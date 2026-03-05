@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "A 3D level editor built with Bevy"
 license = "MIT OR Apache-2.0"
@@ -37,15 +37,15 @@ dirs.workspace = true
 
 [workspace.dependencies]
 bevy = { version = "0.18", features = ["experimental_bevy_feathers", "serialize", "debug", "bevy_remote"] }
-jackdaw_jsn = { version = "0.1.2", path = "crates/jackdaw_jsn" }
-jackdaw_geometry = { version = "0.1.2", path = "crates/jackdaw_geometry" }
+jackdaw_jsn = { version = "0.1.3", path = "crates/jackdaw_jsn" }
+jackdaw_geometry = { version = "0.1.3", path = "crates/jackdaw_geometry" }
 bevy_monitors = "0.2"
 bevy_infinite_grid = "0.18"
-jackdaw_camera = { version = "0.1.2", path = "crates/jackdaw_camera" }
-jackdaw_feathers = { version = "0.1.2", path = "crates/jackdaw_feathers" }
-jackdaw_widgets = { version = "0.1.2", path = "crates/jackdaw_widgets" }
-jackdaw_commands = { version = "0.1.2", path = "crates/jackdaw_commands" }
-jackdaw_terrain = { version = "0.1.2", path = "crates/jackdaw_terrain" }
+jackdaw_camera = { version = "0.1.3", path = "crates/jackdaw_camera" }
+jackdaw_feathers = { version = "0.1.3", path = "crates/jackdaw_feathers" }
+jackdaw_widgets = { version = "0.1.3", path = "crates/jackdaw_widgets" }
+jackdaw_commands = { version = "0.1.3", path = "crates/jackdaw_commands" }
+jackdaw_terrain = { version = "0.1.3", path = "crates/jackdaw_terrain" }
 noise = "0.9"
 rand = "0.9"
 serde = "1"

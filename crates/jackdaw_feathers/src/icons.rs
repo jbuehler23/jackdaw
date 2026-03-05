@@ -11,7 +11,7 @@ pub struct EditorFont(pub Handle<Font>);
 
 pub struct IconFontPlugin;
 
-const INTER_VARIABLE_BYTES: &[u8] = include_bytes!("../../../assets/fonts/InterVariable.ttf");
+const INTER_VARIABLE_BYTES: &[u8] = include_bytes!("../fonts/InterVariable.ttf");
 
 impl Plugin for IconFontPlugin {
     fn build(&self, app: &mut App) {
