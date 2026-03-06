@@ -110,7 +110,7 @@ fn file_icon(name: &str) -> Icon {
     let ext = name.rsplit('.').next().unwrap_or("");
     match ext {
         "gltf" | "glb" => Icon::Cuboid,
-        "png" | "jpg" | "jpeg" | "bmp" | "tga" => Icon::Image,
+        "png" | "jpg" | "jpeg" | "bmp" | "tga" | "ktx2" | "webp" => Icon::Image,
         "json" | "ron" => Icon::FileBraces,
         "rs" => Icon::FileCode,
         "toml" => Icon::Settings,

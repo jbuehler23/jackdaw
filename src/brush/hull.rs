@@ -145,6 +145,7 @@ pub(super) fn rebuild_brush_from_vertices(
             },
             material_index: old_face.material_index,
             texture_path: old_face.texture_path.clone(),
+            material_name: old_face.material_name.clone(),
             uv_offset: old_face.uv_offset,
             uv_scale: old_face.uv_scale,
             uv_rotation: old_face.uv_rotation,

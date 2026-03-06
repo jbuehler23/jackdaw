@@ -1,0 +1,15 @@
+{
+  "jsn": {
+    "format_version": [
+      1,
+      0,
+      0
+    ],
+    "editor_version": "0.1.4",
+    "bevy_version": "0.18"
+  },
+  "project": {
+    "name": "jackdaw",
+    "description": ""
+  }
+}

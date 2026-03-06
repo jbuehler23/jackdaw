@@ -136,6 +136,48 @@ pub struct JsnAssets {
     pub textures: Vec<String>,
     #[serde(default)]
     pub models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_definitions: Vec<JsnMaterialDefinition>,
+}
+
+/// Serializable material definition embedded in scene files.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct JsnMaterialDefinition {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_color_texture: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_map_texture: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metallic_roughness_texture: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emissive_texture: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occlusion_texture: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_texture: Option<String>,
+    #[serde(default = "default_base_color")]
+    pub base_color: [f32; 4],
+    #[serde(default)]
+    pub metallic: f32,
+    #[serde(default = "default_half")]
+    pub perceptual_roughness: f32,
+    #[serde(default = "default_half")]
+    pub reflectance: f32,
+    #[serde(default)]
+    pub emissive_intensity: f32,
+    #[serde(default)]
+    pub double_sided: bool,
+    #[serde(default)]
+    pub flip_normal_map_y: bool,
+}
+
+fn default_base_color() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 1.0]
+}
+
+fn default_half() -> f32 {
+    0.5
 }
 
 /// Reserved for editor-specific state. Currently unused.

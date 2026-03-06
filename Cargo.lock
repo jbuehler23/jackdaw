@@ -3760,6 +3760,7 @@ dependencies = [
  "jackdaw_jsn",
  "jackdaw_terrain",
  "jackdaw_widgets",
+ "regex",
  "rfd",
  "serde",
  "serde_json",

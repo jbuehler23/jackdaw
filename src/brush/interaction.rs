@@ -1516,6 +1516,7 @@ pub(super) fn handle_clip_mode(
                 plane: plane.clone(),
                 material_index: 0,
                 texture_path: None,
+                material_name: None,
                 uv_offset: Vec2::ZERO,
                 uv_scale: Vec2::ONE,
                 uv_rotation: 0.0,

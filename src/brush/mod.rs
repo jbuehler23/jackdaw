@@ -135,6 +135,8 @@ impl Plugin for BrushPlugin {
             .init_resource::<EdgeDragState>()
             .init_resource::<ClipState>()
             .init_resource::<LastUsedTexture>()
+            .init_resource::<crate::material_definition::MaterialDefinitionCache>()
+            .init_resource::<crate::material_definition::MaterialLibrary>()
             .add_systems(
                 OnEnter(crate::AppState::Editor),
                 mesh::setup_default_materials,
@@ -144,7 +146,9 @@ impl Plugin for BrushPlugin {
                 (
                     interaction::handle_edit_mode_keys,
                     mesh::ensure_texture_materials,
+                    mesh::ensure_material_definitions,
                     mesh::set_texture_repeat_mode,
+                    mesh::set_material_def_repeat_mode,
                     mesh::sync_brush_preview,
                     mesh::regenerate_brush_meshes,
                     mesh::apply_brush_preview_materials,

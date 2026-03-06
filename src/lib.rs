@@ -12,6 +12,9 @@ pub mod hierarchy;
 pub mod inspector;
 pub use inspector::{EditorMeta, ReflectEditorMeta};
 pub mod layout;
+pub mod material_browser;
+pub mod material_definition;
+pub mod material_preview;
 pub mod modal_transform;
 pub mod navmesh;
 pub mod project;
@@ -88,7 +91,7 @@ impl Plugin for EditorPlugin {
                 custom_properties::CustomPropertiesPlugin,
                 entity_templates::EntityTemplatesPlugin,
                 brush::BrushPlugin,
-                texture_browser::TextureBrowserPlugin,
+                material_browser::MaterialBrowserPlugin,
                 draw_brush::DrawBrushPlugin,
                 face_grid::FaceGridPlugin,
                 alignment_guides::AlignmentGuidesPlugin,

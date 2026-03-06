@@ -119,6 +119,7 @@ impl Plugin for InspectorPlugin {
             .add_observer(custom_props_display::on_custom_property_checkbox_commit)
             .add_observer(custom_props_display::on_custom_property_text_commit)
             .add_observer(brush_display::handle_clear_texture)
+            .add_observer(brush_display::handle_clear_material)
             .add_observer(brush_display::handle_apply_texture_to_all)
             .add_observer(brush_display::handle_uv_scale_preset)
             .add_observer(brush_display::on_brush_face_text_commit)

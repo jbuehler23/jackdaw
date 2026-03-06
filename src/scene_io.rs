@@ -10,7 +10,9 @@ use bevy::{
     tasks::{AsyncComputeTaskPool, IoTaskPool, Task, futures_lite::future},
     window::{PrimaryWindow, RawHandleWrapper},
 };
-use jackdaw_jsn::format::{JsnAssets, JsnEntity, JsnHeader, JsnMetadata, JsnScene};
+use jackdaw_jsn::format::{
+    JsnAssets, JsnEntity, JsnHeader, JsnMaterialDefinition, JsnMetadata, JsnScene,
+};
 use rfd::{AsyncFileDialog, FileHandle};
 use serde::de::DeserializeSeed;
 
@@ -253,6 +255,35 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
 
         clear_scene_entities(world);
         load_scene_from_jsn(world, &jsn.scene);
+
+        // Merge embedded material definitions into the library
+        if !jsn.assets.material_definitions.is_empty() {
+            let mut library =
+                world.resource_mut::<crate::material_definition::MaterialLibrary>();
+            for jsn_def in &jsn.assets.material_definitions {
+                // Don't overwrite existing definitions with the same name
+                if library.get_by_name(&jsn_def.name).is_some() {
+                    continue;
+                }
+                library.add(crate::material_definition::MaterialDefinition {
+                    name: jsn_def.name.clone(),
+                    base_color_texture: jsn_def.base_color_texture.clone(),
+                    normal_map_texture: jsn_def.normal_map_texture.clone(),
+                    metallic_roughness_texture: jsn_def.metallic_roughness_texture.clone(),
+                    emissive_texture: jsn_def.emissive_texture.clone(),
+                    occlusion_texture: jsn_def.occlusion_texture.clone(),
+                    depth_texture: jsn_def.depth_texture.clone(),
+                    base_color: jsn_def.base_color,
+                    metallic: jsn_def.metallic,
+                    perceptual_roughness: jsn_def.perceptual_roughness,
+                    reflectance: jsn_def.reflectance,
+                    emissive_intensity: jsn_def.emissive_intensity,
+                    double_sided: jsn_def.double_sided,
+                    flip_normal_map_y: jsn_def.flip_normal_map_y,
+                });
+            }
+        }
+
         info!("Scene loaded from {path}");
 
         // Restore metadata
@@ -510,14 +541,20 @@ fn clear_scene_entities(world: &mut World) {
 fn build_asset_manifest(world: &mut World) -> JsnAssets {
     let mut textures = Vec::new();
     let mut models = Vec::new();
+    let mut material_names: Vec<String> = Vec::new();
 
-    // Scan brush face textures
+    // Scan brush face textures and material names
     let mut brush_query = world.query::<&jackdaw_jsn::Brush>();
     for brush in brush_query.iter(world) {
         for face in &brush.faces {
             if let Some(ref path) = face.texture_path {
                 if !textures.contains(path) {
                     textures.push(path.clone());
+                }
+            }
+            if let Some(ref name) = face.material_name {
+                if !material_names.contains(name) {
+                    material_names.push(name.clone());
                 }
             }
         }
@@ -531,10 +568,38 @@ fn build_asset_manifest(world: &mut World) -> JsnAssets {
         }
     }
 
+    // Collect referenced material definitions from the library
+    let library = world.resource::<crate::material_definition::MaterialLibrary>();
+    let material_definitions: Vec<JsnMaterialDefinition> = material_names
+        .iter()
+        .filter_map(|name| {
+            library.get_by_name(name).map(|def| JsnMaterialDefinition {
+                name: def.name.clone(),
+                base_color_texture: def.base_color_texture.clone(),
+                normal_map_texture: def.normal_map_texture.clone(),
+                metallic_roughness_texture: def.metallic_roughness_texture.clone(),
+                emissive_texture: def.emissive_texture.clone(),
+                occlusion_texture: def.occlusion_texture.clone(),
+                depth_texture: def.depth_texture.clone(),
+                base_color: def.base_color,
+                metallic: def.metallic,
+                perceptual_roughness: def.perceptual_roughness,
+                reflectance: def.reflectance,
+                emissive_intensity: def.emissive_intensity,
+                double_sided: def.double_sided,
+                flip_normal_map_y: def.flip_normal_map_y,
+            })
+        })
+        .collect();
+
     textures.sort();
     models.sort();
 
-    JsnAssets { textures, models }
+    JsnAssets {
+        textures,
+        models,
+        material_definitions,
+    }
 }
 
 /// ISO 8601 timestamp (simplified — no chrono dependency).

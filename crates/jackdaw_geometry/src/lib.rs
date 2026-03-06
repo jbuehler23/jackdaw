@@ -14,6 +14,8 @@ pub struct BrushFaceData {
     pub material_index: usize,
     /// Asset-relative texture path (e.g. "textures/brick.png"). Overrides material_index when set.
     pub texture_path: Option<String>,
+    /// References a MaterialDefinition by name. Takes priority over texture_path when set.
+    pub material_name: Option<String>,
     pub uv_offset: Vec2,
     pub uv_scale: Vec2,
     pub uv_rotation: f32,
@@ -195,6 +197,7 @@ pub fn brush_planes_to_world(
                 },
                 material_index: face.material_index,
                 texture_path: face.texture_path.clone(),
+                material_name: face.material_name.clone(),
                 uv_offset: face.uv_offset,
                 uv_scale: face.uv_scale,
                 uv_rotation: face.uv_rotation,

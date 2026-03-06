@@ -1,9 +1,14 @@
 use std::collections::HashSet;
+use std::path::Path;
 
 use bevy::{
-    image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
+    asset::RenderAssetUsages,
+    image::{
+        CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor, ImageType,
+    },
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
+    render::render_resource::TextureDimension,
 };
 
 use super::{
@@ -11,6 +16,7 @@ use super::{
     TextureMaterialCache,
 };
 use crate::draw_brush::DrawBrushState;
+use crate::material_definition::{MaterialDefCacheEntry, MaterialDefinitionCache, MaterialLibrary};
 use jackdaw_geometry::{compute_brush_geometry, compute_face_uvs, triangulate_face};
 
 pub(super) fn setup_default_materials(
@@ -72,6 +78,190 @@ pub(super) fn ensure_texture_materials(
     }
 }
 
+/// Returns true if the KTX2 file is NOT a simple 2D texture (cubemap or array texture).
+fn is_ktx2_non_2d(path: &Path) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    use std::io::Read;
+    let mut header = [0u8; 40];
+    if file.read_exact(&mut header).is_err() {
+        return false;
+    }
+    let layer_count = u32::from_le_bytes([header[32], header[33], header[34], header[35]]);
+    let face_count = u32::from_le_bytes([header[36], header[37], header[38], header[39]]);
+    layer_count > 1 || face_count > 1
+}
+
+/// Load a material texture from disk, skipping cubemaps and other non-2D textures.
+fn load_material_image(
+    path: &str,
+    assets_dir: &Path,
+    images: &mut Assets<Image>,
+) -> Option<Handle<Image>> {
+    let abs_path = assets_dir.join(path);
+    // Pre-check: skip KTX2 cubemaps before decoding
+    if abs_path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ktx2"))
+        && is_ktx2_non_2d(&abs_path)
+    {
+        return None;
+    }
+    let bytes = std::fs::read(&abs_path).ok()?;
+    let ext = abs_path.extension()?.to_str()?;
+    let image = Image::from_buffer(
+        &bytes,
+        ImageType::Extension(ext),
+        CompressedImageFormats::all(),
+        true,
+        ImageSampler::default(),
+        RenderAssetUsages::default(),
+    )
+    .ok()?;
+    // Also check decoded dimension as a safety net
+    if image.texture_descriptor.dimension != TextureDimension::D2 {
+        return None;
+    }
+    Some(images.add(image))
+}
+
+pub(super) fn ensure_material_definitions(
+    brushes: Query<&super::Brush>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut cache: ResMut<MaterialDefinitionCache>,
+    library: Res<MaterialLibrary>,
+    project_root: Option<Res<crate::project::ProjectRoot>>,
+) {
+    let assets_dir = project_root
+        .map(|p| p.assets_dir())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("assets"));
+
+    let mut names_to_load: Vec<String> = Vec::new();
+
+    // Pre-cache all library materials (for browser thumbnails/previews)
+    for def in &library.materials {
+        if !cache.entries.contains_key(&def.name) && !names_to_load.contains(&def.name) {
+            names_to_load.push(def.name.clone());
+        }
+    }
+
+    // Also check brush faces for materials not yet in cache
+    for brush in &brushes {
+        for face in &brush.faces {
+            if let Some(ref name) = face.material_name {
+                if !cache.entries.contains_key(name) && !names_to_load.contains(name) {
+                    names_to_load.push(name.clone());
+                }
+            }
+        }
+    }
+
+    for name in names_to_load {
+        let Some(def) = library.get_by_name(&name) else {
+            continue;
+        };
+
+        let base_color_image = def
+            .base_color_texture
+            .as_ref()
+            .and_then(|p| load_material_image(p, &assets_dir, &mut images));
+        let base_color_texture = base_color_image.clone();
+        let normal_map_texture = def
+            .normal_map_texture
+            .as_ref()
+            .and_then(|p| load_material_image(p, &assets_dir, &mut images));
+        let metallic_roughness_texture = def
+            .metallic_roughness_texture
+            .as_ref()
+            .and_then(|p| load_material_image(p, &assets_dir, &mut images));
+        let emissive_texture = def
+            .emissive_texture
+            .as_ref()
+            .and_then(|p| load_material_image(p, &assets_dir, &mut images));
+        let occlusion_texture = def
+            .occlusion_texture
+            .as_ref()
+            .and_then(|p| load_material_image(p, &assets_dir, &mut images));
+        let depth_map = def
+            .depth_texture
+            .as_ref()
+            .and_then(|p| load_material_image(p, &assets_dir, &mut images));
+
+        let [r, g, b, a] = def.base_color;
+        let material = materials.add(StandardMaterial {
+            base_color: Color::srgba(r, g, b, a),
+            base_color_texture,
+            normal_map_texture,
+            metallic_roughness_texture,
+            emissive_texture,
+            occlusion_texture,
+            depth_map,
+            metallic: def.metallic,
+            perceptual_roughness: def.perceptual_roughness,
+            reflectance: def.reflectance,
+            emissive: if def.emissive_intensity > 0.0 {
+                LinearRgba::WHITE * def.emissive_intensity
+            } else {
+                LinearRgba::BLACK
+            },
+            double_sided: def.double_sided,
+            flip_normal_map_y: def.flip_normal_map_y,
+            ..default()
+        });
+
+        cache.entries.insert(
+            name,
+            MaterialDefCacheEntry {
+                material,
+                preview_image: None,
+                base_color_image,
+            },
+        );
+    }
+}
+
+/// Set repeat wrapping mode on material definition texture images once they finish loading.
+pub(super) fn set_material_def_repeat_mode(
+    cache: Res<MaterialDefinitionCache>,
+    materials: Res<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut done: Local<HashSet<String>>,
+) {
+    for (name, entry) in &cache.entries {
+        if done.contains(name) {
+            continue;
+        }
+        let Some(mat) = materials.get(&entry.material) else {
+            continue;
+        };
+        let mut all_loaded = true;
+        for tex_handle in [
+            &mat.base_color_texture,
+            &mat.normal_map_texture,
+            &mat.metallic_roughness_texture,
+            &mat.emissive_texture,
+            &mat.occlusion_texture,
+            &mat.depth_map,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(image) = images.get_mut(tex_handle) {
+                image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                    address_mode_u: ImageAddressMode::Repeat,
+                    address_mode_v: ImageAddressMode::Repeat,
+                    ..ImageSamplerDescriptor::linear()
+                });
+            } else {
+                all_loaded = false;
+            }
+        }
+        if all_loaded {
+            done.insert(name.clone());
+        }
+    }
+}
+
 /// Set repeat wrapping mode on brush texture images once they finish loading.
 pub(super) fn set_texture_repeat_mode(
     cache: Res<TextureMaterialCache>,
@@ -108,6 +298,7 @@ pub(super) fn regenerate_brush_meshes(
     mut meshes: ResMut<Assets<Mesh>>,
     palette: Res<BrushMaterialPalette>,
     texture_cache: Res<TextureMaterialCache>,
+    mat_def_cache: Res<MaterialDefinitionCache>,
 ) {
     for (entity, brush, children, preview) in &changed_brushes {
         // Despawn all Mesh3d children — covers both BrushFaceEntity children
@@ -160,13 +351,18 @@ pub(super) fn regenerate_brush_meshes(
 
             let mesh_handle = meshes.add(mesh);
 
-            let material = match &face_data.texture_path {
-                Some(path) => texture_cache
+            let material = match (&face_data.material_name, &face_data.texture_path) {
+                (Some(name), _) => mat_def_cache
+                    .entries
+                    .get(name)
+                    .map(|e| e.material.clone())
+                    .unwrap_or_else(|| palette.materials[0].clone()),
+                (None, Some(path)) => texture_cache
                     .entries
                     .get(path)
                     .map(|e| e.material.clone())
                     .unwrap_or_else(|| palette.materials[0].clone()),
-                None => {
+                (None, None) => {
                     let mats = if preview.is_some() {
                         &palette.preview_materials
                     } else {
@@ -292,8 +488,8 @@ fn swap_face_materials(
         let Some(face_data) = brush.faces.get(face.face_index) else {
             continue;
         };
-        // Only swap untextured faces
-        if face_data.texture_path.is_some() {
+        // Only swap untextured/unmaterialed faces
+        if face_data.texture_path.is_some() || face_data.material_name.is_some() {
             continue;
         }
         let mat = target_materials

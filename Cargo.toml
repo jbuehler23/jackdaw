@@ -34,6 +34,7 @@ bincode.workspace = true
 base64.workspace = true
 anyhow.workspace = true
 dirs.workspace = true
+regex.workspace = true
 
 [workspace.dependencies]
 bevy = { version = "0.18", features = ["experimental_bevy_feathers", "serialize", "debug", "bevy_remote"] }
@@ -61,6 +62,7 @@ bincode = { version = "2", features = ["serde"], default-features = false }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 anyhow = { version = "1", default-features = false }
 dirs = "6"
+regex = "1"
 
 # Idiomatic Bevy code often triggers these lints, and the CI workflow treats them as errors.
 [workspace.lints.clippy]

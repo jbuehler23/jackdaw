@@ -3,7 +3,7 @@ use crate::brush::{
     Brush, BrushEditMode, BrushFaceData, BrushSelection, EditMode, SetBrush, TextureMaterialCache,
 };
 use crate::commands::CommandHistory;
-use crate::texture_browser::ClearTextureFromFaces;
+use crate::asset_browser::ClearTextureFromFaces;
 
 use bevy::prelude::*;
 use jackdaw_feathers::{
@@ -76,11 +76,16 @@ pub(super) struct BrushFacePropsState {
     data_hash: u64,
 }
 
+/// Clear material definition from currently selected brush faces.
+#[derive(Event, Debug, Clone)]
+pub(crate) struct ClearMaterialFromFaces;
+
 fn hash_face_data(face: &BrushFaceData) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     // Hash the fields we care about for display
     face.texture_path.hash(&mut hasher);
+    face.material_name.hash(&mut hasher);
     face.uv_offset.x.to_bits().hash(&mut hasher);
     face.uv_offset.y.to_bits().hash(&mut hasher);
     face.uv_scale.x.to_bits().hash(&mut hasher);
@@ -303,6 +308,76 @@ pub(crate) fn update_brush_face_properties(
             },
         );
         commands.entity(apply_all_btn).observe(
+            |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
+                if let Ok(mut bg) = bg.get_mut(out.event_target()) {
+                    bg.0 = tokens::INPUT_BG;
+                }
+            },
+        );
+    }
+
+    // Material definition info
+    if let Some(ref mat_name) = face.material_name {
+        let mat_row = commands
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: px(tokens::SPACING_XS),
+                    width: Val::Percent(100.0),
+                    ..Default::default()
+                },
+                ChildOf(container_entity),
+            ))
+            .id();
+
+        commands.spawn((
+            Text::new(format!("Material: {mat_name}")),
+            TextFont {
+                font_size: tokens::FONT_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+            Node {
+                flex_grow: 1.0,
+                ..Default::default()
+            },
+            ChildOf(mat_row),
+        ));
+
+        let clear_mat_btn = commands
+            .spawn((
+                Node {
+                    padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    ..Default::default()
+                },
+                BackgroundColor(tokens::INPUT_BG),
+                ChildOf(mat_row),
+            ))
+            .id();
+        commands.spawn((
+            Text::new("Clear"),
+            TextFont {
+                font_size: tokens::FONT_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_PRIMARY),
+            ChildOf(clear_mat_btn),
+        ));
+        commands
+            .entity(clear_mat_btn)
+            .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+                commands.trigger(ClearMaterialFromFaces);
+            });
+        commands.entity(clear_mat_btn).observe(
+            |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
+                if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
+                    bg.0 = tokens::HOVER_BG;
+                }
+            },
+        );
+        commands.entity(clear_mat_btn).observe(
             |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
                 if let Ok(mut bg) = bg.get_mut(out.event_target()) {
                     bg.0 = tokens::INPUT_BG;
@@ -567,6 +642,43 @@ fn apply_brush_face_field(
         old,
         new: brush.clone(),
         label: "Edit face UV".to_string(),
+    };
+    history.undo_stack.push(Box::new(cmd));
+    history.redo_stack.clear();
+}
+
+pub(crate) fn handle_clear_material(
+    _event: On<ClearMaterialFromFaces>,
+    brush_selection: Res<BrushSelection>,
+    edit_mode: Res<EditMode>,
+    mut brushes: Query<&mut Brush>,
+    mut history: ResMut<CommandHistory>,
+) {
+    if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
+        return;
+    }
+    let Some(brush_entity) = brush_selection.entity else {
+        return;
+    };
+    if brush_selection.faces.is_empty() {
+        return;
+    }
+    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+        return;
+    };
+
+    let old = brush.clone();
+    for &face_idx in &brush_selection.faces {
+        if face_idx < brush.faces.len() {
+            brush.faces[face_idx].material_name = None;
+        }
+    }
+
+    let cmd = SetBrush {
+        entity: brush_entity,
+        old,
+        new: brush.clone(),
+        label: "Clear material".to_string(),
     };
     history.undo_stack.push(Box::new(cmd));
     history.redo_stack.clear();

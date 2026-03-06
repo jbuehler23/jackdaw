@@ -21,8 +21,8 @@ use crate::{
     gizmos::{GizmoMode, GizmoSpace},
     hierarchy::{HierarchyPanel, HierarchyTreeContainer},
     inspector::Inspector,
+    material_browser,
     selection::Selection,
-    texture_browser,
     viewport::SceneViewport,
 };
 
@@ -741,18 +741,18 @@ fn bottom_panels(icon_font: Handle<Font>) -> impl Bundle {
             height: percent(100),
             ..Default::default()
         },
-        // Horizontal split: asset browser | handle | texture browser
+        // Horizontal split: asset browser | material browser
         split_panel::panel_group(
             0.15,
             (
                 Spawn((
-                    split_panel::panel(1),
+                    split_panel::panel(2),
                     asset_browser::asset_browser_panel(icon_font.clone()),
                 )),
                 Spawn(split_panel::panel_handle()),
                 Spawn((
                     split_panel::panel(1),
-                    texture_browser::texture_browser_panel(icon_font),
+                    material_browser::material_browser_panel(icon_font),
                 )),
             ),
         ),
