@@ -1134,7 +1134,6 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
     };
 
     commands.queue(move |world: &mut World| {
-        use avian3d::parry::math::Point as ParryPoint;
         use avian3d::parry::transformation::convex_hull;
 
         let Some(brush) = world.get::<Brush>(target_entity) else {
@@ -1149,10 +1148,9 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
         let inv_rotation = rotation.inverse();
 
         // Get existing brush vertices in local space, then convert drawn verts to local space
-        let existing_verts = compute_brush_geometry(&old_brush.faces).0;
-        let existing_count = existing_verts.len();
+        let mut all_local_verts: Vec<Vec3> = compute_brush_geometry(&old_brush.faces).0;
+        let existing_count = all_local_verts.len();
 
-        let mut all_local_verts: Vec<Vec3> = existing_verts;
         for v in &drawn_verts {
             all_local_verts.push(inv_rotation * (*v - translation));
         }
@@ -1162,11 +1160,7 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
         }
 
         // Compute convex hull
-        let points: Vec<ParryPoint<f32>> = all_local_verts
-            .iter()
-            .map(|v| ParryPoint::new(v.x, v.y, v.z))
-            .collect();
-        let (hull_verts, hull_tris) = convex_hull(&points);
+        let (hull_verts, hull_tris) = convex_hull(&all_local_verts);
         if hull_verts.len() < 4 || hull_tris.is_empty() {
             return;
         }
@@ -2306,7 +2300,6 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
     let others: Vec<Entity> = selected_brushes[1..].to_vec();
 
     {
-        use avian3d::parry::math::Point as ParryPoint;
         use avian3d::parry::transformation::convex_hull;
 
         // Read primary brush data
@@ -2322,9 +2315,8 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
         let inv_rotation = rotation.inverse();
 
         // Gather all vertices in primary's local space
-        let existing_verts = compute_brush_geometry(&old_primary_brush.faces).0;
-        let existing_count = existing_verts.len();
-        let mut all_local_verts: Vec<Vec3> = existing_verts;
+        let mut all_local_verts: Vec<Vec3> = compute_brush_geometry(&old_primary_brush.faces).0;
+        let existing_count = all_local_verts.len();
 
         // Gather vertices from other brushes, converted to primary's local space
         for &other in &others {
@@ -2346,11 +2338,7 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
         }
 
         // Compute convex hull
-        let points: Vec<ParryPoint<f32>> = all_local_verts
-            .iter()
-            .map(|v| ParryPoint::new(v.x, v.y, v.z))
-            .collect();
-        let (hull_verts, hull_tris) = convex_hull(&points);
+        let (hull_verts, hull_tris) = convex_hull(&all_local_verts);
         if hull_verts.len() < 4 || hull_tris.is_empty() {
             return;
         }

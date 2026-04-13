@@ -4,7 +4,6 @@ use crate::brush::{self, BrushMeshCache};
 use crate::colors;
 use crate::selection::Selected;
 use crate::viewport::SceneViewport;
-use avian3d::parry::math::Point as ParryPoint;
 use avian3d::parry::transformation::convex_hull;
 use bevy::prelude::*;
 use jackdaw_jsn::BrushGroup;
@@ -162,10 +161,7 @@ fn draw_selection_bounding_boxes(
                 draw_aabb_wireframe(&mut gizmos, min, max, color);
             }
             BoundingBoxMode::ConvexHull => {
-                let parry_points: Vec<ParryPoint<f32>> = world_verts
-                    .iter()
-                    .map(|v| ParryPoint::new(v.x, v.y, v.z))
-                    .collect();
+                let parry_points: Vec<Vec3> = world_verts;
                 let (hull_verts, hull_tris) = convex_hull(&parry_points);
                 if hull_verts.is_empty() || hull_tris.is_empty() {
                     continue;
