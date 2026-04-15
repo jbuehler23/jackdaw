@@ -5,6 +5,7 @@ use bevy::{
     ecs::reflect::{AppTypeRegistry, ReflectComponent},
     feathers::theme::ThemedText,
     input_focus::InputFocus,
+    math::Vec3A,
     prelude::*,
     reflect::ReflectRef,
     ui_widgets::observe,
@@ -472,6 +473,7 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            false,
         );
         return;
     }
@@ -487,6 +489,7 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            false,
         );
         return;
     }
@@ -505,6 +508,7 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            false,
         );
         return;
     }
@@ -523,6 +527,24 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            false,
+        );
+        return;
+    }
+
+    // Vec3A is a SIMD version of Vec3, used in affine transformation matrices (global transforms)
+    if let Some(vec3) = value.try_downcast_ref::<Vec3A>() {
+        spawn_vec3_row(
+            commands,
+            parent,
+            name,
+            &vec3.to_vec3(),
+            field_path,
+            source_entity,
+            type_path,
+            depth,
+            // A Vec3A is not editable!
+            true,
         );
         return;
     }
@@ -855,6 +877,7 @@ fn spawn_vec3_row(
     source_entity: Entity,
     type_path: &str,
     depth: usize,
+    disabled: bool,
 ) {
     let left_padding = depth as f32 * tokens::SPACING_MD;
     // Column container: label above, axis inputs below.
@@ -913,6 +936,7 @@ fn spawn_vec3_row(
         format!("{field_path}.x"),
         source_entity,
         type_path,
+        disabled,
     );
     spawn_axis_input(
         commands,
@@ -923,6 +947,7 @@ fn spawn_vec3_row(
         format!("{field_path}.y"),
         source_entity,
         type_path,
+        disabled,
     );
     spawn_axis_input(
         commands,
@@ -933,6 +958,7 @@ fn spawn_vec3_row(
         format!("{field_path}.z"),
         source_entity,
         type_path,
+        disabled,
     );
 }
 
@@ -945,6 +971,7 @@ fn spawn_vec2_row(
     source_entity: Entity,
     type_path: &str,
     depth: usize,
+    disabled: bool,
 ) {
     let left_padding = depth as f32 * tokens::SPACING_MD;
     let col = commands
@@ -993,6 +1020,7 @@ fn spawn_vec2_row(
         format!("{field_path}.x"),
         source_entity,
         type_path,
+        disabled,
     );
     spawn_axis_input(
         commands,
@@ -1003,6 +1031,7 @@ fn spawn_vec2_row(
         format!("{field_path}.y"),
         source_entity,
         type_path,
+        disabled,
     );
 }
 
@@ -1018,6 +1047,7 @@ fn spawn_vec4_row(
     source_entity: Entity,
     type_path: &str,
     depth: usize,
+    disabled: bool,
 ) {
     let left_padding = depth as f32 * tokens::SPACING_MD;
     let col = commands
@@ -1072,6 +1102,7 @@ fn spawn_vec4_row(
         format!("{field_path}.x"),
         source_entity,
         type_path,
+        disabled,
     );
     spawn_axis_input(
         commands,
@@ -1082,6 +1113,7 @@ fn spawn_vec4_row(
         format!("{field_path}.y"),
         source_entity,
         type_path,
+        disabled,
     );
     spawn_axis_input(
         commands,
@@ -1092,6 +1124,7 @@ fn spawn_vec4_row(
         format!("{field_path}.z"),
         source_entity,
         type_path,
+        disabled,
     );
     spawn_axis_input(
         commands,
@@ -1102,6 +1135,7 @@ fn spawn_vec4_row(
         format!("{field_path}.w"),
         source_entity,
         type_path,
+        disabled,
     );
 }
 
@@ -1114,6 +1148,7 @@ fn spawn_axis_input(
     field_path: String,
     source_entity: Entity,
     type_path: &str,
+    disabled: bool,
 ) {
     // Numeric input with colored axis prefix (X/Y/Z/W label inside the input)
     commands.spawn((
@@ -1121,6 +1156,7 @@ fn spawn_axis_input(
             TextEditProps::default()
                 .numeric_f32()
                 .with_default_value(value.to_string())
+                .with_disabled(disabled)
                 .with_prefix(text_edit::TextEditPrefix::Label {
                     label: label.to_string(),
                     size: tokens::TEXT_SIZE,

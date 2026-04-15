@@ -233,6 +233,7 @@ pub(crate) fn on_add_component_button_click(
         text_edit::text_edit(
             TextEditProps::default()
                 .with_placeholder("Search components...")
+                .auto_focus()
                 .allow_empty(),
         ),
         ChildOf(picker),

@@ -1329,6 +1329,7 @@ fn update_material_browser_ui(
     registry: Res<MaterialRegistry>,
     state: Res<MaterialBrowserState>,
     materials: Res<Assets<StandardMaterial>>,
+    project_root: Res<crate::project::ProjectRoot>,
     grid_query: Query<(Entity, Option<&Children>), With<MaterialBrowserGrid>>,
     mut root_label_query: Query<&mut Text, With<MaterialBrowserRootLabel>>,
 ) {
@@ -1338,7 +1339,10 @@ fn update_material_browser_ui(
     }
 
     for mut text in root_label_query.iter_mut() {
-        **text = state.scan_directory.to_string_lossy().to_string();
+        **text = project_root
+            .to_relative(&state.scan_directory)
+            .to_string_lossy()
+            .to_string();
     }
 
     let Ok((grid_entity, grid_children)) = grid_query.single() else {
@@ -1483,7 +1487,7 @@ pub fn material_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::SpaceBetween,
                     width: Val::Percent(100.0),
-                    height: Val::Px(tokens::ROW_HEIGHT),
+                    min_height: Val::Px(tokens::ROW_HEIGHT),
                     padding: UiRect::horizontal(Val::Px(tokens::SPACING_MD)),
                     flex_shrink: 0.0,
                     ..Default::default()
@@ -1511,6 +1515,10 @@ pub fn material_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
                             ),
                             (
                                 MaterialBrowserRootLabel,
+                                Node {
+                                    margin: UiRect::vertical(Val::Px(tokens::SPACING_MD)),
+                                    ..Default::default()
+                                },
                                 Text::new(""),
                                 TextFont {
                                     font_size: tokens::FONT_SM,

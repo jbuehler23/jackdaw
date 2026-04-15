@@ -18,6 +18,10 @@ impl ProjectRoot {
     pub fn assets_dir(&self) -> PathBuf {
         self.root.join("assets")
     }
+    pub fn to_relative(&self, path: impl AsRef<Path>) -> PathBuf {
+        let path = path.as_ref();
+        path.strip_prefix(&self.root).unwrap_or(path).into()
+    }
 }
 
 #[derive(Serialize, Deserialize, Default)]

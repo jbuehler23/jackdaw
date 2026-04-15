@@ -4,15 +4,14 @@ use bevy::prelude::*;
 use bevy::text::{FontFeatureTag, FontFeatures};
 use bevy_ui_text_input::actions::{TextInputAction, TextInputEdit};
 use bevy_ui_text_input::*;
-
 // Re-export key types from bevy_ui_text_input for consumers
 pub use bevy_ui_text_input::{TextInputBuffer, TextInputQueue};
 
 use crate::cursor::{ActiveCursor, HoverCursor};
 use crate::icons::EditorFont;
 use crate::tokens::{
-    AXIS_LABEL_BG, BORDER_COLOR, ELEVATED_BG, PRIMARY_COLOR, SHADOW_COLOR_LIGHT, TEXT_BODY_COLOR,
-    TEXT_MUTED_COLOR, TEXT_SIZE, TEXT_SIZE_SM,
+    self, AXIS_LABEL_BG, BORDER_COLOR, ELEVATED_BG, PRIMARY_COLOR, SHADOW_COLOR_LIGHT,
+    TEXT_BODY_COLOR, TEXT_MUTED_COLOR, TEXT_SIZE, TEXT_SIZE_SM,
 };
 
 pub fn plugin(app: &mut App) {
@@ -130,8 +129,10 @@ pub struct TextEditConfig {
     default_value: Option<String>,
     min: f64,
     max: f64,
+    auto_focus: bool,
     allow_empty: bool,
     drag_bottom: bool,
+    disabled: bool,
     pub initialized: bool,
 }
 
@@ -145,6 +146,8 @@ pub struct TextEditProps {
     pub suffix: Option<String>,
     pub min: f64,
     pub max: f64,
+    pub disabled: bool,
+    pub auto_focus: bool,
     pub allow_empty: bool,
     pub drag_bottom: bool,
     pub grow: bool,
@@ -162,6 +165,8 @@ impl Default for TextEditProps {
             suffix: None,
             min: f64::MIN,
             max: f64::MAX,
+            disabled: false,
+            auto_focus: false,
             allow_empty: false,
             drag_bottom: false,
             grow: false,
@@ -210,6 +215,17 @@ impl TextEditProps {
         self.grow = true;
         self
     }
+    pub fn auto_focus(mut self) -> Self {
+        self.auto_focus = true;
+        self
+    }
+    pub fn disabled(self) -> Self {
+        self.with_disabled(true)
+    }
+    pub fn with_disabled(mut self, value: bool) -> Self {
+        self.disabled = value;
+        self
+    }
     pub fn numeric_f32(mut self) -> Self {
         self.variant = TextEditVariant::NumericF32;
         self.filter = Some(FilterType::Decimal);
@@ -247,8 +263,10 @@ pub fn text_edit(props: TextEditProps) -> impl Bundle {
         suffix,
         min,
         max,
+        auto_focus,
         allow_empty,
         drag_bottom,
+        disabled,
         grow: _,
     } = props;
 
@@ -271,8 +289,10 @@ pub fn text_edit(props: TextEditProps) -> impl Bundle {
             default_value,
             min,
             max,
+            auto_focus,
             allow_empty,
             drag_bottom,
+            disabled,
             initialized: false,
         },
         TextEditValue::default(),
@@ -283,6 +303,7 @@ fn setup_text_edit_input(
     mut commands: Commands,
     editor_font: Res<EditorFont>,
     mut configs: Query<(Entity, &mut TextEditConfig)>,
+    mut focus: ResMut<InputFocus>,
 ) {
     let font = editor_font.0.clone();
     let tabular_figures: FontFeatures = [FontFeatureTag::TABULAR_FIGURES].into();
@@ -321,20 +342,25 @@ fn setup_text_edit_input(
                 Node {
                     width: percent(100),
                     height: px(INPUT_HEIGHT),
-                    // If prefix, no left padding so the label sits flush at the edge
+                    // If prefix, only a small bit of left padding so the label sits close to the edge
                     padding: if has_prefix {
-                        UiRect::new(px(0), px(8), px(0), px(0))
+                        UiRect::new(
+                            px(tokens::SPACING_XS),
+                            px(tokens::SPACING_MD),
+                            px(tokens::SPACING_SM),
+                            px(tokens::SPACING_SM),
+                        )
                     } else {
-                        UiRect::axes(px(8), px(4))
+                        UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_SM))
                     },
-                    border_radius: BorderRadius::all(px(4)),
+                    border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
                     // Stretch so prefix fills full height
                     align_items: if has_prefix {
                         AlignItems::Stretch
                     } else {
                         AlignItems::Center
                     },
-                    column_gap: px(6),
+                    column_gap: px(tokens::SPACING_MD),
                     ..default()
                 },
                 BackgroundColor(ELEVATED_BG),
@@ -378,7 +404,7 @@ fn setup_text_edit_input(
 
         commands.entity(entity).add_child(wrapper_entity);
 
-        if is_numeric && !config.drag_bottom {
+        if is_numeric && !config.drag_bottom && !config.disabled {
             // When there's a prefix (XYZ label), the drag hitbox covers ONLY the
             // label area so clicking the value area still lets you type.
             // Without a prefix, the hitbox covers the left portion of the input.
@@ -471,6 +497,7 @@ fn setup_text_edit_input(
                 mode: TextInputMode::SingleLine,
                 clear_on_submit: false,
                 unfocus_on_submit: true,
+                is_enabled: !config.disabled,
                 ..default()
             },
             TextFont {
@@ -499,6 +526,10 @@ fn setup_text_edit_input(
                 ..default()
             },
         ));
+
+        if config.auto_focus {
+            focus.0 = Some(text_input.id());
+        }
 
         if let Some(filter) = filter {
             text_input.insert(filter);

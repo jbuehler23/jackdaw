@@ -127,7 +127,7 @@ pub(super) fn spawn_physics_section(
             Node {
                 flex_direction: FlexDirection::Column,
                 width: Val::Percent(100.0),
-                padding: UiRect::horizontal(Val::Px(tokens::SPACING_MD)),
+                padding: UiRect::all(Val::Px(tokens::SPACING_MD)),
                 row_gap: Val::Px(tokens::SPACING_SM),
                 ..Default::default()
             },
