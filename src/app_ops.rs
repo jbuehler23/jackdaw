@@ -13,7 +13,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<AppGoHomeOp>();
 }
 
-#[operator(id = "app.open_extensions", label = "Extensions...", allows_undo = false)]
+#[operator(
+    id = "app.open_extensions",
+    label = "Extensions...",
+    allows_undo = false
+)]
 fn app_open_extensions(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::extensions_dialog::open_extensions_dialog(world);
@@ -27,7 +31,11 @@ fn app_open_keybinds(_: In<OperatorParameters>, mut commands: Commands) -> Opera
     OperatorResult::Finished
 }
 
-#[operator(id = "app.toggle_hot_reload", label = "Toggle Hot Reload", allows_undo = false)]
+#[operator(
+    id = "app.toggle_hot_reload",
+    label = "Toggle Hot Reload",
+    allows_undo = false
+)]
 fn app_toggle_hot_reload(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         let mut enabled = world.resource_mut::<crate::hot_reload::HotReloadEnabled>();
