@@ -39,7 +39,7 @@ pub(super) fn plugin(app: &mut App) {
 /// child-entity despawns.
 #[derive(Component, Debug)]
 pub struct Extension {
-    pub name: String,
+    pub id: String,
 }
 
 /// [`Resource`]s attached to a specific [`Extension`].
@@ -329,7 +329,7 @@ impl ExtensionAppExt for App {
 pub fn unload_extension(world: &mut World, ext_entity: Entity) {
     let ext_name = world
         .get::<Extension>(ext_entity)
-        .map(|e| e.name.clone())
+        .map(|e| e.id.clone())
         .unwrap_or_default();
     info!("Unloading extension: {}", ext_name);
 
@@ -343,15 +343,15 @@ pub fn unload_extension(world: &mut World, ext_entity: Entity) {
 
 /// Enable a named extension via the catalog. Returns the new extension
 /// entity, or `None` if the name is unknown or already loaded.
-pub fn enable_extension(world: &mut World, name: &str) -> Option<Entity> {
+pub fn enable_extension(world: &mut World, id: &str) -> Option<Entity> {
     {
         let mut query = world.query::<&Extension>();
-        if query.iter(world).any(|e| e.name == name) {
+        if query.iter(world).any(|e| e.id == id) {
             return None;
         }
     }
 
-    let extension = world.resource::<ExtensionCatalog>().construct(name)?;
+    let extension = world.resource::<ExtensionCatalog>().construct(id)?;
     Some(load_static_extension(world, extension))
 }
 
@@ -367,10 +367,10 @@ pub fn load_static_extension(
     world: &mut World,
     extension: Box<dyn crate::JackdawExtension>,
 ) -> Entity {
-    let name = extension.id();
-    info!("Loading extension: {}", name);
+    let id = extension.id();
+    info!("Loading extension: {id}");
 
-    let extension_entity = world.spawn(Extension { name }).id();
+    let extension_entity = world.spawn(Extension { id }).id();
 
     let mut ctx = crate::ExtensionContext::new(world, extension_entity);
     extension.register(&mut ctx);
@@ -385,13 +385,9 @@ pub fn load_static_extension(
 }
 
 /// Disable a named extension by despawning its root entity.
-pub fn disable_extension(world: &mut World, name: &str) -> bool {
+pub fn disable_extension(world: &mut World, id: &str) -> bool {
     let mut query = world.query::<(Entity, &Extension)>();
-    let Some(ext_entity) = query
-        .iter(world)
-        .find(|(_, e)| e.name == name)
-        .map(|(e, _)| e)
-    else {
+    let Some(ext_entity) = query.iter(world).find(|(_, e)| e.id == id).map(|(e, _)| e) else {
         return false;
     };
     unload_extension(world, ext_entity);

@@ -120,7 +120,7 @@ fn populate_extensions_dialog(
     // Split catalog entries into Built-in vs. Custom. Membership comes
     // from each extension's declared `ExtensionKind`.
     let enabled_names: std::collections::HashSet<String> =
-        loaded.iter().map(|e| e.name.clone()).collect();
+        loaded.iter().map(|e| e.id.clone()).collect();
     let mut builtin_rows: Vec<(String, String, bool)> = Vec::new();
     let mut custom_rows: Vec<(String, String, bool)> = Vec::new();
     for (id, label, _description, kind) in catalog.iter_with_content() {

@@ -112,6 +112,6 @@ pub fn resolve_enabled_list(world: &World) -> Vec<String> {
 /// and write it to disk.
 pub fn persist_current_enabled(world: &mut World) {
     let mut query = world.query::<&jackdaw_api_internal::lifecycle::Extension>();
-    let enabled: Vec<String> = query.iter(world).map(|e| e.name.clone()).collect();
+    let enabled: Vec<String> = query.iter(world).map(|e| e.id.clone()).collect();
     write_enabled_list(&enabled);
 }
