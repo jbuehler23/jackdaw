@@ -80,10 +80,6 @@ impl Plugin for SceneIoPlugin {
             .init_resource::<SceneDirtyState>()
             .add_systems(
                 Update,
-                handle_scene_io_keys.in_set(crate::EditorInteractionSystems),
-            )
-            .add_systems(
-                Update,
                 (poll_scene_dialog, cleanup_pending_new_scene)
                     .run_if(in_state(crate::AppState::Editor)),
             )
@@ -1920,27 +1916,6 @@ fn poll_scene_dialog(world: &mut World) {
                 finish_load_scene(world, file.path());
             }
         }
-    }
-}
-
-fn handle_scene_io_keys(world: &mut World) {
-    use crate::keybinds::EditorAction;
-
-    let keyboard = world.resource::<ButtonInput<KeyCode>>();
-    let keybinds = world.resource::<crate::keybinds::KeybindRegistry>();
-    let save_as = keybinds.just_pressed(EditorAction::SaveAs, keyboard);
-    let save = keybinds.just_pressed(EditorAction::Save, keyboard);
-    let open = keybinds.just_pressed(EditorAction::Open, keyboard);
-    let new = keybinds.just_pressed(EditorAction::NewScene, keyboard);
-
-    if save_as {
-        save_scene_as(world);
-    } else if save {
-        save_scene(world);
-    } else if open {
-        load_scene(world);
-    } else if new {
-        new_scene(world);
     }
 }
 

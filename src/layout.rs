@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use bevy::{feathers::theme::ThemedText, picking::hover::Hovered, prelude::*, ui_widgets::observe};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
@@ -11,13 +13,17 @@ use jackdaw_feathers::{
 
 use crate::{
     EditorEntity,
-    brush::{BrushEditMode, BrushSelection, EditMode},
+    brush::{BrushEditMode, EditMode},
     draw_brush::{ActivateDrawBrushModalOp, DrawBrushState},
+    edit_mode_ops::{
+        EditModeClipOp, EditModeEdgeOp, EditModeFaceOp, EditModeObjectOp, EditModePhysicsOp,
+        EditModeVertexOp,
+    },
+    gizmo_ops::{GizmoModeRotateOp, GizmoModeScaleOp, GizmoModeTranslateOp, GizmoSpaceToggleOp},
     gizmos::{GizmoMode, GizmoSpace},
     hierarchy::{HierarchyPanel, HierarchyShowAllButton, HierarchyTreeContainer},
     inspector::Inspector,
     remote::ConnectionManager,
-    selection::Selection,
     viewport::SceneViewport,
 };
 
@@ -609,6 +615,11 @@ fn toolbar_button(
     tooltip: &str,
 ) -> impl Bundle {
     let label = label.to_string();
+    let op_id: &'static str = match mode {
+        GizmoMode::Translate => GizmoModeTranslateOp::ID,
+        GizmoMode::Rotate => GizmoModeRotateOp::ID,
+        GizmoMode::Scale => GizmoModeScaleOp::ID,
+    };
     (
         GizmoModeButton(mode),
         Hovered::default(),
@@ -641,11 +652,15 @@ fn toolbar_button(
                 ThemedText,
             )
         ],
-        observe(
-            move |_: On<Pointer<Click>>, mut gizmo_mode: ResMut<GizmoMode>| {
-                *gizmo_mode = mode;
-            },
-        ),
+        observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            commands
+                .operator(op_id)
+                .settings(CallOperatorSettings {
+                    execution_context: ExecutionContext::Invoke,
+                    creates_history_entry: true,
+                })
+                .call();
+        }),
     )
 }
 
@@ -682,11 +697,14 @@ fn toolbar_space_button(icon_font: Handle<Font>) -> impl Bundle {
                 ThemedText,
             )
         ],
-        observe(|_: On<Pointer<Click>>, mut space: ResMut<GizmoSpace>| {
-            *space = match *space {
-                GizmoSpace::World => GizmoSpace::Local,
-                GizmoSpace::Local => GizmoSpace::World,
-            };
+        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+            commands
+                .operator(GizmoSpaceToggleOp::ID)
+                .settings(CallOperatorSettings {
+                    execution_context: ExecutionContext::Invoke,
+                    creates_history_entry: true,
+                })
+                .call();
         }),
     )
 }
@@ -718,89 +736,24 @@ fn toolbar_edit_button(
             },
             TextColor(tokens::TEXT_SECONDARY),
         )],
-        observe(
-            move |_: On<Pointer<Click>>,
-                  mut commands: Commands,
-                  mut edit_mode: ResMut<EditMode>,
-                  mut brush_selection: ResMut<BrushSelection>,
-                  mut draw_state: ResMut<DrawBrushState>,
-                  selection: Res<Selection>,
-                  brushes: Query<(), With<jackdaw_jsn::Brush>>| {
-                match tool {
-                    EditToolButton::Object => {
-                        *edit_mode = EditMode::Object;
-                        brush_selection.entity = None;
-                        brush_selection.faces.clear();
-                        brush_selection.vertices.clear();
-                        brush_selection.edges.clear();
-                        draw_state.active = None;
-                    }
-                    EditToolButton::Physics => {
-                        draw_state.active = None;
-                        brush_selection.entity = None;
-                        brush_selection.faces.clear();
-                        brush_selection.vertices.clear();
-                        brush_selection.edges.clear();
-                        if *edit_mode == EditMode::Physics {
-                            // Toggle off
-                            *edit_mode = EditMode::Object;
-                        } else {
-                            *edit_mode = EditMode::Physics;
-                        }
-                    }
-                    EditToolButton::Vertex
-                    | EditToolButton::Edge
-                    | EditToolButton::Face
-                    | EditToolButton::Clip => {
-                        // Cancel draw mode if active
-                        draw_state.active = None;
-
-                        let target_mode = match tool {
-                            EditToolButton::Vertex => BrushEditMode::Vertex,
-                            EditToolButton::Edge => BrushEditMode::Edge,
-                            EditToolButton::Face => BrushEditMode::Face,
-                            EditToolButton::Clip => BrushEditMode::Clip,
-                            _ => unreachable!(),
-                        };
-
-                        if let EditMode::BrushEdit(current) = *edit_mode {
-                            if current == target_mode {
-                                // Same mode: toggle off
-                                *edit_mode = EditMode::Object;
-                                brush_selection.entity = None;
-                                brush_selection.faces.clear();
-                                brush_selection.vertices.clear();
-                                brush_selection.edges.clear();
-                            } else {
-                                // Switch sub-mode
-                                *edit_mode = EditMode::BrushEdit(target_mode);
-                                brush_selection.faces.clear();
-                                brush_selection.vertices.clear();
-                                brush_selection.edges.clear();
-                            }
-                        } else {
-                            // Enter edit on primary if it's a brush
-                            if let Some(entity) =
-                                selection.primary().filter(|&e| brushes.contains(e))
-                            {
-                                *edit_mode = EditMode::BrushEdit(target_mode);
-                                brush_selection.entity = Some(entity);
-                                brush_selection.faces.clear();
-                                brush_selection.vertices.clear();
-                                brush_selection.edges.clear();
-                            }
-                        }
-                    }
-                    EditToolButton::Operator(op) => commands
-                        .operator(op)
-                        .settings(CallOperatorSettings {
-                            execution_context: ExecutionContext::Invoke,
-                            creates_history_entry: true,
-                        })
-                        .call(),
-                }
-            },
-        ),
+        observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let op_id: Cow<'static, str> = match tool {
+                EditToolButton::Object => EditModeObjectOp::ID.into(),
+                EditToolButton::Vertex => EditModeVertexOp::ID.into(),
+                EditToolButton::Edge => EditModeEdgeOp::ID.into(),
+                EditToolButton::Face => EditModeFaceOp::ID.into(),
+                EditToolButton::Clip => EditModeClipOp::ID.into(),
+                EditToolButton::Physics => EditModePhysicsOp::ID.into(),
+                EditToolButton::Operator(op) => op.into(),
+            };
+            commands
+                .operator(op_id)
+                .settings(CallOperatorSettings {
+                    execution_context: ExecutionContext::Invoke,
+                    creates_history_entry: true,
+                })
+                .call();
+        }),
     )
 }
 

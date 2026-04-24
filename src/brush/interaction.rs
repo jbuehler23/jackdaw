@@ -29,6 +29,13 @@ pub(super) struct KeyboardInput<'w> {
     pub keybinds: Res<'w, KeybindRegistry>,
 }
 
+/// Reactive cleanup: when the active brush entity is no longer
+/// selected, drop out of brush-edit mode. Also the single remaining
+/// keybind for this subsystem — Escape exits brush-edit back to
+/// Object, deferring to clip mode's own handler if points are pending.
+/// The digit-key mode switches (1/2/3/4) moved to
+/// [`crate::edit_mode_ops`]; the toolbar buttons there dispatch the
+/// same operators.
 pub(super) fn handle_edit_mode_keys(
     input_focus: Res<InputFocus>,
     input: KeyboardInput,
@@ -36,7 +43,6 @@ pub(super) fn handle_edit_mode_keys(
     mut edit_mode: ResMut<EditMode>,
     mut brush_selection: ResMut<BrushSelection>,
     modal: Res<crate::modal_transform::ModalTransformState>,
-    brushes: Query<(), With<Brush>>,
     face_drag: Res<BrushDragState>,
     vertex_drag: Res<VertexDragState>,
     edge_drag: Res<EdgeDragState>,
@@ -70,48 +76,6 @@ pub(super) fn handle_edit_mode_keys(
         return;
     }
     if face_drag.pending.is_some() || vertex_drag.pending.is_some() || edge_drag.pending.is_some() {
-        return;
-    }
-
-    // 1/2/3/4 toggle brush sub-element modes
-    let pressed_mode = if keybinds.just_pressed(EditorAction::VertexMode, keyboard) {
-        Some(BrushEditMode::Vertex)
-    } else if keybinds.just_pressed(EditorAction::EdgeMode, keyboard) {
-        Some(BrushEditMode::Edge)
-    } else if keybinds.just_pressed(EditorAction::FaceMode, keyboard) {
-        Some(BrushEditMode::Face)
-    } else if keybinds.just_pressed(EditorAction::ClipMode, keyboard) {
-        Some(BrushEditMode::Clip)
-    } else {
-        None
-    };
-
-    if let Some(target_mode) = pressed_mode {
-        if let EditMode::BrushEdit(current) = *edit_mode {
-            if current == target_mode {
-                // Same key again: toggle off to Object
-                *edit_mode = EditMode::Object;
-                brush_selection.entity = None;
-                brush_selection.faces.clear();
-                brush_selection.vertices.clear();
-                brush_selection.edges.clear();
-            } else {
-                // Switch sub-mode, clear sub-element selections
-                *edit_mode = EditMode::BrushEdit(target_mode);
-                brush_selection.faces.clear();
-                brush_selection.vertices.clear();
-                brush_selection.edges.clear();
-            }
-        } else {
-            // From Object mode: enter edit on primary if it's a brush
-            if let Some(entity) = selection.primary().filter(|&e| brushes.contains(e)) {
-                *edit_mode = EditMode::BrushEdit(target_mode);
-                brush_selection.entity = Some(entity);
-                brush_selection.faces.clear();
-                brush_selection.vertices.clear();
-                brush_selection.edges.clear();
-            }
-        }
         return;
     }
 

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
 
 use crate::util::OperatorResultExt as _;
 mod util;
@@ -20,11 +19,7 @@ fn smoke_test_headless_update() {
 #[test]
 fn can_run_extension() {
     let mut app = util::headless_app();
-    app.register_extension::<SampleExtension>();
-    app.finish();
-    // first update sets the extension up
-    // todo: maybe do plugin setup in `Startup` so that jackdaw is actually ready in the first frame?
-    app.update();
+    util::register_and_enable_extension::<SampleExtension>(&mut app);
     for _ in 0..10 {
         app.world_mut()
             .operator(SampleExtension::SPAWN)
@@ -38,9 +33,7 @@ fn can_run_extension() {
 #[test]
 fn can_call_operator() {
     let mut app = util::headless_app();
-    app.register_extension::<SampleExtension>();
-    app.finish();
-    app.update();
+    util::register_and_enable_extension::<SampleExtension>(&mut app);
 
     let amount_of_panels = app
         .world_mut()
@@ -63,9 +56,7 @@ fn can_call_operator() {
 #[test]
 fn can_pass_params_to_operator() {
     let mut app = util::headless_app();
-    app.register_extension::<SampleExtension>();
-    app.finish();
-    app.update();
+    util::register_and_enable_extension::<SampleExtension>(&mut app);
     app.world_mut()
         .operator(SampleExtension::CHECK_PARAMS)
         .param("foo", "bar")

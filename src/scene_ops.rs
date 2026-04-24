@@ -1,0 +1,113 @@
+//! Scene I/O operators: new / open / save / save as / save selection
+//! as template / open recent.
+//!
+//! These wrap the existing free functions in [`crate::scene_io`] so they
+//! can be dispatched uniformly through the operator API (menu, keybind,
+//! F3 command palette, extension code). BEI bindings for the
+//! usual Ctrl+N / Ctrl+O / Ctrl+S / Ctrl+Shift+S keybinds are attached
+//! here.
+
+use bevy::prelude::*;
+use bevy_enhanced_input::prelude::{Chord, Press, *};
+use jackdaw_api::prelude::*;
+
+use crate::core_extension::{CoreExtensionInputContext, Modifiers};
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext, modifiers: &Modifiers) {
+    ctx.register_operator::<SceneNewOp>()
+        .register_operator::<SceneOpenOp>()
+        .register_operator::<SceneSaveOp>()
+        .register_operator::<SceneSaveAsOp>()
+        .register_operator::<SceneSaveSelectionAsTemplateOp>()
+        .register_operator::<SceneOpenRecentOp>();
+
+    let ext = ctx.id();
+    let ctrl = modifiers.ctrl;
+    let shift = modifiers.shift;
+    ctx.entity_mut().world_scope(|world| {
+        world.spawn((
+            Action::<SceneNewOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            Chord::new([ctrl, shift]),
+            bindings![(KeyCode::KeyN, Press::default())],
+        ));
+        world.spawn((
+            Action::<SceneOpenOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            Chord::single(ctrl),
+            bindings![(KeyCode::KeyO, Press::default())],
+        ));
+        world.spawn((
+            Action::<SceneSaveOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            Chord::single(ctrl),
+            bindings![(KeyCode::KeyS, Press::default())],
+        ));
+        world.spawn((
+            Action::<SceneSaveAsOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            Chord::new([ctrl, shift]),
+            bindings![(KeyCode::KeyS, Press::default())],
+        ));
+    });
+}
+
+#[operator(id = "scene.new", label = "New")]
+fn scene_new(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        crate::scene_io::new_scene(world);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "scene.open", label = "Open")]
+fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        crate::scene_io::load_scene(world);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "scene.save", label = "Save", allows_undo = false)]
+fn scene_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        crate::scene_io::save_scene(world);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "scene.save_as", label = "Save As...", allows_undo = false)]
+fn scene_save_as(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        crate::scene_io::save_scene_as(world);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "scene.save_selection_as_template",
+    label = "Save Selection as Template",
+    allows_undo = false
+)]
+fn scene_save_selection_as_template(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        let selection = world.resource::<crate::selection::Selection>();
+        let name = selection
+            .primary()
+            .and_then(|e| world.get::<Name>(e).map(|n| n.as_str().to_string()))
+            .unwrap_or_else(|| "template".to_string());
+        crate::entity_templates::save_entity_template(world, &name);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "scene.open_recent", label = "Open Recent...")]
+fn scene_open_recent(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        crate::open_recent_dialog(world);
+    });
+    OperatorResult::Finished
+}

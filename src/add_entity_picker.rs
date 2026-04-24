@@ -40,28 +40,34 @@ fn builtin_groups() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
     vec![
         (
             "Shapes",
-            vec![("add.cube", "Cube"), ("add.sphere", "Sphere")],
+            vec![
+                ("op:entity.add.cube", "Cube"),
+                ("op:entity.add.sphere", "Sphere"),
+            ],
         ),
         (
             "Lights",
             vec![
-                ("add.point_light", "Point Light"),
-                ("add.directional_light", "Directional Light"),
-                ("add.spot_light", "Spot Light"),
+                ("op:entity.add.point_light", "Point Light"),
+                ("op:entity.add.directional_light", "Directional Light"),
+                ("op:entity.add.spot_light", "Spot Light"),
             ],
         ),
         (
             "Cameras & Entities",
-            vec![("add.camera", "Camera"), ("add.empty", "Empty")],
+            vec![
+                ("op:entity.add.camera", "Camera"),
+                ("op:entity.add.empty", "Empty"),
+            ],
         ),
         (
             "Regions",
             vec![
-                ("add.navmesh", "Navmesh Region"),
-                ("add.terrain", "Terrain"),
+                ("op:entity.add.navmesh", "Navmesh Region"),
+                ("op:entity.add.terrain", "Terrain"),
             ],
         ),
-        ("Prefabs", vec![("add.prefab", "Prefab...")]),
+        ("Prefabs", vec![("op:entity.add.prefab", "Prefab...")]),
     ]
 }
 

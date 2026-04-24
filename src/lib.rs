@@ -2,6 +2,7 @@
 //! Usage of this crate is meant for headless operation. If you want to interact with the jackdaw API for extensions, use the `jackdaw_api` crate instead.
 pub mod add_entity_picker;
 pub mod alignment_guides;
+pub mod app_ops;
 pub mod asset_browser;
 pub mod asset_catalog;
 pub mod brush;
@@ -10,11 +11,15 @@ pub mod commands;
 pub mod custom_properties;
 pub mod default_style;
 pub mod draw_brush;
+pub mod edit_mode_ops;
 pub mod entity_ops;
 pub mod entity_templates;
 pub mod face_grid;
+pub mod gizmo_ops;
 pub mod gizmos;
+pub mod grid_ops;
 pub mod hierarchy;
+pub mod history_ops;
 pub mod inspector;
 pub mod keybind_settings;
 pub mod keybinds;
@@ -45,14 +50,17 @@ pub mod project_select;
 pub mod remote;
 pub mod restart;
 pub mod scene_io;
+pub mod scene_ops;
 pub mod sdk_paths;
 pub mod selection;
 pub mod snapping;
 pub mod status_bar;
 pub mod terrain;
 pub mod texture_browser;
+pub mod transform_ops;
 pub mod undo_snapshot;
 pub mod view_modes;
+pub mod view_ops;
 pub mod viewport;
 pub mod viewport_overlays;
 pub mod viewport_select;
@@ -303,8 +311,8 @@ impl Plugin for EditorCorePlugin {
                     register_animation_entities_in_ast,
                     follow_scene_selection_to_clip,
                     sync_selected_keyframes_from_selection,
-                    handle_keyframe_delete_intercept.before(entity_ops::handle_entity_keys),
-                    handle_timeline_shortcuts.before(entity_ops::handle_entity_keys),
+                    handle_keyframe_delete_intercept,
+                    handle_timeline_shortcuts,
                     auto_save_layout_on_change,
                     add_entity_picker::filter_add_entity_picker,
                     add_entity_picker::close_add_entity_picker_on_escape,
@@ -1035,8 +1043,8 @@ impl DespawnKeyframeCmd {
     }
 }
 
-/// Interceptor that runs before [`entity_ops::handle_entity_keys`]
-/// and steals the Delete key for any selected keyframe entities.
+/// Interceptor that runs before the entity-delete operator fires and
+/// steals the Delete key for any selected keyframe entities.
 /// Each keyframe gets wrapped in a [`DespawnKeyframeCmd`], the
 /// commands are grouped and pushed onto the history, and the
 /// keyframes are removed from [`selection::Selection`] so the
@@ -1201,7 +1209,7 @@ impl jackdaw_commands::EditorCommand for SpawnKeyframeCmd {
 }
 
 /// Combined handler for timeline keyboard shortcuts that need to
-/// intercept before [`entity_ops::handle_entity_keys`]:
+/// intercept before the entity-level operator dispatch:
 ///
 /// - **Arrow keys** (Left/Right/Home/End) step the playhead when the
 ///   timeline dock window is active. Consumes the key input via
@@ -1887,30 +1895,33 @@ fn populate_menu(
             (
                 "File",
                 vec![
-                    ("file.new", "New"),
-                    ("file.open", "Open"),
+                    ("op:scene.new", "New"),
+                    ("op:scene.open", "Open"),
                     ("---", ""),
-                    ("file.save", "Save"),
-                    ("file.save_as", "Save As..."),
+                    ("op:scene.save", "Save"),
+                    ("op:scene.save_as", "Save As..."),
                     ("---", ""),
-                    ("file.save_template", "Save Selection as Template"),
+                    (
+                        "op:scene.save_selection_as_template",
+                        "Save Selection as Template",
+                    ),
                     ("---", ""),
-                    ("file.keybinds", "Keybinds..."),
-                    ("file.extensions", "Extensions..."),
+                    ("op:app.open_keybinds", "Keybinds..."),
+                    ("op:app.open_extensions", "Extensions..."),
                     ("---", ""),
-                    ("file.hot_reload", hot_reload_label),
-                    ("file.open_recent", "Open Recent..."),
-                    ("file.home", "Home"),
+                    ("op:app.toggle_hot_reload", hot_reload_label),
+                    ("op:scene.open_recent", "Open Recent..."),
+                    ("op:app.go_home", "Home"),
                 ],
             ),
             (
                 "Edit",
                 vec![
-                    ("edit.undo", "Undo"),
-                    ("edit.redo", "Redo"),
+                    ("op:history.undo", "Undo"),
+                    ("op:history.redo", "Redo"),
                     ("---", ""),
-                    ("edit.delete", "Delete"),
-                    ("edit.duplicate", "Duplicate"),
+                    ("op:entity.delete", "Delete"),
+                    ("op:entity.duplicate", "Duplicate"),
                     ("---", ""),
                     ("edit.join", "Join (Convex Merge)"),
                     ("edit.csg_subtract", "CSG Subtract"),
@@ -1921,15 +1932,15 @@ fn populate_menu(
             (
                 "View",
                 vec![
-                    ("view.wireframe", "Toggle Wireframe"),
-                    ("view.bounding_boxes", "Toggle Bounding Boxes"),
-                    ("view.bounding_box_mode", "Cycle Bounding Box Mode"),
-                    ("view.face_grid", "Toggle Face Grid"),
-                    ("view.brush_wireframe", "Toggle Brush Wireframe"),
-                    ("view.show_brush_outline", "Toggle Brush Outline"),
-                    ("view.alignment_guides", "Toggle Alignment Guides"),
-                    ("view.collider_gizmos", "Toggle Collider Gizmos"),
-                    ("view.hierarchy_arrows", "Toggle Hierarchy Arrows"),
+                    ("op:view.toggle_wireframe", "Toggle Wireframe"),
+                    ("op:view.toggle_bounding_boxes", "Toggle Bounding Boxes"),
+                    ("op:view.cycle_bounding_box_mode", "Cycle Bounding Box Mode"),
+                    ("op:view.toggle_face_grid", "Toggle Face Grid"),
+                    ("op:view.toggle_brush_wireframe", "Toggle Brush Wireframe"),
+                    ("op:view.toggle_brush_outline", "Toggle Brush Outline"),
+                    ("op:view.toggle_alignment_guides", "Toggle Alignment Guides"),
+                    ("op:view.toggle_collider_gizmos", "Toggle Collider Gizmos"),
+                    ("op:view.toggle_hierarchy_arrows", "Toggle Hierarchy Arrows"),
                 ],
             ),
             ("Add", add_menu_refs),
@@ -1940,61 +1951,6 @@ fn populate_menu(
 
 fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
     match event.action.as_str() {
-        "file.new" => {
-            commands.queue(|world: &mut World| {
-                scene_io::new_scene(world);
-            });
-        }
-        "file.save" => {
-            commands.queue(|world: &mut World| {
-                scene_io::save_scene(world);
-            });
-        }
-        "file.save_as" => {
-            commands.queue(|world: &mut World| {
-                scene_io::save_scene_as(world);
-            });
-        }
-        "file.open" => {
-            commands.queue(|world: &mut World| {
-                scene_io::load_scene(world);
-            });
-        }
-        "file.save_template" => {
-            // Use a default name based on the selected entity
-            commands.queue(|world: &mut World| {
-                let selection = world.resource::<Selection>();
-                let name = selection
-                    .primary()
-                    .and_then(|e| world.get::<Name>(e).map(|n| n.as_str().to_string()))
-                    .unwrap_or_else(|| "template".to_string());
-                entity_templates::save_entity_template(world, &name);
-            });
-        }
-        "edit.undo" => {
-            commands.queue(|world: &mut World| {
-                world.resource_scope(|world, mut history: Mut<commands::CommandHistory>| {
-                    history.undo(world);
-                });
-            });
-        }
-        "edit.redo" => {
-            commands.queue(|world: &mut World| {
-                world.resource_scope(|world, mut history: Mut<commands::CommandHistory>| {
-                    history.redo(world);
-                });
-            });
-        }
-        "edit.delete" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::delete_selected(world);
-            });
-        }
-        "edit.duplicate" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::duplicate_selected(world);
-            });
-        }
         "edit.join" => {
             commands.queue(draw_brush::join_selected_brushes_impl);
         }
@@ -2063,169 +2019,6 @@ fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
                 }
             });
         }
-        "file.keybinds" => {
-            commands.trigger(keybind_settings::OpenKeybindSettingsEvent);
-        }
-        "file.extensions" => {
-            commands.queue(|world: &mut World| {
-                extensions_dialog::open_extensions_dialog(world);
-            });
-        }
-        "file.home" => {
-            commands.queue(|world: &mut World| {
-                world
-                    .resource_mut::<NextState<AppState>>()
-                    .set(AppState::ProjectSelect);
-            });
-        }
-        "file.hot_reload" => {
-            commands.queue(|world: &mut World| {
-                let mut enabled = world.resource_mut::<hot_reload::HotReloadEnabled>();
-                enabled.0 = !enabled.0;
-                let state = if enabled.0 { "on" } else { "off" };
-                info!("Hot reload toggled {state}");
-                // Menu shows the current on/off state — trigger a
-                // rebuild so the label refreshes.
-                world.resource_mut::<MenuBarDirty>().0 = true;
-            });
-        }
-        "file.open_recent" => {
-            commands.queue(open_recent_dialog);
-        }
-        "view.wireframe" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<view_modes::ViewModeSettings>();
-                settings.wireframe = !settings.wireframe;
-            });
-        }
-        "view.bounding_boxes" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<viewport_overlays::OverlaySettings>();
-                settings.show_bounding_boxes = !settings.show_bounding_boxes;
-            });
-        }
-        "view.bounding_box_mode" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<viewport_overlays::OverlaySettings>();
-                settings.bounding_box_mode = match settings.bounding_box_mode {
-                    viewport_overlays::BoundingBoxMode::Aabb => {
-                        viewport_overlays::BoundingBoxMode::ConvexHull
-                    }
-                    viewport_overlays::BoundingBoxMode::ConvexHull => {
-                        viewport_overlays::BoundingBoxMode::Aabb
-                    }
-                };
-            });
-        }
-        "view.face_grid" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<viewport_overlays::OverlaySettings>();
-                settings.show_face_grid = !settings.show_face_grid;
-            });
-        }
-        "view.brush_wireframe" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<viewport_overlays::OverlaySettings>();
-                settings.show_brush_wireframe = !settings.show_brush_wireframe;
-            });
-        }
-        "view.show_brush_outline" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<viewport_overlays::OverlaySettings>();
-                settings.show_brush_outline = !settings.show_brush_outline;
-            });
-        }
-        "view.alignment_guides" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<viewport_overlays::OverlaySettings>();
-                settings.show_alignment_guides = !settings.show_alignment_guides;
-            });
-        }
-        "view.collider_gizmos" => {
-            commands.queue(|world: &mut World| {
-                let mut config =
-                    world.resource_mut::<jackdaw_avian_integration::PhysicsOverlayConfig>();
-                config.show_colliders = !config.show_colliders;
-            });
-        }
-        "view.hierarchy_arrows" => {
-            commands.queue(|world: &mut World| {
-                let mut config =
-                    world.resource_mut::<jackdaw_avian_integration::PhysicsOverlayConfig>();
-                config.show_hierarchy_arrows = !config.show_hierarchy_arrows;
-            });
-        }
-        "add.cube" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::Cube);
-            });
-        }
-        "add.sphere" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::Sphere);
-            });
-        }
-        "add.point_light" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::PointLight);
-            });
-        }
-        "add.directional_light" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(
-                    world,
-                    entity_ops::EntityTemplate::DirectionalLight,
-                );
-            });
-        }
-        "add.spot_light" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::SpotLight);
-            });
-        }
-        "add.camera" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::Camera3d);
-            });
-        }
-        "add.empty" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::Empty);
-            });
-        }
-        "add.navmesh" => {
-            commands.queue(|world: &mut World| {
-                spawn_undoable(world, "Add Navmesh Region", |world| {
-                    let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
-                        SystemState::new(world);
-                    let (mut commands, mut selection) = system_state.get_mut(world);
-                    let entity = navmesh::spawn_navmesh_entity(&mut commands);
-                    selection.select_single(&mut commands, entity);
-                    system_state.apply(world);
-                    scene_io::register_entity_in_ast(world, entity);
-                    entity
-                });
-            });
-        }
-        "add.terrain" => {
-            commands.queue(|world: &mut World| {
-                spawn_undoable(world, "Add Terrain", |world| {
-                    let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
-                        SystemState::new(world);
-                    let (mut commands, mut selection) = system_state.get_mut(world);
-                    let entity = terrain::spawn_terrain_entity(&mut commands);
-                    selection.select_single(&mut commands, entity);
-                    system_state.apply(world);
-                    scene_io::register_entity_in_ast(world, entity);
-                    entity
-                });
-            });
-        }
-        "add.prefab" => {
-            commands.queue(|world: &mut World| {
-                crate::prefab_picker::open_prefab_picker(world);
-            });
-        }
         action if action.starts_with(OP_PREFIX) => {
             // Extension-contributed menu entry. The action id is the
             // operator id with an "op:" prefix. Dispatching through the
@@ -2267,7 +2060,7 @@ fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
 const OP_PREFIX: &str = "op:";
 
 /// Wrap an entity-spawning closure in a `SpawnEntity` command so Ctrl+Z can undo it.
-fn spawn_undoable<F>(world: &mut World, label: &str, spawn: F)
+pub(crate) fn spawn_undoable<F>(world: &mut World, label: &str, spawn: F)
 where
     F: Fn(&mut World) -> Entity + Send + Sync + 'static,
 {
@@ -2341,7 +2134,7 @@ fn cleanup_editor(world: &mut World) {
     }
 }
 
-fn open_recent_dialog(world: &mut World) {
+pub(crate) fn open_recent_dialog(world: &mut World) {
     let recent = project::read_recent_projects();
     if recent.projects.is_empty() {
         return;

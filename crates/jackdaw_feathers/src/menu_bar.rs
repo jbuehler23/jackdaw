@@ -3,9 +3,15 @@ use jackdaw_widgets::menu_bar::{
     MenuAction, MenuBar, MenuBarDropdown, MenuBarDropdownItem, MenuBarItem, MenuBarState,
 };
 
-use crate::button::{ButtonClickEvent, ButtonProps, ButtonVariant, button};
+use crate::button::{ButtonClickEvent, ButtonProps, ButtonVariant, CallOperator, button};
 use crate::tokens;
 use crate::tooltip::Tooltip;
+
+/// Action strings in menu entries that start with this prefix are
+/// interpreted as operator ids; the suffix becomes the [`CallOperator`] id
+/// attached to the dropdown button so the editor dispatches through the
+/// operator API instead of firing a generic [`MenuAction`].
+pub const OP_ACTION_PREFIX: &str = "op:";
 
 pub fn plugin(app: &mut App) {
     app.add_observer(on_dropdown_item_click)
@@ -14,15 +20,21 @@ pub fn plugin(app: &mut App) {
         .add_observer(on_menu_bar_item_out);
 }
 
-/// When a dropdown item is clicked, fire the [`MenuAction`].
+/// When a dropdown item is clicked, fire the [`MenuAction`] — unless the
+/// item carries a [`CallOperator`] component, in which case the editor's
+/// operator observer will handle dispatch and a `MenuAction` would
+/// double-fire.
 fn on_dropdown_item_click(
     event: On<ButtonClickEvent>,
-    items: Query<&MenuBarDropdownItem>,
+    items: Query<(&MenuBarDropdownItem, Option<&CallOperator>)>,
     mut commands: Commands,
 ) {
-    let Ok(item) = items.get(event.entity) else {
+    let Ok((item, call_op)) = items.get(event.entity) else {
         return;
     };
+    if call_op.is_some() {
+        return;
+    }
     commands.trigger(MenuAction {
         action: item.action.clone(),
     });
@@ -227,19 +239,28 @@ fn spawn_dropdown(commands: &mut Commands, x: f32, y: f32, actions: &[(String, S
             continue;
         }
 
-        commands.entity(dropdown).with_child((
-            MenuBarDropdownItem {
-                action: action.clone(),
-            },
-            button(
-                ButtonProps::new(label.clone())
-                    .with_variant(ButtonVariant::Ghost)
-                    // TODO: add keybind as subtitle
-                    .align_left(),
-            ),
-            // TODO: show this tooltip only when the user has opted into dev stuff
-            Tooltip(action.to_string()),
-        ));
+        let item = MenuBarDropdownItem {
+            action: action.clone(),
+        };
+        let btn = button(
+            ButtonProps::new(label.clone())
+                .with_variant(ButtonVariant::Ghost)
+                // TODO: add keybind as subtitle
+                .align_left(),
+        );
+        // TODO: show this tooltip only when the user has opted into dev stuff
+        let tooltip = Tooltip(action.to_string());
+
+        if let Some(op_id) = action.strip_prefix(OP_ACTION_PREFIX) {
+            commands.entity(dropdown).with_child((
+                item,
+                btn,
+                tooltip,
+                CallOperator::new(op_id.to_string()),
+            ));
+        } else {
+            commands.entity(dropdown).with_child((item, btn, tooltip));
+        }
     }
 
     dropdown

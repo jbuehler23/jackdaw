@@ -53,11 +53,7 @@ impl Plugin for EntityOpsPlugin {
         }
         app.register_type::<EmptyEntity>()
             .register_type::<SceneCamera>()
-            .register_type::<SceneLight>()
-            .add_systems(
-                Update,
-                handle_entity_keys.in_set(crate::EditorInteractionSystems),
-            );
+            .register_type::<SceneLight>();
     }
 }
 
@@ -440,7 +436,7 @@ fn snap_to_nearest_axis(v: Vec3) -> Vec3 {
 ///   world axis, then negated. This is the axis you're "looking along".
 /// - **Pitch** (PageUp/PageDown): camera right snapped to nearest world axis. If it
 ///   collides with the roll axis, use the cross product with Y instead.
-fn camera_snapped_rotation_axes(gt: &GlobalTransform) -> (Vec3, Vec3, Vec3) {
+pub(crate) fn camera_snapped_rotation_axes(gt: &GlobalTransform) -> (Vec3, Vec3, Vec3) {
     let yaw_axis = Vec3::Y;
 
     // Forward projected onto the horizontal plane, snapped to nearest axis
@@ -470,160 +466,13 @@ fn camera_snapped_rotation_axes(gt: &GlobalTransform) -> (Vec3, Vec3, Vec3) {
     (yaw_axis, roll_axis, pitch_axis)
 }
 
-pub fn handle_entity_keys(
-    world: &mut World,
-    cameras: &mut QueryState<&GlobalTransform, With<crate::viewport::MainViewportCamera>>,
-) -> Result {
-    // Don't process entity keys when a text input is focused
-    let has_input_focus = world.resource::<InputFocus>().0.is_some();
-    if has_input_focus {
-        return Ok(());
-    }
-
-    // Don't process entity keys during modal transform operations or draw mode
-    let modal_active = world
-        .resource::<crate::modal_transform::ModalTransformState>()
-        .active
-        .is_some();
-    if modal_active {
-        return Ok(());
-    }
-    let draw_active = world
-        .resource::<crate::draw_brush::DrawBrushState>()
-        .active
-        .is_some();
-    if draw_active {
-        return Ok(());
-    }
-
-    // Don't process entity ops during brush edit mode (Delete etc. handled by brush systems)
-    let in_brush_edit = !matches!(
-        *world.resource::<crate::brush::EditMode>(),
-        crate::brush::EditMode::Object
-    );
-    if in_brush_edit {
-        return Ok(());
-    }
-
-    use crate::keybinds::EditorAction;
-
-    let keyboard = world.resource::<ButtonInput<KeyCode>>();
-    let keybinds = world.resource::<crate::keybinds::KeybindRegistry>();
-
-    let delete = keybinds.just_pressed(EditorAction::Delete, keyboard);
-    let duplicate = keybinds.just_pressed(EditorAction::Duplicate, keyboard);
-    let copy = keybinds.just_pressed(EditorAction::CopyComponents, keyboard);
-    let paste = keybinds.just_pressed(EditorAction::PasteComponents, keyboard);
-    let reset_pos = keybinds.just_pressed(EditorAction::ResetPosition, keyboard);
-    let reset_rot = keybinds.just_pressed(EditorAction::ResetRotation, keyboard);
-    let reset_scale = keybinds.just_pressed(EditorAction::ResetScale, keyboard);
-    let do_hide_selected = keybinds.just_pressed(EditorAction::ToggleVisibility, keyboard);
-    let unhide_all = keybinds.just_pressed(EditorAction::UnhideAll, keyboard);
-    let hide_unselected = keybinds.just_pressed(EditorAction::HideAll, keyboard);
-
-    // Rotations (Alt+Arrow/PageUp/Down)
-    let rot_left = keybinds.just_pressed(EditorAction::Rotate90Left, keyboard);
-    let rot_right = keybinds.just_pressed(EditorAction::Rotate90Right, keyboard);
-    let rot_up = keybinds.just_pressed(EditorAction::Rotate90Up, keyboard);
-    let rot_down = keybinds.just_pressed(EditorAction::Rotate90Down, keyboard);
-    let roll_left = keybinds.just_pressed(EditorAction::Roll90Left, keyboard);
-    let roll_right = keybinds.just_pressed(EditorAction::Roll90Right, keyboard);
-    let any_rotation = rot_left || rot_right || rot_up || rot_down || roll_left || roll_right;
-
-    // Nudge: use key_just_pressed since Ctrl+arrow is also valid (duplicate+nudge).
-    let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
-    let nudge_left = keybinds.key_just_pressed(EditorAction::NudgeLeft, keyboard) && !alt;
-    let nudge_right = keybinds.key_just_pressed(EditorAction::NudgeRight, keyboard) && !alt;
-    let nudge_fwd = keybinds.key_just_pressed(EditorAction::NudgeForward, keyboard) && !alt;
-    let nudge_back = keybinds.key_just_pressed(EditorAction::NudgeBack, keyboard) && !alt;
-    let nudge_up = keybinds.key_just_pressed(EditorAction::NudgeUp, keyboard) && !alt;
-    let nudge_down = keybinds.key_just_pressed(EditorAction::NudgeDown, keyboard) && !alt;
-    let any_nudge = nudge_left || nudge_right || nudge_fwd || nudge_back || nudge_up || nudge_down;
-
-    if delete {
-        delete_selected(world);
-    } else if duplicate {
-        duplicate_selected(world);
-    } else if copy {
-        copy_components(world);
-    } else if paste {
-        paste_components(world);
-    } else if reset_pos {
-        reset_transform_selected(world, TransformReset::Position);
-    } else if reset_rot {
-        reset_transform_selected(world, TransformReset::Rotation);
-    } else if reset_scale {
-        reset_transform_selected(world, TransformReset::Scale);
-    } else if unhide_all {
-        world.run_system_cached(unhide_all_entities)?;
-    } else if hide_unselected {
-        world.run_system_cached(hide_all_entities)?;
-    } else if do_hide_selected {
-        hide_selected(world);
-    } else if any_rotation {
-        // TrenchBroom-style rotation: snap camera axes to the nearest world axis
-        // so rotations always produce axis-aligned results while still feeling
-        // intuitive from the current viewpoint.
-        let (yaw_axis, roll_axis, pitch_axis) = {
-            cameras
-                .iter(world)
-                .next()
-                .map(camera_snapped_rotation_axes)
-                .unwrap_or((Vec3::Y, Vec3::NEG_Z, Vec3::X))
-        };
-
-        let angle = std::f32::consts::FRAC_PI_2;
-        let rotation = if rot_left {
-            Quat::from_axis_angle(yaw_axis, -angle)
-        } else if rot_right {
-            Quat::from_axis_angle(yaw_axis, angle)
-        } else if rot_up {
-            Quat::from_axis_angle(roll_axis, -angle)
-        } else if rot_down {
-            Quat::from_axis_angle(roll_axis, angle)
-        } else if roll_left {
-            Quat::from_axis_angle(pitch_axis, angle)
-        } else {
-            // roll_right
-            Quat::from_axis_angle(pitch_axis, -angle)
-        };
-        rotate_selected(world, rotation);
-    } else if any_nudge {
-        let grid_size = world
-            .resource::<crate::snapping::SnapSettings>()
-            .grid_size();
-        let offset = if nudge_left {
-            Vec3::new(-grid_size, 0.0, 0.0)
-        } else if nudge_right {
-            Vec3::new(grid_size, 0.0, 0.0)
-        } else if nudge_fwd {
-            Vec3::new(0.0, 0.0, -grid_size)
-        } else if nudge_back {
-            Vec3::new(0.0, 0.0, grid_size)
-        } else if nudge_up {
-            Vec3::new(0.0, grid_size, 0.0)
-        } else {
-            // nudge_down
-            Vec3::new(0.0, -grid_size, 0.0)
-        };
-
-        if ctrl {
-            // Ctrl+arrow: duplicate then nudge
-            duplicate_selected(world);
-        }
-        nudge_selected(world, offset);
-    }
-    Ok(())
-}
-
-enum TransformReset {
+pub(crate) enum TransformReset {
     Position,
     Rotation,
     Scale,
 }
 
-fn reset_transform_selected(world: &mut World, reset: TransformReset) {
+pub(crate) fn reset_transform_selected(world: &mut World, reset: TransformReset) {
     let selection = world.resource::<Selection>();
     let entities: Vec<Entity> = selection.entities.clone();
 
@@ -684,7 +533,7 @@ fn reset_transform_selected(world: &mut World, reset: TransformReset) {
     }
 }
 
-fn nudge_selected(world: &mut World, offset: Vec3) {
+pub(crate) fn nudge_selected(world: &mut World, offset: Vec3) {
     let selection = world.resource::<Selection>();
     let entities: Vec<Entity> = selection.entities.clone();
 
@@ -726,7 +575,7 @@ fn nudge_selected(world: &mut World, offset: Vec3) {
     }
 }
 
-fn rotate_selected(world: &mut World, rotation: Quat) {
+pub(crate) fn rotate_selected(world: &mut World, rotation: Quat) {
     let selection = world.resource::<Selection>();
     let entities: Vec<Entity> = selection.entities.clone();
 
@@ -1044,4 +893,292 @@ fn get_assets_base_dir() -> Option<std::path::PathBuf> {
         std::env::current_exe().ok()?.parent()?.to_path_buf()
     };
     Some(base.join("assets"))
+}
+
+// ─────────────────────── Operators ────────────────────────────
+//
+// Entity-level operators (`entity.*`) and the `Add` menu
+// (`entity.add.*`). Keybind and menu dispatch both arrive here.
+// Operators are gated with `is_available = can_act_on_entities` so
+// they refuse to fire while a brush sub-element drag or modal
+// operator has the scene locked, matching the guards the legacy
+// `handle_entity_keys` applied.
+
+use bevy_enhanced_input::prelude::{Chord, Press, *};
+use jackdaw_api::prelude::*;
+
+use crate::core_extension::{CoreExtensionInputContext, Modifiers};
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext, modifiers: &Modifiers) {
+    ctx.register_operator::<EntityDeleteOp>()
+        .register_operator::<EntityDuplicateOp>()
+        .register_operator::<EntityCopyComponentsOp>()
+        .register_operator::<EntityPasteComponentsOp>()
+        .register_operator::<EntityToggleVisibilityOp>()
+        .register_operator::<EntityHideUnselectedOp>()
+        .register_operator::<EntityUnhideAllOp>()
+        .register_operator::<EntityAddCubeOp>()
+        .register_operator::<EntityAddSphereOp>()
+        .register_operator::<EntityAddPointLightOp>()
+        .register_operator::<EntityAddDirectionalLightOp>()
+        .register_operator::<EntityAddSpotLightOp>()
+        .register_operator::<EntityAddCameraOp>()
+        .register_operator::<EntityAddEmptyOp>()
+        .register_operator::<EntityAddNavmeshOp>()
+        .register_operator::<EntityAddTerrainOp>()
+        .register_operator::<EntityAddPrefabOp>();
+
+    let ext = ctx.id();
+    let ctrl = modifiers.ctrl;
+    let alt = modifiers.alt;
+    ctx.entity_mut().world_scope(|world| {
+        world.spawn((
+            Action::<EntityDeleteOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            bindings![(KeyCode::Delete, Press::default())],
+        ));
+        world.spawn((
+            Action::<EntityDuplicateOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            Chord::single(ctrl),
+            bindings![(KeyCode::KeyD, Press::default())],
+        ));
+        world.spawn((
+            Action::<EntityCopyComponentsOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            Chord::single(ctrl),
+            bindings![(KeyCode::KeyC, Press::default())],
+        ));
+        world.spawn((
+            Action::<EntityPasteComponentsOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            Chord::single(ctrl),
+            bindings![(KeyCode::KeyV, Press::default())],
+        ));
+        world.spawn((
+            Action::<EntityToggleVisibilityOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            bindings![(KeyCode::KeyH, Press::default())],
+        ));
+        world.spawn((
+            Action::<EntityUnhideAllOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            Chord::single(ctrl),
+            bindings![(KeyCode::KeyH, Press::default())],
+        ));
+        world.spawn((
+            Action::<EntityHideUnselectedOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            Chord::single(alt),
+            bindings![(KeyCode::KeyH, Press::default())],
+        ));
+    });
+}
+
+/// Shared availability check for entity manipulation operators.
+/// Refuses to fire while a text input has focus, while a modal
+/// operator is in flight, while the draw brush modal is active, or
+/// while brush sub-element edit mode is active — matches the guards
+/// the legacy `handle_entity_keys` applied.
+fn can_act_on_entities(
+    input_focus: Res<InputFocus>,
+    active: ActiveModalQuery,
+    modal: Res<crate::modal_transform::ModalTransformState>,
+    draw_state: Res<crate::draw_brush::DrawBrushState>,
+    edit_mode: Res<crate::brush::EditMode>,
+) -> bool {
+    if input_focus.0.is_some() || active.is_modal_running() || modal.active.is_some() {
+        return false;
+    }
+    if draw_state.active.is_some() {
+        return false;
+    }
+    matches!(*edit_mode, crate::brush::EditMode::Object)
+}
+
+// ── Entity lifecycle ────────────────────────────────────────────
+
+#[operator(
+    id = "entity.delete",
+    label = "Delete",
+    is_available = can_act_on_entities
+)]
+fn entity_delete(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(delete_selected);
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "entity.duplicate",
+    label = "Duplicate",
+    is_available = can_act_on_entities
+)]
+fn entity_duplicate(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(duplicate_selected);
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "entity.copy_components",
+    label = "Copy Components",
+    allows_undo = false,
+    is_available = can_act_on_entities
+)]
+fn entity_copy_components(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(copy_components);
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "entity.paste_components",
+    label = "Paste Components",
+    is_available = can_act_on_entities
+)]
+fn entity_paste_components(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(paste_components);
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "entity.toggle_visibility",
+    label = "Toggle Visibility",
+    allows_undo = false,
+    is_available = can_act_on_entities
+)]
+fn entity_toggle_visibility(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(hide_selected);
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "entity.hide_unselected",
+    label = "Hide Unselected",
+    allows_undo = false,
+    is_available = can_act_on_entities
+)]
+fn entity_hide_unselected(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        if let Err(err) = world.run_system_cached(hide_all_entities) {
+            warn!("hide_all_entities: {err:?}");
+        }
+    });
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "entity.unhide_all",
+    label = "Unhide All",
+    allows_undo = false,
+    is_available = can_act_on_entities
+)]
+fn entity_unhide_all(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        if let Err(err) = world.run_system_cached(unhide_all_entities) {
+            warn!("unhide_all_entities: {err:?}");
+        }
+    });
+    OperatorResult::Finished
+}
+
+// ── Add menu ────────────────────────────────────────────────────
+
+#[operator(id = "entity.add.cube", label = "Cube")]
+fn entity_add_cube(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::Cube);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.sphere", label = "Sphere")]
+fn entity_add_sphere(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::Sphere);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.point_light", label = "Point Light")]
+fn entity_add_point_light(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::PointLight);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.directional_light", label = "Directional Light")]
+fn entity_add_directional_light(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::DirectionalLight);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.spot_light", label = "Spot Light")]
+fn entity_add_spot_light(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::SpotLight);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.camera", label = "Camera")]
+fn entity_add_camera(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::Camera3d);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.empty", label = "Empty")]
+fn entity_add_empty(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::Empty);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.navmesh", label = "Navmesh")]
+fn entity_add_navmesh(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        crate::spawn_undoable(world, "Add Navmesh Region", |world| {
+            let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
+                SystemState::new(world);
+            let (mut commands, mut selection) = system_state.get_mut(world);
+            let entity = crate::navmesh::spawn_navmesh_entity(&mut commands);
+            selection.select_single(&mut commands, entity);
+            system_state.apply(world);
+            crate::scene_io::register_entity_in_ast(world, entity);
+            entity
+        });
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.terrain", label = "Terrain")]
+fn entity_add_terrain(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        crate::spawn_undoable(world, "Add Terrain", |world| {
+            let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
+                SystemState::new(world);
+            let (mut commands, mut selection) = system_state.get_mut(world);
+            let entity = crate::terrain::spawn_terrain_entity(&mut commands);
+            selection.select_single(&mut commands, entity);
+            system_state.apply(world);
+            crate::scene_io::register_entity_in_ast(world, entity);
+            entity
+        });
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.prefab", label = "Prefab")]
+fn entity_add_prefab(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        crate::prefab_picker::open_prefab_picker(world);
+    });
+    OperatorResult::Finished
 }
