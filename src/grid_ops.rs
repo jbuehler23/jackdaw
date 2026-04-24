@@ -32,14 +32,20 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 }
 
 #[operator(id = "grid.increase", label = "Increase Grid", allows_undo = false)]
-pub(crate) fn grid_increase(_: In<OperatorParameters>, mut snap: ResMut<SnapSettings>) -> OperatorResult {
+pub(crate) fn grid_increase(
+    _: In<OperatorParameters>,
+    mut snap: ResMut<SnapSettings>,
+) -> OperatorResult {
     snap.grid_power = i32::min(snap.grid_power + 1, GRID_POWER_MAX);
     snap.translate_increment = snap.grid_size();
     OperatorResult::Finished
 }
 
 #[operator(id = "grid.decrease", label = "Decrease Grid", allows_undo = false)]
-pub(crate) fn grid_decrease(_: In<OperatorParameters>, mut snap: ResMut<SnapSettings>) -> OperatorResult {
+pub(crate) fn grid_decrease(
+    _: In<OperatorParameters>,
+    mut snap: ResMut<SnapSettings>,
+) -> OperatorResult {
     snap.grid_power = i32::max(snap.grid_power - 1, GRID_POWER_MIN);
     snap.translate_increment = snap.grid_size();
     OperatorResult::Finished

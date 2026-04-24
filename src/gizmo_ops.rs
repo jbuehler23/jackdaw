@@ -65,7 +65,10 @@ fn can_change_gizmo(
     allows_undo = false,
     is_available = can_change_gizmo
 )]
-pub(crate) fn gizmo_mode_translate(_: In<OperatorParameters>, mut mode: ResMut<GizmoMode>) -> OperatorResult {
+pub(crate) fn gizmo_mode_translate(
+    _: In<OperatorParameters>,
+    mut mode: ResMut<GizmoMode>,
+) -> OperatorResult {
     *mode = GizmoMode::Translate;
     OperatorResult::Finished
 }
@@ -76,7 +79,10 @@ pub(crate) fn gizmo_mode_translate(_: In<OperatorParameters>, mut mode: ResMut<G
     allows_undo = false,
     is_available = can_change_gizmo
 )]
-pub(crate) fn gizmo_mode_rotate(_: In<OperatorParameters>, mut mode: ResMut<GizmoMode>) -> OperatorResult {
+pub(crate) fn gizmo_mode_rotate(
+    _: In<OperatorParameters>,
+    mut mode: ResMut<GizmoMode>,
+) -> OperatorResult {
     *mode = GizmoMode::Rotate;
     OperatorResult::Finished
 }
@@ -87,7 +93,10 @@ pub(crate) fn gizmo_mode_rotate(_: In<OperatorParameters>, mut mode: ResMut<Gizm
     allows_undo = false,
     is_available = can_change_gizmo
 )]
-pub(crate) fn gizmo_mode_scale(_: In<OperatorParameters>, mut mode: ResMut<GizmoMode>) -> OperatorResult {
+pub(crate) fn gizmo_mode_scale(
+    _: In<OperatorParameters>,
+    mut mode: ResMut<GizmoMode>,
+) -> OperatorResult {
     *mode = GizmoMode::Scale;
     OperatorResult::Finished
 }
@@ -98,7 +107,10 @@ pub(crate) fn gizmo_mode_scale(_: In<OperatorParameters>, mut mode: ResMut<Gizmo
     allows_undo = false,
     is_available = can_change_gizmo
 )]
-pub(crate) fn gizmo_space_toggle(_: In<OperatorParameters>, mut space: ResMut<GizmoSpace>) -> OperatorResult {
+pub(crate) fn gizmo_space_toggle(
+    _: In<OperatorParameters>,
+    mut space: ResMut<GizmoSpace>,
+) -> OperatorResult {
     *space = match *space {
         GizmoSpace::World => GizmoSpace::Local,
         GizmoSpace::Local => GizmoSpace::World,

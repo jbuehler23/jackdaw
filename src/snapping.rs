@@ -251,9 +251,13 @@ fn handle_grid_size_scroll(
             MouseScrollUnit::Pixel => event.y * 0.01,
         };
         if delta > 0.0 {
-            commands.operator(crate::grid_ops::GridIncreaseOp::ID).call();
+            commands
+                .operator(crate::grid_ops::GridIncreaseOp::ID)
+                .call();
         } else if delta < 0.0 {
-            commands.operator(crate::grid_ops::GridDecreaseOp::ID).call();
+            commands
+                .operator(crate::grid_ops::GridDecreaseOp::ID)
+                .call();
         }
     }
 }
