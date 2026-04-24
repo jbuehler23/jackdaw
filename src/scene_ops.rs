@@ -68,7 +68,7 @@ fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResu
     OperatorResult::Finished
 }
 
-#[operator(id = "scene.save", label = "Save")]
+#[operator(id = "scene.save", label = "Save", allows_undo = false)]
 fn scene_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::scene_io::save_scene(world);
@@ -76,7 +76,7 @@ fn scene_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResu
     OperatorResult::Finished
 }
 
-#[operator(id = "scene.save_as", label = "Save As...")]
+#[operator(id = "scene.save_as", label = "Save As...", allows_undo = false)]
 fn scene_save_as(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::scene_io::save_scene_as(world);
@@ -86,7 +86,8 @@ fn scene_save_as(_: In<OperatorParameters>, mut commands: Commands) -> OperatorR
 
 #[operator(
     id = "scene.save_selection_as_template",
-    label = "Save Selection as Template"
+    label = "Save Selection as Template",
+    allows_undo = false
 )]
 fn scene_save_selection_as_template(
     _: In<OperatorParameters>,
