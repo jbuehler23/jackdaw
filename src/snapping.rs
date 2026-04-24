@@ -4,6 +4,7 @@ use bevy::{
     prelude::*,
 };
 use bevy_infinite_grid::{InfiniteGrid, InfiniteGridSettings};
+use jackdaw_api::op::{Operator, OperatorCommandsExt as _};
 
 use crate::default_style;
 
@@ -212,15 +213,17 @@ impl SnapSettings {
 }
 
 /// Scroll-wheel grid size control. Continuous-input, so it stays as a
-/// system rather than an operator. Bracket-key bindings live on
-/// [`crate::grid_ops::GridIncreaseOp`]/[`crate::grid_ops::GridDecreaseOp`].
+/// system rather than an operator. The actual power bump is delegated
+/// to [`crate::grid_ops::GridIncreaseOp`] /
+/// [`crate::grid_ops::GridDecreaseOp`] (also bound to the bracket
+/// keys) so the clamp + translate-increment refresh live in one place.
 fn handle_grid_size_scroll(
     keyboard: Res<ButtonInput<KeyCode>>,
     input_focus: Res<InputFocus>,
     modal: Res<crate::modal_transform::ModalTransformState>,
     terrain_edit_mode: Res<crate::terrain::TerrainEditMode>,
     mut scroll_events: MessageReader<MouseWheel>,
-    mut snap: ResMut<SnapSettings>,
+    mut commands: Commands,
 ) {
     if input_focus.0.is_some() || modal.active.is_some() {
         return;
@@ -242,21 +245,15 @@ fn handle_grid_size_scroll(
         return;
     }
 
-    let mut changed = false;
     for event in scroll_events.read() {
         let delta = match event.unit {
             MouseScrollUnit::Line => event.y,
             MouseScrollUnit::Pixel => event.y * 0.01,
         };
         if delta > 0.0 {
-            snap.grid_power = (snap.grid_power + 1).min(GRID_POWER_MAX);
-            changed = true;
+            commands.operator(crate::grid_ops::GridIncreaseOp::ID).call();
         } else if delta < 0.0 {
-            snap.grid_power = (snap.grid_power - 1).max(GRID_POWER_MIN);
-            changed = true;
+            commands.operator(crate::grid_ops::GridDecreaseOp::ID).call();
         }
-    }
-    if changed {
-        snap.translate_increment = snap.grid_size();
     }
 }

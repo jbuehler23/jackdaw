@@ -15,6 +15,11 @@ use crate::{
     EditorEntity,
     brush::{BrushEditMode, EditMode},
     draw_brush::{ActivateDrawBrushModalOp, DrawBrushState},
+    edit_mode_ops::{
+        EditModeClipOp, EditModeEdgeOp, EditModeFaceOp, EditModeObjectOp, EditModePhysicsOp,
+        EditModeVertexOp,
+    },
+    gizmo_ops::{GizmoModeRotateOp, GizmoModeScaleOp, GizmoModeTranslateOp, GizmoSpaceToggleOp},
     gizmos::{GizmoMode, GizmoSpace},
     hierarchy::{HierarchyPanel, HierarchyShowAllButton, HierarchyTreeContainer},
     inspector::Inspector,
@@ -611,9 +616,9 @@ fn toolbar_button(
 ) -> impl Bundle {
     let label = label.to_string();
     let op_id: &'static str = match mode {
-        GizmoMode::Translate => "gizmo.mode.translate",
-        GizmoMode::Rotate => "gizmo.mode.rotate",
-        GizmoMode::Scale => "gizmo.mode.scale",
+        GizmoMode::Translate => GizmoModeTranslateOp::ID,
+        GizmoMode::Rotate => GizmoModeRotateOp::ID,
+        GizmoMode::Scale => GizmoModeScaleOp::ID,
     };
     (
         GizmoModeButton(mode),
@@ -694,7 +699,7 @@ fn toolbar_space_button(icon_font: Handle<Font>) -> impl Bundle {
         ],
         observe(|_: On<Pointer<Click>>, mut commands: Commands| {
             commands
-                .operator("gizmo.space.toggle")
+                .operator(GizmoSpaceToggleOp::ID)
                 .settings(CallOperatorSettings {
                     execution_context: ExecutionContext::Invoke,
                     creates_history_entry: true,
@@ -733,12 +738,12 @@ fn toolbar_edit_button(
         )],
         observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
             let op_id: Cow<'static, str> = match tool {
-                EditToolButton::Object => "edit_mode.object".into(),
-                EditToolButton::Vertex => "edit_mode.vertex".into(),
-                EditToolButton::Edge => "edit_mode.edge".into(),
-                EditToolButton::Face => "edit_mode.face".into(),
-                EditToolButton::Clip => "edit_mode.clip".into(),
-                EditToolButton::Physics => "edit_mode.physics".into(),
+                EditToolButton::Object => EditModeObjectOp::ID.into(),
+                EditToolButton::Vertex => EditModeVertexOp::ID.into(),
+                EditToolButton::Edge => EditModeEdgeOp::ID.into(),
+                EditToolButton::Face => EditModeFaceOp::ID.into(),
+                EditToolButton::Clip => EditModeClipOp::ID.into(),
+                EditToolButton::Physics => EditModePhysicsOp::ID.into(),
                 EditToolButton::Operator(op) => op.into(),
             };
             commands

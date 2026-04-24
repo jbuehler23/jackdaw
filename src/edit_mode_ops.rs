@@ -81,7 +81,7 @@ fn can_change_edit_mode(
     allows_undo = false,
     is_available = can_change_edit_mode
 )]
-fn edit_mode_object(
+pub(crate) fn edit_mode_object(
     _: In<OperatorParameters>,
     mut edit_mode: ResMut<EditMode>,
     mut brush_selection: ResMut<BrushSelection>,
@@ -99,7 +99,7 @@ fn edit_mode_object(
     allows_undo = false,
     is_available = can_change_edit_mode
 )]
-fn edit_mode_vertex(
+pub(crate) fn edit_mode_vertex(
     _: In<OperatorParameters>,
     edit_mode: ResMut<EditMode>,
     brush_selection: ResMut<BrushSelection>,
@@ -123,7 +123,7 @@ fn edit_mode_vertex(
     allows_undo = false,
     is_available = can_change_edit_mode
 )]
-fn edit_mode_edge(
+pub(crate) fn edit_mode_edge(
     _: In<OperatorParameters>,
     edit_mode: ResMut<EditMode>,
     brush_selection: ResMut<BrushSelection>,
@@ -147,7 +147,7 @@ fn edit_mode_edge(
     allows_undo = false,
     is_available = can_change_edit_mode
 )]
-fn edit_mode_face(
+pub(crate) fn edit_mode_face(
     _: In<OperatorParameters>,
     edit_mode: ResMut<EditMode>,
     brush_selection: ResMut<BrushSelection>,
@@ -171,7 +171,7 @@ fn edit_mode_face(
     allows_undo = false,
     is_available = can_change_edit_mode
 )]
-fn edit_mode_clip(
+pub(crate) fn edit_mode_clip(
     _: In<OperatorParameters>,
     edit_mode: ResMut<EditMode>,
     brush_selection: ResMut<BrushSelection>,
@@ -195,7 +195,7 @@ fn edit_mode_clip(
     allows_undo = false,
     is_available = can_change_edit_mode
 )]
-fn edit_mode_physics(
+pub(crate) fn edit_mode_physics(
     _: In<OperatorParameters>,
     mut edit_mode: ResMut<EditMode>,
     mut brush_selection: ResMut<BrushSelection>,
