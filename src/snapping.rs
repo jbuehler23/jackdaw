@@ -15,12 +15,12 @@ impl Plugin for SnappingPlugin {
             .init_resource::<GridSettings>()
             .add_systems(
                 Update,
-                handle_grid_size_keys.in_set(crate::EditorInteractionSystems),
+                handle_grid_size_scroll.in_set(crate::EditorInteractionSystems),
             )
             .add_systems(
                 Update,
                 sync_grid_settings
-                    .after(handle_grid_size_keys)
+                    .after(handle_grid_size_scroll)
                     .run_if(in_state(crate::AppState::Editor)),
             );
     }
@@ -211,9 +211,11 @@ impl SnapSettings {
     }
 }
 
-fn handle_grid_size_keys(
+/// Scroll-wheel grid size control. Continuous-input, so it stays as a
+/// system rather than an operator. Bracket-key bindings live on
+/// [`crate::grid_ops::GridIncreaseOp`]/[`crate::grid_ops::GridDecreaseOp`].
+fn handle_grid_size_scroll(
     keyboard: Res<ButtonInput<KeyCode>>,
-    keybinds: Res<crate::keybinds::KeybindRegistry>,
     input_focus: Res<InputFocus>,
     modal: Res<crate::modal_transform::ModalTransformState>,
     terrain_edit_mode: Res<crate::terrain::TerrainEditMode>,
@@ -236,33 +238,23 @@ fn handle_grid_size_keys(
             crate::terrain::TerrainEditMode::Sculpt(_)
         );
 
+    if !((ctrl && alt) || shift_grid) {
+        return;
+    }
+
     let mut changed = false;
-
-    // Ctrl+Alt+Scroll or Shift+Scroll (non-sculpt): change grid size
-    if (ctrl && alt) || shift_grid {
-        for event in scroll_events.read() {
-            let delta = match event.unit {
-                MouseScrollUnit::Line => event.y,
-                MouseScrollUnit::Pixel => event.y * 0.01,
-            };
-            if delta > 0.0 {
-                snap.grid_power = (snap.grid_power + 1).min(GRID_POWER_MAX);
-                changed = true;
-            } else if delta < 0.0 {
-                snap.grid_power = (snap.grid_power - 1).max(GRID_POWER_MIN);
-                changed = true;
-            }
+    for event in scroll_events.read() {
+        let delta = match event.unit {
+            MouseScrollUnit::Line => event.y,
+            MouseScrollUnit::Pixel => event.y * 0.01,
+        };
+        if delta > 0.0 {
+            snap.grid_power = (snap.grid_power + 1).min(GRID_POWER_MAX);
+            changed = true;
+        } else if delta < 0.0 {
+            snap.grid_power = (snap.grid_power - 1).max(GRID_POWER_MIN);
+            changed = true;
         }
-    }
-
-    // Bracket keys: alternative grid size control
-    if keybinds.just_pressed(crate::keybinds::EditorAction::DecreaseGrid, &keyboard) {
-        snap.grid_power = (snap.grid_power - 1).max(GRID_POWER_MIN);
-        changed = true;
-    }
-    if keybinds.just_pressed(crate::keybinds::EditorAction::IncreaseGrid, &keyboard) {
-        snap.grid_power = (snap.grid_power + 1).min(GRID_POWER_MAX);
-        changed = true;
     }
     if changed {
         snap.translate_increment = snap.grid_size();

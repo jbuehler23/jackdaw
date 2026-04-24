@@ -107,6 +107,10 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::scene_ops::add_to_extension(ctx, &modifiers);
         crate::history_ops::add_to_extension(ctx, &modifiers);
         crate::app_ops::add_to_extension(ctx);
+        crate::view_ops::add_to_extension(ctx, &modifiers);
+        crate::grid_ops::add_to_extension(ctx);
+        crate::gizmo_ops::add_to_extension(ctx);
+        crate::edit_mode_ops::add_to_extension(ctx);
     }
 
     fn register_input_context(app: &mut App) {

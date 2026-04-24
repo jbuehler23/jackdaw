@@ -81,11 +81,7 @@ impl Plugin for TransformGizmosPlugin {
             .add_systems(Startup, configure_transform_gizmos)
             .add_systems(
                 Update,
-                (
-                    handle_gizmo_mode_keys,
-                    handle_gizmo_hover,
-                    handle_gizmo_drag,
-                )
+                (handle_gizmo_hover, handle_gizmo_drag)
                     .chain()
                     .in_set(crate::EditorInteractionSystems),
             )
@@ -102,42 +98,6 @@ fn configure_transform_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
     let (config, _) = config_store.config_mut::<TransformGizmoGroup>();
     config.depth_bias = -1.0;
     config.line.width = 3.0;
-}
-
-fn handle_gizmo_mode_keys(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    keybinds: Res<crate::keybinds::KeybindRegistry>,
-    mut mode: ResMut<GizmoMode>,
-    mut space: ResMut<GizmoSpace>,
-    drag_state: Res<GizmoDragState>,
-    modal: Res<ModalTransformState>,
-    edit_mode: Res<crate::brush::EditMode>,
-) {
-    // Don't switch modes while dragging, during modal ops, or in brush edit mode
-    if drag_state.active || modal.active.is_some() {
-        return;
-    }
-    if *edit_mode != crate::brush::EditMode::Object {
-        return;
-    }
-
-    use crate::keybinds::EditorAction;
-
-    if keybinds.just_pressed(EditorAction::GizmoRotate, &keyboard) {
-        *mode = GizmoMode::Rotate;
-    }
-    if keybinds.just_pressed(EditorAction::GizmoScale, &keyboard) {
-        *mode = GizmoMode::Scale;
-    }
-    if keybinds.just_pressed(EditorAction::GizmoTranslate, &keyboard) {
-        *mode = GizmoMode::Translate;
-    }
-    if keybinds.just_pressed(EditorAction::ToggleGizmoSpace, &keyboard) {
-        *space = match *space {
-            GizmoSpace::World => GizmoSpace::Local,
-            GizmoSpace::Local => GizmoSpace::World,
-        };
-    }
 }
 
 pub(crate) fn handle_gizmo_hover(

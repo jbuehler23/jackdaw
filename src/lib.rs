@@ -11,10 +11,13 @@ pub mod commands;
 pub mod custom_properties;
 pub mod default_style;
 pub mod draw_brush;
+pub mod edit_mode_ops;
 pub mod entity_ops;
 pub mod entity_templates;
 pub mod face_grid;
+pub mod gizmo_ops;
 pub mod gizmos;
+pub mod grid_ops;
 pub mod hierarchy;
 pub mod history_ops;
 pub mod inspector;
@@ -56,6 +59,7 @@ pub mod terrain;
 pub mod texture_browser;
 pub mod undo_snapshot;
 pub mod view_modes;
+pub mod view_ops;
 pub mod viewport;
 pub mod viewport_overlays;
 pub mod viewport_select;
@@ -1934,15 +1938,15 @@ fn populate_menu(
             (
                 "View",
                 vec![
-                    ("view.wireframe", "Toggle Wireframe"),
-                    ("view.bounding_boxes", "Toggle Bounding Boxes"),
-                    ("view.bounding_box_mode", "Cycle Bounding Box Mode"),
-                    ("view.face_grid", "Toggle Face Grid"),
-                    ("view.brush_wireframe", "Toggle Brush Wireframe"),
-                    ("view.show_brush_outline", "Toggle Brush Outline"),
-                    ("view.alignment_guides", "Toggle Alignment Guides"),
-                    ("view.collider_gizmos", "Toggle Collider Gizmos"),
-                    ("view.hierarchy_arrows", "Toggle Hierarchy Arrows"),
+                    ("op:view.toggle_wireframe", "Toggle Wireframe"),
+                    ("op:view.toggle_bounding_boxes", "Toggle Bounding Boxes"),
+                    ("op:view.cycle_bounding_box_mode", "Cycle Bounding Box Mode"),
+                    ("op:view.toggle_face_grid", "Toggle Face Grid"),
+                    ("op:view.toggle_brush_wireframe", "Toggle Brush Wireframe"),
+                    ("op:view.toggle_brush_outline", "Toggle Brush Outline"),
+                    ("op:view.toggle_alignment_guides", "Toggle Alignment Guides"),
+                    ("op:view.toggle_collider_gizmos", "Toggle Collider Gizmos"),
+                    ("op:view.toggle_hierarchy_arrows", "Toggle Hierarchy Arrows"),
                 ],
             ),
             ("Add", add_menu_refs),
@@ -2029,69 +2033,6 @@ fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
                     bs.vertices.clear();
                     bs.edges.clear();
                 }
-            });
-        }
-        "view.wireframe" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<view_modes::ViewModeSettings>();
-                settings.wireframe = !settings.wireframe;
-            });
-        }
-        "view.bounding_boxes" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<viewport_overlays::OverlaySettings>();
-                settings.show_bounding_boxes = !settings.show_bounding_boxes;
-            });
-        }
-        "view.bounding_box_mode" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<viewport_overlays::OverlaySettings>();
-                settings.bounding_box_mode = match settings.bounding_box_mode {
-                    viewport_overlays::BoundingBoxMode::Aabb => {
-                        viewport_overlays::BoundingBoxMode::ConvexHull
-                    }
-                    viewport_overlays::BoundingBoxMode::ConvexHull => {
-                        viewport_overlays::BoundingBoxMode::Aabb
-                    }
-                };
-            });
-        }
-        "view.face_grid" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<viewport_overlays::OverlaySettings>();
-                settings.show_face_grid = !settings.show_face_grid;
-            });
-        }
-        "view.brush_wireframe" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<viewport_overlays::OverlaySettings>();
-                settings.show_brush_wireframe = !settings.show_brush_wireframe;
-            });
-        }
-        "view.show_brush_outline" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<viewport_overlays::OverlaySettings>();
-                settings.show_brush_outline = !settings.show_brush_outline;
-            });
-        }
-        "view.alignment_guides" => {
-            commands.queue(|world: &mut World| {
-                let mut settings = world.resource_mut::<viewport_overlays::OverlaySettings>();
-                settings.show_alignment_guides = !settings.show_alignment_guides;
-            });
-        }
-        "view.collider_gizmos" => {
-            commands.queue(|world: &mut World| {
-                let mut config =
-                    world.resource_mut::<jackdaw_avian_integration::PhysicsOverlayConfig>();
-                config.show_colliders = !config.show_colliders;
-            });
-        }
-        "view.hierarchy_arrows" => {
-            commands.queue(|world: &mut World| {
-                let mut config =
-                    world.resource_mut::<jackdaw_avian_integration::PhysicsOverlayConfig>();
-                config.show_hierarchy_arrows = !config.show_hierarchy_arrows;
             });
         }
         "add.cube" => {
