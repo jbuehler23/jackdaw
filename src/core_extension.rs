@@ -76,12 +76,12 @@ impl JackdawExtension for JackdawCoreExtension {
             ),
         ));
 
-        // Spawn the two modifier-key input actions once, up front, so
-        // later keybind ports can `Chord::single(ctrl)` /
-        // `Chord::new([ctrl, shift])` without each module having to
-        // re-register them.
+        // Spawn the three modifier-key input actions once, up front,
+        // so later keybind ports can `Chord::single(ctrl)` /
+        // `Chord::new([ctrl, shift])` / `Chord::single(alt)` without
+        // each module having to re-register them.
         let ext = ctx.id();
-        let (ctrl, shift) = ctx.entity_mut().world_scope(|world| {
+        let (ctrl, shift, alt) = ctx.entity_mut().world_scope(|world| {
             let ctrl = world
                 .spawn((
                     Action::<CtrlHeldAction>::new(),
@@ -96,9 +96,16 @@ impl JackdawExtension for JackdawCoreExtension {
                     bindings![KeyCode::ShiftLeft, KeyCode::ShiftRight],
                 ))
                 .id();
-            (ctrl, shift)
+            let alt = world
+                .spawn((
+                    Action::<AltHeldAction>::new(),
+                    ActionOf::<CoreExtensionInputContext>::new(ext),
+                    bindings![KeyCode::AltLeft, KeyCode::AltRight],
+                ))
+                .id();
+            (ctrl, shift, alt)
         });
-        let modifiers = Modifiers { ctrl, shift };
+        let modifiers = Modifiers { ctrl, shift, alt };
 
         ctx.register_operator::<CancelModalOp>();
         ctx.register_operator::<crate::asset_browser::ApplyTextureOp>();
@@ -111,6 +118,8 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::grid_ops::add_to_extension(ctx);
         crate::gizmo_ops::add_to_extension(ctx);
         crate::edit_mode_ops::add_to_extension(ctx);
+        crate::entity_ops::add_to_extension(ctx, &modifiers);
+        crate::transform_ops::add_to_extension(ctx, &modifiers);
     }
 
     fn register_input_context(app: &mut App) {
@@ -135,11 +144,18 @@ pub struct CtrlHeldAction;
 #[action_output(bool)]
 pub struct ShiftHeldAction;
 
-/// Entity ids of the Ctrl and Shift modifier actions, passed to each
-/// module's `add_to_extension` so chorded keybinds can reference them.
+/// BEI input action bound to Alt (left or right). See [`CtrlHeldAction`].
+#[derive(Component, Debug, Default, Clone, Copy, InputAction)]
+#[action_output(bool)]
+pub struct AltHeldAction;
+
+/// Entity ids of the Ctrl, Shift, and Alt modifier actions, passed to
+/// each module's `add_to_extension` so chorded keybinds can reference
+/// them.
 pub struct Modifiers {
     pub ctrl: Entity,
     pub shift: Entity,
+    pub alt: Entity,
 }
 
 #[operator(

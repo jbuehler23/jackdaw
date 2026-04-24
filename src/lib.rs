@@ -57,6 +57,7 @@ pub mod snapping;
 pub mod status_bar;
 pub mod terrain;
 pub mod texture_browser;
+pub mod transform_ops;
 pub mod undo_snapshot;
 pub mod view_modes;
 pub mod view_ops;
@@ -310,8 +311,8 @@ impl Plugin for EditorCorePlugin {
                     register_animation_entities_in_ast,
                     follow_scene_selection_to_clip,
                     sync_selected_keyframes_from_selection,
-                    handle_keyframe_delete_intercept.before(entity_ops::handle_entity_keys),
-                    handle_timeline_shortcuts.before(entity_ops::handle_entity_keys),
+                    handle_keyframe_delete_intercept,
+                    handle_timeline_shortcuts,
                     auto_save_layout_on_change,
                     add_entity_picker::filter_add_entity_picker,
                     add_entity_picker::close_add_entity_picker_on_escape,
@@ -1926,8 +1927,8 @@ fn populate_menu(
                     ("op:history.undo", "Undo"),
                     ("op:history.redo", "Redo"),
                     ("---", ""),
-                    ("edit.delete", "Delete"),
-                    ("edit.duplicate", "Duplicate"),
+                    ("op:entity.delete", "Delete"),
+                    ("op:entity.duplicate", "Duplicate"),
                     ("---", ""),
                     ("edit.join", "Join (Convex Merge)"),
                     ("edit.csg_subtract", "CSG Subtract"),
@@ -1957,16 +1958,6 @@ fn populate_menu(
 
 fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
     match event.action.as_str() {
-        "edit.delete" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::delete_selected(world);
-            });
-        }
-        "edit.duplicate" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::duplicate_selected(world);
-            });
-        }
         "edit.join" => {
             commands.queue(draw_brush::join_selected_brushes_impl);
         }
@@ -2035,77 +2026,6 @@ fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
                 }
             });
         }
-        "add.cube" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::Cube);
-            });
-        }
-        "add.sphere" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::Sphere);
-            });
-        }
-        "add.point_light" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::PointLight);
-            });
-        }
-        "add.directional_light" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(
-                    world,
-                    entity_ops::EntityTemplate::DirectionalLight,
-                );
-            });
-        }
-        "add.spot_light" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::SpotLight);
-            });
-        }
-        "add.camera" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::Camera3d);
-            });
-        }
-        "add.empty" => {
-            commands.queue(|world: &mut World| {
-                entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::Empty);
-            });
-        }
-        "add.navmesh" => {
-            commands.queue(|world: &mut World| {
-                spawn_undoable(world, "Add Navmesh Region", |world| {
-                    let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
-                        SystemState::new(world);
-                    let (mut commands, mut selection) = system_state.get_mut(world);
-                    let entity = navmesh::spawn_navmesh_entity(&mut commands);
-                    selection.select_single(&mut commands, entity);
-                    system_state.apply(world);
-                    scene_io::register_entity_in_ast(world, entity);
-                    entity
-                });
-            });
-        }
-        "add.terrain" => {
-            commands.queue(|world: &mut World| {
-                spawn_undoable(world, "Add Terrain", |world| {
-                    let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
-                        SystemState::new(world);
-                    let (mut commands, mut selection) = system_state.get_mut(world);
-                    let entity = terrain::spawn_terrain_entity(&mut commands);
-                    selection.select_single(&mut commands, entity);
-                    system_state.apply(world);
-                    scene_io::register_entity_in_ast(world, entity);
-                    entity
-                });
-            });
-        }
-        "add.prefab" => {
-            commands.queue(|world: &mut World| {
-                crate::prefab_picker::open_prefab_picker(world);
-            });
-        }
         action if action.starts_with(OP_PREFIX) => {
             // Extension-contributed menu entry. The action id is the
             // operator id with an "op:" prefix. Dispatching through the
@@ -2147,7 +2067,7 @@ fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
 const OP_PREFIX: &str = "op:";
 
 /// Wrap an entity-spawning closure in a `SpawnEntity` command so Ctrl+Z can undo it.
-fn spawn_undoable<F>(world: &mut World, label: &str, spawn: F)
+pub(crate) fn spawn_undoable<F>(world: &mut World, label: &str, spawn: F)
 where
     F: Fn(&mut World) -> Entity + Send + Sync + 'static,
 {
