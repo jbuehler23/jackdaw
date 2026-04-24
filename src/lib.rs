@@ -1050,8 +1050,8 @@ impl DespawnKeyframeCmd {
     }
 }
 
-/// Interceptor that runs before [`entity_ops::handle_entity_keys`]
-/// and steals the Delete key for any selected keyframe entities.
+/// Interceptor that runs before the entity-delete operator fires and
+/// steals the Delete key for any selected keyframe entities.
 /// Each keyframe gets wrapped in a [`DespawnKeyframeCmd`], the
 /// commands are grouped and pushed onto the history, and the
 /// keyframes are removed from [`selection::Selection`] so the
@@ -1216,7 +1216,7 @@ impl jackdaw_commands::EditorCommand for SpawnKeyframeCmd {
 }
 
 /// Combined handler for timeline keyboard shortcuts that need to
-/// intercept before [`entity_ops::handle_entity_keys`]:
+/// intercept before the entity-level operator dispatch:
 ///
 /// - **Arrow keys** (Left/Right/Home/End) step the playhead when the
 ///   timeline dock window is active. Consumes the key input via
