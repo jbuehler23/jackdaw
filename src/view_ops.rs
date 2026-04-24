@@ -31,7 +31,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 }
 
 #[operator(id = "view.toggle_wireframe", label = "Toggle Wireframe")]
-fn view_toggle_wireframe(
+pub(crate) fn view_toggle_wireframe(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::view_modes::ViewModeSettings>,
 ) -> OperatorResult {
@@ -40,7 +40,7 @@ fn view_toggle_wireframe(
 }
 
 #[operator(id = "view.toggle_bounding_boxes", label = "Toggle Bounding Boxes")]
-fn view_toggle_bounding_boxes(
+pub(crate) fn view_toggle_bounding_boxes(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
 ) -> OperatorResult {
@@ -49,7 +49,7 @@ fn view_toggle_bounding_boxes(
 }
 
 #[operator(id = "view.cycle_bounding_box_mode", label = "Cycle Bounding Box Mode")]
-fn view_cycle_bounding_box_mode(
+pub(crate) fn view_cycle_bounding_box_mode(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
 ) -> OperatorResult {
@@ -65,7 +65,7 @@ fn view_cycle_bounding_box_mode(
 }
 
 #[operator(id = "view.toggle_face_grid", label = "Toggle Face Grid")]
-fn view_toggle_face_grid(
+pub(crate) fn view_toggle_face_grid(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
 ) -> OperatorResult {
@@ -74,7 +74,7 @@ fn view_toggle_face_grid(
 }
 
 #[operator(id = "view.toggle_brush_wireframe", label = "Toggle Brush Wireframe")]
-fn view_toggle_brush_wireframe(
+pub(crate) fn view_toggle_brush_wireframe(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
 ) -> OperatorResult {
@@ -83,7 +83,7 @@ fn view_toggle_brush_wireframe(
 }
 
 #[operator(id = "view.toggle_brush_outline", label = "Toggle Brush Outline")]
-fn view_toggle_brush_outline(
+pub(crate) fn view_toggle_brush_outline(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
 ) -> OperatorResult {
@@ -92,7 +92,7 @@ fn view_toggle_brush_outline(
 }
 
 #[operator(id = "view.toggle_alignment_guides", label = "Toggle Alignment Guides")]
-fn view_toggle_alignment_guides(
+pub(crate) fn view_toggle_alignment_guides(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
 ) -> OperatorResult {
@@ -101,7 +101,7 @@ fn view_toggle_alignment_guides(
 }
 
 #[operator(id = "view.toggle_collider_gizmos", label = "Toggle Collider Gizmos")]
-fn view_toggle_collider_gizmos(
+pub(crate) fn view_toggle_collider_gizmos(
     _: In<OperatorParameters>,
     mut config: ResMut<jackdaw_avian_integration::PhysicsOverlayConfig>,
 ) -> OperatorResult {
@@ -110,7 +110,7 @@ fn view_toggle_collider_gizmos(
 }
 
 #[operator(id = "view.toggle_hierarchy_arrows", label = "Toggle Hierarchy Arrows")]
-fn view_toggle_hierarchy_arrows(
+pub(crate) fn view_toggle_hierarchy_arrows(
     _: In<OperatorParameters>,
     mut config: ResMut<jackdaw_avian_integration::PhysicsOverlayConfig>,
 ) -> OperatorResult {

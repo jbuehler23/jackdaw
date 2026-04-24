@@ -1859,10 +1859,6 @@ fn populate_menu(
         "window.reset_layout".to_string(),
         "Reset Layout".to_string(),
     ));
-    let window_entries_refs: Vec<(&str, &str)> = window_entries
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
 
     // Build the Add menu from the shared helper so the toolbar and the
     // scene-tree Add Entity picker stay in lockstep. Separators are
@@ -1879,10 +1875,6 @@ fn populate_menu(
         }
         add_menu.push((item.action, item.label));
     }
-    let add_menu_refs: Vec<(&str, &str)> = add_menu
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
 
     // Current hot-reload state → reflect in the menu label.
     let hot_reload_on = world
@@ -1902,130 +1894,74 @@ fn populate_menu(
             (
                 "File",
                 vec![
-                    ("op:scene.new", "New"),
-                    ("op:scene.open", "Open"),
-                    ("---", ""),
-                    ("op:scene.save", "Save"),
-                    ("op:scene.save_as", "Save As..."),
-                    ("---", ""),
-                    (
-                        "op:scene.save_selection_as_template",
+                    op_entry::<scene_ops::SceneNewOp>("New"),
+                    op_entry::<scene_ops::SceneOpenOp>("Open"),
+                    separator(),
+                    op_entry::<scene_ops::SceneSaveOp>("Save"),
+                    op_entry::<scene_ops::SceneSaveAsOp>("Save As..."),
+                    separator(),
+                    op_entry::<scene_ops::SceneSaveSelectionAsTemplateOp>(
                         "Save Selection as Template",
                     ),
-                    ("---", ""),
-                    ("op:app.open_keybinds", "Keybinds..."),
-                    ("op:app.open_extensions", "Extensions..."),
-                    ("---", ""),
-                    ("op:app.toggle_hot_reload", hot_reload_label),
-                    ("op:scene.open_recent", "Open Recent..."),
-                    ("op:app.go_home", "Home"),
+                    separator(),
+                    op_entry::<app_ops::AppOpenKeybindsOp>("Keybinds..."),
+                    op_entry::<app_ops::AppOpenExtensionsOp>("Extensions..."),
+                    separator(),
+                    op_entry::<app_ops::AppToggleHotReloadOp>(hot_reload_label),
+                    op_entry::<scene_ops::SceneOpenRecentOp>("Open Recent..."),
+                    op_entry::<app_ops::AppGoHomeOp>("Home"),
                 ],
             ),
             (
                 "Edit",
                 vec![
-                    ("op:history.undo", "Undo"),
-                    ("op:history.redo", "Redo"),
-                    ("---", ""),
-                    ("op:entity.delete", "Delete"),
-                    ("op:entity.duplicate", "Duplicate"),
-                    ("---", ""),
-                    ("edit.join", "Join (Convex Merge)"),
-                    ("edit.csg_subtract", "CSG Subtract"),
-                    ("edit.csg_intersect", "CSG Intersect"),
-                    ("edit.extend_to_brush", "Extend to Brush"),
+                    op_entry::<history_ops::HistoryUndoOp>("Undo"),
+                    op_entry::<history_ops::HistoryRedoOp>("Redo"),
+                    separator(),
+                    op_entry::<entity_ops::EntityDeleteOp>("Delete"),
+                    op_entry::<entity_ops::EntityDuplicateOp>("Duplicate"),
+                    separator(),
+                    op_entry::<draw_brush::BrushJoinOp>("Join (Convex Merge)"),
+                    op_entry::<draw_brush::BrushCsgSubtractOp>("CSG Subtract"),
+                    op_entry::<draw_brush::BrushCsgIntersectOp>("CSG Intersect"),
+                    op_entry::<draw_brush::BrushExtendFaceToBrushOp>("Extend to Brush"),
                 ],
             ),
             (
                 "View",
                 vec![
-                    ("op:view.toggle_wireframe", "Toggle Wireframe"),
-                    ("op:view.toggle_bounding_boxes", "Toggle Bounding Boxes"),
-                    ("op:view.cycle_bounding_box_mode", "Cycle Bounding Box Mode"),
-                    ("op:view.toggle_face_grid", "Toggle Face Grid"),
-                    ("op:view.toggle_brush_wireframe", "Toggle Brush Wireframe"),
-                    ("op:view.toggle_brush_outline", "Toggle Brush Outline"),
-                    ("op:view.toggle_alignment_guides", "Toggle Alignment Guides"),
-                    ("op:view.toggle_collider_gizmos", "Toggle Collider Gizmos"),
-                    ("op:view.toggle_hierarchy_arrows", "Toggle Hierarchy Arrows"),
+                    op_entry::<view_ops::ViewToggleWireframeOp>("Toggle Wireframe"),
+                    op_entry::<view_ops::ViewToggleBoundingBoxesOp>("Toggle Bounding Boxes"),
+                    op_entry::<view_ops::ViewCycleBoundingBoxModeOp>("Cycle Bounding Box Mode"),
+                    op_entry::<view_ops::ViewToggleFaceGridOp>("Toggle Face Grid"),
+                    op_entry::<view_ops::ViewToggleBrushWireframeOp>("Toggle Brush Wireframe"),
+                    op_entry::<view_ops::ViewToggleBrushOutlineOp>("Toggle Brush Outline"),
+                    op_entry::<view_ops::ViewToggleAlignmentGuidesOp>("Toggle Alignment Guides"),
+                    op_entry::<view_ops::ViewToggleColliderGizmosOp>("Toggle Collider Gizmos"),
+                    op_entry::<view_ops::ViewToggleHierarchyArrowsOp>("Toggle Hierarchy Arrows"),
                 ],
             ),
-            ("Add", add_menu_refs),
-            ("Window", window_entries_refs),
+            ("Add", add_menu),
+            ("Window", window_entries),
         ],
     );
 }
 
+/// Build a menu-entry tuple whose action id is the given operator's
+/// `ID` wrapped in the feathers `op:` prefix. Keeps operator ids out
+/// of UI code — callers pass the `Op` type, not a hand-typed string.
+fn op_entry<O: Operator>(label: impl Into<String>) -> (String, String) {
+    (format!("op:{}", O::ID), label.into())
+}
+
+/// Menu separator row. Feathers renders any `(---, _)` entry as a
+/// horizontal divider.
+fn separator() -> (String, String) {
+    ("---".to_string(), String::new())
+}
+
 fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
     match event.action.as_str() {
-        "edit.join" => {
-            commands.queue(draw_brush::join_selected_brushes_impl);
-        }
-        "edit.csg_subtract" => {
-            commands.queue(draw_brush::csg_subtract_selected_impl);
-        }
-        "edit.csg_intersect" => {
-            commands.queue(draw_brush::csg_intersect_selected_impl);
-        }
-        "edit.extend_to_brush" => {
-            commands.queue(|world: &mut World| {
-                let edit_mode = *world.resource::<crate::brush::EditMode>();
-                let selection = world.resource::<Selection>();
-                let entities = selection.entities.clone();
-
-                let brush_selection = world.resource::<crate::brush::BrushSelection>();
-
-                // Resolve primary + face_index: prefer active face-mode selection,
-                // fall back to remembered face.
-                let (primary, face_index) = if edit_mode
-                    == crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face)
-                {
-                    let primary = brush_selection.entity;
-                    let face = brush_selection.faces.last().copied();
-                    match (primary, face) {
-                        (Some(p), Some(f)) => (p, f),
-                        _ => return,
-                    }
-                } else {
-                    let Some(primary) = selection.primary() else {
-                        return;
-                    };
-                    let face_index = if brush_selection.last_face_entity == Some(primary) {
-                        brush_selection.last_face_index
-                    } else {
-                        None
-                    };
-                    match face_index {
-                        Some(f) => (primary, f),
-                        None => return,
-                    }
-                };
-
-                let mut brush_query = world.query_filtered::<Entity, With<jackdaw_jsn::Brush>>();
-                let targets: Vec<Entity> = entities
-                    .iter()
-                    .copied()
-                    .filter(|&e| e != primary && brush_query.get(world, e).is_ok())
-                    .collect();
-                if targets.is_empty() {
-                    return;
-                }
-
-                draw_brush::extend_face_to_brush_impl(world, primary, &targets, face_index);
-
-                // Exit face mode if we were in it (geometry changed, indices invalid)
-                if edit_mode == crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face)
-                {
-                    *world.resource_mut::<crate::brush::EditMode>() =
-                        crate::brush::EditMode::Object;
-                    let mut bs = world.resource_mut::<crate::brush::BrushSelection>();
-                    bs.entity = None;
-                    bs.faces.clear();
-                    bs.vertices.clear();
-                    bs.edges.clear();
-                }
-            });
-        }
         action if action.starts_with(OP_PREFIX) => {
             // Extension-contributed menu entry. The action id is the
             // operator id with an "op:" prefix. Dispatching through the

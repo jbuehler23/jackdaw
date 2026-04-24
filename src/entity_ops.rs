@@ -996,7 +996,7 @@ fn can_act_on_entities(
     label = "Delete",
     is_available = can_act_on_entities
 )]
-fn entity_delete(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_delete(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(delete_selected);
     OperatorResult::Finished
 }
@@ -1006,7 +1006,10 @@ fn entity_delete(_: In<OperatorParameters>, mut commands: Commands) -> OperatorR
     label = "Duplicate",
     is_available = can_act_on_entities
 )]
-fn entity_duplicate(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_duplicate(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(duplicate_selected);
     OperatorResult::Finished
 }
@@ -1017,7 +1020,10 @@ fn entity_duplicate(_: In<OperatorParameters>, mut commands: Commands) -> Operat
     allows_undo = false,
     is_available = can_act_on_entities
 )]
-fn entity_copy_components(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_copy_components(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(copy_components);
     OperatorResult::Finished
 }
@@ -1027,7 +1033,10 @@ fn entity_copy_components(_: In<OperatorParameters>, mut commands: Commands) -> 
     label = "Paste Components",
     is_available = can_act_on_entities
 )]
-fn entity_paste_components(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_paste_components(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(paste_components);
     OperatorResult::Finished
 }
@@ -1038,7 +1047,10 @@ fn entity_paste_components(_: In<OperatorParameters>, mut commands: Commands) ->
     allows_undo = false,
     is_available = can_act_on_entities
 )]
-fn entity_toggle_visibility(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_toggle_visibility(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(hide_selected);
     OperatorResult::Finished
 }
@@ -1049,7 +1061,10 @@ fn entity_toggle_visibility(_: In<OperatorParameters>, mut commands: Commands) -
     allows_undo = false,
     is_available = can_act_on_entities
 )]
-fn entity_hide_unselected(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_hide_unselected(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(|world: &mut World| {
         if let Err(err) = world.run_system_cached(hide_all_entities) {
             warn!("hide_all_entities: {err:?}");
@@ -1064,7 +1079,10 @@ fn entity_hide_unselected(_: In<OperatorParameters>, mut commands: Commands) -> 
     allows_undo = false,
     is_available = can_act_on_entities
 )]
-fn entity_unhide_all(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_unhide_all(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(|world: &mut World| {
         if let Err(err) = world.run_system_cached(unhide_all_entities) {
             warn!("unhide_all_entities: {err:?}");

@@ -47,7 +47,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 }
 
 #[operator(id = "scene.new", label = "New")]
-fn scene_new(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn scene_new(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::scene_io::new_scene(world);
     });
@@ -55,7 +55,7 @@ fn scene_new(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResul
 }
 
 #[operator(id = "scene.open", label = "Open")]
-fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::scene_io::load_scene(world);
     });
@@ -63,7 +63,7 @@ fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResu
 }
 
 #[operator(id = "scene.save", label = "Save", allows_undo = false)]
-fn scene_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn scene_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::scene_io::save_scene(world);
     });
@@ -71,7 +71,7 @@ fn scene_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResu
 }
 
 #[operator(id = "scene.save_as", label = "Save As...", allows_undo = false)]
-fn scene_save_as(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn scene_save_as(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::scene_io::save_scene_as(world);
     });
@@ -83,7 +83,7 @@ fn scene_save_as(_: In<OperatorParameters>, mut commands: Commands) -> OperatorR
     label = "Save Selection as Template",
     allows_undo = false
 )]
-fn scene_save_selection_as_template(
+pub(crate) fn scene_save_selection_as_template(
     _: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
@@ -99,7 +99,10 @@ fn scene_save_selection_as_template(
 }
 
 #[operator(id = "scene.open_recent", label = "Open Recent...")]
-fn scene_open_recent(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn scene_open_recent(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::open_recent_dialog(world);
     });

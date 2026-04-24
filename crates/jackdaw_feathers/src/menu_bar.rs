@@ -158,18 +158,19 @@ pub fn menu_bar_shell() -> impl Bundle {
 }
 
 /// Populate a menu bar entity with items. Call from the app layer after spawning the shell.
+///
+/// Actions are `(action_id, label)` pairs. `action_id` can be an
+/// operator id wrapped in the [`OP_ACTION_PREFIX`] or any free-form
+/// identifier the host matches in a `MenuAction` observer. Action
+/// strings are owned so callers can pass `format!("op:{}", Op::ID)`
+/// without leaking operator-id string literals into UI code.
 pub fn populate_menu_bar(
     world: &mut World,
     menu_bar_entity: Entity,
-    menus: Vec<(&str, Vec<(&str, &str)>)>,
+    menus: Vec<(&str, Vec<(String, String)>)>,
 ) {
     for (label, actions) in menus {
-        let actions_owned: Vec<(String, String)> = actions
-            .into_iter()
-            .map(|(a, l)| (a.to_string(), l.to_string()))
-            .collect();
-
-        spawn_menu_bar_item(world, menu_bar_entity, label, actions_owned);
+        spawn_menu_bar_item(world, menu_bar_entity, label, actions);
     }
 }
 

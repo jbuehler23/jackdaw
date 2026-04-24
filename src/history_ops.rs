@@ -35,7 +35,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 }
 
 #[operator(id = "history.undo", label = "Undo", allows_undo = false)]
-fn history_undo(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn history_undo(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         cancel_active_modal_if_any(world);
         world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
@@ -46,7 +46,7 @@ fn history_undo(_: In<OperatorParameters>, mut commands: Commands) -> OperatorRe
 }
 
 #[operator(id = "history.redo", label = "Redo", allows_undo = false)]
-fn history_redo(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn history_redo(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         cancel_active_modal_if_any(world);
         world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {

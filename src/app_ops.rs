@@ -18,7 +18,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     label = "Extensions...",
     allows_undo = false
 )]
-fn app_open_extensions(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn app_open_extensions(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::extensions_dialog::open_extensions_dialog(world);
     });
@@ -26,7 +29,10 @@ fn app_open_extensions(_: In<OperatorParameters>, mut commands: Commands) -> Ope
 }
 
 #[operator(id = "app.open_keybinds", label = "Keybinds...", allows_undo = false)]
-fn app_open_keybinds(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn app_open_keybinds(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.trigger(crate::keybind_settings::OpenKeybindSettingsEvent);
     OperatorResult::Finished
 }
@@ -36,7 +42,10 @@ fn app_open_keybinds(_: In<OperatorParameters>, mut commands: Commands) -> Opera
     label = "Toggle Hot Reload",
     allows_undo = false
 )]
-fn app_toggle_hot_reload(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn app_toggle_hot_reload(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(|world: &mut World| {
         let mut enabled = world.resource_mut::<crate::hot_reload::HotReloadEnabled>();
         enabled.0 = !enabled.0;
@@ -50,7 +59,7 @@ fn app_toggle_hot_reload(_: In<OperatorParameters>, mut commands: Commands) -> O
 }
 
 #[operator(id = "app.go_home", label = "Home", allows_undo = false)]
-fn app_go_home(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn app_go_home(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         world
             .resource_mut::<NextState<crate::AppState>>()
