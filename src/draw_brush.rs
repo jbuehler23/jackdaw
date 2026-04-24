@@ -3073,9 +3073,9 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
     id = "brush.join",
     label = "Join (Convex Merge)",
     description = "Merge all selected brushes into a single convex-hull brush. \
-                   Preconditions: at least two `Brush` entities present in \
-                   `Selection::entities`. With fewer than two selected brushes \
-                   the op is a no-op. The first selected brush keeps its entity \
+                   Requires at least two `Brush` entities in \
+                   `Selection::entities`; availability (`can_run_binary_brush_op`) \
+                   is false otherwise. The first selected brush keeps its entity \
                    id and transform; others are despawned.",
     is_available = can_run_binary_brush_op,
 )]
@@ -3088,9 +3088,10 @@ pub(crate) fn brush_join(_: In<OperatorParameters>, mut commands: Commands) -> O
     id = "brush.csg_subtract",
     label = "CSG Subtract",
     description = "Subtract the non-first selected brushes from the first. \
-                   Preconditions: at least two `Brush` entities in \
-                   `Selection::entities` (first is the target, rest are cutters). \
-                   The target may be split into multiple fragment brushes.",
+                   Requires at least two `Brush` entities in `Selection::entities` \
+                   (first is the target, rest are cutters); availability \
+                   (`can_run_binary_brush_op`) is false otherwise. The target may \
+                   be split into multiple fragment brushes.",
     is_available = can_run_binary_brush_op,
 )]
 pub(crate) fn brush_csg_subtract(
@@ -3105,9 +3106,11 @@ pub(crate) fn brush_csg_subtract(
     id = "brush.csg_intersect",
     label = "CSG Intersect",
     description = "Replace the selected brushes with the solid shared by all of \
-                   them. Preconditions: at least two `Brush` entities in \
-                   `Selection::entities`. With fewer than two or an empty \
-                   intersection the op is a no-op.",
+                   them. Requires at least two `Brush` entities in \
+                   `Selection::entities`; availability \
+                   (`can_run_binary_brush_op`) is false otherwise. When the \
+                   intersection is empty the impl exits silently without \
+                   mutating the world.",
     is_available = can_run_binary_brush_op,
 )]
 pub(crate) fn brush_csg_intersect(
@@ -3193,9 +3196,11 @@ fn can_run_extend_face(
                    • `EditMode::BrushEdit(Face)` with a face selected on \
                      `BrushSelection` and ≥ 1 other brush in `Selection::entities`.\n\
                    • `EditMode::Object` with ≥ 2 brushes in `Selection::entities` \
-                     and a hovered or remembered face on the primary.\n\
-                   In either path the face index is resolved before any \
-                   mutation; if no face can be resolved, the op is a no-op.",
+                     and a remembered face on the primary.\n\
+                   Availability (`can_run_extend_face`) is false when neither \
+                   entry path applies. The Object-mode path additionally \
+                   tries to resolve a hovered face via raycast once invoked; \
+                   if that also fails it returns `Cancelled`.",
     is_available = can_run_extend_face,
 )]
 pub(crate) fn brush_extend_face_to_brush(
