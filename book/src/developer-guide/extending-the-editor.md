@@ -112,9 +112,10 @@ dylib path entirely:
 // your_editor/src/main.rs
 fn main() {
     App::new()
-        .add_plugins(jackdaw::EditorPlugins::default()
-            .with_extension("my_tool", || Box::new(MyTool))
-            .build())
+        .add_plugins(
+            jackdaw::EditorPlugins::default()
+                .set(ExtensionPlugin::new().with_extension::<MyExtension>())
+        )
         .run();
 }
 ```

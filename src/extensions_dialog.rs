@@ -120,7 +120,7 @@ fn populate_extensions_dialog(
     // Split catalog entries into Built-in vs. Custom. Membership comes
     // from each extension's declared `ExtensionKind`.
     let enabled_names: std::collections::HashSet<String> =
-        loaded.iter().map(|e| e.name.clone()).collect();
+        loaded.iter().map(|e| e.id.clone()).collect();
     let mut builtin_rows: Vec<(String, String, bool)> = Vec::new();
     let mut custom_rows: Vec<(String, String, bool)> = Vec::new();
     for (id, label, _description, kind) in catalog.iter_with_content() {
@@ -129,13 +129,13 @@ fn populate_extensions_dialog(
         // from the dialog entirely rather than rendering a locked
         // checkbox — they're implementation detail, not a user
         // choice.
-        if extensions_config::is_required(id) {
+        if extensions_config::is_required(&id) {
             continue;
         }
         let row = (
             id.to_string(),
             label.to_string(),
-            enabled_names.contains(id),
+            enabled_names.contains(&id),
         );
         match kind {
             ExtensionKind::Builtin => builtin_rows.push(row),

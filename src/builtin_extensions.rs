@@ -14,15 +14,15 @@ use jackdaw_feathers::icons::Icon;
 pub struct CoreWindowsExtension;
 
 impl JackdawExtension for CoreWindowsExtension {
-    fn id() -> String {
+    fn id(&self) -> String {
         "jackdaw.core_windows".to_string()
     }
 
-    fn label() -> String {
+    fn label(&self) -> String {
         "Core Windows".to_string()
     }
 
-    fn kind() -> ExtensionKind {
+    fn kind(&self) -> ExtensionKind {
         ExtensionKind::Builtin
     }
 
@@ -93,15 +93,15 @@ impl JackdawExtension for CoreWindowsExtension {
 pub struct AssetBrowserExtension;
 
 impl JackdawExtension for AssetBrowserExtension {
-    fn id() -> String {
+    fn id(&self) -> String {
         "jackdaw.asset_browser".to_string()
     }
 
-    fn label() -> String {
+    fn label(&self) -> String {
         "Asset Browser".to_string()
     }
 
-    fn kind() -> ExtensionKind {
+    fn kind(&self) -> ExtensionKind {
         ExtensionKind::Builtin
     }
 
@@ -134,15 +134,15 @@ impl JackdawExtension for AssetBrowserExtension {
 pub struct TimelineExtension;
 
 impl JackdawExtension for TimelineExtension {
-    fn id() -> String {
+    fn id(&self) -> String {
         "jackdaw.timeline".to_string()
     }
 
-    fn label() -> String {
+    fn label(&self) -> String {
         "Timeline".to_string()
     }
 
-    fn kind() -> ExtensionKind {
+    fn kind(&self) -> ExtensionKind {
         ExtensionKind::Builtin
     }
 
@@ -165,15 +165,15 @@ impl JackdawExtension for TimelineExtension {
 pub struct TerminalExtension;
 
 impl JackdawExtension for TerminalExtension {
-    fn id() -> String {
+    fn id(&self) -> String {
         "jackdaw.terminal".to_string()
     }
 
-    fn label() -> String {
+    fn label(&self) -> String {
         "Terminal".to_string()
     }
 
-    fn kind() -> ExtensionKind {
+    fn kind(&self) -> ExtensionKind {
         ExtensionKind::Builtin
     }
 
@@ -213,15 +213,15 @@ impl JackdawExtension for TerminalExtension {
 pub struct InspectorExtension;
 
 impl JackdawExtension for InspectorExtension {
-    fn id() -> String {
+    fn id(&self) -> String {
         "jackdaw.inspector".to_string()
     }
 
-    fn label() -> String {
+    fn label(&self) -> String {
         "Inspector".to_string()
     }
 
-    fn kind() -> ExtensionKind {
+    fn kind(&self) -> ExtensionKind {
         ExtensionKind::Builtin
     }
 

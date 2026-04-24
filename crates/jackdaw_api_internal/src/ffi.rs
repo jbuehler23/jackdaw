@@ -119,24 +119,19 @@ pub type ReflectRegisterFn = unsafe extern "Rust" fn(&mut bevy::reflect::TypeReg
 /// must be allocated with the same allocator the host uses; this is
 /// guaranteed when both sides link against Bevy with
 /// `dynamic_linking` enabled, which shares the Rust allocator.
-///
-/// `improper_ctypes_definitions` is silenced for the `ctor` field:
-/// `Box<dyn Trait>` is a fat pointer with a rustc-defined layout,
-/// which is sound here because editor and extension are required
-/// to link against the same Bevy dylib and so agree on layout.
 #[repr(C)]
-#[expect(
-    improper_ctypes_definitions,
-    reason = "This is wrong, but I'll fix it in the next PR"
-)]
 pub struct ExtensionEntry {
     pub api_version: u32,
     pub bevy_version: *const c_char,
     pub profile: *const c_char,
-    pub id: *const c_char,
-    pub label: *const c_char,
-    pub description: *const c_char,
-    pub ctor: unsafe extern "C" fn() -> Box<dyn crate::JackdawExtension>,
+    pub ctor: unsafe extern "C" fn() -> JackdawExtensionPtr,
+    pub dtor: unsafe extern "C" fn(JackdawExtensionPtr),
+}
+
+#[repr(C)]
+pub struct JackdawExtensionPtr {
+    data: *mut (),
+    vtable: *mut (),
 }
 
 /// Shape returned by every game dylib's entry function.

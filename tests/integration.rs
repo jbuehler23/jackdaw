@@ -37,7 +37,7 @@ impl<T: Operator> Default for IntegrationTestsExtension<T> {
 }
 
 impl<T: Operator + Send + Sync> JackdawExtension for IntegrationTestsExtension<T> {
-    fn id() -> String {
+    fn id(&self) -> String {
         "Integration Tests".to_string()
     }
 

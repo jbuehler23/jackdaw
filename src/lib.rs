@@ -356,18 +356,11 @@ impl ExtensionPlugin {
 
     /// Register an extension. May be called any number of times.
     pub fn with_extension<T: JackdawExtension + Default>(mut self) -> Self {
+        const {
+            assert!(size_of::<T>() == 0, "Extension type must be zero-sized");
+        }
         self.user_extensions
             .push(std::sync::Arc::new(|| Box::new(T::default())));
-        self
-    }
-
-    /// Like [`ExtensionPlugin::with_extension`], but takes a constructor function
-    /// instead of a type implementing [`JackdawExtension`].
-    pub fn with_extension_ctor<F>(mut self, ctor: F) -> Self
-    where
-        F: Fn() -> Box<dyn JackdawExtension> + Send + Sync + 'static,
-    {
-        self.user_extensions.push(std::sync::Arc::new(ctor));
         self
     }
 
@@ -398,7 +391,7 @@ impl Plugin for ExtensionPlugin {
 
         for ctor in &self.user_extensions {
             let ctor = std::sync::Arc::clone(ctor);
-            app.register_extension_dynamic(move || (*ctor)());
+            app.register_extension_with(move || (*ctor)());
         }
     }
 }

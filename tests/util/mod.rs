@@ -56,7 +56,7 @@ pub fn register_and_enable_extension<T: JackdawExtension + Default>(app: &mut Ap
     app.update();
     // Force-enable the test extension; idempotent if it was already enabled
     // (returns `None` in that case).
-    enable_extension(app.world_mut(), &T::id());
+    enable_extension(app.world_mut(), &T::default().id());
     // Let any on-add observers for the operator entities settle before the
     // caller starts asserting.
     app.update();

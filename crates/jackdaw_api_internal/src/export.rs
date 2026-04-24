@@ -52,38 +52,37 @@
 /// dylib would fail at link time anyway (duplicate symbol).
 #[macro_export]
 macro_rules! export_extension {
-    ($id:expr, $label:expr, $description:expr, $ctor:expr) => {
+    ($extension:ident) => {
         const _: () = {
-            const __JACKDAW_ID: &::core::ffi::CStr =
-                match ::core::ffi::CStr::from_bytes_with_nul(::core::concat!($id, "\0").as_bytes())
-                {
-                    ::core::result::Result::Ok(s) => s,
-                    ::core::result::Result::Err(_) => {
-                        ::core::panic!("extension ID contains interior NUL byte")
-                    }
-                };
-            const __JACKDAW_LABEL: &::core::ffi::CStr =
-                match ::core::ffi::CStr::from_bytes_with_nul(::core::concat!($label, "\0").as_bytes())
-                {
-                    ::core::result::Result::Ok(s) => s,
-                    ::core::result::Result::Err(_) => {
-                        ::core::panic!("extension label contains interior NUL byte")
-                    }
-                };
-            const __JACKDAW_DESCRIPTION: &::core::ffi::CStr =
-                match ::core::ffi::CStr::from_bytes_with_nul(
-                    ::core::concat!($description, "\0").as_bytes(),
-                ) {
-                    ::core::result::Result::Ok(s) => s,
-                    ::core::result::Result::Err(_) => {
-                        ::core::panic!("extension description contains interior NUL byte")
-                    }
-                };
+            // Using a ZST means that our common pattern of creating a sample extension to harvest the ID etc. is a no-op.
+            // We can also lift this requirement in the futureif we want.
+            const _: () = {
+                assert!(
+                    std::mem::size_of::<$extension>() == 0,
+                    "Extension must be a zero-sized type."
+                );
+            };
 
-            unsafe extern "C" fn __jackdaw_ctor() -> ::std::boxed::Box<dyn $crate::JackdawExtension>
-            {
-                let make: fn() -> ::std::boxed::Box<dyn $crate::JackdawExtension> = $ctor;
-                make()
+            unsafe extern "C" fn __jackdaw_ctor() -> $crate::ffi::JackdawExtensionPtr {
+                let obj: Box<dyn JackdawExtension> = Box::new($extension);
+                // SAFETY: Casting a trait object to a fat pointer is trivially fine in by itself,
+                // but note that we are ignoring the fact that the ABI border does not guarantee
+                // that we can actually turn this back
+                unsafe {
+                    let raw: *mut dyn JackdawExtension = Box::into_raw(obj);
+                    std::mem::transmute(raw)
+                }
+            }
+
+            unsafe extern "C" fn __jackdaw_dtor(ptr: $crate::ffi::JackdawExtensionPtr) {
+                // SAFETY: This is not safe lol
+                // We are just hoping that the ABI did not change in-between invocations
+                // by making sure the editor and the extension are built with the exact same
+                // compiler version + call
+                unsafe {
+                    let ptr: *mut dyn JackdawExtension = std::mem::transmute(ptr);
+                    drop(Box::from_raw(ptr));
+                }
             }
 
             #[unsafe(no_mangle)]
@@ -92,10 +91,8 @@ macro_rules! export_extension {
                     api_version: $crate::ffi::API_VERSION,
                     bevy_version: $crate::ffi::BEVY_VERSION.as_ptr(),
                     profile: $crate::ffi::PROFILE.as_ptr(),
-                    id: __JACKDAW_ID.as_ptr(),
-                    label: __JACKDAW_LABEL.as_ptr(),
-                    description: __JACKDAW_DESCRIPTION.as_ptr(),
                     ctor: __jackdaw_ctor,
+                    dtor: __jackdaw_dtor,
                 }
             }
         };
