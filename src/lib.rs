@@ -2,6 +2,7 @@
 //! Usage of this crate is meant for headless operation. If you want to interact with the jackdaw API for extensions, use the `jackdaw_api` crate instead.
 pub mod add_entity_picker;
 pub mod alignment_guides;
+pub mod app_ops;
 pub mod asset_browser;
 pub mod asset_catalog;
 pub mod brush;
@@ -15,6 +16,7 @@ pub mod entity_templates;
 pub mod face_grid;
 pub mod gizmos;
 pub mod hierarchy;
+pub mod history_ops;
 pub mod inspector;
 pub mod keybind_settings;
 pub mod keybinds;
@@ -45,6 +47,7 @@ pub mod project_select;
 pub mod remote;
 pub mod restart;
 pub mod scene_io;
+pub mod scene_ops;
 pub mod sdk_paths;
 pub mod selection;
 pub mod snapping;
@@ -1894,27 +1897,30 @@ fn populate_menu(
             (
                 "File",
                 vec![
-                    ("file.new", "New"),
-                    ("file.open", "Open"),
+                    ("op:scene.new", "New"),
+                    ("op:scene.open", "Open"),
                     ("---", ""),
-                    ("file.save", "Save"),
-                    ("file.save_as", "Save As..."),
+                    ("op:scene.save", "Save"),
+                    ("op:scene.save_as", "Save As..."),
                     ("---", ""),
-                    ("file.save_template", "Save Selection as Template"),
+                    (
+                        "op:scene.save_selection_as_template",
+                        "Save Selection as Template",
+                    ),
                     ("---", ""),
-                    ("file.keybinds", "Keybinds..."),
-                    ("file.extensions", "Extensions..."),
+                    ("op:app.open_keybinds", "Keybinds..."),
+                    ("op:app.open_extensions", "Extensions..."),
                     ("---", ""),
-                    ("file.hot_reload", hot_reload_label),
-                    ("file.open_recent", "Open Recent..."),
-                    ("file.home", "Home"),
+                    ("op:app.toggle_hot_reload", hot_reload_label),
+                    ("op:scene.open_recent", "Open Recent..."),
+                    ("op:app.go_home", "Home"),
                 ],
             ),
             (
                 "Edit",
                 vec![
-                    ("edit.undo", "Undo"),
-                    ("edit.redo", "Redo"),
+                    ("op:history.undo", "Undo"),
+                    ("op:history.redo", "Redo"),
                     ("---", ""),
                     ("edit.delete", "Delete"),
                     ("edit.duplicate", "Duplicate"),
@@ -1947,51 +1953,6 @@ fn populate_menu(
 
 fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
     match event.action.as_str() {
-        "file.new" => {
-            commands.queue(|world: &mut World| {
-                scene_io::new_scene(world);
-            });
-        }
-        "file.save" => {
-            commands.queue(|world: &mut World| {
-                scene_io::save_scene(world);
-            });
-        }
-        "file.save_as" => {
-            commands.queue(|world: &mut World| {
-                scene_io::save_scene_as(world);
-            });
-        }
-        "file.open" => {
-            commands.queue(|world: &mut World| {
-                scene_io::load_scene(world);
-            });
-        }
-        "file.save_template" => {
-            // Use a default name based on the selected entity
-            commands.queue(|world: &mut World| {
-                let selection = world.resource::<Selection>();
-                let name = selection
-                    .primary()
-                    .and_then(|e| world.get::<Name>(e).map(|n| n.as_str().to_string()))
-                    .unwrap_or_else(|| "template".to_string());
-                entity_templates::save_entity_template(world, &name);
-            });
-        }
-        "edit.undo" => {
-            commands.queue(|world: &mut World| {
-                world.resource_scope(|world, mut history: Mut<commands::CommandHistory>| {
-                    history.undo(world);
-                });
-            });
-        }
-        "edit.redo" => {
-            commands.queue(|world: &mut World| {
-                world.resource_scope(|world, mut history: Mut<commands::CommandHistory>| {
-                    history.redo(world);
-                });
-            });
-        }
         "edit.delete" => {
             commands.queue(|world: &mut World| {
                 entity_ops::delete_selected(world);
@@ -2069,35 +2030,6 @@ fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
                     bs.edges.clear();
                 }
             });
-        }
-        "file.keybinds" => {
-            commands.trigger(keybind_settings::OpenKeybindSettingsEvent);
-        }
-        "file.extensions" => {
-            commands.queue(|world: &mut World| {
-                extensions_dialog::open_extensions_dialog(world);
-            });
-        }
-        "file.home" => {
-            commands.queue(|world: &mut World| {
-                world
-                    .resource_mut::<NextState<AppState>>()
-                    .set(AppState::ProjectSelect);
-            });
-        }
-        "file.hot_reload" => {
-            commands.queue(|world: &mut World| {
-                let mut enabled = world.resource_mut::<hot_reload::HotReloadEnabled>();
-                enabled.0 = !enabled.0;
-                let state = if enabled.0 { "on" } else { "off" };
-                info!("Hot reload toggled {state}");
-                // Menu shows the current on/off state — trigger a
-                // rebuild so the label refreshes.
-                world.resource_mut::<MenuBarDirty>().0 = true;
-            });
-        }
-        "file.open_recent" => {
-            commands.queue(open_recent_dialog);
         }
         "view.wireframe" => {
             commands.queue(|world: &mut World| {
@@ -2348,7 +2280,7 @@ fn cleanup_editor(world: &mut World) {
     }
 }
 
-fn open_recent_dialog(world: &mut World) {
+pub(crate) fn open_recent_dialog(world: &mut World) {
     let recent = project::read_recent_projects();
     if recent.projects.is_empty() {
         return;

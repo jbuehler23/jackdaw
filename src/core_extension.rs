@@ -75,9 +75,38 @@ impl JackdawExtension for JackdawCoreExtension {
                 )]
             ),
         ));
+
+        // Spawn the two modifier-key input actions once, up front, so
+        // later keybind ports can `Chord::single(ctrl)` /
+        // `Chord::new([ctrl, shift])` without each module having to
+        // re-register them.
+        let ext = ctx.id();
+        let (ctrl, shift) = ctx.entity_mut().world_scope(|world| {
+            let ctrl = world
+                .spawn((
+                    Action::<CtrlHeldAction>::new(),
+                    ActionOf::<CoreExtensionInputContext>::new(ext),
+                    bindings![KeyCode::ControlLeft, KeyCode::ControlRight],
+                ))
+                .id();
+            let shift = world
+                .spawn((
+                    Action::<ShiftHeldAction>::new(),
+                    ActionOf::<CoreExtensionInputContext>::new(ext),
+                    bindings![KeyCode::ShiftLeft, KeyCode::ShiftRight],
+                ))
+                .id();
+            (ctrl, shift)
+        });
+        let modifiers = Modifiers { ctrl, shift };
+
         ctx.register_operator::<CancelModalOp>();
         ctx.register_operator::<crate::asset_browser::ApplyTextureOp>();
         crate::draw_brush::add_to_extension(ctx);
+
+        crate::scene_ops::add_to_extension(ctx, &modifiers);
+        crate::history_ops::add_to_extension(ctx, &modifiers);
+        crate::app_ops::add_to_extension(ctx);
     }
 
     fn register_input_context(app: &mut App) {
@@ -87,6 +116,27 @@ impl JackdawExtension for JackdawCoreExtension {
 
 #[derive(Component, Default)]
 pub struct CoreExtensionInputContext;
+
+/// BEI input action bound to Ctrl (left or right). Operator bindings
+/// that need Ctrl as a modifier use this as a
+/// `Chord::single(ctrl_entity)` prerequisite so e.g. `Ctrl+S` fires
+/// only while Ctrl is held. The entity id is captured during
+/// `register` and passed to each module via [`Modifiers`].
+#[derive(Component, Debug, Default, Clone, Copy, InputAction)]
+#[action_output(bool)]
+pub struct CtrlHeldAction;
+
+/// BEI input action bound to Shift (left or right). See [`CtrlHeldAction`].
+#[derive(Component, Debug, Default, Clone, Copy, InputAction)]
+#[action_output(bool)]
+pub struct ShiftHeldAction;
+
+/// Entity ids of the Ctrl and Shift modifier actions, passed to each
+/// module's `add_to_extension` so chorded keybinds can reference them.
+pub struct Modifiers {
+    pub ctrl: Entity,
+    pub shift: Entity,
+}
 
 #[operator(
     id = "modal.cancel",

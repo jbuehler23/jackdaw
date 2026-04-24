@@ -19,10 +19,7 @@ pub struct CommandHistoryPlugin;
 
 impl Plugin for CommandHistoryPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(CommandHistory::default()).add_systems(
-            Update,
-            handle_undo_redo_keys.in_set(crate::EditorInteractionSystems),
-        );
+        app.insert_resource(CommandHistory::default());
     }
 }
 
@@ -520,52 +517,6 @@ pub(crate) fn snapshot_rebuild(scene: &DynamicScene) -> DynamicScene {
                 components: e.components.iter().map(|c| c.to_dynamic()).collect(),
             })
             .collect(),
-    }
-}
-
-fn handle_undo_redo_keys(world: &mut World) {
-    let keyboard = world.resource::<ButtonInput<KeyCode>>();
-    let keybinds = world.resource::<crate::keybinds::KeybindRegistry>();
-    let undo = keybinds.just_pressed(crate::keybinds::EditorAction::Undo, keyboard);
-    let redo = keybinds.just_pressed(crate::keybinds::EditorAction::Redo, keyboard);
-
-    if !undo && !redo {
-        return;
-    }
-
-    // If a modal operator is in flight when the user hits undo/redo,
-    // cancel it first. The snapshot restore is about to rip the
-    // scene out from under the modal, so its `ActiveModalOperator`
-    // marker + per-operator state (e.g. `DrawBrushState.active`)
-    // would otherwise be left stale — the next keypress that tries
-    // to start the same modal would no-op because the framework
-    // thinks one is already running.
-    use jackdaw_api_internal::operator::OperatorWorldExt as _;
-    if let Err(err) = world.cancel_active_modal() {
-        warn!("Failed to cancel active modal before undo/redo: {err:?}");
-    }
-
-    let mut history = world.resource_mut::<CommandHistory>();
-    let command = if redo {
-        history.redo_stack.pop()
-    } else {
-        history.undo_stack.pop()
-    };
-
-    if let Some(mut command) = command {
-        if redo {
-            command.execute(world);
-            world
-                .resource_mut::<CommandHistory>()
-                .undo_stack
-                .push(command);
-        } else {
-            command.undo(world);
-            world
-                .resource_mut::<CommandHistory>()
-                .redo_stack
-                .push(command);
-        }
     }
 }
 
