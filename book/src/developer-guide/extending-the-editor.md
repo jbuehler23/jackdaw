@@ -113,7 +113,7 @@ dylib path entirely:
 fn main() {
     App::new()
         .add_plugins(jackdaw::EditorPlugins::default()
-            .with_extension("my_tool", || Box::new(MyTool))
+            .with_extension("my_tool", || Box::new())
             .build())
         .run();
 }

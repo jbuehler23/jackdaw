@@ -300,50 +300,23 @@ pub trait ExtensionAppExt {
     ///
     /// See also [`Self::register_extension_with`].
     fn register_extension<T: crate::JackdawExtension + Default>(&mut self) -> &mut Self {
-        self.register_extension_with::<T>(|| Box::new(T::default()))
+        self.register_extension_with(|| Box::new(T::default()))
     }
 
     /// Like [`Self::register_extension`], but with a custom constructor.
-    fn register_extension_with<T: crate::JackdawExtension>(
-        &mut self,
-        ctor: impl Fn() -> Box<dyn crate::JackdawExtension> + Send + Sync + 'static,
-    ) -> &mut Self;
-
-    /// Register an extension by constructor alone, without the
-    /// compile-time type parameter required by [`Self::register_extension`].
-    ///
-    /// Used by the runtime dylib loader: it gets a `Box<dyn JackdawExtension>`
-    /// from an FFI ctor and can't name the concrete type. Constructs one
-    /// instance up front to harvest `dyn_name()`, `dyn_kind()`, and
-    /// `dyn_register_input_context()`; the ctor itself is stored for
-    /// later invocations from the Extensions dialog.
-    fn register_extension_dynamic(
+    fn register_extension_with(
         &mut self,
         ctor: impl Fn() -> Box<dyn crate::JackdawExtension> + Send + Sync + 'static,
     ) -> &mut Self;
 }
 
 impl ExtensionAppExt for App {
-    fn register_extension_with<T: crate::JackdawExtension>(
+    fn register_extension_with(
         &mut self,
         ctor: impl Fn() -> Box<dyn crate::JackdawExtension> + Send + Sync + 'static,
     ) -> &mut Self {
         let ext = ctor();
         ext.register_input_context(self);
-        self.world_mut()
-            .resource_mut::<ExtensionCatalog>()
-            .register_extension_internal(ctor);
-        self
-    }
-
-    fn register_extension_dynamic(
-        &mut self,
-        ctor: impl Fn() -> Box<dyn crate::JackdawExtension> + Send + Sync + 'static,
-    ) -> &mut Self {
-        let ext = ctor();
-        ext.register_input_context(self);
-        drop(ext);
-
         self.world_mut()
             .resource_mut::<ExtensionCatalog>()
             .register_extension_internal(ctor);
