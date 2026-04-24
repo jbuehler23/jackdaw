@@ -2,7 +2,6 @@ use std::marker::PhantomData;
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
 
 use crate::util::OperatorResultExt as _;
 mod util;
@@ -22,9 +21,7 @@ fn integration_test_one(_: In<OperatorParameters>) -> OperatorResult {
 
 fn run_test<T: Operator + Send + Sync>() {
     let mut app = util::headless_app();
-    app.register_extension::<IntegrationTestsExtension<T>>();
-    app.finish();
-    app.update();
+    util::register_and_enable_extension::<IntegrationTestsExtension<T>>(&mut app);
     app.world_mut()
         .operator(ID)
         .call()
