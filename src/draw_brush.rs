@@ -3072,7 +3072,12 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
 #[operator(
     id = "brush.join",
     label = "Join (Convex Merge)",
-    is_available = can_run_brush_op,
+    description = "Merge all selected brushes into a single convex-hull brush. \
+                   Preconditions: at least two `Brush` entities present in \
+                   `Selection::entities`. With fewer than two selected brushes \
+                   the op is a no-op. The first selected brush keeps its entity \
+                   id and transform; others are despawned.",
+    is_available = can_run_binary_brush_op,
 )]
 pub(crate) fn brush_join(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(join_selected_brushes_impl);
@@ -3082,7 +3087,11 @@ pub(crate) fn brush_join(_: In<OperatorParameters>, mut commands: Commands) -> O
 #[operator(
     id = "brush.csg_subtract",
     label = "CSG Subtract",
-    is_available = can_run_brush_op,
+    description = "Subtract the non-first selected brushes from the first. \
+                   Preconditions: at least two `Brush` entities in \
+                   `Selection::entities` (first is the target, rest are cutters). \
+                   The target may be split into multiple fragment brushes.",
+    is_available = can_run_binary_brush_op,
 )]
 pub(crate) fn brush_csg_subtract(
     _: In<OperatorParameters>,
@@ -3095,7 +3104,11 @@ pub(crate) fn brush_csg_subtract(
 #[operator(
     id = "brush.csg_intersect",
     label = "CSG Intersect",
-    is_available = can_run_brush_op,
+    description = "Replace the selected brushes with the solid shared by all of \
+                   them. Preconditions: at least two `Brush` entities in \
+                   `Selection::entities`. With fewer than two or an empty \
+                   intersection the op is a no-op.",
+    is_available = can_run_binary_brush_op,
 )]
 pub(crate) fn brush_csg_intersect(
     _: In<OperatorParameters>,
@@ -3105,20 +3118,85 @@ pub(crate) fn brush_csg_intersect(
     OperatorResult::Finished
 }
 
-/// Shared gate: brush-level operators never run mid-draw, mid-modal,
-/// or while a text input is focused.
-fn can_run_brush_op(
+/// Shared environment gate: brush-level operators never run mid-draw,
+/// mid-modal, or while a text input is focused. Each specific op
+/// composes this with its own selection-state precondition check.
+fn env_allows_brush_op(
+    input_focus: &InputFocus,
+    modal: &crate::modal_transform::ModalTransformState,
+    draw_state: &DrawBrushState,
+) -> bool {
+    input_focus.0.is_none() && modal.active.is_none() && draw_state.active.is_none()
+}
+
+/// `brush.join` / `brush.csg_subtract` / `brush.csg_intersect` all
+/// require at least two `Brush` entities in the current selection.
+fn can_run_binary_brush_op(
     input_focus: Res<InputFocus>,
     modal: Res<crate::modal_transform::ModalTransformState>,
     draw_state: Res<DrawBrushState>,
+    selection: Res<Selection>,
+    brushes: Query<(), With<Brush>>,
 ) -> bool {
-    input_focus.0.is_none() && modal.active.is_none() && draw_state.active.is_none()
+    if !env_allows_brush_op(&input_focus, &modal, &draw_state) {
+        return false;
+    }
+    selection
+        .entities
+        .iter()
+        .filter(|&&e| brushes.contains(e))
+        .count()
+        >= 2
+}
+
+/// `brush.extend_face_to_brush` needs either (a) Face edit mode with a
+/// face picked and another brush selected, or (b) Object mode with ≥ 2
+/// brushes selected and a remembered/hovered face on the primary.
+fn can_run_extend_face(
+    input_focus: Res<InputFocus>,
+    modal: Res<crate::modal_transform::ModalTransformState>,
+    draw_state: Res<DrawBrushState>,
+    selection: Res<Selection>,
+    brush_selection: Res<crate::brush::BrushSelection>,
+    edit_mode: Res<crate::brush::EditMode>,
+    brushes: Query<(), With<Brush>>,
+) -> bool {
+    if !env_allows_brush_op(&input_focus, &modal, &draw_state) {
+        return false;
+    }
+    let brush_count = selection
+        .entities
+        .iter()
+        .filter(|&&e| brushes.contains(e))
+        .count();
+    match *edit_mode {
+        crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face) => {
+            brush_selection.entity.is_some()
+                && !brush_selection.faces.is_empty()
+                && brush_count >= 1
+        }
+        crate::brush::EditMode::Object => {
+            brush_count >= 2
+                && brush_selection.last_face_entity.is_some_and(|e| {
+                    brush_selection.last_face_index.is_some() && brushes.contains(e)
+                })
+        }
+        _ => false,
+    }
 }
 
 #[operator(
     id = "brush.extend_face_to_brush",
     label = "Extend to Brush",
-    is_available = can_run_brush_op,
+    description = "Extend a face of the primary brush to conform to the shape of \
+                   the other selected brushes. Two entry paths:\n\
+                   • `EditMode::BrushEdit(Face)` with a face selected on \
+                     `BrushSelection` and ≥ 1 other brush in `Selection::entities`.\n\
+                   • `EditMode::Object` with ≥ 2 brushes in `Selection::entities` \
+                     and a hovered or remembered face on the primary.\n\
+                   In either path the face index is resolved before any \
+                   mutation; if no face can be resolved, the op is a no-op.",
+    is_available = can_run_extend_face,
 )]
 pub(crate) fn brush_extend_face_to_brush(
     _: In<OperatorParameters>,
