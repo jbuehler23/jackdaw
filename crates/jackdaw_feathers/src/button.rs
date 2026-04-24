@@ -1,6 +1,7 @@
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use lucide_icons::Icon;
+use std::borrow::Cow;
 
 use crate::icons::EditorFont;
 use crate::tokens::{
@@ -13,6 +14,19 @@ use crate::cursor::HoverCursor;
 #[derive(EntityEvent)]
 pub struct ButtonClickEvent {
     pub entity: Entity,
+}
+
+/// Attached to a button to declare that clicking it should dispatch
+/// the operator with this id. The editor registers the dispatch
+/// observer; feathers just carries the id so widgets can declare
+/// their intent without depending on the operator API.
+#[derive(Component, Clone, Debug)]
+pub struct CallOperator(pub Cow<'static, str>);
+
+impl CallOperator {
+    pub fn new(id: impl Into<Cow<'static, str>>) -> Self {
+        Self(id.into())
+    }
 }
 
 pub fn plugin(app: &mut App) {
@@ -136,6 +150,7 @@ struct ButtonConfig {
     left_icon: Option<Icon>,
     right_icon: Option<Icon>,
     subtitle: Option<String>,
+    call_operator: Option<Cow<'static, str>>,
     initialized: bool,
 }
 
@@ -149,6 +164,7 @@ pub struct ButtonProps {
     pub right_icon: Option<Icon>,
     pub direction: FlexDirection,
     pub subtitle: Option<String>,
+    pub call_operator: Option<Cow<'static, str>>,
 }
 
 impl ButtonProps {
@@ -184,6 +200,13 @@ impl ButtonProps {
     }
     pub fn with_subtitle(mut self, subtitle: impl Into<String>) -> Self {
         self.subtitle = Some(subtitle.into());
+        self
+    }
+    /// Dispatch an operator by id when this button is clicked. The
+    /// editor provides the observer that actually calls
+    /// `world.operator(id).call()`; feathers only stores the id.
+    pub fn call_operator(mut self, id: impl Into<Cow<'static, str>>) -> Self {
+        self.call_operator = Some(id.into());
         self
     }
 }
@@ -288,6 +311,7 @@ pub fn button(props: ButtonProps) -> impl Bundle {
         right_icon,
         direction,
         subtitle,
+        call_operator,
     } = props;
 
     (
@@ -297,6 +321,7 @@ pub fn button(props: ButtonProps) -> impl Bundle {
             left_icon,
             right_icon,
             subtitle,
+            call_operator,
             initialized: false,
         },
     )
@@ -356,6 +381,7 @@ fn setup_button(
         let right_icon = config.right_icon;
         let content = config.content.clone();
         let subtitle = config.subtitle.clone();
+        let call_operator = config.call_operator.clone();
         let variant = *variant;
         let size = *size;
         let font = font.clone();
@@ -364,6 +390,9 @@ fn setup_button(
             let Ok(mut ec) = world.get_entity_mut(entity) else {
                 return;
             };
+            if let Some(id) = call_operator {
+                ec.insert(CallOperator(id));
+            }
             ec.with_children(|parent| {
                 if let Some(icon) = left_icon {
                     parent.spawn((
@@ -465,7 +494,13 @@ fn handle_button_click(
     }
 }
 
-/// Create an icon-only button using lucide icon font
+/// Create an icon-only button using lucide icon font.
+///
+/// To dispatch an operator on click, spawn the returned bundle alongside an
+/// [`CallOperator`] component: `commands.spawn((icon_button(props, font),
+/// CallOperator::new("my.op")))`. A setter isn't provided on
+/// [`IconButtonProps`] because `icon_button` has no staging/setup system;
+/// the tuple-form keeps the API small.
 pub fn icon_button(props: IconButtonProps, icon_font: &Handle<Font>) -> impl Bundle {
     let IconButtonProps {
         icon,

@@ -407,7 +407,7 @@ impl<'a> ExtensionContext<'a> {
     /// Contribute an entry to one of the editor's top-level menus
     /// (`"Add"`, `"Tools"`, etc.). Clicking the entry dispatches the
     /// referenced operator.
-    pub fn register_menu_entry(&mut self, descriptor: MenuEntryDescriptor) {
+    pub fn register_menu_entry(&mut self, descriptor: MenuEntryDescriptor) -> &mut Self {
         let ext = self.extension_entity;
         self.world.spawn((
             RegisteredMenuEntry {
@@ -417,6 +417,19 @@ impl<'a> ExtensionContext<'a> {
             },
             ChildOf(ext),
         ));
+        self
+    }
+
+    /// Convenience that registers a menu entry using `O::LABEL` and
+    /// `O::ID` from the operator type, so callers only need to supply the
+    /// menu name. Equivalent to calling
+    /// [`Self::register_menu_entry`] with a full [`MenuEntryDescriptor`].
+    pub fn menu_entry_for<O: Operator>(&mut self, menu: impl Into<String>) -> &mut Self {
+        self.register_menu_entry(MenuEntryDescriptor {
+            menu: menu.into(),
+            label: O::LABEL.to_string(),
+            operator_id: O::ID,
+        })
     }
 }
 

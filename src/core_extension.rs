@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
+use jackdaw_feathers::button::{ButtonClickEvent, CallOperator};
 
 /// Catalog name of the Core extension. Exported so
 /// [`crate::extensions_config::REQUIRED_EXTENSIONS`] and the
@@ -10,7 +11,38 @@ use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
 pub const CORE_EXTENSION_ID: &str = "jackdaw.core";
 
 pub(super) fn plugin(app: &mut App) {
-    app.register_extension::<JackdawCoreExtension>();
+    app.register_extension::<JackdawCoreExtension>()
+        .add_observer(dispatch_call_operator);
+}
+
+/// When a button carrying an [`CallOperator`] component is clicked,
+/// dispatch the referenced operator. This is the single editor-wide
+/// glue that makes `ButtonProps::call_operator(id)` and menu/context-menu
+/// `op:`-prefixed entries (which also attach `CallOperator` via feathers)
+/// actually run the operator. Without this, `CallOperator` is inert.
+///
+/// The feathers-level click handlers for menu/context items skip
+/// firing their own `MenuAction`/`ContextMenuAction` events when they
+/// see `CallOperator`, so this observer is the sole dispatch path for
+/// those items and won't double-fire.
+fn dispatch_call_operator(
+    event: On<ButtonClickEvent>,
+    call_op: Query<&CallOperator>,
+    mut commands: Commands,
+) {
+    let Ok(CallOperator(id)) = call_op.get(event.entity) else {
+        return;
+    };
+    let id = id.clone();
+    commands.queue(move |world: &mut World| {
+        world
+            .operator(id)
+            .settings(CallOperatorSettings {
+                execution_context: ExecutionContext::Invoke,
+                creates_history_entry: true,
+            })
+            .call()
+    });
 }
 
 #[derive(Default)]

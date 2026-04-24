@@ -49,6 +49,32 @@ pub(super) fn plugin(app: &mut App) {
 /// Extensions then bind the operator to a key via pure BEI syntax. Use
 /// BEI binding modifiers (`Press`, `Release`, `Hold`) when specific
 /// input timing is needed. See the [`jackdaw_api` documentation](crate).
+///
+/// # Registering an operator end-to-end
+///
+/// The canonical pattern inside a [`crate::JackdawExtension::register`]
+/// implementation:
+///
+/// ```ignore
+/// // 1. Register the operator (spawns `OperatorEntity` + `Fire<Op>` observer)
+/// ctx.register_operator::<PlaceCubeOp>();
+///
+/// // 2. Bind input via BEI on the extension's input context
+/// ctx.entity_mut().with_related::<ActionOf<MyInputContext>>((
+///     Action::<PlaceCubeOp>::new(),
+///     bindings![(KeyCode::KeyP, Press::default())],
+/// ));
+///
+/// // 3. Contribute a menu entry (label + id pulled from the operator)
+/// ctx.menu_entry_for::<PlaceCubeOp>("Add");
+/// ```
+///
+/// Buttons in UI code dispatch the operator by attaching a
+/// `CallOperator` component (from `jackdaw_feathers::button`), usually via
+/// `ButtonProps::call_operator("sample.place_cube")`. The editor registers
+/// a global observer that, on `ButtonClickEvent`, calls
+/// [`OperatorWorldExt::operator`] with the stored id — so no per-button
+/// click handler is needed.
 pub trait Operator: InputAction + 'static {
     const ID: &'static str;
     const LABEL: &'static str;
