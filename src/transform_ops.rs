@@ -11,16 +11,16 @@
 //! plain Arrow and PageUp/Down for nudge.
 
 use bevy::{input_focus::InputFocus, prelude::*};
-use bevy_enhanced_input::prelude::{Chord, Press, *};
+use bevy_enhanced_input::prelude::*;
 use jackdaw_api::prelude::*;
 
-use crate::core_extension::{CoreExtensionInputContext, Modifiers};
+use crate::core_extension::CoreExtensionInputContext;
 use crate::entity_ops::{
     TransformReset, camera_snapped_rotation_axes, nudge_selected, reset_transform_selected,
     rotate_selected,
 };
 
-pub(crate) fn add_to_extension(ctx: &mut ExtensionContext, modifiers: &Modifiers) {
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TransformResetPositionOp>()
         .register_operator::<TransformResetRotationOp>()
         .register_operator::<TransformResetScaleOp>()
@@ -38,98 +38,88 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext, modifiers: &Modifiers
         .register_operator::<TransformNudgeZPosOp>();
 
     let ext = ctx.id();
-    let alt = modifiers.alt;
     ctx.entity_mut().world_scope(|world| {
         // Reset: Alt + G / R / S
         world.spawn((
             Action::<TransformResetPositionOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(alt),
-            bindings![(KeyCode::KeyG, Press::default())],
+            bindings![KeyCode::KeyG.with_mod_keys(ModKeys::ALT)],
         ));
         world.spawn((
             Action::<TransformResetRotationOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(alt),
-            bindings![(KeyCode::KeyR, Press::default())],
+            bindings![KeyCode::KeyR.with_mod_keys(ModKeys::ALT)],
         ));
         world.spawn((
             Action::<TransformResetScaleOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(alt),
-            bindings![(KeyCode::KeyS, Press::default())],
+            bindings![KeyCode::KeyS.with_mod_keys(ModKeys::ALT)],
         ));
 
         // Rotate 90: Alt + Arrow / PageUp / PageDown
         world.spawn((
             Action::<TransformRotate90YawCcwOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(alt),
-            bindings![(KeyCode::ArrowLeft, Press::default())],
+            bindings![KeyCode::ArrowLeft.with_mod_keys(ModKeys::ALT)],
         ));
         world.spawn((
             Action::<TransformRotate90YawCwOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(alt),
-            bindings![(KeyCode::ArrowRight, Press::default())],
+            bindings![KeyCode::ArrowRight.with_mod_keys(ModKeys::ALT)],
         ));
         world.spawn((
             Action::<TransformRotate90PitchCcwOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(alt),
-            bindings![(KeyCode::ArrowUp, Press::default())],
+            bindings![KeyCode::ArrowUp.with_mod_keys(ModKeys::ALT)],
         ));
         world.spawn((
             Action::<TransformRotate90PitchCwOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(alt),
-            bindings![(KeyCode::ArrowDown, Press::default())],
+            bindings![KeyCode::ArrowDown.with_mod_keys(ModKeys::ALT)],
         ));
         world.spawn((
             Action::<TransformRotate90RollCcwOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(alt),
-            bindings![(KeyCode::PageUp, Press::default())],
+            bindings![KeyCode::PageUp.with_mod_keys(ModKeys::ALT)],
         ));
         world.spawn((
             Action::<TransformRotate90RollCwOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(alt),
-            bindings![(KeyCode::PageDown, Press::default())],
+            bindings![KeyCode::PageDown.with_mod_keys(ModKeys::ALT)],
         ));
 
-        // Nudge: plain Arrow / PageUp / PageDown. No modifier chord —
-        // but BEI still fires our Alt+Arrow rotate bindings when Alt
-        // is held, so in practice the two don't collide.
+        // Nudge: plain Arrow / PageUp / PageDown. BEI's ModKeys check
+        // excludes held modifiers, so these don't fire when Alt is
+        // held — the Alt+Arrow rotate bindings above claim those.
         world.spawn((
             Action::<TransformNudgeXNegOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::ArrowLeft, Press::default())],
+            bindings![KeyCode::ArrowLeft],
         ));
         world.spawn((
             Action::<TransformNudgeXPosOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::ArrowRight, Press::default())],
+            bindings![KeyCode::ArrowRight],
         ));
         world.spawn((
             Action::<TransformNudgeZNegOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::ArrowUp, Press::default())],
+            bindings![KeyCode::ArrowUp],
         ));
         world.spawn((
             Action::<TransformNudgeZPosOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::ArrowDown, Press::default())],
+            bindings![KeyCode::ArrowDown],
         ));
         world.spawn((
             Action::<TransformNudgeYPosOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::PageUp, Press::default())],
+            bindings![KeyCode::PageUp],
         ));
         world.spawn((
             Action::<TransformNudgeYNegOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::PageDown, Press::default())],
+            bindings![KeyCode::PageDown],
         ));
     });
 }

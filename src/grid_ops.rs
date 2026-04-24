@@ -31,7 +31,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     });
 }
 
-#[operator(id = "grid.increase", label = "Increase Grid", allows_undo = false)]
+#[operator(id = "grid.increase", label = "Increase Grid")]
 pub(crate) fn grid_increase(
     _: In<OperatorParameters>,
     mut snap: ResMut<SnapSettings>,
@@ -41,7 +41,7 @@ pub(crate) fn grid_increase(
     OperatorResult::Finished
 }
 
-#[operator(id = "grid.decrease", label = "Decrease Grid", allows_undo = false)]
+#[operator(id = "grid.decrease", label = "Decrease Grid")]
 pub(crate) fn grid_decrease(
     _: In<OperatorParameters>,
     mut snap: ResMut<SnapSettings>,

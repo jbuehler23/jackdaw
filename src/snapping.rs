@@ -83,7 +83,7 @@ fn sync_grid_settings(
 pub const GRID_POWER_MIN: i32 = -5;
 pub const GRID_POWER_MAX: i32 = 8;
 
-#[derive(Resource)]
+#[derive(Resource, Clone, PartialEq)]
 pub struct SnapSettings {
     pub translate_snap: bool,
     pub translate_increment: f32,

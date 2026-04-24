@@ -57,7 +57,7 @@ pub enum BoundingBoxMode {
     ConvexHull,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone, PartialEq)]
 pub struct OverlaySettings {
     pub show_bounding_boxes: bool,
     pub show_coordinate_indicator: bool,

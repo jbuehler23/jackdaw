@@ -3,12 +3,12 @@ use jackdaw_widgets::menu_bar::{
     MenuAction, MenuBar, MenuBarDropdown, MenuBarDropdownItem, MenuBarItem, MenuBarState,
 };
 
-use crate::button::{ButtonClickEvent, ButtonProps, ButtonVariant, CallOperator, button};
+use crate::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonVariant, button};
 use crate::tokens;
 use crate::tooltip::Tooltip;
 
 /// Action strings in menu entries that start with this prefix are
-/// interpreted as operator ids; the suffix becomes the [`CallOperator`] id
+/// interpreted as operator ids; the suffix becomes the [`ButtonOperatorCall`] id
 /// attached to the dropdown button so the editor dispatches through the
 /// operator API instead of firing a generic [`MenuAction`].
 pub const OP_ACTION_PREFIX: &str = "op:";
@@ -21,18 +21,18 @@ pub fn plugin(app: &mut App) {
 }
 
 /// When a dropdown item is clicked, fire the [`MenuAction`] — unless the
-/// item carries a [`CallOperator`] component, in which case the editor's
+/// item carries a [`ButtonOperatorCall`] component, in which case the editor's
 /// operator observer will handle dispatch and a `MenuAction` would
 /// double-fire.
 fn on_dropdown_item_click(
     event: On<ButtonClickEvent>,
-    items: Query<(&MenuBarDropdownItem, Option<&CallOperator>)>,
+    items: Query<(&MenuBarDropdownItem, Option<&ButtonOperatorCall>)>,
     mut commands: Commands,
 ) {
-    let Ok((item, call_op)) = items.get(event.entity) else {
+    let Ok((item, button_op)) = items.get(event.entity) else {
         return;
     };
-    if call_op.is_some() {
+    if button_op.is_some() {
         return;
     }
     commands.trigger(MenuAction {
@@ -256,7 +256,7 @@ fn spawn_dropdown(commands: &mut Commands, x: f32, y: f32, actions: &[(String, S
                 item,
                 btn,
                 tooltip,
-                CallOperator::new(op_id.to_string()),
+                ButtonOperatorCall::new(op_id.to_string()),
             ));
         } else {
             commands.entity(dropdown).with_child((item, btn, tooltip));

@@ -36,7 +36,7 @@ pub mod physics_colors {
     pub const COLLIDER_HIERARCHY_ARROW: Color = Color::srgba(0.4, 0.7, 1.0, 0.6);
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone, PartialEq)]
 pub struct PhysicsOverlayConfig {
     pub show_colliders: bool,
     pub show_hierarchy_arrows: bool,

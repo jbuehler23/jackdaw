@@ -6,10 +6,17 @@
 use bevy::feathers::theme::ThemedText;
 use bevy::prelude::*;
 use bevy::ui_widgets::observe;
+use jackdaw_api::prelude::Operator;
 use jackdaw_feathers::text_edit::{self, TextEditProps, TextEditValue};
 use jackdaw_feathers::tokens;
 
 use std::collections::HashSet;
+
+use crate::entity_ops::{
+    EntityAddCameraOp, EntityAddCubeOp, EntityAddDirectionalLightOp, EntityAddEmptyOp,
+    EntityAddNavmeshOp, EntityAddPointLightOp, EntityAddPrefabOp, EntityAddSphereOp,
+    EntityAddSpotLightOp, EntityAddTerrainOp,
+};
 
 /// Marker for the scene-tree Add Entity button.
 #[derive(Component)]
@@ -34,40 +41,53 @@ pub struct AddEntityPickerSectionHeader {
     pub category: String,
 }
 
+/// Build an `op:` action string for the given operator type. Keeps
+/// operator ids out of UI code — callers pass the `Op` type, not a
+/// hand-typed string.
+fn op_action<O: Operator>() -> String {
+    format!("op:{}", O::ID)
+}
+
 /// Built-in Add items grouped by category. Order here is the order in
 /// the picker and in the toolbar Add menu.
-fn builtin_groups() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
+fn builtin_groups() -> Vec<(&'static str, Vec<(String, &'static str)>)> {
     vec![
         (
             "Shapes",
             vec![
-                ("op:entity.add.cube", "Cube"),
-                ("op:entity.add.sphere", "Sphere"),
+                (op_action::<EntityAddCubeOp>(), "Cube"),
+                (op_action::<EntityAddSphereOp>(), "Sphere"),
             ],
         ),
         (
             "Lights",
             vec![
-                ("op:entity.add.point_light", "Point Light"),
-                ("op:entity.add.directional_light", "Directional Light"),
-                ("op:entity.add.spot_light", "Spot Light"),
+                (op_action::<EntityAddPointLightOp>(), "Point Light"),
+                (
+                    op_action::<EntityAddDirectionalLightOp>(),
+                    "Directional Light",
+                ),
+                (op_action::<EntityAddSpotLightOp>(), "Spot Light"),
             ],
         ),
         (
             "Cameras & Entities",
             vec![
-                ("op:entity.add.camera", "Camera"),
-                ("op:entity.add.empty", "Empty"),
+                (op_action::<EntityAddCameraOp>(), "Camera"),
+                (op_action::<EntityAddEmptyOp>(), "Empty"),
             ],
         ),
         (
             "Regions",
             vec![
-                ("op:entity.add.navmesh", "Navmesh Region"),
-                ("op:entity.add.terrain", "Terrain"),
+                (op_action::<EntityAddNavmeshOp>(), "Navmesh Region"),
+                (op_action::<EntityAddTerrainOp>(), "Terrain"),
             ],
         ),
-        ("Prefabs", vec![("op:entity.add.prefab", "Prefab...")]),
+        (
+            "Prefabs",
+            vec![(op_action::<EntityAddPrefabOp>(), "Prefab...")],
+        ),
     ]
 }
 
@@ -88,7 +108,7 @@ pub fn collect_add_menu_items(world: &mut World) -> Vec<AddMenuItem> {
         .into_iter()
         .flat_map(|(category, entries)| {
             entries.into_iter().map(move |(action, label)| AddMenuItem {
-                action: action.to_string(),
+                action,
                 label: label.to_string(),
                 category: category.to_string(),
             })

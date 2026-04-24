@@ -904,12 +904,12 @@ fn get_assets_base_dir() -> Option<std::path::PathBuf> {
 // operator has the scene locked, matching the guards the legacy
 // `handle_entity_keys` applied.
 
-use bevy_enhanced_input::prelude::{Chord, Press, *};
+use bevy_enhanced_input::prelude::*;
 use jackdaw_api::prelude::*;
 
-use crate::core_extension::{CoreExtensionInputContext, Modifiers};
+use crate::core_extension::CoreExtensionInputContext;
 
-pub(crate) fn add_to_extension(ctx: &mut ExtensionContext, modifiers: &Modifiers) {
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityDeleteOp>()
         .register_operator::<EntityDuplicateOp>()
         .register_operator::<EntityCopyComponentsOp>()
@@ -929,48 +929,41 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext, modifiers: &Modifiers
         .register_operator::<EntityAddPrefabOp>();
 
     let ext = ctx.id();
-    let ctrl = modifiers.ctrl;
-    let alt = modifiers.alt;
     ctx.entity_mut().world_scope(|world| {
         world.spawn((
             Action::<EntityDeleteOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Delete, Press::default())],
+            bindings![KeyCode::Delete],
         ));
         world.spawn((
             Action::<EntityDuplicateOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(ctrl),
-            bindings![(KeyCode::KeyD, Press::default())],
+            bindings![KeyCode::KeyD.with_mod_keys(ModKeys::CONTROL)],
         ));
         world.spawn((
             Action::<EntityCopyComponentsOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(ctrl),
-            bindings![(KeyCode::KeyC, Press::default())],
+            bindings![KeyCode::KeyC.with_mod_keys(ModKeys::CONTROL)],
         ));
         world.spawn((
             Action::<EntityPasteComponentsOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(ctrl),
-            bindings![(KeyCode::KeyV, Press::default())],
+            bindings![KeyCode::KeyV.with_mod_keys(ModKeys::CONTROL)],
         ));
         world.spawn((
             Action::<EntityToggleVisibilityOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::KeyH, Press::default())],
+            bindings![KeyCode::KeyH],
         ));
         world.spawn((
             Action::<EntityUnhideAllOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(ctrl),
-            bindings![(KeyCode::KeyH, Press::default())],
+            bindings![KeyCode::KeyH.with_mod_keys(ModKeys::CONTROL)],
         ));
         world.spawn((
             Action::<EntityHideUnselectedOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(alt),
-            bindings![(KeyCode::KeyH, Press::default())],
+            bindings![KeyCode::KeyH.with_mod_keys(ModKeys::ALT)],
         ));
     });
 }
@@ -1083,7 +1076,7 @@ fn entity_unhide_all(_: In<OperatorParameters>, mut commands: Commands) -> Opera
 // ── Add menu ────────────────────────────────────────────────────
 
 #[operator(id = "entity.add.cube", label = "Cube")]
-fn entity_add_cube(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_add_cube(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         create_entity_in_world(world, EntityTemplate::Cube);
     });
@@ -1091,7 +1084,10 @@ fn entity_add_cube(_: In<OperatorParameters>, mut commands: Commands) -> Operato
 }
 
 #[operator(id = "entity.add.sphere", label = "Sphere")]
-fn entity_add_sphere(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_add_sphere(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(|world: &mut World| {
         create_entity_in_world(world, EntityTemplate::Sphere);
     });
@@ -1099,7 +1095,10 @@ fn entity_add_sphere(_: In<OperatorParameters>, mut commands: Commands) -> Opera
 }
 
 #[operator(id = "entity.add.point_light", label = "Point Light")]
-fn entity_add_point_light(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_add_point_light(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(|world: &mut World| {
         create_entity_in_world(world, EntityTemplate::PointLight);
     });
@@ -1107,7 +1106,7 @@ fn entity_add_point_light(_: In<OperatorParameters>, mut commands: Commands) -> 
 }
 
 #[operator(id = "entity.add.directional_light", label = "Directional Light")]
-fn entity_add_directional_light(
+pub(crate) fn entity_add_directional_light(
     _: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
@@ -1118,7 +1117,10 @@ fn entity_add_directional_light(
 }
 
 #[operator(id = "entity.add.spot_light", label = "Spot Light")]
-fn entity_add_spot_light(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_add_spot_light(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(|world: &mut World| {
         create_entity_in_world(world, EntityTemplate::SpotLight);
     });
@@ -1126,7 +1128,10 @@ fn entity_add_spot_light(_: In<OperatorParameters>, mut commands: Commands) -> O
 }
 
 #[operator(id = "entity.add.camera", label = "Camera")]
-fn entity_add_camera(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_add_camera(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(|world: &mut World| {
         create_entity_in_world(world, EntityTemplate::Camera3d);
     });
@@ -1134,7 +1139,10 @@ fn entity_add_camera(_: In<OperatorParameters>, mut commands: Commands) -> Opera
 }
 
 #[operator(id = "entity.add.empty", label = "Empty")]
-fn entity_add_empty(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_add_empty(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(|world: &mut World| {
         create_entity_in_world(world, EntityTemplate::Empty);
     });
@@ -1142,7 +1150,10 @@ fn entity_add_empty(_: In<OperatorParameters>, mut commands: Commands) -> Operat
 }
 
 #[operator(id = "entity.add.navmesh", label = "Navmesh")]
-fn entity_add_navmesh(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_add_navmesh(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::spawn_undoable(world, "Add Navmesh Region", |world| {
             let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
@@ -1159,7 +1170,10 @@ fn entity_add_navmesh(_: In<OperatorParameters>, mut commands: Commands) -> Oper
 }
 
 #[operator(id = "entity.add.terrain", label = "Terrain")]
-fn entity_add_terrain(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_add_terrain(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::spawn_undoable(world, "Add Terrain", |world| {
             let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
@@ -1176,7 +1190,10 @@ fn entity_add_terrain(_: In<OperatorParameters>, mut commands: Commands) -> Oper
 }
 
 #[operator(id = "entity.add.prefab", label = "Prefab")]
-fn entity_add_prefab(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn entity_add_prefab(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::prefab_picker::open_prefab_picker(world);
     });

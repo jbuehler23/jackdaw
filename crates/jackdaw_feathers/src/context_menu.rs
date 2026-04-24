@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuItem};
 
-use crate::button::{ButtonClickEvent, ButtonProps, ButtonVariant, CallOperator, button};
+use crate::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonVariant, button};
 use crate::menu_bar::OP_ACTION_PREFIX;
 use crate::tokens;
 
@@ -11,16 +11,16 @@ pub fn plugin(app: &mut App) {
 
 fn on_context_menu_item_click(
     event: On<ButtonClickEvent>,
-    items: Query<(&ContextMenuItem, Option<&CallOperator>)>,
+    items: Query<(&ContextMenuItem, Option<&ButtonOperatorCall>)>,
     mut commands: Commands,
 ) {
-    let Ok((item, call_op)) = items.get(event.entity) else {
+    let Ok((item, button_op)) = items.get(event.entity) else {
         return;
     };
     // Items that dispatch an operator are handled by the editor-side
-    // CallOperator observer; firing ContextMenuAction here would
+    // ButtonOperatorCall observer; firing ContextMenuAction here would
     // double-dispatch.
-    if call_op.is_some() {
+    if button_op.is_some() {
         return;
     }
     commands.trigger(ContextMenuAction {
@@ -31,7 +31,7 @@ fn on_context_menu_item_click(
 
 /// Spawn a context menu at the given position with the given items.
 /// Each item is `(action_id, label)`. Actions prefixed with
-/// [`OP_ACTION_PREFIX`] are attached as [`CallOperator`] ids on the item.
+/// [`OP_ACTION_PREFIX`] are attached as [`ButtonOperatorCall`] ids on the item.
 pub fn spawn_context_menu(
     commands: &mut Commands,
     position: Vec2,
@@ -70,9 +70,11 @@ pub fn spawn_context_menu(
         );
 
         if let Some(op_id) = action.strip_prefix(OP_ACTION_PREFIX) {
-            commands
-                .entity(menu)
-                .with_child((item, btn, CallOperator::new(op_id.to_string())));
+            commands.entity(menu).with_child((
+                item,
+                btn,
+                ButtonOperatorCall::new(op_id.to_string()),
+            ));
         } else {
             commands.entity(menu).with_child((item, btn));
         }
