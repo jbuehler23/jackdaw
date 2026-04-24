@@ -159,10 +159,7 @@ fn can_act_on_entities(
     label = "Reset Position",
     is_available = can_act_on_entities
 )]
-fn transform_reset_position(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
-) -> OperatorResult {
+fn transform_reset_position(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         reset_transform_selected(world, TransformReset::Position);
     });
@@ -174,10 +171,7 @@ fn transform_reset_position(
     label = "Reset Rotation",
     is_available = can_act_on_entities
 )]
-fn transform_reset_rotation(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
-) -> OperatorResult {
+fn transform_reset_rotation(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         reset_transform_selected(world, TransformReset::Rotation);
     });
@@ -243,10 +237,7 @@ fn transform_rotate_90_yaw_ccw(
     label = "Rotate 90° Yaw CW",
     is_available = can_act_on_entities
 )]
-fn transform_rotate_90_yaw_cw(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
-) -> OperatorResult {
+fn transform_rotate_90_yaw_cw(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| rotate_by_camera_axis(world, CameraAxis::Yaw, 1.0));
     OperatorResult::Finished
 }
