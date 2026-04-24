@@ -49,7 +49,10 @@ use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use jackdaw_api_internal::ffi::{ENTRY_SYMBOL, ExtensionEntry, GAME_ENTRY_SYMBOL, GameEntry};
+use jackdaw_api_internal::JackdawExtension;
+use jackdaw_api_internal::ffi::{
+    ENTRY_SYMBOL, ExtensionEntry, GAME_ENTRY_SYMBOL, GameEntry, JackdawExtensionPtr,
+};
 
 pub use compat::CompatError;
 
@@ -250,7 +253,7 @@ impl LoadedKind {
 /// gets reopened from its final destination.
 pub fn peek_kind(path: &Path) -> Result<LoadedKind, LoadError> {
     match open_and_verify(path)? {
-        OpenedDylib::Extension { id: name, .. } => Ok(LoadedKind::Extension(name)),
+        OpenedDylib::Extension { ctor, .. } => Ok(LoadedKind::Extension(ctor().id())),
         OpenedDylib::Game { name, .. } => Ok(LoadedKind::Game(name)),
     }
 }
@@ -382,17 +385,15 @@ fn is_dylib(path: &Path) -> bool {
 /// Result of a successfully-verified dylib open. The loader keeps
 /// each variant's `Library` handle alive for the duration of the
 /// `App`; dropping it while the entry code is still reachable is UB.
-#[expect(
-    improper_ctypes_definitions,
-    reason = "This is wrong, but I'll fix it in the next PR"
-)]
 enum OpenedDylib {
     Extension {
         lib: libloading::Library,
-        id: String,
-        label: String,
-        description: String,
-        ctor: unsafe extern "C" fn() -> Box<dyn jackdaw_api_internal::JackdawExtension>,
+        ctor: Box<dyn Fn() -> Box<dyn JackdawExtension> + Send + Sync>,
+        #[expect(
+            dead_code,
+            reason = "Ideally we should clean up after ourselves, but the extension is a ZST anyways, so there's not really any data to leak anyways. Still, feel free to implement the destructor!"
+        )]
+        dtor: Box<dyn Fn(Box<dyn JackdawExtension>) + Send + Sync>,
     },
     Game {
         lib: libloading::Library,
@@ -405,10 +406,6 @@ enum OpenedDylib {
 /// Try to open `path`, dispatching on which entry symbol it
 /// exposes. Game symbol wins if both somehow exist (a cdylib
 /// should only `export_game!` or `export_extension!`, not both).
-#[expect(
-    improper_ctypes_definitions,
-    reason = "This is wrong, but I'll fix it in the next PR"
-)]
 fn open_and_verify(path: &Path) -> Result<OpenedDylib, LoadError> {
     // SAFETY: libloading's standard contract. Caller trusts `path`
     // is a well-formed dynamic library; if not, the call returns
@@ -464,23 +461,45 @@ fn open_and_verify(path: &Path) -> Result<OpenedDylib, LoadError> {
 
     compat::verify_compat(&entry)?;
 
-    let read_cstr = |field| -> Result<String, LoadError> {
-        // SAFETY: `verify_compat` rejected null; the library stays
-        // alive at least until `lib` is dropped by the caller.
-        let id_ctstr = unsafe { CStr::from_ptr(field) };
-        let owned = id_ctstr
-            .to_str()
-            .map_err(|_| LoadError::InvalidName)?
-            .to_owned();
-        Ok(owned)
+    let construct_extension = move || -> Box<dyn JackdawExtension> {
+        // SAFETY: the dylib stays loaded because its
+        // Library handle is kept in LoadedDylibs;
+        // `verify_compat` asserted the ABI contract at
+        // load time mooore or less (see next comment),
+        //  and the ctor pointer itself is just a plain function pointer.
+        let raw = unsafe { (entry.ctor)() };
+        // SAFETY: we control the export site, which exports the pointer of
+        // a `dyn JackdawExtension` trait object, so we can "safely" transmute
+        // the pointer. This is not really safe, since there's no guarantee
+        // that the ABI is preserved across compiler invocations, but good enough for now
+        unsafe {
+            let ptr: *mut dyn JackdawExtension = std::mem::transmute(raw);
+            Box::from_raw(ptr)
+        }
+    };
+
+    let destruct_extension = move |ext: Box<dyn JackdawExtension>| {
+        // SAFETY: we control the export site, which exports the pointer of
+        // a `dyn JackdawExtension` trait object, so we can "safely" transmute
+        // the pointer. This is not really safe, since there's no guarantee
+        // that the ABI is preserved across compiler invocations, but good enough for now
+        let raw = unsafe {
+            std::mem::transmute::<*mut dyn JackdawExtension, JackdawExtensionPtr>(Box::into_raw(
+                ext,
+            ))
+        };
+        // SAFETY: the dylib stays loaded because its
+        // Library handle is kept in LoadedDylibs;
+        // `verify_compat` asserted the ABI contract at
+        // load time mooore or less (see next comment),
+        //  and the dtor pointer itself is just a plain function pointer.
+        unsafe { (entry.dtor)(raw) }
     };
 
     Ok(OpenedDylib::Extension {
         lib,
-        id: read_cstr(entry.id)?,
-        label: read_cstr(entry.label)?,
-        description: read_cstr(entry.description)?,
-        ctor: entry.ctor,
+        ctor: Box::new(construct_extension),
+        dtor: Box::new(destruct_extension),
     })
 }
 
@@ -491,15 +510,7 @@ fn try_load(app: &mut App, path: &Path) -> Result<LoadedKind, LoadError> {
     // while still holding it on our side of ownership.
     let lib_and_kind = open_and_verify_keep_lib(path)?;
     match lib_and_kind {
-        (
-            lib,
-            OpenedKind::Extension {
-                id,
-                label,
-                description,
-                ctor,
-            },
-        ) => {
+        (lib, OpenedKind::Extension { ctor }) => {
             // Run the per-dylib reflect registrar against our registry
             // BEFORE handing the library off. Uses the exported
             // `REFLECT_REGISTER_SYMBOL` (if present); absent on older
@@ -510,26 +521,12 @@ fn try_load(app: &mut App, path: &Path) -> Result<LoadedKind, LoadError> {
             // input-context registration; then store the ctor in the
             // catalog so subsequent enable/disable cycles rebuild the
             // extension fresh each time.
-            let sample = unsafe { ctor() };
-            let kind = sample.dyn_kind();
-            sample.dyn_register_input_context(app);
-            drop(sample);
+            let ext = ctor();
+            ext.register_input_context(app);
+            let id = ext.id();
+            drop(ext);
 
-            jackdaw_api_internal::lifecycle::register_dylib_extension(
-                app.world_mut(),
-                &id,
-                label,
-                description,
-                kind,
-                move || {
-                    // SAFETY: the dylib stays loaded because its
-                    // Library handle is kept in LoadedDylibs;
-                    // `verify_compat` asserted the ABI contract at
-                    // load time, and the ctor pointer itself is just a
-                    // plain function pointer.
-                    unsafe { ctor() }
-                },
-            );
+            jackdaw_api_internal::lifecycle::register_dylib_extension(app.world_mut(), ctor);
 
             app.world_mut()
                 .resource_mut::<LoadedDylibs>()
@@ -626,15 +623,9 @@ fn try_load(app: &mut App, path: &Path) -> Result<LoadedKind, LoadError> {
 pub fn load_from_path(world: &mut World, path: &Path) -> Result<LoadedKind, LoadError> {
     let lib_and_kind = open_and_verify_keep_lib(path)?;
     match lib_and_kind {
-        (
-            lib,
-            OpenedKind::Extension {
-                id: name,
-                label,
-                description,
-                ctor,
-            },
-        ) => {
+        (lib, OpenedKind::Extension { ctor }) => {
+            let ext = ctor();
+            let id = ext.id();
             // Already-registered extensions come through this path
             // when the user re-installs a rebuild. Don't double-
             // register; registering the same extension twice produces
@@ -642,10 +633,10 @@ pub fn load_from_path(world: &mut World, path: &Path) -> Result<LoadedKind, Load
             // catalog entry.
             if world
                 .resource::<jackdaw_api_internal::ExtensionCatalog>()
-                .contains(&name)
+                .contains(&id)
             {
                 info!(
-                    "Extension `{name}` already registered; keeping the new library handle \
+                    "Extension `{id}` already registered; keeping the new library handle \
                      alive but skipping re-registration."
                 );
                 // Re-run reflect register in case the rebuild added
@@ -653,31 +644,19 @@ pub fn load_from_path(world: &mut World, path: &Path) -> Result<LoadedKind, Load
                 call_reflect_register_symbol(world, &lib);
                 register_derived_component_ids(world);
                 world.resource_mut::<LoadedDylibs>().libs.push(lib);
-                return Ok(LoadedKind::Extension(name));
+                return Ok(LoadedKind::Extension(id));
             }
 
             call_reflect_register_symbol(world, &lib);
             register_derived_component_ids(world);
 
-            let sample = unsafe { ctor() };
-            let kind = sample.dyn_kind();
-            drop(sample);
+            jackdaw_api_internal::lifecycle::register_dylib_extension(world, ctor);
 
-            jackdaw_api_internal::lifecycle::register_dylib_extension(
-                world,
-                &name,
-                label,
-                description,
-                kind,
-                move || unsafe { ctor() },
-            );
-
-            let extension = unsafe { ctor() };
-            jackdaw_api_internal::lifecycle::load_static_extension(world, extension);
+            jackdaw_api_internal::lifecycle::load_static_extension(world, ext);
 
             world.resource_mut::<LoadedDylibs>().libs.push(lib);
 
-            Ok(LoadedKind::Extension(name))
+            Ok(LoadedKind::Extension(id))
         }
         (
             lib,
@@ -738,16 +717,9 @@ pub fn load_from_path(world: &mut World, path: &Path) -> Result<LoadedKind, Load
 /// with the handle at the call site so the caller can both move the
 /// library into `LoadedDylibs` at the right moment and look up symbols
 /// on it in the meantime.
-#[expect(
-    improper_ctypes_definitions,
-    reason = "This is wrong, but I'll fix it in the next PR"
-)]
 enum OpenedKind {
     Extension {
-        id: String,
-        label: String,
-        description: String,
-        ctor: unsafe extern "C" fn() -> Box<dyn jackdaw_api_internal::JackdawExtension>,
+        ctor: Box<dyn Fn() -> Box<dyn JackdawExtension> + Send + Sync>,
     },
     Game {
         name: String,
@@ -762,21 +734,7 @@ enum OpenedKind {
 /// into `LoadedDylibs`.
 fn open_and_verify_keep_lib(path: &Path) -> Result<(libloading::Library, OpenedKind), LoadError> {
     match open_and_verify(path)? {
-        OpenedDylib::Extension {
-            lib,
-            id,
-            label,
-            description,
-            ctor,
-        } => Ok((
-            lib,
-            OpenedKind::Extension {
-                id,
-                label,
-                description,
-                ctor,
-            },
-        )),
+        OpenedDylib::Extension { lib, ctor, .. } => Ok((lib, OpenedKind::Extension { ctor })),
         OpenedDylib::Game {
             lib,
             name,

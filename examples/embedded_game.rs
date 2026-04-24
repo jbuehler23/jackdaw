@@ -38,7 +38,7 @@ fn main() -> AppExit {
 struct MyGameExtension;
 
 impl JackdawExtension for MyGameExtension {
-    fn id() -> String {
+    fn id(&self) -> String {
         "my_game".into()
     }
 

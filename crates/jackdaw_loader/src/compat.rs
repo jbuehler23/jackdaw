@@ -53,31 +53,20 @@ impl std::error::Error for CompatError {}
 /// Verify every embedded version tag against the host's values and
 /// sanity-check that pointer fields are non-null.
 pub fn verify_compat(entry: &ExtensionEntry) -> Result<(), CompatError> {
-    verify_version_fields(
-        entry.api_version,
-        entry.bevy_version,
-        entry.profile,
-        entry.id,
-    )
+    verify_version_fields(entry.api_version, entry.bevy_version, entry.profile)
 }
 
 /// Same as [`verify_compat`] but for a [`GameEntry`]. Both envelopes
 /// share the same version-field layout, so the check itself is
 /// structurally identical.
 pub fn verify_game_compat(entry: &GameEntry) -> Result<(), CompatError> {
-    verify_version_fields(
-        entry.api_version,
-        entry.bevy_version,
-        entry.profile,
-        entry.name,
-    )
+    verify_version_fields(entry.api_version, entry.bevy_version, entry.profile)
 }
 
 fn verify_version_fields(
     api_version: u32,
     bevy_version: *const c_char,
     profile: *const c_char,
-    name: *const c_char,
 ) -> Result<(), CompatError> {
     if api_version != API_VERSION {
         return Err(CompatError::ApiVersionMismatch {
@@ -102,10 +91,6 @@ fn verify_version_fields(
             host: host_profile,
             extension: ext_profile,
         });
-    }
-
-    if name.is_null() {
-        return Err(CompatError::NullPointer { field: "name" });
     }
 
     Ok(())

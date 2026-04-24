@@ -17,15 +17,15 @@ use jackdaw_api::prelude::*;
 pub struct ViewableCameraExtension;
 
 impl JackdawExtension for ViewableCameraExtension {
-    fn id() -> String {
+    fn id(&self) -> String {
         "viewable_camera".to_string()
     }
 
-    fn label() -> String {
+    fn label(&self) -> String {
         "Viewable Camera".to_string()
     }
 
-    fn register_input_context(app: &mut App) {
+    fn register_input_context(&self, app: &mut App) {
         app.add_input_context::<ViewableCameraContext>();
     }
 

@@ -208,9 +208,6 @@ pub struct ExtensionCatalog {
 
 struct CatalogEntry {
     ctor: ExtensionCtor,
-    label: String,
-    description: String,
-    kind: ExtensionKind,
 }
 
 /// Classifies an entry in the catalog. Surfaced in toggle UIs so
@@ -220,36 +217,31 @@ struct CatalogEntry {
 ///
 /// Defaults to [`ExtensionKind::Regular`]. [`ExtensionKind::Builtin`] is reserved
 /// for extensions shipped inside the editor binary.
+// Don't change the repr(u8) value of variants; they're used in FFI
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub enum ExtensionKind {
     /// Ships with Jackdaw as a core feature area (scene tree, inspector,
     /// asset browser, etc.). Present in every build.
-    Builtin,
+    Builtin = 0,
     /// Everything else: example extensions bundled for demonstration,
     /// third-party extensions loaded from disk, user-authored addons.
-    Regular,
+    Regular = 1,
 }
 
 impl ExtensionCatalog {
     /// Register a constructor with its declared kind. Most callers
     /// should use [`App::register_extension`] instead, which handles BEI
     /// context registration.
-    fn register(&mut self, id: impl Into<String>, entry: CatalogEntry) {
-        self.entries.insert(id.into(), entry);
-    }
-
-    /// Convenience method for calling [`ExtensionCatalog::register`] on a known type.
-    fn register_generic<T: crate::JackdawExtension>(
+    fn register_extension_internal(
         &mut self,
         ctor: impl Fn() -> Box<dyn crate::JackdawExtension> + Send + Sync + 'static,
     ) {
-        self.register(
-            T::id(),
+        let id = ctor().id();
+        self.entries.insert(
+            id,
             CatalogEntry {
-                kind: T::kind(),
                 ctor: Arc::new(ctor),
-                label: T::label(),
-                description: T::description(),
             },
         );
     }
@@ -264,20 +256,23 @@ impl ExtensionCatalog {
 
     /// Iterate IDs with their declared [`ExtensionKind`]. Useful for
     /// grouping the Extensions dialog into Built-in and Custom sections.
-    pub fn iter_with_content(&self) -> impl Iterator<Item = (&str, &str, &str, ExtensionKind)> {
+    pub fn iter_with_content(
+        &self,
+    ) -> impl Iterator<Item = (String, String, String, ExtensionKind)> {
         self.entries.iter().map(|(id, entry)| {
+            let ext = (entry.ctor)();
             (
-                id.as_str(),
-                entry.label.as_str(),
-                entry.description.as_str(),
-                entry.kind,
+                id.to_string(),
+                ext.label().to_string(),
+                ext.description().to_string(),
+                ext.kind(),
             )
         })
     }
 
     /// Look up the declared [`ExtensionKind`] for a registered name.
     pub fn kind(&self, name: &str) -> Option<ExtensionKind> {
-        self.entries.get(name).map(|e| e.kind)
+        self.entries.get(name).map(|e| (e.ctor)().kind())
     }
 
     /// Whether the named extension is a Jackdaw-shipped built-in.
@@ -333,10 +328,11 @@ impl ExtensionAppExt for App {
         &mut self,
         ctor: impl Fn() -> Box<dyn crate::JackdawExtension> + Send + Sync + 'static,
     ) -> &mut Self {
-        T::register_input_context(self);
+        let ext = ctor();
+        ext.register_input_context(self);
         self.world_mut()
             .resource_mut::<ExtensionCatalog>()
-            .register_generic::<T>(ctor);
+            .register_extension_internal(ctor);
         self
     }
 
@@ -344,25 +340,13 @@ impl ExtensionAppExt for App {
         &mut self,
         ctor: impl Fn() -> Box<dyn crate::JackdawExtension> + Send + Sync + 'static,
     ) -> &mut Self {
-        let sample = ctor();
-        let id = sample.dyn_id();
-        let label = sample.dyn_label();
-        let description = sample.dyn_description();
-        let kind = sample.dyn_kind();
-        sample.dyn_register_input_context(self);
-        drop(sample);
+        let ext = ctor();
+        ext.register_input_context(self);
+        drop(ext);
 
         self.world_mut()
             .resource_mut::<ExtensionCatalog>()
-            .register(
-                id,
-                CatalogEntry {
-                    ctor: Arc::new(ctor),
-                    label,
-                    description,
-                    kind,
-                },
-            );
+            .register_extension_internal(ctor);
         self
     }
 }
@@ -410,7 +394,7 @@ pub fn load_static_extension(
     world: &mut World,
     extension: Box<dyn crate::JackdawExtension>,
 ) -> Entity {
-    let name = extension.dyn_id();
+    let name = extension.id();
     info!("Loading extension: {}", name);
 
     let extension_entity = world.spawn(Extension { name }).id();
@@ -450,26 +434,13 @@ pub(crate) struct StoredExtension(pub(crate) Box<dyn crate::JackdawExtension>);
 /// Register a dylib-loaded extension into a running editor's catalog.
 /// The dylib loader uses this after reading the dylib's entry metadata.
 /// Operates on `&mut World` (not `&mut App`) because installs happen post-startup.
-pub fn register_dylib_extension<F>(
-    world: &mut World,
-    id: impl Into<String>,
-    label: impl Into<String>,
-    description: impl Into<String>,
-    kind: ExtensionKind,
-    ctor: F,
-) where
+pub fn register_dylib_extension<F>(world: &mut World, ctor: F)
+where
     F: Fn() -> Box<dyn crate::JackdawExtension> + Send + Sync + 'static,
 {
-    // FIXME: what about BEI contexts? Where are they added?
-    world.resource_mut::<ExtensionCatalog>().register(
-        id,
-        CatalogEntry {
-            ctor: Arc::new(ctor),
-            label: label.into(),
-            description: description.into(),
-            kind,
-        },
-    );
+    world
+        .resource_mut::<ExtensionCatalog>()
+        .register_extension_internal(ctor);
 }
 
 /// Keep `OperatorIndex` in sync when an operator entity is spawned.

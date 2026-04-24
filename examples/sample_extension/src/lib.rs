@@ -20,19 +20,19 @@ use jackdaw_api::prelude::*;
 pub struct SampleExtension;
 
 impl JackdawExtension for SampleExtension {
-    fn id() -> String {
+    fn id(&self) -> String {
         "sample".to_string()
     }
 
-    fn label() -> String {
+    fn label(&self) -> String {
         "Example Extension".to_string()
     }
 
-    fn description() -> String {
+    fn description(&self) -> String {
         "Just a tiny example extension :)".to_string()
     }
 
-    fn register_input_context(app: &mut App) {
+    fn register_input_context(&self, app: &mut App) {
         app.add_input_context::<SampleContext>();
     }
 
@@ -103,9 +103,4 @@ fn hello_time(_: In<OperatorParameters>, time: Res<Time>) -> OperatorResult {
 // cdylib output needs it; the rlib output that's statically
 // linked into the prebuilt binary just carries a dead symbol,
 // which is harmless.
-jackdaw_api::export_extension!(
-    "sample",
-    "Example Extension",
-    "Just a tiny example extension :)",
-    || Box::new(SampleExtension)
-);
+jackdaw_api::export_extension!(SampleExtension);

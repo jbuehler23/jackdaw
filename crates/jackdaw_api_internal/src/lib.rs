@@ -37,7 +37,7 @@
 //!             ]),
 //!         ));
 //!     }
-//!     fn register_input_context(app: &mut App) {
+//!     fn register_input_context(&self, app: &mut App) {
 //!         app.add_input_context::<SamplePluginContext>();
 //!     }
 //! }
@@ -108,26 +108,18 @@ pub mod prelude {
 
 /// Trait implemented by every extension. Declares the extension's name
 /// and registration logic; the framework handles everything else.
-pub trait JackdawExtension: Send + Sync + 'static + DynJackdawExtension {
+pub trait JackdawExtension: Send + Sync + 'static {
     /// A unique identifier for this extension. This will be used to refer to the extension internally.
     /// The prefix `"jackdaw."` as well as the name `jackdaw` itself are reserved for built-in extensions.
-    fn id() -> String
-    where
-        Self: Sized;
+    fn id(&self) -> String;
 
     /// A human-readable name for this extension. This will be displayed in UIs.
-    fn label() -> String
-    where
-        Self: Sized,
-    {
-        Self::id()
+    fn label(&self) -> String {
+        self.id()
     }
 
     /// A human-readable description for this extension. This will be displayed in UIs.
-    fn description() -> String
-    where
-        Self: Sized,
-    {
+    fn description(&self) -> String {
         "".to_string()
     }
 
@@ -136,10 +128,7 @@ pub trait JackdawExtension: Send + Sync + 'static + DynJackdawExtension {
     /// The Extensions dialog reads this to split the list into Built-in
     /// and Custom sections. Reserved as a future hook for marketplace
     /// categories.
-    fn kind() -> ExtensionKind
-    where
-        Self: Sized,
-    {
+    fn kind(&self) -> ExtensionKind {
         ExtensionKind::Regular
     }
 
@@ -154,11 +143,7 @@ pub trait JackdawExtension: Send + Sync + 'static + DynJackdawExtension {
     /// contexts.
     // FIXME: this leaks memory when the extension is disabled
     #[expect(unused_variables, reason = "The default implementation does nothing")]
-    fn register_input_context(app: &mut App)
-    where
-        Self: Sized,
-    {
-    }
+    fn register_input_context(&self, app: &mut App) {}
 
     /// Main registration logic. Called each time the extension is
     /// enabled. Spawn operators, windows, BEI action entities, and any
@@ -172,42 +157,6 @@ pub trait JackdawExtension: Send + Sync + 'static + DynJackdawExtension {
     /// state (file handles, network sessions, and the like).
     #[expect(unused_variables, reason = "The default implementation does nothing")]
     fn unregister(&self, world: &mut World, extension_entity: Entity) {}
-}
-
-/// Allows access to the extension's static methods via a dynamic dispatch.
-/// This is needed for when you're holding a `Box<dyn JackdawExtension>` and need to call methods that wouldn't require `self`.
-pub trait DynJackdawExtension {
-    /// Returns [`JackdawExtension::id`] via dynamic dispatch.
-    fn dyn_id(&self) -> String;
-    /// Returns [`JackdawExtension::label`] via dynamic dispatch.
-    fn dyn_label(&self) -> String;
-    /// Returns [`JackdawExtension::kind`] via dynamic dispatch.
-    fn dyn_kind(&self) -> ExtensionKind;
-    /// Returns [`JackdawExtension::description`] via dynamic dispatch.
-    fn dyn_description(&self) -> String;
-    /// Registers input contexts for this extension.
-    fn dyn_register_input_context(&self, app: &mut App);
-}
-
-impl<T: JackdawExtension> DynJackdawExtension for T {
-    fn dyn_id(&self) -> String {
-        T::id()
-    }
-
-    fn dyn_label(&self) -> String {
-        T::label()
-    }
-
-    fn dyn_description(&self) -> String {
-        T::description()
-    }
-    fn dyn_kind(&self) -> ExtensionKind {
-        T::kind()
-    }
-
-    fn dyn_register_input_context(&self, app: &mut App) {
-        T::register_input_context(app);
-    }
 }
 
 /// Passed to [`JackdawExtension::register`]. Holds the extension entity

@@ -129,13 +129,13 @@ fn populate_extensions_dialog(
         // from the dialog entirely rather than rendering a locked
         // checkbox — they're implementation detail, not a user
         // choice.
-        if extensions_config::is_required(id) {
+        if extensions_config::is_required(&id) {
             continue;
         }
         let row = (
             id.to_string(),
             label.to_string(),
-            enabled_names.contains(id),
+            enabled_names.contains(&id),
         );
         match kind {
             ExtensionKind::Builtin => builtin_rows.push(row),

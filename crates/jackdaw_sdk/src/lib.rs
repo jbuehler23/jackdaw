@@ -42,9 +42,9 @@ pub use jackdaw_api::export_game;
 pub use jackdaw_api::operator;
 
 pub use jackdaw_api::{
-    DynJackdawExtension, ExtensionContext, ExtensionKind, ExtensionPoint, HierarchyWindow,
-    InspectorWindow, JackdawExtension, MenuEntryDescriptor, PanelContext, SectionBuildFn,
-    WindowDescriptor, jsn, op, pie, runtime,
+    ExtensionContext, ExtensionKind, ExtensionPoint, HierarchyWindow, InspectorWindow,
+    JackdawExtension, MenuEntryDescriptor, PanelContext, SectionBuildFn, WindowDescriptor, jsn, op,
+    pie, runtime,
 };
 
 /// Bevy root surface for extension code walking bevy paths beyond

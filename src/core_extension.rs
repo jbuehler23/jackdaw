@@ -17,19 +17,19 @@ pub(super) fn plugin(app: &mut App) {
 pub struct JackdawCoreExtension;
 
 impl JackdawExtension for JackdawCoreExtension {
-    fn id() -> String {
+    fn id(&self) -> String {
         CORE_EXTENSION_ID.to_string()
     }
 
-    fn label() -> String {
+    fn label(&self) -> String {
         "Jackdaw Core Functionality".to_string()
     }
 
-    fn description() -> String {
+    fn description(&self) -> String {
         "Important functionality for the Jackdaw editor. This extension is always loaded and cannot be disabled.".to_string()
     }
 
-    fn kind() -> ExtensionKind {
+    fn kind(&self) -> ExtensionKind {
         ExtensionKind::Builtin
     }
 
@@ -48,7 +48,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::draw_brush::add_to_extension(ctx);
     }
 
-    fn register_input_context(app: &mut App) {
+    fn register_input_context(&self, app: &mut App) {
         app.add_input_context::<CoreExtensionInputContext>();
     }
 }
