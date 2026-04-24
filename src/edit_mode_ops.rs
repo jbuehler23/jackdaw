@@ -78,7 +78,6 @@ fn can_change_edit_mode(
 #[operator(
     id = "edit_mode.object",
     label = "Object Mode",
-    allows_undo = false,
     is_available = can_change_edit_mode
 )]
 pub(crate) fn edit_mode_object(
@@ -96,7 +95,6 @@ pub(crate) fn edit_mode_object(
 #[operator(
     id = "edit_mode.vertex",
     label = "Vertex Mode",
-    allows_undo = false,
     is_available = can_change_edit_mode
 )]
 pub(crate) fn edit_mode_vertex(
@@ -120,7 +118,6 @@ pub(crate) fn edit_mode_vertex(
 #[operator(
     id = "edit_mode.edge",
     label = "Edge Mode",
-    allows_undo = false,
     is_available = can_change_edit_mode
 )]
 pub(crate) fn edit_mode_edge(
@@ -144,7 +141,6 @@ pub(crate) fn edit_mode_edge(
 #[operator(
     id = "edit_mode.face",
     label = "Face Mode",
-    allows_undo = false,
     is_available = can_change_edit_mode
 )]
 pub(crate) fn edit_mode_face(
@@ -168,7 +164,6 @@ pub(crate) fn edit_mode_face(
 #[operator(
     id = "edit_mode.clip",
     label = "Clip Mode",
-    allows_undo = false,
     is_available = can_change_edit_mode
 )]
 pub(crate) fn edit_mode_clip(
@@ -192,7 +187,6 @@ pub(crate) fn edit_mode_clip(
 #[operator(
     id = "edit_mode.physics",
     label = "Physics Tool",
-    allows_undo = false,
     is_available = can_change_edit_mode
 )]
 pub(crate) fn edit_mode_physics(

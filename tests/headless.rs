@@ -66,6 +66,50 @@ fn can_pass_params_to_operator() {
         .assert_finished();
 }
 
+/// Verifies that the snapshot mechanism notices changes to editor-state
+/// resources (`EditMode`, `GizmoMode`, `ViewModeSettings`, ...). Two
+/// snapshots taken either side of a resource mutation must compare
+/// unequal — if they compared equal, the operator dispatcher would
+/// silently drop the undo entry and Ctrl+Z wouldn't restore the old
+/// state. The restore-via-`apply` half of the contract goes through
+/// `apply_ast_to_world`, which drives editor UI systems that can't run
+/// headless; that half is covered by manual smoke testing in the
+/// editor.
+#[test]
+fn snapshot_notices_editor_state_changes() {
+    use jackdaw::brush::{BrushEditMode, EditMode};
+    use jackdaw::gizmos::{GizmoMode, GizmoSpace};
+    use jackdaw::snapping::SnapSettings;
+    use jackdaw::view_modes::ViewModeSettings;
+    use jackdaw::viewport_overlays::OverlaySettings;
+    use jackdaw_api_internal::snapshot::ActiveSnapshotter;
+    use jackdaw_avian_integration::PhysicsOverlayConfig;
+
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+
+    let world = app.world_mut();
+    let before = world
+        .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));
+
+    // Flip each editor-state resource the snapshot should cover.
+    *world.resource_mut::<ViewModeSettings>() = ViewModeSettings { wireframe: true };
+    *world.resource_mut::<EditMode>() = EditMode::BrushEdit(BrushEditMode::Face);
+    *world.resource_mut::<GizmoMode>() = GizmoMode::Rotate;
+    *world.resource_mut::<GizmoSpace>() = GizmoSpace::Local;
+    world.resource_mut::<SnapSettings>().grid_power = 3;
+    world.resource_mut::<OverlaySettings>().show_bounding_boxes = true;
+    world.resource_mut::<PhysicsOverlayConfig>().show_colliders = false;
+
+    let after = world
+        .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));
+    assert!(
+        !before.equals(&*after),
+        "snapshotter should observe the mutated editor-state resources"
+    );
+}
+
 #[derive(Default)]
 struct SampleExtension;
 

@@ -11,7 +11,7 @@ impl Plugin for ViewModesPlugin {
     }
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone, PartialEq)]
 pub struct ViewModeSettings {
     pub wireframe: bool,
 }

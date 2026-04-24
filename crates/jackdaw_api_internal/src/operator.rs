@@ -70,7 +70,7 @@ pub(super) fn plugin(app: &mut App) {
 /// ```
 ///
 /// Buttons in UI code dispatch the operator by attaching a
-/// `CallOperator` component (from `jackdaw_feathers::button`), usually via
+/// `ButtonOperatorCall` component (from `jackdaw_feathers::button`), usually via
 /// `ButtonProps::call_operator("sample.place_cube")`. The editor registers
 /// a global observer that, on `ButtonClickEvent`, calls
 /// [`OperatorWorldExt::operator`] with the stored id — so no per-button

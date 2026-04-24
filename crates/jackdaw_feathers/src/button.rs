@@ -21,9 +21,9 @@ pub struct ButtonClickEvent {
 /// observer; feathers just carries the id so widgets can declare
 /// their intent without depending on the operator API.
 #[derive(Component, Clone, Debug)]
-pub struct CallOperator(pub Cow<'static, str>);
+pub struct ButtonOperatorCall(pub Cow<'static, str>);
 
-impl CallOperator {
+impl ButtonOperatorCall {
     pub fn new(id: impl Into<Cow<'static, str>>) -> Self {
         Self(id.into())
     }
@@ -391,7 +391,7 @@ fn setup_button(
                 return;
             };
             if let Some(id) = call_operator {
-                ec.insert(CallOperator(id));
+                ec.insert(ButtonOperatorCall(id));
             }
             ec.with_children(|parent| {
                 if let Some(icon) = left_icon {
@@ -497,8 +497,8 @@ fn handle_button_click(
 /// Create an icon-only button using lucide icon font.
 ///
 /// To dispatch an operator on click, spawn the returned bundle alongside an
-/// [`CallOperator`] component: `commands.spawn((icon_button(props, font),
-/// CallOperator::new("my.op")))`. A setter isn't provided on
+/// [`ButtonOperatorCall`] component: `commands.spawn((icon_button(props, font),
+/// ButtonOperatorCall::new("my.op")))`. A setter isn't provided on
 /// [`IconButtonProps`] because `icon_button` has no staging/setup system;
 /// the tuple-form keeps the API small.
 pub fn icon_button(props: IconButtonProps, icon_font: &Handle<Font>) -> impl Bundle {

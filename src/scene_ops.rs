@@ -8,12 +8,12 @@
 //! here.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Chord, Press, *};
+use bevy_enhanced_input::prelude::*;
 use jackdaw_api::prelude::*;
 
-use crate::core_extension::{CoreExtensionInputContext, Modifiers};
+use crate::core_extension::CoreExtensionInputContext;
 
-pub(crate) fn add_to_extension(ctx: &mut ExtensionContext, modifiers: &Modifiers) {
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<SceneNewOp>()
         .register_operator::<SceneOpenOp>()
         .register_operator::<SceneSaveOp>()
@@ -22,32 +22,26 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext, modifiers: &Modifiers
         .register_operator::<SceneOpenRecentOp>();
 
     let ext = ctx.id();
-    let ctrl = modifiers.ctrl;
-    let shift = modifiers.shift;
     ctx.entity_mut().world_scope(|world| {
         world.spawn((
             Action::<SceneNewOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::new([ctrl, shift]),
-            bindings![(KeyCode::KeyN, Press::default())],
+            bindings![KeyCode::KeyN.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT)],
         ));
         world.spawn((
             Action::<SceneOpenOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(ctrl),
-            bindings![(KeyCode::KeyO, Press::default())],
+            bindings![KeyCode::KeyO.with_mod_keys(ModKeys::CONTROL)],
         ));
         world.spawn((
             Action::<SceneSaveOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::single(ctrl),
-            bindings![(KeyCode::KeyS, Press::default())],
+            bindings![KeyCode::KeyS.with_mod_keys(ModKeys::CONTROL)],
         ));
         world.spawn((
             Action::<SceneSaveAsOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            Chord::new([ctrl, shift]),
-            bindings![(KeyCode::KeyS, Press::default())],
+            bindings![KeyCode::KeyS.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT)],
         ));
     });
 }

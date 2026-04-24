@@ -62,7 +62,6 @@ fn can_change_gizmo(
 #[operator(
     id = "gizmo.mode.translate",
     label = "Gizmo Translate",
-    allows_undo = false,
     is_available = can_change_gizmo
 )]
 pub(crate) fn gizmo_mode_translate(
@@ -76,7 +75,6 @@ pub(crate) fn gizmo_mode_translate(
 #[operator(
     id = "gizmo.mode.rotate",
     label = "Gizmo Rotate",
-    allows_undo = false,
     is_available = can_change_gizmo
 )]
 pub(crate) fn gizmo_mode_rotate(
@@ -90,7 +88,6 @@ pub(crate) fn gizmo_mode_rotate(
 #[operator(
     id = "gizmo.mode.scale",
     label = "Gizmo Scale",
-    allows_undo = false,
     is_available = can_change_gizmo
 )]
 pub(crate) fn gizmo_mode_scale(
@@ -104,7 +101,6 @@ pub(crate) fn gizmo_mode_scale(
 #[operator(
     id = "gizmo.space.toggle",
     label = "Toggle Gizmo Space",
-    allows_undo = false,
     is_available = can_change_gizmo
 )]
 pub(crate) fn gizmo_space_toggle(
