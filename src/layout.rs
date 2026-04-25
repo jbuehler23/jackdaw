@@ -741,16 +741,19 @@ fn toolbar_edit_button(
             // modal; re-dispatching would fail with ModalAlreadyActive.
             if matches!(tool, EditToolButton::Physics) {
                 commands.queue(|world: &mut World| {
-                    if *world.resource::<EditMode>() == EditMode::Physics {
-                        let _ = world.operator("modal.cancel").call();
+                    let result = if *world.resource::<EditMode>() == EditMode::Physics {
+                        world.operator("modal.cancel").call()
                     } else {
-                        let _ = world
+                        world
                             .operator(PhysicsActivateOp::ID)
                             .settings(CallOperatorSettings {
                                 execution_context: ExecutionContext::Invoke,
                                 creates_history_entry: true,
                             })
-                            .call();
+                            .call()
+                    };
+                    if let Err(err) = result {
+                        error!("physics tool dispatch failed: {err}");
                     }
                 });
                 return;

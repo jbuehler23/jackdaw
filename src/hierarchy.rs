@@ -6,7 +6,6 @@ use bevy::{
 };
 use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_feathers::{
     context_menu::spawn_context_menu,
     icons::IconFont,
@@ -66,7 +65,6 @@ impl Plugin for HierarchyPlugin {
         app.init_resource::<ContextMenuState>()
             .init_resource::<PendingTemplateDefaultName>()
             .init_resource::<HierarchyShowAll>()
-            .init_resource::<PendingRenameTarget>()
             .add_systems(Startup, setup_tree_node_expanded_watcher)
             .add_systems(OnEnter(crate::AppState::Editor), setup_name_watcher)
             .add_systems(
@@ -938,10 +936,10 @@ fn on_context_menu_action(
         }
         "hierarchy.rename" => {
             if let Some(target) = target_entity {
-                commands.trigger(TreeRowStartRename {
-                    entity: Entity::PLACEHOLDER,
-                    source_entity: target,
-                });
+                commands
+                    .operator(RenameBeginOp::ID)
+                    .param("entity", target.to_bits() as i64)
+                    .call();
             }
         }
         "hierarchy.duplicate" => {
@@ -1091,29 +1089,18 @@ struct InlineRenameInput {
     source_entity: Entity,
 }
 
-/// Entity to rename on the next `hierarchy.rename_begin` invoke.
-#[derive(Resource, Default)]
-struct PendingRenameTarget(Option<Entity>);
+fn on_tree_row_start_rename(event: On<TreeRowStartRename>, mut commands: Commands) {
+    let target = event.source_entity;
+    commands
+        .operator(RenameBeginOp::ID)
+        .param("entity", target.to_bits() as i64)
+        .call();
+}
 
-fn on_tree_row_start_rename(
-    event: On<TreeRowStartRename>,
-    mut commands: Commands,
-    mut pending: ResMut<PendingRenameTarget>,
-    rename_check: Query<(), With<InlineRenameInput>>,
-) {
-    if !rename_check.is_empty() {
-        return;
-    }
-    pending.0 = Some(event.source_entity);
-    commands.queue(|world: &mut World| {
-        let _ = world
-            .operator(RenameBeginOp::ID)
-            .settings(CallOperatorSettings {
-                execution_context: ExecutionContext::Invoke,
-                creates_history_entry: false,
-            })
-            .call();
-    });
+/// `is_available` for `hierarchy.rename_begin`: only fires when no
+/// inline rename is already in progress.
+fn no_rename_in_progress(rename_check: Query<(), With<InlineRenameInput>>) -> bool {
+    rename_check.is_empty()
 }
 
 fn entity_name(names: &Query<&Name>, entity: Entity) -> String {
@@ -1145,40 +1132,51 @@ fn find_rename_targets(
     None
 }
 
-fn restore_label(commands: &mut Commands, label_entity: Entity, text: String) {
-    commands
-        .entity(label_entity)
-        .remove::<TreeRowInlineRename>();
-    if let Ok(mut ec) = commands.get_entity(label_entity) {
-        ec.insert(Text::new(text));
-        ec.entry::<Node>().and_modify(|mut node| {
+/// Custom command: drop the inline-rename marker from a tree-row label
+/// and restore its displayed text + visibility. Issued from rename
+/// commit/cancel paths so the queue boundary is explicit.
+struct RestoreLabel {
+    label_entity: Entity,
+    text: String,
+}
+
+impl Command for RestoreLabel {
+    fn apply(self, world: &mut World) {
+        let Ok(mut ec) = world.get_entity_mut(self.label_entity) else {
+            return;
+        };
+        ec.remove::<TreeRowInlineRename>();
+        ec.insert(Text::new(self.text));
+        if let Some(mut node) = ec.get_mut::<Node>() {
             node.display = Display::Flex;
-        });
+        }
     }
 }
 
+/// Begin inline rename of an entity in the hierarchy tree.
+///
+/// # Parameters
+/// - `entity`: the scene entity to rename, encoded via [`Entity::to_bits()`].
 #[operator(
     id = "hierarchy.rename_begin",
     label = "Rename Entity",
-    description = "Begin inline rename of the entity in `PendingRenameTarget`. \
-                   Modal: commits on Enter, cancels on Escape.",
+    description = "Rename the selected entity in the hierarchy.",
     modal = true,
-    allows_undo = false,
     cancel = cancel_rename_begin,
+    is_available = no_rename_in_progress,
 )]
 pub(crate) fn rename_begin(
-    _: In<OperatorParameters>,
+    params: In<OperatorParameters>,
     mut commands: Commands,
-    mut pending: ResMut<PendingRenameTarget>,
     tree_index: Res<TreeIndex>,
     tree_nodes: Query<&Children, With<TreeNode>>,
     content_query: Query<(Entity, &Children), With<TreeRowContent>>,
     label_query: Query<Entity, With<TreeRowLabel>>,
     names: Query<&Name>,
     rename_inputs: Query<(), With<InlineRenameInput>>,
-    modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+    active: ActiveModalQuery,
 ) -> OperatorResult {
-    if modal.is_some() {
+    if active.is_modal_running() {
         return if rename_inputs.is_empty() {
             OperatorResult::Finished
         } else {
@@ -1186,7 +1184,7 @@ pub(crate) fn rename_begin(
         };
     }
 
-    let Some(source) = pending.0.take() else {
+    let Some(source) = params.as_entity("entity") else {
         return OperatorResult::Cancelled;
     };
     let Some((label_entity, content_entity)) = find_rename_targets(
@@ -1231,7 +1229,10 @@ fn cancel_rename_begin(
     for (rename_entity, inline_rename) in &rename_query {
         input_focus.clear();
         let original = entity_name(&names, inline_rename.source_entity);
-        restore_label(&mut commands, inline_rename.label_entity, original);
+        commands.queue(RestoreLabel {
+            label_entity: inline_rename.label_entity,
+            text: original,
+        });
         commands.entity(rename_entity).despawn();
     }
 }
@@ -1299,7 +1300,10 @@ fn handle_inline_rename_commit(
     };
 
     input_focus.clear();
-    restore_label(&mut commands, label_entity, event.text.clone());
+    commands.queue(RestoreLabel {
+        label_entity,
+        text: event.text.clone(),
+    });
     commands.entity(rename_entity).despawn();
 
     // Trigger the rename

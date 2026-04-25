@@ -2,6 +2,35 @@ use bevy::{prelude::*, ui::UiGlobalTransform};
 
 use crate::viewport::SceneViewport;
 
+/// Window-to-camera-space mapping for the scene viewport node.
+///
+/// `top_left` is where the viewport node starts in window logical pixels,
+/// `vp_size` is its logical size, and `remap` scales window-local pixels
+/// onto the camera's render target (which may differ from the UI node
+/// size on `HiDPI` / fractional scaling).
+pub(crate) struct ViewportRemap {
+    pub top_left: Vec2,
+    pub vp_size: Vec2,
+    pub remap: Vec2,
+}
+
+impl ViewportRemap {
+    /// Compute remap parameters from the camera and the scene viewport's
+    /// `ComputedNode` + `UiGlobalTransform`.
+    pub fn new(camera: &Camera, computed: &ComputedNode, vp_transform: &UiGlobalTransform) -> Self {
+        let scale = computed.inverse_scale_factor();
+        let vp_pos = vp_transform.translation * scale;
+        let vp_size = computed.size() * scale;
+        let top_left = vp_pos - vp_size / 2.0;
+        let target_size = camera.logical_viewport_size().unwrap_or(vp_size);
+        Self {
+            top_left,
+            vp_size,
+            remap: target_size / vp_size,
+        }
+    }
+}
+
 /// Convert window cursor position to viewport-local coordinates in camera space.
 ///
 /// The camera renders to an off-screen image whose logical size may differ from
@@ -17,17 +46,10 @@ pub(crate) fn window_to_viewport_cursor(
     let Ok((computed, vp_transform)) = viewport_query.single() else {
         return Some(cursor_pos);
     };
-    // Convert from physical pixels to logical pixels to match cursor_position()
-    let scale = computed.inverse_scale_factor();
-    let vp_pos = vp_transform.translation * scale;
-    let vp_size = computed.size() * scale;
-    // ComputedNode position is the center, convert to top-left
-    let vp_top_left = vp_pos - vp_size / 2.0;
-    let local = cursor_pos - vp_top_left;
-    if local.x >= 0.0 && local.y >= 0.0 && local.x <= vp_size.x && local.y <= vp_size.y {
-        // Remap from UI-logical space to camera render-target space
-        let target_size = camera.logical_viewport_size().unwrap_or(vp_size);
-        Some(local * target_size / vp_size)
+    let map = ViewportRemap::new(camera, computed, vp_transform);
+    let local = cursor_pos - map.top_left;
+    if local.x >= 0.0 && local.y >= 0.0 && local.x <= map.vp_size.x && local.y <= map.vp_size.y {
+        Some(local * map.remap)
     } else {
         None
     }

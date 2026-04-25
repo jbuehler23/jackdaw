@@ -12,7 +12,6 @@ use bevy::{
     prelude::*,
 };
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_jsn::BrushGroup;
 
 /// Marker for the box-select visual overlay node.
@@ -253,8 +252,12 @@ pub(crate) fn handle_viewport_click(
     }
 }
 
-/// Shift+LMB in the viewport dispatches [`BoxSelectOp`]. Modifier+mouse
-/// gestures aren't expressible as BEI key actions, so this stays a system.
+/// Shift+LMB in the viewport dispatches [`BoxSelectOp`], and a release
+/// inside the operator commits it. Both the trigger here and the
+/// release detection on line 327 sit outside the BEI keybind menu
+/// because modifier+mouse gestures aren't expressible as BEI key
+/// actions. Surfacing them in the customisation UI is part of the
+/// keybind menu rebuild (Phase 11).
 fn box_select_invoke_trigger(
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -280,23 +283,17 @@ fn box_select_invoke_trigger(
         return;
     }
     commands.queue(|world: &mut World| {
-        let _ = world
-            .operator(BoxSelectOp::ID)
-            .settings(CallOperatorSettings {
-                execution_context: ExecutionContext::Invoke,
-                creates_history_entry: false,
-            })
-            .call();
+        if let Err(err) = world.operator(BoxSelectOp::ID).call() {
+            error!("box-select dispatch failed: {err}");
+        }
     });
 }
 
 #[operator(
     id = "selection.box_select",
     label = "Box Select",
-    description = "Drag a rectangle to select entities. \
-                   Modal: commits on mouse release, cancels on Escape.",
+    description = "Drag a rectangle to select entities inside it.",
     modal = true,
-    allows_undo = false,
     cancel = cancel_box_select,
 )]
 pub(crate) fn box_select(
@@ -307,7 +304,7 @@ pub(crate) fn box_select(
     scene_entities: Query<(Entity, &GlobalTransform), (Without<EditorEntity>, With<Name>)>,
     mut selection: ResMut<Selection>,
     mut commands: Commands,
-    modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+    active: ActiveModalQuery,
 ) -> OperatorResult {
     let Ok(window) = vp.windows.single() else {
         return OperatorResult::Cancelled;
@@ -316,7 +313,7 @@ pub(crate) fn box_select(
         return OperatorResult::Cancelled;
     };
 
-    if modal.is_none() {
+    if !active.is_modal_running() {
         box_state.active = true;
         box_state.start = cursor_pos;
         box_state.current = cursor_pos;
@@ -335,12 +332,11 @@ pub(crate) fn box_select(
     let Ok((vp_computed, vp_tf)) = vp.viewport.single() else {
         return OperatorResult::Finished;
     };
-    let scale = vp_computed.inverse_scale_factor();
-    let vp_size = vp_computed.size() * scale;
-    let vp_top_left = vp_tf.translation * scale - vp_size / 2.0;
-    let remap = camera.logical_viewport_size().unwrap_or(vp_size) / vp_size;
-    let min = (box_state.start - vp_top_left).min(box_state.current - vp_top_left) * remap;
-    let max = (box_state.start - vp_top_left).max(box_state.current - vp_top_left) * remap;
+    let map = crate::viewport_util::ViewportRemap::new(camera, vp_computed, vp_tf);
+    let start_local = box_state.start - map.top_left;
+    let current_local = box_state.current - map.top_left;
+    let min = start_local.min(current_local) * map.remap;
+    let max = start_local.max(current_local) * map.remap;
 
     let selected: Vec<Entity> = scene_entities
         .iter()

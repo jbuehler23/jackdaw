@@ -17,7 +17,6 @@ use bevy::{
 
 use bevy_enhanced_input::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 
 use crate::brush::{BrushSelection, EditMode};
 use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
@@ -50,21 +49,18 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<PhysicsActivateOp>();
 
     let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<PhysicsActivateOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyP.with_mod_keys(ModKeys::SHIFT)],
-        ));
-    });
+    ctx.spawn((
+        Action::<PhysicsActivateOp>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![KeyCode::KeyP.with_mod_keys(ModKeys::SHIFT)],
+    ));
 }
 
 #[operator(
     id = "physics.activate",
     label = "Physics Tool",
-    description = "Hammer-style physics placement tool. Modal: Space commits, Escape cancels.",
+    description = "Drop physics-enabled objects into the scene like a hammer.",
     modal = true,
-    allows_undo = false,
     cancel = cancel_physics_activate,
 )]
 pub(crate) fn physics_activate(
@@ -73,9 +69,9 @@ pub(crate) fn physics_activate(
     mut draw_state: ResMut<DrawBrushState>,
     mut brush_selection: ResMut<BrushSelection>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+    active: ActiveModalQuery,
 ) -> OperatorResult {
-    if modal.is_none() {
+    if !active.is_modal_running() {
         draw_state.active = None;
         brush_selection.clear();
         *edit_mode = EditMode::Physics;
