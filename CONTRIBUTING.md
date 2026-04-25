@@ -63,7 +63,7 @@ cargo doc --workspace --no-deps
 
 ## Writing an operator
 
-User-facing editor actions are written as **operators**: Blender-style functions identified by a string id, registered with the editor's extension catalog, and dispatchable from UI buttons, menu entries, keybinds, the (planned) command palette, and the (planned) remote/scripting API. Every new editor behaviour should be an operator unless there's a specific reason it can't be (continuous-scroll input, per-frame reactive state, etc.).
+Anything the user does in the editor is an **operator**: a small function with a string id. Buttons, menu entries, keybinds, and (later) the command palette and remote API all call the same operator by that id. Reach for an operator first when you're adding new behaviour. The exceptions are things that don't fit a single click, like continuous scroll input or per-frame reactive state.
 
 ### A minimal example
 
@@ -83,11 +83,11 @@ fn spawn_cube(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResu
 }
 ```
 
-The `#[operator]` macro generates a zero-sized type (`SpawnCubeOp`) that implements the `Operator` trait, derives `InputAction` so it can be used as a BEI binding target, and registers `spawn_cube` as the execute system.
+The macro gives you back a `SpawnCubeOp` type. You'll use it to register the op, bind keys to it, and reference its id from buttons.
 
 ### Registering it on an extension
 
-Operators are registered on a `JackdawExtension`. The core editor functionality lives on `JackdawCoreExtension` (`src/core_extension.rs`); custom extensions register their own. Inside `register`:
+Operators live on a `JackdawExtension`. Built-in editor ops are on `JackdawCoreExtension` (`src/core_extension.rs`); your own extension registers its ops the same way. Inside `register`:
 
 ```rust
 fn register(&self, ctx: &mut ExtensionContext) {
@@ -97,7 +97,7 @@ fn register(&self, ctx: &mut ExtensionContext) {
 
 ### Binding it to a key
 
-Use BEI bindings on the extension's input context. `ctx.spawn(...)` attaches the binding to the extension entity so it's torn down on unload:
+Bind a key by spawning a BEI action on the extension's input context. Use `ctx.spawn(...)` so the binding goes away with the extension if it's ever unloaded:
 
 ```rust
 ctx.spawn((
@@ -107,7 +107,7 @@ ctx.spawn((
 ));
 ```
 
-Modifier chords use `with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT)` — don't define separate "ctrl-held" actions.
+For chords like Ctrl+Shift+S, use `with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT)` on a single binding. Don't make a separate "ctrl-held" action.
 
 ### Dispatching from a button
 
@@ -125,11 +125,11 @@ For other UI nodes (raw `Node`, picker entries, observers):
 })
 ```
 
-Always reference the `<Op>::ID` constant — never hand-type the operator id string outside of user-extension code.
+Always go through the `<Op>::ID` constant. Don't type out the operator id as a string in editor code; that's only OK inside someone else's extension where the type isn't in scope.
 
 ### Parameters
 
-If the operator needs runtime data (an entity to act on, an axis to constrain to, etc.) use `OperatorParameters`. Helpers exist for the common conversions:
+If your operator needs to know something when it runs (which entity to delete, which axis to lock to), pull it out of `OperatorParameters`. There are helpers for the common types:
 
 ```rust
 fn delete_entity(
@@ -144,11 +144,11 @@ fn delete_entity(
 }
 ```
 
-Document each parameter in the function's `///` doc comment under a `# Parameters` section. Don't list parameters in the macro `description` — that text is shown to artists in the UI.
+Document each parameter in the function's `///` doc comment under a `# Parameters` heading. Keep them out of the macro `description`, since that text shows up in the UI for artists.
 
 ### Availability checks
 
-If the op should be greyed out / not callable when the editor isn't in the right state, attach an `is_available` system that returns `bool`:
+If your operator only makes sense when the editor is in a certain state (something selected, a particular mode active), add an `is_available` system that returns `bool`. Buttons and menu entries pointing at the operator will grey out automatically when it returns `false`:
 
 ```rust
 fn has_selection(selection: Res<Selection>) -> bool {
@@ -164,11 +164,11 @@ fn has_selection(selection: Res<Selection>) -> bool {
 fn delete_selected(...) -> OperatorResult { ... }
 ```
 
-Selection / mode / "is something open" preconditions belong in `is_available`, not in the operator body.
+Checks like "is an entity selected?" or "are we in edit mode?" belong in `is_available`, not inside the operator function. That way the UI can grey the action out instead of letting the user click it and silently fail.
 
 ### Modal operators
 
-For multi-frame interactions (drag, dialog, sculpt-while-held) set `modal = true` and provide a `cancel` system. The invoke runs every frame until it returns `Finished` or `Cancelled`; the global Escape binding routes to `cancel` automatically:
+If your operator stays active across multiple frames (a drag, a dialog the user is filling in, sculpt-while-held), mark it `modal = true` and give it a `cancel` system. While the modal is running, your function gets called every frame; return `Running` to stay active, `Finished` when the user commits, or `Cancelled` to bail out. Pressing Escape calls your cancel system for you:
 
 ```rust
 #[operator(
@@ -196,28 +196,28 @@ fn cancel_box_select(/* ... */) { /* restore initial state */ }
 
 ### Description guidelines
 
-The `description` ends up in the editor UI and the (planned) command palette, so write for non-programming artists:
+The `description` is what users actually see in the editor and (later) in the command palette. Write it for an artist using the editor, not for the next developer reading the code:
 
 - One sentence.
-- No backticks or code references — describe the user-visible effect.
-- No mentions of undo / history / dialogs / "OS" — assume they Just Work.
-- No parameters — those go in `///` docs.
+- No backticks or code names. Describe what the user sees happen.
+- Don't talk about undo, history, dialogs, or "the OS". Assume those Just Work.
+- Don't list parameters. Those go in the `///` doc comment.
 
 Compare:
 
 ```rust
-// Bad — implementation detail leaked to the UI:
+// Bad. Implementation detail leaked to the UI:
 description = "Open an OS folder picker and store the result in `AssetBrowserFolderTask` for the polling system to consume."
 
-// Good — what the user sees:
+// Good. What the user sees:
 description = "Choose a different folder as the assets directory."
 ```
 
 ### Undo/redo
 
-`allows_undo` defaults to `true`; the dispatcher captures a scene snapshot before the op runs and diffs after. The default is correct for almost all operators — leave it alone. Set `allows_undo = false` only for ops that explicitly should not produce an undo entry (cancelling a modal, opening a settings dialog, etc.).
+`allows_undo` defaults to `true`, which means the editor takes a snapshot of the scene before your operator runs and saves the changes as an undo step. That's what you want for almost every operator, so leave the default alone. Only set `allows_undo = false` when an undo entry would be wrong, like cancelling a modal or opening a settings dialog.
 
-If the operator pushes its own history command via `CommandHistory::push_executed`, the framework still defaults to `true` and harmlessly no-ops on the resulting empty diff.
+If your operator records its own history entry through `CommandHistory::push_executed`, you can still leave `allows_undo` as `true`. The automatic snapshot will see no changes and skip making a duplicate entry.
 
 ## License
 
