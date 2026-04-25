@@ -24,8 +24,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<EditModeVertexOp>()
         .register_operator::<EditModeEdgeOp>()
         .register_operator::<EditModeFaceOp>()
-        .register_operator::<EditModeClipOp>()
-        .register_operator::<EditModePhysicsOp>();
+        .register_operator::<EditModeClipOp>();
 
     let ext = ctx.id();
     ctx.entity_mut().world_scope(|world| {
@@ -87,7 +86,7 @@ pub(crate) fn edit_mode_object(
     mut draw_state: ResMut<DrawBrushState>,
 ) -> OperatorResult {
     *edit_mode = EditMode::Object;
-    clear_brush_selection(&mut brush_selection);
+    brush_selection.clear();
     draw_state.active = None;
     OperatorResult::Finished
 }
@@ -184,27 +183,6 @@ pub(crate) fn edit_mode_clip(
     )
 }
 
-#[operator(
-    id = "edit_mode.physics",
-    label = "Physics Tool",
-    is_available = can_change_edit_mode
-)]
-pub(crate) fn edit_mode_physics(
-    _: In<OperatorParameters>,
-    mut edit_mode: ResMut<EditMode>,
-    mut brush_selection: ResMut<BrushSelection>,
-    mut draw_state: ResMut<DrawBrushState>,
-) -> OperatorResult {
-    draw_state.active = None;
-    clear_brush_selection(&mut brush_selection);
-    *edit_mode = if *edit_mode == EditMode::Physics {
-        EditMode::Object
-    } else {
-        EditMode::Physics
-    };
-    OperatorResult::Finished
-}
-
 fn switch_brush_edit_mode(
     target: BrushEditMode,
     mut edit_mode: ResMut<EditMode>,
@@ -219,7 +197,7 @@ fn switch_brush_edit_mode(
         EditMode::BrushEdit(current) if current == target => {
             // Same mode pressed twice: toggle back to Object.
             *edit_mode = EditMode::Object;
-            clear_brush_selection(&mut brush_selection);
+            brush_selection.clear();
         }
         EditMode::BrushEdit(_) => {
             // Switching between brush sub-modes: swap the mode but
@@ -244,11 +222,4 @@ fn switch_brush_edit_mode(
         }
     }
     OperatorResult::Finished
-}
-
-fn clear_brush_selection(brush_selection: &mut BrushSelection) {
-    brush_selection.entity = None;
-    brush_selection.faces.clear();
-    brush_selection.vertices.clear();
-    brush_selection.edges.clear();
 }

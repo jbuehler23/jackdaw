@@ -11,6 +11,8 @@ use bevy::{
     picking::prelude::Pickable,
     prelude::*,
 };
+use jackdaw_api::prelude::*;
+use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_jsn::BrushGroup;
 
 /// Marker for the box-select visual overlay node.
@@ -28,13 +30,17 @@ impl Plugin for ViewportSelectPlugin {
                 Update,
                 (
                     handle_viewport_click.after(handle_gizmo_hover),
-                    handle_box_select,
+                    box_select_invoke_trigger,
                     update_box_select_overlay,
                     exit_group_on_escape,
                 )
                     .in_set(crate::EditorInteractionSystems),
             );
     }
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<BoxSelectOp>();
 }
 
 #[derive(Resource, Default)]
@@ -247,88 +253,112 @@ pub(crate) fn handle_viewport_click(
     }
 }
 
-fn handle_box_select(
+/// Shift+LMB in the viewport dispatches [`BoxSelectOp`]. Modifier+mouse
+/// gestures aren't expressible as BEI key actions, so this stays a system.
+fn box_select_invoke_trigger(
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     vp: ViewportCursor,
-    mut box_state: ResMut<BoxSelectState>,
     guards: InteractionGuards,
-    scene_entities: Query<(Entity, &GlobalTransform), (Without<EditorEntity>, With<Name>)>,
-    mut selection: ResMut<Selection>,
+    box_state: Res<BoxSelectState>,
     mut commands: Commands,
 ) {
-    // Don't box-select during gizmo drag, brush edit mode, or draw mode.
-    // Physics mode is allowed (same as Object for selection purposes).
-    if guards.gizmo_drag.active
+    if box_state.active
+        || !mouse.just_pressed(MouseButton::Left)
+        || !keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
+        || guards.gizmo_drag.active
         || matches!(*guards.edit_mode, crate::brush::EditMode::BrushEdit(_))
         || guards.draw_state.active.is_some()
+        || guards.modal.active.is_some()
     {
-        box_state.active = false;
         return;
     }
-
     let Ok(window) = vp.windows.single() else {
         return;
     };
-    let Some(cursor_pos) = window.cursor_position() else {
+    if window.cursor_position().is_none() {
         return;
+    }
+    commands.queue(|world: &mut World| {
+        let _ = world
+            .operator(BoxSelectOp::ID)
+            .settings(CallOperatorSettings {
+                execution_context: ExecutionContext::Invoke,
+                creates_history_entry: false,
+            })
+            .call();
+    });
+}
+
+#[operator(
+    id = "selection.box_select",
+    label = "Box Select",
+    description = "Drag a rectangle to select entities. \
+                   Modal: commits on mouse release, cancels on Escape.",
+    modal = true,
+    allows_undo = false,
+    cancel = cancel_box_select,
+)]
+pub(crate) fn box_select(
+    _: In<OperatorParameters>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    vp: ViewportCursor,
+    mut box_state: ResMut<BoxSelectState>,
+    scene_entities: Query<(Entity, &GlobalTransform), (Without<EditorEntity>, With<Name>)>,
+    mut selection: ResMut<Selection>,
+    mut commands: Commands,
+    modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+) -> OperatorResult {
+    let Ok(window) = vp.windows.single() else {
+        return OperatorResult::Cancelled;
+    };
+    let Some(cursor_pos) = window.cursor_position() else {
+        return OperatorResult::Cancelled;
     };
 
-    let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-
-    // Start box select on Shift+LMB drag
-    if shift && mouse.just_pressed(MouseButton::Left) && !box_state.active {
+    if modal.is_none() {
         box_state.active = true;
         box_state.start = cursor_pos;
         box_state.current = cursor_pos;
-        return;
+        return OperatorResult::Running;
     }
 
-    if box_state.active {
-        box_state.current = cursor_pos;
-
-        let released = mouse.just_released(MouseButton::Left);
-
-        if released {
-            box_state.active = false;
-
-            let Ok((camera, cam_tf)) = vp.camera.single() else {
-                return;
-            };
-            let Ok((vp_computed, vp_tf)) = vp.viewport.single() else {
-                return;
-            };
-            let scale = vp_computed.inverse_scale_factor();
-            let vp_pos = vp_tf.translation * scale;
-            let vp_size = vp_computed.size() * scale;
-            let vp_top_left = vp_pos - vp_size / 2.0;
-
-            // Convert box to viewport-local coords, then remap to camera space
-            let target_size = camera.logical_viewport_size().unwrap_or(vp_size);
-            let remap = target_size / vp_size;
-            let min = (box_state.start - vp_top_left).min(box_state.current - vp_top_left) * remap;
-            let max = (box_state.start - vp_top_left).max(box_state.current - vp_top_left) * remap;
-
-            // Find entities within the box
-            let mut selected_entities = Vec::new();
-            for (entity, global_tf) in &scene_entities {
-                let pos = global_tf.translation();
-                if let Ok(screen_pos) = camera.world_to_viewport(cam_tf, pos)
-                    && screen_pos.x >= min.x
-                    && screen_pos.x <= max.x
-                    && screen_pos.y >= min.y
-                    && screen_pos.y <= max.y
-                    && !selected_entities.contains(&entity)
-                {
-                    selected_entities.push(entity);
-                }
-            }
-
-            if !selected_entities.is_empty() {
-                selection.select_multiple(&mut commands, &selected_entities);
-            }
-        }
+    box_state.current = cursor_pos;
+    if !mouse.just_released(MouseButton::Left) {
+        return OperatorResult::Running;
     }
+    box_state.active = false;
+
+    let Ok((camera, cam_tf)) = vp.camera.single() else {
+        return OperatorResult::Finished;
+    };
+    let Ok((vp_computed, vp_tf)) = vp.viewport.single() else {
+        return OperatorResult::Finished;
+    };
+    let scale = vp_computed.inverse_scale_factor();
+    let vp_size = vp_computed.size() * scale;
+    let vp_top_left = vp_tf.translation * scale - vp_size / 2.0;
+    let remap = camera.logical_viewport_size().unwrap_or(vp_size) / vp_size;
+    let min = (box_state.start - vp_top_left).min(box_state.current - vp_top_left) * remap;
+    let max = (box_state.start - vp_top_left).max(box_state.current - vp_top_left) * remap;
+
+    let selected: Vec<Entity> = scene_entities
+        .iter()
+        .filter_map(|(entity, tf)| {
+            let screen = camera.world_to_viewport(cam_tf, tf.translation()).ok()?;
+            (screen.x >= min.x && screen.x <= max.x && screen.y >= min.y && screen.y <= max.y)
+                .then_some(entity)
+        })
+        .collect();
+
+    if !selected.is_empty() {
+        selection.select_multiple(&mut commands, &selected);
+    }
+    OperatorResult::Finished
+}
+
+fn cancel_box_select(mut box_state: ResMut<BoxSelectState>) {
+    box_state.active = false;
 }
 
 fn update_box_select_overlay(

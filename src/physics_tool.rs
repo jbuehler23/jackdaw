@@ -15,8 +15,14 @@ use bevy::{
     window::SystemCursorIcon,
 };
 
-use crate::brush::EditMode;
+use bevy_enhanced_input::prelude::*;
+use jackdaw_api::prelude::*;
+use jackdaw_api_internal::lifecycle::ActiveModalOperator;
+
+use crate::brush::{BrushSelection, EditMode};
 use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
+use crate::core_extension::CoreExtensionInputContext;
+use crate::draw_brush::DrawBrushState;
 use crate::selection::Selection;
 use jackdaw_avian_integration::simulation::{PhysicsDrag, PhysicsToolState};
 
@@ -32,15 +38,64 @@ impl Plugin for PhysicsToolPlugin {
         );
         app.add_systems(
             Update,
-            (
-                sync_selection_disable_state,
-                physics_tool_drag,
-                physics_tool_keys,
-            )
+            (sync_selection_disable_state, physics_tool_drag)
                 .chain()
                 .after(on_edit_mode_transition)
                 .run_if(in_state(crate::AppState::Editor)),
         );
+    }
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<PhysicsActivateOp>();
+
+    let ext = ctx.id();
+    ctx.entity_mut().world_scope(|world| {
+        world.spawn((
+            Action::<PhysicsActivateOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            bindings![KeyCode::KeyP.with_mod_keys(ModKeys::SHIFT)],
+        ));
+    });
+}
+
+#[operator(
+    id = "physics.activate",
+    label = "Physics Tool",
+    description = "Hammer-style physics placement tool. Modal: Space commits, Escape cancels.",
+    modal = true,
+    allows_undo = false,
+    cancel = cancel_physics_activate,
+)]
+pub(crate) fn physics_activate(
+    _: In<OperatorParameters>,
+    mut edit_mode: ResMut<EditMode>,
+    mut draw_state: ResMut<DrawBrushState>,
+    mut brush_selection: ResMut<BrushSelection>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+) -> OperatorResult {
+    if modal.is_none() {
+        draw_state.active = None;
+        brush_selection.clear();
+        *edit_mode = EditMode::Physics;
+        return OperatorResult::Running;
+    }
+
+    if keyboard.just_pressed(KeyCode::Space) {
+        *edit_mode = EditMode::Object;
+        return OperatorResult::Finished;
+    }
+    if *edit_mode != EditMode::Physics {
+        return OperatorResult::Finished;
+    }
+
+    OperatorResult::Running
+}
+
+fn cancel_physics_activate(mut edit_mode: ResMut<EditMode>) {
+    if *edit_mode == EditMode::Physics {
+        *edit_mode = EditMode::Object;
     }
 }
 
@@ -325,16 +380,6 @@ fn physics_tool_drag(
                 override_cursor.0 = None;
             }
         }
-    }
-}
-
-/// Space/Escape: commit & exit to Object mode.
-fn physics_tool_keys(mut edit_mode: ResMut<EditMode>, keyboard: Res<ButtonInput<KeyCode>>) {
-    if *edit_mode != EditMode::Physics {
-        return;
-    }
-    if keyboard.just_pressed(KeyCode::Space) || keyboard.just_pressed(KeyCode::Escape) {
-        *edit_mode = EditMode::Object;
     }
 }
 

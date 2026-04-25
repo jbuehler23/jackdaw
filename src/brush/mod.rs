@@ -70,6 +70,18 @@ pub struct BrushSelection {
     pub last_face_index: Option<usize>,
 }
 
+impl BrushSelection {
+    /// Clear the active selection (entity + faces + vertices + edges).
+    /// Leaves `last_face_*` untouched so the extend-to-brush fallback
+    /// still works after deselecting.
+    pub fn clear(&mut self) {
+        self.entity = None;
+        self.faces.clear();
+        self.vertices.clear();
+        self.edges.clear();
+    }
+}
+
 /// Intent for face hover highlight color.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum HoverIntent {
