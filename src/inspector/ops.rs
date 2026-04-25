@@ -55,9 +55,10 @@ fn component_id_for_path(
 #[operator(
     id = "component.add",
     label = "Add Component",
-    description = "Add a component (looked up by `type_path`) to the entity in `entity` \
-                   (entity bits). Pushes an `AddComponent` history entry and marks the \
-                   inspector dirty.",
+    description = "Add a component to the entity. Pushes an `AddComponent` history entry \
+                   and marks the inspector dirty.\n\
+                   Params: `entity: i64` (entity bits), `type_path: String` (fully-qualified \
+                   reflected type path).",
     allows_undo = false
 )]
 pub(crate) fn component_add(
@@ -88,8 +89,9 @@ pub(crate) fn component_add(
 #[operator(
     id = "component.remove",
     label = "Remove Component",
-    description = "Remove a component (looked up by `type_path`) from the entity in \
-                   `entity`. Marks the inspector dirty so the display rebuilds.",
+    description = "Remove a component from the entity. Marks the inspector dirty so the \
+                   display rebuilds.\n\
+                   Params: `entity: i64`, `type_path: String`.",
     allows_undo = false
 )]
 pub(crate) fn component_remove(
@@ -117,8 +119,9 @@ pub(crate) fn component_remove(
 #[operator(
     id = "component.revert_baseline",
     label = "Revert To Prefab",
-    description = "Restore the component's prefab baseline value on the entity in \
-                   `entity`. The component must be marked as overridden in the AST.",
+    description = "Restore the component's prefab baseline value on the entity. The \
+                   component must be marked as overridden in the AST.\n\
+                   Params: `entity: i64`, `type_path: String`.",
     allows_undo = false
 )]
 pub(crate) fn component_revert_baseline(
@@ -143,7 +146,9 @@ pub(crate) fn component_revert_baseline(
 #[operator(
     id = "physics.enable",
     label = "Enable Physics",
-    description = "Add `RigidBody` and `AvianCollider` to the entity (no-op if already present).",
+    description = "Add `RigidBody` and `AvianCollider` to the entity (idempotent if already \
+                   present).\n\
+                   Params: `entity: i64`.",
     allows_undo = false
 )]
 pub(crate) fn physics_enable(
@@ -166,7 +171,8 @@ pub(crate) fn physics_enable(
     id = "physics.disable",
     label = "Disable Physics",
     description = "Remove physics components from the entity, capturing the pre-disable \
-                   state as a `DisablePhysics` history entry so undo restores them.",
+                   state as a `DisablePhysics` history entry so undo restores them.\n\
+                   Params: `entity: i64`.",
     allows_undo = false
 )]
 pub(crate) fn physics_disable(
@@ -190,9 +196,9 @@ pub(crate) fn physics_disable(
 #[operator(
     id = "animation.toggle_keyframe",
     label = "Toggle Keyframe",
-    description = "Spawn (or replace) a keyframe at the current timeline cursor for the \
-                   `(entity, component_type_path, field_path)` triple. Creates the clip \
-                   and track lazily if missing.",
+    description = "Spawn (or replace) a keyframe at the current timeline cursor. Creates \
+                   the clip and track lazily if missing.\n\
+                   Params: `entity: i64`, `component_type_path: String`, `field_path: String`.",
     allows_undo = false
 )]
 pub(crate) fn animation_toggle_keyframe(
