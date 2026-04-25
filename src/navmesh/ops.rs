@@ -1,6 +1,4 @@
-//! Operators for the navmesh contextual toolbar. The fetch / build /
-//! save / load ops dispatch existing events; the four viz toggles
-//! flip flags on `NavmeshVizConfig`.
+//! Operators for the navmesh contextual toolbar.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -21,36 +19,41 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<NavmeshTogglePolyOp>();
 }
 
+/// Fetch the latest scene mesh from the connected game so the navmesh
+/// can be rebuilt from it.
 #[operator(
     id = "navmesh.fetch",
     label = "Fetch Scene",
-    description = "Request the active scene's navmesh input from the connected game."
+    description = "Fetch the latest scene mesh from the connected game."
 )]
 pub(crate) fn navmesh_fetch(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.trigger(GetNavmeshInput);
     OperatorResult::Finished
 }
 
+/// Bake a navmesh for the current scene.
 #[operator(
     id = "navmesh.build",
     label = "Build",
-    description = "Build the navmesh from the current scene input."
+    description = "Bake a navmesh for the current scene."
 )]
 pub(crate) fn navmesh_build(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.trigger(BuildNavmesh);
     OperatorResult::Finished
 }
 
+/// Save the baked navmesh to disk.
 #[operator(
     id = "navmesh.save",
     label = "Save",
-    description = "Write the current navmesh to disk."
+    description = "Save the baked navmesh to disk."
 )]
 pub(crate) fn navmesh_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.trigger(SaveNavmesh);
     OperatorResult::Finished
 }
 
+/// Load a navmesh from disk.
 #[operator(
     id = "navmesh.load",
     label = "Load",
@@ -61,10 +64,11 @@ pub(crate) fn navmesh_load(_: In<OperatorParameters>, mut commands: Commands) ->
     OperatorResult::Finished
 }
 
+/// Show or hide the navmesh visual mesh.
 #[operator(
     id = "navmesh.toggle_visual",
     label = "Toggle Visual",
-    description = "Toggle the navmesh visual-mesh overlay."
+    description = "Show or hide the navmesh visual mesh."
 )]
 pub(crate) fn navmesh_toggle_visual(
     _: In<OperatorParameters>,
@@ -74,10 +78,11 @@ pub(crate) fn navmesh_toggle_visual(
     OperatorResult::Finished
 }
 
+/// Show or hide the navmesh obstacle markers.
 #[operator(
     id = "navmesh.toggle_obstacles",
     label = "Toggle Obstacles",
-    description = "Toggle the navmesh obstacle gizmo overlay."
+    description = "Show or hide the navmesh obstacle markers."
 )]
 pub(crate) fn navmesh_toggle_obstacles(
     _: In<OperatorParameters>,
@@ -87,10 +92,11 @@ pub(crate) fn navmesh_toggle_obstacles(
     OperatorResult::Finished
 }
 
+/// Show or hide the navmesh detail mesh.
 #[operator(
     id = "navmesh.toggle_detail",
     label = "Toggle Detail Mesh",
-    description = "Toggle the navmesh detail-mesh overlay."
+    description = "Show or hide the navmesh detail mesh."
 )]
 pub(crate) fn navmesh_toggle_detail(
     _: In<OperatorParameters>,
@@ -100,10 +106,11 @@ pub(crate) fn navmesh_toggle_detail(
     OperatorResult::Finished
 }
 
+/// Show or hide the navmesh polygon mesh.
 #[operator(
     id = "navmesh.toggle_poly",
     label = "Toggle Polygon Mesh",
-    description = "Toggle the navmesh polygon-mesh overlay."
+    description = "Show or hide the navmesh polygon mesh."
 )]
 pub(crate) fn navmesh_toggle_poly(
     _: In<OperatorParameters>,

@@ -89,11 +89,13 @@ fn play_is_running(state: Res<State<PlayState>>) -> bool {
     *state.get() != PlayState::Stopped
 }
 
+/// Start the game running in the editor. From Stopped, captures a
+/// snapshot of the scene first so Stop can restore it; from Paused,
+/// resumes.
 #[operator(
     id = "pie.play",
     label = "Play",
-    description = "Enter Play-In-Editor. From Stopped, snapshots the scene first; from Paused, resumes. \
-                   Availability (`play_is_stopped_or_paused`) excludes the already-Playing state.",
+    description = "Start the game running in the editor.",
     is_available = play_is_stopped_or_paused
 )]
 pub(crate) fn pie_play(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
@@ -101,10 +103,11 @@ pub(crate) fn pie_play(_: In<OperatorParameters>, mut commands: Commands) -> Ope
     OperatorResult::Finished
 }
 
+/// Pause the running game.
 #[operator(
     id = "pie.pause",
     label = "Pause",
-    description = "Pause Play-In-Editor. Availability (`play_is_playing`) requires the Playing state.",
+    description = "Pause the running game.",
     is_available = play_is_playing
 )]
 pub(crate) fn pie_pause(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
@@ -112,11 +115,12 @@ pub(crate) fn pie_pause(_: In<OperatorParameters>, mut commands: Commands) -> Op
     OperatorResult::Finished
 }
 
+/// Stop the running game and restore the scene to the state it was in
+/// before Play was pressed.
 #[operator(
     id = "pie.stop",
     label = "Stop",
-    description = "Exit Play-In-Editor and restore the pre-play scene snapshot. \
-                   Availability (`play_is_running`) excludes the already-Stopped state.",
+    description = "Stop the running game and restore the scene.",
     is_available = play_is_running
 )]
 pub(crate) fn pie_stop(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {

@@ -1462,12 +1462,16 @@ fn has_array_preview(preview: Res<AssetPreviewState>) -> bool {
         .is_some_and(|info| info.layer_count > 0)
 }
 
+/// Step the asset preview's selected layer by `direction`, wrapping at
+/// the texture's layer count.
+///
+/// # Parameters
+/// - `direction` (`i64`, default `+1`): how many layers to advance, can
+///   be negative to step backwards.
 #[operator(
     id = "asset.cycle_array_layer",
     label = "Cycle Array Layer",
-    description = "Step the asset preview's `current_layer` by `direction`, wrapping at `selected_info.layer_count`. \
-                   Availability (`has_array_preview`) requires the asset preview to hold an array texture.\n\
-                   Params: `direction: i64` (signed step, defaults to +1).",
+    description = "Step the previewed array texture by one layer.",
     is_available = has_array_preview
 )]
 pub(crate) fn asset_cycle_array_layer(
@@ -1480,23 +1484,18 @@ pub(crate) fn asset_cycle_array_layer(
     if info.layer_count == 0 {
         return OperatorResult::Cancelled;
     }
-    let direction = params
-        .get("direction")
-        .and_then(|v| match v {
-            jackdaw_jsn::PropertyValue::Int(i) => Some(*i),
-            _ => None,
-        })
-        .unwrap_or(1);
+    let direction = params.as_int("direction").unwrap_or(1);
     let count = info.layer_count as i64;
     let next = ((preview.current_layer as i64) + direction).rem_euclid(count);
     preview.current_layer = next as u32;
     OperatorResult::Finished
 }
 
+/// Choose a different folder as the assets directory.
 #[operator(
     id = "asset.select_folder",
     label = "Select Assets Folder",
-    description = "Open an OS folder picker and store the result in `AssetBrowserFolderTask` for the polling system to consume."
+    description = "Choose a different folder as the assets directory."
 )]
 pub(crate) fn asset_select_folder(
     _: In<OperatorParameters>,

@@ -1699,20 +1699,22 @@ fn pending_texture_slot_set(pending: Res<PendingTextureSlot>) -> bool {
     pending.slot.is_some() && pending.material_handle.is_some()
 }
 
+/// Create a fresh empty material and select it for preview.
 #[operator(
     id = "material.create",
     label = "New Material",
-    description = "Create a fresh `StandardMaterial`, register it with the browser, and select it for preview."
+    description = "Create a fresh empty material."
 )]
 pub(crate) fn material_create(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.trigger(CreateNewMaterial);
     OperatorResult::Finished
 }
 
+/// Refresh the material browser from disk.
 #[operator(
     id = "material.rescan",
     label = "Rescan Materials",
-    description = "Schedule a material directory rescan; the browser's polling system picks it up next frame."
+    description = "Refresh the material browser from disk."
 )]
 pub(crate) fn material_rescan(
     _: In<OperatorParameters>,
@@ -1722,10 +1724,11 @@ pub(crate) fn material_rescan(
     OperatorResult::Finished
 }
 
+/// Choose a different folder as the materials directory.
 #[operator(
     id = "material.select_folder",
     label = "Select Materials Folder",
-    description = "Open an OS folder picker for the materials root and store the result in `MaterialBrowserFolderTask` for the polling system."
+    description = "Choose a different folder as the materials directory."
 )]
 pub(crate) fn material_select_folder(
     _: In<OperatorParameters>,
@@ -1746,12 +1749,15 @@ pub(crate) fn material_select_folder(
     OperatorResult::Finished
 }
 
+/// Pick an image from disk for the targeted material's texture slot.
+///
+/// The slot and target material are routed through the
+/// [`PendingTextureSlot`] resource by the inspector button before
+/// dispatch.
 #[operator(
     id = "material.browse_texture_slot",
     label = "Browse Texture",
-    description = "Open a file picker for the texture slot recorded in `PendingTextureSlot` (set by the slot's \
-                   browse button before dispatch). Availability (`pending_texture_slot_set`) requires the slot \
-                   and material handle to be present.",
+    description = "Pick an image to assign to this material's texture slot.",
     is_available = pending_texture_slot_set
 )]
 pub(crate) fn material_browse_texture_slot(
@@ -1772,12 +1778,15 @@ pub(crate) fn material_browse_texture_slot(
     OperatorResult::Finished
 }
 
+/// Remove the image from the targeted material's texture slot.
+///
+/// The slot and target material are routed through the
+/// [`PendingTextureSlot`] resource by the inspector button before
+/// dispatch.
 #[operator(
     id = "material.clear_texture_slot",
     label = "Clear Texture",
-    description = "Clear the texture from the slot recorded in `PendingTextureSlot` (set by the slot's clear \
-                   button before dispatch). Availability (`pending_texture_slot_set`) requires the slot and \
-                   material handle to be present.",
+    description = "Remove the image from this material's texture slot.",
     is_available = pending_texture_slot_set
 )]
 pub(crate) fn material_clear_texture_slot(

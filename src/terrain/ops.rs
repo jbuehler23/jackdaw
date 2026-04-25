@@ -1,9 +1,4 @@
 //! Operators for the terrain contextual toolbar and inspector.
-//!
-//! Six tool-toggle ops flip `TerrainEditMode` between `Sculpt(tool)` /
-//! `Generate` and `None`; `terrain.generate` and `terrain.erode`
-//! apply the corresponding heightmap transform and push a single
-//! [`SetTerrainHeights`] history entry.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -42,10 +37,11 @@ fn has_selected_terrain(
     selection.primary().is_some_and(|e| terrains.contains(e))
 }
 
+/// Pick the raise sculpt tool. Pressing again puts the brush away.
 #[operator(
     id = "terrain.tool.raise",
     label = "Raise",
-    description = "Activate the raise sculpt tool, or deactivate if already active.",
+    description = "Pick the raise sculpt tool.",
     is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_tool_raise(
@@ -59,10 +55,11 @@ pub(crate) fn terrain_tool_raise(
     OperatorResult::Finished
 }
 
+/// Pick the lower sculpt tool. Pressing again puts the brush away.
 #[operator(
     id = "terrain.tool.lower",
     label = "Lower",
-    description = "Activate the lower sculpt tool, or deactivate if already active.",
+    description = "Pick the lower sculpt tool.",
     is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_tool_lower(
@@ -76,10 +73,11 @@ pub(crate) fn terrain_tool_lower(
     OperatorResult::Finished
 }
 
+/// Pick the flatten sculpt tool. Pressing again puts the brush away.
 #[operator(
     id = "terrain.tool.flatten",
     label = "Flatten",
-    description = "Activate the flatten sculpt tool, or deactivate if already active.",
+    description = "Pick the flatten sculpt tool.",
     is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_tool_flatten(
@@ -93,10 +91,11 @@ pub(crate) fn terrain_tool_flatten(
     OperatorResult::Finished
 }
 
+/// Pick the smooth sculpt tool. Pressing again puts the brush away.
 #[operator(
     id = "terrain.tool.smooth",
     label = "Smooth",
-    description = "Activate the smooth sculpt tool, or deactivate if already active.",
+    description = "Pick the smooth sculpt tool.",
     is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_tool_smooth(
@@ -110,10 +109,11 @@ pub(crate) fn terrain_tool_smooth(
     OperatorResult::Finished
 }
 
+/// Pick the noise sculpt tool. Pressing again puts the brush away.
 #[operator(
     id = "terrain.tool.noise",
     label = "Noise",
-    description = "Activate the noise sculpt tool, or deactivate if already active.",
+    description = "Pick the noise sculpt tool.",
     is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_tool_noise(
@@ -127,10 +127,11 @@ pub(crate) fn terrain_tool_noise(
     OperatorResult::Finished
 }
 
+/// Open the heightmap-generation panel. Pressing again closes it.
 #[operator(
     id = "terrain.tool.generate",
     label = "Generate",
-    description = "Activate the generate-heightmap mode, or deactivate if already active.",
+    description = "Open the heightmap-generation panel.",
     is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_tool_generate(
@@ -141,12 +142,18 @@ pub(crate) fn terrain_tool_generate(
     OperatorResult::Finished
 }
 
+/// Generate a fresh heightmap for the selected terrain.
+///
+/// Reads the noise/octaves/etc. settings from the inspector's
+/// generation panel ([`TerrainGenerateState`]).
+///
+/// `allows_undo = false` because this op pushes its own
+/// [`SetTerrainHeights`] history entry; letting the framework also
+/// capture a diff would double-record the change.
 #[operator(
     id = "terrain.generate",
     label = "Generate Terrain",
-    description = "Replace the selected terrain's heights with a generated heightmap from \
-                   `TerrainGenerateState.settings`. Pushes a single `SetTerrainHeights` \
-                   history entry.",
+    description = "Generate a fresh heightmap for the selected terrain.",
     is_available = has_selected_terrain,
     allows_undo = false
 )]
@@ -177,11 +184,18 @@ pub(crate) fn terrain_generate(
     OperatorResult::Finished
 }
 
+/// Apply hydraulic erosion to the selected terrain.
+///
+/// Uses the erosion settings from the inspector's generation panel
+/// ([`TerrainGenerateState::erosion`]).
+///
+/// `allows_undo = false` because this op pushes its own
+/// [`SetTerrainHeights`] history entry; letting the framework also
+/// capture a diff would double-record the change.
 #[operator(
     id = "terrain.erode",
     label = "Erode Terrain",
-    description = "Run hydraulic erosion in-place on the selected terrain's heights and push \
-                   a `SetTerrainHeights` history entry.",
+    description = "Apply hydraulic erosion to the selected terrain.",
     is_available = has_selected_terrain,
     allows_undo = false
 )]
