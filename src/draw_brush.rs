@@ -559,7 +559,6 @@ fn configure_draw_brush_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
 
 fn draw_brush_activate(
     keyboard: Res<ButtonInput<KeyCode>>,
-    keybinds: Res<crate::keybinds::KeybindRegistry>,
     input_focus: Res<InputFocus>,
     mut draw_state: ResMut<DrawBrushState>,
     modal: Res<crate::modal_transform::ModalTransformState>,
@@ -568,11 +567,9 @@ fn draw_brush_activate(
     selection: Res<Selection>,
     brush_query: Query<(), With<Brush>>,
 ) {
-    use crate::keybinds::EditorAction;
-
-    // Handle Tab toggle while in draw mode (works in all phases)
+    // Tab toggles Add/Cut while a draw is in progress.
     if let Some(ref mut active) = draw_state.active {
-        if keybinds.just_pressed(EditorAction::ToggleDrawMode, &keyboard) {
+        if keyboard.just_pressed(KeyCode::Tab) {
             active.mode = match active.mode {
                 DrawMode::Add => DrawMode::Cut,
                 DrawMode::Cut => DrawMode::Add,
@@ -581,11 +578,13 @@ fn draw_brush_activate(
         return;
     }
 
-    // B or Mouse4 = draw in Add mode, Alt+B = append to brush, C = draw in Cut mode
-    let append = keybinds.just_pressed(EditorAction::AppendToBrush, &keyboard);
-    let mode = if append {
+    // B = Add, Alt+B = append to selected brush, C = Cut.
+    let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+    let pressed_b = keyboard.just_pressed(KeyCode::KeyB);
+    let append = pressed_b && alt;
+    let mode = if pressed_b {
         DrawMode::Add
-    } else if keybinds.just_pressed(EditorAction::DrawCut, &keyboard) {
+    } else if keyboard.just_pressed(KeyCode::KeyC) {
         DrawMode::Cut
     } else {
         return;
@@ -1032,25 +1031,19 @@ fn draw_brush_confirm(
 fn draw_brush_cancel(
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
-    keybinds: Res<crate::keybinds::KeybindRegistry>,
     mut draw_state: ResMut<DrawBrushState>,
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
 ) {
-    use crate::keybinds::EditorAction;
-
     let Some(ref mut active) = draw_state.active else {
         return;
     };
 
-    // Polygon mode: Enter closes the polygon (via convex hull) and
-    // transitions to ExtrudingDepth, Backspace removes the last
-    // placed vertex. Lives outside the operator framework for now
-    // and runs in both Add and Cut modes — the Add-mode operator
-    // migration stopped short of migrating these keybinds.
+    // Polygon mode: Enter closes the polygon (via convex hull), Backspace
+    // removes the last placed vertex.
     if active.phase == DrawPhase::DrawingPolygon {
-        if keybinds.just_pressed(EditorAction::ClosePolygon, &keyboard) {
+        if keyboard.just_pressed(KeyCode::Enter) {
             let hull = convex_hull_on_plane(&active.polygon_vertices, &active.plane);
             if hull.len() >= 3 {
                 active.polygon_vertices = hull;
@@ -1066,7 +1059,7 @@ fn draw_brush_cancel(
                 return;
             }
         }
-        if keybinds.just_pressed(EditorAction::RemoveLastVertex, &keyboard) {
+        if keyboard.just_pressed(KeyCode::Backspace) {
             active.polygon_vertices.pop();
             if active.polygon_vertices.is_empty() {
                 active.phase = DrawPhase::PlacingFirstCorner;
@@ -1083,9 +1076,7 @@ fn draw_brush_cancel(
         return;
     }
 
-    if keybinds.just_pressed(EditorAction::CancelDraw, &keyboard)
-        || mouse.just_pressed(MouseButton::Right)
-    {
+    if keyboard.just_pressed(KeyCode::Escape) || mouse.just_pressed(MouseButton::Right) {
         draw_state.active = None;
     }
 }

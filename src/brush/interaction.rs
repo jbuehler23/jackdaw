@@ -1,8 +1,7 @@
-use bevy::{ecs::system::SystemParam, input_focus::InputFocus, prelude::*};
+use bevy::{input_focus::InputFocus, prelude::*};
 
 use crate::default_style;
 use crate::{
-    keybinds::{EditorAction, KeybindRegistry},
     selection::Selection,
     viewport::{MainViewportCamera, SceneViewport},
     viewport_util::{point_in_polygon_2d, window_to_viewport_cursor},
@@ -12,23 +11,15 @@ use super::{BrushEditMode, BrushMeshCache, BrushSelection, EditMode};
 use jackdaw_geometry::{brush_planes_to_world, compute_brush_geometry};
 use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
 
-/// Bundled keyboard + keybind input to keep system parameter counts under the 16-param limit.
-#[derive(SystemParam)]
-pub(super) struct KeyboardInput<'w> {
-    pub keyboard: Res<'w, ButtonInput<KeyCode>>,
-    pub keybinds: Res<'w, KeybindRegistry>,
-}
-
 /// Reactive cleanup: when the active brush entity is no longer
-/// selected, drop out of brush-edit mode. Also the single remaining
-/// keybind for this subsystem — Escape exits brush-edit back to
-/// Object, deferring to clip mode's own handler if points are pending.
-/// The digit-key mode switches (1/2/3/4) moved to
+/// selected, drop out of brush-edit mode. Also handles Escape to exit
+/// brush-edit (deferring to clip mode's own clear when points are
+/// pending). The digit-key mode switches (1/2/3/4) moved to
 /// [`crate::edit_mode_ops`]; the toolbar buttons there dispatch the
 /// same operators.
 pub(super) fn handle_edit_mode_keys(
     input_focus: Res<InputFocus>,
-    input: KeyboardInput,
+    keyboard: Res<ButtonInput<KeyCode>>,
     selection: Res<Selection>,
     mut edit_mode: ResMut<EditMode>,
     mut brush_selection: ResMut<BrushSelection>,
@@ -38,8 +29,6 @@ pub(super) fn handle_edit_mode_keys(
     edge_drag: Res<EdgeDragState>,
     clip_state: Res<ClipState>,
 ) {
-    let keyboard = &input.keyboard;
-    let keybinds = &input.keybinds;
     if input_focus.0.is_some() || modal.active.is_some() {
         return;
     }
@@ -55,10 +44,7 @@ pub(super) fn handle_edit_mode_keys(
             brush_selection.last_face_index = brush_selection.faces.last().copied();
         }
         *edit_mode = EditMode::Object;
-        brush_selection.entity = None;
-        brush_selection.faces.clear();
-        brush_selection.vertices.clear();
-        brush_selection.edges.clear();
+        brush_selection.clear();
     }
 
     // Don't switch modes while any drag is active
@@ -69,20 +55,17 @@ pub(super) fn handle_edit_mode_keys(
         return;
     }
 
-    // Escape: exit to Object (unless Clip mode with pending points)
-    if keybinds.just_pressed(EditorAction::ExitEditMode, keyboard) {
+    // Escape: exit to Object (unless Clip mode with pending points,
+    // which the `brush.clip.clear` operator handles separately).
+    if keyboard.just_pressed(KeyCode::Escape) {
         if let EditMode::BrushEdit(BrushEditMode::Clip) = *edit_mode
             && !clip_state.points.is_empty()
         {
-            // Let clip mode's own Escape handler clear the points first
             return;
         }
         if matches!(*edit_mode, EditMode::BrushEdit(_)) {
             *edit_mode = EditMode::Object;
-            brush_selection.entity = None;
-            brush_selection.faces.clear();
-            brush_selection.vertices.clear();
-            brush_selection.edges.clear();
+            brush_selection.clear();
         }
     }
 }
@@ -404,7 +387,7 @@ fn pick_face_under_cursor(
 /// Updates the hover resource each frame to track which face the cursor is over.
 pub(super) fn brush_face_hover(
     edit_mode: Res<EditMode>,
-    input: KeyboardInput,
+    keyboard: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
@@ -416,7 +399,6 @@ pub(super) fn brush_face_hover(
     mut hover: ResMut<super::BrushFaceHover>,
     brushes: Query<(), With<Brush>>,
 ) {
-    let keyboard = &input.keyboard;
     let in_face_edit = matches!(*edit_mode, EditMode::BrushEdit(BrushEditMode::Face));
     let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);

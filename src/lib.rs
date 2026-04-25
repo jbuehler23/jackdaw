@@ -1060,8 +1060,7 @@ impl DespawnKeyframeCmd {
 /// reverses them in push order.
 fn handle_keyframe_delete_intercept(world: &mut World) {
     let keyboard = world.resource::<ButtonInput<KeyCode>>();
-    let keybinds = world.resource::<crate::keybinds::KeybindRegistry>();
-    if !keybinds.just_pressed(crate::keybinds::EditorAction::Delete, keyboard) {
+    if !keyboard.just_pressed(KeyCode::Delete) && !keyboard.just_pressed(KeyCode::Backspace) {
         return;
     }
 
