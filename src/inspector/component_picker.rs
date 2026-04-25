@@ -1,14 +1,13 @@
 use crate::EditorEntity;
+use crate::prelude::*;
 use crate::selection::{Selected, Selection};
 use std::any::TypeId;
 use std::collections::{BTreeMap, HashSet};
 
-use super::InspectorDirty;
-
 use bevy::{
     ecs::{
         archetype::Archetype,
-        component::{ComponentId, Components},
+        component::Components,
         reflect::{AppTypeRegistry, ReflectComponent},
     },
     feathers::theme::ThemedText,
@@ -36,8 +35,6 @@ struct ComponentInfo {
     module_path: String,
     category: String,
     description: String,
-    type_id: TypeId,
-    component_id: ComponentId,
     type_path_full: String,
 }
 
@@ -107,10 +104,10 @@ pub(crate) fn on_add_component_button_click(
             continue;
         }
 
-        // Get component ID
-        let Some(component_id) = components.get_id(type_id) else {
+        // Skip if no component ID is registered for this type
+        if components.get_id(type_id).is_none() {
             continue;
-        };
+        }
 
         let short_name = table.short_path().to_string();
         let module = table.module_path().unwrap_or("").to_string();
@@ -136,8 +133,6 @@ pub(crate) fn on_add_component_button_click(
             module_path: module,
             category,
             description,
-            type_id,
-            component_id,
             type_path_full: full_path.to_string(),
         });
     }
@@ -301,8 +296,6 @@ pub(crate) fn on_add_component_button_click(
 
         // Component entries
         for info in entries {
-            let type_id = info.type_id;
-            let component_id = info.component_id;
             let short_name = info.short_name.clone();
             let category = info.category.clone();
             let description = info.description.clone();
@@ -337,41 +330,19 @@ pub(crate) fn on_add_component_button_click(
                     ChildOf(list),
                     observe({
                         let type_path_full = type_path_full.clone();
-                        move |mut click: On<Pointer<Click>>, mut commands: Commands| {
+                        move |mut click: On<Pointer<Click>>,
+                              mut commands: Commands,
+                              mut pickers: Query<Entity, With<ComponentPicker>>| {
                             click.propagate(false); // Don't let click through to backdrop
-                            let tp = type_path_full.clone();
-                            let cmd = crate::commands::AddComponent::new(
-                                source_entity,
-                                type_id,
-                                component_id,
-                                tp,
-                            );
-                            let cmd = Box::new(cmd);
-                            fn remove_pickers(
-                                In((source_entity, mut cmd)): In<(
-                                    Entity,
-                                    Box<dyn crate::commands::EditorCommand>,
-                                )>,
-                                world: &mut World,
-                                pickers: &mut QueryState<Entity, With<ComponentPicker>>,
-                            ) {
-                                cmd.execute(world);
-                                let mut history =
-                                    world.resource_mut::<crate::commands::CommandHistory>();
-                                history.push_executed(cmd);
-
-                                // Signal the inspector to rebuild
-                                world.entity_mut(source_entity).insert(InspectorDirty);
-
-                                // Close the picker dialog
-                                let pickers: Vec<Entity> = pickers.iter(world).collect();
-                                for picker in pickers {
-                                    if let Ok(ec) = world.get_entity_mut(picker) {
-                                        ec.despawn();
-                                    }
-                                }
+                            commands
+                                .operator(crate::inspector::ops::ComponentAddOp::ID)
+                                .param("entity", source_entity.to_bits() as i64)
+                                .param("type_path", type_path_full.clone())
+                                .call();
+                            // Close the picker dialog
+                            for picker in &mut pickers {
+                                commands.entity(picker).despawn();
                             }
-                            commands.run_system_cached_with(remove_pickers, (source_entity, cmd));
                         }
                     }),
                     observe(

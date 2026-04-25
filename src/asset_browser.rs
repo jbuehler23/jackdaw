@@ -1129,16 +1129,14 @@ fn update_preview_panel(
             TextColor(tokens::TEXT_PRIMARY),
             ChildOf(prev_btn),
         ));
-        let layer_count = info.layer_count;
-        commands.entity(prev_btn).observe(
-            move |_: On<Pointer<Click>>, mut ps: ResMut<AssetPreviewState>| {
-                if ps.current_layer > 0 {
-                    ps.current_layer -= 1;
-                } else {
-                    ps.current_layer = layer_count.saturating_sub(1);
-                }
-            },
-        );
+        commands
+            .entity(prev_btn)
+            .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+                commands
+                    .operator(AssetCycleArrayLayerOp::ID)
+                    .param("direction", -1i64)
+                    .call();
+            });
 
         commands.spawn((
             Text::new(layer_text),
@@ -1171,12 +1169,14 @@ fn update_preview_panel(
             TextColor(tokens::TEXT_PRIMARY),
             ChildOf(next_btn),
         ));
-        let layer_count2 = info.layer_count;
-        commands.entity(next_btn).observe(
-            move |_: On<Pointer<Click>>, mut ps: ResMut<AssetPreviewState>| {
-                ps.current_layer = (ps.current_layer + 1) % layer_count2;
-            },
-        );
+        commands
+            .entity(next_btn)
+            .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+                commands
+                    .operator(AssetCycleArrayLayerOp::ID)
+                    .param("direction", 1i64)
+                    .call();
+            });
     }
 
     // Apply button (only for 2D textures)
@@ -1232,20 +1232,6 @@ fn update_preview_panel(
             },
         );
     }
-}
-
-fn spawn_asset_folder_dialog(
-    _: On<Pointer<Click>>,
-    mut commands: Commands,
-    raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
-) {
-    let mut dialog = AsyncFileDialog::new().set_title("Select assets directory");
-    if let Ok(rh) = raw_handle.single() {
-        let handle = unsafe { rh.get_handle() };
-        dialog = dialog.set_parent(&handle);
-    }
-    let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_folder().await });
-    commands.insert_resource(AssetBrowserFolderTask(task));
 }
 
 fn poll_asset_browser_folder(world: &mut World) {
@@ -1436,7 +1422,9 @@ fn asset_folder_button(icon_font: Handle<Font>) -> impl Bundle {
             icon_font,
             tokens::TEXT_SECONDARY,
         ),
-        observe(spawn_asset_folder_dialog),
+        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.operator(AssetSelectFolderOp::ID).call();
+        }),
     )
 }
 
@@ -1458,4 +1446,61 @@ fn check_watcher_events(
         browser.needs_refresh = true;
         material_browser.needs_rescan = true;
     }
+}
+
+// ── Operators ──────────────────────────────────────────────────────────────
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<AssetCycleArrayLayerOp>()
+        .register_operator::<AssetSelectFolderOp>();
+}
+
+#[operator(
+    id = "asset.cycle_array_layer",
+    label = "Cycle Array Layer",
+    description = "Step the asset preview's `current_layer` by `direction` (defaults to +1), wrapping at `selected_info.layer_count`.",
+    allows_undo = false
+)]
+pub(crate) fn asset_cycle_array_layer(
+    params: In<OperatorParameters>,
+    mut preview: ResMut<AssetPreviewState>,
+) -> OperatorResult {
+    let Some(info) = preview.selected_info.as_ref() else {
+        return OperatorResult::Cancelled;
+    };
+    if info.layer_count == 0 {
+        return OperatorResult::Cancelled;
+    }
+    let direction = params
+        .get("direction")
+        .and_then(|v| match v {
+            jackdaw_jsn::PropertyValue::Int(i) => Some(*i),
+            _ => None,
+        })
+        .unwrap_or(1);
+    let count = info.layer_count as i64;
+    let next = ((preview.current_layer as i64) + direction).rem_euclid(count);
+    preview.current_layer = next as u32;
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "asset.select_folder",
+    label = "Select Assets Folder",
+    description = "Open an OS folder picker and store the result in `AssetBrowserFolderTask` for the polling system to consume.",
+    allows_undo = false
+)]
+pub(crate) fn asset_select_folder(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+    raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
+) -> OperatorResult {
+    let mut dialog = AsyncFileDialog::new().set_title("Select assets directory");
+    if let Ok(rh) = raw_handle.single() {
+        let handle = unsafe { rh.get_handle() };
+        dialog = dialog.set_parent(&handle);
+    }
+    let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_folder().await });
+    commands.insert_resource(AssetBrowserFolderTask(task));
+    OperatorResult::Finished
 }

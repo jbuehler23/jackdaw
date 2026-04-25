@@ -97,6 +97,12 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::brush_drag_ops::add_to_extension(ctx);
         crate::gizmos::add_to_extension(ctx);
         crate::terrain::sculpt::add_to_extension(ctx);
+        crate::navmesh::ops::add_to_extension(ctx);
+        crate::pie::add_to_extension(ctx);
+        crate::terrain::ops::add_to_extension(ctx);
+        crate::asset_browser::add_to_extension(ctx);
+        crate::material_browser::add_to_extension(ctx);
+        crate::inspector::ops::add_to_extension(ctx);
     }
 
     fn register_input_context(&self, app: &mut App) {

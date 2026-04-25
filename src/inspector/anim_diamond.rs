@@ -15,6 +15,7 @@ use jackdaw_feathers::button::{ButtonClickEvent, ButtonProps, ButtonSize, Button
 use jackdaw_feathers::icons::Icon;
 
 use super::InspectorFieldRow;
+use crate::prelude::*;
 
 /// Epsilon for "is the cursor on this keyframe?" (~1 frame at 60fps).
 const CURSOR_ON_KEYFRAME_EPS: f32 = 0.02;
@@ -104,9 +105,8 @@ pub fn decorate_animatable_fields(
     }
 }
 
-/// Observer: when a diamond button is clicked, ensure a clip + track
-/// exist for the bound property and spawn a keyframe at the current
-/// cursor time.
+/// Observer: when a diamond button is clicked, dispatch
+/// `animation.toggle_keyframe` with the bound property's params.
 pub fn on_diamond_click(
     event: On<ButtonClickEvent>,
     buttons: Query<&AnimDiamondButton>,
@@ -115,62 +115,63 @@ pub fn on_diamond_click(
     let Ok(button_ref) = buttons.get(event.entity) else {
         return;
     };
-    let source_entity = button_ref.source_entity;
-    let component_type_path = button_ref.component_type_path.clone();
-    let field_path = button_ref.field_path.clone();
+    commands
+        .operator(super::ops::AnimationToggleKeyframeOp::ID)
+        .param("entity", button_ref.source_entity.to_bits() as i64)
+        .param(
+            "component_type_path",
+            button_ref.component_type_path.clone(),
+        )
+        .param("field_path", button_ref.field_path.clone())
+        .call();
+}
 
-    commands.queue(move |world: &mut World| {
-        let cursor_time = world
-            .get_resource::<TimelineCursor>()
-            .map(|c| c.seek_time)
-            .unwrap_or(0.0);
+/// Spawn (or replace) a keyframe at the current cursor time on the
+/// given entity's clip/track for the named property. Shared between
+/// the diamond click observer and the `animation.toggle_keyframe`
+/// operator.
+pub(crate) fn toggle_keyframe(
+    world: &mut World,
+    source_entity: Entity,
+    component_type_path: &str,
+    field_path: &str,
+) {
+    let cursor_time = world
+        .get_resource::<TimelineCursor>()
+        .map(|c| c.seek_time)
+        .unwrap_or(0.0);
 
-        // Step 1: find or create a Clip as a child of the source
-        // entity. The clip's name reuses the source's Name if set.
-        let clip_entity = find_or_create_clip(world, source_entity);
-        let Some(clip_entity) = clip_entity else {
-            warn!(
-                "Diamond click: source entity {source_entity} has no Name - \
-                 give it one in the inspector first so the clip's target can \
-                 resolve"
-            );
-            return;
-        };
-
-        // Step 2: find or create a track for this property under the
-        // clip.
-        let track_entity =
-            find_or_create_track(world, clip_entity, &component_type_path, &field_path);
-
-        // Step 3: snapshot the current reflected field value and
-        // spawn the right typed keyframe component as a child of the
-        // track.
-        spawn_typed_keyframe(
-            world,
-            source_entity,
-            track_entity,
-            &component_type_path,
-            &field_path,
-            cursor_time,
+    let Some(clip_entity) = find_or_create_clip(world, source_entity) else {
+        warn!(
+            "toggle_keyframe: source entity {source_entity} has no Name - \
+             give it one in the inspector first so the clip's target can \
+             resolve"
         );
+        return;
+    };
 
-        // Step 4: grow the clip's authored duration if needed so the
-        // new keyframe is visible in the timeline view.
-        if let Some(mut clip) = world.get_mut::<Clip>(clip_entity)
-            && cursor_time > clip.duration
-        {
-            clip.duration = cursor_time;
-        }
+    let track_entity = find_or_create_track(world, clip_entity, component_type_path, field_path);
+    spawn_typed_keyframe(
+        world,
+        source_entity,
+        track_entity,
+        component_type_path,
+        field_path,
+        cursor_time,
+    );
 
-        // Step 5: make this the active clip and force a timeline
-        // rebuild so the new diamond/keyframe row appears.
-        if let Some(mut selected) = world.get_resource_mut::<SelectedClip>() {
-            selected.0 = Some(clip_entity);
-        }
-        if let Some(mut dirty) = world.get_resource_mut::<TimelineDirty>() {
-            dirty.0 = true;
-        }
-    });
+    if let Some(mut clip) = world.get_mut::<Clip>(clip_entity)
+        && cursor_time > clip.duration
+    {
+        clip.duration = cursor_time;
+    }
+
+    if let Some(mut selected) = world.get_resource_mut::<SelectedClip>() {
+        selected.0 = Some(clip_entity);
+    }
+    if let Some(mut dirty) = world.get_resource_mut::<TimelineDirty>() {
+        dirty.0 = true;
+    }
 }
 
 /// Return an existing `Clip` child of `source_entity`, or spawn one

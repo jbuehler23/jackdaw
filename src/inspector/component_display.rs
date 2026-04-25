@@ -1,6 +1,7 @@
 use crate::EditorEntity;
 use crate::custom_properties::CustomProperties;
 use crate::default_style;
+use crate::prelude::*;
 use crate::selection::{Selected, Selection};
 use std::any::TypeId;
 
@@ -147,9 +148,9 @@ pub(crate) fn build_inspector_displays(
     // Check for prefab baseline (override tracking)
     let baseline = entity_ref.get::<jackdaw_jsn::JsnPrefabBaseline>().cloned();
 
-    // (short_name, module_group, component_id)
+    // (short_name, module_group, component_id, full_type_path)
     let mut custom_groups = std::collections::HashSet::new();
-    let mut comp_list: Vec<(String, String, ComponentId)> = archetype
+    let mut comp_list: Vec<(String, String, ComponentId, String)> = archetype
         .iter_components()
         .filter_map(|component_id| {
             let info = components.get_info(component_id)?;
@@ -189,7 +190,7 @@ pub(crate) fn build_inspector_displays(
                 } else {
                     extract_module_group(table.module_path())
                 };
-                return Some((short, module_group, component_id));
+                return Some((short, module_group, component_id, full_path.to_string()));
             }
 
             // Fallback: use Components name
@@ -201,10 +202,12 @@ pub(crate) fn build_inspector_displays(
             {
                 return None;
             }
+            let full = name.to_string();
             Some((
                 name.shortname().to_string(),
                 "Other".to_string(),
                 component_id,
+                full,
             ))
         })
         .collect();
@@ -221,7 +224,7 @@ pub(crate) fn build_inspector_displays(
 
     // Spawn components with subtle group dividers
     let mut current_group = String::new();
-    for (name, module_group, component_id) in &comp_list {
+    for (name, module_group, component_id, type_path) in &comp_list {
         // Category group divider with icon
         if *module_group != current_group {
             current_group = module_group.clone();
@@ -297,6 +300,7 @@ pub(crate) fn build_inspector_displays(
         let (display_entity, body_entity) = spawn_component_display(
             commands,
             name,
+            type_path,
             source_entity,
             Some(component_id),
             &icon_font.0,
@@ -521,6 +525,7 @@ pub(crate) fn on_inspector_dirty(
 pub(crate) fn spawn_component_display(
     commands: &mut Commands,
     name: &str,
+    type_path: &str,
     entity: Entity,
     component: Option<ComponentId>,
     icon_font: &Handle<Font>,
@@ -655,10 +660,13 @@ pub(crate) fn spawn_component_display(
             commands.trigger(ToggleCollapsible { entity: section });
         });
 
-    if let Some(component) = component {
+    if component.is_some() {
+        let type_path_owned = type_path.to_string();
+        let entity_bits = entity.to_bits() as i64;
+
         // Revert button (only shown for overridden prefab components)
         if is_overridden {
-            let source_entity = entity;
+            let revert_type_path = type_path_owned.clone();
             commands.spawn((
                 Text::new(String::from(Icon::RotateCcw.unicode())),
                 TextFont {
@@ -669,9 +677,11 @@ pub(crate) fn spawn_component_display(
                 TextColor(default_style::INSPECTOR_OVERRIDE),
                 ChildOf(header),
                 bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-                    commands.queue(move |world: &mut World| {
-                        revert_component_to_baseline(world, source_entity, component);
-                    });
+                    commands
+                        .operator(super::ops::ComponentRevertBaselineOp::ID)
+                        .param("entity", entity_bits)
+                        .param("type_path", revert_type_path.clone())
+                        .call();
                 }),
             ));
         }
@@ -688,9 +698,10 @@ pub(crate) fn spawn_component_display(
             ChildOf(header),
             bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                 commands
-                    .entity(entity)
-                    .remove_by_id(component)
-                    .insert(InspectorDirty);
+                    .operator(super::ops::ComponentRemoveOp::ID)
+                    .param("entity", entity_bits)
+                    .param("type_path", type_path_owned.clone())
+                    .call();
             }),
         ));
     }
@@ -778,7 +789,11 @@ pub(crate) fn filter_inspector_components(
 }
 
 /// Revert a single component on a prefab instance back to its baseline value.
-fn revert_component_to_baseline(world: &mut World, entity: Entity, component_id: ComponentId) {
+pub(crate) fn revert_component_to_baseline(
+    world: &mut World,
+    entity: Entity,
+    component_id: ComponentId,
+) {
     use bevy::ecs::reflect::AppTypeRegistry;
     use bevy::reflect::serde::TypedReflectDeserializer;
     use serde::de::DeserializeSeed;

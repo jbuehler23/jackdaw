@@ -1,6 +1,6 @@
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
-use bevy::ui_widgets::observe;
+use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{self, ButtonProps, ButtonVariant},
     combobox::{self, ComboBoxChangeEvent},
@@ -12,8 +12,7 @@ use jackdaw_feathers::{
     tokens,
 };
 
-use super::{TerrainBrushSettings, TerrainDirtyChunks, TerrainEditMode, sculpt::SetTerrainHeights};
-use crate::commands::CommandHistory;
+use super::{TerrainBrushSettings, TerrainEditMode};
 use crate::selection::Selection;
 
 pub(super) fn plugin(app: &mut App) {
@@ -22,18 +21,8 @@ pub(super) fn plugin(app: &mut App) {
             Update,
             (update_terrain_inspector, sync_brush_fields).run_if(in_state(crate::AppState::Editor)),
         )
-        .add_observer(on_generate_clicked)
-        .add_observer(on_erode_clicked)
         .add_observer(on_terrain_text_commit);
 }
-
-// --- Events ---
-
-#[derive(Event)]
-struct GenerateClicked;
-
-#[derive(Event)]
-struct ErodeClicked;
 
 // --- State ---
 
@@ -290,11 +279,12 @@ fn update_terrain_inspector(
 
     // Generate button
     commands.spawn((
-        button::button(ButtonProps::new("Generate").with_variant(ButtonVariant::Primary)),
+        button::button(
+            ButtonProps::new("Generate")
+                .with_variant(ButtonVariant::Primary)
+                .call_operator(crate::terrain::ops::TerrainGenerateOp::ID),
+        ),
         ChildOf(body),
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.trigger(GenerateClicked);
-        }),
     ));
 
     // --- Erosion section ---
@@ -364,11 +354,12 @@ fn update_terrain_inspector(
 
     // Erode button
     commands.spawn((
-        button::button(ButtonProps::new("Erode").with_variant(ButtonVariant::Primary)),
+        button::button(
+            ButtonProps::new("Erode")
+                .with_variant(ButtonVariant::Primary)
+                .call_operator(crate::terrain::ops::TerrainErodeOp::ID),
+        ),
         ChildOf(ebody),
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.trigger(ErodeClicked);
-        }),
     ));
 }
 
@@ -650,65 +641,4 @@ fn on_terrain_text_commit(
         }
         current = parent;
     }
-}
-
-// --- Event handlers ---
-
-fn on_generate_clicked(
-    _trigger: On<GenerateClicked>,
-    selection: Res<Selection>,
-    mut terrains: Query<(&mut jackdaw_jsn::Terrain, &mut TerrainDirtyChunks)>,
-    gen_state: Res<TerrainGenerateState>,
-    mut history: ResMut<CommandHistory>,
-) {
-    let Some(entity) = selection.primary() else {
-        return;
-    };
-    let Ok((mut terrain, mut dirty)) = terrains.get_mut(entity) else {
-        return;
-    };
-
-    let old_heights = terrain.heights.clone();
-
-    let new_heights = jackdaw_terrain::generate_heightmap(terrain.resolution, &gen_state.settings);
-    terrain.heights = new_heights.clone();
-    dirty.rebuild_all = true;
-
-    let cmd = SetTerrainHeights {
-        entity,
-        old_heights,
-        new_heights,
-        label: "Generate Terrain".to_string(),
-    };
-    history.push_executed(Box::new(cmd));
-}
-
-fn on_erode_clicked(
-    _trigger: On<ErodeClicked>,
-    selection: Res<Selection>,
-    mut terrains: Query<(&mut jackdaw_jsn::Terrain, &mut TerrainDirtyChunks)>,
-    gen_state: Res<TerrainGenerateState>,
-    mut history: ResMut<CommandHistory>,
-) {
-    let Some(entity) = selection.primary() else {
-        return;
-    };
-    let Ok((mut terrain, mut dirty)) = terrains.get_mut(entity) else {
-        return;
-    };
-
-    let old_heights = terrain.heights.clone();
-
-    let mut heights = terrain.heights.clone();
-    jackdaw_terrain::hydraulic_erosion(&mut heights, terrain.resolution, &gen_state.erosion);
-    terrain.heights = heights.clone();
-    dirty.rebuild_all = true;
-
-    let cmd = SetTerrainHeights {
-        entity,
-        old_heights,
-        new_heights: heights,
-        label: "Erode Terrain".to_string(),
-    };
-    history.push_executed(Box::new(cmd));
 }

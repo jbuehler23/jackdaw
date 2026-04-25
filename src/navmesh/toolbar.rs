@@ -1,15 +1,15 @@
-use bevy::{prelude::*, ui_widgets::observe};
+use bevy::prelude::*;
+use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{self, ButtonProps, ButtonVariant},
     separator, tokens,
 };
 
-use super::{
-    brp_client::GetNavmeshInput,
-    build::BuildNavmesh,
-    save_load::{LoadNavmesh, SaveNavmesh},
-    visualization::NavmeshVizConfig,
+use super::ops::{
+    NavmeshBuildOp, NavmeshFetchOp, NavmeshLoadOp, NavmeshSaveOp, NavmeshToggleDetailOp,
+    NavmeshToggleObstaclesOp, NavmeshTogglePolyOp, NavmeshToggleVisualOp,
 };
+use super::visualization::NavmeshVizConfig;
 use crate::{EditorEntity, selection::Selection};
 
 pub(super) fn plugin(app: &mut App) {
@@ -60,31 +60,25 @@ pub fn navmesh_toolbar() -> impl Bundle {
                 },
                 TextColor(tokens::TEXT_SECONDARY),
             ),
-            (
-                button::button(
-                    ButtonProps::new("Fetch Scene").with_variant(ButtonVariant::Primary),
-                ),
-                observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-                    commands.trigger(GetNavmeshInput);
-                }),
+            button::button(
+                ButtonProps::new("Fetch Scene")
+                    .with_variant(ButtonVariant::Primary)
+                    .call_operator(NavmeshFetchOp::ID),
             ),
-            (
-                button::button(ButtonProps::new("Build").with_variant(ButtonVariant::Default)),
-                observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-                    commands.trigger(BuildNavmesh);
-                }),
+            button::button(
+                ButtonProps::new("Build")
+                    .with_variant(ButtonVariant::Default)
+                    .call_operator(NavmeshBuildOp::ID),
             ),
-            (
-                button::button(ButtonProps::new("Save").with_variant(ButtonVariant::Default)),
-                observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-                    commands.trigger(SaveNavmesh);
-                }),
+            button::button(
+                ButtonProps::new("Save")
+                    .with_variant(ButtonVariant::Default)
+                    .call_operator(NavmeshSaveOp::ID),
             ),
-            (
-                button::button(ButtonProps::new("Load").with_variant(ButtonVariant::Default)),
-                observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-                    commands.trigger(LoadNavmesh);
-                }),
+            button::button(
+                ButtonProps::new("Load")
+                    .with_variant(ButtonVariant::Default)
+                    .call_operator(NavmeshLoadOp::ID),
             ),
             // Separator before viz toggles
             separator::separator(separator::SeparatorProps::vertical()),
@@ -102,18 +96,18 @@ fn viz_toggle_button(
     toggle: NavmeshVizToggle,
     _initially_active: bool,
 ) -> impl Bundle {
+    let op_id = match toggle {
+        NavmeshVizToggle::Visual => NavmeshToggleVisualOp::ID,
+        NavmeshVizToggle::Obstacles => NavmeshToggleObstaclesOp::ID,
+        NavmeshVizToggle::DetailMesh => NavmeshToggleDetailOp::ID,
+        NavmeshVizToggle::PolygonMesh => NavmeshTogglePolyOp::ID,
+    };
     (
         toggle,
-        button::button(ButtonProps::new(label).with_variant(ButtonVariant::Default)),
-        observe(
-            move |_: On<Pointer<Click>>, mut config: ResMut<NavmeshVizConfig>| match toggle {
-                NavmeshVizToggle::Visual => config.show_visual = !config.show_visual,
-                NavmeshVizToggle::Obstacles => config.show_obstacles = !config.show_obstacles,
-                NavmeshVizToggle::DetailMesh => config.show_detail_mesh = !config.show_detail_mesh,
-                NavmeshVizToggle::PolygonMesh => {
-                    config.show_polygon_mesh = !config.show_polygon_mesh;
-                }
-            },
+        button::button(
+            ButtonProps::new(label)
+                .with_variant(ButtonVariant::Default)
+                .call_operator(op_id),
         ),
     )
 }

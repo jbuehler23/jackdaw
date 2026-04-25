@@ -351,6 +351,7 @@ fn spawn_fallback_section(
         let (display_entity, body_entity) = component_display::spawn_component_display(
             commands,
             &short_name,
+            type_path,
             source_entity,
             None,
             &icon_font.0,

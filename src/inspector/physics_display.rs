@@ -16,6 +16,7 @@ use jackdaw_widgets::collapsible::{
 
 use crate::commands::{AddComponent, CommandGroup, CommandHistory, EditorCommand};
 use crate::inspector::FieldBinding;
+use crate::prelude::*;
 use crate::selection::Selection;
 
 /// Marker for the Physics section checkbox.
@@ -506,7 +507,8 @@ fn spawn_labeled_row(commands: &mut Commands, parent: Entity, label: &str, font:
     ));
 }
 
-/// Handle the Enable checkbox toggle.
+/// Handle the Enable checkbox toggle by dispatching the matching
+/// `physics.enable` / `physics.disable` operator.
 pub(super) fn on_physics_enable_toggle(
     event: On<CheckboxCommitEvent>,
     checkboxes: Query<&PhysicsEnableCheckbox>,
@@ -515,31 +517,19 @@ pub(super) fn on_physics_enable_toggle(
     let Ok(physics_cb) = checkboxes.get(event.entity) else {
         return;
     };
-    let source_entity = physics_cb.0;
-    let checked = event.checked;
-
-    commands.queue(move |world: &mut World| {
-        if checked {
-            enable_physics(world, source_entity);
-        } else {
-            // Wrap disable in an undoable command. Captures the full
-            // physics-related AST state as a snapshot and restores it on undo.
-            let cmd = DisablePhysics::from_world(world, source_entity);
-            let mut cmd: Box<dyn EditorCommand> = Box::new(cmd);
-            cmd.execute(world);
-            world.resource_mut::<CommandHistory>().push_executed(cmd);
-        }
-        // Rebuild inspector
-        if let Ok(mut ec) = world.get_entity_mut(source_entity) {
-            ec.insert(super::InspectorDirty);
-        }
-    });
+    let entity_bits = physics_cb.0.to_bits() as i64;
+    let op_id = if event.checked {
+        super::ops::PhysicsEnableOp::ID
+    } else {
+        super::ops::PhysicsDisableOp::ID
+    };
+    commands.operator(op_id).param("entity", entity_bits).call();
 }
 
 /// Command that disables physics on an entity. Captures the full pre-disable
 /// state (`RigidBody`, `AvianCollider`, and all derived avian components in the
 /// AST) so undo restores them.
-struct DisablePhysics {
+pub(crate) struct DisablePhysics {
     entity: Entity,
     /// Snapshot of AST components that were removed, keyed by `type_path`.
     removed_components: std::collections::HashMap<String, serde_json::Value>,
@@ -548,7 +538,7 @@ struct DisablePhysics {
 }
 
 impl DisablePhysics {
-    fn from_world(world: &World, entity: Entity) -> Self {
+    pub(crate) fn from_world(world: &World, entity: Entity) -> Self {
         let mut removed_components = std::collections::HashMap::new();
         let mut removed_derived = std::collections::HashSet::new();
         if let Some(node) = world
@@ -649,7 +639,7 @@ impl EditorCommand for DisablePhysics {
     }
 }
 
-fn enable_physics(world: &mut World, entity: Entity) {
+pub(crate) fn enable_physics(world: &mut World, entity: Entity) {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let reg = registry.read();
     let components_res = world.components();

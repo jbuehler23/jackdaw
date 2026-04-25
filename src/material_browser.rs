@@ -23,6 +23,7 @@ use crate::{
     brush::{Brush, BrushEditMode, BrushSelection, EditMode, SetBrush},
     commands::CommandHistory,
     material_preview::MaterialPreviewState,
+    prelude::*,
     selection::Selection,
 };
 use jackdaw_commands::{CommandGroup, EditorCommand};
@@ -991,11 +992,12 @@ fn update_preview_area(
             ))
             .id();
         commands.entity(browse_btn).observe(
-            move |_: On<Pointer<Click>>, mut commands: Commands| {
-                commands.trigger(BrowseTextureSlot {
-                    slot,
-                    material_handle: browse_handle.clone(),
-                });
+            move |_: On<Pointer<Click>>,
+                  mut pending: ResMut<PendingTextureSlot>,
+                  mut commands: Commands| {
+                pending.slot = Some(slot);
+                pending.material_handle = Some(browse_handle.clone());
+                commands.operator(MaterialBrowseTextureSlotOp::ID).call();
             },
         );
 
@@ -1019,11 +1021,12 @@ fn update_preview_area(
                 ))
                 .id();
             commands.entity(clear_btn).observe(
-                move |_: On<Pointer<Click>>, mut commands: Commands| {
-                    commands.trigger(ClearTextureSlot {
-                        slot,
-                        material_handle: clear_handle.clone(),
-                    });
+                move |_: On<Pointer<Click>>,
+                      mut pending: ResMut<PendingTextureSlot>,
+                      mut commands: Commands| {
+                    pending.slot = Some(slot);
+                    pending.material_handle = Some(clear_handle.clone());
+                    commands.operator(MaterialClearTextureSlotOp::ID).call();
                 },
             );
         }
@@ -1196,20 +1199,6 @@ fn on_material_param_commit(
     {
         catalog.dirty = true;
     }
-}
-
-fn spawn_material_folder_dialog(
-    _: On<Pointer<Click>>,
-    mut commands: Commands,
-    raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
-) {
-    let mut dialog = AsyncFileDialog::new().set_title("Select materials directory");
-    if let Ok(rh) = raw_handle.single() {
-        let handle = unsafe { rh.get_handle() };
-        dialog = dialog.set_parent(&handle);
-    }
-    let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_folder().await });
-    commands.insert_resource(MaterialBrowserFolderTask(task));
 }
 
 fn poll_material_browser_folder(world: &mut World) {
@@ -1641,7 +1630,7 @@ fn new_material_button(icon_font: Handle<Font>) -> impl Bundle {
             tokens::TEXT_SECONDARY,
         ),
         observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.trigger(CreateNewMaterial);
+            commands.operator(MaterialCreateOp::ID).call();
         }),
     )
 }
@@ -1659,7 +1648,9 @@ fn material_folder_button(icon_font: Handle<Font>) -> impl Bundle {
             icon_font,
             tokens::TEXT_SECONDARY,
         ),
-        observe(spawn_material_folder_dialog),
+        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.operator(MaterialSelectFolderOp::ID).call();
+        }),
     )
 }
 
@@ -1676,10 +1667,125 @@ fn rescan_button(icon_font: Handle<Font>) -> impl Bundle {
             icon_font,
             tokens::TEXT_SECONDARY,
         ),
-        observe(
-            |_: On<Pointer<Click>>, mut state: ResMut<MaterialBrowserState>| {
-                state.needs_rescan = true;
-            },
-        ),
+        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.operator(MaterialRescanOp::ID).call();
+        }),
     )
+}
+
+// ── Operators ──────────────────────────────────────────────────────────────
+
+/// Resource set by the texture-slot button click before dispatching
+/// `material.browse_texture_slot` / `material.clear_texture_slot`. The
+/// operator reads this and clears it. `Handle<StandardMaterial>` doesn't
+/// fit `PropertyValue`, so we route it through a sidecar resource the
+/// same way `hierarchy.rename_begin` uses `PendingRenameTarget`.
+#[derive(Resource, Default)]
+struct PendingTextureSlot {
+    slot: Option<TextureSlot>,
+    material_handle: Option<Handle<StandardMaterial>>,
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.init_resource::<PendingTextureSlot>()
+        .register_operator::<MaterialCreateOp>()
+        .register_operator::<MaterialRescanOp>()
+        .register_operator::<MaterialSelectFolderOp>()
+        .register_operator::<MaterialBrowseTextureSlotOp>()
+        .register_operator::<MaterialClearTextureSlotOp>();
+}
+
+#[operator(
+    id = "material.create",
+    label = "New Material",
+    description = "Create a fresh `StandardMaterial`, register it with the browser, and select it for preview.",
+    allows_undo = false
+)]
+pub(crate) fn material_create(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.trigger(CreateNewMaterial);
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "material.rescan",
+    label = "Rescan Materials",
+    description = "Schedule a material directory rescan; the browser's polling system picks it up next frame.",
+    allows_undo = false
+)]
+pub(crate) fn material_rescan(
+    _: In<OperatorParameters>,
+    mut state: ResMut<MaterialBrowserState>,
+) -> OperatorResult {
+    state.needs_rescan = true;
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "material.select_folder",
+    label = "Select Materials Folder",
+    description = "Open an OS folder picker for the materials root and store the result in `MaterialBrowserFolderTask` for the polling system.",
+    allows_undo = false
+)]
+pub(crate) fn material_select_folder(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+    raw_handle: Query<&bevy::window::RawHandleWrapper, With<bevy::window::PrimaryWindow>>,
+) -> OperatorResult {
+    let mut dialog = AsyncFileDialog::new().set_title("Select materials directory");
+    if let Ok(rh) = raw_handle.single() {
+        let handle = unsafe { rh.get_handle() };
+        dialog = dialog.set_parent(&handle);
+    }
+    let task =
+        bevy::tasks::AsyncComputeTaskPool::get().spawn(async move { dialog.pick_folder().await });
+    commands.insert_resource(MaterialBrowserFolderTask(task));
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "material.browse_texture_slot",
+    label = "Browse Texture",
+    description = "Open a file picker for the texture slot recorded in `PendingTextureSlot` (set by the slot's browse button before dispatch).",
+    allows_undo = false
+)]
+pub(crate) fn material_browse_texture_slot(
+    _: In<OperatorParameters>,
+    mut pending: ResMut<PendingTextureSlot>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(slot) = pending.slot.take() else {
+        return OperatorResult::Cancelled;
+    };
+    let Some(material_handle) = pending.material_handle.take() else {
+        return OperatorResult::Cancelled;
+    };
+    commands.trigger(BrowseTextureSlot {
+        slot,
+        material_handle,
+    });
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "material.clear_texture_slot",
+    label = "Clear Texture",
+    description = "Clear the texture from the slot recorded in `PendingTextureSlot` (set by the slot's clear button before dispatch).",
+    allows_undo = false
+)]
+pub(crate) fn material_clear_texture_slot(
+    _: In<OperatorParameters>,
+    mut pending: ResMut<PendingTextureSlot>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(slot) = pending.slot.take() else {
+        return OperatorResult::Cancelled;
+    };
+    let Some(material_handle) = pending.material_handle.take() else {
+        return OperatorResult::Cancelled;
+    };
+    commands.trigger(ClearTextureSlot {
+        slot,
+        material_handle,
+    });
+    OperatorResult::Finished
 }

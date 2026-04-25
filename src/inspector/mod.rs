@@ -1,9 +1,10 @@
-mod anim_diamond;
+pub(crate) mod anim_diamond;
 mod brush_display;
 pub(crate) mod component_display;
 mod component_picker;
 mod custom_props_display;
 mod material_display;
+pub(crate) mod ops;
 pub(crate) mod physics_display;
 pub(crate) mod reflect_fields;
 

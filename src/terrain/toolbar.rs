@@ -1,10 +1,15 @@
-use bevy::{prelude::*, ui_widgets::observe};
+use bevy::prelude::*;
+use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{self, ButtonProps, ButtonVariant},
     separator, tokens,
 };
 
 use super::TerrainEditMode;
+use super::ops::{
+    TerrainToolFlattenOp, TerrainToolGenerateOp, TerrainToolLowerOp, TerrainToolNoiseOp,
+    TerrainToolRaiseOp, TerrainToolSmoothOp,
+};
 use crate::{EditorEntity, selection::Selection};
 
 pub(super) fn plugin(app: &mut App) {
@@ -72,36 +77,20 @@ pub fn terrain_toolbar() -> impl Bundle {
 }
 
 fn terrain_tool_button(label: &str, tool: TerrainToolButton) -> impl Bundle {
+    let op_id = match tool {
+        TerrainToolButton::Raise => TerrainToolRaiseOp::ID,
+        TerrainToolButton::Lower => TerrainToolLowerOp::ID,
+        TerrainToolButton::Flatten => TerrainToolFlattenOp::ID,
+        TerrainToolButton::Smooth => TerrainToolSmoothOp::ID,
+        TerrainToolButton::Noise => TerrainToolNoiseOp::ID,
+        TerrainToolButton::Generate => TerrainToolGenerateOp::ID,
+    };
     (
         tool,
-        button::button(ButtonProps::new(label).with_variant(ButtonVariant::Default)),
-        observe(
-            move |_: On<Pointer<Click>>, mut edit_mode: ResMut<TerrainEditMode>| {
-                let new_mode = match tool {
-                    TerrainToolButton::Raise => {
-                        TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Raise)
-                    }
-                    TerrainToolButton::Lower => {
-                        TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Lower)
-                    }
-                    TerrainToolButton::Flatten => {
-                        TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Flatten)
-                    }
-                    TerrainToolButton::Smooth => {
-                        TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Smooth)
-                    }
-                    TerrainToolButton::Noise => {
-                        TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Noise)
-                    }
-                    TerrainToolButton::Generate => TerrainEditMode::Generate,
-                };
-                // Toggle off if already in this mode
-                if *edit_mode == new_mode {
-                    *edit_mode = TerrainEditMode::None;
-                } else {
-                    *edit_mode = new_mode;
-                }
-            },
+        button::button(
+            ButtonProps::new(label)
+                .with_variant(ButtonVariant::Default)
+                .call_operator(op_id),
         ),
     )
 }

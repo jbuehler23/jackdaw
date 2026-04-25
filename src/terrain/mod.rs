@@ -1,5 +1,6 @@
 pub mod inspector;
 pub mod mesh;
+pub mod ops;
 pub mod sculpt;
 pub mod toolbar;
 
