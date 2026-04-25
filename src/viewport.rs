@@ -391,13 +391,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ViewportBookmarkLoadOp>();
 
     let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<ViewportFocusSelectedOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::KeyF, Press::default())],
-        ));
-    });
+    ctx.spawn((
+        Action::<ViewportFocusSelectedOp>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![(KeyCode::KeyF, Press::default())],
+    ));
 }
 
 fn has_primary_selection(selection: Res<Selection>) -> bool {
@@ -409,8 +407,7 @@ fn has_primary_selection(selection: Res<Selection>) -> bool {
     label = "Focus Selected",
     description = "Frame the editor camera on the primary selection at a distance scaled by the entity's bounding scale. \
                    Availability (`has_primary_selection`) requires `Selection::primary()` to be set.",
-    is_available = has_primary_selection,
-    allows_undo = false
+    is_available = has_primary_selection
 )]
 pub(crate) fn viewport_focus_selected(
     _: In<OperatorParameters>,
@@ -449,8 +446,7 @@ fn slot_param(params: &OperatorParameters) -> Option<usize> {
     id = "viewport.bookmark.save",
     label = "Save Camera Bookmark",
     description = "Save the current camera transform into `CameraBookmarks.slots[slot]`.\n\
-                   Params: `slot: i64` (0..=8).",
-    allows_undo = false
+                   Params: `slot: i64` (0..=8)."
 )]
 pub(crate) fn viewport_bookmark_save(
     params: In<OperatorParameters>,
@@ -474,8 +470,7 @@ pub(crate) fn viewport_bookmark_save(
     label = "Load Camera Bookmark",
     description = "Apply `CameraBookmarks.slots[slot]` to the editor camera. Cancelled if \
                    the slot is empty.\n\
-                   Params: `slot: i64` (0..=8).",
-    allows_undo = false
+                   Params: `slot: i64` (0..=8)."
 )]
 pub(crate) fn viewport_bookmark_load(
     params: In<OperatorParameters>,
