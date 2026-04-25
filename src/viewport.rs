@@ -448,7 +448,8 @@ fn slot_param(params: &OperatorParameters) -> Option<usize> {
 #[operator(
     id = "viewport.bookmark.save",
     label = "Save Camera Bookmark",
-    description = "Save the current camera transform into `CameraBookmarks.slots[slot]` (0-8).",
+    description = "Save the current camera transform into `CameraBookmarks.slots[slot]`.\n\
+                   Params: `slot: i64` (0..=8).",
     allows_undo = false
 )]
 pub(crate) fn viewport_bookmark_save(
@@ -471,7 +472,9 @@ pub(crate) fn viewport_bookmark_save(
 #[operator(
     id = "viewport.bookmark.load",
     label = "Load Camera Bookmark",
-    description = "Apply `CameraBookmarks.slots[slot]` (0-8) to the editor camera. No-op if the slot is empty.",
+    description = "Apply `CameraBookmarks.slots[slot]` to the editor camera. Cancelled if \
+                   the slot is empty.\n\
+                   Params: `slot: i64` (0..=8).",
     allows_undo = false
 )]
 pub(crate) fn viewport_bookmark_load(
