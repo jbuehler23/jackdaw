@@ -111,10 +111,16 @@ For chords like Ctrl+Shift+S, use `with_mod_keys(ModKeys::CONTROL | ModKeys::SHI
 
 ### Dispatching from a button
 
-For Feathers buttons:
+For Feathers buttons, the easiest path is `ButtonProps::from_operator`, which fills in both the label and the click dispatch from the operator's metadata:
 
 ```rust
-button::button(ButtonProps::new("Add Cube").call_operator(SpawnCubeOp::ID))
+button::button(ButtonProps::from_operator::<SpawnCubeOp>())
+```
+
+If you need a different label than the operator's `LABEL` (icon-only buttons, abbreviated toolbar entries), spell it out:
+
+```rust
+button::button(ButtonProps::new("Cube").call_operator(SpawnCubeOp::ID))
 ```
 
 For other UI nodes (raw `Node`, picker entries, observers):
@@ -145,6 +151,8 @@ fn delete_entity(
 ```
 
 Document each parameter in the function's `///` doc comment under a `# Parameters` heading. Keep them out of the macro `description`, since that text shows up in the UI for artists.
+
+The `let Some(...) = ... else { return Cancelled }` pattern is the current shape; the long-term goal is `let entity = params.as_entity("entity")?;`, which needs `OperatorResult` to implement `Try` (and `FromResidual<Option<Infallible>>`). It's not wired up yet, so use the `let-else` form for now.
 
 ### Availability checks
 
@@ -180,10 +188,10 @@ If your operator stays active across multiple frames (a drag, a dialog the user 
 )]
 fn box_select(
     _: In<OperatorParameters>,
-    modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+    active: ActiveModalQuery,
     /* ... */
 ) -> OperatorResult {
-    if modal.is_none() {
+    if !active.is_modal_running() {
         // first frame setup
         return OperatorResult::Running;
     }
@@ -193,6 +201,8 @@ fn box_select(
 
 fn cancel_box_select(/* ... */) { /* restore initial state */ }
 ```
+
+`ActiveModalQuery` is the convenience system param for "is a modal currently running, and which one?". Use it instead of hand-rolling an `Option<Single<...>>` query against `ActiveModalOperator`.
 
 ### Description guidelines
 
