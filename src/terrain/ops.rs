@@ -154,8 +154,7 @@ pub(crate) fn terrain_tool_generate(
     id = "terrain.generate",
     label = "Generate Terrain",
     description = "Generate a fresh heightmap for the selected terrain.",
-    is_available = has_selected_terrain,
-    allows_undo = false
+    is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_generate(
     _: In<OperatorParameters>,
@@ -196,8 +195,7 @@ pub(crate) fn terrain_generate(
     id = "terrain.erode",
     label = "Erode Terrain",
     description = "Apply hydraulic erosion to the selected terrain.",
-    is_available = has_selected_terrain,
-    allows_undo = false
+    is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_erode(
     _: In<OperatorParameters>,
