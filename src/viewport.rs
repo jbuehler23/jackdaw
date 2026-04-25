@@ -400,10 +400,16 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     });
 }
 
+fn has_primary_selection(selection: Res<Selection>) -> bool {
+    selection.primary().is_some()
+}
+
 #[operator(
     id = "viewport.focus_selected",
     label = "Focus Selected",
-    description = "Frame the editor camera on the primary selection at a distance scaled by the entity's bounding scale.",
+    description = "Frame the editor camera on the primary selection at a distance scaled by the entity's bounding scale. \
+                   Availability (`has_primary_selection`) requires `Selection::primary()` to be set.",
+    is_available = has_primary_selection,
     allows_undo = false
 )]
 pub(crate) fn viewport_focus_selected(
