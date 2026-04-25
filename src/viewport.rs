@@ -402,11 +402,11 @@ fn has_primary_selection(selection: Res<Selection>) -> bool {
     selection.primary().is_some()
 }
 
+/// Center the camera on the selected entity.
 #[operator(
     id = "viewport.focus_selected",
     label = "Focus Selected",
-    description = "Frame the editor camera on the primary selection at a distance scaled by the entity's bounding scale. \
-                   Availability (`has_primary_selection`) requires `Selection::primary()` to be set.",
+    description = "Center the camera on the selected entity.",
     is_available = has_primary_selection
 )]
 pub(crate) fn viewport_focus_selected(
@@ -433,20 +433,18 @@ pub(crate) fn viewport_focus_selected(
 }
 
 fn slot_param(params: &OperatorParameters) -> Option<usize> {
-    match params.get("slot")? {
-        jackdaw_jsn::PropertyValue::Int(i) => {
-            let v = *i;
-            (0..9).contains(&v).then_some(v as usize)
-        }
-        _ => None,
-    }
+    let v = params.as_int("slot")?;
+    (0..9).contains(&v).then_some(v as usize)
 }
 
+/// Save the camera position to a numbered slot.
+///
+/// # Parameters
+/// - `slot` (`i64`, `0..=8`): which bookmark slot to write.
 #[operator(
     id = "viewport.bookmark.save",
     label = "Save Camera Bookmark",
-    description = "Save the current camera transform into `CameraBookmarks.slots[slot]`.\n\
-                   Params: `slot: i64` (0..=8)."
+    description = "Save the camera position to a numbered slot."
 )]
 pub(crate) fn viewport_bookmark_save(
     params: In<OperatorParameters>,
@@ -465,12 +463,15 @@ pub(crate) fn viewport_bookmark_save(
     OperatorResult::Finished
 }
 
+/// Restore the camera to a previously-saved bookmark slot. Cancels if
+/// the slot is empty.
+///
+/// # Parameters
+/// - `slot` (`i64`, `0..=8`): which bookmark slot to read.
 #[operator(
     id = "viewport.bookmark.load",
     label = "Load Camera Bookmark",
-    description = "Apply `CameraBookmarks.slots[slot]` to the editor camera. Cancelled if \
-                   the slot is empty.\n\
-                   Params: `slot: i64` (0..=8)."
+    description = "Restore the camera to a previously-saved slot."
 )]
 pub(crate) fn viewport_bookmark_load(
     params: In<OperatorParameters>,
