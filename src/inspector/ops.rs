@@ -1,16 +1,11 @@
 //! Inspector operators: per-component buttons (add / remove / revert)
 //! and the small set of typed actions (`physics.enable` / `physics.disable`,
 //! `animation.toggle_keyframe`).
-//!
-//! All ops route entity references through `i64` (`Entity::to_bits()`) and
-//! type / field paths through `String`, since `PropertyValue` doesn't carry
-//! `Entity` or `ComponentId` directly.
 
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::reflect::AppTypeRegistry;
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_jsn::PropertyValue;
 
 use super::component_display::revert_component_to_baseline;
 use super::physics_display::{DisablePhysics, enable_physics};
@@ -25,21 +20,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<AnimationToggleKeyframeOp>();
 }
 
-fn entity_param(params: &OperatorParameters) -> Option<Entity> {
-    let bits = match params.get("entity")? {
-        PropertyValue::Int(i) => *i as u64,
-        _ => return None,
-    };
-    Some(Entity::from_bits(bits))
-}
-
-fn string_param<'a>(params: &'a OperatorParameters, key: &str) -> Option<&'a str> {
-    match params.get(key)? {
-        PropertyValue::String(s) => Some(s.as_str()),
-        _ => None,
-    }
-}
-
 /// Look up the component id and type id for a fully-qualified type path.
 fn component_id_for_path(
     world: &World,
@@ -52,23 +32,30 @@ fn component_id_for_path(
     Some((component_id, type_id))
 }
 
+/// Add a component to the target entity.
+///
+/// # Parameters
+/// - `entity`: the entity that will receive the component, encoded as
+///   `i64` via [`Entity::to_bits()`] (use [`OperatorParameters::as_entity`]
+///   to read it back).
+/// - `type_path`: the fully-qualified Bevy reflected type path of the
+///   component to add (e.g. `"bevy_transform::components::transform::Transform"`).
+///
+/// Pushes a single undoable history entry that recreates the component
+/// on undo.
 #[operator(
     id = "component.add",
     label = "Add Component",
-    description = "Add a component to the entity. Pushes an `AddComponent` history entry \
-                   and marks the inspector dirty.\n\
-                   Params: `entity: i64` (entity bits), `type_path: String` (fully-qualified \
-                   reflected type path).",
-    allows_undo = false
+    description = "Add a component to the selected entity."
 )]
 pub(crate) fn component_add(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = entity_param(&params) else {
+    let Some(entity) = params.as_entity("entity") else {
         return OperatorResult::Cancelled;
     };
-    let Some(type_path) = string_param(&params, "type_path").map(str::to_string) else {
+    let Some(type_path) = params.as_str("type_path").map(str::to_string) else {
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
@@ -86,22 +73,25 @@ pub(crate) fn component_add(
     OperatorResult::Finished
 }
 
+/// Remove a component from the target entity.
+///
+/// # Parameters
+/// - `entity`: the entity to remove the component from.
+/// - `type_path`: the fully-qualified Bevy reflected type path of the
+///   component to remove.
 #[operator(
     id = "component.remove",
     label = "Remove Component",
-    description = "Remove a component from the entity. Marks the inspector dirty so the \
-                   display rebuilds.\n\
-                   Params: `entity: i64`, `type_path: String`.",
-    allows_undo = false
+    description = "Remove a component from the selected entity."
 )]
 pub(crate) fn component_remove(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = entity_param(&params) else {
+    let Some(entity) = params.as_entity("entity") else {
         return OperatorResult::Cancelled;
     };
-    let Some(type_path) = string_param(&params, "type_path").map(str::to_string) else {
+    let Some(type_path) = params.as_str("type_path").map(str::to_string) else {
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
@@ -116,22 +106,26 @@ pub(crate) fn component_remove(
     OperatorResult::Finished
 }
 
+/// Restore an overridden component on a prefab instance to the prefab's
+/// baseline value.
+///
+/// # Parameters
+/// - `entity`: the prefab instance entity.
+/// - `type_path`: the fully-qualified Bevy reflected type path of the
+///   component to revert.
 #[operator(
     id = "component.revert_baseline",
     label = "Revert To Prefab",
-    description = "Restore the component's prefab baseline value on the entity. The \
-                   component must be marked as overridden in the AST.\n\
-                   Params: `entity: i64`, `type_path: String`.",
-    allows_undo = false
+    description = "Restore the component to the value it had in the source prefab."
 )]
 pub(crate) fn component_revert_baseline(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = entity_param(&params) else {
+    let Some(entity) = params.as_entity("entity") else {
         return OperatorResult::Cancelled;
     };
-    let Some(type_path) = string_param(&params, "type_path").map(str::to_string) else {
+    let Some(type_path) = params.as_str("type_path").map(str::to_string) else {
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
@@ -143,19 +137,22 @@ pub(crate) fn component_revert_baseline(
     OperatorResult::Finished
 }
 
+/// Add `RigidBody` and `AvianCollider` to the entity so it participates
+/// in the physics simulation. No-op if those components are already
+/// present.
+///
+/// # Parameters
+/// - `entity`: the entity to make physical.
 #[operator(
     id = "physics.enable",
     label = "Enable Physics",
-    description = "Add `RigidBody` and `AvianCollider` to the entity (idempotent if already \
-                   present).\n\
-                   Params: `entity: i64`.",
-    allows_undo = false
+    description = "Make the selected entity participate in the physics simulation."
 )]
 pub(crate) fn physics_enable(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = entity_param(&params) else {
+    let Some(entity) = params.as_entity("entity") else {
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
@@ -167,19 +164,21 @@ pub(crate) fn physics_enable(
     OperatorResult::Finished
 }
 
+/// Remove physics components from the entity, capturing the pre-disable
+/// state so undo restores them.
+///
+/// # Parameters
+/// - `entity`: the entity to make non-physical.
 #[operator(
     id = "physics.disable",
     label = "Disable Physics",
-    description = "Remove physics components from the entity, capturing the pre-disable \
-                   state as a `DisablePhysics` history entry so undo restores them.\n\
-                   Params: `entity: i64`.",
-    allows_undo = false
+    description = "Stop the selected entity from participating in the physics simulation."
 )]
 pub(crate) fn physics_disable(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = entity_param(&params) else {
+    let Some(entity) = params.as_entity("entity") else {
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
@@ -193,29 +192,42 @@ pub(crate) fn physics_disable(
     OperatorResult::Finished
 }
 
+/// Spawn (or replace) a keyframe at the current timeline cursor for one
+/// of the entity's animatable properties. Creates the clip and track
+/// lazily if they don't exist yet.
+///
+/// # Parameters
+/// - `entity`: the source entity whose property is being animated.
+/// - `component_type_path`: the fully-qualified Bevy reflected type
+///   path of the component that owns the property
+///   (e.g. `"bevy_transform::components::transform::Transform"`).
+/// - `field_path`: the dotted path to the field within that component
+///   (e.g. `"translation"` or `"rotation"`).
 #[operator(
     id = "animation.toggle_keyframe",
     label = "Toggle Keyframe",
-    description = "Spawn (or replace) a keyframe at the current timeline cursor. Creates \
-                   the clip and track lazily if missing.\n\
-                   Params: `entity: i64`, `component_type_path: String`, `field_path: String`.",
-    allows_undo = false
+    description = "Add or replace a keyframe for this property at the current timeline cursor."
 )]
 pub(crate) fn animation_toggle_keyframe(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = entity_param(&params) else {
+    let Some(entity) = params.as_entity("entity") else {
         return OperatorResult::Cancelled;
     };
-    let Some(type_path) = string_param(&params, "component_type_path").map(str::to_string) else {
+    let Some(type_path) = params.as_str("component_type_path").map(str::to_string) else {
         return OperatorResult::Cancelled;
     };
-    let Some(field_path) = string_param(&params, "field_path").map(str::to_string) else {
+    let Some(field_path) = params.as_str("field_path").map(str::to_string) else {
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        super::anim_diamond::toggle_keyframe(world, entity, &type_path, &field_path);
+        world
+            .run_system_cached_with(
+                super::anim_diamond::toggle_keyframe,
+                (entity, type_path, field_path),
+            )
+            .ok();
     });
     OperatorResult::Finished
 }

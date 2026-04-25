@@ -1468,8 +1468,7 @@ fn has_array_preview(preview: Res<AssetPreviewState>) -> bool {
     description = "Step the asset preview's `current_layer` by `direction`, wrapping at `selected_info.layer_count`. \
                    Availability (`has_array_preview`) requires the asset preview to hold an array texture.\n\
                    Params: `direction: i64` (signed step, defaults to +1).",
-    is_available = has_array_preview,
-    allows_undo = false
+    is_available = has_array_preview
 )]
 pub(crate) fn asset_cycle_array_layer(
     params: In<OperatorParameters>,
@@ -1497,8 +1496,7 @@ pub(crate) fn asset_cycle_array_layer(
 #[operator(
     id = "asset.select_folder",
     label = "Select Assets Folder",
-    description = "Open an OS folder picker and store the result in `AssetBrowserFolderTask` for the polling system to consume.",
-    allows_undo = false
+    description = "Open an OS folder picker and store the result in `AssetBrowserFolderTask` for the polling system to consume."
 )]
 pub(crate) fn asset_select_folder(
     _: In<OperatorParameters>,
@@ -1507,6 +1505,9 @@ pub(crate) fn asset_select_folder(
 ) -> OperatorResult {
     let mut dialog = AsyncFileDialog::new().set_title("Select assets directory");
     if let Ok(rh) = raw_handle.single() {
+        // SAFETY: the primary window is open, so its `RawHandleWrapper`
+        // points to a live OS handle. We use the returned wrapper only
+        // to parent the modal dialog within this scope.
         let handle = unsafe { rh.get_handle() };
         dialog = dialog.set_parent(&handle);
     }

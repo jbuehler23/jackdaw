@@ -127,14 +127,12 @@ pub fn on_diamond_click(
 }
 
 /// Spawn (or replace) a keyframe at the current cursor time on the
-/// given entity's clip/track for the named property. Shared between
-/// the diamond click observer and the `animation.toggle_keyframe`
-/// operator.
+/// given entity's clip/track for the named property. Shared exclusive
+/// system; call via `world.run_system_cached_with(toggle_keyframe,
+/// (entity, type_path, field_path))`.
 pub(crate) fn toggle_keyframe(
+    In((source_entity, component_type_path, field_path)): In<(Entity, String, String)>,
     world: &mut World,
-    source_entity: Entity,
-    component_type_path: &str,
-    field_path: &str,
 ) {
     let cursor_time = world
         .get_resource::<TimelineCursor>()
@@ -150,13 +148,13 @@ pub(crate) fn toggle_keyframe(
         return;
     };
 
-    let track_entity = find_or_create_track(world, clip_entity, component_type_path, field_path);
+    let track_entity = find_or_create_track(world, clip_entity, &component_type_path, &field_path);
     spawn_typed_keyframe(
         world,
         source_entity,
         track_entity,
-        component_type_path,
-        field_path,
+        &component_type_path,
+        &field_path,
         cursor_time,
     );
 

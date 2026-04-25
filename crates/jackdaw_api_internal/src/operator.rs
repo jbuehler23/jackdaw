@@ -130,6 +130,47 @@ pub trait Operator: InputAction + 'static {
 #[derive(Debug, Clone, Default, Deref, DerefMut, Reflect)]
 pub struct OperatorParameters(pub BTreeMap<String, PropertyValue>);
 
+impl OperatorParameters {
+    /// Read an `i64` parameter by key.
+    pub fn as_int(&self, key: &str) -> Option<i64> {
+        match self.get(key)? {
+            PropertyValue::Int(i) => Some(*i),
+            _ => None,
+        }
+    }
+
+    /// Read an `f64` parameter by key.
+    pub fn as_float(&self, key: &str) -> Option<f64> {
+        match self.get(key)? {
+            PropertyValue::Float(f) => Some(*f),
+            _ => None,
+        }
+    }
+
+    /// Read a `bool` parameter by key.
+    pub fn as_bool(&self, key: &str) -> Option<bool> {
+        match self.get(key)? {
+            PropertyValue::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// Read a `String` parameter by key.
+    pub fn as_str(&self, key: &str) -> Option<&str> {
+        match self.get(key)? {
+            PropertyValue::String(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Read an [`Entity`] parameter, decoded from the `i64` bits a
+    /// caller stored via [`Entity::to_bits()`]. Returns `None` if the
+    /// key is missing or not an `Int`.
+    pub fn as_entity(&self, key: &str) -> Option<Entity> {
+        self.as_int(key).map(|bits| Entity::from_bits(bits as u64))
+    }
+}
+
 pub type OperatorSystemId = SystemId<In<OperatorParameters>, OperatorResult>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

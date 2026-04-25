@@ -94,8 +94,7 @@ fn play_is_running(state: Res<State<PlayState>>) -> bool {
     label = "Play",
     description = "Enter Play-In-Editor. From Stopped, snapshots the scene first; from Paused, resumes. \
                    Availability (`play_is_stopped_or_paused`) excludes the already-Playing state.",
-    is_available = play_is_stopped_or_paused,
-    allows_undo = false
+    is_available = play_is_stopped_or_paused
 )]
 pub(crate) fn pie_play(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(handle_play);
@@ -106,8 +105,7 @@ pub(crate) fn pie_play(_: In<OperatorParameters>, mut commands: Commands) -> Ope
     id = "pie.pause",
     label = "Pause",
     description = "Pause Play-In-Editor. Availability (`play_is_playing`) requires the Playing state.",
-    is_available = play_is_playing,
-    allows_undo = false
+    is_available = play_is_playing
 )]
 pub(crate) fn pie_pause(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(handle_pause);
@@ -119,8 +117,7 @@ pub(crate) fn pie_pause(_: In<OperatorParameters>, mut commands: Commands) -> Op
     label = "Stop",
     description = "Exit Play-In-Editor and restore the pre-play scene snapshot. \
                    Availability (`play_is_running`) excludes the already-Stopped state.",
-    is_available = play_is_running,
-    allows_undo = false
+    is_available = play_is_running
 )]
 pub(crate) fn pie_stop(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(handle_stop);

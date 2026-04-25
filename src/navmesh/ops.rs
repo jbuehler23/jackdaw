@@ -24,8 +24,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 #[operator(
     id = "navmesh.fetch",
     label = "Fetch Scene",
-    description = "Request the active scene's navmesh input from the connected game.",
-    allows_undo = false
+    description = "Request the active scene's navmesh input from the connected game."
 )]
 pub(crate) fn navmesh_fetch(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.trigger(GetNavmeshInput);
@@ -35,8 +34,7 @@ pub(crate) fn navmesh_fetch(_: In<OperatorParameters>, mut commands: Commands) -
 #[operator(
     id = "navmesh.build",
     label = "Build",
-    description = "Build the navmesh from the current scene input.",
-    allows_undo = false
+    description = "Build the navmesh from the current scene input."
 )]
 pub(crate) fn navmesh_build(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.trigger(BuildNavmesh);
@@ -46,8 +44,7 @@ pub(crate) fn navmesh_build(_: In<OperatorParameters>, mut commands: Commands) -
 #[operator(
     id = "navmesh.save",
     label = "Save",
-    description = "Write the current navmesh to disk.",
-    allows_undo = false
+    description = "Write the current navmesh to disk."
 )]
 pub(crate) fn navmesh_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.trigger(SaveNavmesh);
@@ -57,8 +54,7 @@ pub(crate) fn navmesh_save(_: In<OperatorParameters>, mut commands: Commands) ->
 #[operator(
     id = "navmesh.load",
     label = "Load",
-    description = "Load a navmesh from disk.",
-    allows_undo = false
+    description = "Load a navmesh from disk."
 )]
 pub(crate) fn navmesh_load(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.trigger(LoadNavmesh);
@@ -68,8 +64,7 @@ pub(crate) fn navmesh_load(_: In<OperatorParameters>, mut commands: Commands) ->
 #[operator(
     id = "navmesh.toggle_visual",
     label = "Toggle Visual",
-    description = "Toggle the navmesh visual-mesh overlay.",
-    allows_undo = false
+    description = "Toggle the navmesh visual-mesh overlay."
 )]
 pub(crate) fn navmesh_toggle_visual(
     _: In<OperatorParameters>,
@@ -82,8 +77,7 @@ pub(crate) fn navmesh_toggle_visual(
 #[operator(
     id = "navmesh.toggle_obstacles",
     label = "Toggle Obstacles",
-    description = "Toggle the navmesh obstacle gizmo overlay.",
-    allows_undo = false
+    description = "Toggle the navmesh obstacle gizmo overlay."
 )]
 pub(crate) fn navmesh_toggle_obstacles(
     _: In<OperatorParameters>,
@@ -96,8 +90,7 @@ pub(crate) fn navmesh_toggle_obstacles(
 #[operator(
     id = "navmesh.toggle_detail",
     label = "Toggle Detail Mesh",
-    description = "Toggle the navmesh detail-mesh overlay.",
-    allows_undo = false
+    description = "Toggle the navmesh detail-mesh overlay."
 )]
 pub(crate) fn navmesh_toggle_detail(
     _: In<OperatorParameters>,
@@ -110,8 +103,7 @@ pub(crate) fn navmesh_toggle_detail(
 #[operator(
     id = "navmesh.toggle_poly",
     label = "Toggle Polygon Mesh",
-    description = "Toggle the navmesh polygon-mesh overlay.",
-    allows_undo = false
+    description = "Toggle the navmesh polygon-mesh overlay."
 )]
 pub(crate) fn navmesh_toggle_poly(
     _: In<OperatorParameters>,

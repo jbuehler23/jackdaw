@@ -46,8 +46,7 @@ fn has_selected_terrain(
     id = "terrain.tool.raise",
     label = "Raise",
     description = "Activate the raise sculpt tool, or deactivate if already active.",
-    is_available = has_selected_terrain,
-    allows_undo = false
+    is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_tool_raise(
     _: In<OperatorParameters>,
@@ -64,8 +63,7 @@ pub(crate) fn terrain_tool_raise(
     id = "terrain.tool.lower",
     label = "Lower",
     description = "Activate the lower sculpt tool, or deactivate if already active.",
-    is_available = has_selected_terrain,
-    allows_undo = false
+    is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_tool_lower(
     _: In<OperatorParameters>,
@@ -82,8 +80,7 @@ pub(crate) fn terrain_tool_lower(
     id = "terrain.tool.flatten",
     label = "Flatten",
     description = "Activate the flatten sculpt tool, or deactivate if already active.",
-    is_available = has_selected_terrain,
-    allows_undo = false
+    is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_tool_flatten(
     _: In<OperatorParameters>,
@@ -100,8 +97,7 @@ pub(crate) fn terrain_tool_flatten(
     id = "terrain.tool.smooth",
     label = "Smooth",
     description = "Activate the smooth sculpt tool, or deactivate if already active.",
-    is_available = has_selected_terrain,
-    allows_undo = false
+    is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_tool_smooth(
     _: In<OperatorParameters>,
@@ -118,8 +114,7 @@ pub(crate) fn terrain_tool_smooth(
     id = "terrain.tool.noise",
     label = "Noise",
     description = "Activate the noise sculpt tool, or deactivate if already active.",
-    is_available = has_selected_terrain,
-    allows_undo = false
+    is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_tool_noise(
     _: In<OperatorParameters>,
@@ -136,8 +131,7 @@ pub(crate) fn terrain_tool_noise(
     id = "terrain.tool.generate",
     label = "Generate",
     description = "Activate the generate-heightmap mode, or deactivate if already active.",
-    is_available = has_selected_terrain,
-    allows_undo = false
+    is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_tool_generate(
     _: In<OperatorParameters>,
