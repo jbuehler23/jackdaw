@@ -33,10 +33,20 @@ fn toggle_to(mode: &mut TerrainEditMode, target: TerrainEditMode) {
     };
 }
 
+/// Tool-toggle ops require a terrain to be selected; otherwise the
+/// toolbar that hosts these buttons is hidden anyway.
+fn has_selected_terrain(
+    selection: Res<Selection>,
+    terrains: Query<(), With<jackdaw_jsn::Terrain>>,
+) -> bool {
+    selection.primary().is_some_and(|e| terrains.contains(e))
+}
+
 #[operator(
     id = "terrain.tool.raise",
     label = "Raise",
     description = "Activate the raise sculpt tool, or deactivate if already active.",
+    is_available = has_selected_terrain,
     allows_undo = false
 )]
 pub(crate) fn terrain_tool_raise(
@@ -54,6 +64,7 @@ pub(crate) fn terrain_tool_raise(
     id = "terrain.tool.lower",
     label = "Lower",
     description = "Activate the lower sculpt tool, or deactivate if already active.",
+    is_available = has_selected_terrain,
     allows_undo = false
 )]
 pub(crate) fn terrain_tool_lower(
@@ -71,6 +82,7 @@ pub(crate) fn terrain_tool_lower(
     id = "terrain.tool.flatten",
     label = "Flatten",
     description = "Activate the flatten sculpt tool, or deactivate if already active.",
+    is_available = has_selected_terrain,
     allows_undo = false
 )]
 pub(crate) fn terrain_tool_flatten(
@@ -88,6 +100,7 @@ pub(crate) fn terrain_tool_flatten(
     id = "terrain.tool.smooth",
     label = "Smooth",
     description = "Activate the smooth sculpt tool, or deactivate if already active.",
+    is_available = has_selected_terrain,
     allows_undo = false
 )]
 pub(crate) fn terrain_tool_smooth(
@@ -105,6 +118,7 @@ pub(crate) fn terrain_tool_smooth(
     id = "terrain.tool.noise",
     label = "Noise",
     description = "Activate the noise sculpt tool, or deactivate if already active.",
+    is_available = has_selected_terrain,
     allows_undo = false
 )]
 pub(crate) fn terrain_tool_noise(
@@ -122,6 +136,7 @@ pub(crate) fn terrain_tool_noise(
     id = "terrain.tool.generate",
     label = "Generate",
     description = "Activate the generate-heightmap mode, or deactivate if already active.",
+    is_available = has_selected_terrain,
     allows_undo = false
 )]
 pub(crate) fn terrain_tool_generate(
@@ -138,6 +153,7 @@ pub(crate) fn terrain_tool_generate(
     description = "Replace the selected terrain's heights with a generated heightmap from \
                    `TerrainGenerateState.settings`. Pushes a single `SetTerrainHeights` \
                    history entry.",
+    is_available = has_selected_terrain,
     allows_undo = false
 )]
 pub(crate) fn terrain_generate(
@@ -172,6 +188,7 @@ pub(crate) fn terrain_generate(
     label = "Erode Terrain",
     description = "Run hydraulic erosion in-place on the selected terrain's heights and push \
                    a `SetTerrainHeights` history entry.",
+    is_available = has_selected_terrain,
     allows_undo = false
 )]
 pub(crate) fn terrain_erode(

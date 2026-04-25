@@ -77,10 +77,24 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<PieStopOp>();
 }
 
+fn play_is_stopped_or_paused(state: Res<State<PlayState>>) -> bool {
+    !matches!(state.get(), PlayState::Playing)
+}
+
+fn play_is_playing(state: Res<State<PlayState>>) -> bool {
+    *state.get() == PlayState::Playing
+}
+
+fn play_is_running(state: Res<State<PlayState>>) -> bool {
+    *state.get() != PlayState::Stopped
+}
+
 #[operator(
     id = "pie.play",
     label = "Play",
-    description = "Enter Play-In-Editor. From Stopped, snapshots the scene first; from Paused, resumes.",
+    description = "Enter Play-In-Editor. From Stopped, snapshots the scene first; from Paused, resumes. \
+                   Availability (`play_is_stopped_or_paused`) excludes the already-Playing state.",
+    is_available = play_is_stopped_or_paused,
     allows_undo = false
 )]
 pub(crate) fn pie_play(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
@@ -91,7 +105,8 @@ pub(crate) fn pie_play(_: In<OperatorParameters>, mut commands: Commands) -> Ope
 #[operator(
     id = "pie.pause",
     label = "Pause",
-    description = "Pause Play-In-Editor. No-op outside Playing.",
+    description = "Pause Play-In-Editor. Availability (`play_is_playing`) requires the Playing state.",
+    is_available = play_is_playing,
     allows_undo = false
 )]
 pub(crate) fn pie_pause(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
@@ -102,7 +117,9 @@ pub(crate) fn pie_pause(_: In<OperatorParameters>, mut commands: Commands) -> Op
 #[operator(
     id = "pie.stop",
     label = "Stop",
-    description = "Exit Play-In-Editor and restore the pre-play scene snapshot.",
+    description = "Exit Play-In-Editor and restore the pre-play scene snapshot. \
+                   Availability (`play_is_running`) excludes the already-Stopped state.",
+    is_available = play_is_running,
     allows_undo = false
 )]
 pub(crate) fn pie_stop(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {

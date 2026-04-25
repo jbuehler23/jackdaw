@@ -1455,10 +1455,20 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<AssetSelectFolderOp>();
 }
 
+fn has_array_preview(preview: Res<AssetPreviewState>) -> bool {
+    preview
+        .selected_info
+        .as_ref()
+        .is_some_and(|info| info.layer_count > 0)
+}
+
 #[operator(
     id = "asset.cycle_array_layer",
     label = "Cycle Array Layer",
-    description = "Step the asset preview's `current_layer` by `direction` (defaults to +1), wrapping at `selected_info.layer_count`.",
+    description = "Step the asset preview's `current_layer` by `direction`, wrapping at `selected_info.layer_count`. \
+                   Availability (`has_array_preview`) requires the asset preview to hold an array texture.\n\
+                   Params: `direction: i64` (signed step, defaults to +1).",
+    is_available = has_array_preview,
     allows_undo = false
 )]
 pub(crate) fn asset_cycle_array_layer(

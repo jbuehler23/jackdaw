@@ -1695,6 +1695,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<MaterialClearTextureSlotOp>();
 }
 
+fn pending_texture_slot_set(pending: Res<PendingTextureSlot>) -> bool {
+    pending.slot.is_some() && pending.material_handle.is_some()
+}
+
 #[operator(
     id = "material.create",
     label = "New Material",
@@ -1745,7 +1749,10 @@ pub(crate) fn material_select_folder(
 #[operator(
     id = "material.browse_texture_slot",
     label = "Browse Texture",
-    description = "Open a file picker for the texture slot recorded in `PendingTextureSlot` (set by the slot's browse button before dispatch).",
+    description = "Open a file picker for the texture slot recorded in `PendingTextureSlot` (set by the slot's \
+                   browse button before dispatch). Availability (`pending_texture_slot_set`) requires the slot \
+                   and material handle to be present.",
+    is_available = pending_texture_slot_set,
     allows_undo = false
 )]
 pub(crate) fn material_browse_texture_slot(
@@ -1769,7 +1776,10 @@ pub(crate) fn material_browse_texture_slot(
 #[operator(
     id = "material.clear_texture_slot",
     label = "Clear Texture",
-    description = "Clear the texture from the slot recorded in `PendingTextureSlot` (set by the slot's clear button before dispatch).",
+    description = "Clear the texture from the slot recorded in `PendingTextureSlot` (set by the slot's clear \
+                   button before dispatch). Availability (`pending_texture_slot_set`) requires the slot and \
+                   material handle to be present.",
+    is_available = pending_texture_slot_set,
     allows_undo = false
 )]
 pub(crate) fn material_clear_texture_slot(
