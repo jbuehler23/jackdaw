@@ -149,14 +149,18 @@ pub(crate) fn toggle_keyframe(
     };
 
     let track_entity = find_or_create_track(world, clip_entity, &component_type_path, &field_path);
-    spawn_typed_keyframe(
-        world,
-        source_entity,
-        track_entity,
-        &component_type_path,
-        &field_path,
-        cursor_time,
-    );
+    world
+        .run_system_cached_with(
+            spawn_typed_keyframe,
+            (
+                source_entity,
+                track_entity,
+                component_type_path.clone(),
+                field_path.clone(),
+                cursor_time,
+            ),
+        )
+        .ok();
 
     if let Some(mut clip) = world.get_mut::<Clip>(clip_entity)
         && cursor_time > clip.duration
@@ -241,20 +245,23 @@ fn find_or_create_track(
 /// new animatable property means a new arm here plus a new arm
 /// there. Keep them in sync.
 fn spawn_typed_keyframe(
-    world: &mut World,
-    source_entity: Entity,
-    track_entity: Entity,
-    component_type_path: &str,
-    field_path: &str,
-    time: f32,
+    In((source_entity, track_entity, component_type_path, field_path, time)): In<(
+        Entity,
+        Entity,
+        String,
+        String,
+        f32,
+    )>,
+    transforms: Query<&Transform>,
+    mut commands: Commands,
 ) {
-    match (component_type_path, field_path) {
+    match (component_type_path.as_str(), field_path.as_str()) {
         (TRANSFORM, "translation") => {
-            let Some(transform) = world.get::<Transform>(source_entity).copied() else {
+            let Ok(&transform) = transforms.get(source_entity) else {
                 warn!("Diamond click: source has no Transform");
                 return;
             };
-            world.spawn((
+            commands.spawn((
                 Vec3Keyframe {
                     time,
                     value: transform.translation,
@@ -263,11 +270,11 @@ fn spawn_typed_keyframe(
             ));
         }
         (TRANSFORM, "rotation") => {
-            let Some(transform) = world.get::<Transform>(source_entity).copied() else {
+            let Ok(&transform) = transforms.get(source_entity) else {
                 warn!("Diamond click: source has no Transform");
                 return;
             };
-            world.spawn((
+            commands.spawn((
                 QuatKeyframe {
                     time,
                     value: transform.rotation,
@@ -276,11 +283,11 @@ fn spawn_typed_keyframe(
             ));
         }
         (TRANSFORM, "scale") => {
-            let Some(transform) = world.get::<Transform>(source_entity).copied() else {
+            let Ok(&transform) = transforms.get(source_entity) else {
                 warn!("Diamond click: source has no Transform");
                 return;
             };
-            world.spawn((
+            commands.spawn((
                 Vec3Keyframe {
                     time,
                     value: transform.scale,

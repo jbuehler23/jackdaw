@@ -153,7 +153,11 @@ pub(crate) fn component_revert_baseline(
         else {
             return;
         };
-        revert_component_to_baseline(world, entity, component_id);
+        if let Err(err) =
+            world.run_system_cached_with(revert_component_to_baseline, (entity, component_id))
+        {
+            error!("revert_component_to_baseline failed: {err}");
+        }
     });
     OperatorResult::Finished
 }

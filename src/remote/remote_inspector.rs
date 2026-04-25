@@ -350,13 +350,15 @@ fn spawn_fallback_section(
 
         let (display_entity, body_entity) = component_display::spawn_component_display(
             commands,
-            &short_name,
-            type_path,
-            source_entity,
-            None,
-            &icon_font.0,
-            &editor_font.0,
-            false,
+            component_display::ComponentDisplaySpec {
+                name: &short_name,
+                type_path,
+                entity: source_entity,
+                component: None,
+                is_overridden: false,
+                icon_font: &icon_font.0,
+                editor_font: &editor_font.0,
+            },
         );
         commands.entity(display_entity).insert(ChildOf(group_body));
 

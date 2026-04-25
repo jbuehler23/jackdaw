@@ -299,13 +299,15 @@ pub(crate) fn build_inspector_displays(
 
         let (display_entity, body_entity) = spawn_component_display(
             commands,
-            name,
-            type_path,
-            source_entity,
-            Some(component_id),
-            &icon_font.0,
-            &editor_font.0,
-            is_overridden,
+            ComponentDisplaySpec {
+                name,
+                type_path,
+                entity: source_entity,
+                component: Some(component_id),
+                is_overridden,
+                icon_font: &icon_font.0,
+                editor_font: &editor_font.0,
+            },
         );
         commands
             .entity(display_entity)
@@ -522,16 +524,32 @@ pub(crate) fn on_inspector_dirty(
     );
 }
 
+/// Inputs to [`spawn_component_display`]. Bundled into a single
+/// struct so the call site is readable as a struct literal instead of
+/// a long positional argument list.
+pub(crate) struct ComponentDisplaySpec<'a> {
+    pub name: &'a str,
+    pub type_path: &'a str,
+    pub entity: Entity,
+    pub component: Option<ComponentId>,
+    pub is_overridden: bool,
+    pub icon_font: &'a Handle<Font>,
+    pub editor_font: &'a Handle<Font>,
+}
+
 pub(crate) fn spawn_component_display(
     commands: &mut Commands,
-    name: &str,
-    type_path: &str,
-    entity: Entity,
-    component: Option<ComponentId>,
-    icon_font: &Handle<Font>,
-    editor_font: &Handle<Font>,
-    is_overridden: bool,
+    spec: ComponentDisplaySpec<'_>,
 ) -> (Entity, Entity) {
+    let ComponentDisplaySpec {
+        name,
+        type_path,
+        entity,
+        component,
+        is_overridden,
+        icon_font,
+        editor_font,
+    } = spec;
     let font = icon_font.clone();
     let body_font = editor_font.clone();
 
@@ -789,10 +807,12 @@ pub(crate) fn filter_inspector_components(
 }
 
 /// Revert a single component on a prefab instance back to its baseline value.
+///
+/// Exclusive system; call via
+/// `world.run_system_cached_with(revert_component_to_baseline, (entity, component_id))`.
 pub(crate) fn revert_component_to_baseline(
+    In((entity, component_id)): In<(Entity, ComponentId)>,
     world: &mut World,
-    entity: Entity,
-    component_id: ComponentId,
 ) {
     use bevy::ecs::reflect::AppTypeRegistry;
     use bevy::reflect::serde::TypedReflectDeserializer;
