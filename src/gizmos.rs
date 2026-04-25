@@ -3,6 +3,8 @@ use bevy::{
     ui::UiGlobalTransform,
     window::{CursorGrabMode, CursorOptions},
 };
+use jackdaw_api::prelude::*;
+use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 
 use crate::default_style;
 use crate::{
@@ -81,17 +83,21 @@ impl Plugin for TransformGizmosPlugin {
             .add_systems(Startup, configure_transform_gizmos)
             .add_systems(
                 Update,
-                (handle_gizmo_hover, handle_gizmo_drag)
+                (handle_gizmo_hover, gizmo_drag_invoke_trigger)
                     .chain()
                     .in_set(crate::EditorInteractionSystems),
             )
             .add_systems(
                 Update,
                 draw_gizmos
-                    .after(handle_gizmo_drag)
+                    .after(gizmo_drag_invoke_trigger)
                     .run_if(in_state(crate::AppState::Editor)),
             );
     }
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<GizmoDragOp>();
 }
 
 fn configure_transform_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
@@ -201,7 +207,53 @@ pub(crate) fn handle_gizmo_hover(
     hover.hovered_axis = best_axis;
 }
 
-fn handle_gizmo_drag(
+/// LMB on a hovered gizmo axis dispatches `gizmo.drag`. Mouse-button
+/// gestures aren't expressible as BEI key bindings.
+fn gizmo_drag_invoke_trigger(
+    mouse: Res<ButtonInput<MouseButton>>,
+    selection: Res<Selection>,
+    hover: Res<GizmoHoverState>,
+    drag_state: Res<GizmoDragState>,
+    modal: Res<ModalTransformState>,
+    edit_mode: Res<crate::brush::EditMode>,
+    draw_state: Res<crate::draw_brush::DrawBrushState>,
+    mut commands: Commands,
+) {
+    if drag_state.active
+        || !mouse.just_pressed(MouseButton::Left)
+        || hover.hovered_axis.is_none()
+        || selection.primary().is_none()
+        || modal.active.is_some()
+        || *edit_mode != crate::brush::EditMode::Object
+        || draw_state.active.is_some()
+    {
+        return;
+    }
+    commands.queue(|world: &mut World| {
+        let _ = world
+            .operator(GizmoDragOp::ID)
+            .settings(CallOperatorSettings {
+                execution_context: ExecutionContext::Invoke,
+                creates_history_entry: true,
+            })
+            .call();
+    });
+}
+
+#[operator(
+    id = "gizmo.drag",
+    label = "Gizmo Drag",
+    description = "Drag the active transform gizmo to translate / rotate / scale the \
+                   primary selection. Modal: commits on LMB release, cancels on \
+                   Escape (restoring the start transform). Mode and axis come from \
+                   the toolbar's `GizmoMode` resource and the click-time \
+                   `GizmoHoverState`.",
+    modal = true,
+    allows_undo = false,
+    cancel = cancel_gizmo_drag,
+)]
+pub(crate) fn gizmo_drag(
+    _: In<OperatorParameters>,
     selection: Res<Selection>,
     mut transforms: Query<(&GlobalTransform, &mut Transform), With<Selected>>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
@@ -215,178 +267,157 @@ fn handle_gizmo_drag(
     mut drag_state: ResMut<GizmoDragState>,
     mut history: ResMut<CommandHistory>,
     snap_settings: Res<SnapSettings>,
-    modal: Res<ModalTransformState>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
-    (edit_mode, draw_state): (
-        Res<crate::brush::EditMode>,
-        Res<crate::draw_brush::DrawBrushState>,
-    ),
-) {
-    // Suppress gizmo drag during modal operations, brush edit mode, or draw mode
-    if modal.active.is_some()
-        || *edit_mode != crate::brush::EditMode::Object
-        || draw_state.active.is_some()
-    {
-        if drag_state.active {
-            drag_state.active = false;
-        }
-        return;
-    }
-
-    let Some(primary) = selection.primary() else {
-        if drag_state.active {
-            drag_state.active = false;
-        }
-        return;
-    };
-
+    modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+) -> OperatorResult {
     let Ok(window) = windows.single() else {
-        return;
+        return OperatorResult::Cancelled;
     };
     let Some(cursor_pos) = window.cursor_position() else {
-        return;
+        return OperatorResult::Cancelled;
     };
     let Ok((camera, cam_tf)) = camera_query.single() else {
-        return;
+        return OperatorResult::Cancelled;
     };
     let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
     else {
-        return;
+        return OperatorResult::Cancelled;
     };
 
-    // Start drag
-    if mouse.just_pressed(MouseButton::Left) && !drag_state.active {
-        if let Some(axis) = hover.hovered_axis
-            && let Ok((_, transform)) = transforms.get(primary)
-        {
-            drag_state.active = true;
-            drag_state.axis = Some(axis);
-            drag_state.drag_start_screen = viewport_cursor;
-            drag_state.start_transform = *transform;
-            drag_state.entity = Some(primary);
-            drag_state.accumulated_delta = 0.0;
-            // Confine cursor during drag
-            if let Ok(mut cursor_opts) = cursor_query.single_mut() {
-                cursor_opts.grab_mode = CursorGrabMode::Confined;
-            }
+    if modal.is_none() {
+        let Some(primary) = selection.primary() else {
+            return OperatorResult::Cancelled;
+        };
+        let Some(axis) = hover.hovered_axis else {
+            return OperatorResult::Cancelled;
+        };
+        let Ok((_, transform)) = transforms.get(primary) else {
+            return OperatorResult::Cancelled;
+        };
+        drag_state.active = true;
+        drag_state.axis = Some(axis);
+        drag_state.drag_start_screen = viewport_cursor;
+        drag_state.start_transform = *transform;
+        drag_state.entity = Some(primary);
+        drag_state.accumulated_delta = 0.0;
+        if let Ok(mut cursor_opts) = cursor_query.single_mut() {
+            cursor_opts.grab_mode = CursorGrabMode::Confined;
         }
-        return;
+        return OperatorResult::Running;
     }
 
-    // Continue drag
-    if drag_state.active && mouse.pressed(MouseButton::Left) {
-        let Some(entity) = drag_state.entity else {
-            return;
-        };
-        let Ok((global_tf, mut transform)) = transforms.get_mut(entity) else {
-            return;
-        };
-        let Some(axis) = drag_state.axis else {
-            return;
-        };
-
-        let effective_space = if *mode == GizmoMode::Scale {
-            &GizmoSpace::Local
-        } else {
-            &space
-        };
-        let rotation = gizmo_rotation(global_tf, effective_space);
-        let axis_dir = match axis {
-            GizmoAxis::X => rotation * Vec3::X,
-            GizmoAxis::Y => rotation * Vec3::Y,
-            GizmoAxis::Z => rotation * Vec3::Z,
-        };
-
-        let gizmo_pos = global_tf.translation();
-
-        match *mode {
-            GizmoMode::Translate => {
-                let drag_start_pos = drag_state.start_transform.translation;
-
-                // Project mouse movement onto axis in screen space
-                let Some(origin_screen) = camera.world_to_viewport(cam_tf, drag_start_pos).ok()
-                else {
-                    return;
-                };
-                let Some(axis_screen) = camera
-                    .world_to_viewport(cam_tf, drag_start_pos + axis_dir)
-                    .ok()
-                else {
-                    return;
-                };
-                let screen_axis = axis_screen - origin_screen;
-                let len_sq = screen_axis.length_squared();
-
-                //prevents divide by 0 when screen axis is tiny
-                if len_sq < EPSILON {
-                    return;
-                }
-
-                let mouse_delta = viewport_cursor - drag_state.drag_start_screen;
-                let projected = mouse_delta.dot(screen_axis) / len_sq;
-
-                let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-                let raw_delta = axis_dir * projected;
-                let snapped_delta = snap_settings.snap_translate_vec3_if(raw_delta, ctrl);
-                transform.translation = drag_state.start_transform.translation + snapped_delta;
-            }
-            GizmoMode::Rotate => {
-                let mouse_delta = viewport_cursor - drag_state.drag_start_screen;
-                let screen_axis = match axis {
-                    GizmoAxis::X => Vec2::Y,
-                    GizmoAxis::Y => Vec2::X,
-                    GizmoAxis::Z => -Vec2::X,
-                };
-                let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-                let raw_angle = mouse_delta.dot(screen_axis) * ROTATE_SENSITIVITY;
-                let angle = snap_settings.snap_rotate_if(raw_angle, ctrl);
-                let rotation_delta = Quat::from_axis_angle(axis_dir, angle);
-                transform.rotation = rotation_delta * drag_state.start_transform.rotation;
-            }
-            GizmoMode::Scale => {
-                let Some(origin_screen) = camera.world_to_viewport(cam_tf, gizmo_pos).ok() else {
-                    return;
-                };
-                let Some(axis_screen) = camera.world_to_viewport(cam_tf, gizmo_pos + axis_dir).ok()
-                else {
-                    return;
-                };
-                let screen_axis = (axis_screen - origin_screen).normalize_or_zero();
-                let mouse_delta = viewport_cursor - drag_state.drag_start_screen;
-                let projected = mouse_delta.dot(screen_axis) * SCALE_SENSITIVITY;
-
-                let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-                let mut new_scale = drag_state.start_transform.scale;
-                match axis {
-                    GizmoAxis::X => new_scale.x = (new_scale.x + projected).max(MIN_SCALE),
-                    GizmoAxis::Y => new_scale.y = (new_scale.y + projected).max(MIN_SCALE),
-                    GizmoAxis::Z => new_scale.z = (new_scale.z + projected).max(MIN_SCALE),
-                }
-                transform.scale = snap_settings.snap_scale_vec3_if(new_scale, ctrl);
-            }
-        }
-        return;
-    }
-
-    // End drag: push undo command
-    if drag_state.active && mouse.just_released(MouseButton::Left) {
+    if mouse.just_released(MouseButton::Left) {
         if let Some(entity) = drag_state.entity
             && let Ok((_, transform)) = transforms.get(entity)
         {
-            let cmd = SetTransform {
+            history.push_executed(Box::new(SetTransform {
                 entity,
                 old_transform: drag_state.start_transform,
                 new_transform: *transform,
+            }));
+        }
+        clear_gizmo_drag_state(&mut drag_state, &mut cursor_query);
+        return OperatorResult::Finished;
+    }
+
+    let Some(entity) = drag_state.entity else {
+        return OperatorResult::Finished;
+    };
+    let Ok((global_tf, mut transform)) = transforms.get_mut(entity) else {
+        return OperatorResult::Finished;
+    };
+    let Some(axis) = drag_state.axis else {
+        return OperatorResult::Finished;
+    };
+
+    let effective_space = if *mode == GizmoMode::Scale {
+        &GizmoSpace::Local
+    } else {
+        &space
+    };
+    let rotation = gizmo_rotation(global_tf, effective_space);
+    let axis_dir = match axis {
+        GizmoAxis::X => rotation * Vec3::X,
+        GizmoAxis::Y => rotation * Vec3::Y,
+        GizmoAxis::Z => rotation * Vec3::Z,
+    };
+    let gizmo_pos = global_tf.translation();
+    let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let mouse_delta = viewport_cursor - drag_state.drag_start_screen;
+
+    match *mode {
+        GizmoMode::Translate => {
+            let drag_start_pos = drag_state.start_transform.translation;
+            let Ok(origin_screen) = camera.world_to_viewport(cam_tf, drag_start_pos) else {
+                return OperatorResult::Running;
             };
-            history.push_executed(Box::new(cmd));
+            let Ok(axis_screen) = camera.world_to_viewport(cam_tf, drag_start_pos + axis_dir)
+            else {
+                return OperatorResult::Running;
+            };
+            let screen_axis = axis_screen - origin_screen;
+            let len_sq = screen_axis.length_squared();
+            if len_sq < EPSILON {
+                return OperatorResult::Running;
+            }
+            let projected = mouse_delta.dot(screen_axis) / len_sq;
+            let snapped = snap_settings.snap_translate_vec3_if(axis_dir * projected, ctrl);
+            transform.translation = drag_state.start_transform.translation + snapped;
         }
-        drag_state.active = false;
-        drag_state.axis = None;
-        drag_state.entity = None;
-        // Release cursor confinement
-        if let Ok(mut cursor_opts) = cursor_query.single_mut() {
-            cursor_opts.grab_mode = CursorGrabMode::None;
+        GizmoMode::Rotate => {
+            let screen_axis = match axis {
+                GizmoAxis::X => Vec2::Y,
+                GizmoAxis::Y => Vec2::X,
+                GizmoAxis::Z => -Vec2::X,
+            };
+            let raw_angle = mouse_delta.dot(screen_axis) * ROTATE_SENSITIVITY;
+            let angle = snap_settings.snap_rotate_if(raw_angle, ctrl);
+            transform.rotation =
+                Quat::from_axis_angle(axis_dir, angle) * drag_state.start_transform.rotation;
         }
+        GizmoMode::Scale => {
+            let Ok(origin_screen) = camera.world_to_viewport(cam_tf, gizmo_pos) else {
+                return OperatorResult::Running;
+            };
+            let Ok(axis_screen) = camera.world_to_viewport(cam_tf, gizmo_pos + axis_dir) else {
+                return OperatorResult::Running;
+            };
+            let screen_axis = (axis_screen - origin_screen).normalize_or_zero();
+            let projected = mouse_delta.dot(screen_axis) * SCALE_SENSITIVITY;
+            let mut new_scale = drag_state.start_transform.scale;
+            match axis {
+                GizmoAxis::X => new_scale.x = f32::max(new_scale.x + projected, MIN_SCALE),
+                GizmoAxis::Y => new_scale.y = f32::max(new_scale.y + projected, MIN_SCALE),
+                GizmoAxis::Z => new_scale.z = f32::max(new_scale.z + projected, MIN_SCALE),
+            }
+            transform.scale = snap_settings.snap_scale_vec3_if(new_scale, ctrl);
+        }
+    }
+    OperatorResult::Running
+}
+
+fn cancel_gizmo_drag(
+    mut drag_state: ResMut<GizmoDragState>,
+    mut transforms: Query<&mut Transform, With<Selected>>,
+    mut cursor_query: Query<&mut CursorOptions, With<Window>>,
+) {
+    if let Some(entity) = drag_state.entity
+        && let Ok(mut transform) = transforms.get_mut(entity)
+    {
+        *transform = drag_state.start_transform;
+    }
+    clear_gizmo_drag_state(&mut drag_state, &mut cursor_query);
+}
+
+fn clear_gizmo_drag_state(
+    drag_state: &mut GizmoDragState,
+    cursor_query: &mut Query<&mut CursorOptions, With<Window>>,
+) {
+    drag_state.active = false;
+    drag_state.axis = None;
+    drag_state.entity = None;
+    if let Ok(mut cursor_opts) = cursor_query.single_mut() {
+        cursor_opts.grab_mode = CursorGrabMode::None;
     }
 }
 

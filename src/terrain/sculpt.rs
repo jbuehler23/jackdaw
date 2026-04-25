@@ -3,6 +3,8 @@ use bevy::{
     prelude::*,
     ui::UiGlobalTransform,
 };
+use jackdaw_api::prelude::*;
+use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 
 use super::{
     CHUNK_SIZE, TerrainBrushSettings, TerrainDirtyChunks, TerrainEditMode, TerrainSculptState,
@@ -16,12 +18,18 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
-            terrain_sculpt_interaction,
+            update_terrain_brush_position,
+            sculpt_invoke_trigger,
             handle_brush_resize_scroll,
             draw_terrain_brush_gizmo,
         )
+            .chain()
             .run_if(in_state(crate::AppState::Editor)),
     );
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<TerrainSculptOp>();
 }
 
 /// Undo command for terrain height changes.
@@ -70,134 +78,180 @@ fn sync_terrain_heights_to_ast(world: &mut World, entity: Entity) {
     }
 }
 
-fn terrain_sculpt_interaction(
-    mouse: Res<ButtonInput<MouseButton>>,
-    windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
-    mut terrain_query: Query<(
-        Entity,
-        &mut jackdaw_jsn::Terrain,
-        &GlobalTransform,
-        &mut TerrainDirtyChunks,
-    )>,
-    edit_mode: Res<TerrainEditMode>,
-    brush_settings: Res<TerrainBrushSettings>,
-    mut sculpt_state: ResMut<TerrainSculptState>,
-    selection: Res<Selection>,
-    mut history: ResMut<CommandHistory>,
-    time: Res<Time>,
-) {
-    let TerrainEditMode::Sculpt(tool) = *edit_mode else {
-        if sculpt_state.active {
-            sculpt_state.active = false;
-            sculpt_state.brush_position = None;
-        }
-        return;
-    };
+/// Raycast the cursor against the selected terrain's XZ plane and
+/// return the (entity, grid coordinate) that the brush should target.
+fn terrain_brush_hit(
+    windows: &Query<&Window>,
+    camera_query: &Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    terrain_query: &Query<(Entity, &jackdaw_jsn::Terrain, &GlobalTransform)>,
+    selection: &Selection,
+) -> Option<(Entity, Vec2)> {
+    let selected = selection.primary()?;
+    let (terrain_entity, terrain, terrain_tf) = terrain_query.get(selected).ok()?;
 
-    // Must have a terrain selected
-    let Some(selected) = selection.primary() else {
-        sculpt_state.brush_position = None;
-        return;
-    };
-    let Ok((terrain_entity, mut terrain, terrain_tf, mut dirty)) = terrain_query.get_mut(selected)
-    else {
-        sculpt_state.brush_position = None;
-        return;
-    };
+    let window = windows.single().ok()?;
+    let cursor_pos = window.cursor_position()?;
 
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return;
-    };
-
-    // Viewport cursor conversion
-    let Ok((vp_computed, vp_tf)) = viewport_query.single() else {
-        return;
-    };
+    let (vp_computed, vp_tf) = viewport_query.single().ok()?;
     let scale = vp_computed.inverse_scale_factor();
-    let vp_pos = vp_tf.translation * scale;
     let vp_size = vp_computed.size() * scale;
-    let vp_top_left = vp_pos - vp_size / 2.0;
+    let vp_top_left = vp_tf.translation * scale - vp_size / 2.0;
     let local_cursor = cursor_pos - vp_top_left;
     if local_cursor.x < 0.0
         || local_cursor.y < 0.0
         || local_cursor.x > vp_size.x
         || local_cursor.y > vp_size.y
     {
-        return;
+        return None;
     }
 
-    let Ok((camera, cam_tf)) = camera_query.single() else {
-        return;
-    };
+    let (camera, cam_tf) = camera_query.single().ok()?;
     let target_size = camera.logical_viewport_size().unwrap_or(vp_size);
     let local_cursor = local_cursor * target_size / vp_size;
-
-    // Raycast against the terrain's XZ plane to find hit position
-    let Ok(ray) = camera.viewport_to_world(cam_tf, local_cursor) else {
-        return;
-    };
+    let ray = camera.viewport_to_world(cam_tf, local_cursor).ok()?;
 
     let terrain_origin = terrain_tf.translation();
-    let plane_normal = Vec3::Y;
-    let denom = ray.direction.dot(plane_normal);
+    let denom = ray.direction.y;
+    if denom.abs() <= 1e-6 {
+        return None;
+    }
+    let t = (terrain_origin.y - ray.origin.y) / denom;
+    if t <= 0.0 {
+        return None;
+    }
+    let world_hit = ray.origin + ray.direction * t;
+    let local = world_hit - terrain_origin;
+    let half = terrain.size / 2.0;
+    if local.x.abs() > half.x || local.z.abs() > half.y {
+        return None;
+    }
 
-    // Use plane intersection at approximate terrain center height
-    let approx_y = terrain_origin.y;
-    let hit_pos = if denom.abs() > 1e-6 {
-        let t = (approx_y - ray.origin.y) / denom;
-        if t > 0.0 {
-            let point = ray.origin + ray.direction * t;
-            let local = point - terrain_origin;
-            let half = terrain.size / 2.0;
-            if local.x.abs() <= half.x && local.z.abs() <= half.y {
-                Some(point)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let Some(world_hit) = hit_pos else {
-        sculpt_state.brush_position = None;
-        return;
-    };
-
-    // Convert world hit to terrain-local, then to grid coords
-    let local_hit = world_hit - terrain_origin;
     let heightmap = jackdaw_terrain::Heightmap {
         resolution: terrain.resolution,
         size: terrain.size,
         max_height: terrain.max_height,
         heights: terrain.heights.clone(),
     };
-    let grid_pos = heightmap.world_to_grid(Vec2::new(local_hit.x, local_hit.z));
-    sculpt_state.brush_position = Some(grid_pos);
-    sculpt_state.target = Some(terrain_entity);
+    Some((
+        terrain_entity,
+        heightmap.world_to_grid(Vec2::new(local.x, local.z)),
+    ))
+}
 
-    // Start stroke
-    if mouse.just_pressed(MouseButton::Left) {
+/// Track the brush-target grid position so the overlay gizmo follows
+/// the cursor even when no stroke is in progress.
+fn update_terrain_brush_position(
+    edit_mode: Res<TerrainEditMode>,
+    windows: Query<&Window>,
+    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    terrain_query: Query<(Entity, &jackdaw_jsn::Terrain, &GlobalTransform)>,
+    selection: Res<Selection>,
+    mut sculpt_state: ResMut<TerrainSculptState>,
+) {
+    if !matches!(*edit_mode, TerrainEditMode::Sculpt(_)) {
+        if sculpt_state.brush_position.is_some() || sculpt_state.target.is_some() {
+            sculpt_state.brush_position = None;
+            sculpt_state.target = None;
+        }
+        return;
+    }
+    match terrain_brush_hit(
+        &windows,
+        &camera_query,
+        &viewport_query,
+        &terrain_query,
+        &selection,
+    ) {
+        Some((entity, grid)) => {
+            sculpt_state.target = Some(entity);
+            sculpt_state.brush_position = Some(grid);
+        }
+        None => sculpt_state.brush_position = None,
+    }
+}
+
+/// LMB in sculpt mode (with the brush over the terrain) dispatches
+/// `terrain.sculpt`. Mouse-button gestures aren't expressible as BEI
+/// key bindings.
+fn sculpt_invoke_trigger(
+    mouse: Res<ButtonInput<MouseButton>>,
+    edit_mode: Res<TerrainEditMode>,
+    sculpt_state: Res<TerrainSculptState>,
+    mut commands: Commands,
+) {
+    if sculpt_state.active
+        || !mouse.just_pressed(MouseButton::Left)
+        || !matches!(*edit_mode, TerrainEditMode::Sculpt(_))
+        || sculpt_state.brush_position.is_none()
+        || sculpt_state.target.is_none()
+    {
+        return;
+    }
+    commands.queue(|world: &mut World| {
+        let _ = world
+            .operator(TerrainSculptOp::ID)
+            .settings(CallOperatorSettings {
+                execution_context: ExecutionContext::Invoke,
+                creates_history_entry: false,
+            })
+            .call();
+    });
+}
+
+#[operator(
+    id = "terrain.sculpt",
+    label = "Sculpt Terrain",
+    description = "Apply the active sculpt tool while LMB is held. Modal: commits \
+                   the height delta as a single undo entry on release; Escape \
+                   restores the pre-stroke heights.",
+    modal = true,
+    allows_undo = false,
+    cancel = cancel_terrain_sculpt,
+)]
+pub(crate) fn terrain_sculpt(
+    _: In<OperatorParameters>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    edit_mode: Res<TerrainEditMode>,
+    brush_settings: Res<TerrainBrushSettings>,
+    mut sculpt_state: ResMut<TerrainSculptState>,
+    mut terrain_query: Query<(&mut jackdaw_jsn::Terrain, &mut TerrainDirtyChunks)>,
+    mut history: ResMut<CommandHistory>,
+    time: Res<Time>,
+    modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+) -> OperatorResult {
+    let TerrainEditMode::Sculpt(tool) = *edit_mode else {
+        return OperatorResult::Cancelled;
+    };
+    let Some(target) = sculpt_state.target else {
+        return OperatorResult::Cancelled;
+    };
+    let Ok((mut terrain, mut dirty)) = terrain_query.get_mut(target) else {
+        return OperatorResult::Cancelled;
+    };
+
+    if modal.is_none() {
         sculpt_state.active = true;
         sculpt_state.stroke_snapshot = terrain.heights.clone();
+    } else if mouse.just_released(MouseButton::Left) {
+        sculpt_state.active = false;
+        history.push_executed(Box::new(SetTerrainHeights {
+            entity: target,
+            old_heights: std::mem::take(&mut sculpt_state.stroke_snapshot),
+            new_heights: terrain.heights.clone(),
+            label: format!("Terrain {tool:?}"),
+        }));
+        return OperatorResult::Finished;
     }
 
-    // Apply brush while held
-    if sculpt_state.active && mouse.pressed(MouseButton::Left) {
+    if let Some(grid_pos) = sculpt_state.brush_position {
         let mut hm = jackdaw_terrain::Heightmap {
             resolution: terrain.resolution,
             size: terrain.size,
             max_height: terrain.max_height,
             heights: terrain.heights.clone(),
         };
-
         jackdaw_terrain::apply_brush(
             &mut hm,
             tool,
@@ -208,28 +262,30 @@ fn terrain_sculpt_interaction(
             time.delta_secs(),
             None,
         );
-
         let affected =
             jackdaw_terrain::affected_chunks(&hm, grid_pos, brush_settings.radius, CHUNK_SIZE);
-
-        // Write heights back
         terrain.heights = hm.heights;
         for chunk in affected {
             dirty.dirty.insert(chunk);
         }
     }
+    OperatorResult::Running
+}
 
-    // End stroke -- push undo command
-    if mouse.just_released(MouseButton::Left) && sculpt_state.active {
-        sculpt_state.active = false;
-
-        let cmd = SetTerrainHeights {
-            entity: terrain_entity,
-            old_heights: std::mem::take(&mut sculpt_state.stroke_snapshot),
-            new_heights: terrain.heights.clone(),
-            label: format!("Terrain {:?}", tool),
-        };
-        history.push_executed(Box::new(cmd));
+fn cancel_terrain_sculpt(
+    mut sculpt_state: ResMut<TerrainSculptState>,
+    mut terrain_query: Query<(&mut jackdaw_jsn::Terrain, &mut TerrainDirtyChunks)>,
+) {
+    if !sculpt_state.active {
+        return;
+    }
+    sculpt_state.active = false;
+    let snapshot = std::mem::take(&mut sculpt_state.stroke_snapshot);
+    if let Some(target) = sculpt_state.target
+        && let Ok((mut terrain, mut dirty)) = terrain_query.get_mut(target)
+    {
+        terrain.heights = snapshot;
+        dirty.rebuild_all = true;
     }
 }
 
@@ -254,9 +310,9 @@ fn handle_brush_resize_scroll(
             MouseScrollUnit::Pixel => event.y * 0.01,
         };
         if delta > 0.0 {
-            brush_settings.radius = (brush_settings.radius * 1.15).min(50.0);
+            brush_settings.radius = f32::min(brush_settings.radius * 1.15, 50.0);
         } else if delta < 0.0 {
-            brush_settings.radius = (brush_settings.radius * 0.87).max(1.0);
+            brush_settings.radius = f32::max(brush_settings.radius * 0.87, 1.0);
         }
     }
 }

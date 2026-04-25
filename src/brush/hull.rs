@@ -103,7 +103,7 @@ fn compute_face_uv_metrics(
 /// Attempts to match new faces to old faces for material/UV preservation.
 /// Implements texture lock: preserves UV axes from old faces and adjusts
 /// scale/offset to maintain consistent texel density.
-pub(super) fn rebuild_brush_from_vertices(
+pub(crate) fn rebuild_brush_from_vertices(
     old_brush: &Brush,
     old_vertices: &[Vec3],
     old_face_polygons: &[Vec<usize>],

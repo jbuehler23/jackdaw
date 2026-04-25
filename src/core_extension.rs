@@ -92,6 +92,11 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::physics_tool::add_to_extension(ctx);
         crate::hierarchy::add_to_extension(ctx);
         crate::viewport_select::add_to_extension(ctx);
+        crate::clip_ops::add_to_extension(ctx);
+        crate::brush_element_ops::add_to_extension(ctx);
+        crate::brush_drag_ops::add_to_extension(ctx);
+        crate::gizmos::add_to_extension(ctx);
+        crate::terrain::sculpt::add_to_extension(ctx);
     }
 
     fn register_input_context(&self, app: &mut App) {
