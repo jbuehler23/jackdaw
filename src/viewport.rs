@@ -7,11 +7,14 @@ use bevy::{
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
     ui::{UiGlobalTransform, widget::ViewportNode},
 };
+use bevy_enhanced_input::prelude::{Press, *};
 use bevy_infinite_grid::{InfiniteGridBundle, InfiniteGridPlugin};
+use jackdaw_api::prelude::*;
 use jackdaw_camera::{JackdawCameraPlugin, JackdawCameraSettings};
 
 use bevy::ecs::system::SystemParam;
 
+use crate::core_extension::CoreExtensionInputContext;
 use crate::selection::{Selected, Selection};
 use jackdaw_widgets::file_browser::FileBrowserItem;
 
@@ -69,7 +72,8 @@ impl Plugin for ViewportPlugin {
             )
             .add_systems(
                 Update,
-                (update_camera_enabled, handle_camera_keys).in_set(crate::EditorInteractionSystems),
+                (update_camera_enabled, camera_bookmark_keys)
+                    .in_set(crate::EditorInteractionSystems),
             )
             .add_systems(
                 Update,
@@ -331,78 +335,152 @@ pub struct CameraBookmark {
     pub transform: Transform,
 }
 
-fn handle_camera_keys(
+/// Watch for save/load camera bookmark keypresses and dispatch the
+/// corresponding op with a `slot` param. BEI bindings can't carry
+/// payloads, so the slot index lives in a sidecar trigger system.
+fn camera_bookmark_keys(
     keyboard: Res<ButtonInput<KeyCode>>,
-    keybinds: Res<crate::keybinds::KeybindRegistry>,
-    selection: Res<Selection>,
-    selected_transforms: Query<&GlobalTransform, With<Selected>>,
-    mut camera_query: Query<&mut Transform, With<JackdawCameraSettings>>,
-    mut bookmarks: ResMut<CameraBookmarks>,
-    modal: Res<crate::modal_transform::ModalTransformState>,
     edit_mode: Res<crate::brush::EditMode>,
+    selection: Res<Selection>,
+    brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    modal: Res<crate::modal_transform::ModalTransformState>,
+    mut commands: Commands,
 ) {
-    use crate::keybinds::EditorAction;
-
     if modal.active.is_some() {
         return;
     }
-
-    if keybinds.just_pressed(EditorAction::FocusSelected, &keyboard)
-        && let Some(primary) = selection.primary()
-        && let Ok(global_tf) = selected_transforms.get(primary)
-    {
-        let target = global_tf.translation();
-        let scale = global_tf.compute_transform().scale;
-        let dist = (scale.length() * 3.0).max(5.0);
-
-        for mut transform in &mut camera_query {
-            let forward = transform.forward().as_vec3();
-            transform.translation = target - forward * dist;
-            *transform = transform.looking_at(target, Vec3::Y);
-        }
-    }
-
-    // Camera bookmarks
-    let save_actions = [
-        (EditorAction::SaveBookmark1, 0),
-        (EditorAction::SaveBookmark2, 1),
-        (EditorAction::SaveBookmark3, 2),
-        (EditorAction::SaveBookmark4, 3),
-        (EditorAction::SaveBookmark5, 4),
-        (EditorAction::SaveBookmark6, 5),
-        (EditorAction::SaveBookmark7, 6),
-        (EditorAction::SaveBookmark8, 7),
-        (EditorAction::SaveBookmark9, 8),
+    let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let in_object_mode = *edit_mode == crate::brush::EditMode::Object;
+    // Don't shadow edit-mode digit shortcuts when a brush is selected
+    // and we're in Object mode (Digit1-4 there switches to Vertex /
+    // Edge / Face / Clip).
+    let conflicts_with_edit_mode_digits =
+        in_object_mode && selection.primary().is_some_and(|e| brushes.contains(e));
+    let digits = [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
     ];
-    let load_actions = [
-        (EditorAction::LoadBookmark1, 0),
-        (EditorAction::LoadBookmark2, 1),
-        (EditorAction::LoadBookmark3, 2),
-        (EditorAction::LoadBookmark4, 3),
-        (EditorAction::LoadBookmark5, 4),
-        (EditorAction::LoadBookmark6, 5),
-        (EditorAction::LoadBookmark7, 6),
-        (EditorAction::LoadBookmark8, 7),
-        (EditorAction::LoadBookmark9, 8),
-    ];
+    for (slot, key) in digits.iter().enumerate() {
+        if !keyboard.just_pressed(*key) {
+            continue;
+        }
+        if ctrl {
+            commands
+                .operator(ViewportBookmarkSaveOp::ID)
+                .param("slot", slot as i64)
+                .call();
+        } else if in_object_mode && !conflicts_with_edit_mode_digits {
+            commands
+                .operator(ViewportBookmarkLoadOp::ID)
+                .param("slot", slot as i64)
+                .call();
+        }
+    }
+}
 
-    for (action, index) in save_actions {
-        if keybinds.just_pressed(action, &keyboard) {
-            for transform in &camera_query {
-                bookmarks.slots[index] = Some(CameraBookmark {
-                    transform: *transform,
-                });
-            }
-        }
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<ViewportFocusSelectedOp>()
+        .register_operator::<ViewportBookmarkSaveOp>()
+        .register_operator::<ViewportBookmarkLoadOp>();
+
+    let ext = ctx.id();
+    ctx.entity_mut().world_scope(|world| {
+        world.spawn((
+            Action::<ViewportFocusSelectedOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            bindings![(KeyCode::KeyF, Press::default())],
+        ));
+    });
+}
+
+#[operator(
+    id = "viewport.focus_selected",
+    label = "Focus Selected",
+    description = "Frame the editor camera on the primary selection at a distance scaled by the entity's bounding scale.",
+    allows_undo = false
+)]
+pub(crate) fn viewport_focus_selected(
+    _: In<OperatorParameters>,
+    selection: Res<Selection>,
+    selected_transforms: Query<&GlobalTransform, With<Selected>>,
+    mut camera_query: Query<&mut Transform, With<JackdawCameraSettings>>,
+) -> OperatorResult {
+    let Some(primary) = selection.primary() else {
+        return OperatorResult::Cancelled;
+    };
+    let Ok(global_tf) = selected_transforms.get(primary) else {
+        return OperatorResult::Cancelled;
+    };
+    let target = global_tf.translation();
+    let scale = global_tf.compute_transform().scale;
+    let dist = f32::max(scale.length() * 3.0, 5.0);
+    for mut transform in &mut camera_query {
+        let forward = transform.forward().as_vec3();
+        transform.translation = target - forward * dist;
+        *transform = transform.looking_at(target, Vec3::Y);
     }
-    for (action, index) in load_actions {
-        if keybinds.just_pressed(action, &keyboard)
-            && *edit_mode == crate::brush::EditMode::Object
-            && let Some(bookmark) = bookmarks.slots[index]
-        {
-            for mut transform in &mut camera_query {
-                *transform = bookmark.transform;
-            }
+    OperatorResult::Finished
+}
+
+fn slot_param(params: &OperatorParameters) -> Option<usize> {
+    match params.get("slot")? {
+        jackdaw_jsn::PropertyValue::Int(i) => {
+            let v = *i;
+            (0..9).contains(&v).then_some(v as usize)
         }
+        _ => None,
     }
+}
+
+#[operator(
+    id = "viewport.bookmark.save",
+    label = "Save Camera Bookmark",
+    description = "Save the current camera transform into `CameraBookmarks.slots[slot]` (0-8).",
+    allows_undo = false
+)]
+pub(crate) fn viewport_bookmark_save(
+    params: In<OperatorParameters>,
+    camera_query: Query<&Transform, With<JackdawCameraSettings>>,
+    mut bookmarks: ResMut<CameraBookmarks>,
+) -> OperatorResult {
+    let Some(slot) = slot_param(&params) else {
+        return OperatorResult::Cancelled;
+    };
+    let Ok(transform) = camera_query.single() else {
+        return OperatorResult::Cancelled;
+    };
+    bookmarks.slots[slot] = Some(CameraBookmark {
+        transform: *transform,
+    });
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "viewport.bookmark.load",
+    label = "Load Camera Bookmark",
+    description = "Apply `CameraBookmarks.slots[slot]` (0-8) to the editor camera. No-op if the slot is empty.",
+    allows_undo = false
+)]
+pub(crate) fn viewport_bookmark_load(
+    params: In<OperatorParameters>,
+    bookmarks: Res<CameraBookmarks>,
+    mut camera_query: Query<&mut Transform, With<JackdawCameraSettings>>,
+) -> OperatorResult {
+    let Some(slot) = slot_param(&params) else {
+        return OperatorResult::Cancelled;
+    };
+    let Some(bookmark) = bookmarks.slots[slot] else {
+        return OperatorResult::Cancelled;
+    };
+    for mut transform in &mut camera_query {
+        *transform = bookmark.transform;
+    }
+    OperatorResult::Finished
 }

@@ -120,6 +120,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::asset_browser::add_to_extension(ctx);
         crate::material_browser::add_to_extension(ctx);
         crate::inspector::ops::add_to_extension(ctx);
+        crate::viewport::add_to_extension(ctx);
     }
 
     fn register_input_context(&self, app: &mut App) {
