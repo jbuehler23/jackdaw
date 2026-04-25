@@ -14,12 +14,12 @@ use bevy_rerecast::editor_integration::{
     },
     transmission::deserialize,
 };
+use jackdaw_api::prelude::*;
 
 use super::{NavmeshHandleRes, NavmeshObstacles, NavmeshState, NavmeshStatus};
 use crate::EditorEntity;
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_observer(on_get_navmesh_input);
     app.add_systems(
         Update,
         (
@@ -30,9 +30,6 @@ pub(super) fn plugin(app: &mut App) {
             .run_if(in_state(crate::AppState::Editor)),
     );
 }
-
-#[derive(Event)]
-pub struct GetNavmeshInput;
 
 #[derive(Resource)]
 enum GetNavmeshInputRequestTask {
@@ -51,19 +48,26 @@ pub struct SceneVisualMesh;
 #[derive(Component)]
 pub struct ObstacleGizmo;
 
-fn on_get_navmesh_input(
-    _: On<GetNavmeshInput>,
+/// Fetch the latest scene mesh from the connected game so the navmesh
+/// can be rebuilt from it.
+#[operator(
+    id = "navmesh.fetch",
+    label = "Fetch Scene",
+    description = "Fetch the latest scene mesh from the connected game."
+)]
+pub(crate) fn navmesh_fetch(
+    _: In<OperatorParameters>,
     mut commands: Commands,
     regions: Query<&jackdaw_jsn::NavmeshRegion>,
     maybe_task: Option<Res<GetNavmeshInputRequestTask>>,
     mut state: ResMut<NavmeshState>,
-) {
+) -> OperatorResult {
     if maybe_task.is_some() {
-        return;
+        return OperatorResult::Cancelled;
     }
     let Some(region) = regions.iter().next() else {
         warn!("No NavmeshRegion entity found");
-        return;
+        return OperatorResult::Cancelled;
     };
 
     let url = region.connection_url.clone();
@@ -106,6 +110,7 @@ fn on_get_navmesh_input(
 
     let task = IoTaskPool::get().spawn(future);
     commands.insert_resource(GetNavmeshInputRequestTask::Generate { task, url });
+    OperatorResult::Finished
 }
 
 fn poll_remote_navmesh_input(

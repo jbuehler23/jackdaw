@@ -1,31 +1,31 @@
 use bevy::prelude::*;
 use bevy_rerecast::prelude::*;
+use jackdaw_api::prelude::*;
 
 use super::{NavmeshHandleRes, NavmeshState, NavmeshStatus};
 
-pub(super) fn plugin(app: &mut App) {
-    app.add_observer(on_build_navmesh);
-}
-
-#[derive(Event)]
-pub struct BuildNavmesh;
-
-fn on_build_navmesh(
-    _trigger: On<BuildNavmesh>,
+/// Bake a navmesh for the current scene.
+#[operator(
+    id = "navmesh.build",
+    label = "Build",
+    description = "Bake a navmesh for the current scene."
+)]
+pub(crate) fn navmesh_build(
+    _: In<OperatorParameters>,
     mut commands: Commands,
     regions: Query<&jackdaw_jsn::NavmeshRegion>,
     mut navmesh_generator: NavmeshGenerator,
     mut state: ResMut<NavmeshState>,
-) {
+) -> OperatorResult {
     let Some(region) = regions.iter().next() else {
         warn!("No NavmeshRegion entity found");
-        return;
+        return OperatorResult::Cancelled;
     };
-
     let settings = region_to_settings_without_transform(region);
     let handle = navmesh_generator.generate(settings);
     commands.insert_resource(NavmeshHandleRes(handle));
     state.status = NavmeshStatus::Building;
+    OperatorResult::Finished
 }
 
 /// Convert region settings without AABB (for BRP fetch, the remote app determines bounds).

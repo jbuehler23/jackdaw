@@ -61,7 +61,6 @@ impl Plugin for MaterialBrowserPlugin {
             .add_observer(handle_apply_material)
             .add_observer(handle_select_material_preview)
             .add_observer(on_material_param_commit)
-            .add_observer(handle_create_new_material)
             .add_observer(handle_browse_texture_slot)
             .add_observer(handle_clear_texture_slot);
     }
@@ -226,9 +225,6 @@ impl TextureSlot {
         }
     }
 }
-
-#[derive(Event)]
-struct CreateNewMaterial;
 
 #[derive(Event)]
 struct BrowseTextureSlot {
@@ -1223,34 +1219,6 @@ fn poll_material_browser_folder(world: &mut World) {
     }
 }
 
-fn handle_create_new_material(
-    _: On<CreateNewMaterial>,
-    mut registry: ResMut<MaterialRegistry>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut catalog: ResMut<crate::asset_catalog::AssetCatalog>,
-    mut preview_state: ResMut<MaterialPreviewState>,
-) {
-    // Generate a unique name
-    let mut idx = 1u32;
-    let name = loop {
-        let candidate = format!("Material_{idx}");
-        if registry.get_by_name(&candidate).is_none() {
-            break candidate;
-        }
-        idx += 1;
-    };
-
-    let handle = materials.add(StandardMaterial::default());
-    let catalog_name = format!("@{name}");
-    catalog.insert(catalog_name, handle.clone().untyped());
-    catalog.dirty = true;
-    registry.add(name, handle.clone());
-    preview_state.active_material = Some(handle);
-    preview_state.orbit_yaw = 0.5;
-    preview_state.orbit_pitch = -0.3;
-    preview_state.zoom_distance = 3.0;
-}
-
 fn handle_browse_texture_slot(
     event: On<BrowseTextureSlot>,
     mut commands: Commands,
@@ -1705,8 +1673,31 @@ fn pending_texture_slot_set(pending: Res<PendingTextureSlot>) -> bool {
     label = "New Material",
     description = "Create a fresh empty material."
 )]
-pub(crate) fn material_create(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.trigger(CreateNewMaterial);
+pub(crate) fn material_create(
+    _: In<OperatorParameters>,
+    mut registry: ResMut<MaterialRegistry>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut catalog: ResMut<crate::asset_catalog::AssetCatalog>,
+    mut preview_state: ResMut<MaterialPreviewState>,
+) -> OperatorResult {
+    let mut idx = 1u32;
+    let name = loop {
+        let candidate = format!("Material_{idx}");
+        if registry.get_by_name(&candidate).is_none() {
+            break candidate;
+        }
+        idx += 1;
+    };
+
+    let handle = materials.add(StandardMaterial::default());
+    let catalog_name = format!("@{name}");
+    catalog.insert(catalog_name, handle.clone().untyped());
+    catalog.dirty = true;
+    registry.add(name, handle.clone());
+    preview_state.active_material = Some(handle);
+    preview_state.orbit_yaw = 0.5;
+    preview_state.orbit_pitch = -0.3;
+    preview_state.zoom_distance = 3.0;
     OperatorResult::Finished
 }
 

@@ -6,6 +6,7 @@ use bevy::{
     window::{PrimaryWindow, RawHandleWrapper},
 };
 use bevy_rerecast::Navmesh;
+use jackdaw_api::prelude::*;
 use rfd::{AsyncFileDialog, FileHandle};
 
 use super::{NavmeshHandleRes, NavmeshState, NavmeshStatus};
@@ -13,8 +14,6 @@ use super::{NavmeshHandleRes, NavmeshState, NavmeshStatus};
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<WriteTasks>()
         .init_resource::<ReadTasks>();
-    app.add_observer(on_save_navmesh);
-    app.add_observer(on_load_navmesh);
     app.add_systems(
         Update,
         (
@@ -26,14 +25,6 @@ pub(super) fn plugin(app: &mut App) {
             .run_if(in_state(crate::AppState::Editor)),
     );
 }
-
-// -- Events --
-
-#[derive(Event)]
-pub struct SaveNavmesh;
-
-#[derive(Event)]
-pub struct LoadNavmesh;
 
 // -- Save --
 
@@ -70,23 +61,32 @@ impl From<bincode::error::EncodeError> for SaveError {
     }
 }
 
-fn on_save_navmesh(
-    _: On<SaveNavmesh>,
+/// Save the baked navmesh to disk.
+#[operator(
+    id = "navmesh.save",
+    label = "Save",
+    description = "Save the baked navmesh to disk."
+)]
+pub(crate) fn navmesh_save(
+    _: In<OperatorParameters>,
     mut commands: Commands,
     raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
-) {
+) -> OperatorResult {
     let mut dialog = AsyncFileDialog::new()
         .add_filter("Navmesh", &["nav"])
         .set_file_name("navmesh.nav");
 
     if let Ok(rh) = raw_handle.single() {
-        // SAFETY: called on the main thread during an observer
+        // SAFETY: the primary window is open, so its `RawHandleWrapper`
+        // points to a live OS handle. The returned wrapper is only used
+        // to parent the modal dialog within this scope.
         let handle = unsafe { rh.get_handle() };
         dialog = dialog.set_parent(&handle);
     }
 
     let task = AsyncComputeTaskPool::get().spawn(async move { dialog.save_file().await });
     commands.insert_resource(SaveTask(task));
+    OperatorResult::Finished
 }
 
 fn poll_save_task(
@@ -173,21 +173,30 @@ impl From<bincode::error::DecodeError> for LoadError {
     }
 }
 
-fn on_load_navmesh(
-    _: On<LoadNavmesh>,
+/// Load a navmesh from disk.
+#[operator(
+    id = "navmesh.load",
+    label = "Load",
+    description = "Load a navmesh from disk."
+)]
+pub(crate) fn navmesh_load(
+    _: In<OperatorParameters>,
     mut commands: Commands,
     raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
-) {
+) -> OperatorResult {
     let mut dialog = AsyncFileDialog::new().add_filter("Navmesh", &["nav"]);
 
     if let Ok(rh) = raw_handle.single() {
-        // SAFETY: called on the main thread during an observer
+        // SAFETY: the primary window is open, so its `RawHandleWrapper`
+        // points to a live OS handle. The returned wrapper is only used
+        // to parent the modal dialog within this scope.
         let handle = unsafe { rh.get_handle() };
         dialog = dialog.set_parent(&handle);
     }
 
     let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_file().await });
     commands.insert_resource(LoadTask(task));
+    OperatorResult::Finished
 }
 
 fn poll_load_task(

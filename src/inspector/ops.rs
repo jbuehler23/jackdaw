@@ -2,7 +2,7 @@
 //! and the small set of typed actions (`physics.enable` / `physics.disable`,
 //! `animation.toggle_keyframe`).
 
-use bevy::ecs::component::ComponentId;
+use bevy::ecs::component::{ComponentId, Components};
 use bevy::ecs::reflect::AppTypeRegistry;
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -10,6 +10,7 @@ use jackdaw_api::prelude::*;
 use super::component_display::revert_component_to_baseline;
 use super::physics_display::{DisablePhysics, enable_physics};
 use crate::commands::{AddComponent, CommandHistory, EditorCommand};
+use crate::selection::Selection;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ComponentAddOp>()
@@ -20,15 +21,23 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<AnimationToggleKeyframeOp>();
 }
 
+/// Inspector operators all act on the inspected entity (the primary
+/// selection). Buttons that dispatch them get greyed out when nothing
+/// is selected.
+fn has_primary_selection(selection: Res<Selection>) -> bool {
+    selection.primary().is_some()
+}
+
 /// Look up the component id and type id for a fully-qualified type path.
 fn component_id_for_path(
-    world: &World,
+    type_registry: &AppTypeRegistry,
+    components: &Components,
     type_path: &str,
 ) -> Option<(ComponentId, std::any::TypeId)> {
-    let registry = world.resource::<AppTypeRegistry>().read();
+    let registry = type_registry.read();
     let registration = registry.get_with_type_path(type_path)?;
     let type_id = registration.type_id();
-    let component_id = world.components().get_id(type_id)?;
+    let component_id = components.get_id(type_id)?;
     Some((component_id, type_id))
 }
 
@@ -46,7 +55,8 @@ fn component_id_for_path(
 #[operator(
     id = "component.add",
     label = "Add Component",
-    description = "Add a component to the selected entity."
+    description = "Add a component to the selected entity.",
+    is_available = has_primary_selection
 )]
 pub(crate) fn component_add(
     params: In<OperatorParameters>,
@@ -59,7 +69,10 @@ pub(crate) fn component_add(
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        let Some((component_id, type_id)) = component_id_for_path(world, &type_path) else {
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let Some((component_id, type_id)) =
+            component_id_for_path(&registry, world.components(), &type_path)
+        else {
             return;
         };
         let mut cmd: Box<dyn EditorCommand> =
@@ -82,7 +95,8 @@ pub(crate) fn component_add(
 #[operator(
     id = "component.remove",
     label = "Remove Component",
-    description = "Remove a component from the selected entity."
+    description = "Remove a component from the selected entity.",
+    is_available = has_primary_selection
 )]
 pub(crate) fn component_remove(
     params: In<OperatorParameters>,
@@ -95,7 +109,10 @@ pub(crate) fn component_remove(
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        let Some((component_id, _)) = component_id_for_path(world, &type_path) else {
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let Some((component_id, _)) =
+            component_id_for_path(&registry, world.components(), &type_path)
+        else {
             return;
         };
         if let Ok(mut ec) = world.get_entity_mut(entity) {
@@ -116,7 +133,8 @@ pub(crate) fn component_remove(
 #[operator(
     id = "component.revert_baseline",
     label = "Revert To Prefab",
-    description = "Restore the component to the value it had in the source prefab."
+    description = "Restore the component to the value it had in the source prefab.",
+    is_available = has_primary_selection
 )]
 pub(crate) fn component_revert_baseline(
     params: In<OperatorParameters>,
@@ -129,7 +147,10 @@ pub(crate) fn component_revert_baseline(
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        let Some((component_id, _)) = component_id_for_path(world, &type_path) else {
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let Some((component_id, _)) =
+            component_id_for_path(&registry, world.components(), &type_path)
+        else {
             return;
         };
         revert_component_to_baseline(world, entity, component_id);
@@ -146,7 +167,8 @@ pub(crate) fn component_revert_baseline(
 #[operator(
     id = "physics.enable",
     label = "Enable Physics",
-    description = "Make the selected entity participate in the physics simulation."
+    description = "Make the selected entity participate in the physics simulation.",
+    is_available = has_primary_selection
 )]
 pub(crate) fn physics_enable(
     params: In<OperatorParameters>,
@@ -172,7 +194,8 @@ pub(crate) fn physics_enable(
 #[operator(
     id = "physics.disable",
     label = "Disable Physics",
-    description = "Stop the selected entity from participating in the physics simulation."
+    description = "Stop the selected entity from participating in the physics simulation.",
+    is_available = has_primary_selection
 )]
 pub(crate) fn physics_disable(
     params: In<OperatorParameters>,
@@ -206,7 +229,8 @@ pub(crate) fn physics_disable(
 #[operator(
     id = "animation.toggle_keyframe",
     label = "Toggle Keyframe",
-    description = "Add or replace a keyframe for this property at the current timeline cursor."
+    description = "Add or replace a keyframe for this property at the current timeline cursor.",
+    is_available = has_primary_selection
 )]
 pub(crate) fn animation_toggle_keyframe(
     params: In<OperatorParameters>,

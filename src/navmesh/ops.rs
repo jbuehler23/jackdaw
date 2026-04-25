@@ -1,11 +1,15 @@
 //! Operators for the navmesh contextual toolbar.
+//!
+//! Toggle ops live here; the action ops (fetch, build, save, load) are
+//! defined alongside their state in [`super::brp_client`],
+//! [`super::build`], and [`super::save_load`].
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 
-use super::brp_client::GetNavmeshInput;
-use super::build::BuildNavmesh;
-use super::save_load::{LoadNavmesh, SaveNavmesh};
+use super::brp_client::NavmeshFetchOp;
+use super::build::NavmeshBuildOp;
+use super::save_load::{NavmeshLoadOp, NavmeshSaveOp};
 use super::visualization::NavmeshVizConfig;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -17,51 +21,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<NavmeshToggleObstaclesOp>()
         .register_operator::<NavmeshToggleDetailOp>()
         .register_operator::<NavmeshTogglePolyOp>();
-}
-
-/// Fetch the latest scene mesh from the connected game so the navmesh
-/// can be rebuilt from it.
-#[operator(
-    id = "navmesh.fetch",
-    label = "Fetch Scene",
-    description = "Fetch the latest scene mesh from the connected game."
-)]
-pub(crate) fn navmesh_fetch(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.trigger(GetNavmeshInput);
-    OperatorResult::Finished
-}
-
-/// Bake a navmesh for the current scene.
-#[operator(
-    id = "navmesh.build",
-    label = "Build",
-    description = "Bake a navmesh for the current scene."
-)]
-pub(crate) fn navmesh_build(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.trigger(BuildNavmesh);
-    OperatorResult::Finished
-}
-
-/// Save the baked navmesh to disk.
-#[operator(
-    id = "navmesh.save",
-    label = "Save",
-    description = "Save the baked navmesh to disk."
-)]
-pub(crate) fn navmesh_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.trigger(SaveNavmesh);
-    OperatorResult::Finished
-}
-
-/// Load a navmesh from disk.
-#[operator(
-    id = "navmesh.load",
-    label = "Load",
-    description = "Load a navmesh from disk."
-)]
-pub(crate) fn navmesh_load(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.trigger(LoadNavmesh);
-    OperatorResult::Finished
 }
 
 /// Show or hide the navmesh visual mesh.

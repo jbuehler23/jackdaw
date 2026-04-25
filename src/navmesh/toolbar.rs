@@ -5,11 +5,14 @@ use jackdaw_feathers::{
     separator, tokens,
 };
 
+use super::brp_client::NavmeshFetchOp;
+use super::build::NavmeshBuildOp;
 use super::ops::{
-    NavmeshBuildOp, NavmeshFetchOp, NavmeshLoadOp, NavmeshSaveOp, NavmeshToggleDetailOp,
-    NavmeshToggleObstaclesOp, NavmeshTogglePolyOp, NavmeshToggleVisualOp,
+    NavmeshToggleDetailOp, NavmeshToggleObstaclesOp, NavmeshTogglePolyOp, NavmeshToggleVisualOp,
 };
+use super::save_load::{NavmeshLoadOp, NavmeshSaveOp};
 use super::visualization::NavmeshVizConfig;
+use crate::core_extension::ButtonPropsOpExt as _;
 use crate::{EditorEntity, selection::Selection};
 
 pub(super) fn plugin(app: &mut App) {
@@ -61,25 +64,11 @@ pub fn navmesh_toolbar() -> impl Bundle {
                 TextColor(tokens::TEXT_SECONDARY),
             ),
             button::button(
-                ButtonProps::new("Fetch Scene")
-                    .with_variant(ButtonVariant::Primary)
-                    .call_operator(NavmeshFetchOp::ID),
+                ButtonProps::from_operator::<NavmeshFetchOp>().with_variant(ButtonVariant::Primary),
             ),
-            button::button(
-                ButtonProps::new("Build")
-                    .with_variant(ButtonVariant::Default)
-                    .call_operator(NavmeshBuildOp::ID),
-            ),
-            button::button(
-                ButtonProps::new("Save")
-                    .with_variant(ButtonVariant::Default)
-                    .call_operator(NavmeshSaveOp::ID),
-            ),
-            button::button(
-                ButtonProps::new("Load")
-                    .with_variant(ButtonVariant::Default)
-                    .call_operator(NavmeshLoadOp::ID),
-            ),
+            button::button(ButtonProps::from_operator::<NavmeshBuildOp>()),
+            button::button(ButtonProps::from_operator::<NavmeshSaveOp>()),
+            button::button(ButtonProps::from_operator::<NavmeshLoadOp>()),
             // Separator before viz toggles
             separator::separator(separator::SeparatorProps::vertical()),
             // Visualization toggle buttons
