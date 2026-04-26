@@ -749,18 +749,6 @@ pub(crate) fn spawn_component_display(
         ));
     }
 
-    // Ellipsis menu icon
-    commands.spawn((
-        Text::new(String::from(Icon::Ellipsis.unicode())),
-        TextFont {
-            font: font.clone(),
-            font_size: tokens::FONT_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(header),
-    ));
-
     // Hover effect on header
     commands.entity(header).observe(
         |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor, With<CollapsibleHeader>>| {

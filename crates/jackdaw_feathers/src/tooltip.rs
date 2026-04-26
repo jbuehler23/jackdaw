@@ -1,10 +1,9 @@
 //! Generic hover-tooltip primitive.
 //!
 //! Any UI entity that carries a [`Tooltip`] component plus
-//! [`Hovered`](bevy::picking::hover::Hovered) gets a Blender-style
-//! popover after a short delay: bold title, optional wrapped
-//! description, optional dim footer (operator signature, type path,
-//! etc.).
+//! [`bevy::picking::hover::Hovered`] gets a Blender-style popover
+//! after a short delay: bold title, optional wrapped description,
+//! optional dim footer (operator signature, type path, etc.).
 //!
 //! This module owns nothing about *where* the tooltip data comes
 //! from. Domain bridges in the editor crate (operator buttons,
@@ -40,7 +39,8 @@ const TOOLTIP_MAX_WIDTH: f32 = 360.0;
 const TOOLTIP_PADDING: f32 = 10.0;
 
 /// Hover-tooltip data. Attach to any entity that also carries
-/// [`Hovered`] to make it surface a popover after [`HOVER_DELAY`].
+/// [`Hovered`] to make it surface a popover after a short hover
+/// delay (300 ms).
 ///
 /// All three fields are plain strings; empty strings render no line
 /// (so a title-only tooltip skips the description and footer

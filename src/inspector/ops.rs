@@ -18,7 +18,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ComponentRevertBaselineOp>()
         .register_operator::<PhysicsEnableOp>()
         .register_operator::<PhysicsDisableOp>()
-        .register_operator::<AnimationToggleKeyframeOp>();
+        .register_operator::<AnimationToggleKeyframeOp>()
+        .register_operator::<super::brush_display::BrushFaceClearMaterialOp>()
+        .register_operator::<super::brush_display::BrushFaceApplyTextureToAllOp>()
+        .register_operator::<super::brush_display::BrushFaceSetUvScalePresetOp>()
+        .register_operator::<super::brush_display::BrushClearAllMaterialsOp>();
 }
 
 /// Inspector operators all act on the inspected entity (the primary

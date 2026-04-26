@@ -106,12 +106,6 @@ impl Plugin for AssetBrowserPlugin {
     }
 }
 
-// ── Events (absorbed from texture_browser) ──────────────────────────────────
-
-/// Clear texture from currently selected brush faces.
-#[derive(Event, Debug, Clone)]
-pub struct ClearTextureFromFaces;
-
 // ── Texture info ────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]

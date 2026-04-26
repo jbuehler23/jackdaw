@@ -28,7 +28,7 @@ pub struct ButtonClickEvent {
 ///
 /// Feathers carries the data as a plain component so widgets can
 /// declare their intent without depending on the operator API or the
-/// runtime [`OperatorParameters`](super::OperatorParameters) type.
+/// runtime `OperatorParameters` type.
 #[derive(Component, Clone, Debug)]
 pub struct ButtonOperatorCall {
     pub id: Cow<'static, str>,

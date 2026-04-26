@@ -60,7 +60,6 @@ pub mod selection;
 pub mod snapping;
 pub mod status_bar;
 pub mod terrain;
-pub mod texture_browser;
 pub mod transform_ops;
 pub mod undo_snapshot;
 pub mod view_modes;
@@ -2122,10 +2121,10 @@ fn separator() -> (String, String) {
 /// Dispatch `op:`-prefixed [`MenuAction`] events emitted by callers that
 /// don't go through feathers' button click path (e.g. the Add Entity
 /// picker). The feathers menu bar dispatches op-actions through
-/// [`ButtonOperatorCall`](jackdaw_feathers::button::ButtonOperatorCall)
-/// directly and does not fire `MenuAction` for those, so this handler
-/// only sees free-standing `op:` events. Always plain `op:OP_ID` form
-/// — parametrised dispatch goes through `ButtonOperatorCall.params`.
+/// [`jackdaw_feathers::button::ButtonOperatorCall`] directly and does
+/// not fire `MenuAction` for those, so this handler only sees
+/// free-standing `op:` events. Always plain `op:OP_ID` form —
+/// parametrised dispatch goes through `ButtonOperatorCall.params`.
 fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
     let Some(op_id) = event.action.strip_prefix(OP_PREFIX) else {
         return;
