@@ -235,6 +235,11 @@ fn spawn_install_row(commands: &mut Commands, list: Entity) {
                 .with_size(ButtonSize::MD)
                 .with_left_icon(Icon::FilePlus),
         ),
+        jackdaw_feathers::tooltip::Tooltip::title("Install Extension").with_description(
+            "Pick a prebuilt extension dylib (.so / .dll / .dylib) and copy \
+                 it into the user extensions directory. The extension loads on \
+                 the next editor restart.",
+        ),
     ));
 
     commands.spawn((

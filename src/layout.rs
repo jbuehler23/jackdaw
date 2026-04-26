@@ -999,6 +999,12 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
                     (
                         HierarchyShowAllButton,
                         Interaction::default(),
+                        Hovered::default(),
+                        jackdaw_feathers::tooltip::Tooltip::title("Show All Entities")
+                            .with_description(
+                                "Toggle visibility of editor-internal entities and \
+                                 hidden objects in the hierarchy.",
+                            ),
                         Node {
                             width: px(24.0),
                             height: px(24.0),

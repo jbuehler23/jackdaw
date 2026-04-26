@@ -8,9 +8,9 @@ use bevy::{
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureSampleType},
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
-    ui_widgets::observe,
     window::{PrimaryWindow, RawHandleWrapper},
 };
+use jackdaw_feathers::button::ButtonOperatorCall;
 use jackdaw_feathers::text_edit::TextEditValue;
 use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_feathers::{file_browser, icons, icons::IconFont, tokens};
@@ -1073,7 +1073,10 @@ fn update_preview_panel(
             ))
             .id();
 
-        // Previous button
+        // Previous button. `Hovered + ButtonOperatorCall` are
+        // tooltip data sources only — the click below dispatches the
+        // operator manually because this is a raw Node spawn (not a
+        // feathers `button()`), so it doesn't fire `ButtonClickEvent`.
         let prev_btn = commands
             .spawn((
                 Node {
@@ -1082,6 +1085,8 @@ fn update_preview_panel(
                     ..Default::default()
                 },
                 BackgroundColor(tokens::INPUT_BG),
+                Hovered::default(),
+                ButtonOperatorCall::new(AssetCycleArrayLayerOp::ID).with_param("direction", -1i64),
                 ChildOf(nav_row),
             ))
             .id();
@@ -1113,7 +1118,7 @@ fn update_preview_panel(
             ChildOf(nav_row),
         ));
 
-        // Next button
+        // Next button. See `prev_btn` above — same pattern.
         let next_btn = commands
             .spawn((
                 Node {
@@ -1122,6 +1127,8 @@ fn update_preview_panel(
                     ..Default::default()
                 },
                 BackgroundColor(tokens::INPUT_BG),
+                Hovered::default(),
+                ButtonOperatorCall::new(AssetCycleArrayLayerOp::ID).with_param("direction", 1i64),
                 ChildOf(nav_row),
             ))
             .id();
@@ -1144,7 +1151,8 @@ fn update_preview_panel(
             });
     }
 
-    // Apply button (only for 2D textures)
+    // Apply button (only for 2D textures). See `prev_btn` for the
+    // ButtonOperatorCall-as-tooltip-data pattern.
     if !info.is_cubemap && !info.is_array {
         let path_str = path.to_string_lossy().to_string();
         let apply_btn = commands
@@ -1157,6 +1165,9 @@ fn update_preview_panel(
                     ..Default::default()
                 },
                 BackgroundColor(tokens::INPUT_BG),
+                Hovered::default(),
+                ButtonOperatorCall::new("material.apply_texture")
+                    .with_param("path", path_str.clone()),
                 ChildOf(container),
             ))
             .id();
@@ -1376,20 +1387,12 @@ pub fn asset_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
 
 fn asset_folder_button(icon_font: Handle<Font>) -> impl Bundle {
     (
-        Node {
-            padding: UiRect::all(Val::Px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        icons::icon_colored(
-            icons::Icon::FolderOpen,
-            tokens::FONT_MD,
-            icon_font,
-            tokens::TEXT_SECONDARY,
+        jackdaw_feathers::button::icon_button(
+            jackdaw_feathers::button::IconButtonProps::new(icons::Icon::FolderOpen)
+                .variant(jackdaw_feathers::button::ButtonVariant::Ghost),
+            &icon_font,
         ),
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.operator(AssetSelectFolderOp::ID).call();
-        }),
+        ButtonOperatorCall::new(AssetSelectFolderOp::ID),
     )
 }
 

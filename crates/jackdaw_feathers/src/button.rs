@@ -576,7 +576,14 @@ fn handle_button_click(
 /// ButtonOperatorCall::new("my.op")))`. A setter isn't provided on
 /// [`IconButtonProps`] because `icon_button` has no staging/setup system;
 /// the tuple-form keeps the API small.
-pub fn icon_button(props: IconButtonProps, icon_font: &Handle<Font>) -> impl Bundle {
+///
+/// `+ use<>` on the return type opts out of Rust 2024's default
+/// `impl Trait` lifetime capture: the bundle clones `icon_font`
+/// internally (see `font: icon_font.clone()` in the body), so the
+/// returned `impl Bundle` carries no borrow of the input handle and
+/// can be returned through wrapper functions without leaking
+/// lifetimes.
+pub fn icon_button(props: IconButtonProps, icon_font: &Handle<Font>) -> impl Bundle + use<> {
     let IconButtonProps {
         icon,
         color,

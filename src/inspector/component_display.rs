@@ -16,6 +16,7 @@ use bevy::{
     reflect::serde::TypedReflectSerializer,
 };
 use jackdaw_feathers::{
+    button::ButtonOperatorCall,
     icons::{EditorFont, Icon, IconFont},
     tokens,
 };
@@ -690,9 +691,16 @@ pub(crate) fn spawn_component_display(
         let type_path_owned = type_path.to_string();
         let entity_bits = entity.to_bits() as i64;
 
-        // Revert button (only shown for overridden prefab components)
+        // Revert button (only shown for overridden prefab components).
+        // `Hovered + ButtonOperatorCall` are tooltip data sources for
+        // the rich operator popover; the click observer below handles
+        // dispatch because this is a raw `Text` spawn (not a feathers
+        // button, so it doesn't fire `ButtonClickEvent`).
         if is_overridden {
             let revert_type_path = type_path_owned.clone();
+            let bo_call = ButtonOperatorCall::new(super::ops::ComponentRevertBaselineOp::ID)
+                .with_param("entity", entity_bits)
+                .with_param("type_path", revert_type_path.clone());
             commands.spawn((
                 Text::new(String::from(Icon::RotateCcw.unicode())),
                 TextFont {
@@ -701,6 +709,8 @@ pub(crate) fn spawn_component_display(
                     ..Default::default()
                 },
                 TextColor(default_style::INSPECTOR_OVERRIDE),
+                Hovered::default(),
+                bo_call,
                 ChildOf(header),
                 bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                     commands
@@ -712,7 +722,12 @@ pub(crate) fn spawn_component_display(
             ));
         }
 
-        // Remove component button (X icon)
+        // Remove component button (X icon). See revert button for the
+        // tooltip-data + manual-dispatch pattern.
+        let remove_path = type_path_owned.clone();
+        let remove_call = ButtonOperatorCall::new(super::ops::ComponentRemoveOp::ID)
+            .with_param("entity", entity_bits)
+            .with_param("type_path", remove_path.clone());
         commands.spawn((
             Text::new(String::from(Icon::X.unicode())),
             TextFont {
@@ -721,6 +736,8 @@ pub(crate) fn spawn_component_display(
                 ..Default::default()
             },
             TextColor(tokens::TEXT_SECONDARY),
+            Hovered::default(),
+            remove_call,
             ChildOf(header),
             bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                 commands

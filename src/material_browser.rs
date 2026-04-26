@@ -7,10 +7,10 @@ use bevy::{
     picking::hover::Hovered,
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
-    ui_widgets::observe,
     window::{PrimaryWindow, RawHandleWrapper},
 };
 use jackdaw_feathers::{
+    button::{ButtonOperatorCall, ButtonVariant, IconButtonProps, icon_button},
     icons,
     text_edit::{self, TextEditCommitEvent, TextEditDragging, TextEditProps, TextEditValue},
     tokens,
@@ -1588,58 +1588,31 @@ pub fn material_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
 
 fn new_material_button(icon_font: Handle<Font>) -> impl Bundle {
     (
-        Node {
-            padding: UiRect::all(Val::Px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        icons::icon_colored(
-            icons::Icon::Plus,
-            tokens::FONT_MD,
-            icon_font,
-            tokens::TEXT_SECONDARY,
+        icon_button(
+            IconButtonProps::new(icons::Icon::Plus).variant(ButtonVariant::Ghost),
+            &icon_font,
         ),
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.operator(MaterialCreateOp::ID).call();
-        }),
+        ButtonOperatorCall::new(MaterialCreateOp::ID),
     )
 }
 
 fn material_folder_button(icon_font: Handle<Font>) -> impl Bundle {
     (
-        Node {
-            padding: UiRect::all(Val::Px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        icons::icon_colored(
-            icons::Icon::FolderOpen,
-            tokens::FONT_MD,
-            icon_font,
-            tokens::TEXT_SECONDARY,
+        icon_button(
+            IconButtonProps::new(icons::Icon::FolderOpen).variant(ButtonVariant::Ghost),
+            &icon_font,
         ),
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.operator(MaterialSelectFolderOp::ID).call();
-        }),
+        ButtonOperatorCall::new(MaterialSelectFolderOp::ID),
     )
 }
 
 fn rescan_button(icon_font: Handle<Font>) -> impl Bundle {
     (
-        Node {
-            padding: UiRect::all(Val::Px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        icons::icon_colored(
-            icons::Icon::RefreshCw,
-            tokens::FONT_MD,
-            icon_font,
-            tokens::TEXT_SECONDARY,
+        icon_button(
+            IconButtonProps::new(icons::Icon::RefreshCw).variant(ButtonVariant::Ghost),
+            &icon_font,
         ),
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.operator(MaterialRescanOp::ID).call();
-        }),
+        ButtonOperatorCall::new(MaterialRescanOp::ID),
     )
 }
 

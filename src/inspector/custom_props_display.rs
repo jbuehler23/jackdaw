@@ -2,9 +2,11 @@ use crate::commands::{CommandHistory, EditorCommand};
 use crate::custom_properties::{CustomProperties, PropertyValue, SetCustomProperties};
 
 use bevy::ecs::system::SystemState;
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::observe;
 use jackdaw_feathers::combobox::{ComboBoxSelectedIndex, combobox_with_selected};
+use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_feathers::{
     checkbox::{CheckboxCommitEvent, CheckboxProps, checkbox},
     color_picker::{ColorPickerCommitEvent, ColorPickerProps, color_picker},
@@ -241,6 +243,9 @@ pub(super) fn spawn_custom_properties_display(
                 ..Default::default()
             },
             TextColor(tokens::TEXT_SECONDARY),
+            Hovered::default(),
+            Tooltip::title("Remove Property")
+                .with_description("Delete this custom property from the entity."),
             ChildOf(row),
             observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                 let n = n.clone();
@@ -358,6 +363,9 @@ fn spawn_add_property_row(
             ..Default::default()
         },
         TextColor(tokens::TEXT_ACCENT),
+        Hovered::default(),
+        Tooltip::title("Add Custom Property")
+            .with_description("Create a new custom property with the entered name and type."),
         ChildOf(row),
         observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
             commands.run_system_cached_with(add_custom_property_from_ui, source_entity);
