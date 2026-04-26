@@ -4,6 +4,7 @@ use bevy::{
     ecs::system::SystemState, input_focus::InputFocus, prelude::*,
     ui::ui_transform::UiGlobalTransform,
 };
+use bevy_enhanced_input::prelude::{Press, *};
 use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
@@ -13,7 +14,7 @@ use jackdaw_feathers::{
     tokens,
     tree_view::{ROW_BG, TreeRowStyle, tree_row},
 };
-use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuCloseSystems, ContextMenuState};
+use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuState};
 use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeFocused, TreeIndex, TreeNode, TreeNodeExpanded,
     TreeRowChildren, TreeRowClicked, TreeRowContent, TreeRowDropped, TreeRowDroppedOnRoot,
@@ -72,7 +73,6 @@ impl Plugin for HierarchyPlugin {
                 (
                     apply_hierarchy_filter,
                     auto_focus_inline_rename,
-                    handle_hierarchy_right_click.after(ContextMenuCloseSystems),
                     populate_template_dialog,
                     toggle_show_all_button,
                     update_show_all_button_appearance,
@@ -785,9 +785,15 @@ fn on_tree_row_dropped_on_root(
     }
 }
 
-/// Detect right-click on tree rows and open a context menu.
-fn handle_hierarchy_right_click(
-    mouse: Res<ButtonInput<MouseButton>>,
+/// Open the hierarchy row context menu under the cursor (RMB).
+#[operator(
+    id = "hierarchy.open_context_menu",
+    label = "Open Context Menu",
+    description = "Show the context menu for the entity under the cursor.",
+    allows_undo = false
+)]
+pub(crate) fn hierarchy_open_context_menu(
+    _: In<OperatorParameters>,
     mut commands: Commands,
     mut state: ResMut<ContextMenuState>,
     windows: Query<&Window>,
@@ -796,16 +802,12 @@ fn handle_hierarchy_right_click(
     tree_nodes: Query<&TreeNode>,
     computed_nodes: Query<(&ComputedNode, &UiGlobalTransform), With<TreeRowContent>>,
     extension_add_entries: Query<&jackdaw_api_internal::lifecycle::RegisteredMenuEntry>,
-) {
-    if !mouse.just_pressed(MouseButton::Right) {
-        return;
-    }
-
+) -> OperatorResult {
     let Ok(window) = windows.single() else {
-        return;
+        return OperatorResult::Cancelled;
     };
     let Some(cursor_pos) = window.cursor_position() else {
-        return;
+        return OperatorResult::Cancelled;
     };
 
     // Close any existing context menu
@@ -835,7 +837,7 @@ fn handle_hierarchy_right_click(
     }
 
     let Some(target) = target_source else {
-        return;
+        return OperatorResult::Cancelled;
     };
 
     // If the right-clicked entity isn't selected, select it
@@ -907,6 +909,7 @@ fn handle_hierarchy_right_click(
     let menu = spawn_context_menu(&mut commands, cursor_pos, Some(target), &items);
     state.menu_entity = Some(menu);
     state.target_entity = Some(target);
+    OperatorResult::Finished
 }
 
 /// Handle context menu actions for hierarchy operations.
@@ -1079,7 +1082,14 @@ fn on_visibility_toggled(
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<RenameBeginOp>();
+    ctx.register_operator::<RenameBeginOp>()
+        .register_operator::<HierarchyOpenContextMenuOp>();
+    let ext = ctx.id();
+    ctx.spawn((
+        Action::<HierarchyOpenContextMenuOp>::new(),
+        ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
+        bindings![(MouseButton::Right, Press::default())],
+    ));
 }
 
 /// Marker for inline rename `text_edit` entity, linking back to the label entity and source entity.

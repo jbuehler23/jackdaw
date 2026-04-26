@@ -11,6 +11,7 @@ use bevy::{
     picking::prelude::Pickable,
     prelude::*,
 };
+use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::BrushGroup;
 
@@ -31,7 +32,6 @@ impl Plugin for ViewportSelectPlugin {
                     handle_viewport_click.after(handle_gizmo_hover),
                     box_select_invoke_trigger,
                     update_box_select_overlay,
-                    exit_group_on_escape,
                 )
                     .in_set(crate::EditorInteractionSystems),
             );
@@ -39,7 +39,34 @@ impl Plugin for ViewportSelectPlugin {
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<BoxSelectOp>();
+    ctx.register_operator::<BoxSelectOp>()
+        .register_operator::<ViewportExitGroupEditOp>();
+    let ext = ctx.id();
+    ctx.spawn((
+        Action::<ViewportExitGroupEditOp>::new(),
+        ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
+        bindings![(KeyCode::Escape, Press::default())],
+    ));
+}
+
+fn group_edit_active(group_edit: Res<GroupEditState>, input_focus: Res<InputFocus>) -> bool {
+    input_focus.0.is_none() && group_edit.active_group.is_some()
+}
+
+/// Exit `BrushGroup` edit mode (entered via double-click on a group).
+#[operator(
+    id = "viewport.exit_group_edit",
+    label = "Exit Group Edit",
+    description = "Stop editing the current brush group.",
+    is_available = group_edit_active,
+    allows_undo = false,
+)]
+pub(crate) fn viewport_exit_group_edit(
+    _: In<OperatorParameters>,
+    mut group_edit: ResMut<GroupEditState>,
+) -> OperatorResult {
+    group_edit.active_group = None;
+    OperatorResult::Finished
 }
 
 #[derive(Resource, Default)]
@@ -435,19 +462,5 @@ fn find_selectable_ancestor(
         } else {
             return None;
         }
-    }
-}
-
-/// Exit `BrushGroup` edit mode when Escape is pressed.
-fn exit_group_on_escape(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut group_edit: ResMut<GroupEditState>,
-    input_focus: Res<InputFocus>,
-) {
-    if keyboard.just_pressed(KeyCode::Escape)
-        && group_edit.active_group.is_some()
-        && input_focus.0.is_none()
-    {
-        group_edit.active_group = None;
     }
 }

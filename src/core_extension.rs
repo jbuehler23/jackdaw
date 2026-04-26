@@ -95,14 +95,63 @@ impl JackdawExtension for JackdawCoreExtension {
 
         ctx.register_operator::<CancelModalOp>();
         ctx.register_operator::<crate::asset_browser::ApplyTextureOp>();
-        ctx.register_operator::<crate::ClipDeleteKeyframesOp>();
+        ctx.register_operator::<crate::ClipDeleteKeyframesOp>()
+            .register_operator::<crate::ClipTimelineStepLeftOp>()
+            .register_operator::<crate::ClipTimelineStepRightOp>()
+            .register_operator::<crate::ClipTimelineJumpPrevOp>()
+            .register_operator::<crate::ClipTimelineJumpNextOp>()
+            .register_operator::<crate::ClipTimelineJumpStartOp>()
+            .register_operator::<crate::ClipTimelineJumpEndOp>()
+            .register_operator::<crate::ClipCopyKeyframesOp>()
+            .register_operator::<crate::ClipPasteKeyframesOp>();
+        let core_ext = ctx.id();
         ctx.spawn((
             Action::<crate::ClipDeleteKeyframesOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ctx.id()),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
             bindings![
                 (KeyCode::Delete, Press::default()),
                 (KeyCode::Backspace, Press::default()),
             ],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipTimelineStepLeftOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![KeyCode::ArrowLeft],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipTimelineStepRightOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![KeyCode::ArrowRight],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipTimelineJumpPrevOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![KeyCode::ArrowLeft.with_mod_keys(ModKeys::SHIFT)],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipTimelineJumpNextOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![KeyCode::ArrowRight.with_mod_keys(ModKeys::SHIFT)],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipTimelineJumpStartOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![KeyCode::Home],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipTimelineJumpEndOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![KeyCode::End],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipCopyKeyframesOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![KeyCode::KeyC.with_mod_keys(ModKeys::CONTROL)],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipPasteKeyframesOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![KeyCode::KeyV.with_mod_keys(ModKeys::CONTROL)],
         ));
         crate::draw_brush::add_to_extension(ctx);
 
@@ -130,6 +179,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::material_browser::add_to_extension(ctx);
         crate::inspector::ops::add_to_extension(ctx);
         crate::viewport::add_to_extension(ctx);
+        crate::prefab_picker::add_to_extension(ctx);
     }
 
     fn register_input_context(&self, app: &mut App) {

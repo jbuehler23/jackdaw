@@ -316,7 +316,6 @@ impl Plugin for EditorCorePlugin {
                     register_animation_entities_in_ast,
                     follow_scene_selection_to_clip,
                     sync_selected_keyframes_from_selection,
-                    handle_timeline_shortcuts,
                     auto_save_layout_on_change,
                     add_entity_picker::filter_add_entity_picker,
                     add_entity_picker::close_add_entity_picker_on_escape,
@@ -1126,6 +1125,415 @@ fn has_selected_keyframes(
     selection.entities.iter().any(|&e| keyframes.contains(e))
 }
 
+fn timeline_with_clip(
+    input_focus: Res<bevy::input_focus::InputFocus>,
+    active: ActiveModalQuery,
+    docks: Query<&jackdaw_panels::ActiveDockWindow>,
+    selected_clip: Res<jackdaw_animation::SelectedClip>,
+) -> bool {
+    if input_focus.0.is_some() || active.is_modal_running() {
+        return false;
+    }
+    if !docks
+        .iter()
+        .any(|d| d.0.as_deref() == Some("jackdaw.timeline"))
+    {
+        return false;
+    }
+    selected_clip.0.is_some()
+}
+
+fn timeline_paste_available(
+    input_focus: Res<bevy::input_focus::InputFocus>,
+    active: ActiveModalQuery,
+    docks: Query<&jackdaw_panels::ActiveDockWindow>,
+    selected_clip: Res<jackdaw_animation::SelectedClip>,
+    clipboard: Res<jackdaw_animation::KeyframeClipboard>,
+) -> bool {
+    if input_focus.0.is_some() || active.is_modal_running() {
+        return false;
+    }
+    if !docks
+        .iter()
+        .any(|d| d.0.as_deref() == Some("jackdaw.timeline"))
+    {
+        return false;
+    }
+    selected_clip.0.is_some() && !clipboard.entries.is_empty()
+}
+
+/// Step the playhead one ruler tick to the left.
+#[operator(
+    id = "clip.timeline.step_left",
+    label = "Step Left",
+    description = "Step the playhead one tick back.",
+    is_available = timeline_with_clip,
+    allows_undo = false,
+)]
+pub(crate) fn clip_timeline_step_left(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| step_timeline(world, -1));
+    OperatorResult::Finished
+}
+
+/// Step the playhead one ruler tick to the right.
+#[operator(
+    id = "clip.timeline.step_right",
+    label = "Step Right",
+    description = "Step the playhead one tick forward.",
+    is_available = timeline_with_clip,
+    allows_undo = false,
+)]
+pub(crate) fn clip_timeline_step_right(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| step_timeline(world, 1));
+    OperatorResult::Finished
+}
+
+/// Jump the playhead to the previous keyframe in the selected clip.
+#[operator(
+    id = "clip.timeline.jump_prev_keyframe",
+    label = "Jump To Previous Keyframe",
+    description = "Snap the playhead to the previous keyframe.",
+    is_available = timeline_with_clip,
+    allows_undo = false,
+)]
+pub(crate) fn clip_timeline_jump_prev(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| jump_to_keyframe(world, false));
+    OperatorResult::Finished
+}
+
+/// Jump the playhead to the next keyframe in the selected clip.
+#[operator(
+    id = "clip.timeline.jump_next_keyframe",
+    label = "Jump To Next Keyframe",
+    description = "Snap the playhead to the next keyframe.",
+    is_available = timeline_with_clip,
+    allows_undo = false,
+)]
+pub(crate) fn clip_timeline_jump_next(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| jump_to_keyframe(world, true));
+    OperatorResult::Finished
+}
+
+/// Move the playhead to the start of the selected clip.
+#[operator(
+    id = "clip.timeline.jump_start",
+    label = "Jump To Start",
+    description = "Move the playhead to the start of the clip.",
+    is_available = timeline_with_clip,
+    allows_undo = false,
+)]
+pub(crate) fn clip_timeline_jump_start(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        world.write_message(jackdaw_animation::AnimationSeek(0.0));
+    });
+    OperatorResult::Finished
+}
+
+/// Move the playhead to the end of the selected clip.
+#[operator(
+    id = "clip.timeline.jump_end",
+    label = "Jump To End",
+    description = "Move the playhead to the end of the clip.",
+    is_available = timeline_with_clip,
+    allows_undo = false,
+)]
+pub(crate) fn clip_timeline_jump_end(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        let Some(clip_entity) = world.resource::<jackdaw_animation::SelectedClip>().0 else {
+            return;
+        };
+        let Some(clip) = world.get::<jackdaw_animation::Clip>(clip_entity).copied() else {
+            return;
+        };
+        world.write_message(jackdaw_animation::AnimationSeek(clip.duration.max(0.01)));
+    });
+    OperatorResult::Finished
+}
+
+/// Copy the selected keyframes into the animation clipboard so they
+/// can be pasted at a different time.
+#[operator(
+    id = "clip.copy_keyframes",
+    label = "Copy Keyframes",
+    description = "Copy the selected keyframes to the clipboard.",
+    is_available = has_selected_keyframes,
+    allows_undo = false,
+)]
+pub(crate) fn clip_copy_keyframes(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(copy_selected_keyframes);
+    OperatorResult::Finished
+}
+
+/// Paste the clipboard keyframes onto the selected clip starting at
+/// the playhead.
+#[operator(
+    id = "clip.paste_keyframes",
+    label = "Paste Keyframes",
+    description = "Paste keyframes from the clipboard at the playhead.",
+    is_available = timeline_paste_available,
+)]
+pub(crate) fn clip_paste_keyframes(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(paste_clipboard_keyframes);
+    OperatorResult::Finished
+}
+
+fn step_timeline(world: &mut World, direction: i32) {
+    let Some(clip_entity) = world.resource::<jackdaw_animation::SelectedClip>().0 else {
+        return;
+    };
+    let Some(clip) = world.get::<jackdaw_animation::Clip>(clip_entity).copied() else {
+        return;
+    };
+    let duration = clip.duration.max(0.01);
+    let current_time = world
+        .resource::<jackdaw_animation::TimelineCursor>()
+        .seek_time;
+    let step = jackdaw_animation::pick_tick_step(duration);
+    let new_time = (current_time + direction as f32 * step).clamp(0.0, duration);
+    world.write_message(jackdaw_animation::AnimationSeek(new_time));
+}
+
+/// Gather every keyframe time on the clip, across all tracks and
+/// all typed keyframe components. Used by the shift+arrow "step to
+/// adjacent keyframe" path.
+fn collect_clip_keyframe_times(world: &World, clip_entity: Entity) -> Vec<f32> {
+    let mut times = Vec::new();
+    let Some(clip_children) = world.get::<Children>(clip_entity) else {
+        return times;
+    };
+    let track_entities: Vec<Entity> = clip_children.iter().collect();
+    for track in track_entities {
+        let Some(track_children) = world.get::<Children>(track) else {
+            continue;
+        };
+        for kf in track_children.iter() {
+            if let Some(k) = world.get::<jackdaw_animation::Vec3Keyframe>(kf) {
+                times.push(k.time);
+            } else if let Some(k) = world.get::<jackdaw_animation::QuatKeyframe>(kf) {
+                times.push(k.time);
+            } else if let Some(k) = world.get::<jackdaw_animation::F32Keyframe>(kf) {
+                times.push(k.time);
+            }
+        }
+    }
+    times
+}
+
+fn jump_to_keyframe(world: &mut World, forward: bool) {
+    let Some(clip_entity) = world.resource::<jackdaw_animation::SelectedClip>().0 else {
+        return;
+    };
+    let Some(clip) = world.get::<jackdaw_animation::Clip>(clip_entity).copied() else {
+        return;
+    };
+    let duration = clip.duration.max(0.01);
+    let current_time = world
+        .resource::<jackdaw_animation::TimelineCursor>()
+        .seek_time;
+    let times = collect_clip_keyframe_times(world, clip_entity);
+    let new_time = if forward {
+        times
+            .iter()
+            .copied()
+            .filter(|t| *t > current_time + 1e-4)
+            .fold(duration, f32::min)
+    } else {
+        times
+            .iter()
+            .copied()
+            .filter(|t| *t < current_time - 1e-4)
+            .fold(0.0_f32, f32::max)
+    };
+    world.write_message(jackdaw_animation::AnimationSeek(new_time));
+}
+
+fn copy_selected_keyframes(world: &mut World) {
+    let selected: Vec<Entity> = world.resource::<selection::Selection>().entities.clone();
+    if selected.is_empty() {
+        return;
+    }
+    let mut entries: Vec<(f32, jackdaw_animation::KeyframeClipboardEntry)> = Vec::new();
+    for &entity in &selected {
+        let Some(track_entity) = world.get::<ChildOf>(entity).map(ChildOf::parent) else {
+            continue;
+        };
+        let Some(track) = world.get::<jackdaw_animation::AnimationTrack>(track_entity) else {
+            continue;
+        };
+        let component_type_path = track.component_type_path.clone();
+        let field_path = track.field_path.clone();
+
+        if let Some(kf) = world.get::<jackdaw_animation::Vec3Keyframe>(entity) {
+            entries.push((
+                kf.time,
+                jackdaw_animation::KeyframeClipboardEntry {
+                    component_type_path,
+                    field_path,
+                    relative_time: kf.time,
+                    value: jackdaw_animation::KeyframeValue::Vec3(kf.value),
+                },
+            ));
+        } else if let Some(kf) = world.get::<jackdaw_animation::QuatKeyframe>(entity) {
+            entries.push((
+                kf.time,
+                jackdaw_animation::KeyframeClipboardEntry {
+                    component_type_path,
+                    field_path,
+                    relative_time: kf.time,
+                    value: jackdaw_animation::KeyframeValue::Quat(kf.value),
+                },
+            ));
+        } else if let Some(kf) = world.get::<jackdaw_animation::F32Keyframe>(entity) {
+            entries.push((
+                kf.time,
+                jackdaw_animation::KeyframeClipboardEntry {
+                    component_type_path,
+                    field_path,
+                    relative_time: kf.time,
+                    value: jackdaw_animation::KeyframeValue::F32(kf.value),
+                },
+            ));
+        }
+    }
+    if entries.is_empty() {
+        return;
+    }
+    let base = entries
+        .iter()
+        .map(|(t, _)| *t)
+        .fold(f32::INFINITY, f32::min);
+    let mut normalized: Vec<jackdaw_animation::KeyframeClipboardEntry> = entries
+        .into_iter()
+        .map(|(_, mut entry)| {
+            entry.relative_time -= base;
+            entry
+        })
+        .collect();
+    normalized.sort_by(|a, b| a.relative_time.partial_cmp(&b.relative_time).unwrap());
+    let count = normalized.len();
+    world
+        .resource_mut::<jackdaw_animation::KeyframeClipboard>()
+        .entries = normalized;
+    info!("Copied {count} keyframe(s) to animation clipboard");
+}
+
+fn paste_clipboard_keyframes(world: &mut World) {
+    let entries = world
+        .resource::<jackdaw_animation::KeyframeClipboard>()
+        .entries
+        .clone();
+    if entries.is_empty() {
+        return;
+    }
+    let Some(clip_entity) = world.resource::<jackdaw_animation::SelectedClip>().0 else {
+        return;
+    };
+    let cursor_time = world
+        .resource::<jackdaw_animation::TimelineCursor>()
+        .seek_time;
+
+    let mut tracks: Vec<(Entity, String, String)> = Vec::new();
+    if let Some(children) = world.get::<Children>(clip_entity) {
+        for child in children.iter() {
+            if let Some(track) = world.get::<jackdaw_animation::AnimationTrack>(child) {
+                tracks.push((
+                    child,
+                    track.component_type_path.clone(),
+                    track.field_path.clone(),
+                ));
+            }
+        }
+    }
+
+    let mut cmds: Vec<Box<dyn jackdaw_commands::EditorCommand>> = Vec::new();
+    let mut max_paste_time = cursor_time;
+    for entry in &entries {
+        let track_entity = tracks.iter().find_map(|(e, tp, fp)| {
+            (tp == &entry.component_type_path && fp == &entry.field_path).then_some(*e)
+        });
+        let Some(track_entity) = track_entity else {
+            warn!(
+                "Paste keyframe: no track for {}.{} on selected clip. Add one via the inspector diamond first",
+                entry.component_type_path, entry.field_path,
+            );
+            continue;
+        };
+        let paste_time = cursor_time + entry.relative_time;
+        max_paste_time = max_paste_time.max(paste_time);
+        let cmd: Box<dyn jackdaw_commands::EditorCommand> = match entry.value {
+            jackdaw_animation::KeyframeValue::Vec3(v) => Box::new(SpawnKeyframeCmd::Vec3 {
+                keyframe: None,
+                track: track_entity,
+                time: paste_time,
+                value: v,
+            }),
+            jackdaw_animation::KeyframeValue::Quat(q) => Box::new(SpawnKeyframeCmd::Quat {
+                keyframe: None,
+                track: track_entity,
+                time: paste_time,
+                value: q,
+            }),
+            jackdaw_animation::KeyframeValue::F32(f) => Box::new(SpawnKeyframeCmd::F32 {
+                keyframe: None,
+                track: track_entity,
+                time: paste_time,
+                value: f,
+            }),
+        };
+        cmds.push(cmd);
+    }
+
+    if cmds.is_empty() {
+        return;
+    }
+
+    if let Some(mut clip) = world.get_mut::<jackdaw_animation::Clip>(clip_entity)
+        && max_paste_time > clip.duration
+    {
+        clip.duration = max_paste_time;
+    }
+
+    for cmd in &mut cmds {
+        cmd.execute(world);
+    }
+    let count = cmds.len();
+    let group = commands::CommandGroup {
+        commands: cmds,
+        label: "Paste keyframes".to_string(),
+    };
+    let mut history = world.resource_mut::<jackdaw_commands::CommandHistory>();
+    history.push_executed(Box::new(group));
+
+    if let Some(mut dirty) = world.get_resource_mut::<jackdaw_animation::TimelineDirty>() {
+        dirty.0 = true;
+    }
+    info!("Pasted {count} keyframe(s) from animation clipboard");
+}
+
 /// Typed, undo-aware spawn command for animation keyframes. Mirror of
 /// [`DespawnKeyframeCmd`]: execute spawns a fresh entity with the
 /// stored fields parented to the track, undo despawns it. Same ID-
@@ -1216,361 +1624,6 @@ impl jackdaw_commands::EditorCommand for SpawnKeyframeCmd {
     fn description(&self) -> &str {
         "Paste keyframe"
     }
-}
-
-/// Combined handler for timeline keyboard shortcuts that need to
-/// intercept before the entity-level operator dispatch:
-///
-/// - **Arrow keys** (Left/Right/Home/End) step the playhead when the
-///   timeline dock window is active. Consumes the key input via
-///   [`ButtonInput::clear_just_pressed`] so the entity nudge handler
-///   doesn't also slide a selected brush.
-/// - **Ctrl+C** copies the currently-selected keyframes (if any) into
-///   [`jackdaw_animation::KeyframeClipboard`], then consumes the key
-///   so the generic component-copy path doesn't also fire.
-/// - **Ctrl+V** pastes clipboard keyframes onto the
-///   [`jackdaw_animation::SelectedClip`] at the current cursor time,
-///   wrapped in a [`commands::CommandGroup`] of [`SpawnKeyframeCmd`]s
-///   for atomic undo.
-///
-/// All three gate on `InputFocus` being empty so typing in a text
-/// field doesn't trigger the timeline shortcuts.
-fn handle_timeline_shortcuts(world: &mut World) {
-    if world
-        .resource::<bevy::input_focus::InputFocus>()
-        .0
-        .is_some()
-    {
-        return;
-    }
-
-    let (ctrl, shift) = {
-        let keyboard = world.resource::<ButtonInput<KeyCode>>();
-        (
-            keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]),
-            keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
-        )
-    };
-
-    let timeline_active = {
-        let mut query = world.query::<&jackdaw_panels::ActiveDockWindow>();
-        query
-            .iter(world)
-            .any(|active| active.0.as_deref() == Some("jackdaw.timeline"))
-    };
-    if timeline_active && !ctrl {
-        handle_timeline_scrub_keys(world, shift);
-    }
-
-    if ctrl {
-        handle_keyframe_copy(world);
-        handle_keyframe_paste(world);
-    }
-}
-
-/// Step the timeline cursor with arrow keys, Home, and End. Called
-/// from [`handle_timeline_shortcuts`] when the timeline dock window
-/// is active and no modifier (other than Shift) is held.
-///
-/// - Left / Right: step by one ruler tick, using the same
-///   [`jackdaw_animation::pick_tick_step`] the timeline widget uses.
-/// - Shift+Left / Shift+Right: jump to the previous / next keyframe
-///   time across all tracks in the selected clip. Falls back to the
-///   clip boundary (0 or `duration`) when there is no earlier /
-///   later keyframe.
-/// - Home / End: jump to the start / end of the clip.
-fn handle_timeline_scrub_keys(world: &mut World, shift: bool) {
-    let (left, right, home, end) = {
-        let keyboard = world.resource::<ButtonInput<KeyCode>>();
-        (
-            keyboard.just_pressed(KeyCode::ArrowLeft),
-            keyboard.just_pressed(KeyCode::ArrowRight),
-            keyboard.just_pressed(KeyCode::Home),
-            keyboard.just_pressed(KeyCode::End),
-        )
-    };
-    if !left && !right && !home && !end {
-        return;
-    }
-    let Some(clip_entity) = world.resource::<jackdaw_animation::SelectedClip>().0 else {
-        return;
-    };
-    let Some(clip) = world.get::<jackdaw_animation::Clip>(clip_entity).copied() else {
-        return;
-    };
-    let duration = clip.duration.max(0.01);
-    let current_time = world
-        .resource::<jackdaw_animation::TimelineCursor>()
-        .seek_time;
-
-    let new_time = if home {
-        0.0
-    } else if end {
-        duration
-    } else if shift {
-        let times = collect_clip_keyframe_times(world, clip_entity);
-        if left {
-            times
-                .iter()
-                .copied()
-                .filter(|t| *t < current_time - 1e-4)
-                .fold(0.0_f32, f32::max)
-        } else {
-            times
-                .iter()
-                .copied()
-                .filter(|t| *t > current_time + 1e-4)
-                .fold(duration, f32::min)
-        }
-    } else {
-        let step = jackdaw_animation::pick_tick_step(duration);
-        let dir = if left { -1.0 } else { 1.0 };
-        (current_time + dir * step).clamp(0.0, duration)
-    };
-
-    world.write_message(jackdaw_animation::AnimationSeek(new_time));
-
-    // Consume the arrow/home/end presses so the entity nudge handler
-    // downstream doesn't also move a brush this frame.
-    let mut keyboard = world.resource_mut::<ButtonInput<KeyCode>>();
-    keyboard.clear_just_pressed(KeyCode::ArrowLeft);
-    keyboard.clear_just_pressed(KeyCode::ArrowRight);
-    keyboard.clear_just_pressed(KeyCode::Home);
-    keyboard.clear_just_pressed(KeyCode::End);
-}
-
-/// Gather every keyframe time on the clip, across all tracks and
-/// all typed keyframe components. Used by the shift+arrow "step to
-/// adjacent keyframe" path.
-fn collect_clip_keyframe_times(world: &World, clip_entity: Entity) -> Vec<f32> {
-    let mut times = Vec::new();
-    let Some(clip_children) = world.get::<Children>(clip_entity) else {
-        return times;
-    };
-    let track_entities: Vec<Entity> = clip_children.iter().collect();
-    for track in track_entities {
-        let Some(track_children) = world.get::<Children>(track) else {
-            continue;
-        };
-        for kf in track_children.iter() {
-            if let Some(k) = world.get::<jackdaw_animation::Vec3Keyframe>(kf) {
-                times.push(k.time);
-            } else if let Some(k) = world.get::<jackdaw_animation::QuatKeyframe>(kf) {
-                times.push(k.time);
-            } else if let Some(k) = world.get::<jackdaw_animation::F32Keyframe>(kf) {
-                times.push(k.time);
-            }
-        }
-    }
-    times
-}
-
-/// Handle Ctrl+C when any keyframe is in the current selection: copy
-/// a snapshot of each keyframe into [`KeyframeClipboard`] and consume
-/// the key so the generic component-copy path doesn't also serialize
-/// them. Times are stored relative to the earliest copied keyframe
-/// so a later paste reconstructs the spacing anchored at the cursor.
-///
-/// [`KeyframeClipboard`]: jackdaw_animation::KeyframeClipboard
-fn handle_keyframe_copy(world: &mut World) {
-    if !world
-        .resource::<ButtonInput<KeyCode>>()
-        .just_pressed(KeyCode::KeyC)
-    {
-        return;
-    }
-    let selected: Vec<Entity> = world.resource::<selection::Selection>().entities.clone();
-    if selected.is_empty() {
-        return;
-    }
-
-    let mut entries: Vec<(f32, jackdaw_animation::KeyframeClipboardEntry)> = Vec::new();
-    for &entity in &selected {
-        let Some(track_entity) = world.get::<ChildOf>(entity).map(ChildOf::parent) else {
-            continue;
-        };
-        let Some(track) = world.get::<jackdaw_animation::AnimationTrack>(track_entity) else {
-            continue;
-        };
-        let component_type_path = track.component_type_path.clone();
-        let field_path = track.field_path.clone();
-
-        if let Some(kf) = world.get::<jackdaw_animation::Vec3Keyframe>(entity) {
-            entries.push((
-                kf.time,
-                jackdaw_animation::KeyframeClipboardEntry {
-                    component_type_path,
-                    field_path,
-                    relative_time: kf.time,
-                    value: jackdaw_animation::KeyframeValue::Vec3(kf.value),
-                },
-            ));
-        } else if let Some(kf) = world.get::<jackdaw_animation::QuatKeyframe>(entity) {
-            entries.push((
-                kf.time,
-                jackdaw_animation::KeyframeClipboardEntry {
-                    component_type_path,
-                    field_path,
-                    relative_time: kf.time,
-                    value: jackdaw_animation::KeyframeValue::Quat(kf.value),
-                },
-            ));
-        } else if let Some(kf) = world.get::<jackdaw_animation::F32Keyframe>(entity) {
-            entries.push((
-                kf.time,
-                jackdaw_animation::KeyframeClipboardEntry {
-                    component_type_path,
-                    field_path,
-                    relative_time: kf.time,
-                    value: jackdaw_animation::KeyframeValue::F32(kf.value),
-                },
-            ));
-        }
-    }
-
-    if entries.is_empty() {
-        return;
-    }
-
-    // Normalize times: relative_time = original_time - min(original_time).
-    let base = entries
-        .iter()
-        .map(|(t, _)| *t)
-        .fold(f32::INFINITY, f32::min);
-    let mut normalized: Vec<jackdaw_animation::KeyframeClipboardEntry> = entries
-        .into_iter()
-        .map(|(_, mut entry)| {
-            entry.relative_time -= base;
-            entry
-        })
-        .collect();
-    // Sort by relative time for deterministic paste ordering.
-    normalized.sort_by(|a, b| a.relative_time.partial_cmp(&b.relative_time).unwrap());
-
-    let count = normalized.len();
-    world
-        .resource_mut::<jackdaw_animation::KeyframeClipboard>()
-        .entries = normalized;
-    world
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .clear_just_pressed(KeyCode::KeyC);
-    info!("Copied {count} keyframe(s) to animation clipboard");
-}
-
-/// Handle Ctrl+V: if the animation clipboard is non-empty and a clip
-/// is selected, re-spawn each clipboard entry as a new keyframe
-/// parented to the clip's matching track at `cursor_time +
-/// relative_time`. Entries whose property address doesn't resolve to
-/// an existing track on the current clip are skipped with a warning.
-///
-/// Each spawn is wrapped in a [`SpawnKeyframeCmd`] and all commands
-/// are pushed as a single [`commands::CommandGroup`] so Ctrl+Z undoes
-/// the entire paste at once.
-fn handle_keyframe_paste(world: &mut World) {
-    if !world
-        .resource::<ButtonInput<KeyCode>>()
-        .just_pressed(KeyCode::KeyV)
-    {
-        return;
-    }
-    let entries = world
-        .resource::<jackdaw_animation::KeyframeClipboard>()
-        .entries
-        .clone();
-    if entries.is_empty() {
-        return;
-    }
-    let Some(clip_entity) = world.resource::<jackdaw_animation::SelectedClip>().0 else {
-        return;
-    };
-    let cursor_time = world
-        .resource::<jackdaw_animation::TimelineCursor>()
-        .seek_time;
-
-    // Resolve each entry's target track by property address. Collect
-    // the list of tracks under the clip once up front.
-    let mut tracks: Vec<(Entity, String, String)> = Vec::new();
-    if let Some(children) = world.get::<Children>(clip_entity) {
-        for child in children.iter() {
-            if let Some(track) = world.get::<jackdaw_animation::AnimationTrack>(child) {
-                tracks.push((
-                    child,
-                    track.component_type_path.clone(),
-                    track.field_path.clone(),
-                ));
-            }
-        }
-    }
-
-    let mut cmds: Vec<Box<dyn jackdaw_commands::EditorCommand>> = Vec::new();
-    let mut max_paste_time = cursor_time;
-    for entry in &entries {
-        let track_entity = tracks.iter().find_map(|(e, tp, fp)| {
-            (tp == &entry.component_type_path && fp == &entry.field_path).then_some(*e)
-        });
-        let Some(track_entity) = track_entity else {
-            warn!(
-                "Paste keyframe: no track for {}.{} on selected clip. Add one via the inspector diamond first",
-                entry.component_type_path, entry.field_path,
-            );
-            continue;
-        };
-        let paste_time = cursor_time + entry.relative_time;
-        max_paste_time = max_paste_time.max(paste_time);
-        let cmd: Box<dyn jackdaw_commands::EditorCommand> = match entry.value {
-            jackdaw_animation::KeyframeValue::Vec3(v) => Box::new(SpawnKeyframeCmd::Vec3 {
-                keyframe: None,
-                track: track_entity,
-                time: paste_time,
-                value: v,
-            }),
-            jackdaw_animation::KeyframeValue::Quat(q) => Box::new(SpawnKeyframeCmd::Quat {
-                keyframe: None,
-                track: track_entity,
-                time: paste_time,
-                value: q,
-            }),
-            jackdaw_animation::KeyframeValue::F32(f) => Box::new(SpawnKeyframeCmd::F32 {
-                keyframe: None,
-                track: track_entity,
-                time: paste_time,
-                value: f,
-            }),
-        };
-        cmds.push(cmd);
-    }
-
-    if cmds.is_empty() {
-        return;
-    }
-
-    // Auto-extend the clip duration if the paste lands beyond the
-    // current authored range. Matches the behavior of
-    // `handle_add_keyframe_click` in the animation crate.
-    if let Some(mut clip) = world.get_mut::<jackdaw_animation::Clip>(clip_entity)
-        && max_paste_time > clip.duration
-    {
-        clip.duration = max_paste_time;
-    }
-
-    for cmd in &mut cmds {
-        cmd.execute(world);
-    }
-    let count = cmds.len();
-    let group = commands::CommandGroup {
-        commands: cmds,
-        label: "Paste keyframes".to_string(),
-    };
-    let mut history = world.resource_mut::<jackdaw_commands::CommandHistory>();
-    history.push_executed(Box::new(group));
-    world
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .clear_just_pressed(KeyCode::KeyV);
-
-    if let Some(mut dirty) = world.get_resource_mut::<jackdaw_animation::TimelineDirty>() {
-        dirty.0 = true;
-    }
-    info!("Pasted {count} keyframe(s) from animation clipboard");
 }
 
 /// Observer: clicking a timeline keyframe diamond routes through

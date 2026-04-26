@@ -126,17 +126,29 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
 /// Shared availability check for transform operators. Matches the
 /// guards the legacy `handle_entity_keys` applied.
+///
+/// Returns `false` when the timeline dock window is active so the
+/// arrow-key playhead-scrub and Ctrl+C/V keyframe copy/paste operators
+/// can claim those keys without fighting entity nudge / component
+/// copy/paste.
 fn can_act_on_entities(
     input_focus: Res<InputFocus>,
     active: ActiveModalQuery,
     modal: Res<crate::modal_transform::ModalTransformState>,
     draw_state: Res<crate::draw_brush::DrawBrushState>,
     edit_mode: Res<crate::brush::EditMode>,
+    docks: Query<&jackdaw_panels::ActiveDockWindow>,
 ) -> bool {
     if input_focus.0.is_some() || active.is_modal_running() || modal.active.is_some() {
         return false;
     }
     if draw_state.active.is_some() {
+        return false;
+    }
+    if docks
+        .iter()
+        .any(|d| d.0.as_deref() == Some("jackdaw.timeline"))
+    {
         return false;
     }
     matches!(*edit_mode, crate::brush::EditMode::Object)

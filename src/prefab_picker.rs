@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use crate::EditorEntity;
+use crate::core_extension::CoreExtensionInputContext;
 use bevy::{picking::hover::Hovered, prelude::*, ui_widgets::observe};
+use bevy_enhanced_input::prelude::{Press, *};
+use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     icons::Icon,
     text_edit::{self, TextEditProps, TextEditValue},
@@ -14,10 +17,45 @@ impl Plugin for PrefabPickerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (filter_prefab_picker, close_prefab_picker_on_dismiss)
+            (filter_prefab_picker, close_prefab_picker_on_outside_click)
                 .run_if(in_state(crate::AppState::Editor)),
         );
     }
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<PrefabPickerCloseOp>();
+    let ext = ctx.id();
+    ctx.spawn((
+        Action::<PrefabPickerCloseOp>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![(KeyCode::Escape, Press::default())],
+    ));
+}
+
+fn picker_open(picker: Query<(), With<PrefabPicker>>) -> bool {
+    !picker.is_empty()
+}
+
+/// Close the prefab picker. Triggered by Escape via BEI; click-outside
+/// dismissal stays in [`close_prefab_picker_on_outside_click`] because
+/// it's a positional gesture, not a key event.
+#[operator(
+    id = "prefab_picker.close",
+    label = "Close Prefab Picker",
+    description = "Close the prefab picker.",
+    is_available = picker_open,
+    allows_undo = false,
+)]
+pub(crate) fn prefab_picker_close(
+    _: In<OperatorParameters>,
+    picker: Query<Entity, With<PrefabPicker>>,
+    mut commands: Commands,
+) -> OperatorResult {
+    for entity in &picker {
+        commands.entity(entity).despawn();
+    }
+    OperatorResult::Finished
 }
 
 #[derive(Component)]
@@ -269,9 +307,9 @@ fn scan_jsn_files(dir: &PathBuf, _assets_root: &PathBuf, results: &mut Vec<(Stri
     }
 }
 
-/// Close the prefab picker when Escape is pressed or when clicking outside.
-fn close_prefab_picker_on_dismiss(
-    keyboard: Res<ButtonInput<KeyCode>>,
+/// Close the prefab picker on a click outside. (Escape goes through
+/// the `prefab_picker.close` operator binding instead.)
+fn close_prefab_picker_on_outside_click(
     mouse: Res<ButtonInput<MouseButton>>,
     picker: Query<(Entity, &Hovered), With<PrefabPicker>>,
     mut commands: Commands,
@@ -279,9 +317,7 @@ fn close_prefab_picker_on_dismiss(
     let Ok((entity, hovered)) = picker.single() else {
         return;
     };
-    let esc = keyboard.just_pressed(KeyCode::Escape);
-    let clicked_outside = mouse.get_just_pressed().next().is_some() && !hovered.get();
-    if esc || clicked_outside {
+    if mouse.get_just_pressed().next().is_some() && !hovered.get() {
         commands.entity(entity).despawn();
     }
 }
