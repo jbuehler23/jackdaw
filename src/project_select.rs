@@ -756,11 +756,15 @@ fn spawn_new_project_button(
 /// Spawn one segment of the Static/Dylib selector. `initial` picks
 /// the starting highlighted button; subsequent clicks repaint via
 /// `on_linkage_button_click`.
+///
+/// The project picker runs before any extension has registered
+/// operators, so there's no rich hover tooltip available here. The
+/// button label is the single visible affordance — explanatory text
+/// is rendered as a subtitle below the row by the calling dialog.
 fn spawn_linkage_button(
     world: &mut World,
     parent: Entity,
     label: &str,
-    tooltip: &str,
     linkage: TemplateLinkage,
     initial: TemplateLinkage,
     font: Handle<Font>,
@@ -798,7 +802,6 @@ fn spawn_linkage_button(
                 },
                 TextColor(tokens::TEXT_PRIMARY),
             )],
-            jackdaw_feathers::tooltip::Tooltip(tooltip.to_string()),
             ChildOf(parent),
         ))
         .id();
@@ -1268,7 +1271,6 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
             world,
             linkage_row,
             "Static",
-            "Plainly-compiled rlib/bin. Recommended.",
             TemplateLinkage::Static,
             initial_linkage,
             editor_font.clone(),
@@ -1277,11 +1279,27 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
             world,
             linkage_row,
             "Dylib",
-            "Hot-reloadable cdylib. Requires editor `--features dylib`.",
             TemplateLinkage::Dylib,
             initial_linkage,
             editor_font.clone(),
         );
+        // Inline subtitle (visible always, no hover needed) so the
+        // user knows what the two linkage options do without relying
+        // on an operator-registered tooltip — operators aren't loaded
+        // yet at the project-select stage.
+        world.spawn((
+            Text::new(
+                "Static: plainly-compiled rlib/bin (recommended). \
+                 Dylib: hot-reloadable cdylib, requires the editor's `dylib` feature.",
+            ),
+            TextFont {
+                font: editor_font.clone(),
+                font_size: tokens::FONT_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+            ChildOf(card),
+        ));
     }
 
     // Template URL field. Prefilled from preset+linkage, editable

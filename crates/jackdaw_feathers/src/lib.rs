@@ -60,7 +60,7 @@ impl Plugin for EditorFeathersPlugin {
             menu_bar::plugin,
             context_menu::plugin,
             panel_header::plugin,
-            tooltip::plugin,
+            tooltip::TooltipPlugin,
         ));
     }
 }

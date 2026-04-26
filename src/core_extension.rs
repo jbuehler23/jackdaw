@@ -2,7 +2,10 @@ use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
-use jackdaw_feathers::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps};
+use jackdaw_feathers::button::{
+    ButtonClickEvent, ButtonOperatorCall, ButtonParamValue, ButtonProps,
+};
+use jackdaw_jsn::PropertyValue;
 
 /// Build a [`ButtonProps`] from an operator type, filling in the
 /// label and the click dispatch in one step.
@@ -32,51 +35,51 @@ pub(super) fn plugin(app: &mut App) {
         .add_observer(dispatch_button_operator_call);
 }
 
-/// When a button carrying an [`ButtonOperatorCall`] component is clicked,
-/// dispatch the referenced operator. This is the single editor-wide
-/// glue that makes `ButtonProps::call_operator(id)` and menu/context-menu
-/// `op:`-prefixed entries (which also attach `ButtonOperatorCall` via feathers)
-/// actually run the operator. Without this, `ButtonOperatorCall` is inert.
+/// When a button carrying a [`ButtonOperatorCall`] is clicked,
+/// dispatch the referenced operator with the button's statically-declared
+/// parameters. This is the single editor-wide glue that makes
+/// `ButtonProps::call_operator(id)` and menu / context-menu `op:`-prefixed
+/// entries (which also attach `ButtonOperatorCall` via feathers) actually
+/// run the operator.
 ///
 /// The feathers-level click handlers for menu/context items skip
 /// firing their own `MenuAction`/`ContextMenuAction` events when they
-/// see `ButtonOperatorCall`, so this observer is the sole dispatch path for
-/// those items and won't double-fire.
+/// see `ButtonOperatorCall`, so this observer is the sole dispatch path
+/// for those items and won't double-fire.
 fn dispatch_button_operator_call(
     event: On<ButtonClickEvent>,
     button_op: Query<&ButtonOperatorCall>,
     mut commands: Commands,
 ) {
-    let Ok(ButtonOperatorCall(id)) = button_op.get(event.entity) else {
+    let Ok(call) = button_op.get(event.entity) else {
         return;
     };
-    let raw = id.clone().into_owned();
+    let id = call.id.clone().into_owned();
+    let params: Vec<(String, PropertyValue)> = call
+        .params
+        .iter()
+        .map(|(k, v)| (k.to_string(), button_param_to_property_value(v)))
+        .collect();
     commands.queue(move |world: &mut World| {
-        dispatch_op_id_with_query_params(world, &raw);
+        let mut call = world.operator(id.clone()).settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        });
+        for (k, v) in params {
+            call = call.param(k, v);
+        }
+        if let Err(err) = call.call() {
+            error!("operator dispatch failed for `{id}`: {err}");
+        }
     });
 }
 
-/// Parse an operator id of the form `op_id?key=value&key2=value2` and
-/// dispatch through the operator framework with those parameters.
-/// Plain `op_id` (no `?`) dispatches with no params.
-///
-/// Used by both the button-click observer and the menu-action handler
-/// so the `op:window.open?window_id=scene_tree` style menu entries
-/// flow through one parser.
-pub(crate) fn dispatch_op_id_with_query_params(world: &mut World, raw: &str) {
-    let (op_id, query) = raw.split_once('?').unwrap_or((raw, ""));
-    let op_id = op_id.to_string();
-    let mut call = world.operator(op_id).settings(CallOperatorSettings {
-        execution_context: ExecutionContext::Invoke,
-        creates_history_entry: true,
-    });
-    for kv in query.split('&').filter(|s| !s.is_empty()) {
-        if let Some((k, v)) = kv.split_once('=') {
-            call = call.param(k.to_string(), v.to_string());
-        }
-    }
-    if let Err(err) = call.call() {
-        error!("operator dispatch failed for `{raw}`: {err}");
+fn button_param_to_property_value(value: &ButtonParamValue) -> PropertyValue {
+    match value {
+        ButtonParamValue::Bool(v) => PropertyValue::Bool(*v),
+        ButtonParamValue::Int(v) => PropertyValue::Int(*v),
+        ButtonParamValue::Float(v) => PropertyValue::Float(*v),
+        ButtonParamValue::Str(v) => PropertyValue::String(v.to_string()),
     }
 }
 
@@ -123,7 +126,12 @@ impl JackdawExtension for JackdawCoreExtension {
             .register_operator::<crate::ClipTimelineJumpStartOp>()
             .register_operator::<crate::ClipTimelineJumpEndOp>()
             .register_operator::<crate::ClipCopyKeyframesOp>()
-            .register_operator::<crate::ClipPasteKeyframesOp>();
+            .register_operator::<crate::ClipPasteKeyframesOp>()
+            .register_operator::<crate::ClipPlayOp>()
+            .register_operator::<crate::ClipPauseOp>()
+            .register_operator::<crate::ClipStopOp>()
+            .register_operator::<crate::ClipNewOp>()
+            .register_operator::<crate::ClipNewBlendGraphOp>();
         let core_ext = ctx.id();
         ctx.spawn((
             Action::<crate::ClipDeleteKeyframesOp>::new(),

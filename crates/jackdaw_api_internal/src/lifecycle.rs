@@ -79,6 +79,7 @@ pub struct OperatorEntity {
     pub(crate) id: &'static str,
     pub(crate) label: &'static str,
     pub(crate) description: &'static str,
+    pub(crate) parameters: &'static [crate::operator::ParamSpec],
     pub(crate) execute: OperatorSystemId,
     pub(crate) invoke: OperatorSystemId,
     /// Optional system that returns whether the operator can run in
@@ -107,6 +108,13 @@ impl OperatorEntity {
     /// command palette.
     pub fn description(&self) -> &'static str {
         self.description
+    }
+
+    /// Static parameter schema declared in the operator's
+    /// `#[operator(params(...))]` block. Empty for ops that take no
+    /// parameters.
+    pub fn parameters(&self) -> &'static [crate::operator::ParamSpec] {
+        self.parameters
     }
 }
 

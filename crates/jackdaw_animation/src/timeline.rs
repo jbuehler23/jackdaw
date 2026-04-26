@@ -26,9 +26,7 @@ use crate::clip::{
     TimelineSnapHint, Vec3Keyframe,
 };
 use crate::compile::clip_display_duration;
-use crate::player::{
-    AnimationPause, AnimationPlay, AnimationStop, TimelineCursor, TimelineEngagement,
-};
+use crate::player::{TimelineCursor, TimelineEngagement};
 
 // Row heights, picked so the left-column labels vertically align with
 // the right-column strips and the top-of-column spacer aligns with the
@@ -931,25 +929,6 @@ pub fn update_playhead_position(
                 node.left = Val::Percent(percent);
             }
         }
-    }
-}
-
-/// Route transport button clicks into the animation message channel.
-pub fn handle_transport_button_click(
-    event: On<ButtonClickEvent>,
-    play: Query<(), With<TimelinePlayButton>>,
-    pause: Query<(), With<TimelinePauseButton>>,
-    stop: Query<(), With<TimelineStopButton>>,
-    mut play_writer: MessageWriter<AnimationPlay>,
-    mut pause_writer: MessageWriter<AnimationPause>,
-    mut stop_writer: MessageWriter<AnimationStop>,
-) {
-    if play.contains(event.entity) {
-        play_writer.write(AnimationPlay);
-    } else if pause.contains(event.entity) {
-        pause_writer.write(AnimationPause);
-    } else if stop.contains(event.entity) {
-        stop_writer.write(AnimationStop);
     }
 }
 

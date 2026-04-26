@@ -31,9 +31,10 @@ use bevy_monitors::prelude::{Addition, Monitor, NotifyAdded};
 use super::{
     AddComponentButton, ComponentDisplay, ComponentDisplayBody, ComponentName, ComponentPicker,
     Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch, InspectorTarget,
-    ReflectDisplayable, ReflectEditorMeta, brush_display, custom_props_display,
-    extract_module_group, material_display, reflect_fields,
+    ReflectDisplayable, ReflectEditorMeta, brush_display, component_tooltip::ReflectedTypeTooltip,
+    custom_props_display, extract_module_group, material_display, reflect_fields,
 };
+use bevy::picking::hover::Hovered;
 
 pub(crate) fn add_component_displays(
     _: On<Add, Selected>,
@@ -614,7 +615,12 @@ pub(crate) fn spawn_component_display(
         ))
         .id();
 
-    // Toggle area (chevron + icon + title) -- click to collapse/expand
+    // Toggle area (chevron + icon + title) -- click to collapse/expand.
+    // The hover-tooltip source sits on this row so the popover
+    // surface matches the click target; the auto-attach observer in
+    // `component_tooltip.rs` resolves the reflected type and inserts
+    // a `Tooltip` with the short name, optional `ReflectEditorMeta`
+    // description, and full type path.
     let toggle_area = commands
         .spawn((
             Node {
@@ -624,6 +630,8 @@ pub(crate) fn spawn_component_display(
                 flex_grow: 1.0,
                 ..Default::default()
             },
+            Hovered::default(),
+            ReflectedTypeTooltip::new(type_path.to_string()),
             ChildOf(header),
         ))
         .id();
@@ -652,7 +660,7 @@ pub(crate) fn spawn_component_display(
         ChildOf(toggle_area),
     ));
 
-    // Component name (orange if overridden)
+    // Component name (orange if overridden).
     let name_color = if is_overridden {
         default_style::INSPECTOR_OVERRIDE
     } else {

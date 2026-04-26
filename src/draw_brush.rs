@@ -116,13 +116,16 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 }
 
 /// Draw a new brush in the viewport.
-///
-/// # Parameters
-/// - `mode`: `"Add"` (default) creates a new brush; `"Cut"` carves into
-///   the surrounding geometry.
-/// - `append`: when `true` and `mode = "Add"`, the new brush is folded
-///   into the currently-selected brush instead of standing alone.
-#[operator(id = "viewport.draw_brush_modal", label = "Draw Brush", cancel = cancel_draw_brush_modal, modal = true)]
+#[operator(
+    id = "viewport.draw_brush_modal",
+    label = "Draw Brush",
+    cancel = cancel_draw_brush_modal,
+    modal = true,
+    params(
+        mode(String, default = "Add", doc = "Draw mode: \"Add\" or \"Cut\"."),
+        append(bool, default = false, doc = "When true and mode = Add, fold the new brush into the selected one."),
+    ),
+)]
 pub fn activate_draw_brush_modal(
     params: In<OperatorParameters>,
     mut input_focus: ResMut<InputFocus>,

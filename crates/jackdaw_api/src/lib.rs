@@ -63,7 +63,7 @@ pub mod op {
     pub use jackdaw_api_internal::operator::{
         CallOperatorError, CallOperatorSettings, ExecutionContext, Operator, OperatorCallBuilder,
         OperatorCommandsExt, OperatorParameters, OperatorResult, OperatorSystemId,
-        OperatorWorldExt,
+        OperatorWorldExt, ParamDefault, ParamSpec, ParamType, format_operator_signature,
     };
 }
 
@@ -89,7 +89,7 @@ pub mod prelude {
     pub use crate::op::{
         CallOperatorError, CallOperatorSettings, ExecutionContext, Operator,
         OperatorCommandsExt as _, OperatorParameters, OperatorResult, OperatorSystemId,
-        OperatorWorldExt as _,
+        OperatorWorldExt as _, ParamDefault, ParamSpec, ParamType, format_operator_signature,
     };
     pub use crate::pie::PlayState;
     pub use crate::runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems};

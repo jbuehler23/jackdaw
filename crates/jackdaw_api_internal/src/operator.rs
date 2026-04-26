@@ -80,6 +80,11 @@ pub trait Operator: InputAction + 'static {
     const LABEL: &'static str;
     const DESCRIPTION: &'static str = "";
 
+    /// Schema of the parameters this operator accepts. Default empty
+    /// for parameter-less operators. Surfaced in the editor tooltip
+    /// as a call signature and consumed by future scripting surfaces.
+    const PARAMETERS: &'static [ParamSpec] = &[];
+
     /// Whether this operator allows undoing. Note that whether an
     /// operator actually pushes an undo entry depends on the call site,
     /// so this should usually be `true`.
@@ -168,6 +173,141 @@ impl OperatorParameters {
     /// key is missing or not an `Int`.
     pub fn as_entity(&self, key: &str) -> Option<Entity> {
         self.as_int(key).map(|bits| Entity::from_bits(bits as u64))
+    }
+}
+
+/// Type tag for an operator parameter, used by [`ParamSpec`] to describe
+/// the schema of a single parameter without prescribing how the value
+/// is extracted at runtime.
+///
+/// Maps to the variants of [`PropertyValue`] plus an explicit `Entity`
+/// tag for the `i64`-bits encoding used by [`OperatorParameters::as_entity`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParamType {
+    Bool,
+    Int,
+    Float,
+    String,
+    Vec2,
+    Vec3,
+    Color,
+    Entity,
+}
+
+impl ParamType {
+    /// Short, user-facing type label used in tooltip signatures
+    /// (e.g. `i64`, `f64`, `Entity`).
+    pub const fn type_name(self) -> &'static str {
+        match self {
+            ParamType::Bool => "bool",
+            ParamType::Int => "i64",
+            ParamType::Float => "f64",
+            ParamType::String => "String",
+            ParamType::Vec2 => "Vec2",
+            ParamType::Vec3 => "Vec3",
+            ParamType::Color => "Color",
+            ParamType::Entity => "Entity",
+        }
+    }
+}
+
+/// Const-safe default value for a [`ParamSpec`]. Mirrors
+/// [`PropertyValue`] but uses `&'static str` instead of `String` and
+/// stores `Vec2` / `Vec3` / `Color` componentwise so the whole thing
+/// fits in a `const` slice.
+///
+/// Convert to `PropertyValue` via [`ParamDefault::to_property_value`]
+/// when a runtime value is needed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ParamDefault {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(&'static str),
+    Vec2(f32, f32),
+    Vec3(f32, f32, f32),
+    Color(f32, f32, f32, f32),
+}
+
+impl ParamDefault {
+    /// Materialise this default as a runtime [`PropertyValue`] for
+    /// callers that want to feed it into [`OperatorParameters`].
+    pub fn to_property_value(&self) -> PropertyValue {
+        match *self {
+            ParamDefault::Bool(b) => PropertyValue::Bool(b),
+            ParamDefault::Int(i) => PropertyValue::Int(i),
+            ParamDefault::Float(f) => PropertyValue::Float(f),
+            ParamDefault::Str(s) => PropertyValue::String(s.to_string()),
+            ParamDefault::Vec2(x, y) => PropertyValue::Vec2(Vec2::new(x, y)),
+            ParamDefault::Vec3(x, y, z) => PropertyValue::Vec3(Vec3::new(x, y, z)),
+            ParamDefault::Color(r, g, b, a) => PropertyValue::Color(Color::srgba(r, g, b, a)),
+        }
+    }
+}
+
+/// Schema for a single operator parameter. Built into the `Operator`
+/// trait via [`Operator::PARAMETERS`] and surfaced through
+/// [`OperatorEntity::parameters`] so the tooltip and (later) the
+/// scripting REPL / DSL can introspect what an operator accepts.
+#[derive(Clone, Copy, Debug)]
+pub struct ParamSpec {
+    pub name: &'static str,
+    pub ty: ParamType,
+    pub default: Option<ParamDefault>,
+    pub doc: &'static str,
+}
+
+/// Format an operator's call signature for display, e.g.
+/// `viewport.draw_brush_modal()` for a no-param op or
+/// `asset.cycle_array_layer(direction: i64 = 1)` for one-param ops.
+///
+/// Used by the editor tooltip and intended to be the same renderer the
+/// future REPL / DSL surfaces will reach for, so the signature in
+/// docs / chat / GUI all match.
+pub fn format_operator_signature(id: &str, params: &[ParamSpec]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(id.len() + 2);
+    out.push_str(id);
+    out.push('(');
+    for (i, spec) in params.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        let _ = write!(out, "{}: {}", spec.name, spec.ty.type_name());
+        if let Some(default) = &spec.default {
+            out.push_str(" = ");
+            append_default(&mut out, default);
+        }
+    }
+    out.push(')');
+    out
+}
+
+fn append_default(out: &mut String, value: &ParamDefault) {
+    use std::fmt::Write as _;
+    match *value {
+        ParamDefault::Bool(b) => {
+            let _ = write!(out, "{b}");
+        }
+        ParamDefault::Int(i) => {
+            let _ = write!(out, "{i}");
+        }
+        ParamDefault::Float(f) => {
+            let _ = write!(out, "{f}");
+        }
+        ParamDefault::Str(s) => {
+            let _ = write!(out, "\"{s}\"");
+        }
+        ParamDefault::Vec2(x, y) => {
+            let _ = write!(out, "vec2({x}, {y})");
+        }
+        ParamDefault::Vec3(x, y, z) => {
+            let _ = write!(out, "vec3({x}, {y}, {z})");
+        }
+        ParamDefault::Color(r, g, b, a) => {
+            let _ = write!(out, "Color::srgba({r}, {g}, {b}, {a})");
+        }
     }
 }
 

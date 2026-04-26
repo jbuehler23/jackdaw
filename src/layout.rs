@@ -3,11 +3,11 @@ use std::borrow::Cow;
 use bevy::{feathers::theme::ThemedText, picking::hover::Hovered, prelude::*, ui_widgets::observe};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
+    button::ButtonOperatorCall,
     icons::{Icon, IconFont},
     menu_bar, popover, separator, split_panel, status_bar,
     text_edit::{self, TextEditProps},
     tokens,
-    tooltip::Tooltip,
     tree_view::tree_container_drop_observers,
 };
 
@@ -523,27 +523,9 @@ fn toolbar(icon_font: Handle<Font>) -> impl Bundle {
         BackgroundColor(tokens::PANEL_HEADER_BG),
         children![
             // Gizmo mode buttons
-            toolbar_button(
-                Icon::Move3d,
-                "",
-                GizmoMode::Translate,
-                icon_font.clone(),
-                "Move (Esc)"
-            ),
-            toolbar_button(
-                Icon::Rotate3d,
-                "R",
-                GizmoMode::Rotate,
-                icon_font.clone(),
-                "Rotate (R)"
-            ),
-            toolbar_button(
-                Icon::Scale3d,
-                "T",
-                GizmoMode::Scale,
-                icon_font.clone(),
-                "Scale (T)"
-            ),
+            toolbar_button(Icon::Move3d, "", GizmoMode::Translate, icon_font.clone()),
+            toolbar_button(Icon::Rotate3d, "R", GizmoMode::Rotate, icon_font.clone()),
+            toolbar_button(Icon::Scale3d, "T", GizmoMode::Scale, icon_font.clone()),
             // Separator
             separator::separator(separator::SeparatorProps::vertical()),
             // Space toggle
@@ -551,51 +533,19 @@ fn toolbar(icon_font: Handle<Font>) -> impl Bundle {
             // Separator
             separator::separator(separator::SeparatorProps::vertical()),
             // Edit mode buttons
-            toolbar_edit_button(
-                Icon::MousePointer2,
-                EditToolButton::Object,
-                f.clone(),
-                "Object Mode"
-            ),
+            toolbar_edit_button(Icon::MousePointer2, EditToolButton::Object, f.clone()),
             toolbar_edit_button(
                 Icon::Box,
                 EditToolButton::Operator(ActivateDrawBrushModalOp::ID),
                 f.clone(),
-                // todo: add keybind
-                ActivateDrawBrushModalOp::LABEL
             ),
-            toolbar_edit_button(
-                Icon::CircleDot,
-                EditToolButton::Vertex,
-                f.clone(),
-                "Vertex Mode (1)"
-            ),
-            toolbar_edit_button(
-                Icon::GitCommitHorizontal,
-                EditToolButton::Edge,
-                f.clone(),
-                "Edge Mode (2)"
-            ),
-            toolbar_edit_button(
-                Icon::Hexagon,
-                EditToolButton::Face,
-                f.clone(),
-                "Face Mode (3)"
-            ),
-            toolbar_edit_button(
-                Icon::ScissorsLineDashed,
-                EditToolButton::Clip,
-                f.clone(),
-                "Clip Mode (4)"
-            ),
+            toolbar_edit_button(Icon::CircleDot, EditToolButton::Vertex, f.clone()),
+            toolbar_edit_button(Icon::GitCommitHorizontal, EditToolButton::Edge, f.clone()),
+            toolbar_edit_button(Icon::Hexagon, EditToolButton::Face, f.clone()),
+            toolbar_edit_button(Icon::ScissorsLineDashed, EditToolButton::Clip, f.clone()),
             // Separator
             separator::separator(separator::SeparatorProps::vertical()),
-            toolbar_edit_button(
-                Icon::Zap,
-                EditToolButton::Physics,
-                f.clone(),
-                "Physics Tool"
-            ),
+            toolbar_edit_button(Icon::Zap, EditToolButton::Physics, f.clone()),
             // Spacer pushes help button to the right
             (Node {
                 flex_grow: 1.0,
@@ -607,13 +557,7 @@ fn toolbar(icon_font: Handle<Font>) -> impl Bundle {
     )
 }
 
-fn toolbar_button(
-    icon: Icon,
-    label: &str,
-    mode: GizmoMode,
-    font: Handle<Font>,
-    tooltip: &str,
-) -> impl Bundle {
+fn toolbar_button(icon: Icon, label: &str, mode: GizmoMode, font: Handle<Font>) -> impl Bundle {
     let label = label.to_string();
     let op_id: &'static str = match mode {
         GizmoMode::Translate => GizmoModeTranslateOp::ID,
@@ -623,7 +567,10 @@ fn toolbar_button(
     (
         GizmoModeButton(mode),
         Hovered::default(),
-        Tooltip(tooltip.into()),
+        // Tooltip data source for the rich operator popover. Click
+        // dispatch happens in the hand-rolled observer below — see
+        // `toolbar_edit_button` for the same pattern.
+        ButtonOperatorCall::new(op_id),
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -668,7 +615,9 @@ fn toolbar_space_button(icon_font: Handle<Font>) -> impl Bundle {
     (
         GizmoSpaceButton,
         Hovered::default(),
-        Tooltip("Toggle World/Local (X)".into()),
+        // Tooltip data source for the rich operator popover. Click
+        // dispatch happens in the hand-rolled observer below.
+        ButtonOperatorCall::new(GizmoSpaceToggleOp::ID),
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -709,16 +658,31 @@ fn toolbar_space_button(icon_font: Handle<Font>) -> impl Bundle {
     )
 }
 
-fn toolbar_edit_button(
-    icon: Icon,
-    tool: EditToolButton,
-    font: Handle<Font>,
-    tooltip: &str,
-) -> impl Bundle {
+fn toolbar_edit_button(icon: Icon, tool: EditToolButton, font: Handle<Font>) -> impl Bundle {
+    // The hand-rolled `Pointer<Click>` observer below dispatches the
+    // operator directly without going through feathers' button click
+    // path, so [`ButtonOperatorCall`] here is purely a tooltip data
+    // source — the rich `OperatorTooltip` plugin reads the call's id
+    // (and would read params, if any were declared) to render the
+    // Blender-style label/description/signature popover. Because no
+    // `ButtonClickEvent` is fired, the editor's `dispatch_button_operator_call`
+    // observer never sees these and there's no double-dispatch.
+    let primary_op_id: Cow<'static, str> = match tool {
+        EditToolButton::Object => EditModeObjectOp::ID.into(),
+        EditToolButton::Vertex => EditModeVertexOp::ID.into(),
+        EditToolButton::Edge => EditModeEdgeOp::ID.into(),
+        EditToolButton::Face => EditModeFaceOp::ID.into(),
+        EditToolButton::Clip => EditModeClipOp::ID.into(),
+        // Physics is a toggle: clicking while active cancels, clicking
+        // while inactive activates. The tooltip shows the activate-side
+        // operator; the active-side cancel is also reachable via Escape.
+        EditToolButton::Physics => PhysicsActivateOp::ID.into(),
+        EditToolButton::Operator(op) => op.into(),
+    };
     (
         tool,
         Hovered::default(),
-        Tooltip(tooltip.into()),
+        ButtonOperatorCall::new(primary_op_id),
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,

@@ -17,15 +17,90 @@ pub struct ButtonClickEvent {
 }
 
 /// Attached to a button to declare that clicking it should dispatch
-/// the operator with this id. The editor registers the dispatch
-/// observer; feathers just carries the id so widgets can declare
-/// their intent without depending on the operator API.
+/// the operator with this id, optionally passing concrete parameters.
+///
+/// The editor's dispatch observer reads both the id and the params
+/// when the button fires; the editor's tooltip renderer reads them
+/// when the button is hovered, so a "Step Layer Forward" button shows
+/// `asset.cycle_array_layer(direction = 1)` and a "Step Layer
+/// Backward" button shows `asset.cycle_array_layer(direction = -1)`
+/// — same operator, different concrete invocations.
+///
+/// Feathers carries the data as a plain component so widgets can
+/// declare their intent without depending on the operator API or the
+/// runtime [`OperatorParameters`](super::OperatorParameters) type.
 #[derive(Component, Clone, Debug)]
-pub struct ButtonOperatorCall(pub Cow<'static, str>);
+pub struct ButtonOperatorCall {
+    pub id: Cow<'static, str>,
+    pub params: Vec<(Cow<'static, str>, ButtonParamValue)>,
+}
+
+/// Const-friendly subset of operator parameter values that buttons can
+/// statically declare. Mirrors the runtime `PropertyValue` enum used
+/// by `OperatorParameters` but uses `Cow<'static, str>` for strings so
+/// most call sites can construct it without allocating.
+#[derive(Clone, Debug)]
+pub enum ButtonParamValue {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(Cow<'static, str>),
+}
 
 impl ButtonOperatorCall {
+    /// Plain operator dispatch, no params.
     pub fn new(id: impl Into<Cow<'static, str>>) -> Self {
-        Self(id.into())
+        Self {
+            id: id.into(),
+            params: Vec::new(),
+        }
+    }
+
+    /// Add a parameter. Builder-style so call sites can chain.
+    #[must_use]
+    pub fn with_param(
+        mut self,
+        key: impl Into<Cow<'static, str>>,
+        value: impl Into<ButtonParamValue>,
+    ) -> Self {
+        self.params.push((key.into(), value.into()));
+        self
+    }
+}
+
+impl From<bool> for ButtonParamValue {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
+impl From<i64> for ButtonParamValue {
+    fn from(value: i64) -> Self {
+        Self::Int(value)
+    }
+}
+
+impl From<f64> for ButtonParamValue {
+    fn from(value: f64) -> Self {
+        Self::Float(value)
+    }
+}
+
+impl From<String> for ButtonParamValue {
+    fn from(value: String) -> Self {
+        Self::Str(Cow::Owned(value))
+    }
+}
+
+impl From<&'static str> for ButtonParamValue {
+    fn from(value: &'static str) -> Self {
+        Self::Str(Cow::Borrowed(value))
+    }
+}
+
+impl From<Cow<'static, str>> for ButtonParamValue {
+    fn from(value: Cow<'static, str>) -> Self {
+        Self::Str(value)
     }
 }
 
@@ -391,7 +466,7 @@ fn setup_button(
                 return;
             };
             if let Some(id) = call_operator {
-                ec.insert(ButtonOperatorCall(id));
+                ec.insert(ButtonOperatorCall::new(id));
             }
             ec.with_children(|parent| {
                 if let Some(icon) = left_icon {

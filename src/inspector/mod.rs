@@ -2,6 +2,7 @@ pub(crate) mod anim_diamond;
 mod brush_display;
 pub(crate) mod component_display;
 mod component_picker;
+pub(crate) mod component_tooltip;
 mod custom_props_display;
 mod material_display;
 pub(crate) mod ops;
@@ -111,6 +112,7 @@ pub struct InspectorPlugin;
 impl Plugin for InspectorPlugin {
     fn build(&self, app: &mut App) {
         app.register_type_data::<Name, ReflectDisplayable>()
+            .add_plugins(component_tooltip::plugin)
             .add_observer(component_display::remove_component_displays)
             .add_observer(component_display::add_component_displays)
             .add_observer(component_display::on_inspector_dirty)

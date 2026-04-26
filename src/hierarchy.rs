@@ -1164,9 +1164,6 @@ impl Command for RestoreLabel {
 }
 
 /// Begin inline rename of an entity in the hierarchy tree.
-///
-/// # Parameters
-/// - `entity`: the scene entity to rename, encoded via [`Entity::to_bits()`].
 #[operator(
     id = "hierarchy.rename_begin",
     label = "Rename Entity",
@@ -1174,6 +1171,7 @@ impl Command for RestoreLabel {
     modal = true,
     cancel = cancel_rename_begin,
     is_available = no_rename_in_progress,
+    params(entity(Entity, doc = "Scene entity to rename.")),
 )]
 pub(crate) fn rename_begin(
     params: In<OperatorParameters>,

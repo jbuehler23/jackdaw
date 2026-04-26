@@ -4,6 +4,7 @@ use std::sync::{Mutex, mpsc};
 use bevy::{
     asset::RenderAssetUsages,
     image::{CompressedImageFormats, ImageSampler, ImageType},
+    picking::hover::Hovered,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureSampleType},
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
@@ -11,8 +12,8 @@ use bevy::{
     window::{PrimaryWindow, RawHandleWrapper},
 };
 use jackdaw_feathers::text_edit::TextEditValue;
-use jackdaw_feathers::tooltip::ActiveTooltip;
-use jackdaw_feathers::{file_browser, icons, icons::IconFont, popover, tokens};
+use jackdaw_feathers::tooltip::Tooltip;
+use jackdaw_feathers::{file_browser, icons, icons::IconFont, tokens};
 use jackdaw_widgets::file_browser::{FileBrowserItem, FileItemDoubleClicked};
 use rfd::AsyncFileDialog;
 
@@ -425,31 +426,33 @@ fn refresh_browser_on_change(
                 ));
             }
 
-            // File name label
+            // File name label. Truncates inline when it overflows the
+            // cell; when truncated, attach a generic `Tooltip` so the
+            // user can hover to read the full name. Direct attach
+            // (no source-component bridge) — the data is already in
+            // hand at the call site.
             let is_truncated = entry.file_name.len() > 10;
             let display_name = if is_truncated {
                 format!("{}...", &entry.file_name[..8])
             } else {
                 entry.file_name.clone()
             };
-            let name_entity = commands
-                .spawn((
-                    Text::new(display_name),
-                    TextFont {
-                        font_size: 9.0,
-                        ..Default::default()
-                    },
-                    TextColor(tokens::TEXT_SECONDARY),
-                    Node {
-                        max_width: Val::Px(60.0),
-                        overflow: Overflow::clip(),
-                        ..Default::default()
-                    },
-                    ChildOf(thumb_entity),
-                ))
-                .id();
+            let mut name_label = commands.spawn((
+                Text::new(display_name),
+                TextFont {
+                    font_size: 9.0,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+                Node {
+                    max_width: Val::Px(60.0),
+                    overflow: Overflow::clip(),
+                    ..Default::default()
+                },
+                ChildOf(thumb_entity),
+            ));
             if is_truncated {
-                attach_tooltip(&mut commands, name_entity, entry.file_name.clone());
+                name_label.insert((Hovered::default(), Tooltip::title(entry.file_name.clone())));
             }
 
             // Hover
@@ -884,44 +887,6 @@ fn handle_select_asset_preview(
         preview_state.current_layer = 0;
         preview_state.layer_images.clear();
     }
-}
-
-pub fn attach_tooltip(commands: &mut Commands, entity: Entity, text: String) {
-    commands.entity(entity).observe(
-        move |trigger: On<Pointer<Over>>,
-              mut commands: Commands,
-              mut tooltip: ResMut<ActiveTooltip>| {
-            if let Some(old) = tooltip.0.take() {
-                commands.entity(old).try_despawn();
-            }
-            let anchor = trigger.event_target();
-            let tip = commands
-                .spawn(popover::popover(
-                    popover::PopoverProps::new(anchor)
-                        .with_placement(popover::PopoverPlacement::Bottom)
-                        .with_padding(4.0)
-                        .with_z_index(300),
-                ))
-                .id();
-            commands.spawn((
-                Text::new(text.clone()),
-                TextFont {
-                    font_size: tokens::FONT_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_PRIMARY),
-                ChildOf(tip),
-            ));
-            tooltip.0 = Some(tip);
-        },
-    );
-    commands.entity(entity).observe(
-        |_: On<Pointer<Out>>, mut commands: Commands, mut tooltip: ResMut<ActiveTooltip>| {
-            if let Some(old) = tooltip.0.take() {
-                commands.entity(old).try_despawn();
-            }
-        },
-    );
 }
 
 fn extract_array_layers(
@@ -1464,15 +1429,12 @@ fn has_array_preview(preview: Res<AssetPreviewState>) -> bool {
 
 /// Step the asset preview's selected layer by `direction`, wrapping at
 /// the texture's layer count.
-///
-/// # Parameters
-/// - `direction` (`i64`, default `+1`): how many layers to advance, can
-///   be negative to step backwards.
 #[operator(
     id = "asset.cycle_array_layer",
     label = "Cycle Array Layer",
     description = "Step the previewed array texture by one layer.",
-    is_available = has_array_preview
+    is_available = has_array_preview,
+    params(direction(i64, default = 1, doc = "How many layers to advance, can be negative.")),
 )]
 pub(crate) fn asset_cycle_array_layer(
     params: In<OperatorParameters>,

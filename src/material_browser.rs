@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use bevy::{
     feathers::theme::ThemedText,
     image::ImageLoaderSettings,
+    picking::hover::Hovered,
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
     ui_widgets::observe,
@@ -13,13 +14,13 @@ use jackdaw_feathers::{
     icons,
     text_edit::{self, TextEditCommitEvent, TextEditDragging, TextEditProps, TextEditValue},
     tokens,
+    tooltip::Tooltip,
 };
 use rfd::AsyncFileDialog;
 
 use crate::brush::LastUsedMaterial;
 use crate::{
     EditorEntity,
-    asset_browser::attach_tooltip,
     brush::{Brush, BrushEditMode, BrushSelection, EditMode, SetBrush},
     commands::CommandHistory,
     material_preview::MaterialPreviewState,
@@ -1398,30 +1399,31 @@ fn update_material_browser_ui(
             ));
         }
 
+        // Material name label. Truncates inline when it overflows the
+        // cell; when truncated, attach a generic `Tooltip` so the
+        // user can hover to read the full name.
         let is_truncated = name.len() > 10;
         let display_name = if is_truncated {
             format!("{}...", &name[..8])
         } else {
             name.clone()
         };
-        let name_entity = commands
-            .spawn((
-                Text::new(display_name),
-                TextFont {
-                    font_size: 9.0,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-                Node {
-                    max_width: Val::Px(60.0),
-                    overflow: Overflow::clip(),
-                    ..Default::default()
-                },
-                ChildOf(thumb_entity),
-            ))
-            .id();
+        let mut name_label = commands.spawn((
+            Text::new(display_name),
+            TextFont {
+                font_size: 9.0,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+            Node {
+                max_width: Val::Px(60.0),
+                overflow: Overflow::clip(),
+                ..Default::default()
+            },
+            ChildOf(thumb_entity),
+        ));
         if is_truncated {
-            attach_tooltip(&mut commands, name_entity, name.clone());
+            name_label.insert((Hovered::default(), Tooltip::title(name.clone())));
         }
 
         // Hover

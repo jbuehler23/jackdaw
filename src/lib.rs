@@ -82,7 +82,7 @@ use bevy::{
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::{RegisteredMenuEntry, RegisteredWindow};
 use jackdaw_feathers::dialog::EditorDialog;
-use jackdaw_feathers::{EditorFeathersPlugin, tooltip::Tooltip};
+use jackdaw_feathers::{EditorFeathersPlugin, button::ButtonOperatorCall};
 pub use jackdaw_loader::DylibLoaderPlugin;
 use jackdaw_widgets::menu_bar::MenuAction;
 use selection::Selection;
@@ -327,8 +327,6 @@ impl Plugin for EditorCorePlugin {
             .add_observer(handle_menu_action)
             .add_observer(on_create_clip_for_selection)
             .add_observer(on_create_blend_graph_for_selection)
-            .add_observer(on_header_new_clip)
-            .add_observer(on_header_new_blend_graph)
             .add_observer(on_clip_selector_change)
             .add_observer(on_clip_name_commit)
             .add_observer(on_duration_input_commit)
@@ -483,112 +481,80 @@ fn spawn_layout(mut commands: Commands, icon_font: Res<jackdaw_feathers::icons::
     commands.spawn(layout::editor_layout(&icon_font));
 }
 
-/// Observer: the header "+" button spawns a new keyframe clip on
-/// the same entity as the currently-selected clip. Reuses the same
-/// creation logic as `on_create_clip_for_selection` but sources the
-/// parent from the active clip's `ChildOf`, not from `Selection`.
-fn on_header_new_clip(
-    event: On<jackdaw_feathers::button::ButtonClickEvent>,
-    buttons: Query<(), With<jackdaw_animation::TimelineHeaderNewClipButton>>,
-    selected_clip: Res<jackdaw_animation::SelectedClip>,
-    parents: Query<&ChildOf>,
-    names: Query<&Name>,
-    mut commands: Commands,
-) {
-    if !buttons.contains(event.entity) {
+/// Spawn a new keyframe clip on the same target as the currently-
+/// selected clip and make it the new selection. Backs the
+/// [`ClipNewOp`] operator so the timeline header button and any
+/// future keybind / menu entry share one path.
+fn spawn_new_clip_for_selection(world: &mut World) {
+    let Some((target, target_name)) = selected_clip_target_with_name(world) else {
         return;
+    };
+    let clip = world
+        .spawn((
+            jackdaw_animation::Clip::default(),
+            Name::new(format!("{target_name} Clip")),
+            ChildOf(target),
+        ))
+        .id();
+    world.spawn((
+        jackdaw_animation::AnimationTrack::new(
+            "bevy_transform::components::transform::Transform",
+            "translation",
+        ),
+        Name::new(format!("{target_name} / translation")),
+        ChildOf(clip),
+    ));
+    if let Some(mut selected) = world.get_resource_mut::<jackdaw_animation::SelectedClip>() {
+        selected.0 = Some(clip);
     }
-    let Some(clip_entity) = selected_clip.0 else {
-        return;
-    };
-    let Ok(clip_parent) = parents.get(clip_entity) else {
-        return;
-    };
-    let target = clip_parent.parent();
-    let Ok(name) = names.get(target) else {
-        return;
-    };
-    let target_name = name.as_str().to_string();
-
-    commands.queue(move |world: &mut World| {
-        let clip = world
-            .spawn((
-                jackdaw_animation::Clip::default(),
-                Name::new(format!("{target_name} Clip")),
-                ChildOf(target),
-            ))
-            .id();
-        world.spawn((
-            jackdaw_animation::AnimationTrack::new(
-                "bevy_transform::components::transform::Transform",
-                "translation",
-            ),
-            Name::new(format!("{target_name} / translation")),
-            ChildOf(clip),
-        ));
-        if let Some(mut selected) = world.get_resource_mut::<jackdaw_animation::SelectedClip>() {
-            selected.0 = Some(clip);
-        }
-        if let Some(mut dirty) = world.get_resource_mut::<jackdaw_animation::TimelineDirty>() {
-            dirty.0 = true;
-        }
-    });
+    if let Some(mut dirty) = world.get_resource_mut::<jackdaw_animation::TimelineDirty>() {
+        dirty.0 = true;
+    }
 }
 
-/// Observer: the header blend-graph button spawns a new blend graph
-/// clip on the same entity as the currently-selected clip.
-fn on_header_new_blend_graph(
-    event: On<jackdaw_feathers::button::ButtonClickEvent>,
-    buttons: Query<(), With<jackdaw_animation::TimelineHeaderNewBlendGraphButton>>,
-    selected_clip: Res<jackdaw_animation::SelectedClip>,
-    parents: Query<&ChildOf>,
-    names: Query<&Name>,
-    mut commands: Commands,
-) {
-    if !buttons.contains(event.entity) {
-        return;
-    }
-    let Some(clip_entity) = selected_clip.0 else {
+/// Spawn a new blend-graph clip on the same target as the currently-
+/// selected clip. Backs the [`ClipNewBlendGraphOp`] operator.
+fn spawn_new_blend_graph_for_selection(world: &mut World) {
+    let Some((target, target_name)) = selected_clip_target_with_name(world) else {
         return;
     };
-    let Ok(clip_parent) = parents.get(clip_entity) else {
-        return;
-    };
-    let target = clip_parent.parent();
-    let Ok(name) = names.get(target) else {
-        return;
-    };
-    let target_name = name.as_str().to_string();
-
-    commands.queue(move |world: &mut World| {
-        let clip = world
-            .spawn((
-                jackdaw_animation::Clip::default(),
-                jackdaw_animation::AnimationBlendGraph,
-                jackdaw_node_graph::NodeGraph {
-                    title: format!("{target_name} Blend Graph"),
-                },
-                jackdaw_node_graph::GraphCanvasView::default(),
-                Name::new(format!("{target_name} Blend Graph")),
-                ChildOf(target),
-            ))
-            .id();
-        world.spawn((
-            jackdaw_node_graph::GraphNode {
-                node_type: "anim.output".into(),
-                position: Vec2::new(400.0, 160.0),
+    let clip = world
+        .spawn((
+            jackdaw_animation::Clip::default(),
+            jackdaw_animation::AnimationBlendGraph,
+            jackdaw_node_graph::NodeGraph {
+                title: format!("{target_name} Blend Graph"),
             },
-            jackdaw_animation::OutputNode,
-            Name::new("Output"),
-            ChildOf(clip),
-        ));
-        if let Some(mut selected) = world.get_resource_mut::<jackdaw_animation::SelectedClip>() {
-            selected.0 = Some(clip);
-        }
-        if let Some(mut dirty) = world.get_resource_mut::<jackdaw_animation::TimelineDirty>() {
-            dirty.0 = true;
-        }
-    });
+            jackdaw_node_graph::GraphCanvasView::default(),
+            Name::new(format!("{target_name} Blend Graph")),
+            ChildOf(target),
+        ))
+        .id();
+    world.spawn((
+        jackdaw_node_graph::GraphNode {
+            node_type: "anim.output".into(),
+            position: Vec2::new(400.0, 160.0),
+        },
+        jackdaw_animation::OutputNode,
+        Name::new("Output"),
+        ChildOf(clip),
+    ));
+    if let Some(mut selected) = world.get_resource_mut::<jackdaw_animation::SelectedClip>() {
+        selected.0 = Some(clip);
+    }
+    if let Some(mut dirty) = world.get_resource_mut::<jackdaw_animation::TimelineDirty>() {
+        dirty.0 = true;
+    }
+}
+
+/// Look up the parent target entity of the currently-selected clip
+/// along with its `Name`. Returns `None` when no clip is selected or
+/// the target has no `Name`.
+fn selected_clip_target_with_name(world: &World) -> Option<(Entity, String)> {
+    let clip_entity = world.resource::<jackdaw_animation::SelectedClip>().0?;
+    let target = world.get::<ChildOf>(clip_entity)?.parent();
+    let name = world.get::<Name>(target)?;
+    Some((target, name.as_str().to_string()))
 }
 
 /// Clip selector combobox changed. Maps the selected index to a
@@ -673,10 +639,12 @@ fn on_clip_name_commit(
     });
 }
 
-/// One-shot decorator: when timeline header buttons appear, stamp
-/// them with `ToolbarTooltip` so the existing tooltip system picks
-/// them up on hover. Runs every frame but short-circuits via
-/// `Added<T>` filters, so it only fires once per button spawn.
+/// One-shot decorator: when timeline transport / header buttons
+/// appear, stamp them with [`ButtonOperatorCall`] so the editor's
+/// click-dispatch observer routes them through the operator API and
+/// the rich hover tooltip resolves the operator's label / description
+/// / signature. Runs every frame but short-circuits via `Added<T>`
+/// filters, so it only fires once per button spawn.
 fn decorate_timeline_tooltips(
     play: Query<Entity, Added<jackdaw_animation::TimelinePlayButton>>,
     pause: Query<Entity, Added<jackdaw_animation::TimelinePauseButton>>,
@@ -686,19 +654,29 @@ fn decorate_timeline_tooltips(
     mut commands: Commands,
 ) {
     for e in &play {
-        commands.entity(e).insert(Tooltip("Play".into()));
+        commands
+            .entity(e)
+            .insert(ButtonOperatorCall::new(ClipPlayOp::ID));
     }
     for e in &pause {
-        commands.entity(e).insert(Tooltip("Pause".into()));
+        commands
+            .entity(e)
+            .insert(ButtonOperatorCall::new(ClipPauseOp::ID));
     }
     for e in &stop {
-        commands.entity(e).insert(Tooltip("Stop".into()));
+        commands
+            .entity(e)
+            .insert(ButtonOperatorCall::new(ClipStopOp::ID));
     }
     for e in &new_clip {
-        commands.entity(e).insert(Tooltip("New Clip".into()));
+        commands
+            .entity(e)
+            .insert(ButtonOperatorCall::new(ClipNewOp::ID));
     }
     for e in &new_blend {
-        commands.entity(e).insert(Tooltip("New Blend Graph".into()));
+        commands
+            .entity(e)
+            .insert(ButtonOperatorCall::new(ClipNewBlendGraphOp::ID));
     }
 }
 
@@ -1299,6 +1277,95 @@ pub(crate) fn clip_paste_keyframes(
 ) -> OperatorResult {
     commands.queue(paste_clipboard_keyframes);
     OperatorResult::Finished
+}
+
+/// Start playback on the active clip.
+#[operator(
+    id = "clip.play",
+    label = "Play",
+    description = "Start animation playback.",
+    allows_undo = false
+)]
+pub(crate) fn clip_play(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        world.write_message(jackdaw_animation::AnimationPlay);
+    });
+    OperatorResult::Finished
+}
+
+/// Pause playback on the active clip.
+#[operator(
+    id = "clip.pause",
+    label = "Pause",
+    description = "Pause animation playback.",
+    allows_undo = false
+)]
+pub(crate) fn clip_pause(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        world.write_message(jackdaw_animation::AnimationPause);
+    });
+    OperatorResult::Finished
+}
+
+/// Stop playback and rewind the playhead to the start of the clip.
+#[operator(
+    id = "clip.stop",
+    label = "Stop",
+    description = "Stop playback and rewind the playhead to the start of the clip.",
+    allows_undo = false
+)]
+pub(crate) fn clip_stop(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        world.write_message(jackdaw_animation::AnimationStop);
+    });
+    OperatorResult::Finished
+}
+
+/// Spawn a new keyframe clip on the same target as the currently
+/// selected clip, then make it the new selection.
+#[operator(
+    id = "clip.new",
+    label = "New Clip",
+    description = "Create a new keyframe clip alongside the currently-selected clip.",
+    is_available = clip_new_available,
+)]
+pub(crate) fn clip_new(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(spawn_new_clip_for_selection);
+    OperatorResult::Finished
+}
+
+/// Spawn a new blend-graph clip on the same target as the currently
+/// selected clip.
+#[operator(
+    id = "clip.new_blend_graph",
+    label = "New Blend Graph",
+    description = "Create a new blend-graph clip alongside the currently-selected clip.",
+    is_available = clip_new_available,
+)]
+pub(crate) fn clip_new_blend_graph(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(spawn_new_blend_graph_for_selection);
+    OperatorResult::Finished
+}
+
+/// Both [`ClipNewOp`] and [`ClipNewBlendGraphOp`] need a currently-
+/// selected clip to source the parent target from.
+fn clip_new_available(selected_clip: Res<jackdaw_animation::SelectedClip>) -> bool {
+    selected_clip.0.is_some()
 }
 
 fn step_timeline(world: &mut World, direction: i32) {
@@ -2004,14 +2071,12 @@ fn populate_menu(
 }
 
 /// Open a registered dock window by id.
-///
-/// # Parameters
-/// - `window_id`: the dock window's catalog id (e.g. `"jackdaw.timeline"`).
 #[operator(
     id = "window.open",
     label = "Open Window",
     description = "Open a dock window.",
-    allows_undo = false
+    allows_undo = false,
+    params(window_id(String, doc = "Catalog id of the dock window to open."))
 )]
 pub(crate) fn window_open(
     params: In<OperatorParameters>,
@@ -2054,14 +2119,23 @@ fn separator() -> (String, String) {
     ("---".to_string(), String::new())
 }
 
+/// Dispatch `op:`-prefixed [`MenuAction`] events emitted by callers that
+/// don't go through feathers' button click path (e.g. the Add Entity
+/// picker). The feathers menu bar dispatches op-actions through
+/// [`ButtonOperatorCall`](jackdaw_feathers::button::ButtonOperatorCall)
+/// directly and does not fire `MenuAction` for those, so this handler
+/// only sees free-standing `op:` events. Always plain `op:OP_ID` form
+/// — parametrised dispatch goes through `ButtonOperatorCall.params`.
 fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
-    let action = event.action.as_str();
-    if let Some(rest) = action.strip_prefix(OP_PREFIX) {
-        let raw = rest.to_string();
-        commands.queue(move |world: &mut World| {
-            crate::core_extension::dispatch_op_id_with_query_params(world, &raw);
-        });
-    }
+    let Some(op_id) = event.action.strip_prefix(OP_PREFIX) else {
+        return;
+    };
+    let op_id = op_id.to_string();
+    commands.queue(move |world: &mut World| {
+        if let Err(err) = world.operator(op_id.clone()).call() {
+            error!("operator dispatch failed for `{op_id}`: {err}");
+        }
+    });
 }
 
 /// TODO: This should not exist. All actions should be operators.
