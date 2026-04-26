@@ -22,7 +22,6 @@ use bevy::{
     ui::UiGlobalTransform,
 };
 use bevy_enhanced_input::prelude::Press;
-use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::{
     brush_planes_to_world, brushes_intersect, clean_degenerate_faces, compute_brush_geometry,
     compute_face_tangent_axes, compute_face_uvs, intersect_brushes, subtract_brush,
@@ -85,6 +84,16 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         ActionOf::<CoreExtensionInputContext>::new(ext),
         bindings![(MouseButton::Right, Press::default())],
     ));
+    ctx.spawn((
+        Action::<StartDrawBrushAddAppendAction>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![KeyCode::KeyB.with_mod_keys(ModKeys::ALT)],
+    ));
+    ctx.spawn((
+        Action::<StartDrawBrushCutAction>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![KeyCode::KeyC],
+    ));
     ctx.register_operator::<ActivateDrawBrushModalOp>()
         .register_operator::<AddBrushOp>()
         .register_operator::<ConfirmDrawBrushOp>()
@@ -106,17 +115,35 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .init_resource::<StableIdCounter>();
 }
 
+/// Draw a new brush in the viewport.
+///
+/// # Parameters
+/// - `mode`: `"Add"` (default) creates a new brush; `"Cut"` carves into
+///   the surrounding geometry.
+/// - `append`: when `true` and `mode = "Add"`, the new brush is folded
+///   into the currently-selected brush instead of standing alone.
 #[operator(id = "viewport.draw_brush_modal", label = "Draw Brush", cancel = cancel_draw_brush_modal, modal = true)]
 pub fn activate_draw_brush_modal(
-    _: In<OperatorParameters>,
+    params: In<OperatorParameters>,
     mut input_focus: ResMut<InputFocus>,
     mut draw_state: ResMut<DrawBrushState>,
     mut edit_mode: ResMut<crate::brush::EditMode>,
     mut brush_selection: ResMut<crate::brush::BrushSelection>,
-    modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+    selection: Res<Selection>,
+    brush_query: Query<(), With<Brush>>,
+    active: ActiveModalQuery,
 ) -> OperatorResult {
-    if modal.is_none() {
-        let mode = DrawMode::Add;
+    if !active.is_modal_running() {
+        let mode = match params.as_str("mode") {
+            Some("Cut") => DrawMode::Cut,
+            _ => DrawMode::Add,
+        };
+        let append = params.as_bool("append").unwrap_or(false);
+        let append_target = if mode == DrawMode::Add && append {
+            selection.primary().filter(|&e| brush_query.contains(e))
+        } else {
+            None
+        };
         input_focus.0 = None;
 
         // Exit brush edit mode if active
@@ -143,7 +170,7 @@ pub fn activate_draw_brush_modal(
             extrude_start_cursor: Vec2::ZERO,
             plane_locked: false,
             cursor_on_plane: None,
-            append_target: None,
+            append_target,
             drag_footprint: false,
             press_screen_pos: None,
             polygon_vertices: Vec::new(),
@@ -689,12 +716,7 @@ impl Plugin for DrawBrushPlugin {
             .add_systems(Startup, configure_draw_brush_gizmos)
             .add_systems(
                 Update,
-                (
-                    draw_brush_activate,
-                    draw_brush_update,
-                    draw_brush_release,
-                    draw_brush_confirm,
-                )
+                (draw_brush_update, draw_brush_release, draw_brush_confirm)
                     .chain()
                     .in_set(crate::EditorInteractionSystems),
             )
@@ -705,7 +727,9 @@ impl Plugin for DrawBrushPlugin {
                     manage_draw_preview_mesh.after(crate::brush::mesh::regenerate_brush_meshes),
                 )
                     .run_if(in_state(crate::AppState::Editor)),
-            );
+            )
+            .add_observer(dispatch_start_add_append)
+            .add_observer(dispatch_start_cut);
     }
 }
 
@@ -714,82 +738,33 @@ fn configure_draw_brush_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
     config.depth_bias = -1.0;
 }
 
-// TODO: Alt+B (append) and C (Cut start) still trigger via this
-// system because the modal `viewport.draw_brush_modal` doesn't yet
-// take parameters; folding those into BEI bindings needs the modal to
-// accept a `mode` / `append` param so a single op can serve all three
-// entry points. Bare B is handled by `viewport.draw_brush_modal`'s
-// own binding (registered in `add_to_extension`).
-fn draw_brush_activate(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    input_focus: Res<InputFocus>,
-    mut draw_state: ResMut<DrawBrushState>,
-    modal: Res<crate::modal_transform::ModalTransformState>,
-    mut edit_mode: ResMut<crate::brush::EditMode>,
-    mut brush_selection: ResMut<crate::brush::BrushSelection>,
-    selection: Res<Selection>,
-    brush_query: Query<(), With<Brush>>,
-) {
-    if draw_state.active.is_some() {
-        return;
-    }
+/// Marker action: Alt+B starts a draw that appends the new brush to
+/// the selected one. Observed by [`dispatch_start_add_append`] which
+/// fires `viewport.draw_brush_modal` with `append=true`.
+#[derive(Default, InputAction)]
+#[action_output(bool)]
+pub(crate) struct StartDrawBrushAddAppendAction;
 
-    // Alt+B = append to selected brush, C = Cut. (Bare B is handled
-    // by the BEI binding on `viewport.draw_brush_modal`.)
-    let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
-    let pressed_b = keyboard.just_pressed(KeyCode::KeyB);
-    let append = pressed_b && alt;
-    let mode = if pressed_b && alt {
-        DrawMode::Add
-    } else if keyboard.just_pressed(KeyCode::KeyC) {
-        DrawMode::Cut
-    } else {
-        return;
-    };
-    // Standard guards
-    if input_focus.0.is_some() || modal.active.is_some() {
-        return;
-    }
+/// Marker action: C starts a Cut-mode draw. Observed by
+/// [`dispatch_start_cut`] which fires `viewport.draw_brush_modal` with
+/// `mode="Cut"`.
+#[derive(Default, InputAction)]
+#[action_output(bool)]
+pub(crate) struct StartDrawBrushCutAction;
 
-    // Only append to selected brush when AppendToBrush matched; otherwise always create new
-    let append_target = if mode == DrawMode::Add && append {
-        selection.primary().filter(|&e| brush_query.contains(e))
-    } else {
-        None
-    };
+fn dispatch_start_add_append(_: On<Start<StartDrawBrushAddAppendAction>>, mut commands: Commands) {
+    commands
+        .operator(ActivateDrawBrushModalOp::ID)
+        .param("mode", "Add")
+        .param("append", true)
+        .call();
+}
 
-    // Exit brush edit mode if active
-    if *edit_mode != crate::brush::EditMode::Object {
-        *edit_mode = crate::brush::EditMode::Object;
-        brush_selection.entity = None;
-        brush_selection.faces.clear();
-        brush_selection.vertices.clear();
-        brush_selection.edges.clear();
-    }
-
-    draw_state.active = Some(ActiveDraw {
-        corner1: Vec3::ZERO,
-        corner2: Vec3::ZERO,
-        depth: 0.0,
-        phase: DrawPhase::PlacingFirstCorner,
-        mode,
-        plane: DrawPlane {
-            origin: Vec3::ZERO,
-            normal: Vec3::Y,
-            axis_u: Vec3::X,
-            axis_v: Vec3::Z,
-        },
-        extrude_start_cursor: Vec2::ZERO,
-        plane_locked: false,
-        cursor_on_plane: None,
-        append_target,
-        drag_footprint: false,
-        press_screen_pos: None,
-        polygon_vertices: Vec::new(),
-        polygon_cursor: None,
-        diagonal_snap: false,
-        cached_face_hit: None,
-    });
+fn dispatch_start_cut(_: On<Start<StartDrawBrushCutAction>>, mut commands: Commands) {
+    commands
+        .operator(ActivateDrawBrushModalOp::ID)
+        .param("mode", "Cut")
+        .call();
 }
 
 fn draw_brush_update(

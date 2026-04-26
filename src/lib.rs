@@ -1887,7 +1887,7 @@ fn populate_menu(
             descriptor.default_area.clone()
         };
         by_area.entry(area_key).or_default().push((
-            format!("window.open:{}", descriptor.id),
+            format!("{OP_PREFIX}window.open?window_id={}", descriptor.id),
             descriptor.name.clone(),
         ));
     }
@@ -1912,7 +1912,7 @@ fn populate_menu(
         window_entries.push(("---".to_string(), String::new()));
     }
     window_entries.push((
-        "window.reset_layout".to_string(),
+        format!("{OP_PREFIX}window.reset_layout"),
         "Reset Layout".to_string(),
     ));
 
@@ -2003,6 +2003,44 @@ fn populate_menu(
     );
 }
 
+/// Open a registered dock window by id.
+///
+/// # Parameters
+/// - `window_id`: the dock window's catalog id (e.g. `"jackdaw.timeline"`).
+#[operator(
+    id = "window.open",
+    label = "Open Window",
+    description = "Open a dock window.",
+    allows_undo = false
+)]
+pub(crate) fn window_open(
+    params: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    let Some(window_id) = params.as_str("window_id").map(str::to_string) else {
+        return OperatorResult::Cancelled;
+    };
+    commands.queue(move |world: &mut World| {
+        open_window_in_default_area(world, &window_id);
+    });
+    OperatorResult::Finished
+}
+
+/// Reset the dock layout to its default.
+#[operator(
+    id = "window.reset_layout",
+    label = "Reset Layout",
+    description = "Restore the default panel layout.",
+    allows_undo = false
+)]
+pub(crate) fn window_reset_layout(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(reset_layout);
+    OperatorResult::Finished
+}
+
 /// Build a menu-entry tuple whose action id is the given operator's
 /// `ID` wrapped in the feathers `op:` prefix. Keeps operator ids out
 /// of UI code — callers pass the `Op` type, not a hand-typed string.
@@ -2017,40 +2055,12 @@ fn separator() -> (String, String) {
 }
 
 fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
-    match event.action.as_str() {
-        action if action.starts_with(OP_PREFIX) => {
-            // Extension-contributed menu entry. The action id is the
-            // operator id with an "op:" prefix. Dispatching through the
-            // operator system rather than a parallel path keeps
-            // behaviour (history entry, poll, modal) identical to
-            // keybind-triggered operators.
-            let operator_id = action.strip_prefix(OP_PREFIX).unwrap().to_string();
-            commands.queue(move |world: &mut World| {
-                world
-                    .operator(operator_id)
-                    .settings(CallOperatorSettings {
-                        execution_context: ExecutionContext::Invoke,
-                        creates_history_entry: true,
-                    })
-                    .call()
-            });
-        }
-        action if action.starts_with("window.") => {
-            if action == "window.reset_layout" {
-                commands.queue(|world: &mut World| {
-                    reset_layout(world);
-                });
-                return;
-            }
-
-            if let Some(window_id) = action.strip_prefix("window.open:") {
-                let id = window_id.to_string();
-                commands.queue(move |world: &mut World| {
-                    open_window_in_default_area(world, &id);
-                });
-            }
-        }
-        _ => {}
+    let action = event.action.as_str();
+    if let Some(rest) = action.strip_prefix(OP_PREFIX) {
+        let raw = rest.to_string();
+        commands.queue(move |world: &mut World| {
+            crate::core_extension::dispatch_op_id_with_query_params(world, &raw);
+        });
     }
 }
 

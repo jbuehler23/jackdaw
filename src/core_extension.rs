@@ -50,16 +50,34 @@ fn dispatch_button_operator_call(
     let Ok(ButtonOperatorCall(id)) = button_op.get(event.entity) else {
         return;
     };
-    let id = id.clone();
+    let raw = id.clone().into_owned();
     commands.queue(move |world: &mut World| {
-        world
-            .operator(id)
-            .settings(CallOperatorSettings {
-                execution_context: ExecutionContext::Invoke,
-                creates_history_entry: true,
-            })
-            .call()
+        dispatch_op_id_with_query_params(world, &raw);
     });
+}
+
+/// Parse an operator id of the form `op_id?key=value&key2=value2` and
+/// dispatch through the operator framework with those parameters.
+/// Plain `op_id` (no `?`) dispatches with no params.
+///
+/// Used by both the button-click observer and the menu-action handler
+/// so the `op:window.open?window_id=scene_tree` style menu entries
+/// flow through one parser.
+pub(crate) fn dispatch_op_id_with_query_params(world: &mut World, raw: &str) {
+    let (op_id, query) = raw.split_once('?').unwrap_or((raw, ""));
+    let op_id = op_id.to_string();
+    let mut call = world.operator(op_id).settings(CallOperatorSettings {
+        execution_context: ExecutionContext::Invoke,
+        creates_history_entry: true,
+    });
+    for kv in query.split('&').filter(|s| !s.is_empty()) {
+        if let Some((k, v)) = kv.split_once('=') {
+            call = call.param(k.to_string(), v.to_string());
+        }
+    }
+    if let Err(err) = call.call() {
+        error!("operator dispatch failed for `{raw}`: {err}");
+    }
 }
 
 #[derive(Default)]
@@ -95,6 +113,8 @@ impl JackdawExtension for JackdawCoreExtension {
 
         ctx.register_operator::<CancelModalOp>();
         ctx.register_operator::<crate::asset_browser::ApplyTextureOp>();
+        ctx.register_operator::<crate::WindowOpenOp>()
+            .register_operator::<crate::WindowResetLayoutOp>();
         ctx.register_operator::<crate::ClipDeleteKeyframesOp>()
             .register_operator::<crate::ClipTimelineStepLeftOp>()
             .register_operator::<crate::ClipTimelineStepRightOp>()
