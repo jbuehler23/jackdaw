@@ -12,28 +12,20 @@ use jackdaw_geometry::{brush_planes_to_world, compute_brush_geometry};
 use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
 
 /// Reactive cleanup: when the active brush entity is no longer
-/// selected, drop out of brush-edit mode. Also handles Escape to exit
-/// brush-edit (deferring to clip mode's own clear when points are
-/// pending). The digit-key mode switches (1/2/3/4) moved to
-/// [`crate::edit_mode_ops`]; the toolbar buttons there dispatch the
-/// same operators.
-pub(super) fn handle_edit_mode_keys(
+/// selected, drop out of brush-edit mode. The digit-key mode switches
+/// (1/2/3/4) and the Escape exit-to-Object live in
+/// [`crate::edit_mode_ops`].
+pub(super) fn drop_brush_edit_on_deselect(
     input_focus: Res<InputFocus>,
-    keyboard: Res<ButtonInput<KeyCode>>,
     selection: Res<Selection>,
     mut edit_mode: ResMut<EditMode>,
     mut brush_selection: ResMut<BrushSelection>,
     modal: Res<crate::modal_transform::ModalTransformState>,
-    face_drag: Res<BrushDragState>,
-    vertex_drag: Res<VertexDragState>,
-    edge_drag: Res<EdgeDragState>,
-    clip_state: Res<ClipState>,
 ) {
     if input_focus.0.is_some() || modal.active.is_some() {
         return;
     }
 
-    // Exit brush edit mode if the brush entity gets deselected
     if let EditMode::BrushEdit(_) = *edit_mode
         && let Some(brush_entity) = brush_selection.entity
         && selection.primary() != Some(brush_entity)
@@ -45,28 +37,6 @@ pub(super) fn handle_edit_mode_keys(
         }
         *edit_mode = EditMode::Object;
         brush_selection.clear();
-    }
-
-    // Don't switch modes while any drag is active
-    if face_drag.active || vertex_drag.active || edge_drag.active {
-        return;
-    }
-    if face_drag.pending.is_some() || vertex_drag.pending.is_some() || edge_drag.pending.is_some() {
-        return;
-    }
-
-    // Escape: exit to Object (unless Clip mode with pending points,
-    // which the `brush.clip.clear` operator handles separately).
-    if keyboard.just_pressed(KeyCode::Escape) {
-        if let EditMode::BrushEdit(BrushEditMode::Clip) = *edit_mode
-            && !clip_state.points.is_empty()
-        {
-            return;
-        }
-        if matches!(*edit_mode, EditMode::BrushEdit(_)) {
-            *edit_mode = EditMode::Object;
-            brush_selection.clear();
-        }
     }
 }
 

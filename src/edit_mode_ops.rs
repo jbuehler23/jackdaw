@@ -13,7 +13,8 @@ use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
 use crate::brush::{
-    BrushDragState, BrushEditMode, BrushSelection, EdgeDragState, EditMode, VertexDragState,
+    BrushDragState, BrushEditMode, BrushSelection, ClipState, EdgeDragState, EditMode,
+    VertexDragState,
 };
 use crate::core_extension::CoreExtensionInputContext;
 use crate::draw_brush::DrawBrushState;
@@ -24,31 +25,81 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<EditModeVertexOp>()
         .register_operator::<EditModeEdgeOp>()
         .register_operator::<EditModeFaceOp>()
-        .register_operator::<EditModeClipOp>();
+        .register_operator::<EditModeClipOp>()
+        .register_operator::<BrushExitEditModeOp>();
 
     let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<EditModeVertexOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Digit1, Press::default())],
-        ));
-        world.spawn((
-            Action::<EditModeEdgeOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Digit2, Press::default())],
-        ));
-        world.spawn((
-            Action::<EditModeFaceOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Digit3, Press::default())],
-        ));
-        world.spawn((
-            Action::<EditModeClipOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Digit4, Press::default())],
-        ));
-    });
+    ctx.spawn((
+        Action::<EditModeVertexOp>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![(KeyCode::Digit1, Press::default())],
+    ));
+    ctx.spawn((
+        Action::<EditModeEdgeOp>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![(KeyCode::Digit2, Press::default())],
+    ));
+    ctx.spawn((
+        Action::<EditModeFaceOp>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![(KeyCode::Digit3, Press::default())],
+    ));
+    ctx.spawn((
+        Action::<EditModeClipOp>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![(KeyCode::Digit4, Press::default())],
+    ));
+    ctx.spawn((
+        Action::<BrushExitEditModeOp>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![(KeyCode::Escape, Press::default())],
+    ));
+}
+
+/// True only when the user is in `BrushEdit` and an Escape press
+/// should drop them back to Object mode (no modal running, no drag
+/// in flight, not in Clip mode with pending points). Clip-with-points
+/// is owned by `brush.clip.clear`'s Escape binding instead.
+fn can_exit_brush_edit(
+    edit_mode: Res<EditMode>,
+    active: ActiveModalQuery,
+    face_drag: Res<BrushDragState>,
+    vertex_drag: Res<VertexDragState>,
+    edge_drag: Res<EdgeDragState>,
+    clip_state: Res<ClipState>,
+) -> bool {
+    if active.is_modal_running() {
+        return false;
+    }
+    if face_drag.active || vertex_drag.active || edge_drag.active {
+        return false;
+    }
+    if face_drag.pending.is_some() || vertex_drag.pending.is_some() || edge_drag.pending.is_some() {
+        return false;
+    }
+    match *edit_mode {
+        EditMode::BrushEdit(BrushEditMode::Clip) if !clip_state.points.is_empty() => false,
+        EditMode::BrushEdit(_) => true,
+        _ => false,
+    }
+}
+
+/// Drop out of brush-edit mode back to Object.
+#[operator(
+    id = "brush.exit_edit_mode",
+    label = "Exit Edit Mode",
+    description = "Stop editing the brush and return to selecting whole entities.",
+    is_available = can_exit_brush_edit,
+    allows_undo = false,
+)]
+pub(crate) fn brush_exit_edit_mode(
+    _: In<OperatorParameters>,
+    mut edit_mode: ResMut<EditMode>,
+    mut brush_selection: ResMut<BrushSelection>,
+) -> OperatorResult {
+    *edit_mode = EditMode::Object;
+    brush_selection.clear();
+    OperatorResult::Finished
 }
 
 /// True when switching edit modes is safe — no text field has focus,

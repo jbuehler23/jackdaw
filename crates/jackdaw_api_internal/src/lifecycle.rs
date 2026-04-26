@@ -78,7 +78,6 @@ impl Default for ResourceId {
 pub struct OperatorEntity {
     pub(crate) id: &'static str,
     pub(crate) label: &'static str,
-    #[expect(dead_code, reason = "This should go into the UI eventually")]
     pub(crate) description: &'static str,
     pub(crate) execute: OperatorSystemId,
     pub(crate) invoke: OperatorSystemId,
@@ -91,6 +90,24 @@ pub struct OperatorEntity {
     pub(crate) cancel: Option<SystemId<()>>,
     pub(crate) modal: bool,
     pub(crate) allows_undo: bool,
+}
+
+impl OperatorEntity {
+    /// Stable string id (e.g. `"physics.enable"`).
+    pub fn id(&self) -> &'static str {
+        self.id
+    }
+
+    /// User-facing label for menus, buttons, and the keybind UI.
+    pub fn label(&self) -> &'static str {
+        self.label
+    }
+
+    /// One-sentence description shown in tooltips and the (planned)
+    /// command palette.
+    pub fn description(&self) -> &'static str {
+        self.description
+    }
 }
 
 /// Tracks the currently-active modal operator. Exactly zero or one is

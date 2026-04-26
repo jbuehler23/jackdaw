@@ -43,6 +43,7 @@ pub mod material_preview;
 pub mod modal_transform;
 pub mod navmesh;
 pub mod new_project;
+pub mod operator_tooltip;
 pub mod physics_brush_bridge;
 pub mod physics_tool;
 pub mod pie;
@@ -253,6 +254,7 @@ impl Plugin for EditorCorePlugin {
             .add_plugins(jackdaw_avian_integration::simulation::PhysicsSimulationPlugin)
             .add_plugins(physics_brush_bridge::PhysicsBrushBridgePlugin)
             .add_plugins(physics_tool::PhysicsToolPlugin)
+            .add_plugins(operator_tooltip::OperatorTooltipPlugin)
             .add_plugins(jackdaw_node_graph::NodeGraphPlugin)
             .add_plugins(jackdaw_animation::AnimationPlugin)
             .add_plugins(jackdaw_panels::DockPlugin)
@@ -314,7 +316,6 @@ impl Plugin for EditorCorePlugin {
                     register_animation_entities_in_ast,
                     follow_scene_selection_to_clip,
                     sync_selected_keyframes_from_selection,
-                    handle_keyframe_delete_intercept,
                     handle_timeline_shortcuts,
                     auto_save_layout_on_change,
                     add_entity_picker::filter_add_entity_picker,
@@ -1058,64 +1059,71 @@ impl DespawnKeyframeCmd {
 /// remaining non-keyframe entities normally. Both halves land on
 /// the history as independent commands, which is fine: undo
 /// reverses them in push order.
-fn handle_keyframe_delete_intercept(world: &mut World) {
-    let keyboard = world.resource::<ButtonInput<KeyCode>>();
-    if !keyboard.just_pressed(KeyCode::Delete) && !keyboard.just_pressed(KeyCode::Backspace) {
-        return;
-    }
-
-    // Don't process delete while a text input is focused. Matches
-    // the guard in `handle_entity_keys`.
-    if world
-        .resource::<bevy::input_focus::InputFocus>()
-        .0
-        .is_some()
-    {
-        return;
-    }
-
-    let selected: Vec<Entity> = world.resource::<selection::Selection>().entities.clone();
-    if selected.is_empty() {
-        return;
-    }
-
-    // Split the selection into keyframe entities and everything else.
-    let mut kf_cmds: Vec<Box<dyn jackdaw_commands::EditorCommand>> = Vec::new();
-    let mut keyframe_ids: Vec<Entity> = Vec::new();
-    for &entity in &selected {
-        if let Some(cmd) = DespawnKeyframeCmd::try_from_entity(world, entity) {
-            keyframe_ids.push(entity);
-            kf_cmds.push(Box::new(cmd));
+/// Delete all keyframe entities currently in [`selection::Selection`]
+/// as a single undoable group. Strips them from the selection first so
+/// any non-keyframe entities still in the selection get processed by
+/// the generic [`entity_ops::EntityDeleteOp`] in the same press.
+#[operator(
+    id = "clip.delete_keyframes",
+    label = "Delete Keyframes",
+    description = "Remove the selected animation keyframes.",
+    is_available = has_selected_keyframes,
+)]
+pub(crate) fn clip_delete_keyframes(
+    _: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        let selected: Vec<Entity> = world.resource::<selection::Selection>().entities.clone();
+        let mut kf_cmds: Vec<Box<dyn jackdaw_commands::EditorCommand>> = Vec::new();
+        let mut keyframe_ids: Vec<Entity> = Vec::new();
+        for &entity in &selected {
+            if let Some(cmd) = DespawnKeyframeCmd::try_from_entity(world, entity) {
+                keyframe_ids.push(entity);
+                kf_cmds.push(Box::new(cmd));
+            }
         }
-    }
-
-    if kf_cmds.is_empty() {
-        return;
-    }
-
-    // Strip the keyframes out of Selection so the downstream
-    // generic delete path doesn't see them.
-    {
-        let mut selection = world.resource_mut::<selection::Selection>();
-        selection.entities.retain(|e| !keyframe_ids.contains(e));
-    }
-    for entity in &keyframe_ids {
-        if let Ok(mut ent) = world.get_entity_mut(*entity) {
-            ent.remove::<selection::Selected>();
+        if kf_cmds.is_empty() {
+            return;
         }
-    }
+        {
+            let mut selection = world.resource_mut::<selection::Selection>();
+            selection.entities.retain(|e| !keyframe_ids.contains(e));
+        }
+        for entity in &keyframe_ids {
+            if let Ok(mut ent) = world.get_entity_mut(*entity) {
+                ent.remove::<selection::Selected>();
+            }
+        }
+        for cmd in &mut kf_cmds {
+            cmd.execute(world);
+        }
+        let group = commands::CommandGroup {
+            commands: kf_cmds,
+            label: "Delete keyframes".to_string(),
+        };
+        let mut history = world.resource_mut::<jackdaw_commands::CommandHistory>();
+        history.push_executed(Box::new(group));
+    });
+    OperatorResult::Finished
+}
 
-    // Execute each keyframe despawn and wrap them in a single
-    // group so Ctrl+Z undoes the whole delete at once.
-    for cmd in &mut kf_cmds {
-        cmd.execute(world);
+fn has_selected_keyframes(
+    input_focus: Res<bevy::input_focus::InputFocus>,
+    selection: Res<selection::Selection>,
+    keyframes: Query<
+        (),
+        bevy::ecs::query::Or<(
+            With<jackdaw_animation::Vec3Keyframe>,
+            With<jackdaw_animation::QuatKeyframe>,
+            With<jackdaw_animation::F32Keyframe>,
+        )>,
+    >,
+) -> bool {
+    if input_focus.0.is_some() {
+        return false;
     }
-    let group = commands::CommandGroup {
-        commands: kf_cmds,
-        label: "Delete keyframes".to_string(),
-    };
-    let mut history = world.resource_mut::<jackdaw_commands::CommandHistory>();
-    history.push_executed(Box::new(group));
+    selection.entities.iter().any(|&e| keyframes.contains(e))
 }
 
 /// Typed, undo-aware spawn command for animation keyframes. Mirror of

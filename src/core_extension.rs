@@ -95,6 +95,15 @@ impl JackdawExtension for JackdawCoreExtension {
 
         ctx.register_operator::<CancelModalOp>();
         ctx.register_operator::<crate::asset_browser::ApplyTextureOp>();
+        ctx.register_operator::<crate::ClipDeleteKeyframesOp>();
+        ctx.spawn((
+            Action::<crate::ClipDeleteKeyframesOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ctx.id()),
+            bindings![
+                (KeyCode::Delete, Press::default()),
+                (KeyCode::Backspace, Press::default()),
+            ],
+        ));
         crate::draw_brush::add_to_extension(ctx);
 
         crate::scene_ops::add_to_extension(ctx);

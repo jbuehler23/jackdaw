@@ -220,7 +220,7 @@ impl Plugin for BrushPlugin {
             .add_systems(
                 Update,
                 (
-                    interaction::handle_edit_mode_keys,
+                    interaction::drop_brush_edit_on_deselect,
                     interaction::brush_face_hover,
                     crate::brush_drag_ops::face_drag_invoke_trigger,
                     crate::brush_drag_ops::vertex_drag_invoke_trigger,
