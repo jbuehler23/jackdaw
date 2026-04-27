@@ -1295,7 +1295,7 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
             TextFont {
                 font: editor_font.clone(),
                 font_size: tokens::FONT_SM,
-                ..Default::default()
+                ..default()
             },
             TextColor(tokens::TEXT_SECONDARY),
             ChildOf(card),
