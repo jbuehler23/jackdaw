@@ -165,7 +165,7 @@ fn spawn_tooltip_content(commands: &mut Commands, popover: Entity, tip: &Tooltip
             TextFont {
                 font_size: tokens::FONT_SM,
                 weight: FontWeight::MEDIUM,
-                ..Default::default()
+                ..default()
             },
             TextColor(tokens::TEXT_PRIMARY),
             ChildOf(popover),
