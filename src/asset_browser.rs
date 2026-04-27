@@ -435,7 +435,7 @@ fn refresh_browser_on_change(
                 Text::new(display_name),
                 TextFont {
                     font_size: 9.0,
-                    ..Default::default()
+                    ..default()
                 },
                 TextColor(tokens::TEXT_SECONDARY),
                 Node {
