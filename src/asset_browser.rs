@@ -441,7 +441,7 @@ fn refresh_browser_on_change(
                 Node {
                     max_width: Val::Px(60.0),
                     overflow: Overflow::clip(),
-                    ..Default::default()
+                    ..default()
                 },
                 ChildOf(thumb_entity),
             ));
