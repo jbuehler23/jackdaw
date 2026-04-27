@@ -10,7 +10,7 @@
 //! state stale.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::*;
+use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
 use crate::core_extension::CoreExtensionInputContext;
@@ -24,12 +24,18 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             Action::<HistoryUndoOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyZ.with_mod_keys(ModKeys::CONTROL)],
+            bindings![(
+                KeyCode::KeyZ.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            )],
         ));
         world.spawn((
             Action::<HistoryRedoOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyZ.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT)],
+            bindings![(
+                KeyCode::KeyZ.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
+                Press::default(),
+            )],
         ));
     });
 }

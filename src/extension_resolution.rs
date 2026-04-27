@@ -6,7 +6,7 @@ use bevy::{platform::collections::HashMap, prelude::*};
 use jackdaw_api::prelude::ExtensionKind;
 use jackdaw_api_internal::{extensions_config::read_extension_config, lifecycle::ExtensionCatalog};
 
-/// Extensions that must always be loaded — the editor panics without
+/// Extensions that must always be loaded; the editor panics without
 /// the resources they install. Anything listed here is force-enabled
 /// in [`resolve_enabled_list`] regardless of what's persisted on
 /// disk, so a stale config (e.g. one written before the extension

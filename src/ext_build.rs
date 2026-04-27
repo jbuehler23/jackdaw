@@ -12,7 +12,7 @@
 //! a binary target and errors on library-only projects ("No
 //! binaries available!"). Scaffolded jackdaw projects are cdylibs
 //! so the editor can `dlopen` them, so `bevy build` can't drive
-//! them. We still use `bevy new` for scaffolding — that part of
+//! them. We still use `bevy new` for scaffolding; that part of
 //! the toolchain fits cleanly.
 //!
 //! [`build_extension_project`] is the simple entry point.
@@ -311,7 +311,7 @@ pub fn build_extension_project_with_progress(
 
 /// Parse a single line from `cargo --message-format=json-…`. On a
 /// `compiler-artifact` record, bump `artifacts_done` + update
-/// `current_crate`. Errors are swallowed — cargo sometimes emits
+/// `current_crate`. Errors are swallowed; cargo sometimes emits
 /// non-JSON prefix lines, which we ignore.
 fn parse_json_line(line: &str, sink: Option<&Arc<Mutex<BuildProgress>>>) {
     let Some(sink) = sink else { return };
@@ -349,7 +349,7 @@ fn parse_json_line(line: &str, sink: Option<&Arc<Mutex<BuildProgress>>>) {
 }
 
 /// Run `cargo metadata` to count the packages in the resolve set.
-/// Returns `None` on any failure — the progress UI will render an
+/// Returns `None` on any failure; the progress UI will render an
 /// indeterminate bar instead.
 ///
 /// On a fresh bevy project the first `cargo metadata` call takes a
@@ -380,7 +380,7 @@ fn estimate_total_artifacts(project_dir: &Path) -> Option<u32> {
 /// `<project>/target/debug/` still references the old SDK symbol
 /// hashes. Cleaning just the user's package (not `-p bevy`) drops
 /// that stale artifact without forcing a multi-minute bevy
-/// rebuild — the bevy rlib cache stays.
+/// rebuild; the bevy rlib cache stays.
 ///
 /// Blocks until cargo exits. Call from a task pool.
 pub fn cargo_clean_project(project_dir: &Path) -> Result<(), BuildError> {
@@ -415,7 +415,7 @@ pub fn cargo_clean_project(project_dir: &Path) -> Result<(), BuildError> {
 }
 
 /// Parse `name = "..."` out of a project's `Cargo.toml`. Shared
-/// with [`artifact_file_name`] — when the manifest doesn't declare
+/// with [`artifact_file_name`]; when the manifest doesn't declare
 /// a name (shouldn't happen for anything cargo accepted), returns
 /// `"unnamed"`.
 fn package_name_from_manifest(project_dir: &Path) -> String {
@@ -438,7 +438,7 @@ fn package_name_from_manifest(project_dir: &Path) -> String {
 /// open time: if the manifest is a plain binary crate (e.g., the
 /// editor's own source tree, or a user opening any non-extension
 /// cargo project) we skip the build pipeline entirely and let them
-/// in — otherwise `cargo build` compiles the whole dep tree only to
+/// in; otherwise `cargo build` compiles the whole dep tree only to
 /// fail the artifact check at the end.
 ///
 /// Same line-based parsing style as [`package_name_from_manifest`]

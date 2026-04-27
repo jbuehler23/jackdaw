@@ -203,7 +203,7 @@ pub fn scaffold_project(
 /// warning. The user can still build through jackdaw's UI, which
 /// injects env vars directly regardless of on-disk discovery.
 ///
-/// We never clobber an existing `.cargo/config.toml` — if the user
+/// We never clobber an existing `.cargo/config.toml`; if the user
 /// has customised theirs, we log a hint and leave it alone. The
 /// template shouldn't ship one, so in practice we always write.
 fn write_cargo_config(project_path: &Path) {
@@ -255,8 +255,8 @@ fn render_cargo_config(paths: &SdkPaths) -> String {
     // from SdkPaths are always absolute.
     format!(
         "# Activates jackdaw-rustc-wrapper so that any cargo\n\
-         # invocation in this project directory — terminal builds,\n\
-         # rust-analyzer, VSCode tasks — links the resulting cdylib\n\
+         # invocation in this project directory; terminal builds,\n\
+         # rust-analyzer, VSCode tasks; links the resulting cdylib\n\
          # against the same bevy compilation the jackdaw editor\n\
          # ships with, keeping TypeIds in sync.\n\
          #\n\

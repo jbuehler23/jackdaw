@@ -53,7 +53,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.spawn((
         Action::<PhysicsActivateOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![KeyCode::KeyP.with_mod_keys(ModKeys::SHIFT)],
+        bindings![(
+            KeyCode::KeyP.with_mod_keys(ModKeys::SHIFT),
+            Press::default(),
+        )],
     ));
     ctx.spawn((
         Action::<PhysicsCommitOp>::new(),
@@ -101,13 +104,14 @@ fn is_physics_modal_running(active: ActiveModalQuery) -> bool {
 }
 
 /// Drop the placed objects and exit the physics tool, keeping their
-/// settled positions.
+/// settled positions. `allows_undo = true` so undoing the commit
+/// returns to physics mode at those positions for further nudging
+/// or re-simulation.
 #[operator(
     id = "physics.commit",
     label = "Commit Physics Tool",
     description = "Keep where the physics objects landed and exit the tool.",
     is_available = is_physics_modal_running,
-    allows_undo = false,
 )]
 pub(crate) fn physics_commit(
     _: In<OperatorParameters>,

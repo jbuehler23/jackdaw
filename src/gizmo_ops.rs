@@ -47,7 +47,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 }
 
 /// Gizmo mode changes are ignored while any overlay is typing into a
-/// text field or a modal operator is in flight — matches the guards
+/// text field or a modal operator is in flight; matches the guards
 /// the legacy handler used to apply.
 fn can_change_gizmo(
     input_focus: Res<InputFocus>,

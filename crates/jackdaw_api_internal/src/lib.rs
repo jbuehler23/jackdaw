@@ -96,8 +96,8 @@ pub mod prelude {
         macros::operator,
         operator::{
             CallOperatorSettings, ExecutionContext, Operator, OperatorCommandsExt as _,
-            OperatorParameters, OperatorResult, OperatorSystemId, OperatorWorldExt as _,
-            ParamDefault, ParamSpec, ParamType, format_operator_signature,
+            OperatorParameters, OperatorResult, OperatorSignature, OperatorSystemId,
+            OperatorWorldExt as _, ParamSpec,
         },
         pie::PlayState,
         runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems},

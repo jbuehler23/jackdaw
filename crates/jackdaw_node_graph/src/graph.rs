@@ -43,7 +43,7 @@ impl Default for GraphCanvasView {
 ///
 /// `node_type` keys into the [`NodeTypeRegistry`](crate::NodeTypeRegistry) for
 /// the node's visual and terminal schema. Domain-specific parameters live on
-/// sibling components spawned alongside the `GraphNode` — consumer crates add
+/// sibling components spawned alongside the `GraphNode`; consumer crates add
 /// whatever reflected components they need and edit them through the existing
 /// inspector reflect-field UI.
 #[derive(Component, Reflect, Clone, Debug, Serialize, Deserialize, Default)]

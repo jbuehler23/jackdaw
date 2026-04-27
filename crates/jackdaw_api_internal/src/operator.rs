@@ -73,7 +73,7 @@ pub(super) fn plugin(app: &mut App) {
 /// `ButtonOperatorCall` component (from `jackdaw_feathers::button`), usually via
 /// `ButtonProps::call_operator("sample.place_cube")`. The editor registers
 /// a global observer that, on `ButtonClickEvent`, calls
-/// [`OperatorWorldExt::operator`] with the stored id — so no per-button
+/// [`OperatorWorldExt::operator`] with the stored id; so no per-button
 /// click handler is needed.
 pub trait Operator: InputAction + 'static {
     const ID: &'static str;
@@ -130,6 +130,13 @@ pub trait Operator: InputAction + 'static {
     fn register_cancel(commands: &mut Commands) -> Option<SystemId<()>> {
         None
     }
+
+    /// `Display` adapter rendering this operator's call signature
+    /// (`id(name: type = default, ...)`). Shared by the tooltip and
+    /// scripting surfaces.
+    fn signature() -> OperatorSignature<'static> {
+        OperatorSignature::new(Self::ID, Self::PARAMETERS)
+    }
 }
 
 #[derive(Debug, Clone, Default, Deref, DerefMut, Reflect)]
@@ -163,150 +170,94 @@ impl OperatorParameters {
     /// Read a `String` parameter by key.
     pub fn as_str(&self, key: &str) -> Option<&str> {
         match self.get(key)? {
-            PropertyValue::String(s) => Some(s.as_str()),
+            PropertyValue::String(s) => Some(s.as_ref()),
             _ => None,
         }
     }
 
-    /// Read an [`Entity`] parameter, decoded from the `i64` bits a
-    /// caller stored via [`Entity::to_bits()`]. Returns `None` if the
-    /// key is missing or not an `Int`.
+    /// Read an [`Entity`] parameter. `None` if the key is missing or
+    /// the value isn't a [`PropertyValue::Entity`].
     pub fn as_entity(&self, key: &str) -> Option<Entity> {
-        self.as_int(key).map(|bits| Entity::from_bits(bits as u64))
-    }
-}
-
-/// Type tag for an operator parameter, used by [`ParamSpec`] to describe
-/// the schema of a single parameter without prescribing how the value
-/// is extracted at runtime.
-///
-/// Maps to the variants of [`PropertyValue`] plus an explicit `Entity`
-/// tag for the `i64`-bits encoding used by [`OperatorParameters::as_entity`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ParamType {
-    Bool,
-    Int,
-    Float,
-    String,
-    Vec2,
-    Vec3,
-    Color,
-    Entity,
-}
-
-impl ParamType {
-    /// Short, user-facing type label used in tooltip signatures
-    /// (e.g. `i64`, `f64`, `Entity`).
-    pub const fn type_name(self) -> &'static str {
-        match self {
-            ParamType::Bool => "bool",
-            ParamType::Int => "i64",
-            ParamType::Float => "f64",
-            ParamType::String => "String",
-            ParamType::Vec2 => "Vec2",
-            ParamType::Vec3 => "Vec3",
-            ParamType::Color => "Color",
-            ParamType::Entity => "Entity",
+        match self.get(key)? {
+            PropertyValue::Entity(e) => Some(*e),
+            _ => None,
         }
     }
 }
 
-/// Const-safe default value for a [`ParamSpec`]. Mirrors
-/// [`PropertyValue`] but uses `&'static str` instead of `String` and
-/// stores `Vec2` / `Vec3` / `Color` componentwise so the whole thing
-/// fits in a `const` slice.
-///
-/// Convert to `PropertyValue` via [`ParamDefault::to_property_value`]
-/// when a runtime value is needed.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ParamDefault {
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    Str(&'static str),
-    Vec2(f32, f32),
-    Vec3(f32, f32, f32),
-    Color(f32, f32, f32, f32),
-}
-
-impl ParamDefault {
-    /// Materialise this default as a runtime [`PropertyValue`] for
-    /// callers that want to feed it into [`OperatorParameters`].
-    pub fn to_property_value(&self) -> PropertyValue {
-        match *self {
-            ParamDefault::Bool(b) => PropertyValue::Bool(b),
-            ParamDefault::Int(i) => PropertyValue::Int(i),
-            ParamDefault::Float(f) => PropertyValue::Float(f),
-            ParamDefault::Str(s) => PropertyValue::String(s.to_string()),
-            ParamDefault::Vec2(x, y) => PropertyValue::Vec2(Vec2::new(x, y)),
-            ParamDefault::Vec3(x, y, z) => PropertyValue::Vec3(Vec3::new(x, y, z)),
-            ParamDefault::Color(r, g, b, a) => PropertyValue::Color(Color::srgba(r, g, b, a)),
-        }
-    }
-}
-
-/// Schema for a single operator parameter. Built into the `Operator`
-/// trait via [`Operator::PARAMETERS`] and surfaced through
-/// [`OperatorEntity::parameters`] so the tooltip and (later) the
-/// scripting REPL / DSL can introspect what an operator accepts.
-#[derive(Clone, Copy, Debug)]
+/// Schema for a single operator parameter. Declared via
+/// [`Operator::PARAMETERS`] and surfaced through
+/// [`OperatorEntity::parameters`] for tooltips and future scripting
+/// surfaces. Lives in a `const` slice: `PropertyValue::String` is
+/// `Cow<'static, str>` and `Vec2/Vec3/Color` constructors are
+/// `const fn`.
+#[derive(Clone, Debug)]
 pub struct ParamSpec {
     pub name: &'static str,
-    pub ty: ParamType,
-    pub default: Option<ParamDefault>,
+    /// Lowercase Rust-style type name, e.g. `"bool"`, `"i64"`,
+    /// `"Vec2"`. Matches the strings produced by
+    /// [`PropertyValue::type_name`].
+    pub ty: &'static str,
+    pub default: Option<PropertyValue>,
     pub doc: &'static str,
 }
 
-/// Format an operator's call signature for display, e.g.
-/// `viewport.draw_brush_modal()` for a no-param op or
-/// `asset.cycle_array_layer(direction: i64 = 1)` for one-param ops.
-///
-/// Used by the editor tooltip and intended to be the same renderer the
-/// future REPL / DSL surfaces will reach for, so the signature in
-/// docs / chat / GUI all match.
-pub fn format_operator_signature(id: &str, params: &[ParamSpec]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(id.len() + 2);
-    out.push_str(id);
-    out.push('(');
-    for (i, spec) in params.iter().enumerate() {
-        if i > 0 {
-            out.push_str(", ");
-        }
-        let _ = write!(out, "{}: {}", spec.name, spec.ty.type_name());
-        if let Some(default) = &spec.default {
-            out.push_str(" = ");
-            append_default(&mut out, default);
-        }
-    }
-    out.push(')');
-    out
+/// `Display` adapter that renders an operator's call signature:
+/// `id(name: type = default, ...)`. Construct via
+/// [`Operator::signature`] for a static one, or [`Self::new`] for a
+/// runtime-resolved operator.
+pub struct OperatorSignature<'a> {
+    pub id: &'a str,
+    pub params: &'a [ParamSpec],
 }
 
-fn append_default(out: &mut String, value: &ParamDefault) {
-    use std::fmt::Write as _;
-    match *value {
-        ParamDefault::Bool(b) => {
-            let _ = write!(out, "{b}");
+impl<'a> OperatorSignature<'a> {
+    pub const fn new(id: &'a str, params: &'a [ParamSpec]) -> Self {
+        Self { id, params }
+    }
+}
+
+impl std::fmt::Display for OperatorSignature<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.id)?;
+        f.write_str("(")?;
+        for (i, spec) in self.params.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}: {}", spec.name, spec.ty)?;
+            if let Some(default) = &spec.default {
+                write!(f, " = {}", PropertyDisplay(default))?;
+            }
         }
-        ParamDefault::Int(i) => {
-            let _ = write!(out, "{i}");
-        }
-        ParamDefault::Float(f) => {
-            let _ = write!(out, "{f}");
-        }
-        ParamDefault::Str(s) => {
-            let _ = write!(out, "\"{s}\"");
-        }
-        ParamDefault::Vec2(x, y) => {
-            let _ = write!(out, "vec2({x}, {y})");
-        }
-        ParamDefault::Vec3(x, y, z) => {
-            let _ = write!(out, "vec3({x}, {y}, {z})");
-        }
-        ParamDefault::Color(r, g, b, a) => {
-            let _ = write!(out, "Color::srgba({r}, {g}, {b}, {a})");
+        f.write_str(")")
+    }
+}
+
+/// `Display` adapter for [`PropertyValue`]: `true`, `42`, `"hello"`,
+/// `vec2(1, 2)`, `Color::srgba(1, 1, 1, 1)`, `Entity(4294967296)`.
+/// Used internally by [`OperatorSignature`]; prefer that (or
+/// `ButtonCallSignature` in `jackdaw_feathers`).
+pub(crate) struct PropertyDisplay<'a>(pub &'a PropertyValue);
+
+impl std::fmt::Display for PropertyDisplay<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            PropertyValue::Bool(b) => write!(f, "{b}"),
+            PropertyValue::Int(i) => write!(f, "{i}"),
+            PropertyValue::Float(x) => write!(f, "{x}"),
+            PropertyValue::String(s) => write!(f, "\"{s}\""),
+            PropertyValue::Vec2(v) => write!(f, "vec2({}, {})", v.x, v.y),
+            PropertyValue::Vec3(v) => write!(f, "vec3({}, {}, {})", v.x, v.y, v.z),
+            PropertyValue::Color(c) => {
+                let s = c.to_srgba();
+                write!(
+                    f,
+                    "Color::srgba({}, {}, {}, {})",
+                    s.red, s.green, s.blue, s.alpha
+                )
+            }
+            PropertyValue::Entity(e) => write!(f, "Entity({})", e.to_bits()),
         }
     }
 }

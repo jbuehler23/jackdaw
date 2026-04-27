@@ -39,7 +39,7 @@ use crate::selection::GraphSelection;
 /// in the same release handler. That means after a drag-to-move, this
 /// observer would naively fire with the released-on node as its target and
 /// clobber the group selection with a single-node select. We guard against
-/// that by bailing whenever `GraphGesture` is not `Idle` — during a drag
+/// that by bailing whenever `GraphGesture` is not `Idle`; during a drag
 /// the gesture is `MoveNodes`/`ConnectDrag`/etc., and the guard sees it
 /// before `on_node_drag_end` resets it to `Idle`. A plain click (no drag)
 /// keeps the gesture at `Idle` throughout, so it still selects normally.
@@ -75,7 +75,7 @@ pub fn on_node_click(
 /// Begin a `MoveNodes` gesture and ensure the dragged node is selected.
 ///
 /// Relies on `Pointer<DragStart>` propagation walking up from the original
-/// target until it hits a `GraphNodeView` ancestor — i.e. the node root.
+/// target until it hits a `GraphNodeView` ancestor; i.e. the node root.
 /// Drags from widgets that want to own their own drag gesture (like
 /// feathers `text_edit`'s scrub hitbox) stop propagation on their own
 /// wrapper so they never reach this observer.
@@ -115,8 +115,8 @@ pub fn on_node_drag_start(
 /// Uses `Drag::distance` (total movement from drag start) scaled by the
 /// inverse of the canvas zoom so the node tracks the cursor at any zoom.
 ///
-/// Gated purely on `GraphGesture::MoveNodes` — no query on the event
-/// target — because `on_node_drag_start` is the only place that
+/// Gated purely on `GraphGesture::MoveNodes`; no query on the event
+/// target; because `on_node_drag_start` is the only place that
 /// transitions into `MoveNodes`, and that observer already enforces the
 /// `NodeDragHandle` rule.
 pub fn on_node_drag(
@@ -206,7 +206,7 @@ pub fn on_node_drag_end(
 /// Start a `ConnectDrag` from an output terminal.
 ///
 /// Pointer events auto-propagate up the `ChildOf` chain (see
-/// `bevy_picking::events::Pointer` — `#[entity_event(auto_propagate)]`), so if
+/// `bevy_picking::events::Pointer`; `#[entity_event(auto_propagate)]`), so if
 /// we don't stop propagation here, the same `DragStart` bubbles up to the
 /// node root and `on_node_drag_start` kicks in, overwriting our `ConnectDrag`
 /// with a `MoveNodes` gesture and the node ends up sliding around instead of
@@ -257,7 +257,7 @@ pub fn on_terminal_drag(
     if event.button != PointerButton::Primary {
         return;
     }
-    // Only match drag events whose original target is a terminal — this
+    // Only match drag events whose original target is a terminal; this
     // early-return also prevents us from eating the bubble of a node drag.
     let Ok((_view, computed)) = terminals.get(event.event_target()) else {
         return;
@@ -310,7 +310,7 @@ pub fn on_terminal_drag_end(
         return;
     };
     let Some(target) = snap_target else {
-        // No compatible input was under the cursor at release — drop
+        // No compatible input was under the cursor at release; drop
         // silently. The ghost wire has already been despawned by
         // update_ghost_wire on the next frame.
         return;
@@ -442,7 +442,7 @@ pub fn handle_delete_key(
         history.execute(cmd, world);
         world.insert_resource(history);
 
-        // Clear the selection after the removal — the entities no longer exist.
+        // Clear the selection after the removal; the entities no longer exist.
         if let Some(mut sel) = world.get_resource_mut::<GraphSelection>() {
             sel.entities.clear();
         }

@@ -193,7 +193,7 @@ fn spawn_material_summary(
     }
 
     // Clear All button, only if at least one face has a material.
-    // `Hovered + ButtonOperatorCall` are tooltip data sources only —
+    // `Hovered + ButtonOperatorCall` are tooltip data sources only ;
     // dispatch flows through the click observer below because this
     // is a raw Node (not a feathers `button()`), so it doesn't fire
     // `ButtonClickEvent`.
@@ -402,7 +402,7 @@ pub(crate) fn update_brush_face_properties(
 
         // Clear material button. Tooltip via `ButtonOperatorCall`,
         // dispatch via the click observer (raw Node, not a feathers
-        // button — see `Clear All` above for the same pattern).
+        // button; see `Clear All` above for the same pattern).
         let clear_mat_btn = commands
             .spawn((
                 Node {
@@ -767,7 +767,7 @@ fn apply_brush_face_field(
 }
 
 /// True when the brush face inspector has at least one face selected
-/// in the active brush — gates the per-face operators so the buttons
+/// in the active brush; gates the per-face operators so the buttons
 /// grey out when there's nothing to act on.
 fn brush_face_with_selection(
     brush_selection: Res<BrushSelection>,
@@ -793,10 +793,10 @@ pub(crate) fn brush_face_clear_material(
     mut commands: Commands,
 ) -> OperatorResult {
     let Some(brush_entity) = brush_selection.entity else {
-        return OperatorResult::Finished;
+        return OperatorResult::Cancelled;
     };
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Finished;
+        return OperatorResult::Cancelled;
     };
 
     let old = brush.clone();
@@ -831,15 +831,15 @@ pub(crate) fn brush_face_apply_texture_to_all(
     mut commands: Commands,
 ) -> OperatorResult {
     let Some(brush_entity) = brush_selection.entity else {
-        return OperatorResult::Finished;
+        return OperatorResult::Cancelled;
     };
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Finished;
+        return OperatorResult::Cancelled;
     };
 
     let source_idx = brush_selection.faces[0];
     if source_idx >= brush.faces.len() {
-        return OperatorResult::Finished;
+        return OperatorResult::Cancelled;
     }
     let source = brush.faces[source_idx].clone();
 
@@ -877,10 +877,10 @@ pub(crate) fn brush_face_set_uv_scale_preset(
 ) -> OperatorResult {
     let scale_value = params.as_float("scale").unwrap_or(1.0) as f32;
     let Some(brush_entity) = brush_selection.entity else {
-        return OperatorResult::Finished;
+        return OperatorResult::Cancelled;
     };
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Finished;
+        return OperatorResult::Cancelled;
     };
 
     let old = brush.clone();

@@ -1,9 +1,9 @@
 //! Pannable/zoomable canvas container for a node graph.
 //!
 //! The canvas is a two-level hierarchy:
-//! * Outer viewport — clipped, receives pointer/scroll events, holds a
+//! * Outer viewport; clipped, receives pointer/scroll events, holds a
 //!   [`GraphCanvasViewport`] marker that points back at the graph entity.
-//! * Inner "world" — an absolutely-positioned child with a [`UiTransform`]
+//! * Inner "world"; an absolutely-positioned child with a [`UiTransform`]
 //!   whose `translation` and `scale` come from the graph's
 //!   [`GraphCanvasView`]. Node and connection UI are children of the world,
 //!   laid out in canvas-space pixels via `Node::left`/`Node::top`.
@@ -35,7 +35,7 @@ pub struct GraphCanvasWorld {
 /// Spawn a canvas viewport bundle for a graph.
 ///
 /// The viewport is clipped and receives pan/zoom input. Consumer code should
-/// also spawn a [`canvas_world`] child under it — nodes and connections live
+/// also spawn a [`canvas_world`] child under it; nodes and connections live
 /// inside the world, which is pan/zoom-transformed.
 pub fn canvas(graph: Entity) -> impl Bundle {
     (

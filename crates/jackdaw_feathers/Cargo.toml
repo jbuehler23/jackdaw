@@ -12,6 +12,7 @@ bevy.workspace = true
 bevy_monitors.workspace = true
 bevy_ui_text_input.workspace = true
 bevy_easings.workspace = true
+jackdaw_jsn.workspace = true
 jackdaw_widgets.workspace = true
 lucide-icons.workspace = true
 

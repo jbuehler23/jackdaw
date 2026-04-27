@@ -433,7 +433,7 @@ pub(crate) fn remove_component_displays(
 
     // Collect then despawn inside a queued world closure so the
     // cascade runs as one atomic step at flush time. See
-    // `on_inspector_dirty` for the rationale — piecemeal deferred
+    // `on_inspector_dirty` for the rationale; piecemeal deferred
     // despawns can interleave with lazy combobox/button setup
     // spawns and orphan UI text at the root.
     let old_children: Vec<Entity> = displays.iter_many(children.collection()).collect();
@@ -478,7 +478,7 @@ pub(crate) fn on_inspector_dirty(
     // `InspectorDirty` from the source. Doing this in a single
     // queued closure (rather than piecemeal `commands.despawn`
     // calls) guarantees the cascade completes as one atomic unit
-    // inside `Commands` flush — no lazy `setup_button` /
+    // inside `Commands` flush; no lazy `setup_button` /
     // `setup_combobox` spawns from a previous rebuild can slip in
     // between entity despawns and leave orphaned UI children (the
     // source of the "Inherited" floating label + `ChildOf(...)

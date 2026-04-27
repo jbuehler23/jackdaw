@@ -210,15 +210,21 @@ pub struct CustomProperties {
     pub properties: BTreeMap<String, PropertyValue>,
 }
 
+/// One enum for every editor parameter value: runtime
+/// `OperatorParameters`, const operator schemas (`Operator::PARAMETERS`),
+/// concrete button-call params, and reflected `CustomProperties`
+/// fields. `String` uses `Cow<'static, str>` so the enum can sit in a
+/// `const` slice.
 #[derive(Reflect, Clone, Debug, PartialEq)]
 pub enum PropertyValue {
     Bool(bool),
     Int(i64),
     Float(f64),
-    String(String),
+    String(Cow<'static, str>),
     Vec2(Vec2),
     Vec3(Vec3),
     Color(Color),
+    Entity(Entity),
 }
 
 impl From<bool> for PropertyValue {
@@ -241,19 +247,19 @@ impl From<f64> for PropertyValue {
 
 impl From<String> for PropertyValue {
     fn from(value: String) -> Self {
+        Self::String(Cow::Owned(value))
+    }
+}
+
+impl From<&'static str> for PropertyValue {
+    fn from(value: &'static str) -> Self {
+        Self::String(Cow::Borrowed(value))
+    }
+}
+
+impl From<Cow<'static, str>> for PropertyValue {
+    fn from(value: Cow<'static, str>) -> Self {
         Self::String(value)
-    }
-}
-
-impl From<&str> for PropertyValue {
-    fn from(value: &str) -> Self {
-        Self::String(value.to_string())
-    }
-}
-
-impl<'a> From<Cow<'a, str>> for PropertyValue {
-    fn from(value: Cow<'a, str>) -> Self {
-        Self::String(value.to_string())
     }
 }
 
@@ -275,9 +281,16 @@ impl From<Color> for PropertyValue {
     }
 }
 
+impl From<Entity> for PropertyValue {
+    fn from(value: Entity) -> Self {
+        Self::Entity(value)
+    }
+}
+
 impl PropertyValue {
-    /// Human-readable type label for display in UI.
-    pub fn type_label(&self) -> &'static str {
+    /// Title-case label for the Custom Properties UI picker
+    /// (`"Bool"`, `"Int"`, etc.). Inspector match arms key off this.
+    pub const fn type_label(&self) -> &'static str {
         match self {
             Self::Bool(_) => "Bool",
             Self::Int(_) => "Int",
@@ -286,26 +299,47 @@ impl PropertyValue {
             Self::Vec2(_) => "Vec2",
             Self::Vec3(_) => "Vec3",
             Self::Color(_) => "Color",
+            Self::Entity(_) => "Entity",
         }
     }
 
-    /// Create a default value for a given type name.
+    /// Lowercase Rust-style type name (`"bool"`, `"i64"`, etc.) used
+    /// in operator-signature tooltips and matched against
+    /// `ParamSpec::ty` (in `jackdaw_api_internal`).
+    pub const fn type_name(&self) -> &'static str {
+        match self {
+            Self::Bool(_) => "bool",
+            Self::Int(_) => "i64",
+            Self::Float(_) => "f64",
+            Self::String(_) => "String",
+            Self::Vec2(_) => "Vec2",
+            Self::Vec3(_) => "Vec3",
+            Self::Color(_) => "Color",
+            Self::Entity(_) => "Entity",
+        }
+    }
+
+    /// Default value for the given `type_label` string. Used by the
+    /// Custom Properties picker.
     pub fn default_for_type(name: &str) -> Option<Self> {
         match name {
             "Bool" => Some(Self::Bool(false)),
             "Int" => Some(Self::Int(0)),
             "Float" => Some(Self::Float(0.0)),
-            "String" => Some(Self::String(String::new())),
+            "String" => Some(Self::String(Cow::Borrowed(""))),
             "Vec2" => Some(Self::Vec2(Vec2::ZERO)),
             "Vec3" => Some(Self::Vec3(Vec3::ZERO)),
             "Color" => Some(Self::Color(Color::WHITE)),
+            "Entity" => Some(Self::Entity(Entity::PLACEHOLDER)),
             _ => None,
         }
     }
 
     /// All available type names for the UI picker.
     pub fn all_type_names() -> &'static [&'static str] {
-        &["Bool", "Int", "Float", "String", "Vec2", "Vec3", "Color"]
+        &[
+            "Bool", "Int", "Float", "String", "Vec2", "Vec3", "Color", "Entity",
+        ]
     }
 }
 

@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use bevy::{feathers::theme::ThemedText, picking::hover::Hovered, prelude::*, ui_widgets::observe};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
@@ -116,17 +114,12 @@ pub struct GizmoModeButton(pub GizmoMode);
 #[derive(Component)]
 pub struct GizmoSpaceButton;
 
-/// Marker for edit mode/tool buttons in the toolbar
+/// Marker for the physics toolbar button. Clicking it while
+/// `EditMode::Physics` is active cancels the modal rather than
+/// re-dispatching, so it needs its own click observer; other
+/// toolbar buttons are identified by their `ButtonOperatorCall`.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
-pub enum EditToolButton {
-    Object,
-    Vertex,
-    Edge,
-    Face,
-    Clip,
-    Physics,
-    Operator(&'static str),
-}
+pub struct PhysicsToolbarButton;
 
 /// Marker for keybind helper button
 #[derive(Component)]
@@ -532,20 +525,20 @@ fn toolbar(icon_font: Handle<Font>) -> impl Bundle {
             toolbar_space_button(f.clone()),
             // Separator
             separator::separator(separator::SeparatorProps::vertical()),
-            // Edit mode buttons
-            toolbar_edit_button(Icon::MousePointer2, EditToolButton::Object, f.clone()),
-            toolbar_edit_button(
-                Icon::Box,
-                EditToolButton::Operator(ActivateDrawBrushModalOp::ID),
-                f.clone(),
-            ),
-            toolbar_edit_button(Icon::CircleDot, EditToolButton::Vertex, f.clone()),
-            toolbar_edit_button(Icon::GitCommitHorizontal, EditToolButton::Edge, f.clone()),
-            toolbar_edit_button(Icon::Hexagon, EditToolButton::Face, f.clone()),
-            toolbar_edit_button(Icon::ScissorsLineDashed, EditToolButton::Clip, f.clone()),
+            // Edit-mode buttons, parameterised on the operator they
+            // dispatch. Extension toolbar entries follow the same
+            // shape: `toolbar_edit_button::<MyOp>(...)`. Letting
+            // extensions append from outside `layout.rs` is a
+            // follow-up.
+            toolbar_edit_button::<EditModeObjectOp>(Icon::MousePointer2, f.clone()),
+            toolbar_edit_button::<ActivateDrawBrushModalOp>(Icon::Box, f.clone()),
+            toolbar_edit_button::<EditModeVertexOp>(Icon::CircleDot, f.clone()),
+            toolbar_edit_button::<EditModeEdgeOp>(Icon::GitCommitHorizontal, f.clone()),
+            toolbar_edit_button::<EditModeFaceOp>(Icon::Hexagon, f.clone()),
+            toolbar_edit_button::<EditModeClipOp>(Icon::ScissorsLineDashed, f.clone()),
             // Separator
             separator::separator(separator::SeparatorProps::vertical()),
-            toolbar_edit_button(Icon::Zap, EditToolButton::Physics, f.clone()),
+            toolbar_physics_button(Icon::Zap, f.clone()),
             // Spacer pushes help button to the right
             (Node {
                 flex_grow: 1.0,
@@ -568,7 +561,7 @@ fn toolbar_button(icon: Icon, label: &str, mode: GizmoMode, font: Handle<Font>) 
         GizmoModeButton(mode),
         Hovered::default(),
         // Tooltip data source for the rich operator popover. Click
-        // dispatch happens in the hand-rolled observer below — see
+        // dispatch happens in the hand-rolled observer below; see
         // `toolbar_edit_button` for the same pattern.
         ButtonOperatorCall::new(op_id),
         Node {
@@ -658,31 +651,18 @@ fn toolbar_space_button(icon_font: Handle<Font>) -> impl Bundle {
     )
 }
 
-fn toolbar_edit_button(icon: Icon, tool: EditToolButton, font: Handle<Font>) -> impl Bundle {
-    // The hand-rolled `Pointer<Click>` observer below dispatches the
-    // operator directly without going through feathers' button click
-    // path, so [`ButtonOperatorCall`] here is purely a tooltip data
-    // source — the rich `OperatorTooltip` plugin reads the call's id
-    // (and would read params, if any were declared) to render the
-    // Blender-style label/description/signature popover. Because no
-    // `ButtonClickEvent` is fired, the editor's `dispatch_button_operator_call`
-    // observer never sees these and there's no double-dispatch.
-    let primary_op_id: Cow<'static, str> = match tool {
-        EditToolButton::Object => EditModeObjectOp::ID.into(),
-        EditToolButton::Vertex => EditModeVertexOp::ID.into(),
-        EditToolButton::Edge => EditModeEdgeOp::ID.into(),
-        EditToolButton::Face => EditModeFaceOp::ID.into(),
-        EditToolButton::Clip => EditModeClipOp::ID.into(),
-        // Physics is a toggle: clicking while active cancels, clicking
-        // while inactive activates. The tooltip shows the activate-side
-        // operator; the active-side cancel is also reachable via Escape.
-        EditToolButton::Physics => PhysicsActivateOp::ID.into(),
-        EditToolButton::Operator(op) => op.into(),
-    };
+/// Toolbar edit-mode button that dispatches `Op` on click. Generic
+/// so extensions can add their own entries via
+/// `toolbar_edit_button::<MyOp>(Icon::Pencil, font)`.
+///
+/// The `Pointer<Click>` observer dispatches directly rather than
+/// firing `ButtonClickEvent`, so `ButtonOperatorCall` here is just
+/// the tooltip data source for `OperatorTooltipPlugin`. No
+/// double-dispatch through `dispatch_button_operator_call`.
+fn toolbar_edit_button<Op: Operator>(icon: Icon, font: Handle<Font>) -> impl Bundle {
     (
-        tool,
         Hovered::default(),
-        ButtonOperatorCall::new(primary_op_id),
+        ButtonOperatorCall::new(Op::ID),
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -696,48 +676,64 @@ fn toolbar_edit_button(icon: Icon, tool: EditToolButton, font: Handle<Font>) -> 
             TextFont {
                 font,
                 font_size: 15.0,
-                ..Default::default()
+                ..default()
             },
             TextColor(tokens::TEXT_SECONDARY),
         )],
-        observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            // Clicking the Physics button while active cancels the
-            // modal; re-dispatching would fail with ModalAlreadyActive.
-            if matches!(tool, EditToolButton::Physics) {
-                commands.queue(|world: &mut World| {
-                    let result = if *world.resource::<EditMode>() == EditMode::Physics {
-                        world.operator("modal.cancel").call()
-                    } else {
-                        world
-                            .operator(PhysicsActivateOp::ID)
-                            .settings(CallOperatorSettings {
-                                execution_context: ExecutionContext::Invoke,
-                                creates_history_entry: true,
-                            })
-                            .call()
-                    };
-                    if let Err(err) = result {
-                        error!("physics tool dispatch failed: {err}");
-                    }
-                });
-                return;
-            }
-            let op_id: Cow<'static, str> = match tool {
-                EditToolButton::Object => EditModeObjectOp::ID.into(),
-                EditToolButton::Vertex => EditModeVertexOp::ID.into(),
-                EditToolButton::Edge => EditModeEdgeOp::ID.into(),
-                EditToolButton::Face => EditModeFaceOp::ID.into(),
-                EditToolButton::Clip => EditModeClipOp::ID.into(),
-                EditToolButton::Physics => unreachable!("handled above"),
-                EditToolButton::Operator(op) => op.into(),
-            };
+        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
             commands
-                .operator(op_id)
+                .operator(Op::ID)
                 .settings(CallOperatorSettings {
                     execution_context: ExecutionContext::Invoke,
                     creates_history_entry: true,
                 })
                 .call();
+        }),
+    )
+}
+
+/// Toolbar button for the physics tool. Toggles activate/cancel
+/// based on `EditMode`, so a second click leaves the modal without
+/// the user reaching for Escape.
+fn toolbar_physics_button(icon: Icon, font: Handle<Font>) -> impl Bundle {
+    (
+        PhysicsToolbarButton,
+        Hovered::default(),
+        ButtonOperatorCall::new(PhysicsActivateOp::ID),
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_XS)),
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
+            ..Default::default()
+        },
+        BackgroundColor(tokens::TOOLBAR_BUTTON_BG),
+        children![(
+            Text::new(String::from(icon.unicode())),
+            TextFont {
+                font,
+                font_size: 15.0,
+                ..default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+        )],
+        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.queue(|world: &mut World| {
+                let result = if *world.resource::<EditMode>() == EditMode::Physics {
+                    world.operator("modal.cancel").call()
+                } else {
+                    world
+                        .operator(PhysicsActivateOp::ID)
+                        .settings(CallOperatorSettings {
+                            execution_context: ExecutionContext::Invoke,
+                            creates_history_entry: true,
+                        })
+                        .call()
+                };
+                if let Err(err) = result {
+                    error!("physics tool dispatch failed: {err}");
+                }
+            });
         }),
     )
 }
@@ -1169,34 +1165,39 @@ pub fn update_space_toggle_label(
     }
 }
 
-/// Updates edit tool button backgrounds to highlight the active edit mode/draw state.
+/// Highlight the toolbar button matching the active edit mode or
+/// draw state. Buttons are matched by the operator id they carry on
+/// `ButtonOperatorCall`. Built-in modes are explicit arms;
+/// extension toolbar entries fall through to a generic
+/// `active_modal.is_operator(...)` check.
 pub(crate) fn update_edit_tool_highlights(
     edit_mode: Res<EditMode>,
     draw_state: Res<DrawBrushState>,
     active_modal: ActiveModalQuery,
-    mut buttons: Query<(&EditToolButton, &mut BackgroundColor)>,
+    mut buttons: Query<(&ButtonOperatorCall, &mut BackgroundColor)>,
 ) {
     if !edit_mode.is_changed() && !draw_state.is_changed() {
         return;
     }
     let draw_active = draw_state.active.is_some();
-    for (button, mut bg) in &mut buttons {
-        let active = match button {
-            EditToolButton::Object => !draw_active && *edit_mode == EditMode::Object,
-            EditToolButton::Operator(op) => active_modal.is_operator(op),
-            EditToolButton::Vertex => {
-                !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
-            }
-            EditToolButton::Edge => {
-                !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge)
-            }
-            EditToolButton::Face => {
-                !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
-            }
-            EditToolButton::Clip => {
-                !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Clip)
-            }
-            EditToolButton::Physics => !draw_active && *edit_mode == EditMode::Physics,
+    for (call, mut bg) in &mut buttons {
+        let active = if call.id == EditModeObjectOp::ID {
+            !draw_active && *edit_mode == EditMode::Object
+        } else if call.id == EditModeVertexOp::ID {
+            !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
+        } else if call.id == EditModeEdgeOp::ID {
+            !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge)
+        } else if call.id == EditModeFaceOp::ID {
+            !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+        } else if call.id == EditModeClipOp::ID {
+            !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Clip)
+        } else if call.id == PhysicsActivateOp::ID {
+            !draw_active && *edit_mode == EditMode::Physics
+        } else {
+            // Other toolbar buttons (extension tools, draw-brush
+            // activate) highlight when their operator is the active
+            // modal.
+            active_modal.is_operator(&call.id)
         };
         bg.0 = if active {
             tokens::TOOLBAR_ACTIVE_BG

@@ -1435,7 +1435,7 @@ fn toggle_show_all_button(
 /// `jackdaw_feathers::icons`. Text colour stays at the theme's
 /// primary foreground; only the font handle changes. Runs every
 /// frame while in `Editor` state; the body is a few pointer-chasing
-/// lookups per game-spawned entity — cheap enough to skip change
+/// lookups per game-spawned entity; cheap enough to skip change
 /// detection. We only write when the font differs to keep bevy's
 /// `Changed<TextFont>` quiet for downstream consumers.
 fn style_game_spawned_rows(

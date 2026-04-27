@@ -1,8 +1,8 @@
 //! Reflected-type bridge into the generic feathers tooltip pipeline.
 //!
 //! Attach [`ReflectedTypeTooltip`] to any UI entity that displays a
-//! reflected Bevy type — component headers in the inspector, future
-//! type chips in the hierarchy, etc. — and the observer below
+//! reflected Bevy type; component headers in the inspector, future
+//! type chips in the hierarchy, etc.; and the observer below
 //! derives a [`Tooltip`] from the registry: the short type name as
 //! the title, the [`ReflectEditorMeta`] description (when registered)
 //! as the description, and the full type path as the dim footer.

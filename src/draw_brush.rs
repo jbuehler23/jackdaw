@@ -47,22 +47,31 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.spawn((
         Action::<BrushJoinOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![KeyCode::KeyJ],
+        bindings![(KeyCode::KeyJ, Press::default())],
     ));
     ctx.spawn((
         Action::<BrushCsgSubtractOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![KeyCode::KeyK.with_mod_keys(ModKeys::CONTROL)],
+        bindings![(
+            KeyCode::KeyK.with_mod_keys(ModKeys::CONTROL),
+            Press::default(),
+        )],
     ));
     ctx.spawn((
         Action::<BrushCsgIntersectOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![KeyCode::KeyK.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT)],
+        bindings![(
+            KeyCode::KeyK.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
+            Press::default(),
+        )],
     ));
     ctx.spawn((
         Action::<BrushExtendFaceToBrushOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![KeyCode::KeyE.with_mod_keys(ModKeys::CONTROL)],
+        bindings![(
+            KeyCode::KeyE.with_mod_keys(ModKeys::CONTROL),
+            Press::default(),
+        )],
     ));
     ctx.spawn((
         Action::<DrawBrushToggleModeOp>::new(),
@@ -87,12 +96,12 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.spawn((
         Action::<StartDrawBrushAddAppendAction>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![KeyCode::KeyB.with_mod_keys(ModKeys::ALT)],
+        bindings![(KeyCode::KeyB.with_mod_keys(ModKeys::ALT), Press::default(),)],
     ));
     ctx.spawn((
         Action::<StartDrawBrushCutAction>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![KeyCode::KeyC],
+        bindings![(KeyCode::KeyC, Press::default())],
     ));
     ctx.register_operator::<ActivateDrawBrushModalOp>()
         .register_operator::<AddBrushOp>()
@@ -407,16 +416,23 @@ fn confirm_draw_brush(
             }
             let active = active.clone();
             draw_state.active = None;
-            if !active.polygon_vertices.is_empty() {
-                if active.append_target.is_some() {
-                    append_to_brush(&active, &mut commands);
-                } else {
-                    spawn_polygon_brush(&active, &mut commands);
+            match active.mode {
+                DrawMode::Add => {
+                    if !active.polygon_vertices.is_empty() {
+                        if active.append_target.is_some() {
+                            append_to_brush(&active, &mut commands);
+                        } else {
+                            spawn_polygon_brush(&active, &mut commands);
+                        }
+                    } else if active.append_target.is_some() {
+                        append_to_brush(&active, &mut commands);
+                    } else {
+                        spawn_drawn_brush(&active, &mut commands);
+                    }
                 }
-            } else if active.append_target.is_some() {
-                append_to_brush(&active, &mut commands);
-            } else {
-                spawn_drawn_brush(&active, &mut commands);
+                DrawMode::Cut => {
+                    subtract_drawn_brush(&active, &mut commands);
+                }
             }
         }
     }
@@ -659,7 +675,7 @@ fn spawn_brush_or_group(world: &mut World, data: &BrushOrGroup) -> Entity {
 
 /// Per-command undo entry for brush spawns from the legacy non-
 /// operator paths (face extrude, brush clip/split). The draw-brush
-/// modal operator doesn't push this — its `SnapshotDiff` covers the
+/// modal operator doesn't push this; its `SnapshotDiff` covers the
 /// whole transaction.
 pub(crate) struct CreateBrushCommand {
     pub data: BrushData,
@@ -1061,106 +1077,26 @@ fn draw_brush_release(
     active.press_screen_pos = None;
 }
 
+/// Sidecar trigger: an LMB inside an active draw modal dispatches
+/// the `draw_brush.confirm` operator. Mouse-button gestures aren't
+/// expressible as BEI key actions, so the click→operator translation
+/// has to live in a system. The operator itself owns the actual
+/// phase-advance logic and works for both Add and Cut modes.
 fn draw_brush_confirm(
     mouse: Res<ButtonInput<MouseButton>>,
-    mut draw_state: ResMut<DrawBrushState>,
-    windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    draw_state: Res<DrawBrushState>,
     mut commands: Commands,
 ) {
-    if !mouse.just_pressed(MouseButton::Left) {
+    if !mouse.just_pressed(MouseButton::Left) || draw_state.active.is_none() {
         return;
     }
-
-    let Some(ref mut active) = draw_state.active else {
-        return;
-    };
-    if active.mode == DrawMode::Add {
-        // Already migrated to operator
-        return;
-    }
-
-    // Verify cursor is in viewport
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return;
-    };
-    let Ok((camera, _)) = camera_query.single() else {
-        return;
-    };
-    let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
-    else {
-        return;
-    };
-
-    match active.phase {
-        DrawPhase::PlacingFirstCorner => {
-            if let Some(pos) = active.cursor_on_plane {
-                active.corner1 = pos;
-                active.corner2 = pos;
-                active.phase = DrawPhase::DrawingFootprint;
-                active.drag_footprint = true;
-                active.press_screen_pos = Some(cursor_pos);
-            }
-        }
-        DrawPhase::DrawingFootprint => {
-            if active.drag_footprint {
-                return;
-            }
-            let delta = active.corner2 - active.corner1;
-            if delta.dot(active.plane.axis_u).abs() < MIN_FOOTPRINT_SIZE
-                || delta.dot(active.plane.axis_v).abs() < MIN_FOOTPRINT_SIZE
-            {
-                return;
-            }
-            active.phase = DrawPhase::ExtrudingDepth;
-            active.extrude_start_cursor = viewport_cursor;
-            active.depth = 0.0;
-        }
-        DrawPhase::DrawingRotatedWidth => {
-            if active.polygon_vertices.len() == 4 {
-                let edge1 = (active.polygon_vertices[1] - active.polygon_vertices[0]).length();
-                let edge2 = (active.polygon_vertices[3] - active.polygon_vertices[0]).length();
-                if edge1 >= MIN_FOOTPRINT_SIZE && edge2 >= MIN_FOOTPRINT_SIZE {
-                    active.phase = DrawPhase::ExtrudingDepth;
-                    active.extrude_start_cursor = viewport_cursor;
-                    active.depth = 0.0;
-                }
-            }
-        }
-        DrawPhase::DrawingPolygon => {
-            if let Some(cursor) = active.polygon_cursor {
-                // Accept all vertices, but skip near-duplicates
-                let too_close = active
-                    .polygon_vertices
-                    .iter()
-                    .any(|&v| (v - cursor).length() < 0.05);
-                if !too_close {
-                    active.polygon_vertices.push(cursor);
-                }
-            }
-        }
-        DrawPhase::ExtrudingDepth => {
-            if active.depth.abs() < MIN_EXTRUDE_DEPTH {
-                return; // No depth, keep extruding
-            }
-            let active_owned = active.clone();
-            match active_owned.mode {
-                DrawMode::Add => {
-                    unreachable!()
-                }
-                DrawMode::Cut => {
-                    subtract_drawn_brush(&active_owned, &mut commands);
-                    commands.queue(|world: &mut World| {
-                        world.resource_mut::<DrawBrushState>().active = None;
-                    });
-                }
-            }
-        }
-    }
+    commands
+        .operator(ConfirmDrawBrushOp::ID)
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        })
+        .call();
 }
 
 // Enter / Backspace / RMB / Escape during a draw are all handled via

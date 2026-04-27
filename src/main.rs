@@ -10,7 +10,7 @@ fn main() -> AppExit {
     // Install a SIGINT/SIGTERM handler before anything else gets a
     // chance to. Something in the dep tree (wgpu, gilrs, or one of
     // their transitive deps) installs its own `ctrlc` handler that
-    // swallows the signal without propagating an exit intent — so
+    // swallows the signal without propagating an exit intent; so
     // by default Ctrl+C in the terminal is a no-op for jackdaw.
     // Claiming the handler first with `std::process::exit(130)`
     // guarantees Ctrl+C actually kills the process.
@@ -78,7 +78,7 @@ fn main() -> AppExit {
 /// The dylib loader is always on so users who drop extension `.so`/
 /// `.dll`/`.dylib` files into their config directory don't need to
 /// rebuild the editor. The in-tree example extensions in
-/// `examples/*` are workspace members built as standalone cdylibs —
+/// `examples/*` are workspace members built as standalone cdylibs ;
 /// point the loader at their build output if you want to exercise
 /// them, rather than bundling them statically into the editor
 /// binary.

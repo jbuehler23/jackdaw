@@ -67,11 +67,11 @@ pub fn prune_canvas_world_index(
 ///
 /// We look up the owning graph from the `GraphNode`'s `ChildOf` relation,
 /// then the canvas world from [`CanvasWorldIndex`]. If either is missing the
-/// spawn is skipped — this handles the common case where the data entity is
+/// spawn is skipped; this handles the common case where the data entity is
 /// created before the canvas UI.
 ///
 /// This also backfills UI for pre-existing nodes when the canvas itself
-/// just appeared — necessary for switching into a graph whose data entities
+/// just appeared; necessary for switching into a graph whose data entities
 /// were spawned long ago (e.g. loaded from scene or selected from the
 /// timeline dock). Without the backfill, reusing a canvas to view an
 /// existing graph would leave it empty until you mutated a node.
@@ -108,7 +108,7 @@ pub fn spawn_node_ui_for_new_graph_nodes(
             .insert(ChildOf(world_entity));
     }
 
-    // Path B: a new canvas world just appeared — walk every pre-existing
+    // Path B: a new canvas world just appeared; walk every pre-existing
     // GraphNode that belongs to its graph and spawn UI for any that don't
     // already have a view.
     for world in added_worlds.iter() {
@@ -159,7 +159,7 @@ pub fn despawn_node_ui_for_removed(
 /// shader receives viewport-local pixel coordinates in its uniforms.
 ///
 /// Also backfills wire UI for pre-existing connections when a canvas
-/// viewport just appeared — matches the backfill in
+/// viewport just appeared; matches the backfill in
 /// [`spawn_node_ui_for_new_graph_nodes`].
 pub fn spawn_connection_ui_for_new(
     added: Query<(Entity, Option<&ChildOf>), (With<Connection>, Added<Connection>)>,
@@ -209,7 +209,7 @@ pub fn spawn_connection_ui_for_new(
         spawn_wire(conn_entity, viewport_entity, &mut materials, &mut commands);
     }
 
-    // Path B: a new canvas viewport just appeared — backfill wires for
+    // Path B: a new canvas viewport just appeared; backfill wires for
     // every existing Connection under its graph.
     for viewport in added_viewports.iter() {
         let graph = viewport.graph;

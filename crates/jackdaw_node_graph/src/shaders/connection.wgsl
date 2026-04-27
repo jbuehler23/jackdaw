@@ -32,7 +32,7 @@ fn sd_bezier_quadratic(pos: vec2<f32>, A: vec2<f32>, B: vec2<f32>, C: vec2<f32>)
 
     let bb = dot(b, b);
     if (bb < 1.0e-6) {
-        // Degenerate: control points collinear — treat as a line segment.
+        // Degenerate: control points collinear; treat as a line segment.
         let ba = C - A;
         let t = clamp(dot(pos - A, ba) / max(dot(ba, ba), 1.0e-6), 0.0, 1.0);
         return length((A - pos) + ba * t);
@@ -59,7 +59,7 @@ fn sd_bezier_quadratic(pos: vec2<f32>, A: vec2<f32>, B: vec2<f32>, C: vec2<f32>)
         let qpt = d + (c + b * t) * t;
         res = dot(qpt, qpt);
     } else {
-        // Three real roots — pick the closest.
+        // Three real roots; pick the closest.
         let z = sqrt(-p);
         let v = acos(q / (p * z * 2.0)) / 3.0;
         let m = cos(v);
@@ -77,7 +77,7 @@ fn sd_bezier_quadratic(pos: vec2<f32>, A: vec2<f32>, B: vec2<f32>, C: vec2<f32>)
 // De Casteljau split of a cubic Bezier at t = 0.5.
 // Returns two quadratic approximations that together cover the cubic.
 // We pick the midpoint of each half as the quadratic control point by
-// choosing the average of its two cubic control points — a common cheap
+// choosing the average of its two cubic control points; a common cheap
 // approximation that's accurate enough for stroked wires.
 fn split_cubic(
     p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>, p3: vec2<f32>,

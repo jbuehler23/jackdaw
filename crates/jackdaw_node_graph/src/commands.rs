@@ -210,7 +210,7 @@ struct NodeSnapshot {
     original: Entity,
     node: GraphNode,
     terminals: Vec<(u32, TerminalDirection, String, String)>,
-    // (source_node, source_terminal, target_node, target_terminal) — all by
+    // (source_node, source_terminal, target_node, target_terminal); all by
     // original-entity ids, which may point to other nodes in the snapshot.
     incident: Vec<(Entity, u32, Entity, u32)>,
 }

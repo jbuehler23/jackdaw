@@ -203,7 +203,7 @@ fn setup_combobox(
         // The previous flow spawned the trigger via `commands.spawn`,
         // then best-effort attached it as a child of `entity` with
         // `commands.get_entity(entity).add_child(...)`. `get_entity`
-        // only guards at *queue* time, not flush time — if the
+        // only guards at *queue* time, not flush time; if the
         // combobox was cascade-despawned before the spawn + add_child
         // commands drained, the trigger ended up orphaned with a
         // `ChildOf` pointing at a dead parent, producing the

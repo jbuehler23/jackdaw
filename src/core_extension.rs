@@ -2,9 +2,7 @@ use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
-use jackdaw_feathers::button::{
-    ButtonClickEvent, ButtonOperatorCall, ButtonParamValue, ButtonProps,
-};
+use jackdaw_feathers::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps};
 use jackdaw_jsn::PropertyValue;
 
 /// Build a [`ButtonProps`] from an operator type, filling in the
@@ -58,7 +56,7 @@ fn dispatch_button_operator_call(
     let params: Vec<(String, PropertyValue)> = call
         .params
         .iter()
-        .map(|(k, v)| (k.to_string(), button_param_to_property_value(v)))
+        .map(|(k, v)| (k.to_string(), v.clone()))
         .collect();
     commands.queue(move |world: &mut World| {
         let mut call = world.operator(id.clone()).settings(CallOperatorSettings {
@@ -72,15 +70,6 @@ fn dispatch_button_operator_call(
             error!("operator dispatch failed for `{id}`: {err}");
         }
     });
-}
-
-fn button_param_to_property_value(value: &ButtonParamValue) -> PropertyValue {
-    match value {
-        ButtonParamValue::Bool(v) => PropertyValue::Bool(*v),
-        ButtonParamValue::Int(v) => PropertyValue::Int(*v),
-        ButtonParamValue::Float(v) => PropertyValue::Float(*v),
-        ButtonParamValue::Str(v) => PropertyValue::String(v.to_string()),
-    }
 }
 
 #[derive(Default)]
@@ -141,6 +130,9 @@ impl JackdawExtension for JackdawCoreExtension {
                 (KeyCode::Backspace, Press::default()),
             ],
         ));
+        // No `Press` on Step Left / Right: holding an arrow scrubs
+        // the timeline frame-by-frame. Shift+Arrow keyframe jumps
+        // below stay one-shot.
         ctx.spawn((
             Action::<crate::ClipTimelineStepLeftOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
@@ -154,32 +146,44 @@ impl JackdawExtension for JackdawCoreExtension {
         ctx.spawn((
             Action::<crate::ClipTimelineJumpPrevOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![KeyCode::ArrowLeft.with_mod_keys(ModKeys::SHIFT)],
+            bindings![(
+                KeyCode::ArrowLeft.with_mod_keys(ModKeys::SHIFT),
+                Press::default(),
+            )],
         ));
         ctx.spawn((
             Action::<crate::ClipTimelineJumpNextOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![KeyCode::ArrowRight.with_mod_keys(ModKeys::SHIFT)],
+            bindings![(
+                KeyCode::ArrowRight.with_mod_keys(ModKeys::SHIFT),
+                Press::default(),
+            )],
         ));
         ctx.spawn((
             Action::<crate::ClipTimelineJumpStartOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![KeyCode::Home],
+            bindings![(KeyCode::Home, Press::default())],
         ));
         ctx.spawn((
             Action::<crate::ClipTimelineJumpEndOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![KeyCode::End],
+            bindings![(KeyCode::End, Press::default())],
         ));
         ctx.spawn((
             Action::<crate::ClipCopyKeyframesOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![KeyCode::KeyC.with_mod_keys(ModKeys::CONTROL)],
+            bindings![(
+                KeyCode::KeyC.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            )],
         ));
         ctx.spawn((
             Action::<crate::ClipPasteKeyframesOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![KeyCode::KeyV.with_mod_keys(ModKeys::CONTROL)],
+            bindings![(
+                KeyCode::KeyV.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            )],
         ));
         crate::draw_brush::add_to_extension(ctx);
 
@@ -208,6 +212,8 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::inspector::ops::add_to_extension(ctx);
         crate::viewport::add_to_extension(ctx);
         crate::prefab_picker::add_to_extension(ctx);
+        crate::add_entity_picker::add_to_extension(ctx);
+        crate::inspector::component_picker::add_to_extension(ctx);
     }
 
     fn register_input_context(&self, app: &mut App) {

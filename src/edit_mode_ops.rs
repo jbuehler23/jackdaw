@@ -102,7 +102,7 @@ pub(crate) fn brush_exit_edit_mode(
     OperatorResult::Finished
 }
 
-/// True when switching edit modes is safe — no text field has focus,
+/// True when switching edit modes is safe; no text field has focus,
 /// no modal is running, and no brush sub-element drag is in flight or
 /// pending. Keybind-triggered mode changes would otherwise yank the
 /// drag target out from under the active system.

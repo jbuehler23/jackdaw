@@ -317,7 +317,6 @@ impl Plugin for EditorCorePlugin {
                     sync_selected_keyframes_from_selection,
                     auto_save_layout_on_change,
                     add_entity_picker::filter_add_entity_picker,
-                    add_entity_picker::close_add_entity_picker_on_escape,
                 )
                     .run_if(in_state(AppState::Editor)),
             )
@@ -2107,7 +2106,7 @@ pub(crate) fn window_reset_layout(
 
 /// Build a menu-entry tuple whose action id is the given operator's
 /// `ID` wrapped in the feathers `op:` prefix. Keeps operator ids out
-/// of UI code — callers pass the `Op` type, not a hand-typed string.
+/// of UI code; callers pass the `Op` type, not a hand-typed string.
 fn op_entry<O: Operator>(label: impl Into<String>) -> (String, String) {
     (format!("op:{}", O::ID), label.into())
 }
@@ -2123,7 +2122,7 @@ fn separator() -> (String, String) {
 /// picker). The feathers menu bar dispatches op-actions through
 /// [`jackdaw_feathers::button::ButtonOperatorCall`] directly and does
 /// not fire `MenuAction` for those, so this handler only sees
-/// free-standing `op:` events. Always plain `op:OP_ID` form —
+/// free-standing `op:` events. Always plain `op:OP_ID` form ;
 /// parametrised dispatch goes through `ButtonOperatorCall.params`.
 fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
     let Some(op_id) = event.action.strip_prefix(OP_PREFIX) else {

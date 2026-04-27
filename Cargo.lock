@@ -4600,6 +4600,7 @@ dependencies = [
  "bevy_easings",
  "bevy_monitors",
  "bevy_ui_text_input",
+ "jackdaw_jsn",
  "jackdaw_widgets",
  "lucide-icons",
 ]

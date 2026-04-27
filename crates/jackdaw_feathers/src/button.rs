@@ -1,5 +1,6 @@
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use jackdaw_jsn::PropertyValue;
 use lucide_icons::Icon;
 use std::borrow::Cow;
 
@@ -18,33 +19,17 @@ pub struct ButtonClickEvent {
 
 /// Attached to a button to declare that clicking it should dispatch
 /// the operator with this id, optionally passing concrete parameters.
+/// The editor's click observer fires the operator; the tooltip
+/// renderer formats the call signature for hover help, so two buttons
+/// targeting the same operator with different args show different
+/// signatures.
 ///
-/// The editor's dispatch observer reads both the id and the params
-/// when the button fires; the editor's tooltip renderer reads them
-/// when the button is hovered, so a "Step Layer Forward" button shows
-/// `asset.cycle_array_layer(direction = 1)` and a "Step Layer
-/// Backward" button shows `asset.cycle_array_layer(direction = -1)`
-/// — same operator, different concrete invocations.
-///
-/// Feathers carries the data as a plain component so widgets can
-/// declare their intent without depending on the operator API or the
-/// runtime `OperatorParameters` type.
+/// Feathers carries this as a plain component to keep the widget
+/// crate independent of the operator API.
 #[derive(Component, Clone, Debug)]
 pub struct ButtonOperatorCall {
     pub id: Cow<'static, str>,
-    pub params: Vec<(Cow<'static, str>, ButtonParamValue)>,
-}
-
-/// Const-friendly subset of operator parameter values that buttons can
-/// statically declare. Mirrors the runtime `PropertyValue` enum used
-/// by `OperatorParameters` but uses `Cow<'static, str>` for strings so
-/// most call sites can construct it without allocating.
-#[derive(Clone, Debug)]
-pub enum ButtonParamValue {
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    Str(Cow<'static, str>),
+    pub params: Vec<(Cow<'static, str>, PropertyValue)>,
 }
 
 impl ButtonOperatorCall {
@@ -61,46 +46,55 @@ impl ButtonOperatorCall {
     pub fn with_param(
         mut self,
         key: impl Into<Cow<'static, str>>,
-        value: impl Into<ButtonParamValue>,
+        value: impl Into<PropertyValue>,
     ) -> Self {
         self.params.push((key.into(), value.into()));
         self
     }
-}
 
-impl From<bool> for ButtonParamValue {
-    fn from(value: bool) -> Self {
-        Self::Bool(value)
+    /// `Display` adapter rendering this button's concrete call
+    /// signature: `id(name: value, ...)`.
+    pub fn signature(&self) -> ButtonCallSignature<'_> {
+        ButtonCallSignature(self)
     }
 }
 
-impl From<i64> for ButtonParamValue {
-    fn from(value: i64) -> Self {
-        Self::Int(value)
+/// `Display` adapter for [`ButtonOperatorCall`]. Constructed via
+/// [`ButtonOperatorCall::signature`].
+pub struct ButtonCallSignature<'a>(&'a ButtonOperatorCall);
+
+impl std::fmt::Display for ButtonCallSignature<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.id)?;
+        f.write_str("(")?;
+        for (i, (k, v)) in self.0.params.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{k}: ")?;
+            fmt_property_value(f, v)?;
+        }
+        f.write_str(")")
     }
 }
 
-impl From<f64> for ButtonParamValue {
-    fn from(value: f64) -> Self {
-        Self::Float(value)
-    }
-}
-
-impl From<String> for ButtonParamValue {
-    fn from(value: String) -> Self {
-        Self::Str(Cow::Owned(value))
-    }
-}
-
-impl From<&'static str> for ButtonParamValue {
-    fn from(value: &'static str) -> Self {
-        Self::Str(Cow::Borrowed(value))
-    }
-}
-
-impl From<Cow<'static, str>> for ButtonParamValue {
-    fn from(value: Cow<'static, str>) -> Self {
-        Self::Str(value)
+fn fmt_property_value(f: &mut std::fmt::Formatter<'_>, v: &PropertyValue) -> std::fmt::Result {
+    match v {
+        PropertyValue::Bool(b) => write!(f, "{b}"),
+        PropertyValue::Int(i) => write!(f, "{i}"),
+        PropertyValue::Float(x) => write!(f, "{x}"),
+        PropertyValue::String(s) => write!(f, "\"{s}\""),
+        PropertyValue::Vec2(v) => write!(f, "vec2({}, {})", v.x, v.y),
+        PropertyValue::Vec3(v) => write!(f, "vec3({}, {}, {})", v.x, v.y, v.z),
+        PropertyValue::Color(c) => {
+            let s = c.to_srgba();
+            write!(
+                f,
+                "Color::srgba({}, {}, {}, {})",
+                s.red, s.green, s.blue, s.alpha
+            )
+        }
+        PropertyValue::Entity(e) => write!(f, "Entity({})", e.to_bits()),
     }
 }
 
@@ -450,7 +444,7 @@ fn setup_button(
         // on a dead parent, producing the
         // `Entity despawned … is invalid` errors on every inspector
         // rebuild. The `get_entity_mut` guard + synchronous
-        // `with_children` here closes that window — everything
+        // `with_children` here closes that window; everything
         // happens atomically on one `&mut World` block.
         let left_icon = config.left_icon;
         let right_icon = config.right_icon;
@@ -576,13 +570,12 @@ fn handle_button_click(
 /// ButtonOperatorCall::new("my.op")))`. A setter isn't provided on
 /// [`IconButtonProps`] because `icon_button` has no staging/setup system;
 /// the tuple-form keeps the API small.
-///
-/// `+ use<>` on the return type opts out of Rust 2024's default
-/// `impl Trait` lifetime capture: the bundle clones `icon_font`
-/// internally (see `font: icon_font.clone()` in the body), so the
-/// returned `impl Bundle` carries no borrow of the input handle and
-/// can be returned through wrapper functions without leaking
-/// lifetimes.
+// `+ use<>` on the return type opts out of Rust 2024's default
+// `impl Trait` lifetime capture: the bundle clones `icon_font`
+// internally (see `font: icon_font.clone()` in the body), so the
+// returned `impl Bundle` carries no borrow of the input handle and
+// can be returned through wrapper functions without leaking
+// lifetimes.
 pub fn icon_button(props: IconButtonProps, icon_font: &Handle<Font>) -> impl Bundle + use<> {
     let IconButtonProps {
         icon,

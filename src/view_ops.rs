@@ -4,7 +4,7 @@
 //! default keybind (`Ctrl+Shift+W`); the rest are menu-only.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::*;
+use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
 use crate::core_extension::CoreExtensionInputContext;
@@ -25,7 +25,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             Action::<ViewToggleWireframeOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyW.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT)],
+            bindings![(
+                KeyCode::KeyW.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
+                Press::default(),
+            )],
         ));
     });
 }

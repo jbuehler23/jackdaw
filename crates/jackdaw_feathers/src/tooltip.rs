@@ -9,7 +9,7 @@
 //! from. Domain bridges in the editor crate (operator buttons,
 //! inspector headers, …) attach a small "source" component plus an
 //! observer that derives a [`Tooltip`] from it. Call sites that have
-//! the data already in hand can also attach a [`Tooltip`] directly —
+//! the data already in hand can also attach a [`Tooltip`] directly ;
 //! the renderer doesn't care how the component got there.
 //!
 //! See `src/operator_tooltip.rs` and `src/inspector/component_tooltip.rs`

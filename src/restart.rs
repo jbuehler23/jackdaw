@@ -34,7 +34,7 @@ use bevy::log::{info, warn};
 
 /// Env var the parent process sets before respawning, signalling
 /// to the child "the game you're about to load was just rebuilt
-/// and installed — skip the initial-build step in the launcher and
+/// and installed; skip the initial-build step in the launcher and
 /// go straight to the editor." Prevents the scaffold → build →
 /// restart → auto-open → build → restart infinite loop.
 pub const ENV_SKIP_INITIAL_BUILD: &str = "JACKDAW_SKIP_INITIAL_BUILD";
@@ -71,7 +71,7 @@ fn unix_exec_or_fallback(exe: &std::path::Path, args: &[std::ffi::OsString]) {
     cmd.args(args).env(ENV_SKIP_INITIAL_BUILD, "1");
     // `exec` replaces the current process image. It only returns
     // on failure (e.g., ENOENT, EACCES). On success, control never
-    // comes back here — the new image starts at `main`.
+    // comes back here; the new image starts at `main`.
     let err = cmd.exec();
     warn!(
         "restart_jackdaw: exec failed ({err}); falling back to spawn-and-exit. \

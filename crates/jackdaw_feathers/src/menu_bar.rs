@@ -16,7 +16,7 @@ pub const OP_ACTION_PREFIX: &str = "op:";
 /// into a typed [`ButtonOperatorCall`]. Returns `None` if `action` does
 /// not begin with [`OP_ACTION_PREFIX`].
 ///
-/// Values are stored as strings (`ButtonParamValue::Str`); the runtime
+/// Values are stored as strings (`PropertyValue::String`); the runtime
 /// `OperatorParameters::as_int` / `as_bool` accessors coerce numeric
 /// and bool params from string form, matching how legacy query-string
 /// dispatch worked. Future menu entries that need typed values should
@@ -42,7 +42,7 @@ pub fn plugin(app: &mut App) {
         .add_observer(on_menu_bar_item_out);
 }
 
-/// When a dropdown item is clicked, fire the [`MenuAction`] — unless the
+/// When a dropdown item is clicked, fire the [`MenuAction`]; unless the
 /// item carries a [`ButtonOperatorCall`] component, in which case the editor's
 /// operator observer will handle dispatch and a `MenuAction` would
 /// double-fire.
@@ -281,7 +281,7 @@ fn spawn_dropdown(commands: &mut Commands, x: f32, y: f32, actions: &[(String, S
         } else {
             // Non-operator actions (legacy free-form action ids)
             // dispatch via the `MenuAction` event. They get no hover
-            // tooltip — the operator-only tooltip pipeline has no
+            // tooltip; the operator-only tooltip pipeline has no
             // place for them, and these will go away once every menu
             // entry is operator-backed.
             commands.entity(dropdown).with_child((item, btn));

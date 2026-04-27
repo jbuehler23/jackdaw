@@ -15,7 +15,7 @@ use crate::graph::TerminalDirection;
 pub struct TerminalDescriptor {
     /// Display label shown next to the terminal dot.
     pub label: String,
-    /// Compatibility key — only terminals with matching `data_type` can connect.
+    /// Compatibility key; only terminals with matching `data_type` can connect.
     pub data_type: String,
     /// Dot color.
     pub color: Color,

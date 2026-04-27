@@ -307,18 +307,20 @@ fn scan_jsn_files(dir: &PathBuf, _assets_root: &PathBuf, results: &mut Vec<(Stri
     }
 }
 
-/// Close the prefab picker on a click outside. (Escape goes through
-/// the `prefab_picker.close` operator binding instead.)
+/// Left-click outside the picker dispatches [`PrefabPickerCloseOp`]
+/// (the same operator Escape fires via BEI). Right and middle clicks
+/// are ignored so the fly-camera right-drag doesn't dismiss it. A
+/// pure BEI binding can't express "clicked outside this entity".
 fn close_prefab_picker_on_outside_click(
     mouse: Res<ButtonInput<MouseButton>>,
-    picker: Query<(Entity, &Hovered), With<PrefabPicker>>,
+    picker: Query<&Hovered, With<PrefabPicker>>,
     mut commands: Commands,
 ) {
-    let Ok((entity, hovered)) = picker.single() else {
+    let Ok(hovered) = picker.single() else {
         return;
     };
-    if mouse.get_just_pressed().next().is_some() && !hovered.get() {
-        commands.entity(entity).despawn();
+    if mouse.just_pressed(MouseButton::Left) && !hovered.get() {
+        commands.operator(PrefabPickerCloseOp::ID).call();
     }
 }
 

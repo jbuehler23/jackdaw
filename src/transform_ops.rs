@@ -11,7 +11,7 @@
 //! plain Arrow and PageUp/Down for nudge.
 
 use bevy::{input_focus::InputFocus, prelude::*};
-use bevy_enhanced_input::prelude::*;
+use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
 use crate::core_extension::CoreExtensionInputContext;
@@ -39,58 +39,81 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
     let ext = ctx.id();
     ctx.entity_mut().world_scope(|world| {
-        // Reset: Alt + G / R / S
+        // Reset: Alt + G / R / S. Use `Press` so holding the key
+        // doesn't re-fire every frame and stack undo entries.
         world.spawn((
             Action::<TransformResetPositionOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyG.with_mod_keys(ModKeys::ALT)],
+            bindings![(KeyCode::KeyG.with_mod_keys(ModKeys::ALT), Press::default(),)],
         ));
         world.spawn((
             Action::<TransformResetRotationOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyR.with_mod_keys(ModKeys::ALT)],
+            bindings![(KeyCode::KeyR.with_mod_keys(ModKeys::ALT), Press::default(),)],
         ));
         world.spawn((
             Action::<TransformResetScaleOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyS.with_mod_keys(ModKeys::ALT)],
+            bindings![(KeyCode::KeyS.with_mod_keys(ModKeys::ALT), Press::default(),)],
         ));
 
         // Rotate 90: Alt + Arrow / PageUp / PageDown
         world.spawn((
             Action::<TransformRotate90YawCcwOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::ArrowLeft.with_mod_keys(ModKeys::ALT)],
+            bindings![(
+                KeyCode::ArrowLeft.with_mod_keys(ModKeys::ALT),
+                Press::default(),
+            )],
         ));
         world.spawn((
             Action::<TransformRotate90YawCwOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::ArrowRight.with_mod_keys(ModKeys::ALT)],
+            bindings![(
+                KeyCode::ArrowRight.with_mod_keys(ModKeys::ALT),
+                Press::default(),
+            )],
         ));
         world.spawn((
             Action::<TransformRotate90PitchCcwOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::ArrowUp.with_mod_keys(ModKeys::ALT)],
+            bindings![(
+                KeyCode::ArrowUp.with_mod_keys(ModKeys::ALT),
+                Press::default(),
+            )],
         ));
         world.spawn((
             Action::<TransformRotate90PitchCwOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::ArrowDown.with_mod_keys(ModKeys::ALT)],
+            bindings![(
+                KeyCode::ArrowDown.with_mod_keys(ModKeys::ALT),
+                Press::default(),
+            )],
         ));
         world.spawn((
             Action::<TransformRotate90RollCcwOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::PageUp.with_mod_keys(ModKeys::ALT)],
+            bindings![(
+                KeyCode::PageUp.with_mod_keys(ModKeys::ALT),
+                Press::default(),
+            )],
         ));
         world.spawn((
             Action::<TransformRotate90RollCwOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::PageDown.with_mod_keys(ModKeys::ALT)],
+            bindings![(
+                KeyCode::PageDown.with_mod_keys(ModKeys::ALT),
+                Press::default(),
+            )],
         ));
 
         // Nudge: plain Arrow / PageUp / PageDown. BEI's ModKeys check
-        // excludes held modifiers, so these don't fire when Alt is
-        // held — the Alt+Arrow rotate bindings above claim those.
+        // excludes held modifiers, so these don't fire while Alt is
+        // held (the Alt+Arrow rotate bindings above claim those).
+        //
+        // No `Press` here: holding an arrow should keep nudging
+        // frame-by-frame, like Blender. With `Press` the user would
+        // have to tap-tap-tap.
         world.spawn((
             Action::<TransformNudgeXNegOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),

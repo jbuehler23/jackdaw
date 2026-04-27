@@ -1,7 +1,7 @@
 //! Clip-tool operators. Replace the keybind/click branches in
 //! `brush::interaction::handle_clip_mode`. The remaining clip-mode
-//! work — recomputing the preview plane and drawing the gizmo overlay
-//! — stays in `interaction.rs`.
+//! work (recomputing the preview plane and drawing the gizmo
+//! overlay) stays in `interaction.rs`.
 //!
 //! Default keybinds: LMB places a point, Tab cycles mode, Enter
 //! applies, Escape clears.

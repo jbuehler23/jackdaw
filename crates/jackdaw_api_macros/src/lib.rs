@@ -387,16 +387,20 @@ fn build_param_spec(meta: &Meta) -> syn::Result<TokenStream2> {
     })
 }
 
+/// Validate the parameter type ident and return the matching
+/// lowercase Rust-style name as a string literal token. The literal
+/// is what `ParamSpec.ty` stores; it matches the labels produced by
+/// `PropertyValue::type_name`.
 fn param_type_variant(ty: &Ident) -> syn::Result<TokenStream2> {
-    Ok(match ty.to_string().as_str() {
-        "bool" => quote! { ::jackdaw_api::prelude::ParamType::Bool },
-        "i64" => quote! { ::jackdaw_api::prelude::ParamType::Int },
-        "f64" => quote! { ::jackdaw_api::prelude::ParamType::Float },
-        "String" => quote! { ::jackdaw_api::prelude::ParamType::String },
-        "Vec2" => quote! { ::jackdaw_api::prelude::ParamType::Vec2 },
-        "Vec3" => quote! { ::jackdaw_api::prelude::ParamType::Vec3 },
-        "Color" => quote! { ::jackdaw_api::prelude::ParamType::Color },
-        "Entity" => quote! { ::jackdaw_api::prelude::ParamType::Entity },
+    let label = match ty.to_string().as_str() {
+        "bool" => "bool",
+        "i64" => "i64",
+        "f64" => "f64",
+        "String" => "String",
+        "Vec2" => "Vec2",
+        "Vec3" => "Vec3",
+        "Color" => "Color",
+        "Entity" => "Entity",
         other => {
             return Err(syn::Error::new(
                 ty.span(),
@@ -405,15 +409,21 @@ fn param_type_variant(ty: &Ident) -> syn::Result<TokenStream2> {
                 ),
             ));
         }
-    })
+    };
+    Ok(quote! { #label })
 }
 
+/// Lower a `default = …` macro arg into a `PropertyValue` constructor.
+/// Strings go through `Cow::Borrowed` so the whole `ParamSpec` can sit
+/// in a `const` slice; numeric and bool literals are trivial.
 fn param_default_variant(ty: &Ident, expr: &Expr) -> syn::Result<TokenStream2> {
     Ok(match ty.to_string().as_str() {
-        "bool" => quote! { ::jackdaw_api::prelude::ParamDefault::Bool(#expr) },
-        "i64" => quote! { ::jackdaw_api::prelude::ParamDefault::Int(#expr) },
-        "f64" => quote! { ::jackdaw_api::prelude::ParamDefault::Float(#expr) },
-        "String" => quote! { ::jackdaw_api::prelude::ParamDefault::Str(#expr) },
+        "bool" => quote! { ::jackdaw_api::jsn::PropertyValue::Bool(#expr) },
+        "i64" => quote! { ::jackdaw_api::jsn::PropertyValue::Int(#expr) },
+        "f64" => quote! { ::jackdaw_api::jsn::PropertyValue::Float(#expr) },
+        "String" => quote! {
+            ::jackdaw_api::jsn::PropertyValue::String(::std::borrow::Cow::Borrowed(#expr))
+        },
         "Vec2" | "Vec3" | "Color" | "Entity" => {
             return Err(syn::Error::new(
                 expr.span(),

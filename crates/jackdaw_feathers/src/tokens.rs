@@ -66,7 +66,7 @@ pub const TAB_INACTIVE_TEXT: Color = Color::srgb(0.659, 0.659, 0.659);
 pub const DROP_OVERLAY_BASE: Color = Color::srgb(0.126, 0.431, 0.784);
 
 // ---------------------------------------------------------------------------
-// Document tab strip (top-level header tabs — Figma spec)
+// Document tab strip (top-level header tabs; Figma spec)
 // ---------------------------------------------------------------------------
 
 /// Active document tab background (Figma #46474C)

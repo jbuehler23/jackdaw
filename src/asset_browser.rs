@@ -423,7 +423,7 @@ fn refresh_browser_on_change(
             // File name label. Truncates inline when it overflows the
             // cell; when truncated, attach a generic `Tooltip` so the
             // user can hover to read the full name. Direct attach
-            // (no source-component bridge) — the data is already in
+            // (no source-component bridge); the data is already in
             // hand at the call site.
             let is_truncated = entry.file_name.len() > 10;
             let display_name = if is_truncated {
@@ -753,7 +753,7 @@ fn try_find_registry_material(
 /// brush-edit face mode) or to every face of every selected brush
 /// (expanding `BrushGroup`s into their child brushes).
 ///
-/// Parameter: `path` — the asset path of the texture to apply.
+/// Parameter: `path`; the asset path of the texture to apply.
 ///
 /// The operator framework captures a scene-AST snapshot before/after
 /// this runs and pushes it onto `CommandHistory`, so there's no
@@ -761,7 +761,7 @@ fn try_find_registry_material(
 /// the end is what makes that work: the outer `save_history` runs
 /// immediately after this system returns and captures the after-
 /// snapshot from the AST, so the mutation has to land in the AST
-/// before that — `BrushPlugin`'s auto-sync fires next `Update`,
+/// before that; `BrushPlugin`'s auto-sync fires next `Update`,
 /// which is too late here.
 #[operator(
     id = "material.apply_texture",
@@ -782,8 +782,8 @@ pub fn apply_texture(
     children_query: Query<&Children>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let path = match params.0.get("path") {
-        Some(jackdaw_jsn::PropertyValue::String(s)) => s.clone(),
+    let path: String = match params.0.get("path") {
+        Some(jackdaw_jsn::PropertyValue::String(s)) => s.to_string(),
         _ => {
             warn!("material.apply_texture called without a String `path` parameter");
             return OperatorResult::Cancelled;
@@ -1068,7 +1068,7 @@ fn update_preview_panel(
             .id();
 
         // Previous button. `Hovered + ButtonOperatorCall` are
-        // tooltip data sources only — the click below dispatches the
+        // tooltip data sources only; the click below dispatches the
         // operator manually because this is a raw Node spawn (not a
         // feathers `button()`), so it doesn't fire `ButtonClickEvent`.
         let prev_btn = commands
@@ -1112,7 +1112,7 @@ fn update_preview_panel(
             ChildOf(nav_row),
         ));
 
-        // Next button. See `prev_btn` above — same pattern.
+        // Next button. See `prev_btn` above; same pattern.
         let next_btn = commands
             .spawn((
                 Node {

@@ -1,4 +1,4 @@
-//! The "Add Node" popover — a category-grouped picker listing every
+//! The "Add Node" popover; a category-grouped picker listing every
 //! registered [`NodeTypeDescriptor`](crate::NodeTypeDescriptor).
 //!
 //! Opened by right-clicking on the canvas background or by pressing Tab
@@ -7,7 +7,7 @@
 //! translated into canvas-space and closes the popover. An outside click
 //! or pressing Escape also closes it.
 //!
-//! The popover is intentionally lightweight — no search input for Phase 3
+//! The popover is intentionally lightweight; no search input for Phase 3
 //! so we don't need the full `text_edit` stack. Phase 6 polish can add
 //! filtering and keyboard navigation to match Maya's quick-add UX more
 //! closely.
@@ -64,9 +64,9 @@ const ENTRY_HOVER_BG: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
 /// are despawned first so only one popover lives at a time.
 ///
 /// Structure:
-/// * `AddNodeBackdrop` at `GlobalZIndex(999)` — full-screen transparent,
+/// * `AddNodeBackdrop` at `GlobalZIndex(999)`; full-screen transparent,
 ///   `Pickable::default()`, absorbs outside-clicks and closes on click.
-/// * `AddNodePopover` at `GlobalZIndex(1000)` — the styled panel. Clicks on
+/// * `AddNodePopover` at `GlobalZIndex(1000)`; the styled panel. Clicks on
 ///   any descendant hit the popover subtree first (higher z), never the
 ///   backdrop.
 pub fn spawn_popover(
@@ -95,7 +95,7 @@ pub fn spawn_popover(
     let popover_entity = commands.spawn_empty().id();
     let backdrop_entity = commands.spawn_empty().id();
 
-    // Backdrop — full-screen transparent overlay beneath the popover.
+    // Backdrop; full-screen transparent overlay beneath the popover.
     commands.entity(backdrop_entity).insert((
         AddNodeBackdrop {
             popover: popover_entity,
@@ -243,7 +243,7 @@ pub fn spawn_popover(
 /// Because the backdrop sits at `GlobalZIndex(999)` and the popover at
 /// `1000`, clicks on any popover descendant are picked before they reach
 /// the backdrop. Clicks outside the popover hit the backdrop and fire this
-/// observer — straightforward, no hover-map gymnastics.
+/// observer; straightforward, no hover-map gymnastics.
 pub fn on_backdrop_click(
     mut event: On<Pointer<Click>>,
     backdrops: Query<&AddNodeBackdrop>,
@@ -266,7 +266,7 @@ pub fn on_backdrop_click(
 }
 
 /// Close the popover (and its backdrop) on Escape. Simpler than hooking
-/// into the whole dismissal machinery — the backdrop handles outside-click
+/// into the whole dismissal machinery; the backdrop handles outside-click
 /// closure on its own.
 pub fn handle_popover_escape(
     keys: Res<ButtonInput<KeyCode>>,

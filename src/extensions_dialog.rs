@@ -131,7 +131,7 @@ fn populate_extensions_dialog(
         // Required extensions are load-bearing (the editor panics
         // without them), so they're not user-toggleable. Omit them
         // from the dialog entirely rather than rendering a locked
-        // checkbox — they're implementation detail, not a user
+        // checkbox; they're implementation detail, not a user
         // choice.
         if extension_resolution::is_required(&id) {
             continue;

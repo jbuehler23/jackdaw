@@ -114,7 +114,7 @@ pub(super) fn spawn_custom_properties_display(
                     text_edit::text_edit(
                         TextEditProps::default()
                             .grow()
-                            .with_default_value(val.clone())
+                            .with_default_value(val.to_string())
                             .allow_empty(),
                     ),
                     CustomPropertyBinding {
@@ -230,6 +230,21 @@ pub(super) fn spawn_custom_properties_display(
                             });
                         },
                     );
+            }
+            PropertyValue::Entity(val) => {
+                // Entity values are read-only in the Custom Properties UI
+                // for now; surface the bits so users can at least see
+                // which entity is referenced. A pickable
+                // entity-reference field is future work.
+                commands.spawn((
+                    Text::new(format!("Entity({})", val.to_bits())),
+                    TextFont {
+                        font_size: tokens::TEXT_SIZE,
+                        ..default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                    ChildOf(row),
+                ));
             }
         }
 
@@ -504,7 +519,7 @@ pub(crate) fn on_custom_property_text_commit(
                 let new_val = match current_val {
                     PropertyValue::Int(_) => PropertyValue::Int(text.parse().unwrap_or(0)),
                     PropertyValue::Float(_) => PropertyValue::Float(text.parse().unwrap_or(0.0)),
-                    PropertyValue::String(_) => PropertyValue::String(text),
+                    PropertyValue::String(_) => PropertyValue::String(text.into()),
                     other => other.clone(),
                 };
                 apply_custom_property_with_undo(world, source, &name, new_val);

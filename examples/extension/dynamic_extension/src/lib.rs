@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::*;
+use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
 #[derive(Default)]
@@ -53,8 +53,8 @@ impl JackdawExtension for SampleExtension {
             SampleContext,
             actions!(SampleContext[
                 // the `hello` operator function generates a struct called `HelloOp`
-                (Action::<HelloOp>::new(), bindings![KeyCode::F9]),
-                (Action::<HelloTimeOp>::new(), bindings![KeyCode::F10]),
+                (Action::<HelloOp>::new(), bindings![(KeyCode::F9, Press::default())]),
+                (Action::<HelloTimeOp>::new(), bindings![(KeyCode::F10, Press::default())]),
             ]),
         ));
     }

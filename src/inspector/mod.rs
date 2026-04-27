@@ -1,7 +1,7 @@
 pub(crate) mod anim_diamond;
 mod brush_display;
 pub(crate) mod component_display;
-mod component_picker;
+pub(crate) mod component_picker;
 pub(crate) mod component_tooltip;
 mod custom_props_display;
 mod material_display;
@@ -132,7 +132,6 @@ impl Plugin for InspectorPlugin {
                     reflect_fields::refresh_inspector_fields,
                     reflect_fields::refresh_enum_variants,
                     component_picker::filter_component_picker,
-                    component_picker::close_picker_on_escape,
                     brush_display::update_brush_face_properties,
                     component_display::filter_inspector_components,
                     anim_diamond::decorate_animatable_fields,
@@ -323,7 +322,7 @@ pub(super) struct FieldBinding {
 /// `FieldBinding` with the same path as this marker. For composite
 /// fields like `Vec3 translation` the row contains three axis
 /// `FieldBinding`s with paths `translation.x` / `.y` / `.z`, but
-/// there's still only one `InspectorFieldRow` on the outer column —
+/// there's still only one `InspectorFieldRow` on the outer column ;
 /// so per-field decorations (like the animation keyframe diamond)
 /// can hang off this marker without being duplicated per axis.
 #[derive(Component)]
