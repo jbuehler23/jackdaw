@@ -1412,13 +1412,13 @@ fn update_material_browser_ui(
             Text::new(display_name),
             TextFont {
                 font_size: 9.0,
-                ..Default::default()
+                ..default()
             },
             TextColor(tokens::TEXT_SECONDARY),
             Node {
-                max_width: Val::Px(60.0),
+                max_width: px(60.0),
                 overflow: Overflow::clip(),
-                ..Default::default()
+                ..default()
             },
             ChildOf(thumb_entity),
         ));
