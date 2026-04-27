@@ -439,7 +439,7 @@ fn refresh_browser_on_change(
                 },
                 TextColor(tokens::TEXT_SECONDARY),
                 Node {
-                    max_width: Val::Px(60.0),
+                    max_width: px(60.0),
                     overflow: Overflow::clip(),
                     ..default()
                 },
