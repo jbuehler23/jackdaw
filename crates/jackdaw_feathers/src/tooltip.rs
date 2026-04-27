@@ -192,7 +192,7 @@ fn spawn_tooltip_content(commands: &mut Commands, popover: Entity, tip: &Tooltip
             Text::new(tip.footer.clone()),
             TextFont {
                 font_size: tokens::FONT_SM,
-                ..Default::default()
+                ..default()
             },
             TextColor(tokens::TEXT_SECONDARY),
             ChildOf(popover),
