@@ -130,7 +130,7 @@ fn can_change_edit_mode(
     label = "Object Mode",
     is_available = can_change_edit_mode
 )]
-pub(crate) fn edit_mode_object(
+pub fn edit_mode_object(
     _: In<OperatorParameters>,
     mut edit_mode: ResMut<EditMode>,
     mut brush_selection: ResMut<BrushSelection>,

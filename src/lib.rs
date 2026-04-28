@@ -307,9 +307,7 @@ impl Plugin for EditorCorePlugin {
                 Update,
                 (
                     send_scroll_events,
-                    layout::update_toolbar_highlights,
-                    layout::update_space_toggle_label,
-                    layout::update_edit_tool_highlights,
+                    layout::update_toolbar_button_variants,
                     layout::update_active_document_display,
                     layout::update_tab_strip_highlights,
                     auto_hide_internal_entities,

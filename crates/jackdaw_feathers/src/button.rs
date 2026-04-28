@@ -118,7 +118,14 @@ pub fn plugin(app: &mut App) {
 #[derive(Component)]
 pub struct EditorButton;
 
-#[derive(Component, Default, Clone, Copy, PartialEq)]
+/// Marker on the text entity that holds a button's main content
+/// string. External systems use this to mutate the displayed label
+/// without re-spawning the button (e.g. the gizmo space toggle that
+/// flips between "World" and "Local" while keeping the same button).
+#[derive(Component)]
+pub struct ButtonContentText;
+
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ButtonVariant {
     #[default]
     Default,
@@ -141,36 +148,57 @@ pub enum ButtonSize {
 impl ButtonVariant {
     pub fn bg_color(&self, hovered: bool) -> Srgba {
         use bevy::color::palettes::tailwind;
-        match (self, hovered) {
-            (Self::Default, _) => tailwind::ZINC_700,
-            (Self::Ghost | Self::ActiveAlt | Self::Disabled, _) => TEXT_BODY_COLOR,
-            (Self::Primary | Self::Active, _) => PRIMARY_COLOR,
-            (Self::Destructive, false) => tailwind::RED_500,
-            (Self::Destructive, true) => tailwind::RED_600,
+        match self {
+            Self::Default => tailwind::ZINC_700,
+            Self::Ghost | Self::ActiveAlt | Self::Disabled => TEXT_BODY_COLOR,
+            Self::Primary => PRIMARY_COLOR,
+            // Solid surface grey (Figma toolbar #505050). Toolbar
+            // active-tool indicators and combobox selected rows
+            // share this treatment.
+            Self::Active => Srgba::new(0.314, 0.314, 0.314, 1.0),
+            Self::Destructive => {
+                if hovered {
+                    tailwind::RED_600
+                } else {
+                    tailwind::RED_500
+                }
+            }
         }
     }
     pub fn bg_opacity(&self, hovered: bool) -> f32 {
-        #[expect(
-            clippy::match_same_arms,
-            reason = "We want to tweak the values that happen to be the same differently"
-        )]
-        match (self, hovered) {
-            (Self::Ghost, false) | (Self::Disabled, _) => 0.0,
-            (Self::Active, false) => 0.1,
-            (Self::Active, true) => 0.15,
-            (Self::ActiveAlt, _) => 0.05,
-            (Self::Default, false) => 0.5,
-            (Self::Default, true) => 0.8,
-            (Self::Ghost, true) => 0.05,
-            (Self::Primary | Self::Destructive, false) => 1.0,
-            (Self::Primary | Self::Destructive, true) => 0.9,
+        match self {
+            Self::Disabled => 0.0,
+            Self::Ghost => {
+                if hovered {
+                    0.05
+                } else {
+                    0.0
+                }
+            }
+            // Solid #505050 in both states; no hover lift, the icon
+            // colour does the differentiation.
+            Self::Active => 1.0,
+            Self::ActiveAlt => 0.05,
+            Self::Default => {
+                if hovered {
+                    0.8
+                } else {
+                    0.5
+                }
+            }
+            Self::Primary | Self::Destructive => {
+                if hovered {
+                    0.9
+                } else {
+                    1.0
+                }
+            }
         }
     }
     pub fn text_color(&self) -> Srgba {
         match self {
             Self::Default | Self::Ghost | Self::ActiveAlt => TEXT_BODY_COLOR,
-            Self::Primary | Self::Destructive => TEXT_DISPLAY_COLOR,
-            Self::Active => PRIMARY_COLOR.lighter(0.05),
+            Self::Primary | Self::Destructive | Self::Active => TEXT_DISPLAY_COLOR,
             Self::Disabled => TEXT_MUTED_COLOR,
         }
     }
@@ -190,9 +218,16 @@ impl ButtonVariant {
         }
     }
     pub fn border_opacity(&self, hovered: bool) -> f32 {
-        match (self, hovered) {
-            (Self::Ghost, false) | (Self::Disabled, _) => 0.0,
-            (Self::ActiveAlt, _) => 0.2,
+        match self {
+            Self::Ghost => {
+                if hovered {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Self::Disabled => 0.0,
+            Self::ActiveAlt => 0.2,
             _ => 1.0,
         }
     }
@@ -201,15 +236,20 @@ impl ButtonVariant {
 impl ButtonSize {
     fn width(&self) -> Val {
         match self {
-            Self::Icon => Val::Px(28.0),
-            Self::IconSM => Val::Px(24.0),
+            // 18x18 frame matches the Figma viewport-toolbar spec.
+            // Lucide's stroke width is baked into the font; we
+            // control perceived thickness by sizing the glyph to
+            // ~55% of the frame (per Figma: 9.92px vector inside
+            // 18px button) so the icon stays slim against the bg.
+            Self::Icon => Val::Px(18.0),
+            Self::IconSM => Val::Px(16.0),
             Self::MD => Val::Auto,
         }
     }
     fn height(&self) -> Val {
         match self {
-            Self::IconSM => Val::Px(24.0),
-            _ => Val::Px(28.0),
+            Self::IconSM => Val::Px(16.0),
+            _ => Val::Px(18.0),
         }
     }
     fn padding(&self) -> Val {
@@ -220,8 +260,12 @@ impl ButtonSize {
     }
     fn icon_size(&self) -> f32 {
         match self {
-            Self::IconSM => 14.0,
-            _ => 16.0,
+            // 12px glyph in an 18px frame = 67%; slightly above the
+            // Figma 55% so anti-aliased strokes stay legible at
+            // 1x resolution.
+            Self::IconSM => 11.0,
+            Self::Icon => 12.0,
+            Self::MD => 16.0,
         }
     }
 }
@@ -282,6 +326,14 @@ impl ButtonProps {
     }
     pub fn with_subtitle(mut self, subtitle: impl Into<String>) -> Self {
         self.subtitle = Some(subtitle.into());
+        self
+    }
+    /// Override the button's main label. Useful in combination with
+    /// `ButtonProps::from_operator::<Op>()` (defined in
+    /// `jackdaw_api::ui`) when the operator's `LABEL` is too long for
+    /// a tight toolbar slot, or empty when the icon alone is enough.
+    pub fn with_content(mut self, content: impl Into<String>) -> Self {
+        self.content = content.into();
         self
     }
     /// Dispatch an operator by id when this button is clicked. The
@@ -433,15 +485,25 @@ fn setup_button(
         config.initialized = true;
 
         let is_column = node.flex_direction == FlexDirection::Column;
-        let left_padding = if config.left_icon.is_some() || is_column {
-            px(6.0)
+        let icon_only = matches!(size, ButtonSize::Icon | ButtonSize::IconSM);
+        // Icon-only buttons keep symmetric zero-padding so the glyph
+        // sits in the dead centre of the square frame; otherwise an
+        // icon child would inflate one side and shift the glyph off
+        // the centre line.
+        let (left_padding, right_padding) = if icon_only {
+            (size.padding(), size.padding())
         } else {
-            size.padding()
-        };
-        let right_padding = if config.right_icon.is_some() || is_column {
-            px(6.0)
-        } else {
-            size.padding()
+            let left = if config.left_icon.is_some() || is_column {
+                px(6.0)
+            } else {
+                size.padding()
+            };
+            let right = if config.right_icon.is_some() || is_column {
+                px(6.0)
+            } else {
+                size.padding()
+            };
+            (left, right)
         };
         node.padding = UiRect::axes(left_padding, node.padding.top);
         node.padding.right = right_padding;
@@ -488,8 +550,15 @@ fn setup_button(
                     ));
                 }
 
-                if !content.is_empty() {
+                // Icon-sized buttons render only the icon; the
+                // operator label still reaches the user through the
+                // hover tooltip. Skipping the text child here means
+                // callers don't have to mirror the same intent with
+                // `with_content("")`.
+                let icon_only = matches!(size, ButtonSize::Icon | ButtonSize::IconSM);
+                if !content.is_empty() && !icon_only {
                     parent.spawn((
+                        ButtonContentText,
                         Text::new(&content),
                         TextFont {
                             font: font.clone(),
@@ -545,7 +614,16 @@ fn handle_hover(
             &mut BackgroundColor,
             &mut BorderColor,
         ),
-        (Changed<Hovered>, With<EditorButton>),
+        // Re-render when either the hover state OR the variant
+        // changed. Without `Changed<ButtonVariant>` a toolbar button
+        // whose variant flips Active <-> Ghost (driven by an external
+        // system, e.g. `update_toolbar_button_variants`) only picks
+        // up the new bg the next time the cursor crosses it; the
+        // user sees stale highlights.
+        (
+            With<EditorButton>,
+            Or<(Changed<Hovered>, Changed<ButtonVariant>)>,
+        ),
     >,
 ) {
     for (variant, hovered, mut bg, mut border) in &mut buttons {

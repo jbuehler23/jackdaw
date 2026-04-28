@@ -111,6 +111,19 @@ pub const AXIS_LABEL_BG: Color = Color::srgb(0.275, 0.278, 0.298);
 /// Active toolbar button background (#505050)
 pub const TOOLBAR_ACTIVE_BG: Color = Color::srgb(0.314, 0.314, 0.314);
 
+/// Toolbar outer border (#303030, Figma viewport-toolbar spec).
+pub const TOOLBAR_BORDER: Color = Color::srgb(0.188, 0.188, 0.188);
+/// Total toolbar row height (Figma viewport-toolbar spec).
+pub const TOOLBAR_HEIGHT: f32 = 30.0;
+/// Gap between adjacent toolbar children (icon buttons, separators).
+pub const TOOLBAR_GAP: f32 = 6.0;
+/// Toolbar inset on the left edge (Figma viewport-toolbar spec).
+pub const TOOLBAR_PADDING_LEFT: f32 = 6.0;
+/// Toolbar inset on the right edge (Figma viewport-toolbar spec).
+pub const TOOLBAR_PADDING_RIGHT: f32 = 8.0;
+/// Toolbar corner radius (top edges only; bottom flat against the viewport).
+pub const TOOLBAR_RADIUS: f32 = 6.0;
+
 // ---------------------------------------------------------------------------
 // Borders
 // ---------------------------------------------------------------------------

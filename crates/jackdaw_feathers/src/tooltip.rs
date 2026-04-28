@@ -25,9 +25,15 @@ use crate::{
     tokens,
 };
 
-/// Delay before the tooltip appears. Long enough to skip flicker on
-/// quick mouse-overs, short enough to feel responsive.
-const HOVER_DELAY: Duration = Duration::from_millis(300);
+/// Delay before the title-only popover appears. Long enough to skip
+/// flicker on quick mouse-overs, short enough to feel responsive.
+const SHORT_HOVER_DELAY: Duration = Duration::from_millis(300);
+
+/// Additional delay (counted from the start of the hover) before the
+/// description + footer are appended to the existing popover.
+/// Blender-style two-stage tooltips: glance to discover the name,
+/// linger to read the manual.
+const FULL_HOVER_DELAY: Duration = Duration::from_millis(1200);
 
 /// Maximum width of the popover. Wider lines wrap; taller content
 /// grows the popover vertically without re-positioning.
@@ -90,15 +96,29 @@ impl Plugin for TooltipPlugin {
     }
 }
 
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum TooltipStage {
+    #[default]
+    None,
+    /// Title-only popover spawned (after `SHORT_HOVER_DELAY`).
+    Title,
+    /// Title + description + footer spawned (after `FULL_HOVER_DELAY`).
+    Full,
+}
+
 #[derive(Resource, Default)]
 struct TooltipState {
     /// Currently-hovered tagged entity, with elapsed hover time.
     pending: Option<(Entity, Duration)>,
     /// Spawned popover entity, if the tooltip is currently visible.
     active: Option<Entity>,
+    /// Which stage of the popover is currently rendered for `active`.
+    stage: TooltipStage,
 }
 
 /// Tick the hover delay and spawn / despawn the tooltip popover.
+/// Two-stage Blender-style: a glance gets the title, lingering
+/// expands to the full description + signature.
 fn tick_tooltip(
     time: Res<Time>,
     targets: Query<(Entity, &Tooltip, &Hovered)>,
@@ -117,6 +137,7 @@ fn tick_tooltip(
         if let Some(active) = state.active.take() {
             commands.entity(active).try_despawn();
         }
+        state.stage = TooltipStage::None;
         return;
     };
 
@@ -126,55 +147,69 @@ fn tick_tooltip(
         if let Some(active) = state.active.take() {
             commands.entity(active).try_despawn();
         }
+        state.stage = TooltipStage::None;
     }
 
-    let already_visible = state.active.is_some();
     let Some((_, elapsed)) = state.pending.as_mut() else {
         return;
     };
     *elapsed += time.delta();
+    let elapsed = *elapsed;
 
-    if already_visible || *elapsed < HOVER_DELAY {
-        return;
+    match state.stage {
+        TooltipStage::None if elapsed >= SHORT_HOVER_DELAY => {
+            let cursor_pos = window.cursor_position();
+            let popover_entity = commands
+                .spawn(popover::popover(
+                    PopoverProps::new(entity)
+                        .with_position(cursor_pos)
+                        .with_placement(PopoverPlacement::BottomStart)
+                        .with_padding(TOOLTIP_PADDING)
+                        .with_gap(tokens::SPACING_XS)
+                        .with_z_index(300)
+                        .with_node(Node {
+                            flex_direction: FlexDirection::Column,
+                            max_width: Val::Px(TOOLTIP_MAX_WIDTH),
+                            ..Default::default()
+                        }),
+                ))
+                .id();
+            spawn_title(&mut commands, popover_entity, tip);
+            state.active = Some(popover_entity);
+            state.stage = TooltipStage::Title;
+        }
+        TooltipStage::Title if elapsed >= FULL_HOVER_DELAY => {
+            if let Some(popover) = state.active {
+                spawn_body(&mut commands, popover, tip);
+                state.stage = TooltipStage::Full;
+            }
+        }
+        _ => {}
     }
-
-    let cursor_pos = window.cursor_position();
-    let popover_entity = commands
-        .spawn(popover::popover(
-            PopoverProps::new(entity)
-                .with_position(cursor_pos)
-                .with_placement(PopoverPlacement::BottomStart)
-                .with_padding(TOOLTIP_PADDING)
-                .with_gap(tokens::SPACING_XS)
-                .with_z_index(300)
-                .with_node(Node {
-                    flex_direction: FlexDirection::Column,
-                    max_width: Val::Px(TOOLTIP_MAX_WIDTH),
-                    ..Default::default()
-                }),
-        ))
-        .id();
-    spawn_tooltip_content(&mut commands, popover_entity, tip);
-    state.active = Some(popover_entity);
 }
 
-fn spawn_tooltip_content(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
-    if !tip.title.is_empty() {
-        commands.spawn((
-            Text::new(tip.title.clone()),
-            TextFont {
-                font_size: tokens::FONT_SM,
-                weight: FontWeight::MEDIUM,
-                ..default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-            ChildOf(popover),
-        ));
+/// Title-only popover content (stage 1).
+fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
+    if tip.title.is_empty() {
+        return;
     }
+    commands.spawn((
+        Text::new(tip.title.clone()),
+        TextFont {
+            font_size: tokens::FONT_SM,
+            weight: FontWeight::MEDIUM,
+            ..default()
+        },
+        TextColor(tokens::TEXT_PRIMARY),
+        ChildOf(popover),
+    ));
+}
 
-    // Description is the meaningful body the reader is here for, so
-    // it gets primary weight; the footer (signature / type path) is
-    // dim metadata and gets the darker grey.
+/// Description + footer appended below the title (stage 2). Description
+/// is the meaningful body the reader is here for, so it gets primary
+/// weight; the footer (signature / type path) is dim metadata and gets
+/// the darker grey.
+fn spawn_body(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
     if !tip.description.is_empty() {
         commands.spawn((
             Text::new(tip.description.clone()),
@@ -186,7 +221,6 @@ fn spawn_tooltip_content(commands: &mut Commands, popover: Entity, tip: &Tooltip
             ChildOf(popover),
         ));
     }
-
     if !tip.footer.is_empty() {
         commands.spawn((
             Text::new(tip.footer.clone()),

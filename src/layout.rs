@@ -1,8 +1,8 @@
-use bevy::{feathers::theme::ThemedText, picking::hover::Hovered, prelude::*, ui_widgets::observe};
+use bevy::{picking::hover::Hovered, prelude::*, ui_widgets::observe};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
-    button::ButtonOperatorCall,
-    icons::{Icon, IconFont},
+    button::{self, ButtonOperatorCall, ButtonSize, ButtonVariant},
+    icons::IconFont,
     menu_bar, popover, separator, split_panel, status_bar,
     text_edit::{self, TextEditProps},
     tokens,
@@ -12,7 +12,7 @@ use jackdaw_feathers::{
 use crate::{
     EditorEntity,
     brush::{BrushEditMode, EditMode},
-    draw_brush::{ActivateDrawBrushModalOp, DrawBrushState},
+    draw_brush::ActivateDrawBrushModalOp,
     edit_mode_ops::{
         EditModeClipOp, EditModeEdgeOp, EditModeFaceOp, EditModeObjectOp, EditModeVertexOp,
     },
@@ -106,21 +106,6 @@ pub struct HierarchyFilter;
 /// Marker for the toolbar
 #[derive(Component)]
 pub struct Toolbar;
-
-/// Marker for gizmo mode buttons
-#[derive(Component)]
-pub struct GizmoModeButton(pub GizmoMode);
-
-/// Marker for gizmo space toggle
-#[derive(Component)]
-pub struct GizmoSpaceButton;
-
-/// Marker for the physics toolbar button. Clicking it while
-/// `EditMode::Physics` is active cancels the modal rather than
-/// re-dispatching, so it needs its own click observer; other
-/// toolbar buttons are identified by their `ButtonOperatorCall`.
-#[derive(Component, Clone, Copy, PartialEq, Eq)]
-pub struct PhysicsToolbarButton;
 
 /// Marker for keybind helper button
 #[derive(Component)]
@@ -500,279 +485,90 @@ fn viewport_with_toolbar(icon_font: Handle<Font>) -> impl Bundle {
 }
 
 fn toolbar(icon_font: Handle<Font>) -> impl Bundle {
-    let f = icon_font.clone();
+    // Every toolbar entry below goes through `feathers::button(...)`,
+    // the same constructor extensions use. Active-state highlighting
+    // is driven by [`update_toolbar_button_variants`] flipping
+    // `ButtonVariant::Active` on the owning entity, so we never
+    // mutate `BackgroundColor` directly and `handle_hover` stays the
+    // sole bg writer.
+    //
+    // Sizing matches the Figma viewport-toolbar spec: 30px tall, 1px
+    // border, top corners rounded against the panel below.
     (
         Toolbar,
         EditorEntity,
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_SM)),
-            column_gap: px(tokens::SPACING_SM),
+            padding: UiRect {
+                left: px(tokens::TOOLBAR_PADDING_LEFT),
+                right: px(tokens::TOOLBAR_PADDING_RIGHT),
+                top: px(0.0),
+                bottom: px(0.0),
+            },
+            column_gap: px(tokens::TOOLBAR_GAP),
             width: percent(100),
-            height: px(32.0),
+            height: px(tokens::TOOLBAR_HEIGHT),
+            border: UiRect::all(px(1.0)),
+            border_radius: BorderRadius {
+                top_left: px(tokens::TOOLBAR_RADIUS),
+                top_right: px(tokens::TOOLBAR_RADIUS),
+                bottom_left: px(0.0),
+                bottom_right: px(0.0),
+            },
             flex_shrink: 0.0,
             ..Default::default()
         },
         BackgroundColor(tokens::PANEL_HEADER_BG),
+        BorderColor::all(tokens::TOOLBAR_BORDER),
         children![
-            // Gizmo mode buttons
-            toolbar_button(Icon::Move3d, "", GizmoMode::Translate, icon_font.clone()),
-            toolbar_button(Icon::Rotate3d, "R", GizmoMode::Rotate, icon_font.clone()),
-            toolbar_button(Icon::Scale3d, "T", GizmoMode::Scale, icon_font.clone()),
-            // Separator
+            toolbar_op_button::<GizmoModeTranslateOp>(Icon::Move3d),
+            toolbar_op_button::<GizmoModeRotateOp>(Icon::Rotate3d),
+            toolbar_op_button::<GizmoModeScaleOp>(Icon::Scale3d),
             separator::separator(separator::SeparatorProps::vertical()),
-            // Space toggle
-            toolbar_space_button(f.clone()),
-            // Separator
+            // Gizmo space toggle. Active highlight = `Local`; default
+            // = `World`. Tooltip is the discoverability path.
+            toolbar_op_button::<GizmoSpaceToggleOp>(Icon::Globe),
             separator::separator(separator::SeparatorProps::vertical()),
-            // Edit-mode buttons, parameterised on the operator they
-            // dispatch. Extension toolbar entries follow the same
-            // shape: `toolbar_edit_button::<MyOp>(...)`. Letting
-            // extensions append from outside `layout.rs` is a
-            // follow-up.
-            toolbar_edit_button::<EditModeObjectOp>(Icon::MousePointer2, f.clone()),
-            toolbar_edit_button::<ActivateDrawBrushModalOp>(Icon::Box, f.clone()),
-            toolbar_edit_button::<MeasureDistanceOp>(Icon::RulerDimensionLine, f.clone()),
-            toolbar_edit_button::<EditModeVertexOp>(Icon::CircleDot, f.clone()),
-            toolbar_edit_button::<EditModeEdgeOp>(Icon::GitCommitHorizontal, f.clone()),
-            toolbar_edit_button::<EditModeFaceOp>(Icon::Hexagon, f.clone()),
-            toolbar_edit_button::<EditModeClipOp>(Icon::ScissorsLineDashed, f.clone()),
-            // Separator
+            toolbar_op_button::<EditModeObjectOp>(Icon::MousePointer2),
+            toolbar_op_button::<ActivateDrawBrushModalOp>(Icon::Box),
+            toolbar_op_button::<MeasureDistanceOp>(Icon::RulerDimensionLine),
+            toolbar_op_button::<EditModeVertexOp>(Icon::CircleDot),
+            toolbar_op_button::<EditModeEdgeOp>(Icon::GitCommitHorizontal),
+            toolbar_op_button::<EditModeFaceOp>(Icon::Hexagon),
+            toolbar_op_button::<EditModeClipOp>(Icon::ScissorsLineDashed),
             separator::separator(separator::SeparatorProps::vertical()),
-            toolbar_physics_button(Icon::Zap, f.clone()),
-            // Spacer pushes help button to the right
+            toolbar_op_button::<PhysicsActivateOp>(Icon::Zap),
+            // Spacer pushes the help button to the right.
             (Node {
                 flex_grow: 1.0,
                 ..Default::default()
             },),
-            // Keybind help button
-            toolbar_help_button(f),
+            toolbar_help_button(icon_font),
         ],
     )
 }
 
-/// Built-in gizmo-mode toolbar button. Hand-rolled rather than going
-/// through `jackdaw_feathers::button` because [`update_toolbar_highlights`]
-/// drives `BackgroundColor` directly per active mode and would race
-/// with the feathers `handle_hover` system. Extensions adding their
-/// own toolbar entries should prefer
-/// `button::button(ButtonProps::from_operator::<Op>())` via the
-/// [`ButtonPropsOpExt`](jackdaw_api::ui::ButtonPropsOpExt) trait
-/// (no active-state highlight needed); see
-/// `src/navmesh/toolbar.rs` for working examples.
-fn toolbar_button(icon: Icon, label: &str, mode: GizmoMode, font: Handle<Font>) -> impl Bundle {
-    let label = label.to_string();
-    let op_id: &'static str = match mode {
-        GizmoMode::Translate => GizmoModeTranslateOp::ID,
-        GizmoMode::Rotate => GizmoModeRotateOp::ID,
-        GizmoMode::Scale => GizmoModeScaleOp::ID,
-    };
-    (
-        GizmoModeButton(mode),
-        Hovered::default(),
-        // Tooltip data source for the rich operator popover. Click
-        // dispatch happens in the hand-rolled observer below; see
-        // `toolbar_edit_button` for the same pattern.
-        ButtonOperatorCall::new(op_id),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: px(tokens::SPACING_XS),
-            padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::TOOLBAR_BUTTON_BG),
-        children![
-            (
-                Text::new(String::from(icon.unicode())),
-                TextFont {
-                    font,
-                    font_size: 15.0,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-            ),
-            (
-                Text::new(label),
-                TextFont {
-                    font_size: tokens::FONT_SM,
-                    ..Default::default()
-                },
-                ThemedText,
-            )
-        ],
-        observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            commands
-                .operator(op_id)
-                .settings(CallOperatorSettings {
-                    execution_context: ExecutionContext::Invoke,
-                    creates_history_entry: true,
-                })
-                .call();
-        }),
-    )
-}
-
-fn toolbar_space_button(icon_font: Handle<Font>) -> impl Bundle {
-    (
-        GizmoSpaceButton,
-        Hovered::default(),
-        // Tooltip data source for the rich operator popover. Click
-        // dispatch happens in the hand-rolled observer below.
-        ButtonOperatorCall::new(GizmoSpaceToggleOp::ID),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: px(tokens::SPACING_XS),
-            padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::TOOLBAR_BUTTON_BG),
-        children![
-            (
-                Text::new(String::from(Icon::Globe.unicode())),
-                TextFont {
-                    font: icon_font,
-                    font_size: tokens::FONT_MD,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-            ),
-            (
-                Text::new("World"),
-                TextFont {
-                    font_size: tokens::FONT_SM,
-                    ..Default::default()
-                },
-                ThemedText,
-            )
-        ],
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-            commands
-                .operator(GizmoSpaceToggleOp::ID)
-                .settings(CallOperatorSettings {
-                    execution_context: ExecutionContext::Invoke,
-                    creates_history_entry: true,
-                })
-                .call();
-        }),
-    )
-}
-
-/// Toolbar edit-mode button that dispatches `Op` on click. Generic
-/// so extensions can add their own entries via
-/// `toolbar_edit_button::<MyOp>(Icon::Pencil, font)`.
+/// Spawn a square icon-only toolbar button bound to operator `Op`.
+/// Identical to what an extension would write. The icon is the only
+/// visible glyph; `ButtonSize::Icon` suppresses the content text
+/// label, and the operator's label and description show in the rich
+/// operator tooltip on hover via [`OperatorTooltipPlugin`].
 ///
-/// Hand-rolled rather than going through `jackdaw_feathers::button`
-/// because [`update_edit_tool_highlights`] mutates `BackgroundColor`
-/// per active edit mode, which would race with the feathers
-/// `handle_hover` system. Extensions whose toolbar entries don't
-/// need active-state highlighting should prefer
-/// `button::button(ButtonProps::from_operator::<Op>())` via the
-/// [`ButtonPropsOpExt`](jackdaw_api::ui::ButtonPropsOpExt) trait;
-/// see `src/navmesh/toolbar.rs` for examples.
+/// Initial variant is `Ghost` so idle buttons render transparent
+/// against the toolbar's `#1F1F24` panel; the
+/// [`update_toolbar_button_variants`] system flips them to `Active`
+/// when the matching mode/modal is current. Without this, every
+/// button would sit on the muted `Default` grey and the toolbar
+/// would lose the "one currently-active tool" reading.
 ///
-/// The `Pointer<Click>` observer dispatches directly rather than
-/// firing `ButtonClickEvent`, so `ButtonOperatorCall` here is just
-/// the tooltip data source for `OperatorTooltipPlugin`. No
-/// double-dispatch through `dispatch_button_operator_call`.
-fn toolbar_edit_button<Op: Operator>(icon: Icon, font: Handle<Font>) -> impl Bundle {
-    (
-        Hovered::default(),
-        ButtonOperatorCall::new(Op::ID),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::TOOLBAR_BUTTON_BG),
-        children![(
-            Text::new(String::from(icon.unicode())),
-            TextFont {
-                font,
-                font_size: 15.0,
-                ..default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-            // For modal tools (Draw Brush, Measure Distance, etc.),
-            // cancel any active modal first so the user can switch
-            // tools without pressing Escape; otherwise the new
-            // dispatch would fail with `ModalAlreadyActive`. Const
-            // gate so non-modal mode buttons stay a single dispatch.
-            if Op::MODAL {
-                commands.queue(|world: &mut World| {
-                    let _ = world.operator("modal.cancel").call();
-                    let _ = world
-                        .operator(Op::ID)
-                        .settings(CallOperatorSettings {
-                            execution_context: ExecutionContext::Invoke,
-                            creates_history_entry: true,
-                        })
-                        .call();
-                });
-                return;
-            }
-            commands
-                .operator(Op::ID)
-                .settings(CallOperatorSettings {
-                    execution_context: ExecutionContext::Invoke,
-                    creates_history_entry: true,
-                })
-                .call();
-        }),
-    )
-}
-
-/// Toolbar button for the physics tool. Toggles activate/cancel
-/// based on `EditMode`, so a second click leaves the modal without
-/// the user reaching for Escape.
-fn toolbar_physics_button(icon: Icon, font: Handle<Font>) -> impl Bundle {
-    (
-        PhysicsToolbarButton,
-        Hovered::default(),
-        ButtonOperatorCall::new(PhysicsActivateOp::ID),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::TOOLBAR_BUTTON_BG),
-        children![(
-            Text::new(String::from(icon.unicode())),
-            TextFont {
-                font,
-                font_size: 15.0,
-                ..default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.queue(|world: &mut World| {
-                let result = if *world.resource::<EditMode>() == EditMode::Physics {
-                    world.operator("modal.cancel").call()
-                } else {
-                    world
-                        .operator(PhysicsActivateOp::ID)
-                        .settings(CallOperatorSettings {
-                            execution_context: ExecutionContext::Invoke,
-                            creates_history_entry: true,
-                        })
-                        .call()
-                };
-                if let Err(err) = result {
-                    error!("physics tool dispatch failed: {err}");
-                }
-            });
-        }),
+/// [`OperatorTooltipPlugin`]: crate::operator_tooltip::OperatorTooltipPlugin
+fn toolbar_op_button<Op: Operator>(icon: Icon) -> impl Bundle {
+    button::button(
+        ButtonProps::from_operator::<Op>()
+            .with_variant(ButtonVariant::Ghost)
+            .icon(icon)
+            .with_size(ButtonSize::Icon),
     )
 }
 
@@ -1163,85 +959,70 @@ fn scene_view() -> impl Bundle {
     )
 }
 
-/// Updates toolbar button backgrounds to highlight the active gizmo mode.
-pub fn update_toolbar_highlights(
-    mode: Res<GizmoMode>,
-    mut buttons: Query<(&GizmoModeButton, &mut BackgroundColor)>,
-) {
-    if !mode.is_changed() {
-        return;
-    }
-    for (button, mut bg) in &mut buttons {
-        bg.0 = if button.0 == *mode {
-            tokens::TOOLBAR_ACTIVE_BG
-        } else {
-            tokens::TOOLBAR_BUTTON_BG
-        };
-    }
-}
-
-/// Updates the gizmo space toggle button label.
-pub fn update_space_toggle_label(
-    space: Res<GizmoSpace>,
-    buttons: Query<&Children, With<GizmoSpaceButton>>,
-    mut texts: Query<&mut Text, With<ThemedText>>,
-) {
-    if !space.is_changed() {
-        return;
-    }
-    let label = match *space {
-        GizmoSpace::World => "World",
-        GizmoSpace::Local => "Local",
-    };
-    for children in &buttons {
-        for child in children.iter() {
-            if let Ok(mut text) = texts.get_mut(child) {
-                text.0 = label.to_string();
-                return;
-            }
-        }
-    }
-}
-
-/// Highlight the toolbar button matching the active edit mode or
-/// draw state. Buttons are matched by the operator id they carry on
-/// `ButtonOperatorCall`. Built-in modes are explicit arms;
-/// extension toolbar entries fall through to a generic
-/// `active_modal.is_operator(...)` check.
-pub(crate) fn update_edit_tool_highlights(
+/// Flip every toolbar button's [`ButtonVariant`] between `Default`
+/// and `Active` based on the matching editor state. The feathers
+/// `handle_hover` system reads the variant to compute the
+/// background, so this is the only place toolbar active-state lives;
+/// `BackgroundColor` is never mutated directly. New toolbar buttons
+/// just need to register their operator id below to opt in.
+///
+/// Runs every frame: `ActiveModalOperator` is added/removed via
+/// observers that don't trigger `Res::is_changed()` on any of the
+/// scalar resources, so a change-detection short-circuit would miss
+/// the start of a Draw Brush / Measure Distance / etc. session. The
+/// loop is O(toolbar buttons), trivially cheap.
+pub fn update_toolbar_button_variants(
     edit_mode: Res<EditMode>,
-    draw_state: Res<DrawBrushState>,
+    gizmo_mode: Res<GizmoMode>,
+    gizmo_space: Res<GizmoSpace>,
     active_modal: ActiveModalQuery,
-    mut buttons: Query<(&ButtonOperatorCall, &mut BackgroundColor)>,
+    mut buttons: Query<(&ButtonOperatorCall, &mut ButtonVariant)>,
 ) {
-    if !edit_mode.is_changed() && !draw_state.is_changed() {
-        return;
-    }
-    let draw_active = draw_state.active.is_some();
-    for (call, mut bg) in &mut buttons {
-        let active = if call.id == EditModeObjectOp::ID {
-            !draw_active && *edit_mode == EditMode::Object
-        } else if call.id == EditModeVertexOp::ID {
-            !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
-        } else if call.id == EditModeEdgeOp::ID {
-            !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge)
-        } else if call.id == EditModeFaceOp::ID {
-            !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
-        } else if call.id == EditModeClipOp::ID {
-            !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Clip)
-        } else if call.id == PhysicsActivateOp::ID {
-            !draw_active && *edit_mode == EditMode::Physics
-        } else {
-            // Other toolbar buttons (extension tools, draw-brush
-            // activate) highlight when their operator is the active
-            // modal.
+    let modal_running = active_modal.is_modal_running();
+    for (call, mut variant) in &mut buttons {
+        // While any modal is running only the modal's own button
+        // highlights. Gizmo / mode buttons go quiet so the user sees
+        // a single active tool at a time, matching how Blender
+        // surfaces the current mode. New extension modal operators
+        // pick this up automatically through the fall-through arm.
+        let active = if modal_running {
             active_modal.is_operator(&call.id)
-        };
-        bg.0 = if active {
-            tokens::TOOLBAR_ACTIVE_BG
+        } else if call.id == GizmoModeTranslateOp::ID {
+            *gizmo_mode == GizmoMode::Translate
+        } else if call.id == GizmoModeRotateOp::ID {
+            *gizmo_mode == GizmoMode::Rotate
+        } else if call.id == GizmoModeScaleOp::ID {
+            *gizmo_mode == GizmoMode::Scale
+        } else if call.id == GizmoSpaceToggleOp::ID {
+            *gizmo_space == GizmoSpace::Local
+        } else if call.id == EditModeObjectOp::ID {
+            *edit_mode == EditMode::Object
+        } else if call.id == EditModeVertexOp::ID {
+            *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
+        } else if call.id == EditModeEdgeOp::ID {
+            *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge)
+        } else if call.id == EditModeFaceOp::ID {
+            *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+        } else if call.id == EditModeClipOp::ID {
+            *edit_mode == EditMode::BrushEdit(BrushEditMode::Clip)
+        } else if call.id == PhysicsActivateOp::ID {
+            *edit_mode == EditMode::Physics
         } else {
-            tokens::TOOLBAR_BUTTON_BG
+            false
         };
+        // Inactive toolbar buttons fall back to `Ghost` (transparent)
+        // so only the active one stands out as solid grey. Using
+        // `Default` here would tint every idle button with the muted
+        // ZINC_700 fill at ~50% alpha and they'd all read as
+        // "highlighted" against the toolbar's dark panel.
+        let target = if active {
+            ButtonVariant::Active
+        } else {
+            ButtonVariant::Ghost
+        };
+        if *variant != target {
+            *variant = target;
+        }
     }
 }
 

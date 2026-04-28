@@ -78,10 +78,7 @@ pub(crate) fn gizmo_mode_translate(
     label = "Gizmo Rotate",
     is_available = can_change_gizmo
 )]
-pub(crate) fn gizmo_mode_rotate(
-    _: In<OperatorParameters>,
-    mut mode: ResMut<GizmoMode>,
-) -> OperatorResult {
+pub fn gizmo_mode_rotate(_: In<OperatorParameters>, mut mode: ResMut<GizmoMode>) -> OperatorResult {
     *mode = GizmoMode::Rotate;
     OperatorResult::Finished
 }

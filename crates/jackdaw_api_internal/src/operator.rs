@@ -429,6 +429,33 @@ impl<'a> OperatorCallBuilder<'a, Commands<'_, '_>> {
 }
 
 impl<'a> OperatorCallBuilder<'a, World> {
+    /// Whether this operator is declared `modal = true`. Returns
+    /// `Err(UnknownId)` if the id doesn't resolve.
+    pub fn is_modal(self) -> Result<bool, CallOperatorError> {
+        fn is_modal_inner(
+            In(id): In<Cow<'static, str>>,
+            world: &mut World,
+        ) -> Result<bool, CallOperatorError> {
+            let Some(op_entity) = world
+                .resource::<OperatorIndex>()
+                .by_id
+                .get(id.as_ref())
+                .copied()
+            else {
+                return Err(CallOperatorError::UnknownId(id));
+            };
+            let Some(op) = world.get::<OperatorEntity>(op_entity) else {
+                return Err(CallOperatorError::UnknownId(id));
+            };
+            Ok(op.modal)
+        }
+        self.world_commands
+            .run_system_cached_with(is_modal_inner, self.id.clone())
+            .map_err(BevyError::from)
+            .map_err(CallOperatorError::from)
+            .flatten()
+    }
+
     /// Whether the operator would run in the current editor state.
     /// `Ok(true)` if it's ready, `Ok(false)` if not, `Err` for unknown
     /// ids.

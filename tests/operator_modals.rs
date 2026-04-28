@@ -18,8 +18,13 @@
 //! silently going stale.
 
 use bevy::prelude::*;
+use jackdaw::draw_brush::ActivateDrawBrushModalOp;
+use jackdaw::edit_mode_ops::EditModeObjectOp;
+use jackdaw::gizmo_ops::GizmoModeRotateOp;
+use jackdaw::layout::update_toolbar_button_variants;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::{ActiveModalOperator, OperatorEntity};
+use jackdaw_feathers::button::{ButtonOperatorCall, ButtonVariant};
 
 mod util;
 
@@ -109,4 +114,78 @@ fn every_modal_operator_round_trips() {
         let _ = app.world_mut().operator("modal.cancel").call();
         assert_modal_round_trip_id(&mut app, id);
     }
+}
+
+/// Regression: when a modal operator is running, its toolbar button
+/// is the only one carrying `ButtonVariant::Active`. Mode/gizmo
+/// buttons must drop their highlight so the user sees a single
+/// active tool. Reproduces the bug where Object Mode stayed
+/// highlighted while Draw Brush was armed because the system
+/// short-circuited on `Res::is_changed()` and never observed
+/// `ActiveModalOperator` being inserted.
+#[test]
+fn modal_dispatch_steals_toolbar_highlight() {
+    let mut app = util::editor_test_app();
+
+    // Spawn synthetic toolbar entities. The real toolbar isn't
+    // mounted in the test app (it lives behind `OnEnter(Editor)`),
+    // so we model just enough surface for the highlight system to
+    // run against: a `ButtonOperatorCall` and a `ButtonVariant`.
+    let object_button = app
+        .world_mut()
+        .spawn((
+            ButtonOperatorCall::new(EditModeObjectOp::ID),
+            ButtonVariant::Active,
+        ))
+        .id();
+    let rotate_button = app
+        .world_mut()
+        .spawn((
+            ButtonOperatorCall::new(GizmoModeRotateOp::ID),
+            ButtonVariant::Active,
+        ))
+        .id();
+    let draw_button = app
+        .world_mut()
+        .spawn((
+            ButtonOperatorCall::new(ActivateDrawBrushModalOp::ID),
+            ButtonVariant::Ghost,
+        ))
+        .id();
+
+    // Activate the Draw Brush modal.
+    let _ = app
+        .world_mut()
+        .operator(ActivateDrawBrushModalOp::ID)
+        .call()
+        .unwrap_or_else(|err| panic!("draw brush dispatch errored: {err}"));
+
+    // Run the highlight system once. It's gated to AppState::Editor
+    // in the editor's plugin schedule, so we drive it directly here.
+    app.world_mut()
+        .run_system_cached(update_toolbar_button_variants)
+        .expect("update_toolbar_button_variants ran");
+
+    let variant_of = |app: &mut App, e: Entity| {
+        *app.world()
+            .entity(e)
+            .get::<ButtonVariant>()
+            .expect("button has ButtonVariant")
+    };
+
+    assert_eq!(
+        variant_of(&mut app, draw_button),
+        ButtonVariant::Active,
+        "draw-brush button should highlight while its modal is running"
+    );
+    assert_eq!(
+        variant_of(&mut app, object_button),
+        ButtonVariant::Ghost,
+        "object-mode button should drop its highlight while a modal is running"
+    );
+    assert_eq!(
+        variant_of(&mut app, rotate_button),
+        ButtonVariant::Ghost,
+        "gizmo-rotate button should drop its highlight while a modal is running"
+    );
 }

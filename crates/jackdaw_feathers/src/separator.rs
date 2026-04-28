@@ -42,9 +42,11 @@ impl SeparatorProps {
 }
 
 pub fn separator(props: SeparatorProps) -> impl Bundle {
-    let (width, height) = match props.direction {
-        SeparatorDirection::Vertical => (px(1), px(24)),
-        SeparatorDirection::Horizontal => (percent(100), px(1)),
+    let (width, height, align_self) = match props.direction {
+        // Vertical separators stretch to their parent row's height,
+        // so a separator inside a 30px toolbar spans the full 30px.
+        SeparatorDirection::Vertical => (px(1), Val::Auto, AlignSelf::Stretch),
+        SeparatorDirection::Horizontal => (percent(100), px(1), AlignSelf::default()),
     };
 
     (
@@ -52,6 +54,7 @@ pub fn separator(props: SeparatorProps) -> impl Bundle {
         Node {
             width,
             height,
+            align_self,
             ..default()
         },
         BackgroundColor(TEXT_BODY_COLOR.with_alpha(props.alpha).into()),
