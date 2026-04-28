@@ -82,7 +82,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
     ctx.register_operator::<MeasureDistanceOp>()
         .register_operator::<ConfirmMeasureDistanceOp>()
-        .menu_entry_for::<MeasureDistanceOp>("Tools");
+        .register_menu_entry::<MeasureDistanceOp>(TopLevelMenu::Tools);
 }
 
 // ── Operator ──

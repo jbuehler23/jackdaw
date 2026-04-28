@@ -1,9 +1,8 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use bevy::prelude::*;
 
-pub type DockWindowBuildFn = Arc<dyn Fn(&mut World, Entity) + Send + Sync>;
+pub type DockWindowBuildFn = Arc<dyn Fn(&mut ChildSpawner) + Send + Sync + 'static>;
 
 pub struct DockWindowDescriptor {
     pub id: String,

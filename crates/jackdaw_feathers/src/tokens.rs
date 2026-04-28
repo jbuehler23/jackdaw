@@ -274,7 +274,7 @@ pub const FILE_ICON_COLOR: Color = Color::Srgba(tailwind::ZINC_400);
 pub const TEXT_SIZE_XS: f32 = 9.0;
 pub const TEXT_SIZE_SM: f32 = 11.0;
 pub const TEXT_SIZE: f32 = 13.0;
-pub const TEXT_SIZE_LG: f32 = 13.0;
+pub const TEXT_SIZE_LG: f32 = 15.0;
 pub const TEXT_SIZE_XL: f32 = 18.0;
 
 // Keep old names as aliases for existing code

@@ -45,3 +45,37 @@ pub struct DockTabCloseButton {
 pub struct DockTabContent {
     pub window_id: String,
 }
+
+/// A possible default area for a window. Use this to specify where on the screen a window should open by default when the user adds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DefaultArea {
+    Left,
+    BottomDock,
+    RightSidebar,
+}
+
+/// Trait used to convert a [`DefaultArea`] or [`Option<DefaultArea>`] into a string anchor ID.
+pub trait ToAnchorId: Copy {
+    fn anchor_id(self) -> String;
+}
+impl ToAnchorId for Option<DefaultArea> {
+    fn anchor_id(self) -> String {
+        match self {
+            Some(area @ DefaultArea::Left)
+            | Some(area @ DefaultArea::BottomDock)
+            | Some(area @ DefaultArea::RightSidebar) => area.anchor_id(),
+            None => String::new(),
+        }
+    }
+}
+
+impl ToAnchorId for DefaultArea {
+    fn anchor_id(self) -> String {
+        match self {
+            DefaultArea::Left => "left",
+            DefaultArea::BottomDock => "bottom_dock",
+            DefaultArea::RightSidebar => "right_sidebar",
+        }
+        .into()
+    }
+}

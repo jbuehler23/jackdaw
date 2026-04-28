@@ -2,7 +2,7 @@ use bevy::{asset::AssetId, prelude::*};
 pub use lucide_icons::Icon;
 
 /// Resource holding the loaded Lucide icon font handle.
-#[derive(Resource)]
+#[derive(Resource, Deref, DerefMut)]
 pub struct IconFont(pub Handle<Font>);
 
 /// Resource holding the loaded editor body font (Fira Sans).

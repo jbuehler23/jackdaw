@@ -43,8 +43,7 @@ pub use jackdaw_api::operator;
 
 pub use jackdaw_api::{
     ExtensionContext, ExtensionKind, ExtensionPoint, HierarchyWindow, InspectorWindow,
-    JackdawExtension, MenuEntryDescriptor, PanelContext, SectionBuildFn, WindowDescriptor, jsn, op,
-    pie, runtime,
+    JackdawExtension, MenuEntryDescriptor, PanelContext, WindowDescriptor, jsn, op, pie, runtime,
 };
 
 /// Bevy root surface for extension code walking bevy paths beyond

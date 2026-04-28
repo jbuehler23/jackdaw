@@ -10,8 +10,6 @@
 //! Disabling the extension in File > Extensions removes the window,
 //! kills both keybinds, and drops any registered menu entries.
 
-use std::sync::Arc;
-
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
@@ -37,14 +35,13 @@ impl JackdawExtension for SampleExtension {
     }
 
     fn register(&self, ctx: &mut ExtensionContext) {
-        ctx.register_window(WindowDescriptor {
-            id: "sample.hello".into(),
-            name: "Hello Extension".into(),
-            icon: None,
-            default_area: None,
-            priority: None,
-            build: Arc::new(build_hello_panel),
-        });
+        ctx.register_window(
+            WindowDescriptor::new("sample.hello")
+                .with_name("Hello Extension")
+                .with_build(|window| {
+                    window.spawn(Text::new("Hello from an extension!"));
+                }),
+        );
 
         ctx.register_operator::<HelloOp>();
         ctx.register_operator::<HelloTimeOp>();
@@ -58,10 +55,6 @@ impl JackdawExtension for SampleExtension {
             ]),
         ));
     }
-}
-
-fn build_hello_panel(world: &mut World, parent: Entity) {
-    world.spawn((ChildOf(parent), Text::new("Hello from an extension!")));
 }
 
 #[derive(Component, Default)]

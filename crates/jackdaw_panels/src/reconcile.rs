@@ -326,7 +326,7 @@ fn spawn_leaf_ui(world: &mut World, entity: Entity, leaf: &DockLeaf) {
                 ChildOf(entity),
             ))
             .id();
-        (build)(world, content_entity);
+        (build)(&mut ChildSpawner::new(world, content_entity));
     }
 }
 

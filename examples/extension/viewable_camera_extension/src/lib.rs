@@ -35,11 +35,7 @@ impl JackdawExtension for ViewableCameraExtension {
         ctx.register_operator::<PlaceViewableCamera>();
         ctx.register_operator::<ToggleCameraPreview>();
 
-        ctx.register_menu_entry(MenuEntryDescriptor {
-            menu: "Add".into(),
-            label: "Viewable Camera".into(),
-            operator_id: PlaceViewableCamera::ID,
-        });
+        ctx.register_menu_entry::<PlaceViewableCamera>(TopLevelMenu::Add);
 
         ctx.spawn((
             ViewableCameraContext,

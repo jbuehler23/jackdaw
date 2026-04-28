@@ -1,5 +1,6 @@
 use bevy::{picking::hover::Hovered, prelude::*, ui_widgets::observe};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::ToAnchorId as _;
 use jackdaw_feathers::{
     button::{self, ButtonOperatorCall, ButtonSize, ButtonVariant},
     icons::IconFont,
@@ -361,11 +362,11 @@ fn pie_transport_button(kind: crate::pie::PieButton, icon: Icon) -> impl Bundle 
 fn left_dock_area() -> impl Bundle {
     (
         jackdaw_panels::reconcile::AnchorHost {
-            anchor_id: "left".into(),
+            anchor_id: DefaultArea::Left.anchor_id(),
             default_style: jackdaw_panels::DockAreaStyle::TabBar,
         },
         jackdaw_panels::DockArea {
-            id: "left".into(),
+            id: DefaultArea::Left.anchor_id(),
             style: jackdaw_panels::DockAreaStyle::TabBar,
         },
         EditorEntity,
@@ -859,11 +860,11 @@ pub fn update_tab_strip_highlights(
 fn bottom_dock_area() -> impl Bundle {
     (
         jackdaw_panels::reconcile::AnchorHost {
-            anchor_id: "bottom_dock".into(),
+            anchor_id: DefaultArea::BottomDock.anchor_id(),
             default_style: jackdaw_panels::DockAreaStyle::IconSidebar,
         },
         jackdaw_panels::DockArea {
-            id: "bottom_dock".into(),
+            id: DefaultArea::BottomDock.anchor_id(),
             style: jackdaw_panels::DockAreaStyle::IconSidebar,
         },
         EditorEntity,
@@ -942,11 +943,11 @@ fn editor_status_bar() -> impl Bundle {
 fn right_dock_area() -> impl Bundle {
     (
         jackdaw_panels::reconcile::AnchorHost {
-            anchor_id: "right_sidebar".into(),
+            anchor_id: DefaultArea::RightSidebar.anchor_id(),
             default_style: jackdaw_panels::DockAreaStyle::TabBar,
         },
         jackdaw_panels::DockArea {
-            id: "right_sidebar".into(),
+            id: DefaultArea::RightSidebar.anchor_id(),
             style: jackdaw_panels::DockAreaStyle::TabBar,
         },
         EditorEntity,

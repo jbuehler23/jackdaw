@@ -28,10 +28,11 @@ pub mod keybind_focus;
 pub mod keybind_settings;
 pub mod keybinds;
 
-use std::marker::PhantomData;
+use std::{collections::BTreeMap, marker::PhantomData};
 
 pub use inspector::{EditorMeta, ReflectEditorMeta};
 pub mod core_extension;
+pub mod document_ops;
 pub mod ext_build;
 mod extension_lifecycle;
 pub mod extension_resolution;
@@ -78,10 +79,14 @@ use bevy::{
     input::mouse::{MouseScrollUnit, MouseWheel},
     input_focus::InputDispatchPlugin,
     picking::hover::HoverMap,
+    platform::collections::HashMap,
     prelude::*,
 };
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::lifecycle::{RegisteredMenuEntry, RegisteredWindow};
+use jackdaw_api_internal::{
+    ToAnchorId as _,
+    lifecycle::{RegisteredMenuEntry, RegisteredWindow},
+};
 use jackdaw_feathers::dialog::EditorDialog;
 use jackdaw_feathers::{EditorFeathersPlugin, button::ButtonOperatorCall};
 pub use jackdaw_loader::DylibLoaderPlugin;
@@ -1921,12 +1926,11 @@ fn populate_menu(
     // "Add". The "Add" menu goes through the shared
     // `collect_add_menu_items` helper below so the toolbar and the
     // scene-tree picker present identical content.
-    let mut ext_menu_entries: std::collections::BTreeMap<String, Vec<(String, String)>> =
-        std::collections::BTreeMap::new();
+    let mut ext_menu_entries = HashMap::<_, Vec<(String, String)>>::new();
     {
         let mut q = world.query::<&RegisteredMenuEntry>();
         for entry in q.iter(world) {
-            if entry.menu == "Add" {
+            if entry.menu == TopLevelMenu::Add {
                 continue;
             }
             ext_menu_entries
@@ -1961,10 +1965,15 @@ fn populate_menu(
     // Build the Window menu with separators between area groups, followed
     // by Reset Layout at the bottom.
     let mut window_entries: Vec<(String, String)> = Vec::new();
-    let area_order = ["left", "bottom_dock", "right_sidebar", "zz_extensions"];
+    let area_order = [
+        DefaultArea::Left.anchor_id(),
+        DefaultArea::BottomDock.anchor_id(),
+        DefaultArea::RightSidebar.anchor_id(),
+        "zz_extensions".to_string(),
+    ];
     let mut first = true;
     for area in area_order {
-        let Some(entries) = by_area.get(area) else {
+        let Some(entries) = by_area.get(&area) else {
             continue;
         };
         if !first {
@@ -2010,64 +2019,73 @@ fn populate_menu(
         "Hot Reload: Off"
     };
 
-    jackdaw_feathers::menu_bar::populate_menu_bar(
-        world,
-        menu_bar_entity,
-        vec![
-            (
-                "File",
-                vec![
-                    op_entry::<scene_ops::SceneNewOp>("New"),
-                    op_entry::<scene_ops::SceneOpenOp>("Open"),
-                    separator(),
-                    op_entry::<scene_ops::SceneSaveOp>("Save"),
-                    op_entry::<scene_ops::SceneSaveAsOp>("Save As..."),
-                    separator(),
-                    op_entry::<scene_ops::SceneSaveSelectionAsTemplateOp>(
-                        "Save Selection as Template",
-                    ),
-                    separator(),
-                    op_entry::<app_ops::AppOpenKeybindsOp>("Keybinds..."),
-                    op_entry::<app_ops::AppOpenExtensionsOp>("Extensions..."),
-                    separator(),
-                    op_entry::<app_ops::AppToggleHotReloadOp>(hot_reload_label),
-                    op_entry::<scene_ops::SceneOpenRecentOp>("Open Recent..."),
-                    op_entry::<app_ops::AppGoHomeOp>("Home"),
-                ],
-            ),
-            (
-                "Edit",
-                vec![
-                    op_entry::<history_ops::HistoryUndoOp>("Undo"),
-                    op_entry::<history_ops::HistoryRedoOp>("Redo"),
-                    separator(),
-                    op_entry::<entity_ops::EntityDeleteOp>("Delete"),
-                    op_entry::<entity_ops::EntityDuplicateOp>("Duplicate"),
-                    separator(),
-                    op_entry::<draw_brush::BrushJoinOp>("Join (Convex Merge)"),
-                    op_entry::<draw_brush::BrushCsgSubtractOp>("CSG Subtract"),
-                    op_entry::<draw_brush::BrushCsgIntersectOp>("CSG Intersect"),
-                    op_entry::<draw_brush::BrushExtendFaceToBrushOp>("Extend to Brush"),
-                ],
-            ),
-            (
-                "View",
-                vec![
-                    op_entry::<view_ops::ViewToggleWireframeOp>("Toggle Wireframe"),
-                    op_entry::<view_ops::ViewToggleBoundingBoxesOp>("Toggle Bounding Boxes"),
-                    op_entry::<view_ops::ViewCycleBoundingBoxModeOp>("Cycle Bounding Box Mode"),
-                    op_entry::<view_ops::ViewToggleFaceGridOp>("Toggle Face Grid"),
-                    op_entry::<view_ops::ViewToggleBrushWireframeOp>("Toggle Brush Wireframe"),
-                    op_entry::<view_ops::ViewToggleBrushOutlineOp>("Toggle Brush Outline"),
-                    op_entry::<view_ops::ViewToggleAlignmentGuidesOp>("Toggle Alignment Guides"),
-                    op_entry::<view_ops::ViewToggleColliderGizmosOp>("Toggle Collider Gizmos"),
-                    op_entry::<view_ops::ViewToggleHierarchyArrowsOp>("Toggle Hierarchy Arrows"),
-                ],
-            ),
-            ("Add", add_menu),
-            ("Window", window_entries),
-        ],
-    );
+    let mut menu_items = [
+        (
+            TopLevelMenu::File,
+            vec![
+                op_entry::<scene_ops::SceneNewOp>("New"),
+                op_entry::<scene_ops::SceneOpenOp>("Open"),
+                separator(),
+                op_entry::<scene_ops::SceneSaveOp>("Save"),
+                op_entry::<scene_ops::SceneSaveAsOp>("Save As..."),
+                separator(),
+                op_entry::<scene_ops::SceneSaveSelectionAsTemplateOp>("Save Selection as Template"),
+                separator(),
+                op_entry::<app_ops::AppOpenKeybindsOp>("Keybinds..."),
+                op_entry::<app_ops::AppOpenExtensionsOp>("Extensions..."),
+                separator(),
+                op_entry::<app_ops::AppToggleHotReloadOp>(hot_reload_label),
+                op_entry::<scene_ops::SceneOpenRecentOp>("Open Recent..."),
+                op_entry::<app_ops::AppGoHomeOp>("Home"),
+            ],
+        ),
+        (
+            TopLevelMenu::Edit,
+            vec![
+                op_entry::<history_ops::HistoryUndoOp>("Undo"),
+                op_entry::<history_ops::HistoryRedoOp>("Redo"),
+                separator(),
+                op_entry::<entity_ops::EntityDeleteOp>("Delete"),
+                op_entry::<entity_ops::EntityDuplicateOp>("Duplicate"),
+                separator(),
+                op_entry::<draw_brush::BrushJoinOp>("Join (Convex Merge)"),
+                op_entry::<draw_brush::BrushCsgSubtractOp>("CSG Subtract"),
+                op_entry::<draw_brush::BrushCsgIntersectOp>("CSG Intersect"),
+                op_entry::<draw_brush::BrushExtendFaceToBrushOp>("Extend to Brush"),
+            ],
+        ),
+        (
+            TopLevelMenu::View,
+            vec![
+                op_entry::<view_ops::ViewToggleWireframeOp>("Toggle Wireframe"),
+                op_entry::<view_ops::ViewToggleBoundingBoxesOp>("Toggle Bounding Boxes"),
+                op_entry::<view_ops::ViewCycleBoundingBoxModeOp>("Cycle Bounding Box Mode"),
+                op_entry::<view_ops::ViewToggleFaceGridOp>("Toggle Face Grid"),
+                op_entry::<view_ops::ViewToggleBrushWireframeOp>("Toggle Brush Wireframe"),
+                op_entry::<view_ops::ViewToggleBrushOutlineOp>("Toggle Brush Outline"),
+                op_entry::<view_ops::ViewToggleAlignmentGuidesOp>("Toggle Alignment Guides"),
+                op_entry::<view_ops::ViewToggleColliderGizmosOp>("Toggle Collider Gizmos"),
+                op_entry::<view_ops::ViewToggleHierarchyArrowsOp>("Toggle Hierarchy Arrows"),
+            ],
+        ),
+        (TopLevelMenu::Add, add_menu),
+        (TopLevelMenu::Window, window_entries),
+    ]
+    .map(|(menu, actions)| (menu.order(), [(menu.id(), actions)].into_iter().collect()))
+    .into_iter()
+    .collect::<BTreeMap<u8, HashMap<String, Vec<(String, String)>>>>();
+
+    for (menu, actions) in ext_menu_entries {
+        menu_items
+            .entry(menu.order())
+            .or_default()
+            .entry(menu.id())
+            .or_default()
+            .extend(actions);
+    }
+    let menu_items = menu_items.into_values().flatten();
+
+    jackdaw_feathers::menu_bar::populate_menu_bar(world, menu_bar_entity, menu_items);
 }
 
 /// Open a registered dock window by id.
@@ -2632,7 +2650,10 @@ fn sync_active_workspace_from_live_tree(world: &mut World) {
 fn apply_default_splits(world: &mut World) {
     use jackdaw_panels::tree::{DockNode, DockTree, Edge};
 
-    let Some(left_root) = world.resource::<DockTree>().anchor("left") else {
+    let Some(left_root) = world
+        .resource::<DockTree>()
+        .anchor(&DefaultArea::Left.anchor_id())
+    else {
         return;
     };
     let already_split = !matches!(

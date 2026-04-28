@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::ui::UiGlobalTransform;
 use jackdaw_feathers::tokens;
 
-use crate::area::{DockArea, DockTab};
+use crate::area::{DefaultArea, DockArea, DockTab, ToAnchorId as _};
 use crate::reconcile::NodeBinding;
 use crate::sidebar::DockSidebarIcon;
 use crate::tabs::{DockTabGrip, DockTabRow};
@@ -44,7 +44,7 @@ pub enum DropTarget {
         edge: DropEdge,
     },
     /// Dropped on the editor viewport's edge. Routes to the anchor
-    /// associated with that edge (`left/right_sidebar/bottom_dock`).
+    /// associated with that edge (see [`DefaultArea`].
     ViewportEdge {
         anchor_id: String,
         edge: DropEdge,
@@ -67,7 +67,7 @@ pub struct DropOverlay;
 
 /// Marks the editor viewport entity as a drop target. The viewport is
 /// not an `AnchorHost`; dropping on its edge re-populates one of the
-/// side anchors (`left`, `right_sidebar`, `bottom_dock`) instead.
+/// side anchors (see [`DefaultArea`]) instead.
 #[derive(Component)]
 pub struct ViewportDropTarget;
 
@@ -460,11 +460,12 @@ fn on_drag_move(
                         break;
                     }
                     let anchor_id = match edge {
-                        DropEdge::Left => "left",
-                        DropEdge::Right => "right_sidebar",
-                        DropEdge::Bottom => "bottom_dock",
+                        DropEdge::Left => DefaultArea::Left,
+                        DropEdge::Right => DefaultArea::RightSidebar,
+                        DropEdge::Bottom => DefaultArea::BottomDock,
                         DropEdge::Top => unreachable!(),
-                    };
+                    }
+                    .anchor_id();
 
                     new_target = Some(DropTarget::ViewportEdge {
                         anchor_id: anchor_id.to_string(),

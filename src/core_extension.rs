@@ -209,6 +209,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::prefab_picker::add_to_extension(ctx);
         crate::add_entity_picker::add_to_extension(ctx);
         crate::inspector::component_picker::add_to_extension(ctx);
+        crate::document_ops::add_to_extension(ctx);
     }
 
     fn register_input_context(&self, app: &mut App) {

@@ -3,10 +3,11 @@
 //! same API third-party authors do. Disable one in File > Extensions
 //! to remove its windows from the layout.
 
-use std::sync::Arc;
-
 use bevy::prelude::*;
-use jackdaw_api::prelude::{ExtensionContext, ExtensionKind, JackdawExtension, WindowDescriptor};
+use jackdaw_api::{
+    DefaultArea, ExtensionPoint, HierarchyWindow, InspectorWindow,
+    prelude::{ExtensionContext, ExtensionKind, JackdawExtension, WindowDescriptor},
+};
 use jackdaw_feathers::icons::Icon;
 
 /// Scene Tree, Import, and Project Files in the left dock.
@@ -27,64 +28,58 @@ impl JackdawExtension for CoreWindowsExtension {
     }
 
     fn register(&self, ctx: &mut ExtensionContext) {
-        ctx.register_window(WindowDescriptor {
-            id: "jackdaw.hierarchy".into(),
-            name: "Scene Tree".into(),
-            icon: None,
-            default_area: Some("left".into()),
-            priority: Some(0),
-            build: Arc::new(|world, parent| {
-                let icon_font = world
-                    .get_resource::<jackdaw_feathers::icons::IconFont>()
-                    .map(|f| f.0.clone())
-                    .unwrap_or_default();
-                world.spawn((ChildOf(parent), crate::layout::hierarchy_content(icon_font)));
-            }),
-        });
+        ctx.register_window(
+            WindowDescriptor::new(HierarchyWindow::ID)
+                .with_name("Outliner")
+                .with_default_area(DefaultArea::Left)
+                .with_priority(0)
+                .with_build(|window| {
+                    let icon_font = window
+                        .world()
+                        .get_resource::<jackdaw_feathers::icons::IconFont>()
+                        .map(|f| f.0.clone())
+                        .unwrap_or_default();
+                    window.spawn(crate::layout::hierarchy_content(icon_font));
+                }),
+        );
 
-        ctx.register_window(WindowDescriptor {
-            id: "jackdaw.import".into(),
-            name: "Import".into(),
-            icon: None,
-            default_area: Some("left".into()),
-            priority: Some(1),
-            build: Arc::new(|world, parent| {
-                world.spawn((
-                    ChildOf(parent),
-                    Node {
-                        flex_grow: 1.0,
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    children![(
-                        Text::new("Import"),
-                        TextFont {
-                            font_size: 11.0,
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.import")
+                .with_name("Import")
+                .with_default_area(DefaultArea::Left)
+                .with_priority(1)
+                .with_build(|window| {
+                    window.spawn((
+                        Node {
+                            flex_grow: 1.0,
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
                             ..default()
                         },
-                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
-                    )],
-                ));
-            }),
-        });
-
-        ctx.register_window(WindowDescriptor {
-            id: "jackdaw.project_files".into(),
-            name: "Project Files".into(),
-            icon: None,
-            default_area: Some("left".into()),
-            priority: Some(10),
-            build: Arc::new(|world, parent| {
-                world.spawn((
-                    ChildOf(parent),
-                    crate::layout::project_files_panel_content(),
-                ));
-                world
-                    .resource_mut::<crate::project_files::ProjectFilesState>()
-                    .needs_refresh = true;
-            }),
-        });
+                        children![(
+                            Text::new("Import"),
+                            TextFont {
+                                font_size: 11.0,
+                                ..default()
+                            },
+                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+                        )],
+                    ));
+                }),
+        );
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.project_files")
+                .with_name("Project Files")
+                .with_default_area(DefaultArea::Left)
+                .with_priority(10)
+                .with_build(|window| {
+                    window.spawn(crate::layout::project_files_panel_content());
+                    window
+                        .world_mut()
+                        .resource_mut::<crate::project_files::ProjectFilesState>()
+                        .needs_refresh = true;
+                }),
+        );
     }
 }
 
@@ -106,26 +101,25 @@ impl JackdawExtension for AssetBrowserExtension {
     }
 
     fn register(&self, ctx: &mut ExtensionContext) {
-        ctx.register_window(WindowDescriptor {
-            id: "jackdaw.assets".into(),
-            name: "Assets".into(),
-            icon: Some(String::from(Icon::FolderOpen.unicode())),
-            default_area: Some("bottom_dock".into()),
-            priority: Some(0),
-            build: Arc::new(|world, parent| {
-                let icon_font = world
-                    .get_resource::<jackdaw_feathers::icons::IconFont>()
-                    .map(|f| f.0.clone())
-                    .unwrap_or_default();
-                world.spawn((
-                    ChildOf(parent),
-                    crate::asset_browser::asset_browser_panel(icon_font),
-                ));
-                world
-                    .resource_mut::<crate::asset_browser::AssetBrowserState>()
-                    .needs_refresh = true;
-            }),
-        });
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.assets")
+                .with_name("Assets")
+                .with_icon(Icon::FolderOpen.unicode())
+                .with_default_area(DefaultArea::BottomDock)
+                .with_priority(0)
+                .with_build(|window| {
+                    let icon_font = window
+                        .world()
+                        .get_resource::<jackdaw_feathers::icons::IconFont>()
+                        .map(|f| f.0.clone())
+                        .unwrap_or_default();
+                    window.spawn(crate::asset_browser::asset_browser_panel(icon_font));
+                    window
+                        .world_mut()
+                        .resource_mut::<crate::asset_browser::AssetBrowserState>()
+                        .needs_refresh = true;
+                }),
+        );
     }
 }
 
@@ -147,16 +141,16 @@ impl JackdawExtension for TimelineExtension {
     }
 
     fn register(&self, ctx: &mut ExtensionContext) {
-        ctx.register_window(WindowDescriptor {
-            id: "jackdaw.timeline".into(),
-            name: "Timeline".into(),
-            icon: Some(String::from(Icon::Ruler.unicode())),
-            default_area: Some("bottom_dock".into()),
-            priority: Some(1),
-            build: Arc::new(|world, parent| {
-                world.spawn((ChildOf(parent), jackdaw_animation::timeline_panel()));
-            }),
-        });
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.timeline")
+                .with_name("Timeline")
+                .with_icon(Icon::Ruler.unicode())
+                .with_default_area(DefaultArea::BottomDock)
+                .with_priority(1)
+                .with_build(|window| {
+                    window.spawn(jackdaw_animation::timeline_panel());
+                }),
+        );
     }
 }
 
@@ -178,33 +172,32 @@ impl JackdawExtension for TerminalExtension {
     }
 
     fn register(&self, ctx: &mut ExtensionContext) {
-        ctx.register_window(WindowDescriptor {
-            id: "jackdaw.terminal".into(),
-            name: "Terminal".into(),
-            icon: Some(String::from(Icon::Terminal.unicode())),
-            default_area: Some("bottom_dock".into()),
-            priority: Some(2),
-            build: Arc::new(|world, parent| {
-                world.spawn((
-                    ChildOf(parent),
-                    Node {
-                        flex_grow: 1.0,
-                        width: Val::Percent(100.0),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    children![(
-                        Text::new("Terminal window (not implemented yet)"),
-                        TextFont {
-                            font_size: 11.0,
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.terminal")
+                .with_name("Terminal")
+                .with_icon(Icon::Terminal.unicode())
+                .with_default_area(DefaultArea::BottomDock)
+                .with_priority(2)
+                .with_build(|window| {
+                    window.spawn((
+                        Node {
+                            flex_grow: 1.0,
+                            width: Val::Percent(100.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
                             ..default()
                         },
-                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
-                    )],
-                ));
-            }),
-        });
+                        children![(
+                            Text::new("Terminal window (not implemented yet)"),
+                            TextFont {
+                                font_size: 11.0,
+                                ..default()
+                            },
+                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+                        )],
+                    ));
+                }),
+        );
     }
 }
 
@@ -226,97 +219,88 @@ impl JackdawExtension for InspectorExtension {
     }
 
     fn register(&self, ctx: &mut ExtensionContext) {
-        ctx.register_window(WindowDescriptor {
-            id: "jackdaw.inspector.components".into(),
-            name: "Components".into(),
-            icon: None,
-            default_area: Some("right_sidebar".into()),
-            priority: Some(0),
-            build: Arc::new(|world, parent| {
-                let icon_font = world
-                    .get_resource::<jackdaw_feathers::icons::IconFont>()
-                    .map(|f| f.0.clone())
-                    .unwrap_or_default();
-                world.spawn((
-                    ChildOf(parent),
-                    crate::layout::inspector_components_content(icon_font),
-                ));
-            }),
-        });
+        ctx.register_window(
+            WindowDescriptor::new(InspectorWindow::ID)
+                .with_name("Components")
+                .with_default_area(DefaultArea::RightSidebar)
+                .with_priority(0)
+                .with_build(|window| {
+                    let icon_font = window
+                        .world()
+                        .get_resource::<jackdaw_feathers::icons::IconFont>()
+                        .map(|f| f.0.clone())
+                        .unwrap_or_default();
+                    window.spawn(crate::layout::inspector_components_content(icon_font));
+                }),
+        );
 
-        ctx.register_window(WindowDescriptor {
-            id: "jackdaw.inspector.materials".into(),
-            name: "Materials".into(),
-            icon: None,
-            default_area: Some("right_sidebar".into()),
-            priority: Some(1),
-            build: Arc::new(|world, parent| {
-                let icon_font = world
-                    .get_resource::<jackdaw_feathers::icons::IconFont>()
-                    .map(|f| f.0.clone())
-                    .unwrap_or_default();
-                world.spawn((
-                    ChildOf(parent),
-                    crate::material_browser::material_browser_panel(icon_font),
-                ));
-                world
-                    .resource_mut::<crate::material_browser::MaterialBrowserState>()
-                    .needs_rescan = true;
-            }),
-        });
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.inspector.materials")
+                .with_name("Materials")
+                .with_default_area(DefaultArea::RightSidebar)
+                .with_priority(1)
+                .with_build(|window| {
+                    let icon_font = window
+                        .world()
+                        .get_resource::<jackdaw_feathers::icons::IconFont>()
+                        .map(|f| f.0.clone())
+                        .unwrap_or_default();
+                    window.spawn(crate::material_browser::material_browser_panel(icon_font));
+                    window
+                        .world_mut()
+                        .resource_mut::<crate::material_browser::MaterialBrowserState>()
+                        .needs_rescan = true;
+                }),
+        );
 
-        ctx.register_window(WindowDescriptor {
-            id: "jackdaw.inspector.resources".into(),
-            name: "Resources".into(),
-            icon: None,
-            default_area: Some("right_sidebar".into()),
-            priority: Some(2),
-            build: Arc::new(|world, parent| {
-                world.spawn((
-                    ChildOf(parent),
-                    Node {
-                        flex_grow: 1.0,
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    children![(
-                        Text::new("Resources"),
-                        TextFont {
-                            font_size: 11.0,
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.inspector.resources")
+                .with_name("Resources")
+                .with_default_area(DefaultArea::RightSidebar)
+                .with_priority(2)
+                .with_build(|window| {
+                    window.spawn((
+                        Node {
+                            flex_grow: 1.0,
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
                             ..default()
                         },
-                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
-                    )],
-                ));
-            }),
-        });
+                        children![(
+                            Text::new("Resources"),
+                            TextFont {
+                                font_size: 11.0,
+                                ..default()
+                            },
+                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+                        )],
+                    ));
+                }),
+        );
 
-        ctx.register_window(WindowDescriptor {
-            id: "jackdaw.inspector.systems".into(),
-            name: "Systems".into(),
-            icon: None,
-            default_area: Some("right_sidebar".into()),
-            priority: Some(3),
-            build: Arc::new(|world, parent| {
-                world.spawn((
-                    ChildOf(parent),
-                    Node {
-                        flex_grow: 1.0,
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    children![(
-                        Text::new("Systems"),
-                        TextFont {
-                            font_size: 11.0,
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.inspector.systems")
+                .with_name("Systems")
+                .with_default_area(DefaultArea::RightSidebar)
+                .with_priority(3)
+                .with_build(|window| {
+                    window.spawn((
+                        Node {
+                            flex_grow: 1.0,
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
                             ..default()
                         },
-                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
-                    )],
-                ));
-            }),
-        });
+                        children![(
+                            Text::new("Systems"),
+                            TextFont {
+                                font_size: 11.0,
+                                ..default()
+                            },
+                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+                        )],
+                    ));
+                }),
+        );
     }
 }

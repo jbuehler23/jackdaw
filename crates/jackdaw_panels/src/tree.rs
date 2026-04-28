@@ -59,8 +59,8 @@ impl Edge {
 /// A leaf in the dock tree: an area that hosts tabbed windows.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DockLeaf {
-    /// Stable area id. Built-in areas have canonical ids (`"left_top"`,
-    /// `"bottom_dock"`, etc.); dynamic split areas use synthetic ids.
+    /// Stable area id. Built-in areas have canonical ids (see [`DefaultArea`](crate::area::DefaultArea));
+    /// dynamic split areas use synthetic ids.
     pub area_id: String,
     pub style: DockAreaStyle,
     /// Window ids in tab order.
@@ -514,6 +514,8 @@ fn fresh_area_id(window_id: &str, leaf_id: NodeId) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::area::{DefaultArea, ToAnchorId};
+
     use super::*;
 
     fn leaf(area_id: &str, windows: &[&str]) -> DockLeaf {
@@ -571,7 +573,7 @@ mod tests {
     #[test]
     fn split_of_nested_leaf_preserves_other_sibling() {
         let mut t = DockTree::new();
-        let root = t.set_root_leaf(leaf("left", &["a"]));
+        let root = t.set_root_leaf(leaf(&DefaultArea::Left.anchor_id(), &["a"]));
         let right = t.split(root, Edge::Right, "b".into()).unwrap();
         let _deeper = t.split(right, Edge::Bottom, "c".into()).unwrap();
 

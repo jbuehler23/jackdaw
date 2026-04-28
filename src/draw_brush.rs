@@ -115,11 +115,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<DrawBrushCommitPolygonOp>()
         .register_operator::<DrawBrushRemoveLastVertexOp>()
         .register_operator::<DrawBrushCancelCutOp>()
-        .register_menu_entry(MenuEntryDescriptor {
-            menu: "Add".to_string(),
-            label: ActivateDrawBrushModalOp::LABEL.to_string(),
-            operator_id: ActivateDrawBrushModalOp::ID,
-        });
+        .register_menu_entry::<ActivateDrawBrushModalOp>(TopLevelMenu::Add);
 
     ctx.init_resource::<DrawBrushState>()
         .init_resource::<StableIdCounter>();

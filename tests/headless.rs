@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 
@@ -124,19 +122,16 @@ impl JackdawExtension for SampleExtension {
     }
 
     fn register(&self, ctx: &mut ExtensionContext) {
-        ctx.register_window(WindowDescriptor {
-            id: Self::SPAWN.into(),
-            build: Arc::new(build_panel),
-            default_area: Some("left".into()),
-            ..default()
-        });
+        ctx.register_window(
+            WindowDescriptor::new(Self::SPAWN)
+                .with_default_area(DefaultArea::Left)
+                .with_build(|window| {
+                    window.spawn((Panel, Text::new("Some panel")));
+                }),
+        );
         ctx.register_operator::<SpawnMarkerOp>()
             .register_operator::<CheckParamsOp>();
     }
-}
-
-fn build_panel(world: &mut World, parent: Entity) {
-    world.spawn((ChildOf(parent), Panel, Text::new("Some panel")));
 }
 
 #[operator(

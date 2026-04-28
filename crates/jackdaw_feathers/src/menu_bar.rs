@@ -167,10 +167,10 @@ pub fn menu_bar_shell() -> impl Bundle {
 pub fn populate_menu_bar(
     world: &mut World,
     menu_bar_entity: Entity,
-    menus: Vec<(&str, Vec<(String, String)>)>,
+    menus: impl IntoIterator<Item = (String, Vec<(String, String)>)>,
 ) {
     for (label, actions) in menus {
-        spawn_menu_bar_item(world, menu_bar_entity, label, actions);
+        spawn_menu_bar_item(world, menu_bar_entity, &label, actions);
     }
 }
 

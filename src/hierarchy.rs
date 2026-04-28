@@ -900,7 +900,7 @@ pub(crate) fn hierarchy_open_context_menu(
     // `register_menu_entry` call therefore surfaces in all three places.
     let mut ext_rows: Vec<(String, String)> = extension_add_entries
         .iter()
-        .filter(|entry| entry.menu == "Add")
+        .filter(|entry| entry.menu == TopLevelMenu::Add)
         .map(|entry| {
             (
                 format!("{OP_PREFIX}{}", entry.operator_id),

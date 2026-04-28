@@ -54,6 +54,7 @@ mod registries;
 pub mod runtime;
 pub mod snapshot;
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use bevy::ecs::{system::IntoObserverSystem, world::EntityWorldMut};
@@ -63,7 +64,7 @@ use jackdaw_panels::{
 };
 
 use operator::{CallOperatorSettings, Operator, OperatorWorldExt};
-use registries::PanelExtensionRegistry;
+use registries::WindowExtensionRegistry;
 use snapshot::{ActiveSnapshotter, SceneSnapshot};
 
 pub use jackdaw_api_macros as macros;
@@ -73,12 +74,13 @@ pub use jackdaw_jsn as jsn;
 use crate::lifecycle::{ExtensionResourceOf, ResourceId};
 use crate::{
     lifecycle::{
-        ExtensionKind, OperatorEntity, RegisteredMenuEntry, RegisteredPanelExtension,
-        RegisteredWindow, RegisteredWorkspace,
+        ExtensionKind, OperatorEntity, RegisteredMenuEntry, RegisteredWindow,
+        RegisteredWindowExtension, RegisteredWorkspace,
     },
     operator::ExecutionContext,
 };
 
+pub use jackdaw_panels::area::{DefaultArea, ToAnchorId};
 pub use lifecycle::{ActiveModalOperator, Extension, ExtensionCatalog};
 pub use operator::{CallOperatorError, OperatorResult, OperatorWorldExt as _};
 pub use pie::PlayState;
@@ -88,7 +90,7 @@ pub use snapshot::SceneSnapshotter;
 pub mod prelude {
     pub use crate::{
         ExtensionContext, ExtensionPoint, JackdawExtension, MenuEntryDescriptor, PanelContext,
-        SectionBuildFn, WindowDescriptor,
+        WindowDescriptor,
         lifecycle::{
             ActiveModalQuery, Extension, ExtensionAppExt as _, ExtensionCatalog, ExtensionKind,
             RegisteredMenuEntry, RegisteredWindow,
@@ -233,7 +235,7 @@ impl<'a> ExtensionContext<'a> {
             id: descriptor.id.clone(),
             name: descriptor.name,
             icon: descriptor.icon,
-            default_area: descriptor.default_area.unwrap_or_default(),
+            default_area: descriptor.default_area.anchor_id().to_string(),
             priority: descriptor.priority.unwrap_or(100),
             build: descriptor.build,
         };
@@ -338,18 +340,22 @@ impl<'a> ExtensionContext<'a> {
         self
     }
 
-    /// Inject a section into an existing panel (e.g. add a sub-section to
+    /// Inject a section into an existing window (e.g. add a sub-section to
     /// the Inspector window). Section runs with `In<PanelContext>` each time
-    /// the panel re-renders.
-    pub fn extend_window<W: ExtensionPoint>(&mut self, section: SectionBuildFn) -> &mut Self {
+    /// the window re-renders.
+    pub fn extend_window(
+        &mut self,
+        id: impl Into<Cow<'static, str>>,
+        build: impl Fn(&mut ChildSpawner) + Send + Sync + 'static,
+    ) -> &mut Self {
         let ext = self.extension_entity;
-        let panel_id = W::ID.to_string();
-        let mut registry = self.world.resource_mut::<PanelExtensionRegistry>();
-        let section_index = registry.get(&panel_id).len();
-        registry.add(panel_id.clone(), section);
+        let id = id.into();
+        let mut registry = self.world.resource_mut::<WindowExtensionRegistry>();
+        let section_index = registry.get(&id).count();
+        registry.add(id.clone(), build);
         self.world.spawn((
-            RegisteredPanelExtension {
-                panel_id,
+            RegisteredWindowExtension {
+                window_id: id,
                 section_index,
             },
             ChildOf(ext),
@@ -360,7 +366,7 @@ impl<'a> ExtensionContext<'a> {
     /// Contribute an entry to one of the editor's top-level menus
     /// (`"Add"`, `"Tools"`, etc.). Clicking the entry dispatches the
     /// referenced operator.
-    pub fn register_menu_entry(&mut self, descriptor: MenuEntryDescriptor) -> &mut Self {
+    pub fn register_menu_entry_manual(&mut self, descriptor: MenuEntryDescriptor) -> &mut Self {
         let ext = self.extension_entity;
         self.world.spawn((
             RegisteredMenuEntry {
@@ -376,21 +382,61 @@ impl<'a> ExtensionContext<'a> {
     /// Convenience that registers a menu entry using `O::LABEL` and
     /// `O::ID` from the operator type, so callers only need to supply the
     /// menu name. Equivalent to calling
-    /// [`Self::register_menu_entry`] with a full [`MenuEntryDescriptor`].
-    pub fn menu_entry_for<O: Operator>(&mut self, menu: impl Into<String>) -> &mut Self {
-        self.register_menu_entry(MenuEntryDescriptor {
-            menu: menu.into(),
+    /// [`Self::register_menu_entry_manual`] with a full [`MenuEntryDescriptor`].
+    pub fn register_menu_entry<O: Operator>(&mut self, menu: TopLevelMenu) -> &mut Self {
+        self.register_menu_entry_manual(MenuEntryDescriptor {
+            menu,
             label: O::LABEL.to_string(),
             operator_id: O::ID,
         })
     }
 }
 
+/// Top level menus available for menu bar entries.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TopLevelMenu {
+    File,
+    Edit,
+    View,
+    Add,
+    Tools,
+    Window,
+    Custom(String),
+}
+
+impl TopLevelMenu {
+    /// Returns the unique ID of the menu, used internally by the UI.
+    pub fn id(&self) -> String {
+        match self {
+            TopLevelMenu::File => "File".to_string(),
+            TopLevelMenu::Edit => "Edit".to_string(),
+            TopLevelMenu::Add => "Add".to_string(),
+            TopLevelMenu::View => "View".to_string(),
+            TopLevelMenu::Tools => "Tools".to_string(),
+            TopLevelMenu::Window => "Window".to_string(),
+            TopLevelMenu::Custom(id) => id.clone(),
+        }
+    }
+
+    /// Returns the order of the menu, used to sort menu items in the UI.
+    pub fn order(&self) -> u8 {
+        match self {
+            TopLevelMenu::File => 0,
+            TopLevelMenu::Edit => 1,
+            TopLevelMenu::Add => 2,
+            TopLevelMenu::View => 3,
+            TopLevelMenu::Tools => 4,
+            TopLevelMenu::Window => 5,
+            TopLevelMenu::Custom(_) => 6,
+        }
+    }
+}
+
 /// Extension-facing descriptor for a menu bar entry. See
-/// [`ExtensionContext::register_menu_entry`].
+/// [`ExtensionContext::register_menu_entry_manual`].
 pub struct MenuEntryDescriptor {
-    /// Top-level menu name (`"Add"`, `"Tools"`, etc.).
-    pub menu: String,
+    /// Top-level menu.
+    pub menu: TopLevelMenu,
     /// Text shown on the menu item.
     pub label: String,
     /// ID of an operator registered on the same extension, or any other
@@ -408,9 +454,57 @@ pub struct WindowDescriptor {
     pub id: String,
     pub name: String,
     pub icon: Option<String>,
-    pub default_area: Option<String>,
+    pub default_area: Option<DefaultArea>,
     pub priority: Option<i32>,
-    pub build: Arc<dyn Fn(&mut World, Entity) + Send + Sync>,
+    pub build: Arc<dyn Fn(&mut ChildSpawner) + Send + Sync + 'static>,
+}
+
+impl WindowDescriptor {
+    /// Creates a new `WindowDescriptor` with the given unique `id`.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        let id = id.into();
+        Self {
+            id: id.clone(),
+            name: id,
+            ..default()
+        }
+    }
+
+    /// Sets the name of the window shown in the UI.
+    #[must_use]
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    /// Sets the icon of the window.
+    #[must_use]
+    pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    /// Sets the default area of the window used when adding the window.
+    #[must_use]
+    pub fn with_default_area(mut self, area: impl Into<Option<DefaultArea>>) -> Self {
+        self.default_area = area.into();
+        self
+    }
+
+    /// Sets the priority of the window.
+    #[must_use]
+    pub fn with_priority(mut self, priority: i32) -> Self {
+        self.priority = Some(priority);
+        self
+    }
+
+    /// Sets the build function for the window, which is used for building the window's UI.
+    #[must_use]
+    pub fn with_build(mut self, build: impl Fn(&mut ChildSpawner) + Send + Sync + 'static) -> Self {
+        self.build = Arc::new(build);
+        self
+    }
 }
 
 impl Default for WindowDescriptor {
@@ -421,7 +515,7 @@ impl Default for WindowDescriptor {
             icon: None,
             default_area: None,
             priority: None,
-            build: Arc::new(|_, _| {}),
+            build: Arc::new(|_| {}),
         }
     }
 }
@@ -446,8 +540,6 @@ pub struct PanelContext {
     pub window_id: String,
     pub panel_entity: Entity,
 }
-
-pub type SectionBuildFn = Arc<dyn Fn(&mut World, PanelContext) + Send + Sync>;
 
 /// Plugin that wires up the extension framework into the editor.
 ///

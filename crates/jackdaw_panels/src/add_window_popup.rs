@@ -257,5 +257,5 @@ fn add_window_to_area(world: &mut World, window_id: &str, area_entity: Entity) {
         ))
         .id();
 
-    (build)(world, content_entity);
+    (build)(&mut ChildSpawner::new(world, content_entity));
 }

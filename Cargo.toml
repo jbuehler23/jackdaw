@@ -211,3 +211,43 @@ codegen-units = 1
 name = "minimal_extension"
 path = "examples/extension/minimal_extension.rs"
 doc-scrape-examples = true
+
+[[example]]
+name = "add_operator"
+path = "examples/extension/add_operator.rs"
+doc-scrape-examples = true
+
+[[example]]
+name = "call_operator"
+path = "examples/extension/call_operator.rs"
+doc-scrape-examples = true
+
+[[example]]
+name = "keybinding"
+path = "examples/extension/keybinding.rs"
+doc-scrape-examples = true
+
+[[example]]
+name = "extend_window"
+path = "examples/extension/extend_window.rs"
+doc-scrape-examples = true
+
+[[example]]
+name = "add_window"
+path = "examples/extension/add_window.rs"
+doc-scrape-examples = true
+
+[[example]]
+name = "menu_entry"
+path = "examples/extension/menu_entry.rs"
+doc-scrape-examples = true
+
+[[example]]
+name = "widgets"
+path = "examples/extension/widgets.rs"
+doc-scrape-examples = true
+
+[[example]]
+name = "modal"
+path = "examples/extension/modal.rs"
+doc-scrape-examples = true
