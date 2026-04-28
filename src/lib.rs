@@ -40,6 +40,7 @@ pub mod hot_reload;
 pub mod layout;
 pub mod material_browser;
 pub mod material_preview;
+pub mod measure_tool;
 pub mod modal_transform;
 pub mod navmesh;
 pub mod new_project;
@@ -239,6 +240,7 @@ impl Plugin for EditorCorePlugin {
             ))
             .add_plugins((
                 material_browser::MaterialBrowserPlugin,
+                measure_tool::MeasureToolPlugin,
                 draw_brush::DrawBrushPlugin,
                 face_grid::FaceGridPlugin,
                 alignment_guides::AlignmentGuidesPlugin,

@@ -20,6 +20,7 @@ use crate::{
     gizmos::{GizmoMode, GizmoSpace},
     hierarchy::{HierarchyPanel, HierarchyShowAllButton, HierarchyTreeContainer},
     inspector::Inspector,
+    measure_tool::MeasureDistanceOp,
     physics_tool::PhysicsActivateOp,
     remote::ConnectionManager,
     viewport::SceneViewport,
@@ -532,6 +533,7 @@ fn toolbar(icon_font: Handle<Font>) -> impl Bundle {
             // follow-up.
             toolbar_edit_button::<EditModeObjectOp>(Icon::MousePointer2, f.clone()),
             toolbar_edit_button::<ActivateDrawBrushModalOp>(Icon::Box, f.clone()),
+            toolbar_edit_button::<MeasureDistanceOp>(Icon::RulerDimensionLine, f.clone()),
             toolbar_edit_button::<EditModeVertexOp>(Icon::CircleDot, f.clone()),
             toolbar_edit_button::<EditModeEdgeOp>(Icon::GitCommitHorizontal, f.clone()),
             toolbar_edit_button::<EditModeFaceOp>(Icon::Hexagon, f.clone()),
@@ -699,6 +701,24 @@ fn toolbar_edit_button<Op: Operator>(icon: Icon, font: Handle<Font>) -> impl Bun
             TextColor(tokens::TEXT_SECONDARY),
         )],
         observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+            // For modal tools (Draw Brush, Measure Distance, etc.),
+            // cancel any active modal first so the user can switch
+            // tools without pressing Escape; otherwise the new
+            // dispatch would fail with `ModalAlreadyActive`. Const
+            // gate so non-modal mode buttons stay a single dispatch.
+            if Op::MODAL {
+                commands.queue(|world: &mut World| {
+                    let _ = world.operator("modal.cancel").call();
+                    let _ = world
+                        .operator(Op::ID)
+                        .settings(CallOperatorSettings {
+                            execution_context: ExecutionContext::Invoke,
+                            creates_history_entry: true,
+                        })
+                        .call();
+                });
+                return;
+            }
             commands
                 .operator(Op::ID)
                 .settings(CallOperatorSettings {

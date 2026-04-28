@@ -186,6 +186,7 @@ impl JackdawExtension for JackdawCoreExtension {
             )],
         ));
         crate::draw_brush::add_to_extension(ctx);
+        crate::measure_tool::add_to_extension(ctx);
 
         crate::scene_ops::add_to_extension(ctx);
         crate::history_ops::add_to_extension(ctx);

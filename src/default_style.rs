@@ -80,6 +80,11 @@ pub const CLIP_SPLIT_BACK: Color = Color::srgba(0.3, 0.5, 1.0, 0.8);
 // ── Alignment guides ──
 pub const ALIGNMENT_GUIDE: Color = Color::srgba(1.0, 0.65, 0.0, 0.85);
 
+// ── Measure tool ──
+pub const MARKER_SIZE: f32 = 0.008;
+pub const MEASURE_TOOL_LINE: Color = Color::srgb(1.0, 0.84, 0.0);
+pub const MEASURE_TOOL_LABEL: Color = Color::srgba(1.0, 0.84, 0.0, 1.0);
+
 // ── Navmesh visualization ──
 pub const NAVMESH_DETAIL_WIREFRAME: Color = Color::srgb(0.204, 0.827, 0.600);
 pub const NAVMESH_POLYGON_WIREFRAME: Color = Color::srgb(0.984, 0.749, 0.141);
