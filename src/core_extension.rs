@@ -2,25 +2,8 @@ use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
-use jackdaw_feathers::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps};
+use jackdaw_feathers::button::{ButtonClickEvent, ButtonOperatorCall};
 use jackdaw_jsn::PropertyValue;
-
-/// Build a [`ButtonProps`] from an operator type, filling in the
-/// label and the click dispatch in one step.
-///
-/// `ButtonProps::from_operator::<MyOp>()` is the preferred form for
-/// editor toolbars and menus when the button text matches the
-/// operator's `LABEL`. For anything custom (icon-only buttons, a
-/// non-`LABEL` caption), keep using `ButtonProps::new(...).call_operator(id)`.
-pub trait ButtonPropsOpExt {
-    fn from_operator<Op: Operator>() -> Self;
-}
-
-impl ButtonPropsOpExt for ButtonProps {
-    fn from_operator<Op: Operator>() -> Self {
-        Self::new(Op::LABEL).call_operator(Op::ID)
-    }
-}
 
 /// Catalog name of the Core extension. Exported so
 /// [`crate::extension_resolution::REQUIRED_EXTENSIONS`] and the

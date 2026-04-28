@@ -558,8 +558,8 @@ fn toolbar(icon_font: Handle<Font>) -> impl Bundle {
 /// with the feathers `handle_hover` system. Extensions adding their
 /// own toolbar entries should prefer
 /// `button::button(ButtonProps::from_operator::<Op>())` via the
-/// [`ButtonPropsOpExt`](crate::core_extension::ButtonPropsOpExt)
-/// trait (no active-state highlight needed); see
+/// [`ButtonPropsOpExt`](jackdaw_api::ui::ButtonPropsOpExt) trait
+/// (no active-state highlight needed); see
 /// `src/navmesh/toolbar.rs` for working examples.
 fn toolbar_button(icon: Icon, label: &str, mode: GizmoMode, font: Handle<Font>) -> impl Bundle {
     let label = label.to_string();
@@ -672,8 +672,8 @@ fn toolbar_space_button(icon_font: Handle<Font>) -> impl Bundle {
 /// `handle_hover` system. Extensions whose toolbar entries don't
 /// need active-state highlighting should prefer
 /// `button::button(ButtonProps::from_operator::<Op>())` via the
-/// [`ButtonPropsOpExt`](crate::core_extension::ButtonPropsOpExt)
-/// trait; see `src/navmesh/toolbar.rs` for examples.
+/// [`ButtonPropsOpExt`](jackdaw_api::ui::ButtonPropsOpExt) trait;
+/// see `src/navmesh/toolbar.rs` for examples.
 ///
 /// The `Pointer<Click>` observer dispatches directly rather than
 /// firing `ButtonClickEvent`, so `ButtonOperatorCall` here is just
