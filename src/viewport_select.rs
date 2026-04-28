@@ -59,7 +59,6 @@ fn group_edit_active(group_edit: Res<GroupEditState>, input_focus: Res<InputFocu
     label = "Exit Group Edit",
     description = "Stop editing the current brush group.",
     is_available = group_edit_active,
-    allows_undo = false,
 )]
 pub(crate) fn viewport_exit_group_edit(
     _: In<OperatorParameters>,

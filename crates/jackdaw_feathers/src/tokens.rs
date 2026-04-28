@@ -258,15 +258,21 @@ pub const FILE_ICON_COLOR: Color = Color::Srgba(tailwind::ZINC_400);
 // Typography
 // ---------------------------------------------------------------------------
 
+pub const TEXT_SIZE_XS: f32 = 9.0;
 pub const TEXT_SIZE_SM: f32 = 11.0;
 pub const TEXT_SIZE: f32 = 13.0;
 pub const TEXT_SIZE_LG: f32 = 13.0;
 pub const TEXT_SIZE_XL: f32 = 18.0;
 
 // Keep old names as aliases for existing code
+pub const FONT_XS: f32 = TEXT_SIZE_XS;
 pub const FONT_SM: f32 = TEXT_SIZE_SM;
 pub const FONT_MD: f32 = TEXT_SIZE;
 pub const FONT_LG: f32 = TEXT_SIZE_LG;
+
+/// Truncation width for browser thumbnail filename labels (asset
+/// browser, material browser).
+pub const THUMB_NAME_MAX_WIDTH: f32 = 60.0;
 
 // ---------------------------------------------------------------------------
 // Icon sizes (Lucide frame sizes)

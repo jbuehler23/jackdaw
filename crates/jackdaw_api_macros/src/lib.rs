@@ -388,14 +388,14 @@ fn build_param_spec(meta: &Meta) -> syn::Result<TokenStream2> {
 }
 
 /// Validate the parameter type ident and return the matching
-/// lowercase Rust-style name as a string literal token. The literal
-/// is what `ParamSpec.ty` stores; it matches the labels produced by
-/// `PropertyValue::type_name`.
+/// title-case label as a string literal token. The literal is what
+/// `ParamSpec.ty` stores; it matches the labels produced by
+/// [`PropertyValue::type_name`](jackdaw_jsn::PropertyValue::type_name).
 fn param_type_variant(ty: &Ident) -> syn::Result<TokenStream2> {
     let label = match ty.to_string().as_str() {
-        "bool" => "bool",
-        "i64" => "i64",
-        "f64" => "f64",
+        "bool" => "Bool",
+        "i64" => "Int",
+        "f64" => "Float",
         "String" => "String",
         "Vec2" => "Vec2",
         "Vec3" => "Vec3",

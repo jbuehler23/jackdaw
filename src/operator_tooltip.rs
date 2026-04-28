@@ -44,6 +44,6 @@ fn auto_attach_button_tooltip(
     commands.entity(entity).insert(
         Tooltip::title(op.label())
             .with_description(op.description())
-            .with_footer(call.signature().to_string()),
+            .with_footer(call.to_string()),
     );
 }

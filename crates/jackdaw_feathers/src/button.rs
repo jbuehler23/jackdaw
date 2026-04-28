@@ -51,50 +51,63 @@ impl ButtonOperatorCall {
         self.params.push((key.into(), value.into()));
         self
     }
-
-    /// `Display` adapter rendering this button's concrete call
-    /// signature: `id(name: value, ...)`.
-    pub fn signature(&self) -> ButtonCallSignature<'_> {
-        ButtonCallSignature(self)
-    }
 }
 
-/// `Display` adapter for [`ButtonOperatorCall`]. Constructed via
-/// [`ButtonOperatorCall::signature`].
-pub struct ButtonCallSignature<'a>(&'a ButtonOperatorCall);
-
-impl std::fmt::Display for ButtonCallSignature<'_> {
+impl std::fmt::Display for ButtonOperatorCall {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0.id)?;
+        f.write_str(&self.id)?;
         f.write_str("(")?;
-        for (i, (k, v)) in self.0.params.iter().enumerate() {
+        for (i, (k, v)) in self.params.iter().enumerate() {
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write!(f, "{k}: ")?;
-            fmt_property_value(f, v)?;
+            write!(f, "{k}: {v}")?;
         }
         f.write_str(")")
     }
 }
 
-fn fmt_property_value(f: &mut std::fmt::Formatter<'_>, v: &PropertyValue) -> std::fmt::Result {
-    match v {
-        PropertyValue::Bool(b) => write!(f, "{b}"),
-        PropertyValue::Int(i) => write!(f, "{i}"),
-        PropertyValue::Float(x) => write!(f, "{x}"),
-        PropertyValue::String(s) => write!(f, "\"{s}\""),
-        PropertyValue::Vec2(v) => write!(f, "vec2({}, {})", v.x, v.y),
-        PropertyValue::Vec3(v) => write!(f, "vec3({}, {}, {})", v.x, v.y, v.z),
-        PropertyValue::Color(c) => {
-            let s = c.to_srgba();
-            write!(
-                f,
-                "Color::srgba({}, {}, {}, {})",
-                s.red, s.green, s.blue, s.alpha
-            )
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseOpActionError {
+    /// Input does not start with [`crate::menu_bar::OP_ACTION_PREFIX`].
+    MissingPrefix,
+}
+
+impl std::fmt::Display for ParseOpActionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingPrefix => f.write_str("missing `op:` prefix"),
         }
-        PropertyValue::Entity(e) => write!(f, "Entity({})", e.to_bits()),
+    }
+}
+
+impl std::error::Error for ParseOpActionError {}
+
+/// Parse a menu/context-menu action string of the form
+/// `op:OP_ID?key=value&key2=value2` into a [`ButtonOperatorCall`].
+/// Values are stored as `PropertyValue::String`; the runtime
+/// `OperatorParameters::as_int` / `as_bool` accessors coerce numeric
+/// and bool params from string form. Future menu entries that need
+/// typed values should construct the call directly with
+/// [`ButtonOperatorCall::with_param`].
+///
+/// `&String` and `&Cow<str>` deref to `&str`, so this impl covers
+/// every action-string source the editor currently has.
+impl TryFrom<&str> for ButtonOperatorCall {
+    type Error = ParseOpActionError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let rest = value
+            .strip_prefix(crate::menu_bar::OP_ACTION_PREFIX)
+            .ok_or(ParseOpActionError::MissingPrefix)?;
+        let (op_id, query) = rest.split_once('?').unwrap_or((rest, ""));
+        let mut call = ButtonOperatorCall::new(op_id.to_string());
+        for kv in query.split('&').filter(|s| !s.is_empty()) {
+            if let Some((k, v)) = kv.split_once('=') {
+                call = call.with_param(k.to_string(), v.to_string());
+            }
+        }
+        Ok(call)
     }
 }
 

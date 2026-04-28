@@ -1605,8 +1605,10 @@ fn paste_clipboard_keyframes(world: &mut World) {
 /// reuse avoidance rationale: direct `world.spawn` rather than
 /// `DynamicScene`.
 ///
-/// Used by the keyframe paste path (`handle_keyframe_copy_paste`) so
-/// pasting is undoable as a single `CommandGroup`.
+/// Internal primitive used by the keyframe paste path
+/// (`clip.paste_keyframes`). The user-facing entry point for spawning
+/// a keyframe at the current playhead time for a selected entity is
+/// the `animation.toggle_keyframe` operator (`src/inspector/ops.rs`).
 enum SpawnKeyframeCmd {
     Vec3 {
         /// Filled in by `execute`; `None` before the first execute.

@@ -550,6 +550,15 @@ fn toolbar(icon_font: Handle<Font>) -> impl Bundle {
     )
 }
 
+/// Built-in gizmo-mode toolbar button. Hand-rolled rather than going
+/// through [`feathers::button`] because [`update_toolbar_highlights`]
+/// drives `BackgroundColor` directly per active mode and would race
+/// with the feathers `handle_hover` system. Extensions adding their
+/// own toolbar entries should prefer
+/// `button::button(ButtonProps::from_operator::<Op>())` via the
+/// [`ButtonPropsOpExt`](crate::core_extension::ButtonPropsOpExt)
+/// trait (no active-state highlight needed); see
+/// `src/navmesh/toolbar.rs` for working examples.
 fn toolbar_button(icon: Icon, label: &str, mode: GizmoMode, font: Handle<Font>) -> impl Bundle {
     let label = label.to_string();
     let op_id: &'static str = match mode {
@@ -654,6 +663,15 @@ fn toolbar_space_button(icon_font: Handle<Font>) -> impl Bundle {
 /// Toolbar edit-mode button that dispatches `Op` on click. Generic
 /// so extensions can add their own entries via
 /// `toolbar_edit_button::<MyOp>(Icon::Pencil, font)`.
+///
+/// Hand-rolled rather than going through [`feathers::button`]
+/// because [`update_edit_tool_highlights`] mutates `BackgroundColor`
+/// per active edit mode, which would race with the feathers
+/// `handle_hover` system. Extensions whose toolbar entries don't
+/// need active-state highlighting should prefer
+/// `button::button(ButtonProps::from_operator::<Op>())` via the
+/// [`ButtonPropsOpExt`](crate::core_extension::ButtonPropsOpExt)
+/// trait; see `src/navmesh/toolbar.rs` for examples.
 ///
 /// The `Pointer<Click>` observer dispatches directly rather than
 /// firing `ButtonClickEvent`, so `ButtonOperatorCall` here is just

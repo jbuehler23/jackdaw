@@ -2,7 +2,6 @@ use bevy::prelude::*;
 use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuItem};
 
 use crate::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonVariant, button};
-use crate::menu_bar::parse_op_action;
 use crate::tokens;
 
 pub fn plugin(app: &mut App) {
@@ -31,8 +30,9 @@ fn on_context_menu_item_click(
 
 /// Spawn a context menu at the given position with the given items.
 /// Each item is `(action_id, label)`. Actions starting with `op:` are
-/// parsed by [`parse_op_action`] into a [`ButtonOperatorCall`] (id +
-/// any embedded `?key=value` params) attached to the item.
+/// parsed via [`ButtonOperatorCall`]'s `TryFrom<&str>` impl into a
+/// `ButtonOperatorCall` (id + any embedded `?key=value` params)
+/// attached to the item.
 pub fn spawn_context_menu(
     commands: &mut Commands,
     position: Vec2,
@@ -70,7 +70,7 @@ pub fn spawn_context_menu(
                 .align_left(),
         );
 
-        if let Some(call) = parse_op_action(action) {
+        if let Ok(call) = ButtonOperatorCall::try_from(action) {
             commands.entity(menu).with_child((item, btn, call));
         } else {
             commands.entity(menu).with_child((item, btn));

@@ -194,9 +194,8 @@ impl OperatorParameters {
 #[derive(Clone, Debug)]
 pub struct ParamSpec {
     pub name: &'static str,
-    /// Lowercase Rust-style type name, e.g. `"bool"`, `"i64"`,
-    /// `"Vec2"`. Matches the strings produced by
-    /// [`PropertyValue::type_name`].
+    /// Title-case type name, e.g. `"Bool"`, `"Int"`, `"Vec2"`. Matches
+    /// the strings produced by [`PropertyValue::type_name`].
     pub ty: &'static str,
     pub default: Option<PropertyValue>,
     pub doc: &'static str,
@@ -227,38 +226,10 @@ impl std::fmt::Display for OperatorSignature<'_> {
             }
             write!(f, "{}: {}", spec.name, spec.ty)?;
             if let Some(default) = &spec.default {
-                write!(f, " = {}", PropertyDisplay(default))?;
+                write!(f, " = {default}")?;
             }
         }
         f.write_str(")")
-    }
-}
-
-/// `Display` adapter for [`PropertyValue`]: `true`, `42`, `"hello"`,
-/// `vec2(1, 2)`, `Color::srgba(1, 1, 1, 1)`, `Entity(4294967296)`.
-/// Used internally by [`OperatorSignature`]; prefer that (or
-/// `ButtonCallSignature` in `jackdaw_feathers`).
-pub(crate) struct PropertyDisplay<'a>(pub &'a PropertyValue);
-
-impl std::fmt::Display for PropertyDisplay<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            PropertyValue::Bool(b) => write!(f, "{b}"),
-            PropertyValue::Int(i) => write!(f, "{i}"),
-            PropertyValue::Float(x) => write!(f, "{x}"),
-            PropertyValue::String(s) => write!(f, "\"{s}\""),
-            PropertyValue::Vec2(v) => write!(f, "vec2({}, {})", v.x, v.y),
-            PropertyValue::Vec3(v) => write!(f, "vec3({}, {}, {})", v.x, v.y, v.z),
-            PropertyValue::Color(c) => {
-                let s = c.to_srgba();
-                write!(
-                    f,
-                    "Color::srgba({}, {}, {}, {})",
-                    s.red, s.green, s.blue, s.alpha
-                )
-            }
-            PropertyValue::Entity(e) => write!(f, "Entity({})", e.to_bits()),
-        }
     }
 }
 

@@ -434,12 +434,12 @@ fn refresh_browser_on_change(
             let mut name_label = commands.spawn((
                 Text::new(display_name),
                 TextFont {
-                    font_size: 9.0,
+                    font_size: tokens::FONT_XS,
                     ..default()
                 },
                 TextColor(tokens::TEXT_SECONDARY),
                 Node {
-                    max_width: px(60.0),
+                    max_width: px(tokens::THUMB_NAME_MAX_WIDTH),
                     overflow: Overflow::clip(),
                     ..default()
                 },

@@ -7,33 +7,11 @@ use crate::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonVar
 use crate::tokens;
 
 /// Action strings in menu entries that start with this prefix are
-/// interpreted as operator ids; the suffix becomes the [`ButtonOperatorCall`] id
-/// attached to the dropdown button so the editor dispatches through the
-/// operator API instead of firing a generic [`MenuAction`].
+/// interpreted as operator ids; the suffix is parsed by
+/// [`ButtonOperatorCall`]'s `TryFrom<&str>` impl into the call attached
+/// to the dropdown button so the editor dispatches through the operator
+/// API instead of firing a generic [`MenuAction`].
 pub const OP_ACTION_PREFIX: &str = "op:";
-
-/// Parse a menu action of the form `op:OP_ID?key=value&key2=value2`
-/// into a typed [`ButtonOperatorCall`]. Returns `None` if `action` does
-/// not begin with [`OP_ACTION_PREFIX`].
-///
-/// Values are stored as strings (`PropertyValue::String`); the runtime
-/// `OperatorParameters::as_int` / `as_bool` accessors coerce numeric
-/// and bool params from string form, matching how legacy query-string
-/// dispatch worked. Future menu entries that need typed values should
-/// build their `ButtonOperatorCall` directly via
-/// [`ButtonOperatorCall::with_param`] rather than embedding them in the
-/// action string.
-pub fn parse_op_action(action: &str) -> Option<crate::button::ButtonOperatorCall> {
-    let rest = action.strip_prefix(OP_ACTION_PREFIX)?;
-    let (op_id, query) = rest.split_once('?').unwrap_or((rest, ""));
-    let mut call = crate::button::ButtonOperatorCall::new(op_id.to_string());
-    for kv in query.split('&').filter(|s| !s.is_empty()) {
-        if let Some((k, v)) = kv.split_once('=') {
-            call = call.with_param(k.to_string(), v.to_string());
-        }
-    }
-    Some(call)
-}
 
 pub fn plugin(app: &mut App) {
     app.add_observer(on_dropdown_item_click)
@@ -272,7 +250,7 @@ fn spawn_dropdown(commands: &mut Commands, x: f32, y: f32, actions: &[(String, S
                 .align_left(),
         );
 
-        if let Some(call) = parse_op_action(action) {
+        if let Ok(call) = ButtonOperatorCall::try_from(action.as_str()) {
             // Operator-bound menu entries dispatch through the editor's
             // `ButtonOperatorCall` observer; the editor's tooltip
             // renderer reads the call's id + params for the rich

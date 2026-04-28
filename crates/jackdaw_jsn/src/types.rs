@@ -287,10 +287,34 @@ impl From<Entity> for PropertyValue {
     }
 }
 
+impl std::fmt::Display for PropertyValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Int(i) => write!(f, "{i}"),
+            Self::Float(x) => write!(f, "{x}"),
+            Self::String(s) => write!(f, "\"{s}\""),
+            Self::Vec2(v) => write!(f, "vec2({}, {})", v.x, v.y),
+            Self::Vec3(v) => write!(f, "vec3({}, {}, {})", v.x, v.y, v.z),
+            Self::Color(c) => {
+                let s = c.to_srgba();
+                write!(
+                    f,
+                    "Color::srgba({}, {}, {}, {})",
+                    s.red, s.green, s.blue, s.alpha
+                )
+            }
+            Self::Entity(e) => write!(f, "Entity({})", e.to_bits()),
+        }
+    }
+}
+
 impl PropertyValue {
-    /// Title-case label for the Custom Properties UI picker
-    /// (`"Bool"`, `"Int"`, etc.). Inspector match arms key off this.
-    pub const fn type_label(&self) -> &'static str {
+    /// Canonical title-case type name (`"Bool"`, `"Int"`, `"Float"`,
+    /// `"String"`, `"Vec2"`, `"Vec3"`, `"Color"`, `"Entity"`). Used by
+    /// the Custom Properties picker, operator-signature tooltips, and
+    /// matched against `ParamSpec::ty` (in `jackdaw_api_internal`).
+    pub const fn type_name(&self) -> &'static str {
         match self {
             Self::Bool(_) => "Bool",
             Self::Int(_) => "Int",
@@ -303,24 +327,8 @@ impl PropertyValue {
         }
     }
 
-    /// Lowercase Rust-style type name (`"bool"`, `"i64"`, etc.) used
-    /// in operator-signature tooltips and matched against
-    /// `ParamSpec::ty` (in `jackdaw_api_internal`).
-    pub const fn type_name(&self) -> &'static str {
-        match self {
-            Self::Bool(_) => "bool",
-            Self::Int(_) => "i64",
-            Self::Float(_) => "f64",
-            Self::String(_) => "String",
-            Self::Vec2(_) => "Vec2",
-            Self::Vec3(_) => "Vec3",
-            Self::Color(_) => "Color",
-            Self::Entity(_) => "Entity",
-        }
-    }
-
-    /// Default value for the given `type_label` string. Used by the
-    /// Custom Properties picker.
+    /// Default value for the given [`type_name`](Self::type_name)
+    /// string. Used by the Custom Properties picker.
     pub fn default_for_type(name: &str) -> Option<Self> {
         match name {
             "Bool" => Some(Self::Bool(false)),
@@ -335,11 +343,22 @@ impl PropertyValue {
         }
     }
 
-    /// All available type names for the UI picker.
+    /// All available type names for the UI picker, derived from one
+    /// default per variant. Adding a new `PropertyValue` variant only
+    /// requires updating [`type_name`](Self::type_name); this list and
+    /// the picker pick it up automatically.
     pub fn all_type_names() -> &'static [&'static str] {
-        &[
-            "Bool", "Int", "Float", "String", "Vec2", "Vec3", "Color", "Entity",
-        ]
+        const NAMES: &[&str] = &[
+            PropertyValue::Bool(false).type_name(),
+            PropertyValue::Int(0).type_name(),
+            PropertyValue::Float(0.0).type_name(),
+            PropertyValue::String(Cow::Borrowed("")).type_name(),
+            PropertyValue::Vec2(Vec2::ZERO).type_name(),
+            PropertyValue::Vec3(Vec3::ZERO).type_name(),
+            PropertyValue::Color(Color::WHITE).type_name(),
+            PropertyValue::Entity(Entity::PLACEHOLDER).type_name(),
+        ];
+        NAMES
     }
 }
 
