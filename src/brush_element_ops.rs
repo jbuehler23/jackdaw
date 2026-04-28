@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use bevy::{input_focus::InputFocus, prelude::*};
+use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::Brush;
@@ -19,6 +19,7 @@ use crate::brush::{
 };
 use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
+use crate::keybind_focus::KeybindFocus;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushDeleteElementOp>()
@@ -52,13 +53,13 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// mode active, no text field focused, no drag in flight.
 fn can_run_element_op(
     edit_mode: Res<EditMode>,
-    input_focus: Res<InputFocus>,
+    keybind_focus: KeybindFocus,
     face_drag: Res<BrushDragState>,
     vertex_drag: Res<VertexDragState>,
     edge_drag: Res<EdgeDragState>,
 ) -> bool {
     matches!(*edit_mode, EditMode::BrushEdit(_))
-        && input_focus.0.is_none()
+        && !keybind_focus.is_typing()
         && !face_drag.active
         && !vertex_drag.active
         && !edge_drag.active

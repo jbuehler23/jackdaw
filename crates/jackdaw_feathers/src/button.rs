@@ -455,7 +455,7 @@ fn setup_button(
         // despawn of the button landed before these flushed, the
         // `ChildOf` insert hook would fire `add_related<ChildOf>`
         // on a dead parent, producing the
-        // `Entity despawned … is invalid` errors on every inspector
+        // `Entity despawned ... is invalid` errors on every inspector
         // rebuild. The `get_entity_mut` guard + synchronous
         // `with_children` here closes that window; everything
         // happens atomically on one `&mut World` block.

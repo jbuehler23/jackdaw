@@ -1456,7 +1456,7 @@ pub(crate) fn asset_cycle_array_layer(
     label = "Select Assets Folder",
     description = "Choose a different folder as the assets directory."
 )]
-pub(crate) fn asset_select_folder(
+pub fn asset_select_folder(
     _: In<OperatorParameters>,
     mut commands: Commands,
     raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,

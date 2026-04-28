@@ -49,8 +49,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ));
 }
 
-fn group_edit_active(group_edit: Res<GroupEditState>, input_focus: Res<InputFocus>) -> bool {
-    input_focus.0.is_none() && group_edit.active_group.is_some()
+fn group_edit_active(
+    group_edit: Res<GroupEditState>,
+    keybind_focus: crate::keybind_focus::KeybindFocus,
+) -> bool {
+    !keybind_focus.is_typing() && group_edit.active_group.is_some()
 }
 
 /// Exit `BrushGroup` edit mode (entered via double-click on a group).

@@ -24,6 +24,7 @@ pub mod grid_ops;
 pub mod hierarchy;
 pub mod history_ops;
 pub mod inspector;
+pub mod keybind_focus;
 pub mod keybind_settings;
 pub mod keybinds;
 
@@ -2082,11 +2083,19 @@ fn populate_menu(
 )]
 pub(crate) fn window_open(
     params: In<OperatorParameters>,
+    registry: Res<jackdaw_panels::WindowRegistry>,
     mut commands: bevy::prelude::Commands,
 ) -> OperatorResult {
     let Some(window_id) = params.as_str("window_id").map(str::to_string) else {
         return OperatorResult::Cancelled;
     };
+    // Reject unknown ids up front so callers get `Cancelled` rather
+    // than a silent no-op + `Finished`. Lets the menu/tooltip pipeline
+    // distinguish "user opened a window" from "user clicked a stale
+    // menu entry whose extension unloaded."
+    if registry.get(&window_id).is_none() {
+        return OperatorResult::Cancelled;
+    }
     commands.queue(move |world: &mut World| {
         open_window_in_default_area(world, &window_id);
     });

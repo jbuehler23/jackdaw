@@ -1,7 +1,7 @@
 mod brp_client;
 mod build;
 pub(crate) mod ops;
-mod save_load;
+pub mod save_load;
 pub mod toolbar;
 mod visualization;
 

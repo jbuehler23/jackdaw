@@ -1,5 +1,6 @@
 use crate::core_extension::CoreExtensionInputContext;
 use crate::default_style;
+use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
 use crate::{
     EditorEntity,
@@ -203,14 +204,14 @@ fn cancel_draw_brush_modal(mut draw_state: ResMut<DrawBrushState>) {
 
 /// True only while a draw is in progress and the input field isn't
 /// focused. Used as `is_available` for the in-modal keybinds.
-fn is_drawing(input_focus: Res<InputFocus>, draw_state: Res<DrawBrushState>) -> bool {
-    input_focus.0.is_none() && draw_state.active.is_some()
+fn is_drawing(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushState>) -> bool {
+    !keybind_focus.is_typing() && draw_state.active.is_some()
 }
 
 /// True while a draw's polygon is being placed (multi-vertex Add/Cut
 /// before Enter commits the shape).
-fn is_drawing_polygon(input_focus: Res<InputFocus>, draw_state: Res<DrawBrushState>) -> bool {
-    if input_focus.0.is_some() {
+fn is_drawing_polygon(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushState>) -> bool {
+    if keybind_focus.is_typing() {
         return false;
     }
     draw_state
@@ -221,8 +222,8 @@ fn is_drawing_polygon(input_focus: Res<InputFocus>, draw_state: Res<DrawBrushSta
 
 /// True while a Cut-mode draw is in progress. Cut doesn't go through
 /// the modal-finalize path on cancel, so it gets its own RMB binding.
-fn is_drawing_cut(input_focus: Res<InputFocus>, draw_state: Res<DrawBrushState>) -> bool {
-    if input_focus.0.is_some() {
+fn is_drawing_cut(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushState>) -> bool {
+    if keybind_focus.is_typing() {
         return false;
     }
     draw_state
@@ -3138,23 +3139,23 @@ pub(crate) fn brush_csg_intersect(
 /// mid-modal, or while a text input is focused. Each specific op
 /// composes this with its own selection-state precondition check.
 fn env_allows_brush_op(
-    input_focus: &InputFocus,
+    keybind_focus: &KeybindFocus,
     modal: &crate::modal_transform::ModalTransformState,
     draw_state: &DrawBrushState,
 ) -> bool {
-    input_focus.0.is_none() && modal.active.is_none() && draw_state.active.is_none()
+    !keybind_focus.is_typing() && modal.active.is_none() && draw_state.active.is_none()
 }
 
 /// `brush.join` / `brush.csg_subtract` / `brush.csg_intersect` all
 /// require at least two `Brush` entities in the current selection.
 fn can_run_binary_brush_op(
-    input_focus: Res<InputFocus>,
+    keybind_focus: KeybindFocus,
     modal: Res<crate::modal_transform::ModalTransformState>,
     draw_state: Res<DrawBrushState>,
     selection: Res<Selection>,
     brushes: Query<(), With<Brush>>,
 ) -> bool {
-    if !env_allows_brush_op(&input_focus, &modal, &draw_state) {
+    if !env_allows_brush_op(&keybind_focus, &modal, &draw_state) {
         return false;
     }
     selection
@@ -3169,7 +3170,7 @@ fn can_run_binary_brush_op(
 /// face picked and another brush selected, or (b) Object mode with ≥ 2
 /// brushes selected and a remembered/hovered face on the primary.
 fn can_run_extend_face(
-    input_focus: Res<InputFocus>,
+    keybind_focus: KeybindFocus,
     modal: Res<crate::modal_transform::ModalTransformState>,
     draw_state: Res<DrawBrushState>,
     selection: Res<Selection>,
@@ -3177,7 +3178,7 @@ fn can_run_extend_face(
     edit_mode: Res<crate::brush::EditMode>,
     brushes: Query<(), With<Brush>>,
 ) -> bool {
-    if !env_allows_brush_op(&input_focus, &modal, &draw_state) {
+    if !env_allows_brush_op(&keybind_focus, &modal, &draw_state) {
         return false;
     }
     let brush_count = selection

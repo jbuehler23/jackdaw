@@ -179,7 +179,7 @@ fn rebuild_hierarchy_on_container_added(
 fn rebuild_hierarchy(world: &mut World) -> Result {
     fn rebuild_hierarchy_inner(
         world: &mut World,
-        container: &mut SystemState<Single<Entity, With<HierarchyTreeContainer>>>,
+        container: &mut SystemState<Option<Single<Entity, With<HierarchyTreeContainer>>>>,
         roots: &mut QueryState<
             Entity,
             (
@@ -190,7 +190,13 @@ fn rebuild_hierarchy(world: &mut World) -> Result {
             ),
         >,
     ) {
-        let container = *container.get(world);
+        // No container means the editor UI tree isn't mounted (e.g.
+        // headless integration tests, or pre-`OnEnter(Editor)` state).
+        // Nothing to rebuild against; bail.
+        let Some(container) = container.get(world) else {
+            return;
+        };
+        let container = *container;
 
         // Collect all root scene entities (Transform, no ChildOf, no editor markers)
         let roots: Vec<Entity> = roots.iter(world).collect();
@@ -751,8 +757,12 @@ fn on_tree_row_dropped_on_root(
     mut commands: Commands,
     parent_query: Query<&ChildOf, Without<EditorEntity>>,
     tree_index: Res<TreeIndex>,
-    container: Single<Entity, With<HierarchyTreeContainer>>,
+    container: Option<Single<Entity, With<HierarchyTreeContainer>>>,
 ) {
+    let Some(container) = container else {
+        // No tree container mounted (e.g. inside a headless test).
+        return;
+    };
     let dragged = event.dragged_source;
 
     let old_parent = match parent_query.get(dragged) {
@@ -1516,9 +1526,13 @@ fn on_show_all_changed(show_all: Res<HierarchyShowAll>, mut commands: Commands) 
 /// Despawn all tree rows and clear the `TreeIndex`.
 pub fn clear_all_tree_rows(
     world: &mut World,
-    container: &mut SystemState<Single<Entity, With<HierarchyTreeContainer>>>,
+    container: &mut SystemState<Option<Single<Entity, With<HierarchyTreeContainer>>>>,
 ) {
-    let container = *container.get(world);
+    let Some(container) = container.get(world) else {
+        // No tree container mounted (e.g. headless test); nothing to clear.
+        return;
+    };
+    let container = *container;
 
     // Collect tree row children of the container
     let tree_rows: Vec<Entity> = world

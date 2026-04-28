@@ -1696,7 +1696,7 @@ pub(crate) fn material_rescan(
     label = "Select Materials Folder",
     description = "Choose a different folder as the materials directory."
 )]
-pub(crate) fn material_select_folder(
+pub fn material_select_folder(
     _: In<OperatorParameters>,
     mut commands: Commands,
     raw_handle: Query<&bevy::window::RawHandleWrapper, With<bevy::window::PrimaryWindow>>,
