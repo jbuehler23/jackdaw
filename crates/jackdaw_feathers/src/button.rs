@@ -236,20 +236,21 @@ impl ButtonVariant {
 impl ButtonSize {
     fn width(&self) -> Val {
         match self {
-            // 18x18 frame matches the Figma viewport-toolbar spec.
-            // Lucide's stroke width is baked into the font; we
-            // control perceived thickness by sizing the glyph to
-            // ~55% of the frame (per Figma: 9.92px vector inside
-            // 18px button) so the icon stays slim against the bg.
-            Self::Icon => Val::Px(18.0),
-            Self::IconSM => Val::Px(16.0),
+            // 22px frame fits inside the 30px-tall toolbar with 4px
+            // vertical breathing. Glyph at `icon_size = 16` fills
+            // ~73% of the frame which reads as a solid icon rather
+            // than a small mark surrounded by black void; lucide
+            // glyphs only fill about two-thirds of their em-box so
+            // the visible-icon ratio lands closer to the Figma 55%.
+            Self::Icon => Val::Px(22.0),
+            Self::IconSM => Val::Px(20.0),
             Self::MD => Val::Auto,
         }
     }
     fn height(&self) -> Val {
         match self {
-            Self::IconSM => Val::Px(16.0),
-            _ => Val::Px(18.0),
+            Self::IconSM => Val::Px(20.0),
+            _ => Val::Px(22.0),
         }
     }
     fn padding(&self) -> Val {
@@ -260,12 +261,8 @@ impl ButtonSize {
     }
     fn icon_size(&self) -> f32 {
         match self {
-            // 12px glyph in an 18px frame = 67%; slightly above the
-            // Figma 55% so anti-aliased strokes stay legible at
-            // 1x resolution.
-            Self::IconSM => 11.0,
-            Self::Icon => 12.0,
-            Self::MD => 16.0,
+            Self::IconSM => 14.0,
+            Self::Icon | Self::MD => 16.0,
         }
     }
 }

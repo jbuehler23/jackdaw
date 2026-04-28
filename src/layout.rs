@@ -3,7 +3,7 @@ use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{self, ButtonOperatorCall, ButtonSize, ButtonVariant},
     icons::IconFont,
-    menu_bar, popover, separator, split_panel, status_bar,
+    menu_bar, separator, split_panel, status_bar,
     text_edit::{self, TextEditProps},
     tokens,
     tree_view::tree_container_drop_observers,
@@ -107,18 +107,7 @@ pub struct HierarchyFilter;
 #[derive(Component)]
 pub struct Toolbar;
 
-/// Marker for keybind helper button
-#[derive(Component)]
-pub struct KeybindHelpButton;
-
-/// Resource tracking the keybind help popover entity
-#[derive(Resource, Default)]
-pub struct KeybindHelpPopover {
-    pub entity: Option<Entity>,
-}
-
-pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
-    let font = icon_font.0.clone();
+pub fn editor_layout(_icon_font: &IconFont) -> impl Bundle {
     (
         EditorEntity,
         // Outer shell: dark background with padding (Figma: 10px padding, bg #171717)
@@ -192,7 +181,7 @@ pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
                                     // Center column: viewport + bottom dock (ratio 4).
                                     Spawn((
                                         split_panel::panel(4),
-                                        center_column(font.clone()),
+                                        center_column(),
                                     )),
                                     Spawn(split_panel::panel_handle()),
                                     // Right column: inspector (~310px default, ratio 1)
@@ -440,7 +429,7 @@ pub fn project_files_panel_content() -> impl Bundle {
 /// top and the tabbable bottom-panels area (Assets / Timeline / ...)
 /// underneath. The timeline is a regular tab in the bottom panel, so
 /// animating no longer requires switching into an "Animation View".
-fn center_column(icon_font: Handle<Font>) -> impl Bundle {
+fn center_column() -> impl Bundle {
     (
         EditorEntity,
         Node {
@@ -452,10 +441,7 @@ fn center_column(icon_font: Handle<Font>) -> impl Bundle {
         split_panel::panel_group(
             0.15,
             (
-                Spawn((
-                    split_panel::panel(4),
-                    viewport_with_toolbar(icon_font.clone()),
-                )),
+                Spawn((split_panel::panel(4), viewport_with_toolbar())),
                 Spawn(split_panel::panel_handle()),
                 Spawn((split_panel::panel(1), bottom_dock_area())),
             ),
@@ -463,7 +449,7 @@ fn center_column(icon_font: Handle<Font>) -> impl Bundle {
     )
 }
 
-fn viewport_with_toolbar(icon_font: Handle<Font>) -> impl Bundle {
+fn viewport_with_toolbar() -> impl Bundle {
     (
         EditorEntity,
         jackdaw_panels::drag::ViewportDropTarget,
@@ -476,7 +462,7 @@ fn viewport_with_toolbar(icon_font: Handle<Font>) -> impl Bundle {
         },
         BackgroundColor(tokens::PANEL_BG),
         children![
-            toolbar(icon_font),
+            toolbar(),
             crate::navmesh::toolbar::navmesh_toolbar(),
             crate::terrain::toolbar::terrain_toolbar(),
             scene_view(),
@@ -484,7 +470,7 @@ fn viewport_with_toolbar(icon_font: Handle<Font>) -> impl Bundle {
     )
 }
 
-fn toolbar(icon_font: Handle<Font>) -> impl Bundle {
+fn toolbar() -> impl Bundle {
     // Every toolbar entry below goes through `feathers::button(...)`,
     // the same constructor extensions use. Active-state highlighting
     // is driven by [`update_toolbar_button_variants`] flipping
@@ -539,12 +525,6 @@ fn toolbar(icon_font: Handle<Font>) -> impl Bundle {
             toolbar_op_button::<EditModeClipOp>(Icon::ScissorsLineDashed),
             separator::separator(separator::SeparatorProps::vertical()),
             toolbar_op_button::<PhysicsActivateOp>(Icon::Zap),
-            // Spacer pushes the help button to the right.
-            (Node {
-                flex_grow: 1.0,
-                ..Default::default()
-            },),
-            toolbar_help_button(icon_font),
         ],
     )
 }
@@ -570,225 +550,6 @@ fn toolbar_op_button<Op: Operator>(icon: Icon) -> impl Bundle {
             .icon(icon)
             .with_size(ButtonSize::Icon),
     )
-}
-
-fn toolbar_help_button(icon_font: Handle<Font>) -> impl Bundle {
-    (
-        KeybindHelpButton,
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::TOOLBAR_BUTTON_BG),
-        children![(
-            Text::new(String::from(Icon::Keyboard.unicode())),
-            TextFont {
-                font: icon_font,
-                font_size: tokens::FONT_MD,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
-        observe(
-            |trigger: On<Pointer<Click>>,
-             mut commands: Commands,
-             mut popover_state: ResMut<KeybindHelpPopover>,
-             registry: Res<crate::keybinds::KeybindRegistry>| {
-                // Toggle: if popover exists, despawn it
-                if let Some(entity) = popover_state.entity.take() {
-                    if let Ok(mut ec) = commands.get_entity(entity) {
-                        ec.despawn();
-                    }
-                    return;
-                }
-
-                let anchor = trigger.event_target();
-
-                let popover_entity = commands
-                    .spawn(popover::popover(
-                        popover::PopoverProps::new(anchor)
-                            .with_placement(popover::PopoverPlacement::BottomEnd)
-                            .with_padding(12.0)
-                            .with_z_index(200),
-                    ))
-                    .with_children(|parent| {
-                        parent
-                            .spawn(Node {
-                                flex_direction: FlexDirection::Column,
-                                max_height: px(500.0),
-                                overflow: Overflow::scroll_y(),
-                                ..Default::default()
-                            })
-                            .with_children(|scroll_parent| {
-                                spawn_keybind_help_content(scroll_parent, &registry);
-                            });
-                    })
-                    .id();
-
-                popover_state.entity = Some(popover_entity);
-            },
-        ),
-    )
-}
-
-fn spawn_keybind_help_content(
-    parent: &mut ChildSpawnerCommands,
-    registry: &crate::keybinds::KeybindRegistry,
-) {
-    use jackdaw_commands::keybinds::EditorAction;
-
-    // Mouse-only entries that can't be expressed as keybinds, grouped by category
-    let mouse_entries: &[(&str, &[(&str, &str)])] = &[
-        (
-            "Navigation",
-            &[
-                ("RMB + Drag", "Look around"),
-                ("Shift", "Double speed"),
-                ("Scroll", "Dolly forward/back"),
-                ("RMB + Scroll", "Adjust move speed"),
-            ],
-        ),
-        (
-            "Selection",
-            &[
-                ("LMB", "Select entity"),
-                ("Ctrl+Click", "Toggle multi-select"),
-                ("Shift+LMB Drag", "Box select"),
-            ],
-        ),
-        (
-            "Transform",
-            &[
-                ("MMB", "Toggle snap"),
-                ("Ctrl", "Toggle snap (during drag)"),
-            ],
-        ),
-        (
-            "Brush Edit",
-            &[
-                ("Shift+Click", "Multi-select"),
-                ("Click+Drag", "Move selected"),
-            ],
-        ),
-        (
-            "Draw Brush",
-            &[
-                ("Click", "Place vertex / advance"),
-                ("Right-click", "Cancel"),
-            ],
-        ),
-        ("View", &[("Ctrl+Alt+Scroll", "Grid size")]),
-    ];
-
-    // Build sections dynamically from registry
-    let category_order = [
-        "File",
-        "Entity",
-        "Transform",
-        "Brush Edit",
-        "Draw Brush",
-        "CSG",
-        "Gizmo",
-        "Navigation",
-        "View",
-    ];
-
-    // Also include Selection between Navigation and View
-    let display_order = [
-        "Navigation",
-        "Selection",
-        "Transform",
-        "Entity",
-        "Brush Edit",
-        "CSG",
-        "Draw Brush",
-        "Gizmo",
-        "View",
-        "File",
-    ];
-
-    for &section in &display_order {
-        let mut entries: Vec<(String, String)> = Vec::new();
-
-        // Add mouse entries for this section
-        for (cat, mouse_binds) in mouse_entries {
-            if *cat == section {
-                for (key, desc) in *mouse_binds {
-                    entries.push((key.to_string(), desc.to_string()));
-                }
-            }
-        }
-
-        // Add keybind entries for this section (if it's a real category)
-        if category_order.contains(&section) {
-            for &action in EditorAction::all() {
-                if action.category() != section {
-                    continue;
-                }
-                let bindings = registry.bindings.get(&action).cloned().unwrap_or_default();
-                if bindings.is_empty() {
-                    continue;
-                }
-                let key_str = bindings
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" / ");
-                entries.push((key_str, action.to_string()));
-            }
-        }
-
-        if entries.is_empty() {
-            continue;
-        }
-
-        // Section header
-        parent.spawn((
-            Text::new(section),
-            TextFont {
-                font_size: tokens::FONT_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-            Node {
-                margin: UiRect::top(px(tokens::SPACING_SM)),
-                ..Default::default()
-            },
-        ));
-
-        for (key, desc) in &entries {
-            parent.spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    column_gap: px(tokens::SPACING_LG),
-                    width: px(260.0),
-                    ..Default::default()
-                },
-                children![
-                    (
-                        Text::new(key.clone()),
-                        TextFont {
-                            font_size: tokens::FONT_SM,
-                            ..Default::default()
-                        },
-                        TextColor(tokens::TEXT_PRIMARY),
-                    ),
-                    (
-                        Text::new(desc.clone()),
-                        TextFont {
-                            font_size: tokens::FONT_SM,
-                            ..Default::default()
-                        },
-                        TextColor(tokens::TEXT_SECONDARY),
-                    )
-                ],
-            ));
-        }
-    }
 }
 
 pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {

@@ -282,7 +282,6 @@ impl Plugin for EditorCorePlugin {
             .insert_resource(UiTheme(create_dark_theme()))
             .init_resource::<layout::ActiveDocument>()
             .init_resource::<layout::SceneViewPreset>()
-            .init_resource::<layout::KeybindHelpPopover>()
             .init_resource::<asset_catalog::AssetCatalog>()
             .init_resource::<jackdaw_jsn::SceneJsnAst>()
             .init_resource::<MenuBarDirty>()
