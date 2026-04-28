@@ -135,6 +135,18 @@ impl OperatorEntity {
     }
 }
 
+/// Marker on a BEI action entity associating it with an operator id.
+/// Auto-inserted by [`crate::ExtensionContext::register_operator`] via
+/// an `On<Add, Action<Op>>` observer, so call sites that spawn
+/// `Action::<Op>::new()` don't need to do anything extra.
+///
+/// Lets systems (notably the tooltip pipeline) walk from operator id
+/// to the action entity's `Bindings` without needing the typed
+/// `Action<Op>` parameter, which would force a generic over the
+/// operator type.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct OperatorAction(pub &'static str);
+
 /// Tracks the currently-active modal operator. Exactly zero or one is
 /// active at any time; starting a second modal while one is running is
 /// refused.

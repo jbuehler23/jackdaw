@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  toolchain: nightly-2026-01-22
+  toolchain: nightly-2026-03-05
 
 jobs:
   publish:
@@ -36,39 +36,11 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
-      - name: Publish crates
+      - name: Publish workspace to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          # Publish in dependency order. Crates with no internal deps first,
-          # then crates that depend on them, and the root application last.
-          crates=(
-            jackdaw_geometry
-            jackdaw_widgets
-            jackdaw_commands
-            jackdaw_terrain
-            jackdaw_avian_integration
-            jackdaw_remote
-            jackdaw_panels
-            jackdaw_api_macros
-            jackdaw_api
-            jackdaw_jsn
-            jackdaw_camera
-            jackdaw_feathers
-            jackdaw_runtime
-            jackdaw_node_graph
-            jackdaw_animation
-          )
-
-          for crate in "${crates[@]}"; do
-            echo "::group::Publishing $crate"
-            cargo publish -p "$crate" --locked || echo "::warning::$crate publish failed (may already exist)"
-            echo "::endgroup::"
-            # Give the crates.io index time to update
-            sleep 30
-          done
-
-          # Publish the root application crate last
-          echo "::group::Publishing jackdaw"
-          cargo publish --locked
-          echo "::endgroup::"
+        # Cargo walks the workspace dependency graph, publishes in
+        # topological order, waits for the index to propagate between
+        # dependent crates, and skips members marked `publish = false`.
+        # Stabilized in Rust 1.90 (cargo 1.90).
+        run: cargo publish --workspace --locked

@@ -337,6 +337,39 @@ impl<'a> ExtensionContext<'a> {
         );
         self.world.spawn((observer, ChildOf(op_entity)));
 
+        // Auto-tag any BEI action entity for this operator with
+        // `OperatorAction(Op::ID)` so id-keyed lookups (tooltip
+        // keybind discovery, future command palette) can find the
+        // bindings without naming the typed `Action<Op>`. The
+        // observer covers future spawns; the immediate `query_mut`
+        // pass below covers entities already spawned before this
+        // call (some `add_to_extension` modules spawn actions first
+        // and register the operator afterwards).
+        let tag_observer = Observer::new(
+            move |trigger: bevy::prelude::On<
+                bevy::prelude::Add,
+                bevy_enhanced_input::prelude::Action<O>,
+            >,
+                  mut commands: Commands| {
+                commands
+                    .entity(trigger.event_target())
+                    .insert(crate::lifecycle::OperatorAction(O::ID));
+            },
+        );
+        self.world.spawn((tag_observer, ChildOf(op_entity)));
+
+        let existing: Vec<Entity> = self
+            .world
+            .query_filtered::<Entity, bevy::prelude::With<bevy_enhanced_input::prelude::Action<O>>>(
+            )
+            .iter(self.world)
+            .collect();
+        for entity in existing {
+            self.world
+                .entity_mut(entity)
+                .insert(crate::lifecycle::OperatorAction(O::ID));
+        }
+
         self
     }
 
