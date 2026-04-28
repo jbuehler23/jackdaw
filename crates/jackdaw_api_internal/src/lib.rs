@@ -59,6 +59,7 @@ use std::sync::Arc;
 
 use bevy::ecs::{system::IntoObserverSystem, world::EntityWorldMut};
 use bevy::prelude::*;
+use bevy_enhanced_input::prelude::{Action, Fire};
 use jackdaw_panels::{
     DockWindowDescriptor, WindowRegistry, WorkspaceDescriptor, WorkspaceRegistry,
 };
@@ -71,7 +72,7 @@ pub use jackdaw_api_macros as macros;
 pub use jackdaw_api_macros::operator;
 pub use jackdaw_jsn as jsn;
 
-use crate::lifecycle::{ExtensionResourceOf, ResourceId};
+use crate::lifecycle::{ExtensionResourceOf, OperatorAction, ResourceId};
 use crate::{
     lifecycle::{
         ExtensionKind, OperatorEntity, RegisteredMenuEntry, RegisteredWindow,
@@ -321,53 +322,39 @@ impl<'a> ExtensionContext<'a> {
             ))
             .id();
 
-        let observer = Observer::new(
-            move |_: bevy::prelude::On<bevy_enhanced_input::prelude::Fire<O>>,
-                  mut commands: Commands| {
-                commands.queue(move |world: &mut World| {
-                    world
-                        .operator(O::ID)
-                        .settings(CallOperatorSettings {
-                            execution_context: ExecutionContext::Invoke,
-                            creates_history_entry: true,
-                        })
-                        .call()
-                });
-            },
-        );
+        let observer = Observer::new(move |_: On<Fire<O>>, mut commands: Commands| {
+            commands.queue(move |world: &mut World| {
+                world
+                    .operator(O::ID)
+                    .settings(CallOperatorSettings {
+                        execution_context: ExecutionContext::Invoke,
+                        creates_history_entry: true,
+                    })
+                    .call()
+            });
+        });
         self.world.spawn((observer, ChildOf(op_entity)));
 
         // Auto-tag any BEI action entity for this operator with
         // `OperatorAction(Op::ID)` so id-keyed lookups (tooltip
         // keybind discovery, future command palette) can find the
         // bindings without naming the typed `Action<Op>`. The
-        // observer covers future spawns; the immediate `query_mut`
-        // pass below covers entities already spawned before this
-        // call (some `add_to_extension` modules spawn actions first
-        // and register the operator afterwards).
-        let tag_observer = Observer::new(
-            move |trigger: bevy::prelude::On<
-                bevy::prelude::Add,
-                bevy_enhanced_input::prelude::Action<O>,
-            >,
-                  mut commands: Commands| {
+        // observer covers future spawns; the immediate query pass
+        // below covers entities already spawned before this call
+        // (some `add_to_extension` modules spawn actions first and
+        // register the operator afterwards).
+        let tag_observer =
+            Observer::new(move |trigger: On<Add, Action<O>>, mut commands: Commands| {
                 commands
                     .entity(trigger.event_target())
-                    .insert(crate::lifecycle::OperatorAction(O::ID));
-            },
-        );
+                    .insert(OperatorAction(O::ID));
+            });
         self.world.spawn((tag_observer, ChildOf(op_entity)));
 
-        let existing: Vec<Entity> = self
-            .world
-            .query_filtered::<Entity, bevy::prelude::With<bevy_enhanced_input::prelude::Action<O>>>(
-            )
-            .iter(self.world)
-            .collect();
+        let mut existing_actions = self.world.query_filtered::<Entity, With<Action<O>>>();
+        let existing: Vec<Entity> = existing_actions.iter(self.world).collect();
         for entity in existing {
-            self.world
-                .entity_mut(entity)
-                .insert(crate::lifecycle::OperatorAction(O::ID));
+            self.world.entity_mut(entity).insert(OperatorAction(O::ID));
         }
 
         self

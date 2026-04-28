@@ -130,9 +130,9 @@ fn format_binding(binding: Binding) -> Option<String> {
         }
         Binding::MouseButton { button, mod_keys } => {
             let button_name = match button {
-                MouseButton::Left => "LMB",
-                MouseButton::Right => "RMB",
-                MouseButton::Middle => "MMB",
+                MouseButton::Left => "Mouse Left",
+                MouseButton::Right => "Mouse Right",
+                MouseButton::Middle => "Mouse Middle",
                 MouseButton::Back => "Mouse Back",
                 MouseButton::Forward => "Mouse Forward",
                 MouseButton::Other(_) => return None,
@@ -188,7 +188,7 @@ mod tests {
             button: MouseButton::Left,
             mod_keys: ModKeys::ALT,
         };
-        assert_eq!(format_binding(binding).as_deref(), Some("Alt + LMB"));
+        assert_eq!(format_binding(binding).as_deref(), Some("Alt + Mouse Left"));
     }
 
     #[test]

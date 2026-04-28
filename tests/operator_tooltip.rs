@@ -98,8 +98,8 @@ fn tooltip_joins_multiple_bindings() {
 
 /// `viewport.draw_brush_modal` mixes a key (`B`) with a mouse button
 /// (`Mouse Back`). Both should appear in the tooltip; mouse-button
-/// glyphs use the friendly aliases (`LMB` / `RMB` / `Mouse Back` /
-/// ...) instead of the raw enum name.
+/// glyphs use the friendly aliases (`Mouse Left` / `Mouse Right` /
+/// `Mouse Back` / ...) instead of the raw enum name.
 #[test]
 fn tooltip_includes_mouse_button_bindings() {
     let mut app = util::editor_test_app();

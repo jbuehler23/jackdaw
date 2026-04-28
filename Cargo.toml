@@ -8,17 +8,7 @@ repository = "https://github.com/jbuehler23/jackdaw"
 readme = "README.md"
 keywords = ["bevy", "editor", "3d", "level-editor"]
 categories = ["game-development", "graphics"]
-include = [
-    "src/**/*",
-    "examples/**/*",
-    "tests/**/*",
-    "Cargo.toml",
-    "Cargo.lock",
-    "LICENSE-*",
-    "README.md",
-    "assets/environment_maps/**/*",
-    "assets/textures/jd_grid.png",
-]
+exclude = ["assets/environment_maps/"]
 
 [features]
 default = []
