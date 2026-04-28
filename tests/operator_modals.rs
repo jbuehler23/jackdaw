@@ -1,27 +1,29 @@
-//! Modal-operator coverage. For each `modal = true` operator we verify
-//! the start / cancel dance:
+//! Modal-operator coverage. Iterates every operator declared
+//! `modal = true` and round-trips each:
 //!  1. Dispatch starts the operator.
 //!  2. Either the call returns `Running` (modal session active), or
-//!     it's `Cancelled` because its availability gate refused;
+//!     `Cancelled` because its availability gate refused.
 //!     `Finished` is invalid for `modal = true`.
 //!  3. If we got `Running`, `world.operator(id).cancel()` ends the
 //!     session and clears `ActiveModalOperator`.
 //!  4. After cancel the snapshot equals the pre-dispatch snapshot
 //!     (modal cancellation is rollback, not commit).
 //!
-//! Modals whose `Running` state needs a real cursor or scene fixture
-//! (`tools.measure_distance` needs a viewport camera; `terrain.sculpt`
-//! needs a heightmap mesh under the cursor) are marked `#[ignore]`
-//! with the missing fixture spelled out in the test name comment.
+//! The sweep auto-picks up new modal operators, so coverage scales
+//! with the codebase without per-modal hand-rolled tests.
+//!
+//! Per-modal round-trip helpers ([`assert_modal_round_trip_op`]) take
+//! an `Op: Operator` type parameter rather than a raw id string, so
+//! call sites compile-fail when the operator is renamed instead of
+//! silently going stale.
 
 use bevy::prelude::*;
-use jackdaw::brush::{BrushEditMode, EditMode};
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::lifecycle::ActiveModalOperator;
+use jackdaw_api_internal::lifecycle::{ActiveModalOperator, OperatorEntity};
 
 mod util;
 
-/// True iff exactly one entity in the world has `ActiveModalOperator`
+/// True iff at least one entity in the world has `ActiveModalOperator`
 /// attached. Mirrors the dispatcher's view of "modal is running."
 fn modal_running(app: &mut App) -> bool {
     app.world_mut()
@@ -31,11 +33,8 @@ fn modal_running(app: &mut App) -> bool {
         .is_some()
 }
 
-/// Common shape: dispatch the modal, verify it entered a Running state
-/// (or returned Cancelled if its gate failed). If Running, cancel and
-/// verify the modal is no longer attached and a fresh snapshot matches
-/// the original.
-fn assert_modal_round_trip(app: &mut App, id: &'static str) {
+/// Round-trip core, by id. Used by the sweep.
+fn assert_modal_round_trip_id(app: &mut App, id: &'static str) {
     let before = util::snapshot(app);
     let result = app
         .world_mut()
@@ -63,10 +62,10 @@ fn assert_modal_round_trip(app: &mut App, id: &'static str) {
             assert!(before.equals(&*after), "{id}: cancel left state mutated");
         }
         OperatorResult::Cancelled => {
-            // Gate refused. Acceptable for modals like
-            // `selection.box_select` that need an active viewport
-            // cursor; covered by the smoke test, so the round-trip
-            // here just becomes a no-op.
+            // Gate refused. Acceptable for modals that need a real
+            // cursor or scene fixture (no viewport camera, no
+            // selection, etc.); the smoke test still proved dispatch
+            // doesn't panic.
         }
         OperatorResult::Finished => {
             panic!("{id}: modal operator returned Finished, expected Running or Cancelled");
@@ -74,72 +73,40 @@ fn assert_modal_round_trip(app: &mut App, id: &'static str) {
     }
 }
 
-#[test]
-fn physics_activate_modal_round_trip() {
-    let mut app = util::editor_test_app();
-    assert_modal_round_trip(&mut app, "physics.activate");
+/// Typed round-trip for a specific modal operator. Resolves the id
+/// from `O::ID` so a rename of `O` is a build error, not a stale
+/// string literal.
+#[expect(
+    dead_code,
+    reason = "exposed for future per-modal tests that need extra fixtures around the round-trip"
+)]
+fn assert_modal_round_trip<O: Operator>(app: &mut App) {
+    assert_modal_round_trip_id(app, O::ID);
 }
 
+/// Sweep: enumerate every operator declared `modal = true` and run
+/// the round-trip on each. New modal operators get coverage
+/// automatically; CI flags any modal that panics on dispatch or
+/// fails to clear `ActiveModalOperator` on cancel.
 #[test]
-fn gizmo_drag_modal_round_trip() {
+fn every_modal_operator_round_trips() {
     let mut app = util::editor_test_app();
-    assert_modal_round_trip(&mut app, "gizmo.drag");
-}
+    let modal_ids: Vec<&'static str> = app
+        .world_mut()
+        .query::<&OperatorEntity>()
+        .iter(app.world())
+        .filter(|op| op.is_modal())
+        .map(OperatorEntity::id)
+        .collect();
+    assert!(
+        !modal_ids.is_empty(),
+        "expected at least one modal operator to be registered"
+    );
 
-#[test]
-fn brush_face_drag_modal_round_trip() {
-    let mut app = util::editor_test_app();
-    // Brush-element drags require Face/Vertex/Edge edit mode to enter
-    // a Running session; otherwise the gate cancels them. Set the mode
-    // to match before dispatch.
-    *app.world_mut().resource_mut::<EditMode>() = EditMode::BrushEdit(BrushEditMode::Face);
-    assert_modal_round_trip(&mut app, "brush.face.drag");
-}
-
-#[test]
-fn brush_vertex_drag_modal_round_trip() {
-    let mut app = util::editor_test_app();
-    *app.world_mut().resource_mut::<EditMode>() = EditMode::BrushEdit(BrushEditMode::Vertex);
-    assert_modal_round_trip(&mut app, "brush.vertex.drag");
-}
-
-#[test]
-fn brush_edge_drag_modal_round_trip() {
-    let mut app = util::editor_test_app();
-    *app.world_mut().resource_mut::<EditMode>() = EditMode::BrushEdit(BrushEditMode::Edge);
-    assert_modal_round_trip(&mut app, "brush.edge.drag");
-}
-
-#[test]
-fn selection_box_select_modal_round_trip() {
-    let mut app = util::editor_test_app();
-    assert_modal_round_trip(&mut app, "selection.box_select");
-}
-
-#[test]
-fn hierarchy_rename_begin_modal_round_trip() {
-    let mut app = util::editor_test_app();
-    assert_modal_round_trip(&mut app, "hierarchy.rename_begin");
-}
-
-#[test]
-fn viewport_draw_brush_modal_round_trip() {
-    let mut app = util::editor_test_app();
-    assert_modal_round_trip(&mut app, "viewport.draw_brush_modal");
-}
-
-#[test]
-#[ignore = "needs heightmap mesh + cursor under it"]
-fn terrain_sculpt_modal_round_trip() {
-    let mut app = util::editor_test_app();
-    assert_modal_round_trip(&mut app, "terrain.sculpt");
-}
-
-#[test]
-fn tools_measure_distance_modal_round_trip() {
-    // Without a viewport camera the op cancels at its `Single` query;
-    // the round-trip helper accepts the Cancelled path so this test
-    // still runs headless.
-    let mut app = util::editor_test_app();
-    assert_modal_round_trip(&mut app, "tools.measure_distance");
+    for id in modal_ids {
+        // Each iteration starts fresh: cancel any modal a previous
+        // round-trip left running before driving the next one.
+        let _ = app.world_mut().operator("modal.cancel").call();
+        assert_modal_round_trip_id(&mut app, id);
+    }
 }

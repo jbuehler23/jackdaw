@@ -553,7 +553,7 @@ fn toolbar(icon_font: Handle<Font>) -> impl Bundle {
 }
 
 /// Built-in gizmo-mode toolbar button. Hand-rolled rather than going
-/// through [`feathers::button`] because [`update_toolbar_highlights`]
+/// through `jackdaw_feathers::button` because [`update_toolbar_highlights`]
 /// drives `BackgroundColor` directly per active mode and would race
 /// with the feathers `handle_hover` system. Extensions adding their
 /// own toolbar entries should prefer
@@ -666,7 +666,7 @@ fn toolbar_space_button(icon_font: Handle<Font>) -> impl Bundle {
 /// so extensions can add their own entries via
 /// `toolbar_edit_button::<MyOp>(Icon::Pencil, font)`.
 ///
-/// Hand-rolled rather than going through [`feathers::button`]
+/// Hand-rolled rather than going through `jackdaw_feathers::button`
 /// because [`update_edit_tool_highlights`] mutates `BackgroundColor`
 /// per active edit mode, which would race with the feathers
 /// `handle_hover` system. Extensions whose toolbar entries don't

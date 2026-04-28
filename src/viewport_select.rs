@@ -325,7 +325,7 @@ fn box_select_invoke_trigger(
     modal = true,
     cancel = cancel_box_select,
 )]
-pub(crate) fn box_select(
+pub fn box_select(
     _: In<OperatorParameters>,
     mouse: Res<ButtonInput<MouseButton>>,
     vp: ViewportCursor,

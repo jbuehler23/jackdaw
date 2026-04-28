@@ -72,7 +72,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     modal = true,
     cancel = cancel_physics_activate,
 )]
-pub(crate) fn physics_activate(
+pub fn physics_activate(
     _: In<OperatorParameters>,
     mut edit_mode: ResMut<EditMode>,
     mut draw_state: ResMut<DrawBrushState>,

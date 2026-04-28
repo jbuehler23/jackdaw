@@ -103,7 +103,7 @@ pub(crate) fn face_drag_invoke_trigger(
     allows_undo = false,
     cancel = cancel_face_drag,
 )]
-pub(crate) fn brush_face_drag(
+pub fn brush_face_drag(
     _: In<OperatorParameters>,
     mut edit_mode: ResMut<EditMode>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -530,7 +530,7 @@ pub(crate) fn vertex_drag_invoke_trigger(
     allows_undo = false,
     cancel = cancel_vertex_drag,
 )]
-pub(crate) fn brush_vertex_drag(
+pub fn brush_vertex_drag(
     _: In<OperatorParameters>,
     mut edit_mode: ResMut<EditMode>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -840,7 +840,7 @@ pub(crate) fn edge_drag_invoke_trigger(
     allows_undo = false,
     cancel = cancel_edge_drag,
 )]
-pub(crate) fn brush_edge_drag(
+pub fn brush_edge_drag(
     _: In<OperatorParameters>,
     mut edit_mode: ResMut<EditMode>,
     mouse: Res<ButtonInput<MouseButton>>,

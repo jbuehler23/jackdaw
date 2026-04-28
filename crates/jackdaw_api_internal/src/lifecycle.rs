@@ -116,6 +116,19 @@ impl OperatorEntity {
     pub fn parameters(&self) -> &'static [crate::operator::ParamSpec] {
         self.parameters
     }
+
+    /// True if this operator is declared `modal = true`. Modal ops
+    /// can return `OperatorResult::Running` to enter a multi-frame
+    /// session that the dispatcher manages via `ActiveModalOperator`.
+    pub fn is_modal(&self) -> bool {
+        self.modal
+    }
+
+    /// True if a successful call should push an undo entry. Mirrors
+    /// the operator's `allows_undo = ...` flag.
+    pub fn allows_undo(&self) -> bool {
+        self.allows_undo
+    }
 }
 
 /// Tracks the currently-active modal operator. Exactly zero or one is

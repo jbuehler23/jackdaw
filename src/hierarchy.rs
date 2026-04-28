@@ -1183,7 +1183,7 @@ impl Command for RestoreLabel {
     is_available = no_rename_in_progress,
     params(entity(Entity, doc = "Scene entity to rename.")),
 )]
-pub(crate) fn rename_begin(
+pub fn rename_begin(
     params: In<OperatorParameters>,
     mut commands: Commands,
     tree_index: Res<TreeIndex>,
