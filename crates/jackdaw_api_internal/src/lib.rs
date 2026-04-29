@@ -333,7 +333,7 @@ impl<'a> ExtensionContext<'a> {
                     .call()
             });
         });
-        self.world.spawn((observer, ChildOf(op_entity)));
+        self.world.entity_mut(op_entity).with_child(observer);
 
         // Auto-tag any BEI action entity for this operator with
         // `OperatorAction(Op::ID)` so id-keyed lookups (tooltip
@@ -349,13 +349,11 @@ impl<'a> ExtensionContext<'a> {
                     .entity(trigger.event_target())
                     .insert(OperatorAction(O::ID));
             });
-        self.world.spawn((tag_observer, ChildOf(op_entity)));
+        self.world.entity_mut(op_entity).with_child(tag_observer);
 
-        let mut existing_actions = self.world.query_filtered::<Entity, With<Action<O>>>();
-        let existing: Vec<Entity> = existing_actions.iter(self.world).collect();
-        for entity in existing {
-            self.world.entity_mut(entity).insert(OperatorAction(O::ID));
-        }
+        self.world
+            .run_system_cached(tag_existing_actions::<O>)
+            .expect("tag_existing_actions failed");
 
         self
     }
@@ -409,6 +407,20 @@ impl<'a> ExtensionContext<'a> {
             label: O::LABEL.to_string(),
             operator_id: O::ID,
         })
+    }
+}
+
+/// Tag any `Action<O>` entities that already exist with `OperatorAction(O::ID)`.
+/// Run from `register_operator` to cover the case where action entities were
+/// spawned before the operator was registered. Bevy caches the `QueryState`
+/// across calls when this is invoked via `run_system_cached`.
+fn tag_existing_actions<O: Operator>(
+    world: &mut World,
+    actions: &mut QueryState<Entity, With<Action<O>>>,
+) {
+    let existing: Vec<Entity> = actions.iter(world).collect();
+    for entity in existing {
+        world.entity_mut(entity).insert(OperatorAction(O::ID));
     }
 }
 

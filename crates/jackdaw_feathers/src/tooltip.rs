@@ -224,7 +224,7 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
         ));
         return;
     }
-    let row = commands
+    commands
         .spawn((
             Node {
                 flex_direction: FlexDirection::Row,
@@ -234,26 +234,23 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
             },
             ChildOf(popover),
         ))
-        .id();
-    commands.spawn((
-        Text::new(tip.title.clone()),
-        TextFont {
-            font_size: tokens::FONT_SM,
-            weight: FontWeight::MEDIUM,
-            ..default()
-        },
-        TextColor(tokens::TEXT_PRIMARY),
-        ChildOf(row),
-    ));
-    commands.spawn((
-        Text::new(tip.keybind.clone()),
-        TextFont {
-            font_size: tokens::FONT_SM,
-            ..default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(row),
-    ));
+        .with_child((
+            Text::new(tip.title.clone()),
+            TextFont {
+                font_size: tokens::FONT_SM,
+                weight: FontWeight::MEDIUM,
+                ..default()
+            },
+            TextColor(tokens::TEXT_PRIMARY),
+        ))
+        .with_child((
+            Text::new(tip.keybind.clone()),
+            TextFont {
+                font_size: tokens::FONT_SM,
+                ..default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+        ));
 }
 
 /// Description + footer appended below the title (stage 2). Description
