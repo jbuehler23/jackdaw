@@ -84,7 +84,7 @@ use crate::{
 
 pub use jackdaw_panels::area::{DefaultArea, ToAnchorId};
 pub use lifecycle::{ActiveModalOperator, Extension, ExtensionCatalog};
-pub use operator::{CallOperatorError, OperatorResult, OperatorWorldExt as _};
+pub use operator::{CallOperatorError, OperatorResult, OperatorWorldExt};
 pub use pie::PlayState;
 pub use snapshot::SceneSnapshotter;
 
