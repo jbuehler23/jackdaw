@@ -6,6 +6,7 @@ use jackdaw_feathers::picker::{
     Matchable, PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text, picker_item,
 };
 use jackdaw_feathers::tokens;
+use jackdaw_feathers::tooltip::Tooltip;
 
 use crate::core_extension::CoreExtensionInputContext;
 
@@ -86,6 +87,7 @@ fn get_operators(
         .iter(world)
         .map(|op| RegisteredOperator {
             label: op.label(),
+            description: op.description(),
             id: op.id(),
         })
         .collect::<Vec<_>>() // if i don't collect, it's a double borrow of `world`
@@ -119,8 +121,11 @@ fn spawn_item(
                     TextFont::from(font.0.clone()).with_font_size(tokens::TEXT_SIZE_SM),
                     TextColor(tokens::TEXT_MUTED_COLOR.into())
                 )
-            ]
+            ],
         )],
+        Tooltip::title(item.label)
+            .with_description(item.description)
+            .with_footer(item.id),
     ));
     Ok(())
 }
@@ -142,6 +147,7 @@ fn on_select(
 #[derive(Debug, PartialEq, Clone, Copy)]
 struct RegisteredOperator {
     label: &'static str,
+    description: &'static str,
     id: &'static str,
 }
 

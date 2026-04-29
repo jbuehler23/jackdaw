@@ -330,7 +330,7 @@ impl<T: Pickable> PickerProps<T> {
                     ..default()
                 },
                 PickerItems(items.into_boxed_slice()),
-                GlobalZIndex(1000),
+                GlobalZIndex(200),
                 picker,
             ))
             .add_one_related::<PickerInputOf>(input)
