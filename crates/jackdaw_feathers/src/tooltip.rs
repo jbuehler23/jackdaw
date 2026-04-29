@@ -48,15 +48,21 @@ const TOOLTIP_PADDING: f32 = 10.0;
 /// [`Hovered`] to make it surface a popover after a short hover
 /// delay (300 ms).
 ///
-/// All three fields are plain strings; empty strings render no line
-/// (so a title-only tooltip skips the description and footer
-/// children, leaving a tight one-line popover). Builder methods
-/// [`Tooltip::title`] / [`Tooltip::with_description`] /
-/// [`Tooltip::with_footer`] make construction terse.
+/// All four fields are plain strings; empty strings render no line
+/// (so a title-only tooltip skips the description, keybind, and
+/// footer children, leaving a tight one-line popover). Builder
+/// methods [`Tooltip::title`] / [`Tooltip::with_description`] /
+/// [`Tooltip::with_keybind`] / [`Tooltip::with_footer`] make
+/// construction terse.
 #[derive(Component, Clone, Debug, Default)]
 pub struct Tooltip {
     /// Bold first line. Operator label, component short name, etc.
     pub title: String,
+    /// Muted suffix on the title row (operator keybind, etc.).
+    /// Rendered right-aligned next to the title in stage 1 so it
+    /// shows on the short hover, not just the long-hover full popup.
+    /// Empty = skipped.
+    pub keybind: String,
     /// Wrapped paragraph below the title. Empty = skipped.
     pub description: String,
     /// Dim trailing line (operator signature, rust type path, etc.).
@@ -68,6 +74,7 @@ impl Tooltip {
     pub fn title(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),
+            keybind: String::new(),
             description: String::new(),
             footer: String::new(),
         }
@@ -76,6 +83,12 @@ impl Tooltip {
     #[must_use]
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_keybind(mut self, keybind: impl Into<String>) -> Self {
+        self.keybind = keybind.into();
         self
     }
 
@@ -188,21 +201,56 @@ fn tick_tooltip(
     }
 }
 
-/// Title-only popover content (stage 1).
+/// Title-only popover content (stage 1). When the tooltip carries a
+/// keybind, lay it out as a row: bold title on the left, muted
+/// keybind on the right with a small gap. The popover's column
+/// flow shrinks the row to its content width, so the keybind stays
+/// adjacent to the title rather than stretching across the full
+/// `TOOLTIP_MAX_WIDTH`.
 fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
     if tip.title.is_empty() {
         return;
     }
-    commands.spawn((
-        Text::new(tip.title.clone()),
-        TextFont {
-            font_size: tokens::FONT_SM,
-            weight: FontWeight::MEDIUM,
-            ..default()
-        },
-        TextColor(tokens::TEXT_PRIMARY),
-        ChildOf(popover),
-    ));
+    if tip.keybind.is_empty() {
+        commands.spawn((
+            Text::new(tip.title.clone()),
+            TextFont {
+                font_size: tokens::FONT_SM,
+                weight: FontWeight::MEDIUM,
+                ..default()
+            },
+            TextColor(tokens::TEXT_PRIMARY),
+            ChildOf(popover),
+        ));
+        return;
+    }
+    commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(tokens::SPACING_MD),
+                ..default()
+            },
+            ChildOf(popover),
+        ))
+        .with_child((
+            Text::new(tip.title.clone()),
+            TextFont {
+                font_size: tokens::FONT_SM,
+                weight: FontWeight::MEDIUM,
+                ..default()
+            },
+            TextColor(tokens::TEXT_PRIMARY),
+        ))
+        .with_child((
+            Text::new(tip.keybind.clone()),
+            TextFont {
+                font_size: tokens::FONT_SM,
+                ..default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+        ));
 }
 
 /// Description + footer appended below the title (stage 2). Description

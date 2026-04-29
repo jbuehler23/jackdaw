@@ -59,11 +59,12 @@ use std::sync::Arc;
 
 use bevy::ecs::{system::IntoObserverSystem, world::EntityWorldMut};
 use bevy::prelude::*;
+use bevy_enhanced_input::prelude::{Action, Fire};
 use jackdaw_panels::{
     DockWindowDescriptor, WindowRegistry, WorkspaceDescriptor, WorkspaceRegistry,
 };
 
-use operator::{CallOperatorSettings, Operator, OperatorWorldExt};
+use operator::{CallOperatorSettings, Operator};
 use registries::WindowExtensionRegistry;
 use snapshot::{ActiveSnapshotter, SceneSnapshot};
 
@@ -71,7 +72,8 @@ pub use jackdaw_api_macros as macros;
 pub use jackdaw_api_macros::operator;
 pub use jackdaw_jsn as jsn;
 
-use crate::lifecycle::{ExtensionResourceOf, ResourceId};
+use crate::lifecycle::{ExtensionResourceOf, OperatorAction, ResourceId};
+use crate::operator::OperatorCommandsExt as _;
 use crate::{
     lifecycle::{
         ExtensionKind, OperatorEntity, RegisteredMenuEntry, RegisteredWindow,
@@ -82,7 +84,7 @@ use crate::{
 
 pub use jackdaw_panels::area::{DefaultArea, ToAnchorId};
 pub use lifecycle::{ActiveModalOperator, Extension, ExtensionCatalog};
-pub use operator::{CallOperatorError, OperatorResult, OperatorWorldExt as _};
+pub use operator::{CallOperatorError, OperatorResult, OperatorWorldExt};
 pub use pie::PlayState;
 pub use snapshot::SceneSnapshotter;
 
@@ -302,40 +304,49 @@ impl<'a> ExtensionContext<'a> {
             (execute, invoke, availability_check, cancel)
         };
 
-        let op_entity = self
-            .world
-            .spawn((
-                OperatorEntity {
-                    id: O::ID,
-                    label: O::LABEL,
-                    description: O::DESCRIPTION,
-                    parameters: O::PARAMETERS,
-                    execute,
-                    invoke,
-                    availability_check,
-                    cancel,
-                    modal: O::MODAL,
-                    allows_undo: O::ALLOWS_UNDO,
-                },
-                ChildOf(ext),
-            ))
-            .id();
-
-        let observer = Observer::new(
-            move |_: bevy::prelude::On<bevy_enhanced_input::prelude::Fire<O>>,
-                  mut commands: Commands| {
-                commands.queue(move |world: &mut World| {
-                    world
+        self.world.spawn((
+            OperatorEntity {
+                id: O::ID,
+                label: O::LABEL,
+                description: O::DESCRIPTION,
+                parameters: O::PARAMETERS,
+                execute,
+                invoke,
+                availability_check,
+                cancel,
+                modal: O::MODAL,
+                allows_undo: O::ALLOWS_UNDO,
+            },
+            ChildOf(ext),
+            children![
+                Observer::new(move |_: On<Fire<O>>, mut commands: Commands| {
+                    commands
                         .operator(O::ID)
                         .settings(CallOperatorSettings {
                             execution_context: ExecutionContext::Invoke,
                             creates_history_entry: true,
                         })
-                        .call()
-                });
-            },
-        );
-        self.world.spawn((observer, ChildOf(op_entity)));
+                        .call();
+                },),
+                // Auto-tag any BEI action entity for this operator with
+                // `OperatorAction(Op::ID)` so id-keyed lookups (tooltip
+                // keybind discovery, future command palette) can find the
+                // bindings without naming the typed `Action<Op>`. The
+                // observer covers future spawns; the immediate query pass
+                // below covers entities already spawned before this call
+                // (some `add_to_extension` modules spawn actions first and
+                // register the operator afterwards).
+                Observer::new(move |trigger: On<Add, Action<O>>, mut commands: Commands| {
+                    commands
+                        .entity(trigger.event_target())
+                        .insert(OperatorAction(O::ID));
+                })
+            ],
+        ));
+
+        if let Err(err) = self.world.run_system_cached(tag_existing_actions::<O>) {
+            error!("Failed to tag existing actions: {}", err);
+        }
 
         self
     }
@@ -389,6 +400,20 @@ impl<'a> ExtensionContext<'a> {
             label: O::LABEL.to_string(),
             operator_id: O::ID,
         })
+    }
+}
+
+/// Tag any `Action<O>` entities that already exist with `OperatorAction(O::ID)`.
+/// Run from `register_operator` to cover the case where action entities were
+/// spawned before the operator was registered. Bevy caches the `QueryState`
+/// across calls when this is invoked via `run_system_cached`.
+fn tag_existing_actions<O: Operator>(
+    world: &mut World,
+    actions: &mut QueryState<Entity, With<Action<O>>>,
+) {
+    let existing: Vec<Entity> = actions.iter(world).collect();
+    for entity in existing {
+        world.entity_mut(entity).insert(OperatorAction(O::ID));
     }
 }
 
