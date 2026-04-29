@@ -306,5 +306,4 @@ impl Matchable for AddMenuItem {
     fn category(&self) -> Category {
         self.category.clone()
     }
-    OperatorResult::Finished
 }
