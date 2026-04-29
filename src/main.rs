@@ -7,6 +7,19 @@ use bevy::{
 use jackdaw::prelude::*;
 
 fn main() -> AppExit {
+    // CLI mode: `jackdaw <op-id> '<json-params>'` runs an operator
+    // headlessly and exits. Detected before the GUI runner sets up
+    // anything heavy. The first positional arg containing a `.` is
+    // treated as an operator id (operator ids are dotted strings
+    // like `project.new`). Anything else falls through to the GUI.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(op_id) = args.first()
+        && op_id.contains('.')
+    {
+        let params_json = args.get(1).map_or("{}", String::as_str);
+        return run_headless_operator(op_id, params_json);
+    }
+
     // Install a SIGINT/SIGTERM handler before anything else gets a
     // chance to. Something in the dep tree (wgpu, gilrs, or one of
     // their transitive deps) installs its own `ctrlc` handler that
@@ -102,4 +115,111 @@ fn error_handler(error: BevyError, ctx: ErrorContext) {
         return;
     }
     bevy::ecs::error::error(error, ctx);
+}
+
+/// Boot a minimal `App` (no windowing, no rendering), register the
+/// jackdaw operator catalog, dispatch the requested operator with
+/// the JSON-decoded params, then exit.
+///
+/// Used by CI for the template roundtrip (`jackdaw project.new
+/// '{...}'`) and by power users who want to script the editor from
+/// the shell. Returns an `AppExit` whose code is 0 on
+/// `OperatorResult::Finished` and 1 on any failure path.
+///
+/// Uses `eprintln!` for diagnostics so output lands on stderr
+/// regardless of whether `LogPlugin` is configured for the headless
+/// build.
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI mode is a stderr-driven shell tool"
+)]
+fn run_headless_operator(op_id: &str, params_json: &str) -> AppExit {
+    use jackdaw::project_ops; // keep the operator's static-init reachable
+    let _ = &project_ops::ProjectNewOp; // referencing the type ensures the operator's `register_*` SystemIds are wired
+
+    let params = match parse_params_json(params_json) {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("jackdaw: failed to parse params JSON: {err}");
+            return AppExit::error();
+        }
+    };
+
+    // Headless app: no winit, no render, no UI plugins. We just need
+    // the editor's operator catalog wired up so dispatch finds the
+    // requested id.
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(EditorPlugins::default());
+
+    // `App::run` would block forever in the standard runner because
+    // the editor's GUI plugins set up an event loop. For headless
+    // mode we want one update tick (extension registration runs in
+    // PostStartup), then the operator dispatch, then exit.
+    app.update();
+
+    let world = app.world_mut();
+    let mut builder = world.operator(op_id.to_string());
+    for (k, v) in params.0 {
+        builder = builder.param(k, v);
+    }
+    let result = builder.call();
+
+    // Run one more update tick so any commands the operator queued
+    // actually execute against the world before we exit. (Operators
+    // typically use `commands.queue(...)` for the heavy lifting.)
+    app.update();
+
+    match result {
+        Ok(jackdaw_api::op::OperatorResult::Finished)
+        | Ok(jackdaw_api::op::OperatorResult::Running) => AppExit::Success,
+        Ok(jackdaw_api::op::OperatorResult::Cancelled) => {
+            eprintln!("jackdaw: operator `{op_id}` returned Cancelled");
+            AppExit::error()
+        }
+        Err(err) => {
+            eprintln!("jackdaw: operator dispatch failed: {err:?}");
+            AppExit::error()
+        }
+    }
+}
+
+/// Parse a JSON object into [`OperatorParameters`]. Supports the
+/// subset of `PropertyValue` types the CLI realistically needs:
+/// strings, numbers, booleans. Vec / colour / entity values aren't
+/// expressible in JSON in a stable form yet; reject those with a
+/// clear error.
+fn parse_params_json(s: &str) -> Result<jackdaw_api::op::OperatorParameters, String> {
+    use jackdaw_jsn::PropertyValue;
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+
+    let v: Value = serde_json::from_str(s).map_err(|e| e.to_string())?;
+    let Value::Object(map) = v else {
+        return Err("top-level must be a JSON object".to_string());
+    };
+
+    let mut out: BTreeMap<String, PropertyValue> = BTreeMap::new();
+    for (k, v) in map {
+        let pv = match v {
+            Value::Bool(b) => PropertyValue::Bool(b),
+            Value::String(s) => PropertyValue::String(s.into()),
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    PropertyValue::Int(i)
+                } else if let Some(f) = n.as_f64() {
+                    PropertyValue::Float(f)
+                } else {
+                    return Err(format!("`{k}`: number out of supported range"));
+                }
+            }
+            other => {
+                return Err(format!(
+                    "`{k}`: unsupported JSON type {other:?} (want bool/number/string)"
+                ));
+            }
+        };
+        out.insert(k, pv);
+    }
+    Ok(jackdaw_api::op::OperatorParameters(out))
 }

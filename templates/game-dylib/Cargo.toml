@@ -1,0 +1,34 @@
+[package]
+name = "{{project-name}}"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Dual crate-type: `cdylib` produces the `.so`/`.dll`/`.dylib` the
+# editor's loader dlopens; `rlib` lets `bin/editor.rs` link the same
+# plugin in for `cargo editor` runs without going through the loader.
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+# `cargo run --bin editor` (or `cargo editor`) opens the editor.
+# There's no standalone runner — dylib games run only inside the
+# editor process; the loader installs them either via dlopen or via
+# this binary's static link.
+[[bin]]
+name = "editor"
+path = "src/bin/editor.rs"
+
+[features]
+default = []
+# Function-body hot-patching for sub-second iteration on system
+# bodies. Complements (doesn't replace) the editor's `.so` swap
+# which can additionally add/remove systems and change types.
+hot-reload = ["dep:bevy_simple_subsecond_system"]
+
+[dependencies]
+bevy = "0.18"
+jackdaw = { version = "0.4", features = ["dylib"] }
+jackdaw_api = { version = "0.4", features = ["dynamic_linking"] }
+jackdaw_runtime = "0.4"
+bevy_simple_subsecond_system = { version = "0.2", optional = true }

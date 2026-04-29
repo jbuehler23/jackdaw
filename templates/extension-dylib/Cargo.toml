@@ -1,0 +1,16 @@
+[package]
+name = "{{project-name}}"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Dual crate-type: `cdylib` for runtime dlopen by the editor's
+# loader, `rlib` so downstream static binaries can link the
+# extension directly.
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+bevy = "0.18"
+jackdaw_api = { version = "0.4", features = ["dynamic_linking"] }

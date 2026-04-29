@@ -13,6 +13,7 @@ bevy.workspace = true
 # editor-only registration helpers that `jackdaw_api` deliberately
 # keeps out of the public surface for third-party extensions.
 jackdaw_api_internal.workspace = true
+jackdaw_runtime.workspace = true
 libloading = "0.8"
 dirs.workspace = true
 

@@ -17,8 +17,17 @@ use serde::de::{DeserializeSeed, Visitor};
 
 pub use jackdaw_jsn::{Brush, BrushFaceData, CustomProperties, GltfSource, PropertyValue};
 
+pub mod sub_app;
+pub use sub_app::{GameSubApp, GameSubAppHolder, create_game_sub_app};
+
+pub mod extract;
+pub use extract::{GameEntityMap, MainEntity, SceneEntity, extract_scene_entities};
+
 pub mod prelude {
-    pub use crate::{JackdawPlugin, JackdawSceneRoot};
+    pub use crate::{
+        GameEntityMap, GameSubApp, GameSubAppHolder, JackdawPlugin, JackdawSceneRoot, MainEntity,
+        SceneEntity, create_game_sub_app, extract_scene_entities,
+    };
 }
 
 pub struct JackdawPlugin;
@@ -34,7 +43,8 @@ impl Plugin for JackdawPlugin {
             .register_type::<jackdaw_jsn::GltfSource>()
             .register_type::<jackdaw_jsn::JsnPrefab>()
             .register_type::<jackdaw_jsn::NavmeshRegion>()
-            .register_type::<jackdaw_jsn::Terrain>();
+            .register_type::<jackdaw_jsn::Terrain>()
+            .register_type::<crate::extract::SceneEntity>();
 
         app.init_asset::<JackdawScene>()
             .init_asset_loader::<JackdawSceneLoader>();
@@ -153,7 +163,12 @@ fn spawn_scene_entities(
 
     let mut spawned: Vec<Entity> = Vec::new();
     for _ in entities {
-        spawned.push(world.spawn_empty().id());
+        // Tag every loaded entity with `SceneEntity` so the
+        // game-SubApp's extract layer mirrors it across to the game
+        // world during PIE. Authoring-only entities (gizmos,
+        // hierarchy decorators, etc.) skip this marker and stay
+        // editor-side.
+        spawned.push(world.spawn(crate::extract::SceneEntity).id());
     }
 
     for (i, jsn) in entities.iter().enumerate() {

@@ -1,0 +1,9 @@
+# cargo build output
+/target
+
+# IDE clutter
+.vscode/
+.idea/
+
+# Library crate: `Cargo.lock` is gitignored.
+Cargo.lock

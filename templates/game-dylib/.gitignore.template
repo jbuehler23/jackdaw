@@ -1,0 +1,10 @@
+# cargo build output
+/target
+
+# IDE clutter
+.vscode/
+.idea/
+
+# Note: `Cargo.lock` is INTENTIONALLY tracked. The editor binary in
+# this template is a `bin` crate, so `Cargo.lock` is committed to
+# pin dependency versions across contributors and CI.

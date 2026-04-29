@@ -39,6 +39,7 @@ jackdaw_dylib = { workspace = true, optional = true }
 jackdaw_feathers.workspace = true
 jackdaw_jsn.workspace = true
 jackdaw_panels.workspace = true
+jackdaw_runtime.workspace = true
 
 [lints]
 workspace = true

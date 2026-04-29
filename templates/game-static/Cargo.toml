@@ -1,0 +1,35 @@
+[package]
+name = "{{project-name}}"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# `cargo run` runs the standalone game (no editor).
+[[bin]]
+name = "{{project-name}}"
+path = "src/main.rs"
+
+# `cargo run --bin editor` (or the `cargo editor` alias from
+# `.cargo/config.toml`) opens the editor with this game's plugin
+# linked in. Phase 1 of the scaffolding pipeline rework: no dylib,
+# no SDK, no rustc-wrapper.
+[[bin]]
+name = "editor"
+path = "src/bin/editor.rs"
+
+[features]
+default = []
+# Opt in to function-body hot-patching for sub-second iteration on
+# system bodies. Doesn't allow adding/removing systems or changing
+# types — for that, use the dylib template instead.
+hot-reload = ["dep:bevy_simple_subsecond_system"]
+
+[dependencies]
+bevy = "0.18"
+jackdaw = "0.4"
+jackdaw_api = "0.4"
+jackdaw_runtime = "0.4"
+bevy_simple_subsecond_system = { version = "0.2", optional = true }

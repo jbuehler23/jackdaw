@@ -4534,6 +4534,7 @@ dependencies = [
  "jackdaw_feathers",
  "jackdaw_jsn",
  "jackdaw_panels",
+ "jackdaw_runtime",
 ]
 
 [[package]]
@@ -4631,6 +4632,7 @@ dependencies = [
  "bevy",
  "dirs",
  "jackdaw_api_internal",
+ "jackdaw_runtime",
  "libloading",
 ]
 

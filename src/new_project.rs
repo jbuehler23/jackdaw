@@ -1,11 +1,13 @@
 //! Scaffolding user projects via Bevy CLI.
 //!
 //! The editor's **New Project** flow creates a fresh extension or
-//! game project by shelling out to `bevy new -t <URL> --yes
-//! <NAME>`. Templates live in their own GitHub repos (see
-//! [`TEMPLATE_EXTENSION_STATIC_URL`] / [`TEMPLATE_GAME_STATIC_URL`]
-//! and the Dylib counterparts) so the jackdaw binary itself carries
-//! no template files; users always pull the latest at scaffold time.
+//! game project by shelling out to `bevy new -t <URL/SUBDIR> --yes
+//! <NAME>`. Templates live in-tree under `templates/<kind>-<linkage>/`
+//! within the jackdaw repo; we pass cargo-generate's `URL SUBDIR`
+//! syntax so a single repo URL plus a subdir picks the right one.
+//! Pinning to the running editor's [`CARGO_PKG_VERSION`] keeps users
+//! on stable jackdaw from picking up incompatible main-branch
+//! template changes.
 //!
 //! Call [`scaffold_project`] from a worker thread (it spawns
 //! `bevy` and blocks until the subprocess exits). The UI wires
@@ -18,26 +20,23 @@ use bevy::log::{info, warn};
 
 use crate::sdk_paths::SdkPaths;
 
-/// Static extension template. Overridable via
-/// `JACKDAW_TEMPLATE_EXTENSION_STATIC_URL`.
-pub const TEMPLATE_EXTENSION_STATIC_URL: &str =
-    "https://github.com/jbuehler23/jackdaw_template_extension_static";
+/// Repo root the four templates live under. Pre-fills the
+/// scaffolder's Template field; the user can edit the field to
+/// point at a fork or a local path. cargo-generate auto-detects
+/// the value as a git URL or directory.
+pub const TEMPLATE_REPO_URL: &str = "https://github.com/jbuehler23/jackdaw";
 
-/// Static game template. Overridable via
-/// `JACKDAW_TEMPLATE_GAME_STATIC_URL`.
-pub const TEMPLATE_GAME_STATIC_URL: &str =
-    "https://github.com/jbuehler23/jackdaw_template_game_static";
+/// Static extension template subdir.
+pub const TEMPLATE_EXTENSION_STATIC_SUBDIR: &str = "templates/extension-static";
 
-/// Dylib extension template. Overridable via
-/// `JACKDAW_TEMPLATE_EXTENSION_DYLIB_URL`, falling back to the legacy
-/// `JACKDAW_TEMPLATE_EXTENSION_URL`.
-pub const TEMPLATE_EXTENSION_DYLIB_URL: &str =
-    "https://github.com/jbuehler23/jackdaw_template_extension";
+/// Static game template subdir.
+pub const TEMPLATE_GAME_STATIC_SUBDIR: &str = "templates/game-static";
 
-/// Dylib game template. Overridable via
-/// `JACKDAW_TEMPLATE_GAME_DYLIB_URL`, falling back to the legacy
-/// `JACKDAW_TEMPLATE_GAME_URL`.
-pub const TEMPLATE_GAME_DYLIB_URL: &str = "https://github.com/jbuehler23/jackdaw_template_game";
+/// Dylib extension template subdir.
+pub const TEMPLATE_EXTENSION_DYLIB_SUBDIR: &str = "templates/extension-dylib";
+
+/// Dylib game template subdir.
+pub const TEMPLATE_GAME_DYLIB_SUBDIR: &str = "templates/game-dylib";
 
 /// Which template variant the scaffolded project uses.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -61,26 +60,47 @@ pub enum TemplatePreset {
 }
 
 impl TemplatePreset {
-    /// Resolve the preset to a concrete URL for the given linkage,
-    /// consulting env vars for the built-in presets. `Custom` ignores
-    /// `linkage` (the URL is whatever the user pasted).
+    /// Resolve the preset to a concrete `bevy new -t` argument for
+    /// the given linkage. Built-in presets compose `<repo> <subdir>`
+    /// pointing at the in-tree templates; `Custom` is whatever the
+    /// user pasted (ignores `linkage`).
     pub fn url(&self, linkage: TemplateLinkage) -> String {
+        match (self.git_url(), self.subdir(linkage)) {
+            (url, Some(subdir)) => format!("{url} {subdir}"),
+            (url, None) => url.to_string(),
+        }
+    }
+
+    /// Just the git URL portion (no subdir). Used to pre-fill the
+    /// Template field in the New Project modal.
+    pub fn git_url(&self) -> &str {
         match self {
-            Self::Extension => match linkage {
-                TemplateLinkage::Static => std::env::var("JACKDAW_TEMPLATE_EXTENSION_STATIC_URL")
-                    .unwrap_or_else(|_| TEMPLATE_EXTENSION_STATIC_URL.to_string()),
-                TemplateLinkage::Dylib => std::env::var("JACKDAW_TEMPLATE_EXTENSION_DYLIB_URL")
-                    .or_else(|_| std::env::var("JACKDAW_TEMPLATE_EXTENSION_URL"))
-                    .unwrap_or_else(|_| TEMPLATE_EXTENSION_DYLIB_URL.to_string()),
-            },
-            Self::Game => match linkage {
-                TemplateLinkage::Static => std::env::var("JACKDAW_TEMPLATE_GAME_STATIC_URL")
-                    .unwrap_or_else(|_| TEMPLATE_GAME_STATIC_URL.to_string()),
-                TemplateLinkage::Dylib => std::env::var("JACKDAW_TEMPLATE_GAME_DYLIB_URL")
-                    .or_else(|_| std::env::var("JACKDAW_TEMPLATE_GAME_URL"))
-                    .unwrap_or_else(|_| TEMPLATE_GAME_DYLIB_URL.to_string()),
-            },
-            Self::Custom(url) => url.clone(),
+            Self::Extension | Self::Game => TEMPLATE_REPO_URL,
+            Self::Custom(url) => {
+                // Custom URLs may already carry a subdir (`URL
+                // SUBDIR`); split and return the leading word.
+                url.split_whitespace().next().unwrap_or(url)
+            }
+        }
+    }
+
+    /// Just the subdir portion for the given linkage, or `None` if
+    /// the preset doesn't have one (custom URL with no subdir).
+    pub fn subdir(&self, linkage: TemplateLinkage) -> Option<&str> {
+        match self {
+            Self::Extension => Some(match linkage {
+                TemplateLinkage::Static => TEMPLATE_EXTENSION_STATIC_SUBDIR,
+                TemplateLinkage::Dylib => TEMPLATE_EXTENSION_DYLIB_SUBDIR,
+            }),
+            Self::Game => Some(match linkage {
+                TemplateLinkage::Static => TEMPLATE_GAME_STATIC_SUBDIR,
+                TemplateLinkage::Dylib => TEMPLATE_GAME_DYLIB_SUBDIR,
+            }),
+            Self::Custom(url) => {
+                let mut parts = url.split_whitespace();
+                let _ = parts.next();
+                parts.next()
+            }
         }
     }
 
@@ -94,6 +114,7 @@ impl TemplatePreset {
 #[derive(Debug)]
 pub enum ScaffoldError {
     BevyCliNotFound,
+    CargoGenerateNotFound,
     InvalidName(String),
     LocationNotFound(PathBuf),
     ProjectAlreadyExists(PathBuf),
@@ -112,6 +133,11 @@ impl std::fmt::Display for ScaffoldError {
                 f,
                 "`bevy` CLI not found on PATH. Install with \
                  `cargo install --locked --git https://github.com/TheBevyFlock/bevy_cli bevy_cli`."
+            ),
+            Self::CargoGenerateNotFound => write!(
+                f,
+                "`cargo-generate` not found on PATH (needed for local-path \
+                 templates). Install with `cargo install cargo-generate`."
             ),
             Self::InvalidName(name) => write!(
                 f,
@@ -134,18 +160,34 @@ impl std::fmt::Display for ScaffoldError {
 
 impl std::error::Error for ScaffoldError {}
 
-/// Run `bevy new -t <template_url> --yes <name>` in `location`.
-/// Returns the absolute path to the scaffolded project root.
-/// Blocks until `bevy` exits; call from a worker thread.
+/// Run `bevy new` against `template_url` in `location`. Returns the
+/// absolute path to the scaffolded project root. Blocks until `bevy`
+/// exits; call from a worker thread.
+///
+/// `template_url` is either a single value (git URL or local
+/// directory; cargo-generate auto-detects which) or
+/// `"<value> <subdir>"` for the in-tree built-in templates produced
+/// by [`TemplatePreset::url`]. When a subdir is present we split
+/// it back out and pass it through to cargo-generate via bevy's
+/// `--` passthrough (`bevy new ... -- <subdir>`).
+///
+/// `branch` is an optional git branch / tag (the UI's Branch field
+/// or the `project.new` operator's `branch` param). Useful for
+/// scaffolding from a feature branch or a pinned release tag.
+/// Ignored when `template_url` resolves to a local path —
+/// cargo-generate detects local paths automatically and skips the
+/// branch.
 ///
 /// For `Dylib` linkage, writes a `.cargo/config.toml` that routes
 /// cargo through `jackdaw-rustc-wrapper` so the scaffolded project
-/// links against `libjackdaw_sdk`. For `Static` linkage the config
-/// is not written; the project depends on `jackdaw` directly.
+/// links against `libjackdaw_sdk`. For `Static` linkage the template
+/// ships its own `.cargo/config.toml` (with the `cargo editor` alias)
+/// and we leave it alone.
 pub fn scaffold_project(
     name: &str,
     location: &Path,
     template_url: &str,
+    branch: Option<&str>,
     linkage: TemplateLinkage,
 ) -> Result<PathBuf, ScaffoldError> {
     if name.is_empty()
@@ -165,16 +207,51 @@ pub fn scaffold_project(
         return Err(ScaffoldError::ProjectAlreadyExists(project_path));
     }
 
-    // Sanity-check that `bevy` is on PATH before invoking it, so
-    // the error surfaced to the user distinguishes a missing CLI
-    // from an actual scaffold failure.
+    // Split `URL [SUBDIR]`. The URL alone goes to bevy CLI's
+    // `-t/--template` flag; if a subdir is present it rides through
+    // bevy's `-- <args>` passthrough as cargo-generate's second
+    // positional.
+    let mut parts = template_url.split_whitespace();
+    let template_arg = parts.next().unwrap_or("").to_string();
+    let subdir = parts.next();
+
+    // Path detection: bevy CLI's `-t` always treats its value as a
+    // git URL (it doesn't auto-detect local paths the way
+    // cargo-generate does). When the user passes a directory that
+    // exists on disk, shell out to `cargo-generate` directly with
+    // `--path` so it reads from the filesystem instead of trying to
+    // clone. Lets contributors iterate on in-tree templates without
+    // pushing each change to GitHub.
+    if Path::new(&template_arg).is_dir() {
+        return scaffold_from_local_path(
+            name,
+            location,
+            &template_arg,
+            subdir,
+            linkage,
+            &project_path,
+        );
+    }
+
+    // Sanity-check that `bevy` is on PATH before invoking it, so the
+    // error surfaced to the user distinguishes a missing CLI from an
+    // actual scaffold failure.
     let bevy = which_bevy().ok_or(ScaffoldError::BevyCliNotFound)?;
 
-    let output = Command::new(&bevy)
-        .current_dir(location)
-        .args(["new", "-t", template_url, "--yes", name])
-        .output()
-        .map_err(ScaffoldError::Spawn)?;
+    let mut cmd = Command::new(&bevy);
+    cmd.current_dir(location)
+        .args(["new", "-t", &template_arg, "--yes"]);
+    // Pin the template to a branch / tag when the caller supplied
+    // one (the UI's Branch field, the operator's `branch` param).
+    if let Some(branch) = branch {
+        cmd.args(["-b", branch]);
+    }
+    cmd.arg(name);
+    if let Some(subdir) = subdir {
+        cmd.arg("--").arg(subdir);
+    }
+
+    let output = cmd.output().map_err(ScaffoldError::Spawn)?;
 
     if !output.status.success() {
         return Err(ScaffoldError::BevyCliFailed {
@@ -272,6 +349,80 @@ fn render_cargo_config(paths: &SdkPaths) -> String {
         dylib = paths.dylib.display(),
         deps = paths.deps.display(),
     )
+}
+
+/// Local-path scaffold: bypass `bevy new` entirely and call
+/// `cargo-generate` directly with `--path`. bevy CLI's `-t` flag
+/// always treats its value as a git URL (it doesn't expose
+/// `--path`), so contributors iterating on in-tree templates need
+/// this branch to skip the clone-to-tmp step that would otherwise
+/// 404 against unpublished local paths.
+///
+/// `local_root[/subdir]` is the template's source directory (e.g.
+/// `~/Workspace/jackdaw/templates/game-static`). cargo-generate
+/// is required for bevy CLI to work anyway, so the binary is
+/// generally already on PATH.
+fn scaffold_from_local_path(
+    name: &str,
+    location: &Path,
+    local_root: &str,
+    subdir: Option<&str>,
+    linkage: TemplateLinkage,
+    project_path: &Path,
+) -> Result<PathBuf, ScaffoldError> {
+    let cargo_generate =
+        which_cargo_generate().ok_or(ScaffoldError::CargoGenerateNotFound)?;
+
+    let template_path = match subdir {
+        Some(s) => Path::new(local_root).join(s),
+        None => Path::new(local_root).to_path_buf(),
+    };
+    if !template_path.is_dir() {
+        return Err(ScaffoldError::LocationNotFound(template_path));
+    }
+
+    let mut cmd = Command::new(&cargo_generate);
+    cmd.current_dir(location)
+        .arg("generate")
+        .arg("--path")
+        .arg(&template_path)
+        .args(["--name", name])
+        .arg("--destination")
+        .arg(location)
+        .arg("--silent");
+
+    let output = cmd.output().map_err(ScaffoldError::Spawn)?;
+
+    if !output.status.success() {
+        return Err(ScaffoldError::BevyCliFailed {
+            status: output.status,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+
+    if matches!(linkage, TemplateLinkage::Dylib) {
+        write_cargo_config(project_path);
+    }
+    Ok(project_path.to_path_buf())
+}
+
+/// Resolve `cargo-generate` on PATH. Used by the local-path scaffold
+/// branch which shells out to `cargo-generate` directly because
+/// bevy CLI's `-t` flag doesn't expose `--path`.
+fn which_cargo_generate() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(if cfg!(target_os = "windows") {
+            "cargo-generate.exe"
+        } else {
+            "cargo-generate"
+        });
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Resolve `bevy` on PATH. Returns the absolute path if found, so

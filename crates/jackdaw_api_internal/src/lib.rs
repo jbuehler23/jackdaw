@@ -102,7 +102,6 @@ pub mod prelude {
             OperatorWorldExt as _, ParamSpec,
         },
         pie::PlayState,
-        runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems},
         snapshot::{ActiveSnapshotter, SceneSnapshot, SceneSnapshotter},
     };
     // BEI types extension authors need for `actions!` / `bindings!` / observers.

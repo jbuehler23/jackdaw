@@ -53,6 +53,7 @@ pub mod pie;
 pub mod prefab_picker;
 pub mod project;
 pub mod project_files;
+pub mod project_ops;
 pub mod project_select;
 pub mod remote;
 pub mod restart;
@@ -92,6 +93,13 @@ use jackdaw_feathers::{EditorFeathersPlugin, button::ButtonOperatorCall};
 pub use jackdaw_loader::DylibLoaderPlugin;
 use jackdaw_widgets::menu_bar::MenuAction;
 use selection::Selection;
+
+/// Emit the FFI entry symbol a dylib game needs.
+///
+/// Re-exported from `jackdaw_api` so dylib-game templates can write
+/// `jackdaw::export_game_plugin!(MyGame)` instead of pulling in
+/// `jackdaw_api` as a separate dependency.
+pub use jackdaw_api::export_game_plugin;
 
 /// Everything needed to start using Jackdaw.
 pub mod prelude {
@@ -190,12 +198,89 @@ impl Default for EditorPlugins {
     }
 }
 
+impl EditorPlugins {
+    /// Install a user game plugin against the editor's `GameSubApp`.
+    ///
+    /// Use from a static-linked editor binary (or for first-build sanity
+    /// in the dylib template):
+    ///
+    /// ```ignore
+    /// App::new()
+    ///     .add_plugins(EditorPlugins::default().with_game::<MyGame>())
+    ///     .run();
+    /// ```
+    ///
+    /// The user's plugin runs against a separate `World` (the `SubApp`)
+    /// so its `Update` / `Startup` / `FixedUpdate` schedules don't
+    /// collide with the editor's. The `SubApp`'s schedules tick only
+    /// when `PlayState::Playing`; on Stop, the `SubApp` is dropped and
+    /// recreated from the same plugin so the next Play gets a fresh
+    /// world.
+    pub fn with_game<P: Plugin + Default>(self) -> EditorPluginsWithGame<P> {
+        EditorPluginsWithGame {
+            inner: self,
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl PluginGroup for EditorPlugins {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
             .add(EditorCorePlugin)
             .add(ExtensionPlugin::default())
             .add(DylibLoaderPlugin::default())
+    }
+}
+
+/// Builder returned from [`EditorPlugins::with_game`]. Add the same
+/// plugins as `EditorPlugins::default()` plus a `GameSubApp` install
+/// hook for the user's game plugin `P`.
+pub struct EditorPluginsWithGame<P> {
+    inner: EditorPlugins,
+    _marker: PhantomData<fn() -> P>,
+}
+
+impl<P: Plugin + Default> PluginGroup for EditorPluginsWithGame<P> {
+    fn build(self) -> PluginGroupBuilder {
+        self.inner
+            .build()
+            .add(GameSubAppInstallPlugin::<P>::default())
+    }
+}
+
+/// Internal plugin that creates the `GameSubApp` and installs the
+/// user's plugin into it. Pulled into `EditorPlugins::with_game::<P>()`
+/// so static-linked editor binaries get the `SubApp` install path
+/// without going through the dylib loader.
+struct GameSubAppInstallPlugin<P> {
+    _marker: PhantomData<fn() -> P>,
+}
+
+impl<P> Default for GameSubAppInstallPlugin<P> {
+    fn default() -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<P: Plugin + Default> Plugin for GameSubAppInstallPlugin<P> {
+    fn build(&self, app: &mut App) {
+        // Stored as a non-send resource on the editor's main world
+        // (rather than via `App::insert_sub_app`) so hot-reload paths
+        // running inside a system — which only have `&mut World` —
+        // can swap the SubApp without an editor restart. The editor's
+        // `PiePlugin` drives `holder.update(...)` each frame, gated
+        // on `PlayState::Playing`. The rebuild closure lets `Stop`
+        // reconstruct a fresh world without us caching the plugin
+        // instance separately.
+        let holder = jackdaw_runtime::GameSubAppHolder::new(Box::new(|| {
+            let mut sub = jackdaw_runtime::create_game_sub_app();
+            sub.add_plugins(P::default());
+            sub
+        }));
+        app.world_mut().insert_non_send_resource(holder);
     }
 }
 

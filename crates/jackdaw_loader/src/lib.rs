@@ -75,8 +75,11 @@ pub struct GameCatalog {
 /// [`LoadedDylibs`].
 #[derive(Clone, Copy, Debug)]
 pub struct LoadedGameEntry {
-    pub build: unsafe extern "C" fn(*mut bevy::ecs::world::World),
-    pub teardown: unsafe extern "C" fn(*mut bevy::ecs::world::World),
+    /// Construct a fresh `Box<dyn Plugin>` for the user's game. The
+    /// loader calls this at startup (and on hot-reload) to obtain a
+    /// plugin instance, then installs it against `GameSubApp` via
+    /// `app.insert_sub_app`.
+    pub factory: unsafe extern "C" fn() -> jackdaw_api_internal::ffi::JackdawGamePluginPtr,
 }
 
 /// Sub-directory inside the platform config directory where the
@@ -398,8 +401,7 @@ enum OpenedDylib {
     Game {
         lib: libloading::Library,
         name: String,
-        build: unsafe extern "C" fn(*mut bevy::ecs::world::World),
-        teardown: unsafe extern "C" fn(*mut bevy::ecs::world::World),
+        factory: unsafe extern "C" fn() -> jackdaw_api_internal::ffi::JackdawGamePluginPtr,
     },
 }
 
@@ -440,8 +442,7 @@ fn open_and_verify(path: &Path) -> Result<OpenedDylib, LoadError> {
         return Ok(OpenedDylib::Game {
             lib,
             name,
-            build: entry.build,
-            teardown: entry.teardown,
+            factory: entry.factory,
         });
     }
 
@@ -540,51 +541,37 @@ fn try_load(app: &mut App, path: &Path) -> Result<LoadedKind, LoadError> {
 
             Ok(LoadedKind::Extension(id))
         }
-        (
-            lib,
-            OpenedKind::Game {
-                name,
-                build,
-                teardown,
-            },
-        ) => {
+        (lib, OpenedKind::Game { name, factory }) => {
             // Register the game's `#[derive(Reflect)]` types into our
             // AppTypeRegistry via the exported symbol, then assign
-            // ComponentIds so the inspector sees them before build()
-            // runs any systems that query them.
+            // ComponentIds so the inspector sees them before any
+            // game systems that query them run.
             call_reflect_register_symbol(app.world_mut(), &lib);
             register_derived_component_ids(app.world_mut());
 
-            // v2 builds take `*mut World`. Call from an exclusive
-            // context: we have `&mut App` here, so deriving
-            // `&mut World` via `world_mut()` is fine.
-            let world_ptr: *mut bevy::ecs::world::World = std::ptr::from_mut(app.world_mut());
-            let build_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                // SAFETY: `build` is a function pointer from a
-                // compat-verified dylib; `world_ptr` is a valid
-                // mutable reference for the duration of this call;
-                // the dylib stays alive via LoadedDylibs.
-                unsafe { build(world_ptr) }
-            }));
-            if build_result.is_err() {
-                // Build panicked. The library is still loaded; keep
-                // it alive rather than risk UB unloading partially-
-                // executed init code.
+            // v3 install path: call the factory to obtain a fresh
+            // `Box<dyn Plugin>`, install against `GameSubApp`. We
+            // have `&mut App` here so all the SubApp APIs are
+            // available.
+            if let Err(err) = install_game_plugin(app, factory) {
+                // Install panicked or failed. The library is still
+                // loaded; keep it alive rather than risk UB
+                // unloading partially-executed init code.
                 app.world_mut()
                     .resource_mut::<LoadedDylibs>()
                     .libs
                     .push(lib);
-                return Err(LoadError::EntryPanicked);
+                return Err(err);
             }
 
-            // Record build + teardown fn pointers in the GameCatalog
-            // so hot-reload can find them later.
+            // Record the factory pointer in the GameCatalog so
+            // hot-reload can find it later.
             {
                 let mut catalog = app.world_mut().resource_mut::<GameCatalog>();
                 catalog.games.push(name.clone());
                 catalog
                     .entries
-                    .insert(name.clone(), LoadedGameEntry { build, teardown });
+                    .insert(name.clone(), LoadedGameEntry { factory });
             }
             app.world_mut()
                 .resource_mut::<LoadedDylibs>()
@@ -593,6 +580,112 @@ fn try_load(app: &mut App, path: &Path) -> Result<LoadedKind, LoadError> {
 
             Ok(LoadedKind::Game(name))
         }
+    }
+}
+
+/// Wrap the dylib's `extern "C"` factory in a Rust closure that
+/// reconstructs a fresh `Box<dyn Plugin>` each time it's called.
+/// Used to build a [`GameSubAppHolder`] whose `reset` reuses the
+/// same factory pointer for clean Stop semantics.
+fn make_dylib_rebuild_fn(
+    factory: unsafe extern "C" fn() -> jackdaw_api_internal::ffi::JackdawGamePluginPtr,
+) -> Box<dyn Fn() -> bevy::app::SubApp + Send + Sync> {
+    Box::new(move || {
+        // Factory panic falls back to a null plugin pointer; the
+        // null-check below leaves the SubApp empty so it ticks
+        // harmlessly. This shouldn't happen with well-formed dylibs.
+        let null_ptr = jackdaw_api_internal::ffi::JackdawGamePluginPtr {
+            data: std::ptr::null_mut(),
+            vtable: std::ptr::null_mut(),
+        };
+        let plugin_ptr = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: `factory` is a function pointer from a compat-
+            // verified dylib; calling convention matches the declared
+            // prototype.
+            unsafe { factory() }
+        }))
+        .unwrap_or(null_ptr);
+
+        let mut sub = jackdaw_runtime::create_game_sub_app();
+        if !plugin_ptr.data.is_null() {
+            // Reconstruct the Box<dyn Plugin> from the fat-pointer
+            // halves. SAFETY: the factory split a `Box<dyn Plugin>`
+            // via the same (data, vtable) layout we're transmuting
+            // back to. Both sides share Bevy's compilation through
+            // `jackdaw/dynamic_linking`, so the vtable is valid here.
+            let plugin: Box<dyn bevy::app::Plugin> = unsafe {
+                let raw: *mut dyn bevy::app::Plugin =
+                    std::mem::transmute::<(*mut (), *mut ()), *mut dyn bevy::app::Plugin>((
+                        plugin_ptr.data,
+                        plugin_ptr.vtable,
+                    ));
+                Box::from_raw(raw)
+            };
+            sub.add_plugins(BoxedPlugin(plugin));
+        }
+        sub
+    })
+}
+
+/// Build a fresh [`GameSubAppHolder`] hosting the user's plugin and
+/// store it as a non-send resource on `world`. If a previous holder
+/// was present it's dropped here, freeing its world (and any prior
+/// dylib's plugin instance).
+///
+/// Works against `&mut World` so it can be called from both the
+/// startup (`&mut App`) and runtime (system context) install paths.
+/// Hot-reload uses this same function: the file watcher dispatches
+/// an exclusive system that calls back into here with a new factory.
+fn install_game_plugin_into_world(
+    world: &mut World,
+    factory: unsafe extern "C" fn() -> jackdaw_api_internal::ffi::JackdawGamePluginPtr,
+) -> Result<(), LoadError> {
+    // Drop the prior holder (if any) so its world tears down before
+    // we construct the new one. This also drops the previous dylib's
+    // plugin instance.
+    let _previous = world.remove_non_send_resource::<jackdaw_runtime::GameSubAppHolder>();
+
+    // Validate that the factory works once before installing. A
+    // panic here is the same error case as v2's panicking build.
+    let probe_result = std::panic::catch_unwind(AssertUnwindSafe(|| unsafe { factory() }));
+    let probed = probe_result.map_err(|_| LoadError::EntryPanicked)?;
+    // Drop the probed plugin so reset() rebuilds a fresh one.
+    if !probed.data.is_null() {
+        // SAFETY: same fat-pointer reconstruction as above; we
+        // own the box and immediately drop it.
+        unsafe {
+            let raw: *mut dyn bevy::app::Plugin = std::mem::transmute::<
+                (*mut (), *mut ()),
+                *mut dyn bevy::app::Plugin,
+            >((probed.data, probed.vtable));
+            drop(Box::from_raw(raw));
+        }
+    }
+
+    let holder = jackdaw_runtime::GameSubAppHolder::new(make_dylib_rebuild_fn(factory));
+    world.insert_non_send_resource(holder);
+    Ok(())
+}
+
+/// Convenience wrapper for the startup-time install path
+/// (`&mut App` available). Just delegates to the world-keyed
+/// version.
+fn install_game_plugin(
+    app: &mut App,
+    factory: unsafe extern "C" fn() -> jackdaw_api_internal::ffi::JackdawGamePluginPtr,
+) -> Result<(), LoadError> {
+    install_game_plugin_into_world(app.world_mut(), factory)
+}
+
+/// Newtype wrapping a `Box<dyn Plugin>` so it implements [`Plugin`].
+/// Bevy's [`Plugins`] trait is implemented for `P: Plugin` and for
+/// tuples; a bare `Box<dyn Plugin>` doesn't satisfy that bound. The
+/// wrapper just forwards `build` to the inner trait object.
+struct BoxedPlugin(Box<dyn bevy::app::Plugin>);
+
+impl bevy::app::Plugin for BoxedPlugin {
+    fn build(&self, app: &mut App) {
+        self.0.build(app);
     }
 }
 
@@ -658,43 +751,21 @@ pub fn load_from_path(world: &mut World, path: &Path) -> Result<LoadedKind, Load
 
             Ok(LoadedKind::Extension(id))
         }
-        (
-            lib,
-            OpenedKind::Game {
-                name,
-                build,
-                teardown,
-            },
-        ) => {
-            let already_loaded = world
-                .resource::<GameCatalog>()
-                .games
-                .iter()
-                .any(|n| n == &name);
-            if already_loaded {
-                let prior = world.resource::<GameCatalog>().entries.get(&name).copied();
-                if let Some(prior_entry) = prior {
-                    info!("Hot reload: tearing down prior version of `{name}`");
-                    let world_ptr: *mut bevy::ecs::world::World = std::ptr::from_mut(world);
-                    let _ = std::panic::catch_unwind(AssertUnwindSafe(|| unsafe {
-                        (prior_entry.teardown)(world_ptr);
-                    }));
-                }
-            }
-
-            // Register reflect types + ComponentIds BEFORE build().
-            // build() adds systems that may query game components;
-            // the Add Component picker needs ComponentIds immediately.
+        (lib, OpenedKind::Game { name, factory }) => {
+            // Register the game's `#[derive(Reflect)]` types into our
+            // AppTypeRegistry via the exported symbol, then assign
+            // ComponentIds so the inspector sees them before the new
+            // SubApp's systems query them.
             call_reflect_register_symbol(world, &lib);
             register_derived_component_ids(world);
 
-            let world_ptr: *mut bevy::ecs::world::World = std::ptr::from_mut(world);
-            let build_result =
-                std::panic::catch_unwind(AssertUnwindSafe(|| unsafe { build(world_ptr) }));
-            if build_result.is_err() {
-                warn!("load_from_path: build panicked for `{name}`");
+            // Hot-reload swap: drop the prior `GameSubAppHolder` (if
+            // any) and install a fresh one against the new factory.
+            // No editor restart, no process respawn.
+            if let Err(err) = install_game_plugin_into_world(world, factory) {
+                warn!("load_from_path: install panicked for `{name}`");
                 world.resource_mut::<LoadedDylibs>().libs.push(lib);
-                return Err(LoadError::EntryPanicked);
+                return Err(err);
             }
 
             {
@@ -704,7 +775,7 @@ pub fn load_from_path(world: &mut World, path: &Path) -> Result<LoadedKind, Load
                 }
                 catalog
                     .entries
-                    .insert(name.clone(), LoadedGameEntry { build, teardown });
+                    .insert(name.clone(), LoadedGameEntry { factory });
             }
             world.resource_mut::<LoadedDylibs>().libs.push(lib);
 
@@ -723,8 +794,7 @@ enum OpenedKind {
     },
     Game {
         name: String,
-        build: unsafe extern "C" fn(*mut bevy::ecs::world::World),
-        teardown: unsafe extern "C" fn(*mut bevy::ecs::world::World),
+        factory: unsafe extern "C" fn() -> jackdaw_api_internal::ffi::JackdawGamePluginPtr,
     },
 }
 
@@ -735,19 +805,7 @@ enum OpenedKind {
 fn open_and_verify_keep_lib(path: &Path) -> Result<(libloading::Library, OpenedKind), LoadError> {
     match open_and_verify(path)? {
         OpenedDylib::Extension { lib, ctor, .. } => Ok((lib, OpenedKind::Extension { ctor })),
-        OpenedDylib::Game {
-            lib,
-            name,
-            build,
-            teardown,
-        } => Ok((
-            lib,
-            OpenedKind::Game {
-                name,
-                build,
-                teardown,
-            },
-        )),
+        OpenedDylib::Game { lib, name, factory } => Ok((lib, OpenedKind::Game { name, factory })),
     }
 }
 

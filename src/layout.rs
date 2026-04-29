@@ -914,7 +914,7 @@ fn editor_status_bar() -> impl Bundle {
                 },
                 TextColor(tokens::TEXT_SECONDARY),
             ),
-            // Right side: gizmo info + connection indicator
+            // Right side: build progress (when active) + gizmo info + connection indicator
             (
                 Node {
                     flex_direction: FlexDirection::Row,
@@ -923,6 +923,19 @@ fn editor_status_bar() -> impl Bundle {
                     ..Default::default()
                 },
                 children![
+                    // Build progress bar — hidden by default; the
+                    // `update_status_right` system flips it to flex
+                    // and drives the fill width while a project's
+                    // first `cargo build` runs in the background.
+                    (
+                        crate::status_bar::BuildProgressBarSlot,
+                        Node {
+                            display: Display::None,
+                            width: Val::Px(120.0),
+                            ..Default::default()
+                        },
+                        children![jackdaw_feathers::progress::progress_bar(0.0)],
+                    ),
                     (
                         status_bar::StatusBarRight,
                         Text::new(""),

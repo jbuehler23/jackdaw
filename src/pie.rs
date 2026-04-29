@@ -67,8 +67,28 @@ impl Plugin for PiePlugin {
         app.init_state::<PlayState>()
             .init_resource::<PrePlayScene>()
             .add_observer(wire_pie_button)
-            .add_observer(tag_game_spawned);
+            .add_observer(tag_game_spawned)
+            // Drive the user's `GameSubAppHolder` (installed by
+            // `EditorPlugins::with_game::<P>()` or by the dylib
+            // loader) only while `PlayState::Playing`. The SubApp's
+            // `extract` callback syncs editor-world state into the
+            // game world; its `Main` schedule then ticks the user's
+            // `Update` / `FixedUpdate` etc.
+            .add_systems(Update, drive_game_sub_app.run_if(play_is_playing));
     }
+}
+
+fn drive_game_sub_app(world: &mut World) {
+    // `GameSubAppHolder` is a non-send resource so the SubApp can
+    // own `!Send` state (asset loaders, render queues). Take it out
+    // for the duration of the tick and reinsert; this also gives us
+    // `&mut World` access during `extract` without aliasing.
+    let Some(mut holder) = world.remove_non_send_resource::<jackdaw_runtime::GameSubAppHolder>()
+    else {
+        return;
+    };
+    holder.update(world);
+    world.insert_non_send_resource(holder);
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -77,8 +97,24 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<PieStopOp>();
 }
 
-fn play_is_stopped_or_paused(state: Res<State<PlayState>>) -> bool {
-    !matches!(state.get(), PlayState::Playing)
+fn play_is_stopped_or_paused(
+    state: Res<State<PlayState>>,
+    new_project: Option<Res<crate::project_select::NewProjectState>>,
+) -> bool {
+    if matches!(state.get(), PlayState::Playing) {
+        return false;
+    }
+    // Block Play while a background project build is still running.
+    // The status bar's "Building..." indicator tells the user what
+    // they're waiting for; this just prevents an accidental Play
+    // click from no-op-ing silently against a half-built project.
+    if let Some(np) = new_project.as_deref()
+        && let Some(progress) = np.build_progress_snapshot.as_ref()
+        && !progress.finished
+    {
+        return false;
+    }
+    true
 }
 
 fn play_is_playing(state: Res<State<PlayState>>) -> bool {
@@ -210,22 +246,37 @@ pub fn handle_pause(world: &mut World) {
     }
 }
 
-/// Transition to `Stopped`, restoring the pre-Play scene snapshot.
-/// The snapshot restore uses [`crate::scene_io::apply_ast_to_world`],
-/// which despawns non-editor scene entities (including any spawned
-/// by game systems) and respawns from the AST.
+/// Transition to `Stopped`. Resets the `GameSubAppHolder` so the
+/// `SubApp`'s world is reconstructed from the user's plugin
+/// factory; next Play starts from a fresh game world. The editor's
+/// authoring world is not touched (gameplay never mutated it — the
+/// `SubApp`'s world is separate).
+///
+/// Backwards-compat note: prior to the `SubApp` redesign, Stop
+/// applied a `PrePlayScene` snapshot to the editor's authoring
+/// world to revert game-system mutations. With the `SubApp`
+/// boundary, the authoring world is the persistent state and the
+/// `SubApp` is ephemeral; the snapshot path is dormant for now
+/// (kept around in case some editor-side surface still relies on
+/// `PrePlayScene` until full migration).
 pub fn handle_stop(world: &mut World) {
     let current = world.resource::<State<PlayState>>().get().clone();
     if current == PlayState::Stopped {
         return;
     }
 
-    if let Some(snapshot) = world.resource_mut::<PrePlayScene>().snapshot.take() {
-        crate::scene_io::apply_ast_to_world(world, &snapshot);
-        info!("PIE: Stop (scene restored from snapshot)");
+    if let Some(mut holder) = world.remove_non_send_resource::<jackdaw_runtime::GameSubAppHolder>()
+    {
+        holder.reset();
+        world.insert_non_send_resource(holder);
+        info!("PIE: Stop (game subapp reset)");
     } else {
-        info!("PIE: Stop (no snapshot to restore)");
+        info!("PIE: Stop (no game loaded)");
     }
+    // Clear any leftover snapshot resource; the SubApp boundary now
+    // handles state isolation, so the snapshot is no longer the
+    // source of truth on Stop.
+    world.resource_mut::<PrePlayScene>().snapshot = None;
 
     world
         .resource_mut::<NextState<PlayState>>()

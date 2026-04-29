@@ -40,6 +40,10 @@ members = [
     "examples/extension/viewable_camera_extension",
     "tests/fixtures/test_fixture_extension",
 ]
+# Project-scaffolding templates live under `templates/`. They contain
+# `{{project-name}}` cargo-generate placeholders, so cargo can't parse
+# their Cargo.toml as workspace members.
+exclude = ["templates"]
 
 [dependencies]
 bevy.workspace = true
@@ -65,6 +69,7 @@ jackdaw_api.workspace = true
 # doesn't re-export.
 jackdaw_api_internal.workspace = true
 jackdaw_loader.workspace = true
+jackdaw_runtime.workspace = true
 # Optional and activated only by the `dylib` feature. Nothing in
 # the editor's own Rust code imports `jackdaw_sdk` — it's a pure
 # build artifact consumed at runtime by the extension build
@@ -168,7 +173,6 @@ redundant_closure_for_method_calls = "warn"
 
 [dev-dependencies]
 bevy = { workspace = true, features = ["dynamic_linking"] }
-jackdaw_runtime.workspace = true
 # Pulled in so cargo builds the fixture cdylib as part of the
 # workspace test-target graph. `tests/dylib_loading.rs` dlopens the
 # resulting `.so` by path — it doesn't reference the rlib side.

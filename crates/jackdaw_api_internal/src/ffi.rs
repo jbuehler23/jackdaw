@@ -37,16 +37,22 @@
 use core::ffi::{CStr, c_char};
 
 /// Current ABI version. Bump on any breaking change to
-/// [`ExtensionEntry`], [`crate::JackdawExtension`], or the loader's
-/// expectations about the entry function.
+/// [`ExtensionEntry`], [`GameEntry`], [`crate::JackdawExtension`],
+/// or the loader's expectations about the entry function.
 ///
 /// Extensions and games can diverge (each struct carries its own
 /// version field in its header), but we use a shared monotonic
 /// number so the loader's compat check is a single comparison.
-/// v2 introduced the `GameEntry::teardown` pointer and swapped
-/// `build` from `*mut App` to `*mut World`, needed for in-process
-/// hot reload of games.
-pub const API_VERSION: u32 = 2;
+///
+/// - v2 introduced the `GameEntry::teardown` pointer and swapped
+///   `build` from `*mut App` to `*mut World`, needed for in-process
+///   hot reload of games against a single `World`.
+/// - v3 (current) replaces `GameEntry::{build, teardown}` with a
+///   single [`GameEntry::factory`] returning a [`JackdawGamePluginPtr`].
+///   The dylib loader installs the plugin against a `GameSubApp` at
+///   editor startup; teardown becomes `App::remove_sub_app` /
+///   `insert_sub_app` swap, no longer needs the dylib's involvement.
+pub const API_VERSION: u32 = 3;
 
 /// Bevy minor-version string the host was built against. The loader
 /// compares this against the dylib's embedded value and refuses to
@@ -136,31 +142,48 @@ pub struct JackdawExtensionPtr {
 
 /// Shape returned by every game dylib's entry function.
 ///
-/// v2 takes `*mut World` (not `*mut App`) so it can be called at
-/// runtime from any exclusive system, not just during app
-/// construction. That lets the hot-reload loader call `teardown`
-/// then `build` from a regular system without needing to preserve
-/// a `*mut App` past `App::run`.
+/// v3 replaces v2's `build`/`teardown` `*mut World` callbacks with a
+/// single [`Self::factory`] that returns the user's [`Plugin`] as a
+/// stable-ABI [`JackdawGamePluginPtr`]. The loader installs the
+/// returned plugin against a `GameSubApp` at editor startup via
+/// [`App::insert_sub_app`](bevy::app::App::insert_sub_app). Hot-reload
+/// becomes `remove_sub_app` + `insert_sub_app` (the dylib's
+/// involvement ends after the factory call).
+///
+/// [`Plugin`]: bevy::app::Plugin
 ///
 /// # Safety
 ///
 /// Same contract as [`ExtensionEntry`]: NUL-terminated static
 /// strings, same allocator on both sides (guaranteed by
-/// `bevy/dynamic_linking` + `jackdaw_sdk`'s proxy dylib). Both
-/// `build` and `teardown` must be callable with any valid
-/// `*mut World`; the loader wraps each call in `catch_unwind` so a
-/// panic in game code doesn't abort the editor.
-///
-/// The `build` function wires the game's `GamePlugin` against a
-/// `GameApp` constructed inside the macro-emitted stub; it's
-/// idempotent with respect to `teardown` (calling the pair in
-/// sequence is a full reload cycle).
+/// `bevy/dynamic_linking` + `jackdaw_sdk`'s proxy dylib). The
+/// factory is callable any number of times; each call returns a
+/// freshly-boxed plugin instance the caller owns. The loader wraps
+/// the call in `catch_unwind` so a panic in game code doesn't abort
+/// the editor.
 #[repr(C)]
 pub struct GameEntry {
     pub api_version: u32,
     pub bevy_version: *const c_char,
     pub profile: *const c_char,
     pub name: *const c_char,
-    pub build: unsafe extern "C" fn(*mut bevy::ecs::world::World),
-    pub teardown: unsafe extern "C" fn(*mut bevy::ecs::world::World),
+    /// Construct a fresh `Box<dyn Plugin>` for the user's game.
+    /// The loader takes ownership of the returned pointer and is
+    /// responsible for `Box::from_raw` reconstruction before
+    /// `app.add_plugins(plugin)`.
+    pub factory: unsafe extern "C" fn() -> JackdawGamePluginPtr,
+}
+
+/// Stable-ABI representation of a `Box<dyn bevy::app::Plugin>`.
+///
+/// Bevy's `Box<dyn Plugin>` is not `extern "C"`-safe across rustc
+/// compilations — it's a fat pointer (data + vtable) whose vtable
+/// layout depends on the rustc that built the `dyn Plugin`. We rely
+/// on `bevy/dynamic_linking` + `jackdaw_sdk` ensuring both editor
+/// and dylib see one Bevy compilation, so the vtable is shared and
+/// the fat pointer reconstructs correctly on the loader side.
+#[repr(C)]
+pub struct JackdawGamePluginPtr {
+    pub data: *mut (),
+    pub vtable: *mut (),
 }

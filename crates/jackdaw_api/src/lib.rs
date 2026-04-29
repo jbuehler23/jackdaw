@@ -49,7 +49,7 @@ pub use jackdaw_api_macros::operator;
 pub use jackdaw_api_internal::export_extension;
 
 /// Emit the FFI entry symbol a dylib game needs.
-pub use jackdaw_api_internal::export_game;
+pub use jackdaw_api_internal::export_game_plugin;
 
 // --- Sub-modules (curated) ---
 
@@ -73,13 +73,13 @@ pub mod pie {
     pub use jackdaw_api_internal::pie::PlayState;
 }
 
-/// Hot-reloadable game plugin surface. Games implement
-/// [`GamePlugin`](runtime::GamePlugin) and register their systems
-/// through [`GameApp`](runtime::GameApp).
+/// Game-host surface. The user implements vanilla [`bevy::app::Plugin`]
+/// for their game plugin and installs it via the editor's
+/// `EditorPlugins::with_game::<P>()` builder, which registers the
+/// plugin against the [`GameSubApp`](runtime::GameSubApp) so the
+/// game's `World` is isolated from the editor's authoring world.
 pub mod runtime {
-    pub use jackdaw_api_internal::runtime::{
-        GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems, IntoObserverSystemBoxed,
-    };
+    pub use jackdaw_runtime::{GameSubApp, create_game_sub_app};
 }
 
 /// JSN primitives re-exported for operator parameter marshalling.
@@ -139,7 +139,7 @@ pub mod prelude {
         OperatorSystemId, OperatorWorldExt as _, ParamSpec,
     };
     pub use crate::pie::PlayState;
-    pub use crate::runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems};
+    pub use crate::runtime::{GameSubApp, create_game_sub_app};
     pub use crate::{
         DefaultArea, ExtensionContext, ExtensionKind, ExtensionPoint, HierarchyWindow,
         InspectorWindow, JackdawExtension, MenuEntryDescriptor, PanelContext, TopLevelMenu,

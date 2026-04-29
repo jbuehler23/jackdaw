@@ -16,6 +16,17 @@ pub struct GitInfo {
     pub display: String,
 }
 
+/// Marker on the status-bar slot that hosts the build-progress bar.
+/// The slot is `Display::None` by default; `update_status_right`
+/// flips it to `Display::Flex` while a project's first build is
+/// running, and drives the inner [`ProgressBarFill`] width via
+/// [`set_progress_fill`].
+///
+/// [`ProgressBarFill`]: jackdaw_feathers::progress::ProgressBarFill
+/// [`set_progress_fill`]: jackdaw_feathers::progress::set_progress_fill
+#[derive(Component)]
+pub struct BuildProgressBarSlot;
+
 pub struct StatusBarPlugin;
 
 impl Plugin for StatusBarPlugin {
@@ -108,25 +119,99 @@ fn update_status_center(
 #[derive(Component)]
 pub struct SceneStatsText;
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "All resources are needed to drive the right-region display"
+)]
 fn update_status_right(
     mode: Res<GizmoMode>,
     space: Res<GizmoSpace>,
     modal: Res<ModalTransformState>,
     edit_mode: Res<EditMode>,
     draw_state: Res<DrawBrushState>,
+    new_project: Res<crate::project_select::NewProjectState>,
     mut text_query: Query<&mut Text, With<StatusBarRight>>,
+    mut bar_slot_q: Query<(&mut Node, &Children), With<BuildProgressBarSlot>>,
+    children_q: Query<&Children>,
+    mut fill_q: Query<
+        &mut Node,
+        (
+            With<jackdaw_feathers::progress::ProgressBarFill>,
+            Without<BuildProgressBarSlot>,
+        ),
+    >,
 ) {
+    let Ok(mut text) = text_query.single_mut() else {
+        return;
+    };
+
+    // Build progress overrides the gizmo/edit-mode display while a
+    // background build is running. Highest priority because the user
+    // is most likely watching for it after creating a new project.
+    if let Some(progress) = new_project.build_progress_snapshot.as_ref()
+        && !progress.finished
+    {
+        let crate_label = progress
+            .current_crate
+            .as_deref()
+            .unwrap_or("preparing build");
+        let counter = progress
+            .artifacts_total
+            .map(|total| format!(" ({}/{total})", progress.artifacts_done))
+            .unwrap_or_default();
+        let new_text = format!("Building {crate_label}{counter}");
+        if text.0 != new_text {
+            text.0 = new_text;
+        }
+        // Show the progress bar slot and drive its fill. Fraction
+        // is `done / total` when total is known; indeterminate (0%)
+        // otherwise — cargo doesn't always know the total upfront.
+        let fraction = match progress.artifacts_total {
+            Some(total) if total > 0 => {
+                f32::from(progress.artifacts_done as u16)
+                    / f32::from(total.min(u32::from(u16::MAX)) as u16)
+            }
+            _ => 0.0,
+        };
+        if let Ok((mut slot_node, slot_children)) = bar_slot_q.single_mut() {
+            if slot_node.display != Display::Flex {
+                slot_node.display = Display::Flex;
+            }
+            // The progress bar widget is the only child of the slot.
+            // Walk one level deeper to find its `ProgressBarFill`
+            // and update the width directly. Mirrors what the
+            // project-select modal's `refresh_build_progress_ui`
+            // does without needing an extra query type.
+            if let Some(bar_entity) = slot_children.iter().next()
+                && let Ok(bar_children) = children_q.get(bar_entity)
+            {
+                for fill_entity in bar_children.iter() {
+                    if let Ok(mut fill_node) = fill_q.get_mut(fill_entity) {
+                        let pct = (fraction.clamp(0.0, 1.0)) * 100.0;
+                        fill_node.width = Val::Percent(pct);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // No active build: hide the progress slot.
+    if let Ok((mut slot_node, _)) = bar_slot_q.single_mut()
+        && slot_node.display != Display::None
+    {
+        slot_node.display = Display::None;
+    }
+
     if !mode.is_changed()
         && !space.is_changed()
         && !modal.is_changed()
         && !edit_mode.is_changed()
         && !draw_state.is_changed()
+        && !new_project.is_changed()
     {
         return;
     }
-    let Ok(mut text) = text_query.single_mut() else {
-        return;
-    };
 
     // Show draw brush mode status
     if draw_state.active.is_some() {

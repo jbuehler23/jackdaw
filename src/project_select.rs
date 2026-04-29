@@ -81,9 +81,23 @@ struct NewProjectNameInput;
 
 /// Wraps the Template URL `TextEdit`. Pre-filled with the default
 /// URL for the active preset; always editable so users can paste
-/// any Bevy-CLI-compatible URL.
+/// any Bevy-CLI-compatible URL or a local path.
 #[derive(Component)]
 struct NewProjectTemplateInput;
+
+/// Optional subfolder within the template repo. Pre-filled with the
+/// preset's `templates/<kind>-<linkage>` subdir; editable so users
+/// pulling from a custom layout (or a fork that doesn't follow our
+/// in-tree convention) can point at their own subdir.
+#[derive(Component)]
+struct NewProjectSubdirInput;
+
+/// Optional branch / tag for the template repo. Empty = whatever
+/// `bevy new` defaults to (typically `main`). Editable so users
+/// scaffolding from a feature branch or pinned release tag don't
+/// need to reach for an env var.
+#[derive(Component)]
+struct NewProjectBranchInput;
 
 #[derive(Component)]
 struct NewProjectLocationText;
@@ -129,7 +143,7 @@ struct NewProjectLinkageButton(TemplateLinkage);
 
 /// Drives the modal's async operations.
 #[derive(Resource, Default)]
-struct NewProjectState {
+pub(crate) struct NewProjectState {
     /// Which preset the user opened the dialog with. `None` when
     /// the modal isn't open.
     preset: Option<TemplatePreset>,
@@ -177,8 +191,11 @@ struct NewProjectState {
     /// so the modal's bar/log nodes can update without locking on
     /// the hot path.
     build_progress: Option<std::sync::Arc<std::sync::Mutex<crate::ext_build::BuildProgress>>>,
-    /// Latest snapshot of `build_progress`, copied each frame.
-    build_progress_snapshot: Option<crate::ext_build::BuildProgress>,
+    /// Latest snapshot of `build_progress`, copied each frame. Read
+    /// from sibling modules (e.g. the status bar) to surface a
+    /// "Building..." indicator while a project's first build is
+    /// running in the background.
+    pub(crate) build_progress_snapshot: Option<crate::ext_build::BuildProgress>,
     /// Path to the freshly-scaffolded project, kept around so the
     /// build-completion handler can transition into the editor
     /// pointing at the right root.
@@ -847,10 +864,11 @@ fn spawn_linkage_button(
 
 /// Click handler for Static/Dylib segmented buttons. Updates
 /// `NewProjectState.linkage`, repaints the two buttons, and
-/// rewrites the Template URL input to the new preset URL so the
-/// user sees the change immediately. If the user has manually
-/// edited the URL to a custom value, this overwrites it; by
-/// design: toggling the linkage is a "reset to preset" action.
+/// rewrites the Template URL + Subdir inputs to the new preset
+/// values so the user sees the change immediately. If the user
+/// has manually edited either field to a custom value, this
+/// overwrites it; by design: toggling the linkage is a "reset to
+/// preset" action.
 fn on_linkage_button_click(
     click: On<Pointer<Click>>,
     buttons: Query<&NewProjectLinkageButton>,
@@ -891,16 +909,29 @@ fn on_linkage_button_click(
         let Some(preset) = world.resource::<NewProjectState>().preset.clone() else {
             return;
         };
-        let new_url = preset.url(linkage);
-        set_template_input_text(world, new_url);
+        set_template_input_text(world, preset.git_url().to_string());
+        set_subdir_input_text(world, preset.subdir(linkage).unwrap_or("").to_string());
     });
 }
 
 /// Push a new string into the Template URL text input.
 fn set_template_input_text(world: &mut World, new_text: String) {
+    set_named_input_text::<NewProjectTemplateInput>(world, new_text);
+}
+
+/// Push a new string into the Subdir text input.
+fn set_subdir_input_text(world: &mut World, new_text: String) {
+    set_named_input_text::<NewProjectSubdirInput>(world, new_text);
+}
+
+/// Generic helper: walk from a marker-tagged outer text-input entity
+/// to its inner [`TextInputQueue`] and push a new value. Used by
+/// both the Template and Subdir inputs (both share the same outer
+/// → wrapper → inner shape) so we don't duplicate the walk.
+fn set_named_input_text<M: Component>(world: &mut World, new_text: String) {
     use jackdaw_feathers::text_edit::{TextInputQueue, set_text_input_value};
 
-    let mut q = world.query_filtered::<Entity, With<NewProjectTemplateInput>>();
+    let mut q = world.query_filtered::<Entity, With<M>>();
     let Some(outer) = q.iter(world).next() else {
         return;
     };
@@ -1303,7 +1334,8 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
     }
 
     // Template URL field. Prefilled from preset+linkage, editable
-    // so power users can point at a fork or custom template.
+    // so power users can point at a fork, a local path, or any
+    // cargo-generate-compatible source.
     world.spawn((
         Text::new("Template"),
         TextFont {
@@ -1320,7 +1352,62 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         text_edit(
             TextEditProps::default()
                 .with_placeholder("https://github.com/…/your_template".to_string())
-                .with_default_value(preset.url(initial_linkage))
+                .with_default_value(preset.git_url().to_string())
+                .allow_empty(),
+        ),
+    ));
+
+    // Subdir field (optional). Pre-filled with `templates/<kind>-<linkage>`
+    // for built-in presets so users see what the in-tree convention
+    // looks like. Custom forks can override with any subfolder path
+    // — bevy CLI passes it through to cargo-generate as the second
+    // positional argument via `bevy new ... -- <subdir>`.
+    world.spawn((
+        Text::new("Subdir (optional)"),
+        TextFont {
+            font: editor_font.clone(),
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        ChildOf(card),
+    ));
+    world.spawn((
+        NewProjectSubdirInput,
+        ChildOf(card),
+        text_edit(
+            TextEditProps::default()
+                .with_placeholder("templates/game-static".to_string())
+                .with_default_value(
+                    preset
+                        .subdir(initial_linkage)
+                        .unwrap_or_default()
+                        .to_string(),
+                )
+                .allow_empty(),
+        ),
+    ));
+
+    // Branch / tag field (optional). Empty means "whatever bevy new
+    // defaults to" — typically `main`. Useful for scaffolding from
+    // a feature branch or pinning to a release tag.
+    world.spawn((
+        Text::new("Branch (optional)"),
+        TextFont {
+            font: editor_font.clone(),
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        ChildOf(card),
+    ));
+    world.spawn((
+        NewProjectBranchInput,
+        ChildOf(card),
+        text_edit(
+            TextEditProps::default()
+                .with_placeholder("main".to_string())
+                .with_default_value(String::new())
                 .allow_empty(),
         ),
     ));
@@ -1489,10 +1576,12 @@ fn on_create_new_project(
     mut commands: Commands,
     name_inputs: Query<Entity, With<NewProjectNameInput>>,
     template_inputs: Query<Entity, With<NewProjectTemplateInput>>,
+    subdir_inputs: Query<Entity, With<NewProjectSubdirInput>>,
+    branch_inputs: Query<Entity, With<NewProjectBranchInput>>,
     text_edit_values: Query<&TextEditValue>,
 ) {
-    // Read the name + template URL from the text inputs' synced
-    // TextEditValue.
+    // Read the name + template URL + subdir + branch from the text
+    // inputs' synced `TextEditValue`s.
     let Some(name_entity) = name_inputs.iter().next() else {
         return;
     };
@@ -1506,6 +1595,18 @@ fn on_create_new_project(
         .and_then(|e| text_edit_values.get(e).ok())
         .map(|v| v.0.trim().to_string())
         .unwrap_or_default();
+    let subdir_from_input = subdir_inputs
+        .iter()
+        .next()
+        .and_then(|e| text_edit_values.get(e).ok())
+        .map(|v| v.0.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let branch_from_input = branch_inputs
+        .iter()
+        .next()
+        .and_then(|e| text_edit_values.get(e).ok())
+        .map(|v| v.0.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     commands.queue(move |world: &mut World| {
         let (location, linkage) = {
@@ -1531,15 +1632,30 @@ fn on_create_new_project(
                 Some("Please enter a template URL.".into());
             return;
         }
+        // Stitch the URL and (optional) subdir back into a single
+        // `URL [SUBDIR]` string for `scaffold_project`. The
+        // splitting on whitespace inside `scaffold_project` reverses
+        // this for the bevy CLI invocation.
+        let composed_template = match subdir_from_input.as_deref() {
+            Some(subdir) => format!("{template_url} {subdir}"),
+            None => template_url.clone(),
+        };
 
         let name_for_task = name.clone();
         let location_for_task = location.clone();
-        let url_for_task = template_url.clone();
+        let url_for_task = composed_template;
+        let branch_for_task = branch_from_input.clone();
 
         world.resource_mut::<NewProjectState>().status = Some(format!("Scaffolding `{name}`…"));
 
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            scaffold_project(&name_for_task, &location_for_task, &url_for_task, linkage)
+            scaffold_project(
+                &name_for_task,
+                &location_for_task,
+                &url_for_task,
+                branch_for_task.as_deref(),
+                linkage,
+            )
         });
         world.resource_mut::<NewProjectState>().scaffold_task = Some(task);
     });
@@ -1577,11 +1693,27 @@ fn poll_new_project_tasks(
                     .unwrap_or("project")
                     .to_owned();
 
-                // Both linkages kick off `cargo build` with the
-                // same progress stream. Post-build: dylib installs
-                // the cdylib, static opens the project in place.
-                state.status = Some(format!("Building `{project_name}`…"));
+                state.status = Some(format!("Building `{project_name}` in background…"));
                 state.pending_project = Some(project_path.clone());
+
+                // Open the editor IMMEDIATELY: the user can author
+                // the scene, place entities, and explore the
+                // template's `assets/scene.jsn` while the first
+                // build runs. For dylib linkage the build artifact
+                // gets installed when the build finishes (via
+                // `pending_install` in the build-completion branch
+                // below); `pie.play` is gated on build readiness so
+                // hitting Play before the build finishes is a no-op
+                // with a clear tooltip.
+                let linkage = state.linkage;
+                if matches!(linkage, TemplateLinkage::Static) {
+                    // Static path can open right away — the editor
+                    // works without the binary being built; only the
+                    // standalone `cargo play` runner needs it.
+                    state.pending_static_open = Some(project_path.clone());
+                    state.pending_project = None;
+                    state.retry_attempted = false;
+                }
 
                 let progress = std::sync::Arc::new(std::sync::Mutex::new(
                     crate::ext_build::BuildProgress::default(),
@@ -1591,7 +1723,6 @@ fn poll_new_project_tasks(
 
                 let project_for_task = project_path;
                 let progress_for_task = std::sync::Arc::clone(&progress);
-                let linkage = state.linkage;
                 state.build_task = Some(AsyncComputeTaskPool::get().spawn(async move {
                     crate::ext_build::build_extension_project_with_progress(
                         &project_for_task,
@@ -1627,9 +1758,12 @@ fn poll_new_project_tasks(
                     state.pending_install = Some(artifact_or_project);
                 }
                 TemplateLinkage::Static => {
+                    // Editor was already opened against the project
+                    // when the scaffold finished. Just log success;
+                    // no further action needed for static linkage
+                    // (the binary built here is for the user's
+                    // standalone `cargo play`, not the editor).
                     info!("Static build succeeded: {}", artifact_or_project.display());
-                    state.pending_static_open = Some(artifact_or_project);
-                    state.pending_project = None;
                     state.retry_attempted = false;
                 }
             },

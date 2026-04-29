@@ -103,67 +103,75 @@ macro_rules! export_extension {
 
 /// Emit the `extern "C"` entry point a dylib game needs.
 ///
-/// The first argument is the game name as a string literal; the
-/// second is an expression evaluating to a value implementing
-/// [`GamePlugin`](crate::runtime::GamePlugin). The plugin's
-/// `build` method runs once at startup **and** on every hot-reload
-/// cycle. Register game systems, observers, resources, and reflect
-/// types via the [`GameApp`](crate::runtime::GameApp) context.
-/// `GameApp` tracks every registration so the default `teardown`
-/// can reverse them automatically when the dylib is swapped.
+/// The macro takes the game's [`Plugin`] type. The user's plugin must
+/// implement `Default` so the editor's loader can construct fresh
+/// instances on each (re)load. Invoke at most once per crate;
+/// producing two entries from one dylib would fail at link time
+/// anyway (duplicate symbol).
 ///
-/// Invoke at most once per crate. Producing two entries from one
-/// dylib would fail at link time anyway (duplicate symbol).
+/// [`Plugin`]: bevy::app::Plugin
 ///
 /// # Example
 ///
+/// User code is plain Bevy — no jackdaw-specific imports beyond the
+/// macro invocation:
+///
 /// ```ignore
 /// use bevy::prelude::*;
-/// use jackdaw_api::prelude::*;    // brings `GamePlugin`, `GameApp`, `PlayState`
-/// use jackdaw_api::export_game;
 ///
 /// #[derive(Default)]
 /// pub struct MyGame;
 ///
-/// impl GamePlugin for MyGame {
-///     fn build(&self, ctx: &mut GameApp<'_>) {
-///         ctx.add_systems(Update, spin_cube.run_if(in_state(PlayState::Playing)));
+/// impl Plugin for MyGame {
+///     fn build(&self, app: &mut App) {
+///         app.add_systems(Startup, spawn_player);
+///         app.add_systems(Update, move_player);
 ///     }
 /// }
 ///
-/// fn spin_cube() { /* … */ }
-///
-/// export_game!("my_game", MyGame);
+/// jackdaw_api::export_game_plugin!(MyGame);
 /// ```
+///
+/// The editor's dylib loader looks up the emitted
+/// `jackdaw_game_entry_v1` symbol at startup, calls the factory to
+/// obtain a `Box<dyn Plugin>`, and installs it against the editor's
+/// `GameSubApp`.
 #[macro_export]
-macro_rules! export_game {
-    ($name:literal, $plugin:expr) => {
+macro_rules! export_game_plugin {
+    ($plugin_ty:ty) => {
         const _: () = {
-            const __JACKDAW_GAME_NAME_STR: &str = $name;
+            // The dylib's name as a `CStr` for the FFI envelope. We
+            // use the package name from the build environment because
+            // the user no longer passes a name argument; the editor
+            // doesn't actually need a unique per-game name (the
+            // SubApp label `GameSubApp` is shared), but the FFI
+            // header still carries one for diagnostics.
             const __JACKDAW_GAME_NAME: &::core::ffi::CStr =
                 match ::core::ffi::CStr::from_bytes_with_nul(
-                    ::core::concat!($name, "\0").as_bytes(),
+                    ::core::concat!(env!("CARGO_PKG_NAME"), "\0").as_bytes(),
                 ) {
                     ::core::result::Result::Ok(s) => s,
                     ::core::result::Result::Err(_) => {
-                        ::core::panic!("game name contains interior NUL byte")
+                        ::core::panic!("CARGO_PKG_NAME contains interior NUL byte")
                     }
                 };
 
-            unsafe extern "C" fn __jackdaw_game_build(world: *mut ::bevy::ecs::world::World) {
-                // SAFETY: the loader calls this with a valid `&mut World`
-                // pointer obtained from an exclusive system. The pointer
-                // lives for the duration of that system's call.
-                let world: &mut ::bevy::ecs::world::World = unsafe { &mut *world };
-                let mut ctx = $crate::runtime::GameApp::new(world, __JACKDAW_GAME_NAME_STR);
-                $crate::runtime::GamePlugin::build(&$plugin, &mut ctx);
-            }
-
-            unsafe extern "C" fn __jackdaw_game_teardown(world: *mut ::bevy::ecs::world::World) {
-                // SAFETY: same contract as `build`.
-                let world: &mut ::bevy::ecs::world::World = unsafe { &mut *world };
-                let mut ctx = $crate::runtime::GameApp::new(world, __JACKDAW_GAME_NAME_STR);
-                $crate::runtime::GamePlugin::teardown(&$plugin, &mut ctx);
+            unsafe extern "C" fn __jackdaw_game_factory() -> $crate::ffi::JackdawGamePluginPtr {
+                // Construct a fresh plugin instance and return it as
+                // a stable-ABI fat pointer to the trait object.
+                let plugin: ::std::boxed::Box<dyn ::bevy::app::Plugin> =
+                    ::std::boxed::Box::new(<$plugin_ty as ::core::default::Default>::default());
+                let raw: *mut dyn ::bevy::app::Plugin = ::std::boxed::Box::into_raw(plugin);
+                // Split the fat pointer into (data, vtable). This
+                // relies on the standard fat-pointer layout shared by
+                // both sides via `bevy/dynamic_linking` + `jackdaw_sdk`.
+                let parts: (*mut (), *mut ()) = unsafe {
+                    ::core::mem::transmute::<*mut dyn ::bevy::app::Plugin, (*mut (), *mut ())>(raw)
+                };
+                $crate::ffi::JackdawGamePluginPtr {
+                    data: parts.0,
+                    vtable: parts.1,
+                }
             }
 
             #[unsafe(no_mangle)]
@@ -173,8 +181,7 @@ macro_rules! export_game {
                     bevy_version: $crate::ffi::BEVY_VERSION.as_ptr(),
                     profile: $crate::ffi::PROFILE.as_ptr(),
                     name: __JACKDAW_GAME_NAME.as_ptr(),
-                    build: __jackdaw_game_build,
-                    teardown: __jackdaw_game_teardown,
+                    factory: __jackdaw_game_factory,
                 }
             }
         };

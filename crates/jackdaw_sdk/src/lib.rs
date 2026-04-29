@@ -38,7 +38,7 @@ pub mod prelude {
 }
 
 pub use jackdaw_api::export_extension;
-pub use jackdaw_api::export_game;
+pub use jackdaw_api::export_game_plugin;
 pub use jackdaw_api::operator;
 
 pub use jackdaw_api::{
