@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::lifecycle::OperatorEntity;
+use jackdaw_api_internal::lifecycle::{OperatorAction, OperatorEntity};
 use jackdaw_feathers::icons::EditorFont;
 use jackdaw_feathers::picker::{
     Matchable, PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text, picker_item,
@@ -9,6 +9,7 @@ use jackdaw_feathers::tokens;
 use jackdaw_feathers::tooltip::Tooltip;
 
 use crate::core_extension::CoreExtensionInputContext;
+use crate::operator_tooltip::display_keybind;
 
 #[derive(Component)]
 struct CommandPalette;
@@ -82,12 +83,19 @@ fn no_modal_active(active: ActiveModalQuery) -> bool {
 fn get_operators(
     world: &mut World,
     operator_entities: &mut QueryState<&OperatorEntity>,
+    mut actions: &mut QueryState<(&OperatorAction, &Bindings)>,
+    mut binding_components: &mut QueryState<&Binding>,
 ) -> Vec<RegisteredOperator> {
     operator_entities
         .iter(world)
         .map(|op| RegisteredOperator {
             label: op.label(),
             description: op.description(),
+            keybind: display_keybind(
+                op.id(),
+                &actions.query(world),
+                &binding_components.query(world),
+            ),
             id: op.id(),
         })
         .collect::<Vec<_>>() // if i don't collect, it's a double borrow of `world`
@@ -117,7 +125,7 @@ fn spawn_item(
             children![
                 match_text(matched.segments),
                 (
-                    Text::new(item.id),
+                    Text::new(item.keybind.clone()),
                     TextFont::from(font.0.clone()).with_font_size(tokens::TEXT_SIZE_SM),
                     TextColor(tokens::TEXT_MUTED_COLOR.into())
                 )
@@ -125,6 +133,7 @@ fn spawn_item(
         )],
         Tooltip::title(item.label)
             .with_description(item.description)
+            .with_keybind(item.keybind.clone())
             .with_footer(item.id),
     ));
     Ok(())
@@ -144,11 +153,12 @@ fn on_select(
     Ok(())
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone)]
 struct RegisteredOperator {
     label: &'static str,
     description: &'static str,
     id: &'static str,
+    keybind: String,
 }
 
 impl Matchable for RegisteredOperator {

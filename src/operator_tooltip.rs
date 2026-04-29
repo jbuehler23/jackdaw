@@ -22,7 +22,8 @@ use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Binding, Bindings};
 use jackdaw_api_internal::lifecycle::{OperatorAction, OperatorEntity};
 use jackdaw_commands::keybinds::key_display_name;
-use jackdaw_feathers::{button::ButtonOperatorCall, tooltip::Tooltip};
+use jackdaw_feathers::button::ButtonOperatorCall;
+use jackdaw_feathers::tooltip::Tooltip;
 
 pub struct OperatorTooltipPlugin;
 
@@ -93,7 +94,7 @@ fn refresh_keybind_on_bindings_change(
 /// join with `" / "` (e.g. `Delete / Backspace`). Returns an empty
 /// string when no action entity carries that id, or the operator's
 /// only bindings are mouse-motion / wheel which the tooltip skips.
-fn display_keybind(
+pub fn display_keybind(
     operator_id: &str,
     actions: &Query<(&OperatorAction, &Bindings)>,
     binding_components: &Query<&Binding>,
