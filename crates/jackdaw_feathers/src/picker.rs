@@ -29,6 +29,7 @@ impl<T: Matchable + Send + Sync + 'static> Pickable for T {}
 #[derive(Component)]
 #[component(on_replace)]
 pub struct Picker {
+    dismissible: bool,
     matcher: FuzzyMatcher<Item>,
     spawn_item: SystemId<In<SpawnItemInput>, Result>,
     on_select: SystemId<In<SelectInput>, Result>,
@@ -133,6 +134,7 @@ impl<T: Pickable> PickerProps<T> {
             spawn_item,
             on_select,
             on_dismiss,
+            dismissible: props.dismissible,
         };
 
         let mut text_edit_props = TextEditProps::default().auto_focus();
@@ -395,23 +397,44 @@ fn scroll_to_picker_item(
 #[derive(Component)]
 struct PickerDismissButton;
 
+#[derive(EntityEvent)]
+pub struct DismissPickerEvent(pub Entity);
+
 fn on_dismiss_activated(
     trigger: On<ButtonClickEvent>,
     picker_dismiss_query: Query<(), With<PickerDismissButton>>,
     child_of: Query<&ChildOf>,
-    picker_query: Query<(Entity, &Picker, &WithPickerInput, &WithPickerList)>,
+    picker_query: Query<Entity, With<Picker>>,
     mut commands: Commands,
 ) {
     if picker_dismiss_query.get(trigger.entity).is_err() {
         return;
     };
 
-    let Some((picker_entity, picker, input, list)) = std::iter::once(trigger.entity)
+    let Some(picker_entity) = std::iter::once(trigger.entity)
         .chain(child_of.iter_ancestors(trigger.entity))
         .find_map(|e| picker_query.get(e).ok())
     else {
         return;
     };
+
+    commands.trigger(DismissPickerEvent(picker_entity));
+}
+
+fn on_picker_dismissed(
+    trigger: On<DismissPickerEvent>,
+    pickers: Query<(&Picker, &WithPickerInput, &WithPickerList)>,
+    mut commands: Commands,
+) {
+    let Ok((picker, input, list)) = pickers.get(trigger.0) else {
+        return;
+    };
+
+    if !picker.dismissible {
+        return;
+    }
+
+    let picker_entity = trigger.0;
 
     let entities = PickerEntities {
         picker: picker_entity,
@@ -426,6 +449,20 @@ fn on_dismiss_activated(
             error!("Error when dismissing picker {picker_entity}: {e}");
         }
     });
+}
+
+fn handle_esc_key(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    pickers: Query<Entity, With<Picker>>,
+    mut commands: Commands,
+) {
+    if !keyboard.just_pressed(KeyCode::Escape) {
+        return;
+    }
+
+    for picker in &pickers {
+        commands.trigger(DismissPickerEvent(picker));
+    }
 }
 
 #[derive(Component)]
@@ -525,7 +562,7 @@ fn process_pickers(
     }
 }
 
-fn on_picker_select(
+fn on_picker_selected(
     trigger: On<PickerSelect>,
     pickers: Query<(&Picker, &WithPickerInput, &WithPickerList)>,
     mut commands: Commands,
@@ -695,9 +732,15 @@ impl Matchable for Item {
 pub(crate) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
-        (process_pickers, on_text_edit_submit, scroll_to_picker_item),
+        (
+            process_pickers,
+            on_text_edit_submit,
+            scroll_to_picker_item,
+            handle_esc_key,
+        ),
     )
-    .add_observer(on_picker_select)
+    .add_observer(on_picker_selected)
+    .add_observer(on_picker_dismissed)
     .add_observer(on_picker_item_activated)
     .add_observer(on_dismiss_activated);
 }

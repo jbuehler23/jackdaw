@@ -1,5 +1,4 @@
 use crate::EditorEntity;
-use crate::core_extension::CoreExtensionInputContext;
 use crate::selection::{Selected, Selection};
 use std::any::TypeId;
 use std::collections::HashSet;
@@ -8,7 +7,7 @@ use bevy::ecs::archetype::Archetype;
 use bevy::ecs::component::Components;
 use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::prelude::*;
-use jackdaw_api::prelude::{Press, *};
+use jackdaw_api::prelude::*;
 use jackdaw_feathers::picker::{
     Category, Matchable, PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text,
     picker_item,
@@ -258,37 +257,4 @@ fn spawn_item(
     }
 
     Ok(())
-}
-
-pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<ComponentPickerCloseOp>();
-    let ext = ctx.id();
-    ctx.spawn((
-        Action::<ComponentPickerCloseOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Escape, Press::default())],
-    ));
-}
-
-fn component_picker_open(pickers: Query<(), With<ComponentPicker>>) -> bool {
-    !pickers.is_empty()
-}
-
-/// Close the component picker dialog. Triggered by Escape via BEI.
-#[operator(
-    id = "component_picker.close",
-    label = "Close Component Picker",
-    description = "Close the component picker.",
-    is_available = component_picker_open,
-    allows_undo = false,
-)]
-pub(crate) fn component_picker_close(
-    _: In<OperatorParameters>,
-    pickers: Query<Entity, With<ComponentPicker>>,
-    mut commands: Commands,
-) -> OperatorResult {
-    for entity in &pickers {
-        commands.entity(entity).despawn();
-    }
-    OperatorResult::Finished
 }

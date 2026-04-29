@@ -4,14 +4,13 @@
 //! `menu == "Add"`.
 
 use bevy::prelude::*;
-use jackdaw_api::prelude::{Press, *};
+use jackdaw_api::prelude::*;
 use jackdaw_feathers::picker::{
     Category, Matchable, PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text,
     picker_item,
 };
 use jackdaw_feathers::tokens;
 
-use crate::core_extension::CoreExtensionInputContext;
 use crate::entity_ops::{
     EntityAddCameraOp, EntityAddCubeOp, EntityAddDirectionalLightOp, EntityAddEmptyOp,
     EntityAddNavmeshOp, EntityAddPointLightOp, EntityAddPrefabOp, EntityAddSphereOp,
@@ -263,39 +262,6 @@ fn on_select(
     commands.entity(input.entities.picker).try_despawn();
 
     Ok(())
-}
-
-pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<AddEntityPickerCloseOp>();
-    let ext = ctx.id();
-    ctx.spawn((
-        Action::<AddEntityPickerCloseOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Escape, Press::default())],
-    ));
-}
-
-fn add_entity_picker_open(pickers: Query<(), With<AddEntityPicker>>) -> bool {
-    !pickers.is_empty()
-}
-
-/// Close the Add Entity picker. Triggered by Escape via BEI.
-#[operator(
-    id = "add_entity_picker.close",
-    label = "Close Add Entity Picker",
-    description = "Close the Add Entity picker.",
-    is_available = add_entity_picker_open,
-    allows_undo = false,
-)]
-pub(crate) fn add_entity_picker_close(
-    _: In<OperatorParameters>,
-    pickers: Query<Entity, With<AddEntityPicker>>,
-    mut commands: Commands,
-) -> OperatorResult {
-    for entity in &pickers {
-        commands.entity(entity).despawn();
-    }
-    OperatorResult::Finished
 }
 
 impl Matchable for AddMenuItem {

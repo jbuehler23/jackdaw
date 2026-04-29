@@ -207,9 +207,6 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::inspector::ops::add_to_extension(ctx);
         crate::viewport::add_to_extension(ctx);
         crate::command_palette::add_to_extension(ctx);
-        crate::prefab_picker::add_to_extension(ctx);
-        crate::add_entity_picker::add_to_extension(ctx);
-        crate::inspector::component_picker::add_to_extension(ctx);
         crate::document_ops::add_to_extension(ctx);
     }
 
