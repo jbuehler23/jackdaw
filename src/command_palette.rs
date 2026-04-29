@@ -83,8 +83,8 @@ fn no_modal_active(active: ActiveModalQuery) -> bool {
 fn get_operators(
     world: &mut World,
     operator_entities: &mut QueryState<&OperatorEntity>,
-    mut actions: &mut QueryState<(&OperatorAction, &Bindings)>,
-    mut binding_components: &mut QueryState<&Binding>,
+    actions: &mut QueryState<(&OperatorAction, &Bindings)>,
+    binding_components: &mut QueryState<&Binding>,
 ) -> Vec<RegisteredOperator> {
     operator_entities
         .iter(world)
