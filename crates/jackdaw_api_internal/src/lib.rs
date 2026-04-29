@@ -326,7 +326,7 @@ impl<'a> ExtensionContext<'a> {
                             execution_context: ExecutionContext::Invoke,
                             creates_history_entry: true,
                         })
-                        .call()
+                        .call();
                 },),
                 // Auto-tag any BEI action entity for this operator with
                 // `OperatorAction(Op::ID)` so id-keyed lookups (tooltip
@@ -345,7 +345,7 @@ impl<'a> ExtensionContext<'a> {
         ));
 
         if let Err(err) = self.world.run_system_cached(tag_existing_actions::<O>) {
-            error!("Failed to tag existing actions: {}", err)
+            error!("Failed to tag existing actions: {}", err);
         }
 
         self
