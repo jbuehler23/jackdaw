@@ -10,7 +10,7 @@
 
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::*;
+use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
 #[derive(Default)]
@@ -40,8 +40,8 @@ impl JackdawExtension for ViewableCameraExtension {
         ctx.spawn((
             ViewableCameraContext,
             actions!(ViewableCameraContext[
-                (Action::<PlaceViewableCamera>::new(), bindings![KeyCode::F6]),
-                (Action::<ToggleCameraPreview>::new(), bindings![KeyCode::F7]),
+                (Action::<PlaceViewableCamera>::new(), bindings![(KeyCode::F6, Press::default())]),
+                (Action::<ToggleCameraPreview>::new(), bindings![(KeyCode::F7, Press::default())]),
             ]),
         ));
 

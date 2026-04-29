@@ -2,7 +2,7 @@
 name = "jackdaw_animation"
 version = "0.4.0"
 edition = "2024"
-description = "Animation authoring and playback for the Jackdaw editor — thin UI over Bevy's AnimationClip / AnimationGraph / AnimationPlayer."
+description = "Animation authoring and playback for the Jackdaw editor; thin UI over Bevy's AnimationClip / AnimationGraph / AnimationPlayer."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 include = ["src/**/*", "Cargo.toml", "LICENSE*"]

@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 /// Everything `ext_build` and `new_project` need to point
 /// cargo-spawned rustc at the editor's SDK. Paths are _computed_,
-/// not _verified_ — call [`Self::dylib_exists`] / [`Self::wrapper_exists`]
+/// not _verified_; call [`Self::dylib_exists`] / [`Self::wrapper_exists`]
 /// or an equivalent before relying on them.
 pub struct SdkPaths {
     /// Absolute path to `libjackdaw_sdk.{so,dylib,dll}`.

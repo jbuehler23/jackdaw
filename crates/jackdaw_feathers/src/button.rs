@@ -1,6 +1,7 @@
 use bevy::input_focus::InputFocus;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use jackdaw_jsn::PropertyValue;
 use lucide_icons::Icon;
 use std::borrow::Cow;
 
@@ -18,15 +19,96 @@ pub struct ButtonClickEvent {
 }
 
 /// Attached to a button to declare that clicking it should dispatch
-/// the operator with this id. The editor registers the dispatch
-/// observer; feathers just carries the id so widgets can declare
-/// their intent without depending on the operator API.
+/// the operator with this id, optionally passing concrete parameters.
+/// The editor's click observer fires the operator; the tooltip
+/// renderer formats the call signature for hover help, so two buttons
+/// targeting the same operator with different args show different
+/// signatures.
+///
+/// Feathers carries this as a plain component to keep the widget
+/// crate independent of the operator API.
 #[derive(Component, Clone, Debug)]
-pub struct ButtonOperatorCall(pub Cow<'static, str>);
+pub struct ButtonOperatorCall {
+    pub id: Cow<'static, str>,
+    pub params: Vec<(Cow<'static, str>, PropertyValue)>,
+}
 
 impl ButtonOperatorCall {
+    /// Plain operator dispatch, no params.
     pub fn new(id: impl Into<Cow<'static, str>>) -> Self {
-        Self(id.into())
+        Self {
+            id: id.into(),
+            params: Vec::new(),
+        }
+    }
+
+    /// Add a parameter. Builder-style so call sites can chain.
+    #[must_use]
+    pub fn with_param(
+        mut self,
+        key: impl Into<Cow<'static, str>>,
+        value: impl Into<PropertyValue>,
+    ) -> Self {
+        self.params.push((key.into(), value.into()));
+        self
+    }
+}
+
+impl std::fmt::Display for ButtonOperatorCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.id)?;
+        f.write_str("(")?;
+        for (i, (k, v)) in self.params.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{k}: {v}")?;
+        }
+        f.write_str(")")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseOpActionError {
+    /// Input does not start with [`crate::menu_bar::OP_ACTION_PREFIX`].
+    MissingPrefix,
+}
+
+impl std::fmt::Display for ParseOpActionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingPrefix => f.write_str("missing `op:` prefix"),
+        }
+    }
+}
+
+impl std::error::Error for ParseOpActionError {}
+
+/// Parse a menu/context-menu action string of the form
+/// `op:OP_ID?key=value&key2=value2` into a [`ButtonOperatorCall`].
+/// Values are stored as `PropertyValue::String`; the runtime
+/// `OperatorParameters::as_int` / `as_bool` accessors coerce numeric
+/// and bool params from string form. Future menu entries that need
+/// typed values should construct the call directly with
+/// [`ButtonOperatorCall::with_param`].
+///
+/// `&String` and `&Cow<str>` deref to `&str`, so this impl covers
+/// every action-string source the editor currently has.
+impl TryFrom<&str> for ButtonOperatorCall {
+    type Error = ParseOpActionError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let rest = value
+            .strip_prefix(crate::menu_bar::OP_ACTION_PREFIX)
+            .ok_or(ParseOpActionError::MissingPrefix)?;
+        let (op_id, query) = rest.split_once('?').unwrap_or((rest, ""));
+        let mut call = ButtonOperatorCall::new(op_id.to_string());
+        for kv in query.split('&').filter(|s| !s.is_empty()) {
+            if let Some((k, v)) = kv.split_once('=') {
+                call = call.with_param(k.to_string(), v.to_string());
+            }
+        }
+        Ok(call)
     }
 }
 
@@ -37,7 +119,14 @@ pub fn plugin(app: &mut App) {
 #[derive(Component)]
 pub struct EditorButton;
 
-#[derive(Component, Default, Clone, Copy, PartialEq)]
+/// Marker on the text entity that holds a button's main content
+/// string. External systems use this to mutate the displayed label
+/// without re-spawning the button (e.g. the gizmo space toggle that
+/// flips between "World" and "Local" while keeping the same button).
+#[derive(Component)]
+pub struct ButtonContentText;
+
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ButtonVariant {
     #[default]
     Default,
@@ -60,36 +149,57 @@ pub enum ButtonSize {
 impl ButtonVariant {
     pub fn bg_color(&self, hovered: bool) -> Srgba {
         use bevy::color::palettes::tailwind;
-        match (self, hovered) {
-            (Self::Default, _) => tailwind::ZINC_700,
-            (Self::Ghost | Self::ActiveAlt | Self::Disabled, _) => TEXT_BODY_COLOR,
-            (Self::Primary | Self::Active, _) => PRIMARY_COLOR,
-            (Self::Destructive, false) => tailwind::RED_500,
-            (Self::Destructive, true) => tailwind::RED_600,
+        match self {
+            Self::Default => tailwind::ZINC_700,
+            Self::Ghost | Self::ActiveAlt | Self::Disabled => TEXT_BODY_COLOR,
+            Self::Primary => PRIMARY_COLOR,
+            // Solid surface grey (Figma toolbar #505050). Toolbar
+            // active-tool indicators and combobox selected rows
+            // share this treatment.
+            Self::Active => Srgba::new(0.314, 0.314, 0.314, 1.0),
+            Self::Destructive => {
+                if hovered {
+                    tailwind::RED_600
+                } else {
+                    tailwind::RED_500
+                }
+            }
         }
     }
     pub fn bg_opacity(&self, hovered: bool) -> f32 {
-        #[expect(
-            clippy::match_same_arms,
-            reason = "We want to tweak the values that happen to be the same differently"
-        )]
-        match (self, hovered) {
-            (Self::Ghost, false) | (Self::Disabled, _) => 0.0,
-            (Self::Active, false) => 0.1,
-            (Self::Active, true) => 0.15,
-            (Self::ActiveAlt, _) => 0.05,
-            (Self::Default, false) => 0.5,
-            (Self::Default, true) => 0.8,
-            (Self::Ghost, true) => 0.05,
-            (Self::Primary | Self::Destructive, false) => 1.0,
-            (Self::Primary | Self::Destructive, true) => 0.9,
+        match self {
+            Self::Disabled => 0.0,
+            Self::Ghost => {
+                if hovered {
+                    0.05
+                } else {
+                    0.0
+                }
+            }
+            // Solid #505050 in both states; no hover lift, the icon
+            // colour does the differentiation.
+            Self::Active => 1.0,
+            Self::ActiveAlt => 0.05,
+            Self::Default => {
+                if hovered {
+                    0.8
+                } else {
+                    0.5
+                }
+            }
+            Self::Primary | Self::Destructive => {
+                if hovered {
+                    0.9
+                } else {
+                    1.0
+                }
+            }
         }
     }
     pub fn text_color(&self) -> Srgba {
         match self {
             Self::Default | Self::Ghost | Self::ActiveAlt => TEXT_BODY_COLOR,
-            Self::Primary | Self::Destructive => TEXT_DISPLAY_COLOR,
-            Self::Active => PRIMARY_COLOR.lighter(0.05),
+            Self::Primary | Self::Destructive | Self::Active => TEXT_DISPLAY_COLOR,
             Self::Disabled => TEXT_MUTED_COLOR,
         }
     }
@@ -109,9 +219,16 @@ impl ButtonVariant {
         }
     }
     pub fn border_opacity(&self, hovered: bool) -> f32 {
-        match (self, hovered) {
-            (Self::Ghost, false) | (Self::Disabled, _) => 0.0,
-            (Self::ActiveAlt, _) => 0.2,
+        match self {
+            Self::Ghost => {
+                if hovered {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Self::Disabled => 0.0,
+            Self::ActiveAlt => 0.2,
             _ => 1.0,
         }
     }
@@ -120,15 +237,21 @@ impl ButtonVariant {
 impl ButtonSize {
     fn width(&self) -> Val {
         match self {
-            Self::Icon => Val::Px(28.0),
-            Self::IconSM => Val::Px(24.0),
+            // 22px frame fits inside the 30px-tall toolbar with 4px
+            // vertical breathing. Glyph at `icon_size = 16` fills
+            // ~73% of the frame which reads as a solid icon rather
+            // than a small mark surrounded by black void; lucide
+            // glyphs only fill about two-thirds of their em-box so
+            // the visible-icon ratio lands closer to the Figma 55%.
+            Self::Icon => Val::Px(22.0),
+            Self::IconSM => Val::Px(20.0),
             Self::MD => Val::Auto,
         }
     }
     fn height(&self) -> Val {
         match self {
-            Self::IconSM => Val::Px(24.0),
-            _ => Val::Px(28.0),
+            Self::IconSM => Val::Px(20.0),
+            _ => Val::Px(22.0),
         }
     }
     fn padding(&self) -> Val {
@@ -140,7 +263,7 @@ impl ButtonSize {
     fn icon_size(&self) -> f32 {
         match self {
             Self::IconSM => 14.0,
-            _ => 16.0,
+            Self::Icon | Self::MD => 16.0,
         }
     }
 }
@@ -201,6 +324,14 @@ impl ButtonProps {
     }
     pub fn with_subtitle(mut self, subtitle: impl Into<String>) -> Self {
         self.subtitle = Some(subtitle.into());
+        self
+    }
+    /// Override the button's main label. Useful in combination with
+    /// `ButtonProps::from_operator::<Op>()` (defined in
+    /// `jackdaw_api::ui`) when the operator's `LABEL` is too long for
+    /// a tight toolbar slot, or empty when the icon alone is enough.
+    pub fn with_content(mut self, content: impl Into<String>) -> Self {
+        self.content = content.into();
         self
     }
     /// Dispatch an operator by id when this button is clicked. The
@@ -352,15 +483,25 @@ fn setup_button(
         config.initialized = true;
 
         let is_column = node.flex_direction == FlexDirection::Column;
-        let left_padding = if config.left_icon.is_some() || is_column {
-            px(6.0)
+        let icon_only = matches!(size, ButtonSize::Icon | ButtonSize::IconSM);
+        // Icon-only buttons keep symmetric zero-padding so the glyph
+        // sits in the dead centre of the square frame; otherwise an
+        // icon child would inflate one side and shift the glyph off
+        // the centre line.
+        let (left_padding, right_padding) = if icon_only {
+            (size.padding(), size.padding())
         } else {
-            size.padding()
-        };
-        let right_padding = if config.right_icon.is_some() || is_column {
-            px(6.0)
-        } else {
-            size.padding()
+            let left = if config.left_icon.is_some() || is_column {
+                px(6.0)
+            } else {
+                size.padding()
+            };
+            let right = if config.right_icon.is_some() || is_column {
+                px(6.0)
+            } else {
+                size.padding()
+            };
+            (left, right)
         };
         node.padding = UiRect::axes(left_padding, node.padding.top);
         node.padding.right = right_padding;
@@ -374,9 +515,9 @@ fn setup_button(
         // despawn of the button landed before these flushed, the
         // `ChildOf` insert hook would fire `add_related<ChildOf>`
         // on a dead parent, producing the
-        // `Entity despawned … is invalid` errors on every inspector
+        // `Entity despawned ... is invalid` errors on every inspector
         // rebuild. The `get_entity_mut` guard + synchronous
-        // `with_children` here closes that window — everything
+        // `with_children` here closes that window; everything
         // happens atomically on one `&mut World` block.
         let left_icon = config.left_icon;
         let right_icon = config.right_icon;
@@ -392,7 +533,7 @@ fn setup_button(
                 return;
             };
             if let Some(id) = call_operator {
-                ec.insert(ButtonOperatorCall(id));
+                ec.insert(ButtonOperatorCall::new(id));
             }
             ec.with_children(|parent| {
                 if let Some(icon) = left_icon {
@@ -407,8 +548,15 @@ fn setup_button(
                     ));
                 }
 
-                if !content.is_empty() {
+                // Icon-sized buttons render only the icon; the
+                // operator label still reaches the user through the
+                // hover tooltip. Skipping the text child here means
+                // callers don't have to mirror the same intent with
+                // `with_content("")`.
+                let icon_only = matches!(size, ButtonSize::Icon | ButtonSize::IconSM);
+                if !content.is_empty() && !icon_only {
                     parent.spawn((
+                        ButtonContentText,
                         Text::new(&content),
                         TextFont {
                             font: font.clone(),
@@ -457,7 +605,13 @@ fn setup_button(
 }
 
 fn handle_hover(
-    changed: Query<(), Changed<Hovered>>,
+    // Re-render when either the hover state OR the variant
+    // changed. Without `Changed<ButtonVariant>` a toolbar button
+    // whose variant flips Active <-> Ghost (driven by an external
+    // system, e.g. `update_toolbar_button_variants`) only picks
+    // up the new bg the next time the cursor crosses it; the
+    // user sees stale highlights.
+    changed: Query<(), Or<(Changed<Hovered>, Changed<ButtonVariant>)>>,
     mut buttons: Query<
         (
             Entity,
@@ -510,7 +664,13 @@ fn handle_button_click(
 /// ButtonOperatorCall::new("my.op")))`. A setter isn't provided on
 /// [`IconButtonProps`] because `icon_button` has no staging/setup system;
 /// the tuple-form keeps the API small.
-pub fn icon_button(props: IconButtonProps, icon_font: &Handle<Font>) -> impl Bundle {
+// `+ use<>` on the return type opts out of Rust 2024's default
+// `impl Trait` lifetime capture: the bundle clones `icon_font`
+// internally (see `font: icon_font.clone()` in the body), so the
+// returned `impl Bundle` carries no borrow of the input handle and
+// can be returned through wrapper functions without leaking
+// lifetimes.
+pub fn icon_button(props: IconButtonProps, icon_font: &Handle<Font>) -> impl Bundle + use<> {
     let IconButtonProps {
         icon,
         color,

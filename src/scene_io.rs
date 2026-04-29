@@ -1584,7 +1584,7 @@ fn cleanup_pending_new_scene(
 ///
 /// BEI action entities carry a `Name` (via `Action<A>`'s
 /// `#[require(Name::new(any::type_name::<A>()), ActionSettings, …)]`)
-/// but are editor infrastructure — filter them out via
+/// but are editor infrastructure; filter them out via
 /// `Without<ActionSettings>` so they don't get serialized into
 /// undo snapshots and re-spawned as scene entities on undo.
 fn collect_scene_entities_from_set(world: &mut World, editor_set: &HashSet<Entity>) -> Vec<Entity> {
@@ -1671,7 +1671,7 @@ pub(crate) fn clear_scene_entities(world: &mut World) {
 /// so BEI action entities are otherwise indistinguishable from
 /// scene roots. They also carry the non-generic `ActionSettings`
 /// marker, so excluding those keeps every operator's input routing
-/// alive across an `apply_ast_to_world` pass — without action
+/// alive across an `apply_ast_to_world` pass; without action
 /// entities in `Actions<CoreExtensionInputContext>`, BEI emits no
 /// `Fire` events and every editor keybind goes silent.
 pub(crate) fn despawn_scene_entities(world: &mut World) {
@@ -1707,7 +1707,7 @@ pub(crate) fn despawn_scene_entities(world: &mut World) {
 /// Build a self-contained `SceneJsnAst` snapshot of the current
 /// scene by running the same full-scene serialization pass as
 /// `save_scene_inner`. This picks up **runtime asset handles** (ad-
-/// hoc materials etc.) as inline assets under `#Name` keys — the
+/// hoc materials etc.) as inline assets under `#Name` keys; the
 /// live `SceneJsnAst` resource can't do that because
 /// `sync_component_to_ast` uses the stateless `AstSerializerProcessor`
 /// which serializes runtime handles as `null`.
@@ -1720,7 +1720,7 @@ pub(crate) fn despawn_scene_entities(world: &mut World) {
 ///
 /// Cost: O(scene entities × registered components) per snapshot.
 /// Called once per history-creating operator dispatch, not per
-/// frame — acceptable for the current editor workload.
+/// frame; acceptable for the current editor workload.
 pub fn build_snapshot_ast(world: &mut World) -> jackdaw_jsn::SceneJsnAst {
     let parent_path: Cow<'_, Path> = match world
         .get_resource::<crate::project::ProjectRoot>()

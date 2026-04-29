@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
-use crate::{EditorEntity, project::ProjectRoot};
+use crate::{EditorEntity, core_extension::CoreExtensionInputContext, project::ProjectRoot};
 use bevy::prelude::*;
+use jackdaw_api::prelude::Press;
+use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     icons::{EditorFont, Icon, IconFont, icon},
     picker::{
@@ -180,4 +182,39 @@ impl Matchable for PrefabPickerEntry {
     fn haystack(&self) -> String {
         self.display_name.clone()
     }
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<PrefabPickerCloseOp>();
+    let ext = ctx.id();
+    ctx.spawn((
+        Action::<PrefabPickerCloseOp>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![(KeyCode::Escape, Press::default())],
+    ));
+}
+
+fn picker_open(picker: Query<(), With<PrefabPicker>>) -> bool {
+    !picker.is_empty()
+}
+
+/// Close the prefab picker. Triggered by Escape via BEI; click-outside
+/// dismissal stays in [`close_prefab_picker_on_outside_click`] because
+/// it's a positional gesture, not a key event.
+#[operator(
+    id = "prefab_picker.close",
+    label = "Close Prefab Picker",
+    description = "Close the prefab picker.",
+    is_available = picker_open,
+    allows_undo = false,
+)]
+pub(crate) fn prefab_picker_close(
+    _: In<OperatorParameters>,
+    picker: Query<Entity, With<PrefabPicker>>,
+    mut commands: Commands,
+) -> OperatorResult {
+    for entity in &picker {
+        commands.entity(entity).despawn();
+    }
+    OperatorResult::Finished
 }

@@ -67,7 +67,7 @@ impl From<bincode::error::EncodeError> for SaveError {
     label = "Save",
     description = "Save the baked navmesh to disk."
 )]
-pub(crate) fn navmesh_save(
+pub fn navmesh_save(
     _: In<OperatorParameters>,
     mut commands: Commands,
     raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
@@ -179,7 +179,7 @@ impl From<bincode::error::DecodeError> for LoadError {
     label = "Load",
     description = "Load a navmesh from disk."
 )]
-pub(crate) fn navmesh_load(
+pub fn navmesh_load(
     _: In<OperatorParameters>,
     mut commands: Commands,
     raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,

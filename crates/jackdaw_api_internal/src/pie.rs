@@ -31,7 +31,7 @@ use bevy::prelude::*;
 /// Games attach `.run_if(in_state(PlayState::Playing))` to their
 /// update systems and `OnEnter(PlayState::Playing)` to their
 /// start-of-play systems (entity spawning, initial state setup).
-/// `Stopped` is authoring mode — the game is loaded but dormant.
+/// `Stopped` is authoring mode; the game is loaded but dormant.
 /// `Paused` freezes game systems without discarding world state.
 #[derive(States, Clone, Eq, PartialEq, Hash, Debug, Default)]
 pub enum PlayState {

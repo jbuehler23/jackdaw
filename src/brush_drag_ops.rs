@@ -9,9 +9,7 @@
 //! inline in the operator body. Escape goes through the global
 //! `modal.cancel` chain.
 
-use bevy::{
-    input_focus::InputFocus, prelude::*, ui::ui_transform::UiGlobalTransform, window::PrimaryWindow,
-};
+use bevy::{prelude::*, ui::ui_transform::UiGlobalTransform, window::PrimaryWindow};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_jsn::Brush;
@@ -25,6 +23,7 @@ use crate::brush::{
 };
 use crate::commands::CommandHistory;
 use crate::draw_brush::{CreateBrushCommand, DrawBrushState, brush_data_from_entity};
+use crate::keybind_focus::KeybindFocus;
 use crate::modal_transform::ModalTransformState;
 use crate::selection::{Selected, Selection};
 use crate::snapping::SnapSettings;
@@ -45,11 +44,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
 /// True when no other modal/drag/draw is active and the cursor isn't in a text field.
 fn drag_environment_ok(
-    input_focus: &InputFocus,
+    keybind_focus: &KeybindFocus,
     modal: &ModalTransformState,
     draw_state: &DrawBrushState,
 ) -> bool {
-    input_focus.0.is_none() && modal.active.is_none() && draw_state.active.is_none()
+    !keybind_focus.is_typing() && modal.active.is_none() && draw_state.active.is_none()
 }
 
 // =====================================================================
@@ -64,7 +63,7 @@ pub(crate) fn face_drag_invoke_trigger(
     keyboard: Res<ButtonInput<KeyCode>>,
     edit_mode: Res<EditMode>,
     drag_state: Res<BrushDragState>,
-    input_focus: Res<InputFocus>,
+    keybind_focus: KeybindFocus,
     modal: Res<ModalTransformState>,
     draw_state: Res<DrawBrushState>,
     mut commands: Commands,
@@ -78,7 +77,7 @@ pub(crate) fn face_drag_invoke_trigger(
     if !(in_face_edit || shift || alt) {
         return;
     }
-    if !drag_environment_ok(&input_focus, &modal, &draw_state) && !in_face_edit {
+    if !drag_environment_ok(&keybind_focus, &modal, &draw_state) && !in_face_edit {
         return;
     }
     commands.queue(|world: &mut World| {
@@ -104,7 +103,7 @@ pub(crate) fn face_drag_invoke_trigger(
     allows_undo = false,
     cancel = cancel_face_drag,
 )]
-pub(crate) fn brush_face_drag(
+pub fn brush_face_drag(
     _: In<OperatorParameters>,
     mut edit_mode: ResMut<EditMode>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -499,14 +498,14 @@ pub(crate) fn vertex_drag_invoke_trigger(
     mouse: Res<ButtonInput<MouseButton>>,
     edit_mode: Res<EditMode>,
     drag_state: Res<VertexDragState>,
-    input_focus: Res<InputFocus>,
+    keybind_focus: KeybindFocus,
     mut commands: Commands,
 ) {
     if !mouse.just_pressed(MouseButton::Left)
         || !matches!(*edit_mode, EditMode::BrushEdit(BrushEditMode::Vertex))
         || drag_state.active
         || drag_state.pending.is_some()
-        || input_focus.0.is_some()
+        || keybind_focus.is_typing()
     {
         return;
     }
@@ -531,7 +530,7 @@ pub(crate) fn vertex_drag_invoke_trigger(
     allows_undo = false,
     cancel = cancel_vertex_drag,
 )]
-pub(crate) fn brush_vertex_drag(
+pub fn brush_vertex_drag(
     _: In<OperatorParameters>,
     mut edit_mode: ResMut<EditMode>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -809,14 +808,14 @@ pub(crate) fn edge_drag_invoke_trigger(
     mouse: Res<ButtonInput<MouseButton>>,
     edit_mode: Res<EditMode>,
     drag_state: Res<EdgeDragState>,
-    input_focus: Res<InputFocus>,
+    keybind_focus: KeybindFocus,
     mut commands: Commands,
 ) {
     if !mouse.just_pressed(MouseButton::Left)
         || !matches!(*edit_mode, EditMode::BrushEdit(BrushEditMode::Edge))
         || drag_state.active
         || drag_state.pending.is_some()
-        || input_focus.0.is_some()
+        || keybind_focus.is_typing()
     {
         return;
     }
@@ -841,7 +840,7 @@ pub(crate) fn edge_drag_invoke_trigger(
     allows_undo = false,
     cancel = cancel_edge_drag,
 )]
-pub(crate) fn brush_edge_drag(
+pub fn brush_edge_drag(
     _: In<OperatorParameters>,
     mut edit_mode: ResMut<EditMode>,
     mouse: Res<ButtonInput<MouseButton>>,

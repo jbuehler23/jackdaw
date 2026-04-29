@@ -5,12 +5,12 @@ use jackdaw_widgets::menu_bar::{
 
 use crate::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonVariant, button};
 use crate::tokens;
-use crate::tooltip::Tooltip;
 
 /// Action strings in menu entries that start with this prefix are
-/// interpreted as operator ids; the suffix becomes the [`ButtonOperatorCall`] id
-/// attached to the dropdown button so the editor dispatches through the
-/// operator API instead of firing a generic [`MenuAction`].
+/// interpreted as operator ids; the suffix is parsed by
+/// [`ButtonOperatorCall`]'s `TryFrom<&str>` impl into the call attached
+/// to the dropdown button so the editor dispatches through the operator
+/// API instead of firing a generic [`MenuAction`].
 pub const OP_ACTION_PREFIX: &str = "op:";
 
 pub fn plugin(app: &mut App) {
@@ -20,7 +20,7 @@ pub fn plugin(app: &mut App) {
         .add_observer(on_menu_bar_item_out);
 }
 
-/// When a dropdown item is clicked, fire the [`MenuAction`] — unless the
+/// When a dropdown item is clicked, fire the [`MenuAction`]; unless the
 /// item carries a [`ButtonOperatorCall`] component, in which case the editor's
 /// operator observer will handle dispatch and a `MenuAction` would
 /// double-fire.
@@ -249,18 +249,20 @@ fn spawn_dropdown(commands: &mut Commands, x: f32, y: f32, actions: &[(String, S
                 // TODO: add keybind as subtitle
                 .align_left(),
         );
-        // TODO: show this tooltip only when the user has opted into dev stuff
-        let tooltip = Tooltip(action.to_string());
 
-        if let Some(op_id) = action.strip_prefix(OP_ACTION_PREFIX) {
-            commands.entity(dropdown).with_child((
-                item,
-                btn,
-                tooltip,
-                ButtonOperatorCall::new(op_id.to_string()),
-            ));
+        if let Ok(call) = ButtonOperatorCall::try_from(action.as_str()) {
+            // Operator-bound menu entries dispatch through the editor's
+            // `ButtonOperatorCall` observer; the editor's tooltip
+            // renderer reads the call's id + params for the rich
+            // hover popover.
+            commands.entity(dropdown).with_child((item, btn, call));
         } else {
-            commands.entity(dropdown).with_child((item, btn, tooltip));
+            // Non-operator actions (legacy free-form action ids)
+            // dispatch via the `MenuAction` event. They get no hover
+            // tooltip; the operator-only tooltip pipeline has no
+            // place for them, and these will go away once every menu
+            // entry is operator-backed.
+            commands.entity(dropdown).with_child((item, btn));
         }
     }
 

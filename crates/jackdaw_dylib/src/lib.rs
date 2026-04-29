@@ -5,7 +5,7 @@
 //!
 //! * Declares `crate-type = ["dylib"]`, so building it produces a
 //!   single `.so` / `.dylib` / `.dll`.
-//! * Has no original code — every type lives in the inner crates
+//! * Has no original code; every type lives in the inner crates
 //!   listed in `[dependencies]`. Cargo bundles their compiled rlib
 //!   output into this dylib when it links.
 //! * Is linked into both the editor binary (via
@@ -15,7 +15,7 @@
 //!   the boundary, which is what keeps `TypeId`-keyed resource
 //!   lookups working.
 //!
-//! Users never import this crate directly — it's activated via
+//! Users never import this crate directly; it's activated via
 //! `jackdaw_api/dynamic_linking`.
 
 // The `use` statements below exist purely to make sure the listed

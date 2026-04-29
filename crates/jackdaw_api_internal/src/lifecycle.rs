@@ -80,6 +80,7 @@ pub struct OperatorEntity {
     pub(crate) id: &'static str,
     pub(crate) label: &'static str,
     pub(crate) description: &'static str,
+    pub(crate) parameters: &'static [crate::operator::ParamSpec],
     pub(crate) execute: OperatorSystemId,
     pub(crate) invoke: OperatorSystemId,
     /// Optional system that returns whether the operator can run in
@@ -110,14 +111,25 @@ impl OperatorEntity {
         self.description
     }
 
-    /// Returns `true` if the operator is modal.
+    /// Static parameter schema declared in the operator's
+    /// `#[operator(params(...))]` block. Empty for ops that take no
+    /// parameters.
+    pub fn parameters(&self) -> &'static [crate::operator::ParamSpec] {
+        self.parameters
+    }
+
+    /// True if this operator is declared `modal = true`. Modal ops
+    /// can return `OperatorResult::Running` to enter a multi-frame
+    /// session that the dispatcher manages via `ActiveModalOperator`.
     pub fn is_modal(&self) -> bool {
         self.modal
     }
 
-    /// Returns `true` if the operator allows automatic undos. Note that the
-    /// operator may implement its own undo behavior manually,
-    /// so even if this returns `false`, the operator may still support undo.
+    /// True if a successful call should push an undo entry. Mirrors
+    /// the operator's `allows_undo = ...` flag. Operators with this
+    /// set to `false` can still implement custom undo by pushing
+    /// `EditorCommand`s directly, but the snapshot dispatcher won't
+    /// auto-capture for them.
     pub fn allows_undo(&self) -> bool {
         self.allows_undo
     }

@@ -1,21 +1,19 @@
-use std::borrow::Cow;
-
-use bevy::{feathers::theme::ThemedText, picking::hover::Hovered, prelude::*, ui_widgets::observe};
+use bevy::{picking::hover::Hovered, prelude::*, ui_widgets::observe};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::ToAnchorId as _;
 use jackdaw_feathers::{
-    icons::{Icon, IconFont},
-    menu_bar, popover, separator, split_panel, status_bar,
+    button::{self, ButtonOperatorCall, ButtonSize, ButtonVariant},
+    icons::IconFont,
+    menu_bar, separator, split_panel, status_bar,
     text_edit::{self, TextEditProps},
     tokens,
-    tooltip::Tooltip,
     tree_view::tree_container_drop_observers,
 };
 
 use crate::{
     EditorEntity,
     brush::{BrushEditMode, EditMode},
-    draw_brush::{ActivateDrawBrushModalOp, DrawBrushState},
+    draw_brush::ActivateDrawBrushModalOp,
     edit_mode_ops::{
         EditModeClipOp, EditModeEdgeOp, EditModeFaceOp, EditModeObjectOp, EditModeVertexOp,
     },
@@ -23,6 +21,7 @@ use crate::{
     gizmos::{GizmoMode, GizmoSpace},
     hierarchy::{HierarchyPanel, HierarchyShowAllButton, HierarchyTreeContainer},
     inspector::Inspector,
+    measure_tool::MeasureDistanceOp,
     physics_tool::PhysicsActivateOp,
     remote::ConnectionManager,
     viewport::SceneViewport,
@@ -109,38 +108,7 @@ pub struct HierarchyFilter;
 #[derive(Component)]
 pub struct Toolbar;
 
-/// Marker for gizmo mode buttons
-#[derive(Component)]
-pub struct GizmoModeButton(pub GizmoMode);
-
-/// Marker for gizmo space toggle
-#[derive(Component)]
-pub struct GizmoSpaceButton;
-
-/// Marker for edit mode/tool buttons in the toolbar
-#[derive(Component, Clone, Copy, PartialEq, Eq)]
-pub enum EditToolButton {
-    Object,
-    Vertex,
-    Edge,
-    Face,
-    Clip,
-    Physics,
-    Operator(&'static str),
-}
-
-/// Marker for keybind helper button
-#[derive(Component)]
-pub struct KeybindHelpButton;
-
-/// Resource tracking the keybind help popover entity
-#[derive(Resource, Default)]
-pub struct KeybindHelpPopover {
-    pub entity: Option<Entity>,
-}
-
-pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
-    let font = icon_font.0.clone();
+pub fn editor_layout(_icon_font: &IconFont) -> impl Bundle {
     (
         EditorEntity,
         // Outer shell: dark background with padding (Figma: 10px padding, bg #171717)
@@ -214,7 +182,7 @@ pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
                                     // Center column: viewport + bottom dock (ratio 4).
                                     Spawn((
                                         split_panel::panel(4),
-                                        center_column(font.clone()),
+                                        center_column(),
                                     )),
                                     Spawn(split_panel::panel_handle()),
                                     // Right column: inspector (~310px default, ratio 1)
@@ -462,7 +430,7 @@ pub fn project_files_panel_content() -> impl Bundle {
 /// top and the tabbable bottom-panels area (Assets / Timeline / ...)
 /// underneath. The timeline is a regular tab in the bottom panel, so
 /// animating no longer requires switching into an "Animation View".
-fn center_column(icon_font: Handle<Font>) -> impl Bundle {
+fn center_column() -> impl Bundle {
     (
         EditorEntity,
         Node {
@@ -474,10 +442,7 @@ fn center_column(icon_font: Handle<Font>) -> impl Bundle {
         split_panel::panel_group(
             0.15,
             (
-                Spawn((
-                    split_panel::panel(4),
-                    viewport_with_toolbar(icon_font.clone()),
-                )),
+                Spawn((split_panel::panel(4), viewport_with_toolbar())),
                 Spawn(split_panel::panel_handle()),
                 Spawn((split_panel::panel(1), bottom_dock_area())),
             ),
@@ -485,7 +450,7 @@ fn center_column(icon_font: Handle<Font>) -> impl Bundle {
     )
 }
 
-fn viewport_with_toolbar(icon_font: Handle<Font>) -> impl Bundle {
+fn viewport_with_toolbar() -> impl Bundle {
     (
         EditorEntity,
         jackdaw_panels::drag::ViewportDropTarget,
@@ -498,7 +463,7 @@ fn viewport_with_toolbar(icon_font: Handle<Font>) -> impl Bundle {
         },
         BackgroundColor(tokens::PANEL_BG),
         children![
-            toolbar(icon_font),
+            toolbar(),
             crate::navmesh::toolbar::navmesh_toolbar(),
             crate::terrain::toolbar::terrain_toolbar(),
             scene_view(),
@@ -506,519 +471,86 @@ fn viewport_with_toolbar(icon_font: Handle<Font>) -> impl Bundle {
     )
 }
 
-fn toolbar(icon_font: Handle<Font>) -> impl Bundle {
-    let f = icon_font.clone();
+fn toolbar() -> impl Bundle {
+    // Every toolbar entry below goes through `feathers::button(...)`,
+    // the same constructor extensions use. Active-state highlighting
+    // is driven by [`update_toolbar_button_variants`] flipping
+    // `ButtonVariant::Active` on the owning entity, so we never
+    // mutate `BackgroundColor` directly and `handle_hover` stays the
+    // sole bg writer.
+    //
+    // Sizing matches the Figma viewport-toolbar spec: 30px tall, 1px
+    // border, top corners rounded against the panel below.
     (
         Toolbar,
         EditorEntity,
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_SM)),
-            column_gap: px(tokens::SPACING_SM),
+            padding: UiRect {
+                left: px(tokens::TOOLBAR_PADDING_LEFT),
+                right: px(tokens::TOOLBAR_PADDING_RIGHT),
+                top: px(0.0),
+                bottom: px(0.0),
+            },
+            column_gap: px(tokens::TOOLBAR_GAP),
             width: percent(100),
-            height: px(32.0),
+            height: px(tokens::TOOLBAR_HEIGHT),
+            border: UiRect::all(px(1.0)),
+            border_radius: BorderRadius {
+                top_left: px(tokens::TOOLBAR_RADIUS),
+                top_right: px(tokens::TOOLBAR_RADIUS),
+                bottom_left: px(0.0),
+                bottom_right: px(0.0),
+            },
             flex_shrink: 0.0,
             ..Default::default()
         },
         BackgroundColor(tokens::PANEL_HEADER_BG),
+        BorderColor::all(tokens::TOOLBAR_BORDER),
         children![
-            // Gizmo mode buttons
-            toolbar_button(
-                Icon::Move3d,
-                "",
-                GizmoMode::Translate,
-                icon_font.clone(),
-                "Move (Esc)"
-            ),
-            toolbar_button(
-                Icon::Rotate3d,
-                "R",
-                GizmoMode::Rotate,
-                icon_font.clone(),
-                "Rotate (R)"
-            ),
-            toolbar_button(
-                Icon::Scale3d,
-                "T",
-                GizmoMode::Scale,
-                icon_font.clone(),
-                "Scale (T)"
-            ),
-            // Separator
+            toolbar_op_button::<GizmoModeTranslateOp>(Icon::Move3d),
+            toolbar_op_button::<GizmoModeRotateOp>(Icon::Rotate3d),
+            toolbar_op_button::<GizmoModeScaleOp>(Icon::Scale3d),
             separator::separator(separator::SeparatorProps::vertical()),
-            // Space toggle
-            toolbar_space_button(f.clone()),
-            // Separator
+            // Gizmo space toggle. Active highlight = `Local`; default
+            // = `World`. Tooltip is the discoverability path.
+            toolbar_op_button::<GizmoSpaceToggleOp>(Icon::Globe),
             separator::separator(separator::SeparatorProps::vertical()),
-            // Edit mode buttons
-            toolbar_edit_button(
-                Icon::MousePointer2,
-                EditToolButton::Object,
-                f.clone(),
-                "Object Mode"
-            ),
-            toolbar_edit_button(
-                Icon::Box,
-                EditToolButton::Operator(ActivateDrawBrushModalOp::ID),
-                f.clone(),
-                // todo: add keybind
-                ActivateDrawBrushModalOp::LABEL
-            ),
-            toolbar_edit_button(
-                Icon::RulerDimensionLine,
-                EditToolButton::Operator("tools.measure_distance"),
-                f.clone(),
-                "Measure Distance"
-            ),
-            toolbar_edit_button(
-                Icon::CircleDot,
-                EditToolButton::Vertex,
-                f.clone(),
-                "Vertex Mode (1)"
-            ),
-            toolbar_edit_button(
-                Icon::GitCommitHorizontal,
-                EditToolButton::Edge,
-                f.clone(),
-                "Edge Mode (2)"
-            ),
-            toolbar_edit_button(
-                Icon::Hexagon,
-                EditToolButton::Face,
-                f.clone(),
-                "Face Mode (3)"
-            ),
-            toolbar_edit_button(
-                Icon::ScissorsLineDashed,
-                EditToolButton::Clip,
-                f.clone(),
-                "Clip Mode (4)"
-            ),
-            // Separator
+            toolbar_op_button::<EditModeObjectOp>(Icon::MousePointer2),
+            toolbar_op_button::<ActivateDrawBrushModalOp>(Icon::Box),
+            toolbar_op_button::<MeasureDistanceOp>(Icon::RulerDimensionLine),
+            toolbar_op_button::<EditModeVertexOp>(Icon::CircleDot),
+            toolbar_op_button::<EditModeEdgeOp>(Icon::GitCommitHorizontal),
+            toolbar_op_button::<EditModeFaceOp>(Icon::Hexagon),
+            toolbar_op_button::<EditModeClipOp>(Icon::ScissorsLineDashed),
             separator::separator(separator::SeparatorProps::vertical()),
-            toolbar_edit_button(
-                Icon::Zap,
-                EditToolButton::Physics,
-                f.clone(),
-                "Physics Tool"
-            ),
-            // Spacer pushes help button to the right
-            (Node {
-                flex_grow: 1.0,
-                ..Default::default()
-            },),
-            // Keybind help button
-            toolbar_help_button(f),
+            toolbar_op_button::<PhysicsActivateOp>(Icon::Zap),
         ],
     )
 }
 
-fn toolbar_button(
-    icon: Icon,
-    label: &str,
-    mode: GizmoMode,
-    font: Handle<Font>,
-    tooltip: &str,
-) -> impl Bundle {
-    let label = label.to_string();
-    let op_id: &'static str = match mode {
-        GizmoMode::Translate => GizmoModeTranslateOp::ID,
-        GizmoMode::Rotate => GizmoModeRotateOp::ID,
-        GizmoMode::Scale => GizmoModeScaleOp::ID,
-    };
-    (
-        GizmoModeButton(mode),
-        Hovered::default(),
-        Tooltip(tooltip.into()),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: px(tokens::SPACING_XS),
-            padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::TOOLBAR_BUTTON_BG),
-        children![
-            (
-                Text::new(String::from(icon.unicode())),
-                TextFont {
-                    font,
-                    font_size: 15.0,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-            ),
-            (
-                Text::new(label),
-                TextFont {
-                    font_size: tokens::FONT_SM,
-                    ..Default::default()
-                },
-                ThemedText,
-            )
-        ],
-        observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            commands
-                .operator(op_id)
-                .settings(CallOperatorSettings {
-                    execution_context: ExecutionContext::Invoke,
-                    creates_history_entry: true,
-                })
-                .call();
-        }),
+/// Spawn a square icon-only toolbar button bound to operator `Op`.
+/// Identical to what an extension would write. The icon is the only
+/// visible glyph; `ButtonSize::Icon` suppresses the content text
+/// label, and the operator's label and description show in the rich
+/// operator tooltip on hover via [`OperatorTooltipPlugin`].
+///
+/// Initial variant is `Ghost` so idle buttons render transparent
+/// against the toolbar's `#1F1F24` panel; the
+/// [`update_toolbar_button_variants`] system flips them to `Active`
+/// when the matching mode/modal is current. Without this, every
+/// button would sit on the muted `Default` grey and the toolbar
+/// would lose the "one currently-active tool" reading.
+///
+/// [`OperatorTooltipPlugin`]: crate::operator_tooltip::OperatorTooltipPlugin
+fn toolbar_op_button<Op: Operator>(icon: Icon) -> impl Bundle {
+    button::button(
+        ButtonProps::from_operator::<Op>()
+            .with_variant(ButtonVariant::Ghost)
+            .icon(icon)
+            .with_size(ButtonSize::Icon),
     )
-}
-
-fn toolbar_space_button(icon_font: Handle<Font>) -> impl Bundle {
-    (
-        GizmoSpaceButton,
-        Hovered::default(),
-        Tooltip("Toggle World/Local (X)".into()),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: px(tokens::SPACING_XS),
-            padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::TOOLBAR_BUTTON_BG),
-        children![
-            (
-                Text::new(String::from(Icon::Globe.unicode())),
-                TextFont {
-                    font: icon_font,
-                    font_size: tokens::FONT_MD,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-            ),
-            (
-                Text::new("World"),
-                TextFont {
-                    font_size: tokens::FONT_SM,
-                    ..Default::default()
-                },
-                ThemedText,
-            )
-        ],
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-            commands
-                .operator(GizmoSpaceToggleOp::ID)
-                .settings(CallOperatorSettings {
-                    execution_context: ExecutionContext::Invoke,
-                    creates_history_entry: true,
-                })
-                .call();
-        }),
-    )
-}
-
-fn toolbar_edit_button(
-    icon: Icon,
-    tool: EditToolButton,
-    font: Handle<Font>,
-    tooltip: &str,
-) -> impl Bundle {
-    (
-        tool,
-        Hovered::default(),
-        Tooltip(tooltip.into()),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::TOOLBAR_BUTTON_BG),
-        children![(
-            Text::new(String::from(icon.unicode())),
-            TextFont {
-                font,
-                font_size: 15.0,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
-        observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            // Clicking the Physics button while active cancels the
-            // modal; re-dispatching would fail with ModalAlreadyActive.
-            if matches!(tool, EditToolButton::Physics) {
-                commands.queue(|world: &mut World| {
-                    let result = if *world.resource::<EditMode>() == EditMode::Physics {
-                        world.operator("modal.cancel").call()
-                    } else {
-                        world
-                            .operator(PhysicsActivateOp::ID)
-                            .settings(CallOperatorSettings {
-                                execution_context: ExecutionContext::Invoke,
-                                creates_history_entry: true,
-                            })
-                            .call()
-                    };
-                    if let Err(err) = result {
-                        error!("physics tool dispatch failed: {err}");
-                    }
-                });
-                return;
-            }
-            // For modal operators (Draw Brush, Measure Distance, etc.), cancel
-            // any active modal first so the user can switch tools without
-            // having to press Escape.
-            if let EditToolButton::Operator(op) = tool {
-                commands.queue(move |world: &mut World| {
-                    let _ = world.operator("modal.cancel").call();
-                    let _ = world
-                        .operator(op)
-                        .settings(CallOperatorSettings {
-                            execution_context: ExecutionContext::Invoke,
-                            creates_history_entry: true,
-                        })
-                        .call();
-                });
-                return;
-            }
-
-            let op_id: Cow<'static, str> = match tool {
-                EditToolButton::Object => EditModeObjectOp::ID.into(),
-                EditToolButton::Vertex => EditModeVertexOp::ID.into(),
-                EditToolButton::Edge => EditModeEdgeOp::ID.into(),
-                EditToolButton::Face => EditModeFaceOp::ID.into(),
-                EditToolButton::Clip => EditModeClipOp::ID.into(),
-                EditToolButton::Physics => unreachable!("handled above"),
-                EditToolButton::Operator(op) => op.into(),
-            };
-            commands
-                .operator(op_id)
-                .settings(CallOperatorSettings {
-                    execution_context: ExecutionContext::Invoke,
-                    creates_history_entry: true,
-                })
-                .call();
-        }),
-    )
-}
-
-fn toolbar_help_button(icon_font: Handle<Font>) -> impl Bundle {
-    (
-        KeybindHelpButton,
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::TOOLBAR_BUTTON_BG),
-        children![(
-            Text::new(String::from(Icon::Keyboard.unicode())),
-            TextFont {
-                font: icon_font,
-                font_size: tokens::FONT_MD,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
-        observe(
-            |trigger: On<Pointer<Click>>,
-             mut commands: Commands,
-             mut popover_state: ResMut<KeybindHelpPopover>,
-             registry: Res<crate::keybinds::KeybindRegistry>| {
-                // Toggle: if popover exists, despawn it
-                if let Some(entity) = popover_state.entity.take() {
-                    if let Ok(mut ec) = commands.get_entity(entity) {
-                        ec.despawn();
-                    }
-                    return;
-                }
-
-                let anchor = trigger.event_target();
-
-                let popover_entity = commands
-                    .spawn(popover::popover(
-                        popover::PopoverProps::new(anchor)
-                            .with_placement(popover::PopoverPlacement::BottomEnd)
-                            .with_padding(12.0)
-                            .with_z_index(200),
-                    ))
-                    .with_children(|parent| {
-                        parent
-                            .spawn(Node {
-                                flex_direction: FlexDirection::Column,
-                                max_height: px(500.0),
-                                overflow: Overflow::scroll_y(),
-                                ..Default::default()
-                            })
-                            .with_children(|scroll_parent| {
-                                spawn_keybind_help_content(scroll_parent, &registry);
-                            });
-                    })
-                    .id();
-
-                popover_state.entity = Some(popover_entity);
-            },
-        ),
-    )
-}
-
-fn spawn_keybind_help_content(
-    parent: &mut ChildSpawnerCommands,
-    registry: &crate::keybinds::KeybindRegistry,
-) {
-    use jackdaw_commands::keybinds::EditorAction;
-
-    // Mouse-only entries that can't be expressed as keybinds, grouped by category
-    let mouse_entries: &[(&str, &[(&str, &str)])] = &[
-        (
-            "Navigation",
-            &[
-                ("RMB + Drag", "Look around"),
-                ("Shift", "Double speed"),
-                ("Scroll", "Dolly forward/back"),
-                ("RMB + Scroll", "Adjust move speed"),
-            ],
-        ),
-        (
-            "Selection",
-            &[
-                ("LMB", "Select entity"),
-                ("Ctrl+Click", "Toggle multi-select"),
-                ("Shift+LMB Drag", "Box select"),
-            ],
-        ),
-        (
-            "Transform",
-            &[
-                ("MMB", "Toggle snap"),
-                ("Ctrl", "Toggle snap (during drag)"),
-            ],
-        ),
-        (
-            "Brush Edit",
-            &[
-                ("Shift+Click", "Multi-select"),
-                ("Click+Drag", "Move selected"),
-            ],
-        ),
-        (
-            "Draw Brush",
-            &[
-                ("Click", "Place vertex / advance"),
-                ("Right-click", "Cancel"),
-            ],
-        ),
-        ("View", &[("Ctrl+Alt+Scroll", "Grid size")]),
-    ];
-
-    // Build sections dynamically from registry
-    let category_order = [
-        "File",
-        "Entity",
-        "Transform",
-        "Brush Edit",
-        "Draw Brush",
-        "CSG",
-        "Gizmo",
-        "Navigation",
-        "View",
-    ];
-
-    // Also include Selection between Navigation and View
-    let display_order = [
-        "Navigation",
-        "Selection",
-        "Transform",
-        "Entity",
-        "Brush Edit",
-        "CSG",
-        "Draw Brush",
-        "Gizmo",
-        "View",
-        "File",
-    ];
-
-    for &section in &display_order {
-        let mut entries: Vec<(String, String)> = Vec::new();
-
-        // Add mouse entries for this section
-        for (cat, mouse_binds) in mouse_entries {
-            if *cat == section {
-                for (key, desc) in *mouse_binds {
-                    entries.push((key.to_string(), desc.to_string()));
-                }
-            }
-        }
-
-        // Add keybind entries for this section (if it's a real category)
-        if category_order.contains(&section) {
-            for &action in EditorAction::all() {
-                if action.category() != section {
-                    continue;
-                }
-                let bindings = registry.bindings.get(&action).cloned().unwrap_or_default();
-                if bindings.is_empty() {
-                    continue;
-                }
-                let key_str = bindings
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" / ");
-                entries.push((key_str, action.to_string()));
-            }
-        }
-
-        if entries.is_empty() {
-            continue;
-        }
-
-        // Section header
-        parent.spawn((
-            Text::new(section),
-            TextFont {
-                font_size: tokens::FONT_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-            Node {
-                margin: UiRect::top(px(tokens::SPACING_SM)),
-                ..Default::default()
-            },
-        ));
-
-        for (key, desc) in &entries {
-            parent.spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    column_gap: px(tokens::SPACING_LG),
-                    width: px(260.0),
-                    ..Default::default()
-                },
-                children![
-                    (
-                        Text::new(key.clone()),
-                        TextFont {
-                            font_size: tokens::FONT_SM,
-                            ..Default::default()
-                        },
-                        TextColor(tokens::TEXT_PRIMARY),
-                    ),
-                    (
-                        Text::new(desc.clone()),
-                        TextFont {
-                            font_size: tokens::FONT_SM,
-                            ..Default::default()
-                        },
-                        TextColor(tokens::TEXT_SECONDARY),
-                    )
-                ],
-            ));
-        }
-    }
 }
 
 pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
@@ -1059,6 +591,12 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
                     (
                         HierarchyShowAllButton,
                         Interaction::default(),
+                        Hovered::default(),
+                        jackdaw_feathers::tooltip::Tooltip::title("Show All Entities")
+                            .with_description(
+                                "Toggle visibility of editor-internal entities and \
+                                 hidden objects in the hierarchy.",
+                            ),
                         Node {
                             width: px(24.0),
                             height: px(24.0),
@@ -1183,80 +721,70 @@ fn scene_view() -> impl Bundle {
     )
 }
 
-/// Updates toolbar button backgrounds to highlight the active gizmo mode.
-pub fn update_toolbar_highlights(
-    mode: Res<GizmoMode>,
-    mut buttons: Query<(&GizmoModeButton, &mut BackgroundColor)>,
-) {
-    if !mode.is_changed() {
-        return;
-    }
-    for (button, mut bg) in &mut buttons {
-        bg.0 = if button.0 == *mode {
-            tokens::TOOLBAR_ACTIVE_BG
-        } else {
-            tokens::TOOLBAR_BUTTON_BG
-        };
-    }
-}
-
-/// Updates the gizmo space toggle button label.
-pub fn update_space_toggle_label(
-    space: Res<GizmoSpace>,
-    buttons: Query<&Children, With<GizmoSpaceButton>>,
-    mut texts: Query<&mut Text, With<ThemedText>>,
-) {
-    if !space.is_changed() {
-        return;
-    }
-    let label = match *space {
-        GizmoSpace::World => "World",
-        GizmoSpace::Local => "Local",
-    };
-    for children in &buttons {
-        for child in children.iter() {
-            if let Ok(mut text) = texts.get_mut(child) {
-                text.0 = label.to_string();
-                return;
-            }
-        }
-    }
-}
-
-/// Updates edit tool button backgrounds to highlight the active edit mode/draw state.
-pub(crate) fn update_edit_tool_highlights(
+/// Flip every toolbar button's [`ButtonVariant`] between `Default`
+/// and `Active` based on the matching editor state. The feathers
+/// `handle_hover` system reads the variant to compute the
+/// background, so this is the only place toolbar active-state lives;
+/// `BackgroundColor` is never mutated directly. New toolbar buttons
+/// just need to register their operator id below to opt in.
+///
+/// Runs every frame: `ActiveModalOperator` is added/removed via
+/// observers that don't trigger `Res::is_changed()` on any of the
+/// scalar resources, so a change-detection short-circuit would miss
+/// the start of a Draw Brush / Measure Distance / etc. session. The
+/// loop is O(toolbar buttons), trivially cheap.
+pub fn update_toolbar_button_variants(
     edit_mode: Res<EditMode>,
-    draw_state: Res<DrawBrushState>,
+    gizmo_mode: Res<GizmoMode>,
+    gizmo_space: Res<GizmoSpace>,
     active_modal: ActiveModalQuery,
-    mut buttons: Query<(&EditToolButton, &mut BackgroundColor)>,
+    mut buttons: Query<(&ButtonOperatorCall, &mut ButtonVariant)>,
 ) {
-    if !edit_mode.is_changed() && !draw_state.is_changed() {
-        return;
-    }
-    let draw_active = draw_state.active.is_some();
-    for (button, mut bg) in &mut buttons {
-        let active = match button {
-            EditToolButton::Object => !draw_active && *edit_mode == EditMode::Object,
-            EditToolButton::Operator(op) => active_modal.is_operator(op),
-            EditToolButton::Vertex => {
-                !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
-            }
-            EditToolButton::Edge => {
-                !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge)
-            }
-            EditToolButton::Face => {
-                !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
-            }
-            EditToolButton::Clip => {
-                !draw_active && *edit_mode == EditMode::BrushEdit(BrushEditMode::Clip)
-            }
-            EditToolButton::Physics => !draw_active && *edit_mode == EditMode::Physics,
-        };
-        bg.0 = if active {
-            tokens::TOOLBAR_ACTIVE_BG
+    let modal_running = active_modal.is_modal_running();
+    for (call, mut variant) in &mut buttons {
+        // While any modal is running only the modal's own button
+        // highlights. Gizmo / mode buttons go quiet so the user sees
+        // a single active tool at a time, matching how Blender
+        // surfaces the current mode. New extension modal operators
+        // pick this up automatically through the fall-through arm.
+        let active = if modal_running {
+            active_modal.is_operator(&call.id)
+        } else if call.id == GizmoModeTranslateOp::ID {
+            *gizmo_mode == GizmoMode::Translate
+        } else if call.id == GizmoModeRotateOp::ID {
+            *gizmo_mode == GizmoMode::Rotate
+        } else if call.id == GizmoModeScaleOp::ID {
+            *gizmo_mode == GizmoMode::Scale
+        } else if call.id == GizmoSpaceToggleOp::ID {
+            *gizmo_space == GizmoSpace::Local
+        } else if call.id == EditModeObjectOp::ID {
+            *edit_mode == EditMode::Object
+        } else if call.id == EditModeVertexOp::ID {
+            *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
+        } else if call.id == EditModeEdgeOp::ID {
+            *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge)
+        } else if call.id == EditModeFaceOp::ID {
+            *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+        } else if call.id == EditModeClipOp::ID {
+            *edit_mode == EditMode::BrushEdit(BrushEditMode::Clip)
+        } else if call.id == PhysicsActivateOp::ID {
+            *edit_mode == EditMode::Physics
         } else {
-            tokens::TOOLBAR_BUTTON_BG
+            false
         };
+        // Inactive toolbar buttons fall back to `Ghost` (transparent)
+        // so only the active one stands out as solid grey. Using
+        // `Default` here would tint every idle button with the muted
+        // ZINC_700 fill at ~50% alpha and they'd all read as
+        // "highlighted" against the toolbar's dark panel.
+        let target = if active {
+            ButtonVariant::Active
+        } else {
+            ButtonVariant::Ghost
+        };
+        if *variant != target {
+            *variant = target;
+        }
     }
 }
 

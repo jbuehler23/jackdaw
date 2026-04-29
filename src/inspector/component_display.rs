@@ -16,6 +16,7 @@ use bevy::{
     reflect::serde::TypedReflectSerializer,
 };
 use jackdaw_feathers::{
+    button::ButtonOperatorCall,
     icons::{EditorFont, Icon, IconFont},
     tokens,
 };
@@ -31,9 +32,10 @@ use bevy_monitors::prelude::{Addition, Monitor, NotifyAdded};
 use super::{
     AddComponentButton, ComponentDisplay, ComponentDisplayBody, ComponentName, ComponentPicker,
     Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch, InspectorTarget,
-    ReflectDisplayable, ReflectEditorMeta, brush_display, custom_props_display,
-    extract_module_group, material_display, reflect_fields,
+    ReflectDisplayable, ReflectEditorMeta, brush_display, component_tooltip::ReflectedTypeTooltip,
+    custom_props_display, extract_module_group, material_display, reflect_fields,
 };
+use bevy::picking::hover::Hovered;
 
 pub(crate) fn add_component_displays(
     _: On<Add, Selected>,
@@ -431,7 +433,7 @@ pub(crate) fn remove_component_displays(
 
     // Collect then despawn inside a queued world closure so the
     // cascade runs as one atomic step at flush time. See
-    // `on_inspector_dirty` for the rationale — piecemeal deferred
+    // `on_inspector_dirty` for the rationale; piecemeal deferred
     // despawns can interleave with lazy combobox/button setup
     // spawns and orphan UI text at the root.
     let old_children: Vec<Entity> = displays.iter_many(children.collection()).collect();
@@ -476,7 +478,7 @@ pub(crate) fn on_inspector_dirty(
     // `InspectorDirty` from the source. Doing this in a single
     // queued closure (rather than piecemeal `commands.despawn`
     // calls) guarantees the cascade completes as one atomic unit
-    // inside `Commands` flush — no lazy `setup_button` /
+    // inside `Commands` flush; no lazy `setup_button` /
     // `setup_combobox` spawns from a previous rebuild can slip in
     // between entity despawns and leave orphaned UI children (the
     // source of the "Inherited" floating label + `ChildOf(...)
@@ -614,7 +616,12 @@ pub(crate) fn spawn_component_display(
         ))
         .id();
 
-    // Toggle area (chevron + icon + title) -- click to collapse/expand
+    // Toggle area (chevron + icon + title) -- click to collapse/expand.
+    // The hover-tooltip source sits on this row so the popover
+    // surface matches the click target; the auto-attach observer in
+    // `component_tooltip.rs` resolves the reflected type and inserts
+    // a `Tooltip` with the short name, optional `ReflectEditorMeta`
+    // description, and full type path.
     let toggle_area = commands
         .spawn((
             Node {
@@ -624,6 +631,8 @@ pub(crate) fn spawn_component_display(
                 flex_grow: 1.0,
                 ..Default::default()
             },
+            Hovered::default(),
+            ReflectedTypeTooltip::new(type_path.to_string()),
             ChildOf(header),
         ))
         .id();
@@ -652,7 +661,7 @@ pub(crate) fn spawn_component_display(
         ChildOf(toggle_area),
     ));
 
-    // Component name (orange if overridden)
+    // Component name (orange if overridden).
     let name_color = if is_overridden {
         default_style::INSPECTOR_OVERRIDE
     } else {
@@ -682,9 +691,16 @@ pub(crate) fn spawn_component_display(
         let type_path_owned = type_path.to_string();
         let entity_bits = entity.to_bits() as i64;
 
-        // Revert button (only shown for overridden prefab components)
+        // Revert button (only shown for overridden prefab components).
+        // `Hovered + ButtonOperatorCall` are tooltip data sources for
+        // the rich operator popover; the click observer below handles
+        // dispatch because this is a raw `Text` spawn (not a feathers
+        // button, so it doesn't fire `ButtonClickEvent`).
         if is_overridden {
             let revert_type_path = type_path_owned.clone();
+            let bo_call = ButtonOperatorCall::new(super::ops::ComponentRevertBaselineOp::ID)
+                .with_param("entity", entity_bits)
+                .with_param("type_path", revert_type_path.clone());
             commands.spawn((
                 Text::new(String::from(Icon::RotateCcw.unicode())),
                 TextFont {
@@ -693,6 +709,8 @@ pub(crate) fn spawn_component_display(
                     ..Default::default()
                 },
                 TextColor(default_style::INSPECTOR_OVERRIDE),
+                Hovered::default(),
+                bo_call,
                 ChildOf(header),
                 bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                     commands
@@ -704,7 +722,12 @@ pub(crate) fn spawn_component_display(
             ));
         }
 
-        // Remove component button (X icon)
+        // Remove component button (X icon). See revert button for the
+        // tooltip-data + manual-dispatch pattern.
+        let remove_path = type_path_owned.clone();
+        let remove_call = ButtonOperatorCall::new(super::ops::ComponentRemoveOp::ID)
+            .with_param("entity", entity_bits)
+            .with_param("type_path", remove_path.clone());
         commands.spawn((
             Text::new(String::from(Icon::X.unicode())),
             TextFont {
@@ -713,6 +736,8 @@ pub(crate) fn spawn_component_display(
                 ..Default::default()
             },
             TextColor(tokens::TEXT_SECONDARY),
+            Hovered::default(),
+            remove_call,
             ChildOf(header),
             bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                 commands
@@ -723,18 +748,6 @@ pub(crate) fn spawn_component_display(
             }),
         ));
     }
-
-    // Ellipsis menu icon
-    commands.spawn((
-        Text::new(String::from(Icon::Ellipsis.unicode())),
-        TextFont {
-            font: font.clone(),
-            font_size: tokens::FONT_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(header),
-    ));
 
     // Hover effect on header
     commands.entity(header).observe(

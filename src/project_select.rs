@@ -57,7 +57,7 @@ struct ProjectSelectorRoot;
 #[derive(Resource)]
 pub struct PendingAutoOpen {
     pub path: PathBuf,
-    /// `true` when we got here via a post-restart auto-open —
+    /// `true` when we got here via a post-restart auto-open ;
     /// the parent process already built + installed the dylib,
     /// so we skip that step (preventing an infinite
     /// build→restart→auto-open→build loop).
@@ -577,7 +577,7 @@ fn poll_folder_dialog(world: &mut World) {
 ///
 /// All per-session rebuilds therefore happen at the launcher, never
 /// mid-edit. Games' restart-to-activate requirement becomes
-/// invisible — the launcher → editor transition already carries a
+/// invisible; the launcher → editor transition already carries a
 /// build step, so folding a process restart into it is just a
 /// slightly-longer wait.
 pub fn enter_project(world: &mut World, root: PathBuf) {
@@ -601,7 +601,7 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
     // the artifact check at the end.
     if !crate::ext_build::manifest_declares_cdylib(&root) {
         info!(
-            "Project at {} has a Cargo.toml but no cdylib target — \
+            "Project at {} has a Cargo.toml but no cdylib target; \
              opening without building.",
             root.display()
         );
@@ -756,11 +756,15 @@ fn spawn_new_project_button(
 /// Spawn one segment of the Static/Dylib selector. `initial` picks
 /// the starting highlighted button; subsequent clicks repaint via
 /// `on_linkage_button_click`.
+///
+/// The project picker runs before any extension has registered
+/// operators, so there's no rich hover tooltip available here. The
+/// button label is the single visible affordance; explanatory text
+/// is rendered as a subtitle below the row by the calling dialog.
 fn spawn_linkage_button(
     world: &mut World,
     parent: Entity,
     label: &str,
-    tooltip: &str,
     linkage: TemplateLinkage,
     initial: TemplateLinkage,
     font: Handle<Font>,
@@ -798,7 +802,6 @@ fn spawn_linkage_button(
                 },
                 TextColor(tokens::TEXT_PRIMARY),
             )],
-            jackdaw_feathers::tooltip::Tooltip(tooltip.to_string()),
             ChildOf(parent),
         ))
         .id();
@@ -846,7 +849,7 @@ fn spawn_linkage_button(
 /// `NewProjectState.linkage`, repaints the two buttons, and
 /// rewrites the Template URL input to the new preset URL so the
 /// user sees the change immediately. If the user has manually
-/// edited the URL to a custom value, this overwrites it — by
+/// edited the URL to a custom value, this overwrites it; by
 /// design: toggling the linkage is a "reset to preset" action.
 fn on_linkage_button_click(
     click: On<Pointer<Click>>,
@@ -951,7 +954,7 @@ pub fn close_new_project_modal(world: &mut World) {
 }
 
 /// Lightweight modal shown while `enter_project_with` builds an
-/// **existing** project — the user picked a recent entry or
+/// **existing** project; the user picked a recent entry or
 /// browsed to a folder and we need something visual while cargo
 /// runs + the auto-recovery retry may fire. Reuses the same
 /// `NewProjectProgressContainer` / `NewProjectProgressCrateLabel`
@@ -1085,7 +1088,7 @@ pub fn open_project_progress_modal(world: &mut World, project_name: &str) {
 
 /// Show the New Project modal with the given preset pre-selected.
 ///
-/// Callable from any `AppState` — the launcher (`ProjectSelect`)
+/// Callable from any `AppState`; the launcher (`ProjectSelect`)
 /// and the editor's **File → New Project** menu both invoke this.
 /// The modal is a full-window overlay so it renders regardless of
 /// which camera is active.
@@ -1268,7 +1271,6 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
             world,
             linkage_row,
             "Static",
-            "Plainly-compiled rlib/bin. Recommended.",
             TemplateLinkage::Static,
             initial_linkage,
             editor_font.clone(),
@@ -1277,11 +1279,27 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
             world,
             linkage_row,
             "Dylib",
-            "Hot-reloadable cdylib. Requires editor `--features dylib`.",
             TemplateLinkage::Dylib,
             initial_linkage,
             editor_font.clone(),
         );
+        // Inline subtitle (visible always, no hover needed) so the
+        // user knows what the two linkage options do without relying
+        // on an operator-registered tooltip; operators aren't loaded
+        // yet at the project-select stage.
+        world.spawn((
+            Text::new(
+                "Static: plainly-compiled rlib/bin (recommended). \
+                 Dylib: hot-reloadable cdylib, requires the editor's `dylib` feature.",
+            ),
+            TextFont {
+                font: editor_font.clone(),
+                font_size: tokens::FONT_SM,
+                ..default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+            ChildOf(card),
+        ));
     }
 
     // Template URL field. Prefilled from preset+linkage, editable
@@ -1364,7 +1382,7 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         ChildOf(bar_slot),
     ));
 
-    // Log tail — fixed-height scrollable-ish (we don't enable real
+    // Log tail; fixed-height scrollable-ish (we don't enable real
     // scrolling; text wraps naturally and oldest lines age out via
     // the 20-line ring buffer).
     world.spawn((
@@ -1650,9 +1668,8 @@ fn poll_new_project_tasks(
                         state.status = Some("Auto-recovery failed: no project context".into());
                         return;
                     };
-                    state.status = Some(
-                        "Editor SDK changed since last build — cleaning project cache…".into(),
-                    );
+                    state.status =
+                        Some("Editor SDK changed since last build; cleaning project cache…".into());
                     let project_for_task = project;
                     state.clean_task = Some(AsyncComputeTaskPool::get().spawn(async move {
                         crate::ext_build::cargo_clean_project(&project_for_task)
@@ -1670,7 +1687,7 @@ fn poll_new_project_tasks(
         }
     }
 
-    // Clean-task completed — kick off a fresh build.
+    // Clean-task completed; kick off a fresh build.
     if let Some(task) = state.clean_task.as_mut()
         && let Some(result) = future::block_on(future::poll_once(task))
     {
@@ -1686,7 +1703,7 @@ fn poll_new_project_tasks(
                     .unwrap_or("project")
                     .to_owned();
                 state.status = Some(format!("Rebuilding `{project_name}` from scratch…"));
-                // Fresh progress sink — the old one had the prior
+                // Fresh progress sink; the old one had the prior
                 // build's log tail, which would mislead the user.
                 let progress = std::sync::Arc::new(std::sync::Mutex::new(
                     crate::ext_build::BuildProgress::default(),
@@ -1805,7 +1822,7 @@ fn refresh_build_progress_ui(
         }
     }
 
-    // Progress bar fill — walk slot → bar → bar children → fill.
+    // Progress bar fill; walk slot → bar → bar children → fill.
     let fraction = progress.fraction().unwrap_or(0.0).clamp(0.0, 1.0);
     let desired_width = Val::Percent(fraction * 100.0);
     for bar_children in bar_slots.iter() {

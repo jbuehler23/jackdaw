@@ -56,12 +56,12 @@ impl Plugin for EditorFeathersPlugin {
             toast::plugin,
         ));
         app.add_plugins((
+            tooltip::TooltipPlugin,
             alert::plugin,
             color_picker::plugin,
             menu_bar::plugin,
             context_menu::plugin,
             panel_header::plugin,
-            tooltip::plugin,
             picker::plugin,
         ));
     }

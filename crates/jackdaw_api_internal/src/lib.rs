@@ -98,7 +98,8 @@ pub mod prelude {
         macros::operator,
         operator::{
             CallOperatorSettings, ExecutionContext, Operator, OperatorCommandsExt as _,
-            OperatorParameters, OperatorResult, OperatorSystemId, OperatorWorldExt as _,
+            OperatorParameters, OperatorResult, OperatorSignature, OperatorSystemId,
+            OperatorWorldExt as _, ParamSpec,
         },
         pie::PlayState,
         runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems},
@@ -308,6 +309,7 @@ impl<'a> ExtensionContext<'a> {
                     id: O::ID,
                     label: O::LABEL,
                     description: O::DESCRIPTION,
+                    parameters: O::PARAMETERS,
                     execute,
                     invoke,
                     availability_check,

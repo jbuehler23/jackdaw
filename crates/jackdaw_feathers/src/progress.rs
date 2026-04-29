@@ -2,7 +2,7 @@
 //!
 //! Used by the scaffold + hot-reload flows to surface build
 //! progress while cargo runs. Render determinate (known fraction)
-//! or indeterminate (unknown total — bar stays at 0%, caller
+//! or indeterminate (unknown total; bar stays at 0%, caller
 //! typically shows a spinner separately or leaves the bar empty).
 
 use bevy::prelude::*;

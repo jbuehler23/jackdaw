@@ -2,8 +2,8 @@
 //!
 //! Each `Connection` component has a sibling UI node carrying a
 //! [`ConnectionMaterial`]. The material node is sized to 100% of the
-//! viewport and parented directly under it — **not** under the canvas
-//! world — so it never needs to resize in response to node drags. This
+//! viewport and parented directly under it; **not** under the canvas
+//! world; so it never needs to resize in response to node drags. This
 //! avoids a one-frame lag between writing `Node::width/height` in
 //! `PostUpdate` (after Layout) and seeing the new layout applied (only on
 //! the next frame).
@@ -13,7 +13,7 @@
 //! [`UiGlobalTransform`], subtract the viewport origin to get
 //! viewport-local pixels, and push those into the material uniforms. The
 //! shader renders the cubic Bezier in viewport-local pixel space via
-//! `in.uv * in.size` — its natural coordinate system when the node covers
+//! `in.uv * in.size`; its natural coordinate system when the node covers
 //! the whole viewport.
 //!
 //! Stroke width is in screen pixels and does not scale with canvas zoom.
@@ -51,7 +51,7 @@ pub struct GhostConnection;
 #[derive(Component, Debug, Clone, Copy)]
 pub struct PendingRemove;
 
-/// Anchor a UI node on top of a canvas terminal dot — helper return type
+/// Anchor a UI node on top of a canvas terminal dot; helper return type
 /// used by Phase 6's connection-endpoint editing. Not used in Phase 1/2.
 #[derive(Debug, Clone, Copy)]
 pub struct TerminalAnchor {
@@ -83,7 +83,7 @@ const GHOST_COLOR_SNAPPED: Vec4 = Vec4::new(0.3, 0.95, 0.7, 1.0);
 /// Runs in `PostUpdate` after `UiSystems::Layout`, so `UiGlobalTransform`
 /// values are fresh for the current frame. Because the wire's UI node is
 /// sized to the viewport and never resized, writes to `material.*` uniforms
-/// take effect for the same frame's render — no lag.
+/// take effect for the same frame's render; no lag.
 ///
 /// Coordinate-system notes (these tripped me up and are easy to get wrong):
 /// * `UiGlobalTransform::translation` is the **center** of the node in
@@ -161,7 +161,7 @@ pub fn update_connection_endpoints(
 /// gesture's `snap_target` in sync with whichever compatible input
 /// terminal is closest to the cursor.
 ///
-/// Runs in `PostUpdate` after `UiSystems::Layout` — same constraints as
+/// Runs in `PostUpdate` after `UiSystems::Layout`; same constraints as
 /// [`update_connection_endpoints`].
 pub fn update_ghost_wire(
     mut gesture: ResMut<GraphGesture>,
@@ -289,7 +289,7 @@ pub fn update_ghost_wire(
     };
 
     if let Some((_entity, material_handle)) = ghost_query.iter().next() {
-        // Ghost already exists — just update its material.
+        // Ghost already exists; just update its material.
         if let Some(material) = materials.get_mut(&material_handle.0) {
             material.p0 = source_local;
             material.p1 = p1;
@@ -298,7 +298,7 @@ pub fn update_ghost_wire(
             material.color = color;
         }
     } else {
-        // Ghost doesn't exist yet — spawn it parented to the viewport.
+        // Ghost doesn't exist yet; spawn it parented to the viewport.
         // Look up the owning graph from the source node's ChildOf, then
         // find the viewport in the CanvasWorldIndex.
         let Ok(parent) = node_parents.get(source_node) else {

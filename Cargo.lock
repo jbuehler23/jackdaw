@@ -4531,6 +4531,7 @@ dependencies = [
  "jackdaw_api_macros",
  "jackdaw_commands",
  "jackdaw_dylib",
+ "jackdaw_feathers",
  "jackdaw_jsn",
  "jackdaw_panels",
 ]
@@ -4601,6 +4602,7 @@ dependencies = [
  "bevy_monitors",
  "bevy_ui_text_input",
  "jackdaw_fuzzy",
+ "jackdaw_jsn",
  "jackdaw_widgets",
  "lucide-icons",
 ]

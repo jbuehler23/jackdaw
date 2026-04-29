@@ -8,16 +8,16 @@
 //! only tick when the user has Play engaged.
 //!
 //! This module provides:
-//! - [`PlayState`] — the `Stopped` / `Playing` / `Paused` state.
-//! - [`PrePlayScene`] — scene AST snapshot captured at Play time,
+//! - [`PlayState`]; the `Stopped` / `Playing` / `Paused` state.
+//! - [`PrePlayScene`]; scene AST snapshot captured at Play time,
 //!   restored on Stop so the authored scene is the revert baseline.
-//! - [`PieButton`] — marker component for the toolbar transport
+//! - [`PieButton`]; marker component for the toolbar transport
 //!   buttons; the `PiePlugin` auto-wires a click observer to each.
-//! - [`GameSpawned`] — marker added automatically to any entity that
+//! - [`GameSpawned`]; marker added automatically to any entity that
 //!   receives a `Transform` during `PlayState::Playing`. Editor
 //!   surfaces (hierarchy, inspector) use it to distinguish
 //!   authored-then-played entities from ones the game spawned.
-//! - [`PiePlugin`] — registers state, resource, and observers.
+//! - [`PiePlugin`]; registers state, resource, and observers.
 //!
 //! Handlers [`handle_play`], [`handle_pause`], [`handle_stop`] are
 //! exposed for direct `commands.queue(...)` use in case other

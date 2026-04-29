@@ -18,7 +18,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ComponentRevertBaselineOp>()
         .register_operator::<PhysicsEnableOp>()
         .register_operator::<PhysicsDisableOp>()
-        .register_operator::<AnimationToggleKeyframeOp>();
+        .register_operator::<AnimationToggleKeyframeOp>()
+        .register_operator::<super::brush_display::BrushFaceClearMaterialOp>()
+        .register_operator::<super::brush_display::BrushFaceApplyTextureToAllOp>()
+        .register_operator::<super::brush_display::BrushFaceSetUvScalePresetOp>()
+        .register_operator::<super::brush_display::BrushClearAllMaterialsOp>();
 }
 
 /// Inspector operators all act on the inspected entity (the primary
@@ -41,22 +45,17 @@ fn component_id_for_path(
     Some((component_id, type_id))
 }
 
-/// Add a component to the target entity.
-///
-/// # Parameters
-/// - `entity`: the entity that will receive the component, encoded as
-///   `i64` via [`Entity::to_bits()`] (use [`OperatorParameters::as_entity`]
-///   to read it back).
-/// - `type_path`: the fully-qualified Bevy reflected type path of the
-///   component to add (e.g. `"bevy_transform::components::transform::Transform"`).
-///
-/// Pushes a single undoable history entry that recreates the component
-/// on undo.
+/// Add a component to the target entity. Pushes a single undoable
+/// history entry that recreates the component on undo.
 #[operator(
     id = "component.add",
     label = "Add Component",
     description = "Add a component to the selected entity.",
-    is_available = has_primary_selection
+    is_available = has_primary_selection,
+    params(
+        entity(Entity, doc = "Entity that receives the component."),
+        type_path(String, doc = "Fully-qualified Bevy reflected type path of the component to add."),
+    ),
 )]
 pub(crate) fn component_add(
     params: In<OperatorParameters>,
@@ -87,16 +86,15 @@ pub(crate) fn component_add(
 }
 
 /// Remove a component from the target entity.
-///
-/// # Parameters
-/// - `entity`: the entity to remove the component from.
-/// - `type_path`: the fully-qualified Bevy reflected type path of the
-///   component to remove.
 #[operator(
     id = "component.remove",
     label = "Remove Component",
     description = "Remove a component from the selected entity.",
-    is_available = has_primary_selection
+    is_available = has_primary_selection,
+    params(
+        entity(Entity, doc = "Entity that loses the component."),
+        type_path(String, doc = "Fully-qualified Bevy reflected type path of the component to remove."),
+    ),
 )]
 pub(crate) fn component_remove(
     params: In<OperatorParameters>,
@@ -125,16 +123,15 @@ pub(crate) fn component_remove(
 
 /// Restore an overridden component on a prefab instance to the prefab's
 /// baseline value.
-///
-/// # Parameters
-/// - `entity`: the prefab instance entity.
-/// - `type_path`: the fully-qualified Bevy reflected type path of the
-///   component to revert.
 #[operator(
     id = "component.revert_baseline",
     label = "Revert To Prefab",
     description = "Restore the component to the value it had in the source prefab.",
-    is_available = has_primary_selection
+    is_available = has_primary_selection,
+    params(
+        entity(Entity, doc = "Prefab instance entity to revert."),
+        type_path(String, doc = "Fully-qualified Bevy reflected type path of the component to revert."),
+    ),
 )]
 pub(crate) fn component_revert_baseline(
     params: In<OperatorParameters>,
@@ -165,14 +162,12 @@ pub(crate) fn component_revert_baseline(
 /// Add `RigidBody` and `AvianCollider` to the entity so it participates
 /// in the physics simulation. No-op if those components are already
 /// present.
-///
-/// # Parameters
-/// - `entity`: the entity to make physical.
 #[operator(
     id = "physics.enable",
     label = "Enable Physics",
     description = "Make the selected entity participate in the physics simulation.",
-    is_available = has_primary_selection
+    is_available = has_primary_selection,
+    params(entity(Entity, doc = "Entity to make physical.")),
 )]
 pub(crate) fn physics_enable(
     params: In<OperatorParameters>,
@@ -192,14 +187,12 @@ pub(crate) fn physics_enable(
 
 /// Remove physics components from the entity, capturing the pre-disable
 /// state so undo restores them.
-///
-/// # Parameters
-/// - `entity`: the entity to make non-physical.
 #[operator(
     id = "physics.disable",
     label = "Disable Physics",
     description = "Stop the selected entity from participating in the physics simulation.",
-    is_available = has_primary_selection
+    is_available = has_primary_selection,
+    params(entity(Entity, doc = "Entity to make non-physical.")),
 )]
 pub(crate) fn physics_disable(
     params: In<OperatorParameters>,
@@ -222,19 +215,16 @@ pub(crate) fn physics_disable(
 /// Spawn (or replace) a keyframe at the current timeline cursor for one
 /// of the entity's animatable properties. Creates the clip and track
 /// lazily if they don't exist yet.
-///
-/// # Parameters
-/// - `entity`: the source entity whose property is being animated.
-/// - `component_type_path`: the fully-qualified Bevy reflected type
-///   path of the component that owns the property
-///   (e.g. `"bevy_transform::components::transform::Transform"`).
-/// - `field_path`: the dotted path to the field within that component
-///   (e.g. `"translation"` or `"rotation"`).
 #[operator(
     id = "animation.toggle_keyframe",
     label = "Toggle Keyframe",
     description = "Add or replace a keyframe for this property at the current timeline cursor.",
-    is_available = has_primary_selection
+    is_available = has_primary_selection,
+    params(
+        entity(Entity, doc = "Source entity whose property is being animated."),
+        component_type_path(String, doc = "Fully-qualified Bevy reflected type path of the component that owns the property."),
+        field_path(String, doc = "Dotted path to the field within the component (e.g. \"translation\")."),
+    ),
 )]
 pub(crate) fn animation_toggle_keyframe(
     params: In<OperatorParameters>,

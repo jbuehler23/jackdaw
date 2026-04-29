@@ -210,15 +210,21 @@ pub struct CustomProperties {
     pub properties: BTreeMap<String, PropertyValue>,
 }
 
+/// One enum for every editor parameter value: runtime
+/// `OperatorParameters`, const operator schemas (`Operator::PARAMETERS`),
+/// concrete button-call params, and reflected `CustomProperties`
+/// fields. `String` uses `Cow<'static, str>` so the enum can sit in a
+/// `const` slice.
 #[derive(Reflect, Clone, Debug, PartialEq)]
 pub enum PropertyValue {
     Bool(bool),
     Int(i64),
     Float(f64),
-    String(String),
+    String(Cow<'static, str>),
     Vec2(Vec2),
     Vec3(Vec3),
     Color(Color),
+    Entity(Entity),
 }
 
 impl From<bool> for PropertyValue {
@@ -241,19 +247,19 @@ impl From<f64> for PropertyValue {
 
 impl From<String> for PropertyValue {
     fn from(value: String) -> Self {
+        Self::String(Cow::Owned(value))
+    }
+}
+
+impl From<&'static str> for PropertyValue {
+    fn from(value: &'static str) -> Self {
+        Self::String(Cow::Borrowed(value))
+    }
+}
+
+impl From<Cow<'static, str>> for PropertyValue {
+    fn from(value: Cow<'static, str>) -> Self {
         Self::String(value)
-    }
-}
-
-impl From<&str> for PropertyValue {
-    fn from(value: &str) -> Self {
-        Self::String(value.to_string())
-    }
-}
-
-impl<'a> From<Cow<'a, str>> for PropertyValue {
-    fn from(value: Cow<'a, str>) -> Self {
-        Self::String(value.to_string())
     }
 }
 
@@ -275,9 +281,40 @@ impl From<Color> for PropertyValue {
     }
 }
 
+impl From<Entity> for PropertyValue {
+    fn from(value: Entity) -> Self {
+        Self::Entity(value)
+    }
+}
+
+impl std::fmt::Display for PropertyValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Int(i) => write!(f, "{i}"),
+            Self::Float(x) => write!(f, "{x}"),
+            Self::String(s) => write!(f, "\"{s}\""),
+            Self::Vec2(v) => write!(f, "vec2({}, {})", v.x, v.y),
+            Self::Vec3(v) => write!(f, "vec3({}, {}, {})", v.x, v.y, v.z),
+            Self::Color(c) => {
+                let s = c.to_srgba();
+                write!(
+                    f,
+                    "Color::srgba({}, {}, {}, {})",
+                    s.red, s.green, s.blue, s.alpha
+                )
+            }
+            Self::Entity(e) => write!(f, "Entity({})", e.to_bits()),
+        }
+    }
+}
+
 impl PropertyValue {
-    /// Human-readable type label for display in UI.
-    pub fn type_label(&self) -> &'static str {
+    /// Canonical title-case type name (`"Bool"`, `"Int"`, `"Float"`,
+    /// `"String"`, `"Vec2"`, `"Vec3"`, `"Color"`, `"Entity"`). Used by
+    /// the Custom Properties picker, operator-signature tooltips, and
+    /// matched against `ParamSpec::ty` (in `jackdaw_api_internal`).
+    pub const fn type_name(&self) -> &'static str {
         match self {
             Self::Bool(_) => "Bool",
             Self::Int(_) => "Int",
@@ -286,26 +323,42 @@ impl PropertyValue {
             Self::Vec2(_) => "Vec2",
             Self::Vec3(_) => "Vec3",
             Self::Color(_) => "Color",
+            Self::Entity(_) => "Entity",
         }
     }
 
-    /// Create a default value for a given type name.
+    /// Default value for the given [`type_name`](Self::type_name)
+    /// string. Used by the Custom Properties picker.
     pub fn default_for_type(name: &str) -> Option<Self> {
         match name {
             "Bool" => Some(Self::Bool(false)),
             "Int" => Some(Self::Int(0)),
             "Float" => Some(Self::Float(0.0)),
-            "String" => Some(Self::String(String::new())),
+            "String" => Some(Self::String(Cow::Borrowed(""))),
             "Vec2" => Some(Self::Vec2(Vec2::ZERO)),
             "Vec3" => Some(Self::Vec3(Vec3::ZERO)),
             "Color" => Some(Self::Color(Color::WHITE)),
+            "Entity" => Some(Self::Entity(Entity::PLACEHOLDER)),
             _ => None,
         }
     }
 
-    /// All available type names for the UI picker.
+    /// All available type names for the UI picker, derived from one
+    /// default per variant. Adding a new `PropertyValue` variant only
+    /// requires updating [`type_name`](Self::type_name); this list and
+    /// the picker pick it up automatically.
     pub fn all_type_names() -> &'static [&'static str] {
-        &["Bool", "Int", "Float", "String", "Vec2", "Vec3", "Color"]
+        const NAMES: &[&str] = &[
+            PropertyValue::Bool(false).type_name(),
+            PropertyValue::Int(0).type_name(),
+            PropertyValue::Float(0.0).type_name(),
+            PropertyValue::String(Cow::Borrowed("")).type_name(),
+            PropertyValue::Vec2(Vec2::ZERO).type_name(),
+            PropertyValue::Vec3(Vec3::ZERO).type_name(),
+            PropertyValue::Color(Color::WHITE).type_name(),
+            PropertyValue::Entity(Entity::PLACEHOLDER).type_name(),
+        ];
+        NAMES
     }
 }
 

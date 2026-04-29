@@ -73,12 +73,17 @@ pub(super) fn plugin(app: &mut App) {
 /// `ButtonOperatorCall` component (from `jackdaw_feathers::button`), usually via
 /// `ButtonProps::call_operator("sample.place_cube")`. The editor registers
 /// a global observer that, on `ButtonClickEvent`, calls
-/// [`OperatorWorldExt::operator`] with the stored id — so no per-button
+/// [`OperatorWorldExt::operator`] with the stored id; so no per-button
 /// click handler is needed.
 pub trait Operator: InputAction + 'static {
     const ID: &'static str;
     const LABEL: &'static str;
     const DESCRIPTION: &'static str = "";
+
+    /// Schema of the parameters this operator accepts. Default empty
+    /// for parameter-less operators. Surfaced in the editor tooltip
+    /// as a call signature and consumed by future scripting surfaces.
+    const PARAMETERS: &'static [ParamSpec] = &[];
 
     /// Whether this operator allows undoing. Note that whether an
     /// operator actually pushes an undo entry depends on the call site,
@@ -125,6 +130,13 @@ pub trait Operator: InputAction + 'static {
     fn register_cancel(commands: &mut Commands) -> Option<SystemId<()>> {
         None
     }
+
+    /// `Display` adapter rendering this operator's call signature
+    /// (`id(name: type = default, ...)`). Shared by the tooltip and
+    /// scripting surfaces.
+    fn signature() -> OperatorSignature<'static> {
+        OperatorSignature::new(Self::ID, Self::PARAMETERS)
+    }
 }
 
 #[derive(Debug, Clone, Default, Deref, DerefMut, Reflect)]
@@ -158,16 +170,66 @@ impl OperatorParameters {
     /// Read a `String` parameter by key.
     pub fn as_str(&self, key: &str) -> Option<&str> {
         match self.get(key)? {
-            PropertyValue::String(s) => Some(s.as_str()),
+            PropertyValue::String(s) => Some(s.as_ref()),
             _ => None,
         }
     }
 
-    /// Read an [`Entity`] parameter, decoded from the `i64` bits a
-    /// caller stored via [`Entity::to_bits()`]. Returns `None` if the
-    /// key is missing or not an `Int`.
+    /// Read an [`Entity`] parameter. `None` if the key is missing or
+    /// the value isn't a [`PropertyValue::Entity`].
     pub fn as_entity(&self, key: &str) -> Option<Entity> {
-        self.as_int(key).map(|bits| Entity::from_bits(bits as u64))
+        match self.get(key)? {
+            PropertyValue::Entity(e) => Some(*e),
+            _ => None,
+        }
+    }
+}
+
+/// Schema for a single operator parameter. Declared via
+/// [`Operator::PARAMETERS`] and surfaced through
+/// [`OperatorEntity::parameters`] for tooltips and future scripting
+/// surfaces. Lives in a `const` slice: `PropertyValue::String` is
+/// `Cow<'static, str>` and `Vec2/Vec3/Color` constructors are
+/// `const fn`.
+#[derive(Clone, Debug)]
+pub struct ParamSpec {
+    pub name: &'static str,
+    /// Title-case type name, e.g. `"Bool"`, `"Int"`, `"Vec2"`. Matches
+    /// the strings produced by [`PropertyValue::type_name`].
+    pub ty: &'static str,
+    pub default: Option<PropertyValue>,
+    pub doc: &'static str,
+}
+
+/// `Display` adapter that renders an operator's call signature:
+/// `id(name: type = default, ...)`. Construct via
+/// [`Operator::signature`] for a static one, or [`Self::new`] for a
+/// runtime-resolved operator.
+pub struct OperatorSignature<'a> {
+    pub id: &'a str,
+    pub params: &'a [ParamSpec],
+}
+
+impl<'a> OperatorSignature<'a> {
+    pub const fn new(id: &'a str, params: &'a [ParamSpec]) -> Self {
+        Self { id, params }
+    }
+}
+
+impl std::fmt::Display for OperatorSignature<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.id)?;
+        f.write_str("(")?;
+        for (i, spec) in self.params.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}: {}", spec.name, spec.ty)?;
+            if let Some(default) = &spec.default {
+                write!(f, " = {default}")?;
+            }
+        }
+        f.write_str(")")
     }
 }
 
@@ -367,6 +429,33 @@ impl<'a> OperatorCallBuilder<'a, Commands<'_, '_>> {
 }
 
 impl<'a> OperatorCallBuilder<'a, World> {
+    /// Whether this operator is declared `modal = true`. Returns
+    /// `Err(UnknownId)` if the id doesn't resolve.
+    pub fn is_modal(self) -> Result<bool, CallOperatorError> {
+        fn is_modal_inner(
+            In(id): In<Cow<'static, str>>,
+            world: &mut World,
+        ) -> Result<bool, CallOperatorError> {
+            let Some(op_entity) = world
+                .resource::<OperatorIndex>()
+                .by_id
+                .get(id.as_ref())
+                .copied()
+            else {
+                return Err(CallOperatorError::UnknownId(id));
+            };
+            let Some(op) = world.get::<OperatorEntity>(op_entity) else {
+                return Err(CallOperatorError::UnknownId(id));
+            };
+            Ok(op.modal)
+        }
+        self.world_commands
+            .run_system_cached_with(is_modal_inner, self.id.clone())
+            .map_err(BevyError::from)
+            .map_err(CallOperatorError::from)
+            .flatten()
+    }
+
     /// Whether the operator would run in the current editor state.
     /// `Ok(true)` if it's ready, `Ok(false)` if not, `Err` for unknown
     /// ids.

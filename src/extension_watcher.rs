@@ -13,7 +13,7 @@
 //! [`jackdaw_loader::DylibLoaderPlugin`]: per-user config dir plus
 //! `JACKDAW_EXTENSIONS_DIR`.
 //!
-//! Logging happens on notify's background thread directly — bevy's
+//! Logging happens on notify's background thread directly; bevy's
 //! `warn!` is just a `tracing::warn!` and its subscriber is thread-
 //! safe. This sidesteps bevy's Update-schedule throttling (the main
 //! loop can coalesce frames when the window is unfocused, which
@@ -99,7 +99,7 @@ impl Plugin for ExtensionWatcherPlugin {
 
 /// Owns the `notify::RecommendedWatcher` and the shared debounce
 /// state. Dropping this resource stops the watcher. We never read
-/// from it — the callback handles logging directly.
+/// from it; the callback handles logging directly.
 #[derive(Resource)]
 struct WatcherHandle {
     _watcher: RecommendedWatcher,
@@ -122,7 +122,7 @@ fn collect_search_paths() -> Vec<PathBuf> {
 }
 
 fn is_dylib(path: &Path) -> bool {
-    // Skip our own atomic-rename tempfiles — the install flow writes
+    // Skip our own atomic-rename tempfiles; the install flow writes
     // to `<subdir>/.jackdaw-install-<pid>-<name>.so` and then renames
     // into place, and we don't want those intermediate writes to
     // fire the user-facing "Dylib changed on disk" warning.
@@ -144,7 +144,7 @@ fn is_dylib_event(event: &Event) -> bool {
     // managers also have their own event signatures. Rather than
     // enumerate every variant, accept any Create or Modify and let
     // the Debounce collapse the burst. Explicitly skip pure
-    // attribute changes (chmod / chown) and Access events — neither
+    // attribute changes (chmod / chown) and Access events; neither
     // implies new code is available.
     matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
         && !matches!(

@@ -66,7 +66,7 @@ pub const TAB_INACTIVE_TEXT: Color = Color::srgb(0.659, 0.659, 0.659);
 pub const DROP_OVERLAY_BASE: Color = Color::srgb(0.126, 0.431, 0.784);
 
 // ---------------------------------------------------------------------------
-// Document tab strip (top-level header tabs — Figma spec)
+// Document tab strip (top-level header tabs; Figma spec)
 // ---------------------------------------------------------------------------
 
 /// Active document tab background (Figma #46474C)
@@ -110,6 +110,19 @@ pub const ELEVATED_BG: Color = Color::srgb(0.212, 0.216, 0.231);
 pub const AXIS_LABEL_BG: Color = Color::srgb(0.275, 0.278, 0.298);
 /// Active toolbar button background (#505050)
 pub const TOOLBAR_ACTIVE_BG: Color = Color::srgb(0.314, 0.314, 0.314);
+
+/// Toolbar outer border (#303030, Figma viewport-toolbar spec).
+pub const TOOLBAR_BORDER: Color = Color::srgb(0.188, 0.188, 0.188);
+/// Total toolbar row height (Figma viewport-toolbar spec).
+pub const TOOLBAR_HEIGHT: f32 = 30.0;
+/// Gap between adjacent toolbar children (icon buttons, separators).
+pub const TOOLBAR_GAP: f32 = 6.0;
+/// Toolbar inset on the left edge (Figma viewport-toolbar spec).
+pub const TOOLBAR_PADDING_LEFT: f32 = 6.0;
+/// Toolbar inset on the right edge (Figma viewport-toolbar spec).
+pub const TOOLBAR_PADDING_RIGHT: f32 = 8.0;
+/// Toolbar corner radius (top edges only; bottom flat against the viewport).
+pub const TOOLBAR_RADIUS: f32 = 6.0;
 
 // ---------------------------------------------------------------------------
 // Borders
@@ -258,15 +271,21 @@ pub const FILE_ICON_COLOR: Color = Color::Srgba(tailwind::ZINC_400);
 // Typography
 // ---------------------------------------------------------------------------
 
+pub const TEXT_SIZE_XS: f32 = 9.0;
 pub const TEXT_SIZE_SM: f32 = 11.0;
 pub const TEXT_SIZE: f32 = 13.0;
 pub const TEXT_SIZE_LG: f32 = 15.0;
 pub const TEXT_SIZE_XL: f32 = 18.0;
 
 // Keep old names as aliases for existing code
+pub const FONT_XS: f32 = TEXT_SIZE_XS;
 pub const FONT_SM: f32 = TEXT_SIZE_SM;
 pub const FONT_MD: f32 = TEXT_SIZE;
 pub const FONT_LG: f32 = TEXT_SIZE_LG;
+
+/// Truncation width for browser thumbnail filename labels (asset
+/// browser, material browser).
+pub const THUMB_NAME_MAX_WIDTH: f32 = 60.0;
 
 // ---------------------------------------------------------------------------
 // Icon sizes (Lucide frame sizes)

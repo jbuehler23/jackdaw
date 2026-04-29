@@ -8,7 +8,7 @@
 //!
 //! The widget only reads and displays. All mutations go through the
 //! main editor's existing `SpawnEntity` / `SetJsnField` / `DespawnEntity`
-//! command primitives — see [`crate::commands`] for the rationale.
+//! command primitives; see [`crate::commands`] for the rationale.
 
 use bevy::prelude::*;
 use bevy::ui::ComputedNode;
@@ -26,9 +26,7 @@ use crate::clip::{
     TimelineSnapHint, Vec3Keyframe,
 };
 use crate::compile::clip_display_duration;
-use crate::player::{
-    AnimationPause, AnimationPlay, AnimationStop, TimelineCursor, TimelineEngagement,
-};
+use crate::player::{TimelineCursor, TimelineEngagement};
 
 // Row heights, picked so the left-column labels vertically align with
 // the right-column strips and the top-of-column spacer aligns with the
@@ -125,7 +123,7 @@ pub enum TrackField {
     Scale,
 }
 
-/// Marker on the duration text field in the header — reserved for
+/// Marker on the duration text field in the header; reserved for
 /// future phases when explicit duration storage comes back (e.g. for
 /// trimming clips). Phase 5A derives duration from keyframes, so this
 /// marker currently goes unused but is kept to preserve the public API
@@ -164,13 +162,13 @@ pub fn timeline_panel() -> impl Bundle {
 /// Watches both `Changed<T>` (mutations) and `RemovedComponents<T>`
 /// (despawns). The despawn half is load-bearing: when a keyframe
 /// entity is despawned via the editor's `DespawnEntity` command,
-/// nothing fires `Changed<Vec3Keyframe>` — the entity just stops
+/// nothing fires `Changed<Vec3Keyframe>`; the entity just stops
 /// existing. Without the removal check the timeline would still
 /// show a diamond for the now-dead entity until something else
 /// triggered a rebuild.
 ///
 /// The type set matches what `compile_clips` watches, so the
-/// visual rebuild and the Bevy-asset rebuild stay in lockstep — if
+/// visual rebuild and the Bevy-asset rebuild stay in lockstep; if
 /// the compile step had something to recompile this frame, the
 /// timeline widget will redraw on the same frame.
 pub fn mark_timeline_dirty_on_data_change(
@@ -202,7 +200,7 @@ pub fn mark_timeline_dirty_on_data_change(
 }
 
 /// Repopulates the timeline panel whenever the selection or any
-/// timeline data changed. Cheap — the widget is small and redrawn at
+/// timeline data changed. Cheap; the widget is small and redrawn at
 /// 60 Hz at most.
 pub fn rebuild_timeline(
     mut commands: Commands,
@@ -318,13 +316,13 @@ pub fn rebuild_timeline(
 
 /// Spawn the canvas viewport + world as the dock body when the
 /// selected clip is a blend graph. The `clip_entity` itself is the
-/// graph root — it already carries `NodeGraph` + `GraphCanvasView`
-/// from the creation step — so the canvas bundle just points at it.
+/// graph root; it already carries `NodeGraph` + `GraphCanvasView`
+/// from the creation step; so the canvas bundle just points at it.
 fn spawn_blend_graph_body(commands: &mut Commands, parent: Entity, clip_entity: Entity) {
     // Wrapper with flex_grow so the canvas fills the space below
     // the header. The canvas() bundle already includes its own Node
     // (width/height 100%, overflow clip), so we can't merge ours
-    // into it — two-entity pattern avoids the duplicate-Node panic.
+    // into it; two-entity pattern avoids the duplicate-Node panic.
     let wrapper = commands
         .spawn((
             Node {
@@ -536,7 +534,7 @@ fn spawn_header(
 
     // Editable duration. Two-entity structure so we can set a fixed
     // wrapper width without conflicting with the `Node` that
-    // `text_edit()` provides internally — same pattern as the
+    // `text_edit()` provides internally; same pattern as the
     // animation keyframe diamond in the inspector. The
     // `TimelineDurationInput` marker sits on the wrapper; the main
     // editor's `on_duration_input_commit` observer walks up
@@ -754,7 +752,7 @@ fn spawn_ruler_ticks(commands: &mut Commands, ruler: Entity, timeline_col: Entit
 /// between 4 and 10 labels across the visible range.
 /// Step size used by the ruler tick generator. Also used by the
 /// main editor's arrow-key scrub handler so left/right stepping
-/// lands on the same tick marks the ruler draws — that way the
+/// lands on the same tick marks the ruler draws; that way the
 /// playhead visibly snaps from tick to tick as the user holds an
 /// arrow key.
 pub fn pick_tick_step(duration: f32) -> f32 {
@@ -823,7 +821,7 @@ fn spawn_track_label(
         ))
         .id();
 
-    // The track's label is just the property path — the target is
+    // The track's label is just the property path; the target is
     // implied by the clip's parent in the scene tree.
     commands.spawn((
         Text::new(track.field_path.clone()),
@@ -934,32 +932,13 @@ pub fn update_playhead_position(
     }
 }
 
-/// Route transport button clicks into the animation message channel.
-pub fn handle_transport_button_click(
-    event: On<ButtonClickEvent>,
-    play: Query<(), With<TimelinePlayButton>>,
-    pause: Query<(), With<TimelinePauseButton>>,
-    stop: Query<(), With<TimelineStopButton>>,
-    mut play_writer: MessageWriter<AnimationPlay>,
-    mut pause_writer: MessageWriter<AnimationPause>,
-    mut stop_writer: MessageWriter<AnimationStop>,
-) {
-    if play.contains(event.entity) {
-        play_writer.write(AnimationPlay);
-    } else if pause.contains(event.entity) {
-        pause_writer.write(AnimationPause);
-    } else if stop.contains(event.entity) {
-        stop_writer.write(AnimationStop);
-    }
-}
-
 /// Observer for clicks on the per-track `+` button. Reads the track's
 /// `AnimationTrack.property_path()`, looks up the target entity by name,
 /// snapshots the current value of the target's animated field, and
 /// `SpawnEntity`-s the right typed keyframe component at the cursor
 /// time. This is the one place in the widget layer that bridges
 /// "which field does this track animate" (strings in the AST) to
-/// "which keyframe component type to spawn" (a concrete Rust type) —
+/// "which keyframe component type to spawn" (a concrete Rust type) ;
 /// mirroring the dispatch in `compile.rs`.
 pub fn handle_add_keyframe_click(
     event: On<ButtonClickEvent>,
@@ -982,7 +961,7 @@ pub fn handle_add_keyframe_click(
         };
 
         // Walk up from the track to the owning clip, then from the clip
-        // to its parent — the parent entity is the animation target.
+        // to its parent; the parent entity is the animation target.
         // The target is always the clip's parent in the new parenting
         // model; no name lookup needed.
         let Some(clip_entity) = world.get::<ChildOf>(track_entity).map(ChildOf::parent) else {
@@ -1033,7 +1012,7 @@ pub fn handle_add_keyframe_click(
             }
             (component, field) => {
                 warn!(
-                    "Add keyframe: no snapshot dispatch for {component}.{field} — \
+                    "Add keyframe: no snapshot dispatch for {component}.{field}; \
                      add one in handle_add_keyframe_click"
                 );
             }
@@ -1157,7 +1136,7 @@ fn resolve_snap(
     quat_keyframes: &Query<&QuatKeyframe>,
     f32_keyframes: &Query<&F32Keyframe>,
 ) -> SnapResult {
-    // Shift temporarily disables snapping for precise positioning —
+    // Shift temporarily disables snapping for precise positioning ;
     // matches Jackdaw's convention for grid-snap and viewport
     // operations elsewhere in the editor.
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
@@ -1178,7 +1157,7 @@ fn resolve_snap(
     apply_snap(raw_time, duration, snap, &keyframes)
 }
 
-/// Observer: scrubber drag ends — clear the snap hint so hover
+/// Observer: scrubber drag ends; clear the snap hint so hover
 /// highlights don't linger after the user releases the mouse.
 pub fn clear_snap_hint_on_drag_end(
     mut event: On<Pointer<DragEnd>>,
@@ -1192,7 +1171,7 @@ pub fn clear_snap_hint_on_drag_end(
     event.propagate(false);
 }
 
-/// Observer: scrubber drag begins — mark the timeline as actively
+/// Observer: scrubber drag begins; mark the timeline as actively
 /// engaged so [`crate::auto_bind_player`] installs the runtime
 /// components on the next frame. Without this, the target Transform
 /// stays free to edit even while the user is scrubbing.
@@ -1208,7 +1187,7 @@ pub fn handle_scrubber_drag_start(
     event.propagate(false);
 }
 
-/// Observer: scrubber drag ends — release the target by transitioning
+/// Observer: scrubber drag ends; release the target by transitioning
 /// to idle. [`crate::auto_bind_player`] will strip the runtime
 /// components on the next frame.
 pub fn handle_scrubber_drag_end(
@@ -1335,7 +1314,7 @@ fn all_keyframes_for_clip(
 }
 
 /// Paint every rendered keyframe diamond based on its state:
-/// selected, snap-hovered, or default. Runs every frame — cheap
+/// selected, snap-hovered, or default. Runs every frame; cheap
 /// because there are only a handful of diamonds, and it means the
 /// visual picks up any change without a full rebuild.
 ///
@@ -1353,11 +1332,11 @@ pub fn update_keyframe_highlight(
 ) {
     for (handle, mut bg, mut border) in &mut handles {
         if selected.is_selected(handle.keyframe) {
-            // Selected — amber with white border.
+            // Selected; amber with white border.
             bg.0 = Color::srgb(1.0, 0.78, 0.12);
             *border = BorderColor::all(Color::WHITE);
         } else if hint.hovered_keyframe == Some(handle.keyframe) {
-            // Snap hover — brighter accent blue with white border
+            // Snap hover; brighter accent blue with white border
             // so the user sees exactly where their drag is landing.
             bg.0 = Color::srgb(0.38, 0.72, 1.0);
             *border = BorderColor::all(Color::WHITE);

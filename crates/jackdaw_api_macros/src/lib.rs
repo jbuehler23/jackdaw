@@ -1,10 +1,10 @@
 //! Proc macros for `jackdaw_api`.
 
 use proc_macro::TokenStream;
-use proc_macro2::Span;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{
-    Expr, ExprLit, ExprPath, ItemFn, Lit, LitBool, LitStr, MetaNameValue, Path, Token, Visibility,
+    Expr, ExprLit, ExprPath, Ident, ItemFn, Lit, LitBool, LitStr, Meta, Path, Token, Visibility,
     parse_macro_input, punctuated::Punctuated, spanned::Spanned,
 };
 
@@ -53,7 +53,7 @@ use syn::{
 #[proc_macro_attribute]
 pub fn operator(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(
-        attr with Punctuated::<MetaNameValue, Token![,]>::parse_terminated
+        attr with Punctuated::<Meta, Token![,]>::parse_terminated
     );
     let mut item_fn = parse_macro_input!(item as ItemFn);
 
@@ -65,70 +65,93 @@ pub fn operator(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut name_override: Option<String> = None;
     let mut is_available: Option<Path> = None;
     let mut cancel: Option<Path> = None;
+    let mut params: Option<TokenStream2> = None;
 
-    for arg in args {
-        let Some(key) = arg.path.get_ident().map(std::string::ToString::to_string) else {
-            continue;
-        };
-        match key.as_str() {
-            "id" => {
-                if let Some(s) = as_str_expr(&arg.value) {
-                    id = Some(s);
+    for arg in &args {
+        match arg {
+            Meta::NameValue(nv) => {
+                let Some(key) = nv.path.get_ident().map(Ident::to_string) else {
+                    continue;
+                };
+                match key.as_str() {
+                    "id" => {
+                        if let Some(s) = as_str_expr(&nv.value) {
+                            id = Some(s);
+                        }
+                    }
+                    "label" => {
+                        if let Some(s) = as_str_expr(&nv.value) {
+                            label = Some(s);
+                        }
+                    }
+                    "description" => {
+                        if let Some(s) = as_str_expr(&nv.value) {
+                            description = Some(s);
+                        }
+                    }
+                    "modal" => {
+                        if let Some(b) = as_lit_bool(&nv.value) {
+                            modal = b.value;
+                        }
+                    }
+                    "allows_undo" => {
+                        if let Some(b) = as_lit_bool(&nv.value) {
+                            allows_undo = b.value;
+                        }
+                    }
+                    "name" => {
+                        if let Some(s) = as_lit_str(&nv.value) {
+                            name_override = Some(s.value());
+                        }
+                    }
+                    "is_available" => {
+                        if let Some(p) = as_path(&nv.value) {
+                            is_available = Some(p);
+                        } else {
+                            return syn::Error::new(
+                                nv.value.span(),
+                                "`is_available` must be the path of a Bevy system returning `bool`",
+                            )
+                            .into_compile_error()
+                            .into();
+                        }
+                    }
+                    "cancel" => {
+                        if let Some(p) = as_path(&nv.value) {
+                            cancel = Some(p);
+                        } else {
+                            return syn::Error::new(
+                                nv.value.span(),
+                                "`cancel` must be the path of a Bevy system",
+                            )
+                            .into_compile_error()
+                            .into();
+                        }
+                    }
+                    other => {
+                        return syn::Error::new(
+                            nv.path.span(),
+                            format!("unknown `#[operator]` argument: `{other}`"),
+                        )
+                        .into_compile_error()
+                        .into();
+                    }
                 }
             }
-            "label" => {
-                if let Some(s) = as_str_expr(&arg.value) {
-                    label = Some(s);
-                }
+            Meta::List(list) if list.path.is_ident("params") => match build_params_const(list) {
+                Ok(tokens) => params = Some(tokens),
+                Err(err) => return err.into_compile_error().into(),
+            },
+            Meta::Path(path) if path.is_ident("modal") => {
+                modal = true;
             }
-            "description" => {
-                if let Some(s) = as_str_expr(&arg.value) {
-                    description = Some(s);
-                }
-            }
-            "modal" => {
-                if let Some(b) = as_lit_bool(&arg.value) {
-                    modal = b.value;
-                }
-            }
-            "allows_undo" => {
-                if let Some(b) = as_lit_bool(&arg.value) {
-                    allows_undo = b.value;
-                }
-            }
-            "name" => {
-                if let Some(s) = as_lit_str(&arg.value) {
-                    name_override = Some(s.value());
-                }
-            }
-            "is_available" => {
-                if let Some(p) = as_path(&arg.value) {
-                    is_available = Some(p);
-                } else {
-                    return syn::Error::new(
-                        arg.value.span(),
-                        "`is_available` must be the path of a Bevy system returning `bool`",
-                    )
-                    .into_compile_error()
-                    .into();
-                }
-            }
-            "cancel" => {
-                if let Some(p) = as_path(&arg.value) {
-                    cancel = Some(p);
-                } else {
-                    return syn::Error::new(
-                        arg.value.span(),
-                        "`cancel` must be the path of a Bevy system",
-                    )
-                    .into_compile_error()
-                    .into();
-                }
+            Meta::Path(path) if path.is_ident("allows_undo") => {
+                allows_undo = true;
             }
             other => {
                 return syn::Error::new(
-                    arg.path.span(),
-                    format!("unknown `#[operator]` argument: `{other}`"),
+                    other.span(),
+                    "expected `key = value` or `params(...)` in `#[operator]`",
                 )
                 .into_compile_error()
                 .into();
@@ -177,6 +200,12 @@ pub fn operator(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
 
+    let parameters_const = params.map(|tokens| {
+        quote! {
+            const PARAMETERS: &'static [::jackdaw_api::prelude::ParamSpec] = #tokens;
+        }
+    });
+
     let expanded = quote! {
         #[derive(::core::default::Default, ::bevy_enhanced_input::prelude::InputAction)]
         #[action_output(bool)]
@@ -188,6 +217,8 @@ pub fn operator(attr: TokenStream, item: TokenStream) -> TokenStream {
             const DESCRIPTION: &'static str = #description;
             const MODAL: bool = #modal;
             const ALLOWS_UNDO: bool = #allows_undo;
+
+            #parameters_const
 
             fn register_execute(
                 commands: &mut ::bevy::ecs::system::Commands,
@@ -257,4 +288,153 @@ fn to_pascal_case(snake: &str) -> String {
         }
     }
     out
+}
+
+/// Lower a `params(name(Type, default = …, doc = "…"), …)` block into
+/// the const slice expression that goes after `PARAMETERS: &'static [ParamSpec] =`.
+fn build_params_const(list: &syn::MetaList) -> syn::Result<TokenStream2> {
+    let entries: Punctuated<Meta, Token![,]> =
+        list.parse_args_with(Punctuated::parse_terminated)?;
+    let mut items = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        items.push(build_param_spec(entry)?);
+    }
+    Ok(quote! { &[ #( #items ),* ] })
+}
+
+fn build_param_spec(meta: &Meta) -> syn::Result<TokenStream2> {
+    let Meta::List(list) = meta else {
+        return Err(syn::Error::new(
+            meta.span(),
+            "expected `name(Type, default = …, doc = \"…\")`",
+        ));
+    };
+    let name_ident = list.path.get_ident().ok_or_else(|| {
+        syn::Error::new(
+            list.path.span(),
+            "parameter name must be a simple identifier",
+        )
+    })?;
+    let name_lit = LitStr::new(&name_ident.to_string(), name_ident.span());
+
+    let inner: Punctuated<Meta, Token![,]> = list.parse_args_with(Punctuated::parse_terminated)?;
+    let mut iter = inner.iter();
+
+    let ty_meta = iter
+        .next()
+        .ok_or_else(|| syn::Error::new(list.span(), "parameter is missing a type (e.g. `i64`)"))?;
+    let ty_ident = match ty_meta {
+        Meta::Path(path) => path.get_ident().cloned().ok_or_else(|| {
+            syn::Error::new(path.span(), "parameter type must be a single identifier")
+        })?,
+        _ => {
+            return Err(syn::Error::new(
+                ty_meta.span(),
+                "parameter type must be the first argument and a single identifier",
+            ));
+        }
+    };
+    let ty_variant = param_type_variant(&ty_ident)?;
+
+    let mut default_expr: Option<Expr> = None;
+    let mut doc_lit: Option<LitStr> = None;
+    for m in iter {
+        let Meta::NameValue(nv) = m else {
+            return Err(syn::Error::new(
+                m.span(),
+                "expected `default = …` or `doc = \"…\"`",
+            ));
+        };
+        let key = nv.path.get_ident().ok_or_else(|| {
+            syn::Error::new(nv.path.span(), "parameter attribute must be an ident")
+        })?;
+        match key.to_string().as_str() {
+            "default" => default_expr = Some(nv.value.clone()),
+            "doc" => {
+                let lit = as_lit_str(&nv.value).ok_or_else(|| {
+                    syn::Error::new(nv.value.span(), "`doc` must be a string literal")
+                })?;
+                doc_lit = Some(lit);
+            }
+            other => {
+                return Err(syn::Error::new(
+                    key.span(),
+                    format!("unknown parameter attribute: `{other}`"),
+                ));
+            }
+        }
+    }
+
+    let default_tokens = match &default_expr {
+        Some(expr) => {
+            let variant = param_default_variant(&ty_ident, expr)?;
+            quote! { ::core::option::Option::Some(#variant) }
+        }
+        None => quote! { ::core::option::Option::None },
+    };
+    let doc_tokens = match &doc_lit {
+        Some(lit) => quote! { #lit },
+        None => quote! { "" },
+    };
+
+    Ok(quote! {
+        ::jackdaw_api::prelude::ParamSpec {
+            name: #name_lit,
+            ty: #ty_variant,
+            default: #default_tokens,
+            doc: #doc_tokens,
+        }
+    })
+}
+
+/// Validate the parameter type ident and return the matching
+/// title-case label as a string literal token. The literal is what
+/// `ParamSpec.ty` stores; it matches the labels produced by
+/// `jackdaw_jsn::PropertyValue::type_name`.
+fn param_type_variant(ty: &Ident) -> syn::Result<TokenStream2> {
+    let label = match ty.to_string().as_str() {
+        "bool" => "Bool",
+        "i64" => "Int",
+        "f64" => "Float",
+        "String" => "String",
+        "Vec2" => "Vec2",
+        "Vec3" => "Vec3",
+        "Color" => "Color",
+        "Entity" => "Entity",
+        other => {
+            return Err(syn::Error::new(
+                ty.span(),
+                format!(
+                    "unknown parameter type `{other}` (expected bool, i64, f64, String, Vec2, Vec3, Color, Entity)",
+                ),
+            ));
+        }
+    };
+    Ok(quote! { #label })
+}
+
+/// Lower a `default = …` macro arg into a `PropertyValue` constructor.
+/// Strings go through `Cow::Borrowed` so the whole `ParamSpec` can sit
+/// in a `const` slice; numeric and bool literals are trivial.
+fn param_default_variant(ty: &Ident, expr: &Expr) -> syn::Result<TokenStream2> {
+    Ok(match ty.to_string().as_str() {
+        "bool" => quote! { ::jackdaw_api::jsn::PropertyValue::Bool(#expr) },
+        "i64" => quote! { ::jackdaw_api::jsn::PropertyValue::Int(#expr) },
+        "f64" => quote! { ::jackdaw_api::jsn::PropertyValue::Float(#expr) },
+        "String" => quote! {
+            ::jackdaw_api::jsn::PropertyValue::String(::std::borrow::Cow::Borrowed(#expr))
+        },
+        "Vec2" | "Vec3" | "Color" | "Entity" => {
+            return Err(syn::Error::new(
+                expr.span(),
+                "literal `default = …` for Vec2, Vec3, Color, Entity is not supported yet",
+            ));
+        }
+        other => {
+            return Err(syn::Error::new(
+                ty.span(),
+                format!("unknown parameter type `{other}` for default lowering"),
+            ));
+        }
+    })
 }

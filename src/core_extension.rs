@@ -2,24 +2,8 @@ use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
-use jackdaw_feathers::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps};
-
-/// Build a [`ButtonProps`] from an operator type, filling in the
-/// label and the click dispatch in one step.
-///
-/// `ButtonProps::from_operator::<MyOp>()` is the preferred form for
-/// editor toolbars and menus when the button text matches the
-/// operator's `LABEL`. For anything custom (icon-only buttons, a
-/// non-`LABEL` caption), keep using `ButtonProps::new(...).call_operator(id)`.
-pub trait ButtonPropsOpExt {
-    fn from_operator<Op: Operator>() -> Self;
-}
-
-impl ButtonPropsOpExt for ButtonProps {
-    fn from_operator<Op: Operator>() -> Self {
-        Self::new(Op::LABEL).call_operator(Op::ID)
-    }
-}
+use jackdaw_feathers::button::{ButtonClickEvent, ButtonOperatorCall};
+use jackdaw_jsn::PropertyValue;
 
 /// Catalog name of the Core extension. Exported so
 /// [`crate::extension_resolution::REQUIRED_EXTENSIONS`] and the
@@ -32,33 +16,53 @@ pub(super) fn plugin(app: &mut App) {
         .add_observer(dispatch_button_operator_call);
 }
 
-/// When a button carrying an [`ButtonOperatorCall`] component is clicked,
-/// dispatch the referenced operator. This is the single editor-wide
-/// glue that makes `ButtonProps::call_operator(id)` and menu/context-menu
-/// `op:`-prefixed entries (which also attach `ButtonOperatorCall` via feathers)
-/// actually run the operator. Without this, `ButtonOperatorCall` is inert.
+/// When a button carrying a [`ButtonOperatorCall`] is clicked,
+/// dispatch the referenced operator with the button's statically-declared
+/// parameters. This is the single editor-wide glue that makes
+/// `ButtonProps::call_operator(id)` and menu / context-menu `op:`-prefixed
+/// entries (which also attach `ButtonOperatorCall` via feathers) actually
+/// run the operator.
 ///
 /// The feathers-level click handlers for menu/context items skip
 /// firing their own `MenuAction`/`ContextMenuAction` events when they
-/// see `ButtonOperatorCall`, so this observer is the sole dispatch path for
-/// those items and won't double-fire.
+/// see `ButtonOperatorCall`, so this observer is the sole dispatch path
+/// for those items and won't double-fire.
 fn dispatch_button_operator_call(
     event: On<ButtonClickEvent>,
     button_op: Query<&ButtonOperatorCall>,
     mut commands: Commands,
 ) {
-    let Ok(ButtonOperatorCall(id)) = button_op.get(event.entity) else {
+    let Ok(call) = button_op.get(event.entity) else {
         return;
     };
-    let id = id.clone();
+    let id = call.id.clone().into_owned();
+    let params: Vec<(String, PropertyValue)> = call
+        .params
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect();
     commands.queue(move |world: &mut World| {
-        world
-            .operator(id)
-            .settings(CallOperatorSettings {
-                execution_context: ExecutionContext::Invoke,
-                creates_history_entry: true,
-            })
-            .call()
+        // If the target is a modal operator, cancel any in-flight
+        // modal first. Lets the user switch tools (Draw Brush,
+        // Measure Distance, brush-element drags, terrain sculpt, ...)
+        // by clicking another toolbar button without reaching for
+        // Escape, and keeps the second dispatch from failing with
+        // `ModalAlreadyActive`. Extensions that wire their own
+        // operators to buttons inherit this behavior for free.
+        if let Ok(true) = world.operator(id.clone()).is_modal() {
+            let _ = world.operator("modal.cancel").call();
+        }
+
+        let mut call = world.operator(id.clone()).settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        });
+        for (k, v) in params {
+            call = call.param(k, v);
+        }
+        if let Err(err) = call.call() {
+            error!("operator dispatch failed for `{id}`: {err}");
+        }
     });
 }
 
@@ -95,14 +99,85 @@ impl JackdawExtension for JackdawCoreExtension {
 
         ctx.register_operator::<CancelModalOp>();
         ctx.register_operator::<crate::asset_browser::ApplyTextureOp>();
-        ctx.register_operator::<crate::ClipDeleteKeyframesOp>();
+        ctx.register_operator::<crate::WindowOpenOp>()
+            .register_operator::<crate::WindowResetLayoutOp>();
+        ctx.register_operator::<crate::ClipDeleteKeyframesOp>()
+            .register_operator::<crate::ClipTimelineStepLeftOp>()
+            .register_operator::<crate::ClipTimelineStepRightOp>()
+            .register_operator::<crate::ClipTimelineJumpPrevOp>()
+            .register_operator::<crate::ClipTimelineJumpNextOp>()
+            .register_operator::<crate::ClipTimelineJumpStartOp>()
+            .register_operator::<crate::ClipTimelineJumpEndOp>()
+            .register_operator::<crate::ClipCopyKeyframesOp>()
+            .register_operator::<crate::ClipPasteKeyframesOp>()
+            .register_operator::<crate::ClipPlayOp>()
+            .register_operator::<crate::ClipPauseOp>()
+            .register_operator::<crate::ClipStopOp>()
+            .register_operator::<crate::ClipNewOp>()
+            .register_operator::<crate::ClipNewBlendGraphOp>();
+        let core_ext = ctx.id();
         ctx.spawn((
             Action::<crate::ClipDeleteKeyframesOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ctx.id()),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
             bindings![
                 (KeyCode::Delete, Press::default()),
                 (KeyCode::Backspace, Press::default()),
             ],
+        ));
+        // No `Press` on Step Left / Right: holding an arrow scrubs
+        // the timeline frame-by-frame. Shift+Arrow keyframe jumps
+        // below stay one-shot.
+        ctx.spawn((
+            Action::<crate::ClipTimelineStepLeftOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![KeyCode::ArrowLeft],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipTimelineStepRightOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![KeyCode::ArrowRight],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipTimelineJumpPrevOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![(
+                KeyCode::ArrowLeft.with_mod_keys(ModKeys::SHIFT),
+                Press::default(),
+            )],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipTimelineJumpNextOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![(
+                KeyCode::ArrowRight.with_mod_keys(ModKeys::SHIFT),
+                Press::default(),
+            )],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipTimelineJumpStartOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![(KeyCode::Home, Press::default())],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipTimelineJumpEndOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![(KeyCode::End, Press::default())],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipCopyKeyframesOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![(
+                KeyCode::KeyC.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            )],
+        ));
+        ctx.spawn((
+            Action::<crate::ClipPasteKeyframesOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            bindings![(
+                KeyCode::KeyV.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            )],
         ));
         crate::draw_brush::add_to_extension(ctx);
         crate::measure_tool::add_to_extension(ctx);
@@ -132,6 +207,9 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::inspector::ops::add_to_extension(ctx);
         crate::viewport::add_to_extension(ctx);
         crate::command_palette::add_to_extension(ctx);
+        crate::prefab_picker::add_to_extension(ctx);
+        crate::add_entity_picker::add_to_extension(ctx);
+        crate::inspector::component_picker::add_to_extension(ctx);
         crate::document_ops::add_to_extension(ctx);
     }
 

@@ -12,7 +12,7 @@ use super::ops::{
 };
 use super::save_load::{NavmeshLoadOp, NavmeshSaveOp};
 use super::visualization::NavmeshVizConfig;
-use crate::core_extension::ButtonPropsOpExt as _;
+
 use crate::{EditorEntity, selection::Selection};
 
 pub(super) fn plugin(app: &mut App) {

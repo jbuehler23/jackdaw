@@ -48,7 +48,7 @@ pub enum GraphGesture {
     },
     /// Drag-to-connect. `cursor_pos` is in **physical** pixels (same unit
     /// as `UiGlobalTransform::translation`). `snap_target` is updated each
-    /// frame by `update_ghost_wire` — `on_terminal_drag_end` reads it to
+    /// frame by `update_ghost_wire`; `on_terminal_drag_end` reads it to
     /// decide whether to commit the connection.
     ConnectDrag {
         source: ConnectionAnchor,

@@ -135,9 +135,17 @@ Always go through the `<Op>::ID` constant. Don't type out the operator id as a s
 
 ### Parameters
 
-If your operator needs to know something when it runs (which entity to delete, which axis to lock to), pull it out of `OperatorParameters`. There are helpers for the common types:
+If your operator needs to know something when it runs (which entity to delete, which axis to lock to), declare each parameter in a `params(...)` block on the `#[operator(...)]` macro. The schema shows up in the operator's hover tooltip as a call signature, and lays the groundwork for the (planned) command palette and scripting surfaces:
 
 ```rust
+#[operator(
+    id = "selection.delete",
+    label = "Delete Selected",
+    description = "Delete the selected entity.",
+    params(
+        entity(Entity, doc = "Entity to despawn."),
+    ),
+)]
 fn delete_entity(
     params: In<OperatorParameters>,
     mut commands: Commands,
@@ -150,9 +158,11 @@ fn delete_entity(
 }
 ```
 
-Document each parameter in the function's `///` doc comment under a `# Parameters` heading. Keep them out of the macro `description`, since that text shows up in the UI for artists.
+Each entry in `params(...)` is `name(Type, default = …, doc = "…")`. `default` and `doc` are optional. Supported types: `bool`, `i64`, `f64`, `String`, `Vec2`, `Vec3`, `Color`, `Entity`. Defaults are supported on `bool` / `i64` / `f64` / `String` for now.
 
-The `let Some(...) = ... else { return Cancelled }` pattern is the current shape; the long-term goal is `let entity = params.as_entity("entity")?;`, which needs `OperatorResult` to implement `Try` (and `FromResidual<Option<Infallible>>`). It's not wired up yet, so use the `let-else` form for now.
+The schema is informational; it does not change how parameters are extracted at call time. Continue reading values via `params.as_int("…")` / `as_str("…")` / `as_entity("…")` etc. inside the function body. The `let Some(...) = ... else { return Cancelled }` pattern is the current shape; the long-term goal is `let entity = params.as_entity("entity")?;`, which needs `OperatorResult` to implement `Try` (and `FromResidual<Option<Infallible>>`). It's not wired up yet, so use the `let-else` form for now.
+
+A `# Parameters` heading in the function's `///` doc comment is still welcome for longer prose, but the macro `params(...)` block is the primary record. Keep both in sync.
 
 ### Availability checks
 

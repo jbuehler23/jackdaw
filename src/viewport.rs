@@ -438,13 +438,11 @@ fn slot_param(params: &OperatorParameters) -> Option<usize> {
 }
 
 /// Save the camera position to a numbered slot.
-///
-/// # Parameters
-/// - `slot` (`i64`, `0..=8`): which bookmark slot to write.
 #[operator(
     id = "viewport.bookmark.save",
     label = "Save Camera Bookmark",
-    description = "Save the camera position to a numbered slot."
+    description = "Save the camera position to a numbered slot.",
+    params(slot(i64, doc = "Bookmark slot 0..=8."))
 )]
 pub(crate) fn viewport_bookmark_save(
     params: In<OperatorParameters>,
@@ -465,13 +463,11 @@ pub(crate) fn viewport_bookmark_save(
 
 /// Restore the camera to a previously-saved bookmark slot. Cancels if
 /// the slot is empty.
-///
-/// # Parameters
-/// - `slot` (`i64`, `0..=8`): which bookmark slot to read.
 #[operator(
     id = "viewport.bookmark.load",
     label = "Load Camera Bookmark",
-    description = "Restore the camera to a previously-saved slot."
+    description = "Restore the camera to a previously-saved slot.",
+    params(slot(i64, doc = "Bookmark slot 0..=8."))
 )]
 pub(crate) fn viewport_bookmark_load(
     params: In<OperatorParameters>,

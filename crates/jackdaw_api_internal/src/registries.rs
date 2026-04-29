@@ -1,6 +1,6 @@
 //! Panel-extension registry. Operators now live as entities (see
 //! [`crate::lifecycle::OperatorEntity`]) and keybinds go through BEI, so
-//! this file is much smaller than in v1 — only the panel-extension mapping
+//! this file is much smaller than in v1; only the panel-extension mapping
 //! remains.
 
 use std::{borrow::Cow, collections::HashMap};

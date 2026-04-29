@@ -95,14 +95,20 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     allows_undo = false,
     cancel = cancel_measure_distance
 )]
-fn measure_distance(
+pub(crate) fn measure_distance(
     _: In<OperatorParameters>,
     mut state: ResMut<MeasureToolState>,
-    window: Single<&Window>,
-    camera: Single<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    window: Option<Single<&Window>>,
+    camera: Option<Single<(&Camera, &GlobalTransform), With<MainViewportCamera>>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     mut ray_cast: MeshRayCast,
 ) -> OperatorResult {
+    // Outside `AppState::Editor` (e.g. headless tests, project-select
+    // screen) the window or main viewport camera don't exist yet.
+    // Cancel rather than panic on `Single`'s unwrap.
+    let (Some(window), Some(camera)) = (window, camera) else {
+        return OperatorResult::Cancelled;
+    };
     let (camera, cam_tf) = *camera;
 
     // Try to get a world-space point under the cursor.
@@ -128,7 +134,7 @@ fn measure_distance(
     }
 
     if !state.active {
-        // Confirm triggered finish — clean up and exit modal.
+        // Confirm triggered finish; clean up and exit modal.
         state.initialized = false;
         state.has_start = false;
         return OperatorResult::Finished;

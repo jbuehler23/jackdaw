@@ -1,25 +1,18 @@
 use crate::EditorEntity;
-use crate::prelude::*;
+use crate::core_extension::CoreExtensionInputContext;
 use crate::selection::{Selected, Selection};
 use std::any::TypeId;
 use std::collections::HashSet;
 
-use bevy::{
-    ecs::{
-        archetype::Archetype,
-        component::Components,
-        reflect::{AppTypeRegistry, ReflectComponent},
-    },
-    prelude::*,
+use bevy::ecs::archetype::Archetype;
+use bevy::ecs::component::Components;
+use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
+use bevy::prelude::*;
+use jackdaw_api::prelude::{Press, *};
+use jackdaw_feathers::picker::{
+    Category, Matchable, PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text,
+    picker_item,
 };
-use jackdaw_feathers::picker::Category;
-use jackdaw_feathers::picker::Matchable;
-use jackdaw_feathers::picker::PickerItems;
-use jackdaw_feathers::picker::PickerProps;
-use jackdaw_feathers::picker::SelectInput;
-use jackdaw_feathers::picker::SpawnItemInput;
-use jackdaw_feathers::picker::match_text;
-use jackdaw_feathers::picker::picker_item;
 use jackdaw_feathers::tokens;
 
 use super::{AddComponentButton, ComponentPicker, Inspector, ReflectEditorMeta};
@@ -193,7 +186,7 @@ fn on_select(
 
     commands
         .operator(crate::inspector::ops::ComponentAddOp::ID)
-        .param("entity", picker.0.to_bits() as i64)
+        .param("entity", picker.0)
         .param("type_path", info.type_path_full.clone())
         .call();
 
@@ -265,4 +258,37 @@ fn spawn_item(
     }
 
     Ok(())
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<ComponentPickerCloseOp>();
+    let ext = ctx.id();
+    ctx.spawn((
+        Action::<ComponentPickerCloseOp>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![(KeyCode::Escape, Press::default())],
+    ));
+}
+
+fn component_picker_open(pickers: Query<(), With<ComponentPicker>>) -> bool {
+    !pickers.is_empty()
+}
+
+/// Close the component picker dialog. Triggered by Escape via BEI.
+#[operator(
+    id = "component_picker.close",
+    label = "Close Component Picker",
+    description = "Close the component picker.",
+    is_available = component_picker_open,
+    allows_undo = false,
+)]
+pub(crate) fn component_picker_close(
+    _: In<OperatorParameters>,
+    pickers: Query<Entity, With<ComponentPicker>>,
+    mut commands: Commands,
+) -> OperatorResult {
+    for entity in &pickers {
+        commands.entity(entity).despawn();
+    }
+    OperatorResult::Finished
 }

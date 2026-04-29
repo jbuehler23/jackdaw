@@ -18,7 +18,7 @@ use bevy::prelude::*;
 /// strips with an additional `WARN` (manifesting as stray floating
 /// UI nodes like "Inherited" or "Component field" at the window
 /// root). This helper closes that race: inside one world-exclusive
-/// closure it checks the parent is alive, then attaches — and if
+/// closure it checks the parent is alive, then attaches; and if
 /// the parent isn't alive, it despawns the orphan instead.
 pub fn attach_or_despawn(commands: &mut Commands, parent: Entity, child: Entity) {
     commands.queue(move |world: &mut World| {
@@ -55,7 +55,7 @@ pub fn attach_children_or_despawn(commands: &mut Commands, parent: Entity, child
 /// `entity` is still alive, otherwise silently skip. Use for
 /// component inserts that target a widget-internal entity whose
 /// wrapper might have been torn down by [`attach_or_despawn`]'s
-/// fallback despawn path before this command drains — the raw
+/// fallback despawn path before this command drains; the raw
 /// `commands.entity(entity).insert(bundle)` would otherwise log
 /// `Entity despawned: … is invalid`.
 pub fn insert_if_alive<B: Bundle>(commands: &mut Commands, entity: Entity, bundle: B) {

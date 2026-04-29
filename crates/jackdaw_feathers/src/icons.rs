@@ -10,7 +10,7 @@ pub struct IconFont(pub Handle<Font>);
 pub struct EditorFont(pub Handle<Font>);
 
 /// Italic variant of the editor body font. Used by surfaces that
-/// want to mark content as "transient" or "runtime" — today the
+/// want to mark content as "transient" or "runtime"; today the
 /// hierarchy italicises rows for entities spawned during PIE Play.
 #[derive(Resource)]
 pub struct EditorFontItalic(pub Handle<Font>);

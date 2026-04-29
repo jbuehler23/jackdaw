@@ -11,7 +11,7 @@ use crate::graph::GraphNodeSelected;
 
 /// Ordered list of currently selected graph-node entities.
 ///
-/// The last entry is the "primary" selection — used for focus-follows-primary
+/// The last entry is the "primary" selection; used for focus-follows-primary
 /// UI like the context inspector.
 #[derive(Resource, Default, Debug)]
 pub struct GraphSelection {

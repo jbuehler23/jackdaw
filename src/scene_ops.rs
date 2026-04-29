@@ -8,7 +8,7 @@
 //! here.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::*;
+use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
 use crate::core_extension::CoreExtensionInputContext;
@@ -26,22 +26,34 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             Action::<SceneNewOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyN.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT)],
+            bindings![(
+                KeyCode::KeyN.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
+                Press::default(),
+            )],
         ));
         world.spawn((
             Action::<SceneOpenOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyO.with_mod_keys(ModKeys::CONTROL)],
+            bindings![(
+                KeyCode::KeyO.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            )],
         ));
         world.spawn((
             Action::<SceneSaveOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyS.with_mod_keys(ModKeys::CONTROL)],
+            bindings![(
+                KeyCode::KeyS.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            )],
         ));
         world.spawn((
             Action::<SceneSaveAsOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyS.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT)],
+            bindings![(
+                KeyCode::KeyS.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
+                Press::default(),
+            )],
         ));
     });
 }
@@ -55,7 +67,7 @@ pub(crate) fn scene_new(_: In<OperatorParameters>, mut commands: Commands) -> Op
 }
 
 #[operator(id = "scene.open", label = "Open")]
-pub(crate) fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::scene_io::load_scene(world);
     });
@@ -63,7 +75,7 @@ pub(crate) fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> O
 }
 
 #[operator(id = "scene.save", label = "Save", allows_undo = false)]
-pub(crate) fn scene_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub fn scene_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::scene_io::save_scene(world);
     });
@@ -71,7 +83,7 @@ pub(crate) fn scene_save(_: In<OperatorParameters>, mut commands: Commands) -> O
 }
 
 #[operator(id = "scene.save_as", label = "Save As...", allows_undo = false)]
-pub(crate) fn scene_save_as(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub fn scene_save_as(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::scene_io::save_scene_as(world);
     });

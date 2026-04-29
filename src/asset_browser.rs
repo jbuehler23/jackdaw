@@ -4,15 +4,16 @@ use std::sync::{Mutex, mpsc};
 use bevy::{
     asset::RenderAssetUsages,
     image::{CompressedImageFormats, ImageSampler, ImageType},
+    picking::hover::Hovered,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureSampleType},
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
-    ui_widgets::observe,
     window::{PrimaryWindow, RawHandleWrapper},
 };
+use jackdaw_feathers::button::ButtonOperatorCall;
 use jackdaw_feathers::text_edit::TextEditValue;
-use jackdaw_feathers::tooltip::ActiveTooltip;
-use jackdaw_feathers::{file_browser, icons, icons::IconFont, popover, tokens};
+use jackdaw_feathers::tooltip::Tooltip;
+use jackdaw_feathers::{file_browser, icons, icons::IconFont, tokens};
 use jackdaw_widgets::file_browser::{FileBrowserItem, FileItemDoubleClicked};
 use rfd::AsyncFileDialog;
 
@@ -104,12 +105,6 @@ impl Plugin for AssetBrowserPlugin {
             .add_observer(handle_select_asset_preview);
     }
 }
-
-// ── Events (absorbed from texture_browser) ──────────────────────────────────
-
-/// Clear texture from currently selected brush faces.
-#[derive(Event, Debug, Clone)]
-pub struct ClearTextureFromFaces;
 
 // ── Texture info ────────────────────────────────────────────────────────────
 
@@ -425,31 +420,33 @@ fn refresh_browser_on_change(
                 ));
             }
 
-            // File name label
+            // File name label. Truncates inline when it overflows the
+            // cell; when truncated, attach a generic `Tooltip` so the
+            // user can hover to read the full name. Direct attach
+            // (no source-component bridge); the data is already in
+            // hand at the call site.
             let is_truncated = entry.file_name.len() > 10;
             let display_name = if is_truncated {
                 format!("{}...", &entry.file_name[..8])
             } else {
                 entry.file_name.clone()
             };
-            let name_entity = commands
-                .spawn((
-                    Text::new(display_name),
-                    TextFont {
-                        font_size: 9.0,
-                        ..Default::default()
-                    },
-                    TextColor(tokens::TEXT_SECONDARY),
-                    Node {
-                        max_width: Val::Px(60.0),
-                        overflow: Overflow::clip(),
-                        ..Default::default()
-                    },
-                    ChildOf(thumb_entity),
-                ))
-                .id();
+            let mut name_label = commands.spawn((
+                Text::new(display_name),
+                TextFont {
+                    font_size: tokens::FONT_XS,
+                    ..default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+                Node {
+                    max_width: px(tokens::THUMB_NAME_MAX_WIDTH),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+                ChildOf(thumb_entity),
+            ));
             if is_truncated {
-                attach_tooltip(&mut commands, name_entity, entry.file_name.clone());
+                name_label.insert((Hovered::default(), Tooltip::title(entry.file_name.clone())));
             }
 
             // Hover
@@ -756,7 +753,7 @@ fn try_find_registry_material(
 /// brush-edit face mode) or to every face of every selected brush
 /// (expanding `BrushGroup`s into their child brushes).
 ///
-/// Parameter: `path` — the asset path of the texture to apply.
+/// Parameter: `path`; the asset path of the texture to apply.
 ///
 /// The operator framework captures a scene-AST snapshot before/after
 /// this runs and pushes it onto `CommandHistory`, so there's no
@@ -764,7 +761,7 @@ fn try_find_registry_material(
 /// the end is what makes that work: the outer `save_history` runs
 /// immediately after this system returns and captures the after-
 /// snapshot from the AST, so the mutation has to land in the AST
-/// before that — `BrushPlugin`'s auto-sync fires next `Update`,
+/// before that; `BrushPlugin`'s auto-sync fires next `Update`,
 /// which is too late here.
 #[operator(
     id = "material.apply_texture",
@@ -785,8 +782,8 @@ pub fn apply_texture(
     children_query: Query<&Children>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let path = match params.0.get("path") {
-        Some(jackdaw_jsn::PropertyValue::String(s)) => s.clone(),
+    let path: String = match params.0.get("path") {
+        Some(jackdaw_jsn::PropertyValue::String(s)) => s.to_string(),
         _ => {
             warn!("material.apply_texture called without a String `path` parameter");
             return OperatorResult::Cancelled;
@@ -884,44 +881,6 @@ fn handle_select_asset_preview(
         preview_state.current_layer = 0;
         preview_state.layer_images.clear();
     }
-}
-
-pub fn attach_tooltip(commands: &mut Commands, entity: Entity, text: String) {
-    commands.entity(entity).observe(
-        move |trigger: On<Pointer<Over>>,
-              mut commands: Commands,
-              mut tooltip: ResMut<ActiveTooltip>| {
-            if let Some(old) = tooltip.0.take() {
-                commands.entity(old).try_despawn();
-            }
-            let anchor = trigger.event_target();
-            let tip = commands
-                .spawn(popover::popover(
-                    popover::PopoverProps::new(anchor)
-                        .with_placement(popover::PopoverPlacement::Bottom)
-                        .with_padding(4.0)
-                        .with_z_index(300),
-                ))
-                .id();
-            commands.spawn((
-                Text::new(text.clone()),
-                TextFont {
-                    font_size: tokens::FONT_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_PRIMARY),
-                ChildOf(tip),
-            ));
-            tooltip.0 = Some(tip);
-        },
-    );
-    commands.entity(entity).observe(
-        |_: On<Pointer<Out>>, mut commands: Commands, mut tooltip: ResMut<ActiveTooltip>| {
-            if let Some(old) = tooltip.0.take() {
-                commands.entity(old).try_despawn();
-            }
-        },
-    );
 }
 
 fn extract_array_layers(
@@ -1108,7 +1067,10 @@ fn update_preview_panel(
             ))
             .id();
 
-        // Previous button
+        // Previous button. `Hovered + ButtonOperatorCall` are
+        // tooltip data sources only; the click below dispatches the
+        // operator manually because this is a raw Node spawn (not a
+        // feathers `button()`), so it doesn't fire `ButtonClickEvent`.
         let prev_btn = commands
             .spawn((
                 Node {
@@ -1117,6 +1079,8 @@ fn update_preview_panel(
                     ..Default::default()
                 },
                 BackgroundColor(tokens::INPUT_BG),
+                Hovered::default(),
+                ButtonOperatorCall::new(AssetCycleArrayLayerOp::ID).with_param("direction", -1i64),
                 ChildOf(nav_row),
             ))
             .id();
@@ -1148,7 +1112,7 @@ fn update_preview_panel(
             ChildOf(nav_row),
         ));
 
-        // Next button
+        // Next button. See `prev_btn` above; same pattern.
         let next_btn = commands
             .spawn((
                 Node {
@@ -1157,6 +1121,8 @@ fn update_preview_panel(
                     ..Default::default()
                 },
                 BackgroundColor(tokens::INPUT_BG),
+                Hovered::default(),
+                ButtonOperatorCall::new(AssetCycleArrayLayerOp::ID).with_param("direction", 1i64),
                 ChildOf(nav_row),
             ))
             .id();
@@ -1179,7 +1145,8 @@ fn update_preview_panel(
             });
     }
 
-    // Apply button (only for 2D textures)
+    // Apply button (only for 2D textures). See `prev_btn` for the
+    // ButtonOperatorCall-as-tooltip-data pattern.
     if !info.is_cubemap && !info.is_array {
         let path_str = path.to_string_lossy().to_string();
         let apply_btn = commands
@@ -1192,6 +1159,9 @@ fn update_preview_panel(
                     ..Default::default()
                 },
                 BackgroundColor(tokens::INPUT_BG),
+                Hovered::default(),
+                ButtonOperatorCall::new("material.apply_texture")
+                    .with_param("path", path_str.clone()),
                 ChildOf(container),
             ))
             .id();
@@ -1411,20 +1381,12 @@ pub fn asset_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
 
 fn asset_folder_button(icon_font: Handle<Font>) -> impl Bundle {
     (
-        Node {
-            padding: UiRect::all(Val::Px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        icons::icon_colored(
-            icons::Icon::FolderOpen,
-            tokens::FONT_MD,
-            icon_font,
-            tokens::TEXT_SECONDARY,
+        jackdaw_feathers::button::icon_button(
+            jackdaw_feathers::button::IconButtonProps::new(icons::Icon::FolderOpen)
+                .variant(jackdaw_feathers::button::ButtonVariant::Ghost),
+            &icon_font,
         ),
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.operator(AssetSelectFolderOp::ID).call();
-        }),
+        ButtonOperatorCall::new(AssetSelectFolderOp::ID),
     )
 }
 
@@ -1464,15 +1426,12 @@ fn has_array_preview(preview: Res<AssetPreviewState>) -> bool {
 
 /// Step the asset preview's selected layer by `direction`, wrapping at
 /// the texture's layer count.
-///
-/// # Parameters
-/// - `direction` (`i64`, default `+1`): how many layers to advance, can
-///   be negative to step backwards.
 #[operator(
     id = "asset.cycle_array_layer",
     label = "Cycle Array Layer",
     description = "Step the previewed array texture by one layer.",
-    is_available = has_array_preview
+    is_available = has_array_preview,
+    params(direction(i64, default = 1, doc = "How many layers to advance, can be negative.")),
 )]
 pub(crate) fn asset_cycle_array_layer(
     params: In<OperatorParameters>,
@@ -1497,7 +1456,7 @@ pub(crate) fn asset_cycle_array_layer(
     label = "Select Assets Folder",
     description = "Choose a different folder as the assets directory."
 )]
-pub(crate) fn asset_select_folder(
+pub fn asset_select_folder(
     _: In<OperatorParameters>,
     mut commands: Commands,
     raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,

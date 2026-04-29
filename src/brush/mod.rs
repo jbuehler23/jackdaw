@@ -154,7 +154,7 @@ impl EditorCommand for SetBrush {
 
 /// Serialize a Brush component to JSON and store it in the AST.
 pub fn sync_brush_to_ast(world: &mut World, entity: Entity, brush: &Brush) {
-    // `jackdaw_jsn::types::Brush` — the canonical reflected type
+    // `jackdaw_jsn::types::Brush`; the canonical reflected type
     // path (Brush is defined directly in `jackdaw_jsn::types`, not a
     // `types::brush` submodule; historically this string was wrong
     // and the AST ended up with a `types::brush::Brush` key that
@@ -166,7 +166,7 @@ pub fn sync_brush_to_ast(world: &mut World, entity: Entity, brush: &Brush) {
 /// Watch for any `Changed<Brush>` and mirror the new state into the
 /// scene AST. This lets callers that mutate `Brush` directly (and
 /// push `SetBrush` to history as already-executed via
-/// `push_executed`) skip a manual `sync_brush_to_ast` call — without
+/// `push_executed`) skip a manual `sync_brush_to_ast` call; without
 /// this system, the modal draw-brush operator's `before_snapshot`
 /// would capture the pre-mutation AST and an undo across the draw
 /// would wipe the prior Brush edit (e.g. undoing a new brush would

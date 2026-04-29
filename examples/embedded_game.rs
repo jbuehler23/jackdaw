@@ -4,7 +4,7 @@
 //! linked into the binary as a library, the user's game plugin
 //! registered statically through
 //! [`ExtensionPlugin::with_extension`]. No dylib loading, no
-//! rustc-wrapper, no `.cargo/config.toml` stitching — one
+//! rustc-wrapper, no `.cargo/config.toml` stitching; one
 //! `cargo run --example embedded_game` and you're in the editor with
 //! `MyGamePlugin` already active.
 //!

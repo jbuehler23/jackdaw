@@ -22,6 +22,7 @@ use crate::gizmos::{GizmoMode, GizmoSpace};
 use crate::snapping::SnapSettings;
 use crate::view_modes::ViewModeSettings;
 use crate::viewport_overlays::OverlaySettings;
+use crate::viewport_select::GroupEditState;
 
 pub(super) fn plugin(app: &mut App) {
     app.insert_resource(ActiveSnapshotter(Box::new(JsnAstSnapshotter)));
@@ -88,6 +89,11 @@ struct EditorStateSnapshot {
     view_mode: ViewModeSettings,
     overlays: OverlaySettings,
     physics_overlays: PhysicsOverlayConfig,
+    /// Active `BrushGroup` for group-edit mode. The entity id is
+    /// validated against the live world on `apply` because
+    /// `apply_ast_to_world` re-mints scene entities; stale ids are
+    /// dropped to `None`.
+    active_group: Option<Entity>,
 }
 
 impl EditorStateSnapshot {
@@ -100,6 +106,7 @@ impl EditorStateSnapshot {
             view_mode: world.resource::<ViewModeSettings>().clone(),
             overlays: world.resource::<OverlaySettings>().clone(),
             physics_overlays: world.resource::<PhysicsOverlayConfig>().clone(),
+            active_group: world.resource::<GroupEditState>().active_group,
         }
     }
 
@@ -111,5 +118,7 @@ impl EditorStateSnapshot {
         *world.resource_mut::<ViewModeSettings>() = self.view_mode.clone();
         *world.resource_mut::<OverlaySettings>() = self.overlays.clone();
         *world.resource_mut::<PhysicsOverlayConfig>() = self.physics_overlays.clone();
+        let valid_group = self.active_group.filter(|e| world.get_entity(*e).is_ok());
+        world.resource_mut::<GroupEditState>().active_group = valid_group;
     }
 }

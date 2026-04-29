@@ -40,8 +40,8 @@ pub use timeline::{
     TimelinePanelRoot, TimelinePauseButton, TimelinePlayButton, TimelineStopButton, TrackField,
     clear_snap_hint_on_drag_end, handle_add_keyframe_click, handle_scrubber_click,
     handle_scrubber_drag, handle_scrubber_drag_end, handle_scrubber_drag_start,
-    handle_transport_button_click, mark_timeline_dirty_on_data_change, pick_tick_step,
-    rebuild_timeline, timeline_panel, update_keyframe_highlight, update_playhead_position,
+    mark_timeline_dirty_on_data_change, pick_tick_step, rebuild_timeline, timeline_panel,
+    update_keyframe_highlight, update_playhead_position,
 };
 
 /// Plugin that registers the animation authoring data model and wires
@@ -76,7 +76,6 @@ impl Plugin for AnimationPlugin {
             .register_type::<BlendNode>()
             .register_type::<AdditiveBlendNode>()
             .register_type::<OutputNode>()
-            .add_observer(handle_transport_button_click)
             .add_observer(handle_add_keyframe_click)
             .add_observer(handle_scrubber_click)
             .add_observer(handle_scrubber_drag)

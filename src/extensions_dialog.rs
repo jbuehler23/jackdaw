@@ -131,7 +131,7 @@ fn populate_extensions_dialog(
         // Required extensions are load-bearing (the editor panics
         // without them), so they're not user-toggleable. Omit them
         // from the dialog entirely rather than rendering a locked
-        // checkbox — they're implementation detail, not a user
+        // checkbox; they're implementation detail, not a user
         // choice.
         if extension_resolution::is_required(&id) {
             continue;
@@ -234,6 +234,11 @@ fn spawn_install_row(commands: &mut Commands, list: Entity) {
                 .with_variant(ButtonVariant::Default)
                 .with_size(ButtonSize::MD)
                 .with_left_icon(Icon::FilePlus),
+        ),
+        jackdaw_feathers::tooltip::Tooltip::title("Install Extension").with_description(
+            "Pick a prebuilt extension dylib (.so / .dll / .dylib) and copy \
+                 it into the user extensions directory. The extension loads on \
+                 the next editor restart.",
         ),
     ));
 

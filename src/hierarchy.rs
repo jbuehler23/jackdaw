@@ -4,6 +4,7 @@ use bevy::{
     ecs::system::SystemState, input_focus::InputFocus, prelude::*,
     ui::ui_transform::UiGlobalTransform,
 };
+use bevy_enhanced_input::prelude::{Press, *};
 use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
@@ -13,7 +14,7 @@ use jackdaw_feathers::{
     tokens,
     tree_view::{ROW_BG, TreeRowStyle, tree_row},
 };
-use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuCloseSystems, ContextMenuState};
+use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuState};
 use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeFocused, TreeIndex, TreeNode, TreeNodeExpanded,
     TreeRowChildren, TreeRowClicked, TreeRowContent, TreeRowDropped, TreeRowDroppedOnRoot,
@@ -72,7 +73,6 @@ impl Plugin for HierarchyPlugin {
                 (
                     apply_hierarchy_filter,
                     auto_focus_inline_rename,
-                    handle_hierarchy_right_click.after(ContextMenuCloseSystems),
                     populate_template_dialog,
                     toggle_show_all_button,
                     update_show_all_button_appearance,
@@ -179,7 +179,7 @@ fn rebuild_hierarchy_on_container_added(
 fn rebuild_hierarchy(world: &mut World) -> Result {
     fn rebuild_hierarchy_inner(
         world: &mut World,
-        container: &mut SystemState<Single<Entity, With<HierarchyTreeContainer>>>,
+        container: &mut SystemState<Option<Single<Entity, With<HierarchyTreeContainer>>>>,
         roots: &mut QueryState<
             Entity,
             (
@@ -190,7 +190,13 @@ fn rebuild_hierarchy(world: &mut World) -> Result {
             ),
         >,
     ) {
-        let container = *container.get(world);
+        // No container means the editor UI tree isn't mounted (e.g.
+        // headless integration tests, or pre-`OnEnter(Editor)` state).
+        // Nothing to rebuild against; bail.
+        let Some(container) = container.get(world) else {
+            return;
+        };
+        let container = *container;
 
         // Collect all root scene entities (Transform, no ChildOf, no editor markers)
         let roots: Vec<Entity> = roots.iter(world).collect();
@@ -751,8 +757,12 @@ fn on_tree_row_dropped_on_root(
     mut commands: Commands,
     parent_query: Query<&ChildOf, Without<EditorEntity>>,
     tree_index: Res<TreeIndex>,
-    container: Single<Entity, With<HierarchyTreeContainer>>,
+    container: Option<Single<Entity, With<HierarchyTreeContainer>>>,
 ) {
+    let Some(container) = container else {
+        // No tree container mounted (e.g. inside a headless test).
+        return;
+    };
     let dragged = event.dragged_source;
 
     let old_parent = match parent_query.get(dragged) {
@@ -785,9 +795,15 @@ fn on_tree_row_dropped_on_root(
     }
 }
 
-/// Detect right-click on tree rows and open a context menu.
-fn handle_hierarchy_right_click(
-    mouse: Res<ButtonInput<MouseButton>>,
+/// Open the hierarchy row context menu under the cursor (RMB).
+#[operator(
+    id = "hierarchy.open_context_menu",
+    label = "Open Context Menu",
+    description = "Show the context menu for the entity under the cursor.",
+    allows_undo = false
+)]
+pub(crate) fn hierarchy_open_context_menu(
+    _: In<OperatorParameters>,
     mut commands: Commands,
     mut state: ResMut<ContextMenuState>,
     windows: Query<&Window>,
@@ -796,16 +812,12 @@ fn handle_hierarchy_right_click(
     tree_nodes: Query<&TreeNode>,
     computed_nodes: Query<(&ComputedNode, &UiGlobalTransform), With<TreeRowContent>>,
     extension_add_entries: Query<&jackdaw_api_internal::lifecycle::RegisteredMenuEntry>,
-) {
-    if !mouse.just_pressed(MouseButton::Right) {
-        return;
-    }
-
+) -> OperatorResult {
     let Ok(window) = windows.single() else {
-        return;
+        return OperatorResult::Cancelled;
     };
     let Some(cursor_pos) = window.cursor_position() else {
-        return;
+        return OperatorResult::Cancelled;
     };
 
     // Close any existing context menu
@@ -835,7 +847,7 @@ fn handle_hierarchy_right_click(
     }
 
     let Some(target) = target_source else {
-        return;
+        return OperatorResult::Cancelled;
     };
 
     // If the right-clicked entity isn't selected, select it
@@ -907,6 +919,7 @@ fn handle_hierarchy_right_click(
     let menu = spawn_context_menu(&mut commands, cursor_pos, Some(target), &items);
     state.menu_entity = Some(menu);
     state.target_entity = Some(target);
+    OperatorResult::Finished
 }
 
 /// Handle context menu actions for hierarchy operations.
@@ -1079,7 +1092,14 @@ fn on_visibility_toggled(
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<RenameBeginOp>();
+    ctx.register_operator::<RenameBeginOp>()
+        .register_operator::<HierarchyOpenContextMenuOp>();
+    let ext = ctx.id();
+    ctx.spawn((
+        Action::<HierarchyOpenContextMenuOp>::new(),
+        ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
+        bindings![(MouseButton::Right, Press::default())],
+    ));
 }
 
 /// Marker for inline rename `text_edit` entity, linking back to the label entity and source entity.
@@ -1154,9 +1174,6 @@ impl Command for RestoreLabel {
 }
 
 /// Begin inline rename of an entity in the hierarchy tree.
-///
-/// # Parameters
-/// - `entity`: the scene entity to rename, encoded via [`Entity::to_bits()`].
 #[operator(
     id = "hierarchy.rename_begin",
     label = "Rename Entity",
@@ -1164,8 +1181,9 @@ impl Command for RestoreLabel {
     modal = true,
     cancel = cancel_rename_begin,
     is_available = no_rename_in_progress,
+    params(entity(Entity, doc = "Scene entity to rename.")),
 )]
-pub(crate) fn rename_begin(
+pub fn rename_begin(
     params: In<OperatorParameters>,
     mut commands: Commands,
     tree_index: Res<TreeIndex>,
@@ -1427,7 +1445,7 @@ fn toggle_show_all_button(
 /// `jackdaw_feathers::icons`. Text colour stays at the theme's
 /// primary foreground; only the font handle changes. Runs every
 /// frame while in `Editor` state; the body is a few pointer-chasing
-/// lookups per game-spawned entity — cheap enough to skip change
+/// lookups per game-spawned entity; cheap enough to skip change
 /// detection. We only write when the font differs to keep bevy's
 /// `Changed<TextFont>` quiet for downstream consumers.
 fn style_game_spawned_rows(
@@ -1508,9 +1526,13 @@ fn on_show_all_changed(show_all: Res<HierarchyShowAll>, mut commands: Commands) 
 /// Despawn all tree rows and clear the `TreeIndex`.
 pub fn clear_all_tree_rows(
     world: &mut World,
-    container: &mut SystemState<Single<Entity, With<HierarchyTreeContainer>>>,
+    container: &mut SystemState<Option<Single<Entity, With<HierarchyTreeContainer>>>>,
 ) {
-    let container = *container.get(world);
+    let Some(container) = container.get(world) else {
+        // No tree container mounted (e.g. headless test); nothing to clear.
+        return;
+    };
+    let container = *container;
 
     // Collect tree row children of the container
     let tree_rows: Vec<Entity> = world

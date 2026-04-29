@@ -1,14 +1,12 @@
 //! Clip-tool operators. Replace the keybind/click branches in
 //! `brush::interaction::handle_clip_mode`. The remaining clip-mode
-//! work — recomputing the preview plane and drawing the gizmo overlay
-//! — stays in `interaction.rs`.
+//! work (recomputing the preview plane and drawing the gizmo
+//! overlay) stays in `interaction.rs`.
 //!
 //! Default keybinds: LMB places a point, Tab cycles mode, Enter
 //! applies, Escape clears.
 
-use bevy::{
-    input_focus::InputFocus, prelude::*, ui::ui_transform::UiGlobalTransform, window::PrimaryWindow,
-};
+use bevy::{prelude::*, ui::ui_transform::UiGlobalTransform, window::PrimaryWindow};
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::{Brush, BrushFaceData, BrushGroup, BrushPlane};
@@ -54,13 +52,13 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 pub(crate) fn place_point_invoke_trigger(
     mouse: Res<ButtonInput<MouseButton>>,
     edit_mode: Res<EditMode>,
-    input_focus: Res<InputFocus>,
+    keybind_focus: crate::keybind_focus::KeybindFocus,
     clip_state: Res<ClipState>,
     mut commands: Commands,
 ) {
     if !mouse.just_pressed(MouseButton::Left)
         || !is_clip_mode_value(&edit_mode)
-        || input_focus.0.is_some()
+        || keybind_focus.is_typing()
         || clip_state.points.len() >= 3
     {
         return;
@@ -80,39 +78,42 @@ fn is_clip_mode_value(edit_mode: &EditMode) -> bool {
     matches!(edit_mode, EditMode::BrushEdit(BrushEditMode::Clip))
 }
 
-fn is_clip_mode(edit_mode: Res<EditMode>, input_focus: Res<InputFocus>) -> bool {
-    input_focus.0.is_none() && is_clip_mode_value(&edit_mode)
+fn is_clip_mode_open(
+    edit_mode: &EditMode,
+    keybind_focus: &crate::keybind_focus::KeybindFocus,
+) -> bool {
+    !keybind_focus.is_typing() && is_clip_mode_value(edit_mode)
 }
 
 fn can_place_point(
     edit_mode: Res<EditMode>,
-    input_focus: Res<InputFocus>,
+    keybind_focus: crate::keybind_focus::KeybindFocus,
     brush_selection: Res<BrushSelection>,
     clip_state: Res<ClipState>,
 ) -> bool {
-    is_clip_mode(edit_mode, input_focus)
+    is_clip_mode_open(&edit_mode, &keybind_focus)
         && brush_selection.entity.is_some()
         && clip_state.points.len() < 3
 }
 
 fn can_apply_or_cycle(
     edit_mode: Res<EditMode>,
-    input_focus: Res<InputFocus>,
+    keybind_focus: crate::keybind_focus::KeybindFocus,
     clip_state: Res<ClipState>,
 ) -> bool {
-    is_clip_mode(edit_mode, input_focus) && clip_state.preview_plane.is_some()
+    is_clip_mode_open(&edit_mode, &keybind_focus) && clip_state.preview_plane.is_some()
 }
 
 fn can_clear(
     edit_mode: Res<EditMode>,
-    input_focus: Res<InputFocus>,
+    keybind_focus: crate::keybind_focus::KeybindFocus,
     clip_state: Res<ClipState>,
     active: ActiveModalQuery,
 ) -> bool {
     if active.is_modal_running() {
         return false;
     }
-    is_clip_mode(edit_mode, input_focus)
+    is_clip_mode_open(&edit_mode, &keybind_focus)
         && (!clip_state.points.is_empty() || clip_state.mode != ClipMode::KeepFront)
 }
 

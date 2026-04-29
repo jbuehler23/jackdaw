@@ -15,7 +15,7 @@ use bevy::{
     window::SystemCursorIcon,
 };
 
-use bevy_enhanced_input::prelude::*;
+use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
 use crate::brush::{BrushSelection, EditMode};
@@ -46,13 +46,22 @@ impl Plugin for PhysicsToolPlugin {
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<PhysicsActivateOp>();
+    ctx.register_operator::<PhysicsActivateOp>()
+        .register_operator::<PhysicsCommitOp>();
 
     let ext = ctx.id();
     ctx.spawn((
         Action::<PhysicsActivateOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![KeyCode::KeyP.with_mod_keys(ModKeys::SHIFT)],
+        bindings![(
+            KeyCode::KeyP.with_mod_keys(ModKeys::SHIFT),
+            Press::default(),
+        )],
+    ));
+    ctx.spawn((
+        Action::<PhysicsCommitOp>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![(KeyCode::Space, Press::default())],
     ));
 }
 
@@ -63,12 +72,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     modal = true,
     cancel = cancel_physics_activate,
 )]
-pub(crate) fn physics_activate(
+pub fn physics_activate(
     _: In<OperatorParameters>,
     mut edit_mode: ResMut<EditMode>,
     mut draw_state: ResMut<DrawBrushState>,
     mut brush_selection: ResMut<BrushSelection>,
-    keyboard: Res<ButtonInput<KeyCode>>,
     active: ActiveModalQuery,
 ) -> OperatorResult {
     if !active.is_modal_running() {
@@ -78,10 +86,6 @@ pub(crate) fn physics_activate(
         return OperatorResult::Running;
     }
 
-    if keyboard.just_pressed(KeyCode::Space) {
-        *edit_mode = EditMode::Object;
-        return OperatorResult::Finished;
-    }
     if *edit_mode != EditMode::Physics {
         return OperatorResult::Finished;
     }
@@ -93,6 +97,28 @@ fn cancel_physics_activate(mut edit_mode: ResMut<EditMode>) {
     if *edit_mode == EditMode::Physics {
         *edit_mode = EditMode::Object;
     }
+}
+
+fn is_physics_modal_running(active: ActiveModalQuery) -> bool {
+    active.is_operator(PhysicsActivateOp::ID)
+}
+
+/// Drop the placed objects and exit the physics tool, keeping their
+/// settled positions. `allows_undo = true` so undoing the commit
+/// returns to physics mode at those positions for further nudging
+/// or re-simulation.
+#[operator(
+    id = "physics.commit",
+    label = "Commit Physics Tool",
+    description = "Keep where the physics objects landed and exit the tool.",
+    is_available = is_physics_modal_running,
+)]
+pub(crate) fn physics_commit(
+    _: In<OperatorParameters>,
+    mut edit_mode: ResMut<EditMode>,
+) -> OperatorResult {
+    *edit_mode = EditMode::Object;
+    OperatorResult::Finished
 }
 
 /// Track the previous `EditMode` to detect transitions into/out of Physics.

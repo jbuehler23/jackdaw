@@ -210,7 +210,7 @@ fn sculpt_invoke_trigger(
     allows_undo = false,
     cancel = cancel_terrain_sculpt,
 )]
-pub(crate) fn terrain_sculpt(
+pub fn terrain_sculpt(
     _: In<OperatorParameters>,
     mouse: Res<ButtonInput<MouseButton>>,
     edit_mode: Res<TerrainEditMode>,

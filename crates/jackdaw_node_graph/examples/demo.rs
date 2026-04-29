@@ -51,7 +51,7 @@ fn main() -> AppExit {
 #[derive(Component, Debug, Clone, Copy)]
 struct ConstantValue(f32);
 
-/// Cached computed result for any node — `ConstantValue` for constants,
+/// Cached computed result for any node; `ConstantValue` for constants,
 /// sum of resolved inputs for `demo.add` nodes. Written by
 /// [`evaluate_demo_graph`] each frame.
 #[derive(Component, Debug, Clone, Copy, Default)]
@@ -194,7 +194,7 @@ fn populate_demo_node_bodies(
 /// Watch feathers `TextEditValue` changes on any `ConstantInputTarget`
 /// wrapper and push the parsed value into the bound `GraphNode` data
 /// entity's `ConstantValue`. This runs while the user types, while they
-/// drag-scrub the `↔` prefix, and when they commit via Enter/unfocus —
+/// drag-scrub the `↔` prefix, and when they commit via Enter/unfocus ;
 /// all three paths update the value live.
 fn sync_constant_inputs(
     changed: Query<(&ConstantInputTarget, &TextEditValue), Changed<TextEditValue>>,

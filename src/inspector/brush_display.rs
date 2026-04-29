@@ -3,8 +3,11 @@ use crate::brush::{Brush, BrushEditMode, BrushFaceData, BrushSelection, EditMode
 use crate::commands::CommandHistory;
 use crate::selection::Selection;
 
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
+    button::ButtonOperatorCall,
     text_edit::{self, TextEditCommitEvent, TextEditProps},
     tokens,
 };
@@ -27,14 +30,6 @@ fn resolve_material_label(
     }
     format!("Material {:?}", mat_handle.id())
 }
-
-/// Apply the first selected face's material + UV settings to all faces of the brush.
-#[derive(Event, Debug, Clone)]
-pub(crate) struct ApplyTextureToAllFaces;
-
-/// Apply a UV scale preset to all selected faces.
-#[derive(Event, Debug, Clone)]
-pub(crate) struct ApplyUvScalePreset(pub f32);
 
 pub(super) fn spawn_brush_display(
     commands: &mut Commands,
@@ -85,10 +80,6 @@ pub(super) fn spawn_brush_display(
         ChildOf(parent),
     ));
 }
-
-/// Clear material from all faces of selected brushes (Object mode).
-#[derive(Event, Debug, Clone)]
-pub(crate) struct ClearMaterialFromBrush;
 
 fn spawn_material_summary(
     commands: &mut Commands,
@@ -202,6 +193,10 @@ fn spawn_material_summary(
     }
 
     // Clear All button, only if at least one face has a material.
+    // `Hovered + ButtonOperatorCall` are tooltip data sources only ;
+    // dispatch flows through the click observer below because this
+    // is a raw Node (not a feathers `button()`), so it doesn't fire
+    // `ButtonClickEvent`.
     if any_has_material {
         let clear_all_btn = commands
             .spawn((
@@ -212,6 +207,8 @@ fn spawn_material_summary(
                     ..Default::default()
                 },
                 BackgroundColor(tokens::INPUT_BG),
+                Hovered::default(),
+                ButtonOperatorCall::new(BrushClearAllMaterialsOp::ID),
                 ChildOf(parent),
             ))
             .id();
@@ -227,7 +224,7 @@ fn spawn_material_summary(
         commands
             .entity(clear_all_btn)
             .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-                commands.trigger(ClearMaterialFromBrush);
+                commands.operator(BrushClearAllMaterialsOp::ID).call();
             });
         commands.entity(clear_all_btn).observe(
             |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
@@ -254,10 +251,6 @@ pub(super) struct BrushFacePropsState {
     /// Hash of face data to detect UV edits
     data_hash: u64,
 }
-
-/// Clear material from currently selected brush faces.
-#[derive(Event, Debug, Clone)]
-pub(crate) struct ClearMaterialFromFaces;
 
 fn hash_face_data(face: &BrushFaceData) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -407,7 +400,9 @@ pub(crate) fn update_brush_face_properties(
             ChildOf(mat_row),
         ));
 
-        // Clear material button
+        // Clear material button. Tooltip via `ButtonOperatorCall`,
+        // dispatch via the click observer (raw Node, not a feathers
+        // button; see `Clear All` above for the same pattern).
         let clear_mat_btn = commands
             .spawn((
                 Node {
@@ -416,6 +411,8 @@ pub(crate) fn update_brush_face_properties(
                     ..Default::default()
                 },
                 BackgroundColor(tokens::INPUT_BG),
+                Hovered::default(),
+                ButtonOperatorCall::new(BrushFaceClearMaterialOp::ID),
                 ChildOf(mat_row),
             ))
             .id();
@@ -431,7 +428,7 @@ pub(crate) fn update_brush_face_properties(
         commands
             .entity(clear_mat_btn)
             .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-                commands.trigger(ClearMaterialFromFaces);
+                commands.operator(BrushFaceClearMaterialOp::ID).call();
             });
         commands.entity(clear_mat_btn).observe(
             |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
@@ -448,7 +445,8 @@ pub(crate) fn update_brush_face_properties(
             },
         );
 
-        // "Apply to All Faces" button
+        // "Apply to All Faces" button. Tooltip + dispatch via the same
+        // pattern as `Clear All` above.
         let apply_all_btn = commands
             .spawn((
                 Node {
@@ -457,6 +455,8 @@ pub(crate) fn update_brush_face_properties(
                     ..Default::default()
                 },
                 BackgroundColor(tokens::INPUT_BG),
+                Hovered::default(),
+                ButtonOperatorCall::new(BrushFaceApplyTextureToAllOp::ID),
                 ChildOf(container_entity),
             ))
             .id();
@@ -472,7 +472,7 @@ pub(crate) fn update_brush_face_properties(
         commands
             .entity(apply_all_btn)
             .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-                commands.trigger(ApplyTextureToAllFaces);
+                commands.operator(BrushFaceApplyTextureToAllOp::ID).call();
             });
         commands.entity(apply_all_btn).observe(
             |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
@@ -552,6 +552,9 @@ pub(crate) fn update_brush_face_properties(
                     ..Default::default()
                 },
                 BackgroundColor(tokens::INPUT_BG),
+                Hovered::default(),
+                ButtonOperatorCall::new(BrushFaceSetUvScalePresetOp::ID)
+                    .with_param("scale", preset as f64),
                 ChildOf(preset_row),
             ))
             .id();
@@ -567,7 +570,10 @@ pub(crate) fn update_brush_face_properties(
         commands
             .entity(btn)
             .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-                commands.trigger(ApplyUvScalePreset(preset));
+                commands
+                    .operator(BrushFaceSetUvScalePresetOp::ID)
+                    .param("scale", preset as f64)
+                    .call();
             });
         commands.entity(btn).observe(
             |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
@@ -760,25 +766,37 @@ fn apply_brush_face_field(
     history.push_executed(Box::new(cmd));
 }
 
-pub(crate) fn handle_clear_material(
-    _event: On<ClearMaterialFromFaces>,
+/// True when the brush face inspector has at least one face selected
+/// in the active brush; gates the per-face operators so the buttons
+/// grey out when there's nothing to act on.
+fn brush_face_with_selection(
     brush_selection: Res<BrushSelection>,
     edit_mode: Res<EditMode>,
+) -> bool {
+    if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
+        return false;
+    }
+    brush_selection.entity.is_some() && !brush_selection.faces.is_empty()
+}
+
+#[operator(
+    id = "brush.face.clear_material",
+    label = "Clear Material",
+    description = "Remove the material/texture from the selected faces.",
+    is_available = brush_face_with_selection,
+)]
+pub(crate) fn brush_face_clear_material(
+    _: In<OperatorParameters>,
+    brush_selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut history: ResMut<CommandHistory>,
     mut commands: Commands,
-) {
-    if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-        return;
-    }
+) -> OperatorResult {
     let Some(brush_entity) = brush_selection.entity else {
-        return;
+        return OperatorResult::Cancelled;
     };
-    if brush_selection.faces.is_empty() {
-        return;
-    }
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return;
+        return OperatorResult::Cancelled;
     };
 
     let old = brush.clone();
@@ -796,70 +814,32 @@ pub(crate) fn handle_clear_material(
     };
     history.push_executed(Box::new(cmd));
     commands.entity(brush_entity).insert(super::InspectorDirty);
+    OperatorResult::Finished
 }
 
-pub(crate) fn handle_clear_texture(
-    _event: On<crate::asset_browser::ClearTextureFromFaces>,
+#[operator(
+    id = "brush.face.apply_texture_to_all",
+    label = "Apply Material to All Faces",
+    description = "Copy the first selected face's material and UV transform onto every face of the brush.",
+    is_available = brush_face_with_selection,
+)]
+pub(crate) fn brush_face_apply_texture_to_all(
+    _: In<OperatorParameters>,
     brush_selection: Res<BrushSelection>,
-    edit_mode: Res<EditMode>,
     mut brushes: Query<&mut Brush>,
     mut history: ResMut<CommandHistory>,
     mut commands: Commands,
-) {
-    if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-        return;
-    }
+) -> OperatorResult {
     let Some(brush_entity) = brush_selection.entity else {
-        return;
+        return OperatorResult::Cancelled;
     };
-    if brush_selection.faces.is_empty() {
-        return;
-    }
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return;
-    };
-
-    let old = brush.clone();
-    for &face_idx in &brush_selection.faces {
-        if face_idx < brush.faces.len() {
-            brush.faces[face_idx].material = Handle::default();
-        }
-    }
-
-    let cmd = SetBrush {
-        entity: brush_entity,
-        old,
-        new: brush.clone(),
-        label: "Clear texture".to_string(),
-    };
-    history.push_executed(Box::new(cmd));
-    commands.entity(brush_entity).insert(super::InspectorDirty);
-}
-
-pub(crate) fn handle_apply_texture_to_all(
-    _event: On<ApplyTextureToAllFaces>,
-    brush_selection: Res<BrushSelection>,
-    edit_mode: Res<EditMode>,
-    mut brushes: Query<&mut Brush>,
-    mut history: ResMut<CommandHistory>,
-    mut commands: Commands,
-) {
-    if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-        return;
-    }
-    let Some(brush_entity) = brush_selection.entity else {
-        return;
-    };
-    if brush_selection.faces.is_empty() {
-        return;
-    }
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return;
+        return OperatorResult::Cancelled;
     };
 
     let source_idx = brush_selection.faces[0];
     if source_idx >= brush.faces.len() {
-        return;
+        return OperatorResult::Cancelled;
     }
     let source = brush.faces[source_idx].clone();
 
@@ -879,30 +859,32 @@ pub(crate) fn handle_apply_texture_to_all(
     };
     history.push_executed(Box::new(cmd));
     commands.entity(brush_entity).insert(super::InspectorDirty);
+    OperatorResult::Finished
 }
 
-pub(crate) fn handle_uv_scale_preset(
-    event: On<ApplyUvScalePreset>,
+#[operator(
+    id = "brush.face.set_uv_scale_preset",
+    label = "Set UV Scale",
+    description = "Set the UV scale of the selected faces to the given uniform value.",
+    is_available = brush_face_with_selection,
+    params(scale(f64, doc = "Uniform UV scale (the same value for U and V).")),
+)]
+pub(crate) fn brush_face_set_uv_scale_preset(
+    In(params): In<OperatorParameters>,
     brush_selection: Res<BrushSelection>,
-    edit_mode: Res<EditMode>,
     mut brushes: Query<&mut Brush>,
     mut history: ResMut<CommandHistory>,
-) {
-    if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-        return;
-    }
+) -> OperatorResult {
+    let scale_value = params.as_float("scale").unwrap_or(1.0) as f32;
     let Some(brush_entity) = brush_selection.entity else {
-        return;
+        return OperatorResult::Cancelled;
     };
-    if brush_selection.faces.is_empty() {
-        return;
-    }
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return;
+        return OperatorResult::Cancelled;
     };
 
     let old = brush.clone();
-    let scale = Vec2::splat(event.0);
+    let scale = Vec2::splat(scale_value);
     for &face_idx in &brush_selection.faces {
         if face_idx < brush.faces.len() {
             brush.faces[face_idx].uv_scale = scale;
@@ -916,17 +898,23 @@ pub(crate) fn handle_uv_scale_preset(
         label: "Set UV scale preset".to_string(),
     };
     history.push_executed(Box::new(cmd));
+    OperatorResult::Finished
 }
 
-pub(crate) fn handle_clear_material_from_brush(
-    _event: On<ClearMaterialFromBrush>,
+#[operator(
+    id = "brush.clear_all_materials",
+    label = "Clear All Materials",
+    description = "Clear materials from every face of the selected brushes (expanding any selected brush groups into their child brushes)."
+)]
+pub(crate) fn brush_clear_all_materials(
+    _: In<OperatorParameters>,
     selection: Res<Selection>,
     mut brushes: Query<&mut Brush>,
     mut history: ResMut<CommandHistory>,
     brush_groups: Query<(), With<jackdaw_jsn::types::BrushGroup>>,
     children_query: Query<&Children>,
     mut commands: Commands,
-) {
+) -> OperatorResult {
     // Expand BrushGroups into child brushes
     let targets: Vec<Entity> = selection
         .entities
@@ -970,4 +958,5 @@ pub(crate) fn handle_clear_material_from_brush(
             label: "Clear all materials".to_string(),
         }));
     }
+    OperatorResult::Finished
 }

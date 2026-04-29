@@ -1,7 +1,8 @@
 pub(crate) mod anim_diamond;
 mod brush_display;
 pub(crate) mod component_display;
-mod component_picker;
+pub(crate) mod component_picker;
+pub(crate) mod component_tooltip;
 mod custom_props_display;
 mod material_display;
 pub(crate) mod ops;
@@ -111,6 +112,7 @@ pub struct InspectorPlugin;
 impl Plugin for InspectorPlugin {
     fn build(&self, app: &mut App) {
         app.register_type_data::<Name, ReflectDisplayable>()
+            .add_plugins(component_tooltip::plugin)
             .add_observer(component_display::remove_component_displays)
             .add_observer(component_display::add_component_displays)
             .add_observer(component_display::on_inspector_dirty)
@@ -120,11 +122,6 @@ impl Plugin for InspectorPlugin {
             .add_observer(physics_display::on_physics_enable_toggle)
             .add_observer(custom_props_display::on_custom_property_checkbox_commit)
             .add_observer(custom_props_display::on_custom_property_text_commit)
-            .add_observer(brush_display::handle_clear_texture)
-            .add_observer(brush_display::handle_clear_material)
-            .add_observer(brush_display::handle_clear_material_from_brush)
-            .add_observer(brush_display::handle_apply_texture_to_all)
-            .add_observer(brush_display::handle_uv_scale_preset)
             .add_observer(brush_display::on_brush_face_text_commit)
             .add_observer(on_name_field_commit)
             .add_observer(material_display::on_material_text_commit)
@@ -305,7 +302,7 @@ pub(super) struct FieldBinding {
 /// `FieldBinding` with the same path as this marker. For composite
 /// fields like `Vec3 translation` the row contains three axis
 /// `FieldBinding`s with paths `translation.x` / `.y` / `.z`, but
-/// there's still only one `InspectorFieldRow` on the outer column —
+/// there's still only one `InspectorFieldRow` on the outer column ;
 /// so per-field decorations (like the animation keyframe diamond)
 /// can hang off this marker without being duplicated per axis.
 #[derive(Component)]

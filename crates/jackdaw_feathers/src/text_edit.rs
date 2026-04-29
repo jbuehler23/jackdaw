@@ -5,7 +5,7 @@ use bevy::text::{FontFeatureTag, FontFeatures};
 use bevy_ui_text_input::actions::{TextInputAction, TextInputEdit};
 use bevy_ui_text_input::*;
 // Re-export key types from bevy_ui_text_input for consumers
-pub use bevy_ui_text_input::{TextInputBuffer, TextInputQueue};
+pub use bevy_ui_text_input::{TextInputBuffer, TextInputNode, TextInputQueue};
 
 use crate::cursor::{ActiveCursor, HoverCursor};
 use crate::icons::EditorFont;

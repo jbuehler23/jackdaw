@@ -252,7 +252,7 @@ fn gizmo_drag_invoke_trigger(
     allows_undo = false,
     cancel = cancel_gizmo_drag,
 )]
-pub(crate) fn gizmo_drag(
+pub fn gizmo_drag(
     _: In<OperatorParameters>,
     selection: Res<Selection>,
     mut transforms: Query<(&GlobalTransform, &mut Transform), With<Selected>>,

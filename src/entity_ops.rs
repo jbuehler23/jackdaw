@@ -904,7 +904,7 @@ fn get_assets_base_dir() -> Option<std::path::PathBuf> {
 // operator has the scene locked, matching the guards the legacy
 // `handle_entity_keys` applied.
 
-use bevy_enhanced_input::prelude::*;
+use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
 use crate::core_extension::CoreExtensionInputContext;
@@ -933,37 +933,49 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             Action::<EntityDeleteOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::Delete],
+            bindings![(KeyCode::Delete, Press::default())],
         ));
         world.spawn((
             Action::<EntityDuplicateOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyD.with_mod_keys(ModKeys::CONTROL)],
+            bindings![(
+                KeyCode::KeyD.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            )],
         ));
         world.spawn((
             Action::<EntityCopyComponentsOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyC.with_mod_keys(ModKeys::CONTROL)],
+            bindings![(
+                KeyCode::KeyC.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            )],
         ));
         world.spawn((
             Action::<EntityPasteComponentsOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyV.with_mod_keys(ModKeys::CONTROL)],
+            bindings![(
+                KeyCode::KeyV.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            )],
         ));
         world.spawn((
             Action::<EntityToggleVisibilityOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyH],
+            bindings![(KeyCode::KeyH, Press::default())],
         ));
         world.spawn((
             Action::<EntityUnhideAllOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyH.with_mod_keys(ModKeys::CONTROL)],
+            bindings![(
+                KeyCode::KeyH.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            )],
         ));
         world.spawn((
             Action::<EntityHideUnselectedOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![KeyCode::KeyH.with_mod_keys(ModKeys::ALT)],
+            bindings![(KeyCode::KeyH.with_mod_keys(ModKeys::ALT), Press::default(),)],
         ));
     });
 }
@@ -971,7 +983,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// Shared availability check for entity manipulation operators.
 /// Refuses to fire while a text input has focus, while a modal
 /// operator is in flight, while the draw brush modal is active, or
-/// while brush sub-element edit mode is active — matches the guards
+/// while brush sub-element edit mode is active; matches the guards
 /// the legacy `handle_entity_keys` applied.
 fn can_act_on_entities(
     input_focus: Res<InputFocus>,

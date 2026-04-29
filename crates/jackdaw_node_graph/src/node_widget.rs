@@ -4,7 +4,7 @@
 //! sections stacked vertically:
 //! * Title bar (accent-colored strip + display name)
 //! * Terminal row (input column on the left, spacer, output column on the right)
-//! * Body area (reserved for inline params — populated by consumer code)
+//! * Body area (reserved for inline params; populated by consumer code)
 //!
 //! The node's on-screen position is driven by
 //! [`apply_node_position`] reading from
@@ -235,7 +235,7 @@ fn terminal_row(
         },
         children![
             // Invisible hit-zone wrapper. This is what receives pointer
-            // events — it's bigger than the visual dot so dragging
+            // events; it's bigger than the visual dot so dragging
             // connections doesn't require pixel-perfect aim.
             (
                 Node {
@@ -252,7 +252,7 @@ fn terminal_row(
                 },
                 Pickable::default(),
                 children![(
-                    // Visual dot. No Pickable — the parent hit-zone owns
+                    // Visual dot. No Pickable; the parent hit-zone owns
                     // events, so pointer events consistently target the
                     // wrapper regardless of whether the click landed on
                     // the dot itself or its small margin.
@@ -293,7 +293,7 @@ fn body_area(node_entity: Entity) -> impl Bundle {
     )
 }
 
-/// Convenience bundle for a small body label — consumer code can use this
+/// Convenience bundle for a small body label; consumer code can use this
 /// to render read-only values inside a node without having to restate the
 /// font/color tokens every time. Matches Jackdaw's typography via
 /// `jackdaw_feathers::tokens` so it sits consistently next to
@@ -331,7 +331,7 @@ pub fn apply_node_position(
 /// Update each node UI's border color based on whether its data entity
 /// carries a [`GraphNodeSelected`] marker.
 ///
-/// Runs every frame in `Update`. Cheap even with thousands of nodes —
+/// Runs every frame in `Update`. Cheap even with thousands of nodes ;
 /// Phase 6 polish can switch to `Added<GraphNodeSelected>` +
 /// `RemovedComponents` change detection if profiling shows overhead.
 pub fn apply_selection_highlight(
@@ -350,7 +350,7 @@ pub fn apply_selection_highlight(
 
 /// Spawn `Terminal` components on `node_entity` to match a descriptor.
 ///
-/// Caller is responsible for calling this once at node creation time — it
+/// Caller is responsible for calling this once at node creation time; it
 /// writes one child `Terminal` entity per input and per output. This is a
 /// helper used by `AddGraphNodeCmd` in Phase 2 and by the demo example.
 pub fn spawn_terminal_components(

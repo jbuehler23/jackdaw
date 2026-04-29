@@ -1,6 +1,5 @@
 use bevy::{
     input::mouse::{MouseScrollUnit, MouseWheel},
-    input_focus::InputFocus,
     prelude::*,
 };
 use bevy_infinite_grid::{InfiniteGrid, InfiniteGridSettings};
@@ -219,13 +218,13 @@ impl SnapSettings {
 /// keys) so the clamp + translate-increment refresh live in one place.
 fn handle_grid_size_scroll(
     keyboard: Res<ButtonInput<KeyCode>>,
-    input_focus: Res<InputFocus>,
+    keybind_focus: crate::keybind_focus::KeybindFocus,
     modal: Res<crate::modal_transform::ModalTransformState>,
     terrain_edit_mode: Res<crate::terrain::TerrainEditMode>,
     mut scroll_events: MessageReader<MouseWheel>,
     mut commands: Commands,
 ) {
-    if input_focus.0.is_some() || modal.active.is_some() {
+    if keybind_focus.is_typing() || modal.active.is_some() {
         return;
     }
 
