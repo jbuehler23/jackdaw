@@ -64,7 +64,7 @@ use jackdaw_panels::{
     DockWindowDescriptor, WindowRegistry, WorkspaceDescriptor, WorkspaceRegistry,
 };
 
-use operator::{CallOperatorSettings, Operator, OperatorWorldExt};
+use operator::{CallOperatorSettings, Operator};
 use registries::WindowExtensionRegistry;
 use snapshot::{ActiveSnapshotter, SceneSnapshot};
 
@@ -73,6 +73,7 @@ pub use jackdaw_api_macros::operator;
 pub use jackdaw_jsn as jsn;
 
 use crate::lifecycle::{ExtensionResourceOf, OperatorAction, ResourceId};
+use crate::operator::OperatorCommandsExt as _;
 use crate::{
     lifecycle::{
         ExtensionKind, OperatorEntity, RegisteredMenuEntry, RegisteredWindow,
@@ -303,57 +304,49 @@ impl<'a> ExtensionContext<'a> {
             (execute, invoke, availability_check, cancel)
         };
 
-        let op_entity = self
-            .world
-            .spawn((
-                OperatorEntity {
-                    id: O::ID,
-                    label: O::LABEL,
-                    description: O::DESCRIPTION,
-                    parameters: O::PARAMETERS,
-                    execute,
-                    invoke,
-                    availability_check,
-                    cancel,
-                    modal: O::MODAL,
-                    allows_undo: O::ALLOWS_UNDO,
-                },
-                ChildOf(ext),
-            ))
-            .id();
+        self.world.spawn((
+            OperatorEntity {
+                id: O::ID,
+                label: O::LABEL,
+                description: O::DESCRIPTION,
+                parameters: O::PARAMETERS,
+                execute,
+                invoke,
+                availability_check,
+                cancel,
+                modal: O::MODAL,
+                allows_undo: O::ALLOWS_UNDO,
+            },
+            ChildOf(ext),
+            children![
+                Observer::new(move |_: On<Fire<O>>, mut commands: Commands| {
+                    commands
+                        .operator(O::ID)
+                        .settings(CallOperatorSettings {
+                            execution_context: ExecutionContext::Invoke,
+                            creates_history_entry: true,
+                        })
+                        .call()
+                },),
+                // Auto-tag any BEI action entity for this operator with
+                // `OperatorAction(Op::ID)` so id-keyed lookups (tooltip
+                // keybind discovery, future command palette) can find the
+                // bindings without naming the typed `Action<Op>`. The
+                // observer covers future spawns; the immediate query pass
+                // below covers entities already spawned before this call
+                // (some `add_to_extension` modules spawn actions first and
+                // register the operator afterwards).
+                Observer::new(move |trigger: On<Add, Action<O>>, mut commands: Commands| {
+                    commands
+                        .entity(trigger.event_target())
+                        .insert(OperatorAction(O::ID));
+                })
+            ],
+        ));
 
-        let observer = Observer::new(move |_: On<Fire<O>>, mut commands: Commands| {
-            commands.queue(move |world: &mut World| {
-                world
-                    .operator(O::ID)
-                    .settings(CallOperatorSettings {
-                        execution_context: ExecutionContext::Invoke,
-                        creates_history_entry: true,
-                    })
-                    .call()
-            });
-        });
-        self.world.entity_mut(op_entity).with_child(observer);
-
-        // Auto-tag any BEI action entity for this operator with
-        // `OperatorAction(Op::ID)` so id-keyed lookups (tooltip
-        // keybind discovery, future command palette) can find the
-        // bindings without naming the typed `Action<Op>`. The
-        // observer covers future spawns; the immediate query pass
-        // below covers entities already spawned before this call
-        // (some `add_to_extension` modules spawn actions first and
-        // register the operator afterwards).
-        let tag_observer =
-            Observer::new(move |trigger: On<Add, Action<O>>, mut commands: Commands| {
-                commands
-                    .entity(trigger.event_target())
-                    .insert(OperatorAction(O::ID));
-            });
-        self.world.entity_mut(op_entity).with_child(tag_observer);
-
-        self.world
-            .run_system_cached(tag_existing_actions::<O>)
-            .expect("tag_existing_actions failed");
+        if let Err(err) = self.world.run_system_cached(tag_existing_actions::<O>) {
+            error!("Failed to tag existing actions: {}", err)
+        }
 
         self
     }
