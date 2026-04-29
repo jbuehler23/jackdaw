@@ -1,3 +1,35 @@
+//! A picker widget for selecting from a list of items.
+//!
+//! A picker is created by spawning an entity with the [`PickerProps`] component.
+//!
+//! Example:
+//! ```
+//! use bevy::prelude::*;
+//! use jackdaw_feathers::picker::*;
+//!
+//! fn spawn_picker(mut commands: Commands) {
+//!     let items = vec!["Hello".to_string(), "Hi there".to_string()];
+//!     let props = PickerProps::new(spawn_item, on_select).items(items);
+//!     commands.spawn(props);
+//! }
+//!
+//! // This is just a bevy system!
+//! fn spawn_item(input: In<SpawnItemInput>, mut commands: Commands) -> Result {
+//!     commands.entity(input.entities.picker).with_child((
+//!         // Spawn your item here!
+//!     ));
+//!
+//!     Ok(())
+//! }
+//!
+//! fn on_select(input: In<SelectInput>, items: Query<&PickerItems<String>>) -> Result {
+//!     let item = items.get(input.entities.picker)?.at(input.index)?;
+//!     // do whatever you want with your item!
+//!
+//!     Ok(())
+//! }
+//! ```
+
 use bevy::ecs::lifecycle::HookContext;
 use bevy::ecs::relationship::RelatedSpawner;
 use bevy::ecs::system::SystemId;
@@ -22,10 +54,14 @@ use crate::separator::{SeparatorProps, separator};
 use crate::text_edit::{TextEditProps, TextEditValue, text_edit};
 use crate::tokens;
 
+/// This trait is implemented for anything that implements [`Matchable`], [`Send`] and [`Sync`].
+/// It's used for trait bounds when creating a [`Picker`]
 pub trait Pickable: Matchable + Send + Sync + 'static {}
 
 impl<T: Matchable + Send + Sync + 'static> Pickable for T {}
 
+/// A picker, used for selecting from a list of items.
+/// Created by spawning an entity with the [`PickerProps`] component. See the [module docs](crate::picker) for more info
 #[derive(Component)]
 #[component(on_replace)]
 pub struct Picker {
@@ -36,47 +72,68 @@ pub struct Picker {
     on_dismiss: SystemId<In<PickerEntities>, Result>,
 }
 
+/// Relationship target representing the text input of a [`Picker`]
 #[derive(Component, Deref, Debug, PartialEq, Clone)]
 #[relationship_target(relationship = PickerInputOf)]
 pub struct WithPickerInput(Entity);
 
+/// Relationship target representing the list which contains the items of a [`Picker`]
 #[derive(Component, Deref, Debug, PartialEq, Clone)]
 #[relationship_target(relationship = PickerListOf)]
 pub struct WithPickerList(Entity);
 
+/// Relationship representing the text input of a [`Picker`]
 #[derive(Component, Deref, Debug, PartialEq, Clone)]
 #[relationship(relationship_target = WithPickerInput)]
 pub struct PickerInputOf(pub Entity);
 
+/// Relationship representing the list which contains the items of a [`Picker`]
 #[derive(Component, Deref, Debug, PartialEq, Clone)]
 #[relationship(relationship_target = WithPickerList)]
 pub struct PickerListOf(pub Entity);
 
+/// The entities related to a [`Picker`]
 #[derive(Debug, PartialEq, Clone)]
 pub struct PickerEntities {
+    /// The actual picker entity itself
     pub picker: Entity,
+    /// The entity which has the text input used by the picker
     pub input: Entity,
+    /// The entity which items of the picker should be spawned as chilren of
     pub list: Entity,
 }
 
+/// The input to the system which spawns the items in a [`Picker`]. See [`PickerProps`]
 #[derive(Debug, PartialEq, Clone)]
 pub struct SpawnItemInput {
+    /// This item's [`Match`]
     pub matched: Match,
+    /// The entities related to this picker
     pub entities: PickerEntities,
 }
 
+/// The input to the system which spawns the items in a [`Picker`]. See [`PickerProps`]
 #[derive(Debug, PartialEq, Clone)]
 pub struct SelectInput {
+    /// The index of the selected item
     pub index: usize,
+    /// The entities related to this picker
     pub entities: PickerEntities,
 }
 
+/// An event triggered when a picker's item should be selected.
+/// It's usually triggered by a [`picker_item`] and consumed by a [`Picker`]
 #[derive(EntityEvent, Debug, PartialEq, Clone)]
 pub struct PickerSelect {
+    /// The picker entity
     pub entity: Entity,
+    /// The index of the item
     pub index: usize,
 }
 
+/// Properties for creating a [`Picker`].
+///
+/// A picker uses bevy systems for spawning an item, selecting an item and dismissing the picker.
 #[derive(Component)]
 #[component(on_insert)]
 pub struct PickerProps<T: Pickable> {
@@ -285,14 +342,18 @@ impl<T: Pickable> PickerProps<T> {
     }
 }
 
+/// The items of a [`Picker`]
 #[derive(Component, Debug, Default, PartialEq, Clone)]
 pub struct PickerItems<T: Pickable>(Box<[T]>);
 
 impl<T: Pickable> PickerItems<T> {
+    /// Get a reference to the slice of items
     pub fn items(&self) -> &[T] {
         &self.0
     }
 
+    /// Get the item at the given index, returning a `Result<&T, BevyError>`
+    /// for easy error propagation
     pub fn at(&self, index: usize) -> Result<&T> {
         // return a `BevyError` so you can just `?` it
         self.0
@@ -301,9 +362,11 @@ impl<T: Pickable> PickerItems<T> {
     }
 }
 
+/// A single item in a [`Picker`]. Created with the [`picker_item`] function
 #[derive(Component, Debug, Default, PartialEq, Clone, Copy)]
 pub struct PickerItem(pub usize);
 
+/// Creates a selectable [`Picker`] item with the given index.
 #[must_use]
 pub fn picker_item(index: usize) -> impl Bundle {
     (
@@ -397,6 +460,7 @@ fn scroll_to_picker_item(
 #[derive(Component)]
 struct PickerDismissButton;
 
+/// Trigger this event to dismiss a [`Picker`]
 #[derive(EntityEvent)]
 pub struct DismissPickerEvent(pub Entity);
 
@@ -480,6 +544,8 @@ impl MatchText {
     }
 }
 
+/// Create a [`Text`] with multiple [`TextSpan`]s corresponding to the different segments.
+/// The segments that match the input string are highlighted with the text accent color. See [`MatchedStr`]
 pub fn match_text(segments: Box<[MatchedStr]>) -> impl Bundle {
     let mut spans = Vec::with_capacity(segments.len());
 
@@ -624,6 +690,9 @@ fn on_text_edit_submit(
 }
 
 impl<T: Pickable> PickerProps<T> {
+    /// Create a new [`PickerProps`] with two systems:
+    /// - one to spawn the item, with a [`SpawnItemInput`]
+    /// - one that gets triggered when an item is selected, with a [`SelectInput`]
     #[must_use]
     pub fn new<S1, M1, S2, M2>(spawn_item: S1, on_select: S2) -> Self
     where
@@ -652,36 +721,42 @@ impl<T: Pickable> PickerProps<T> {
         }
     }
 
+    /// Sets the placeholder of the text input. Default is `Some("Search")`
     #[must_use]
     pub fn placeholder(mut self, placeholder: Option<impl Into<String>>) -> Self {
         self.placeholder = placeholder.map(Into::into);
         self
     }
 
+    /// Sets the picker's items from the  given iterator
     #[must_use]
     pub fn items(mut self, items: impl IntoIterator<Item = T>) -> Self {
         self.items.get_or_insert_default().extend(items);
         self
     }
 
+    /// Pushes a single item to the picker's items
     #[must_use]
     pub fn item(mut self, item: T) -> Self {
         self.items.get_or_insert_default().push(item);
         self
     }
 
+    /// Sets the title of the picker
     #[must_use]
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
+    /// Sets whether the picker should be dismissible with ESC or the dismiss icon. True by default
     #[must_use]
     pub fn dismissible(mut self, value: bool) -> Self {
         self.dismissible = value;
         self
     }
 
+    /// Set the system to be run when the picker is dismissed
     #[must_use]
     pub fn on_dismiss<S, M>(mut self, on_dismiss: S) -> Self
     where
