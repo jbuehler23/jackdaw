@@ -1,2 +1,5 @@
-[target.'cfg(target_os = "windows")']
-rustflags = ["-C", "link-arg=/DEF:exports.def"]
+# Auto-filled by jackdaw scaffolder at project-create time with a
+# `[build] target-dir = ...` line pointing at the shared jackdaw
+# cache for this jackdaw version. Cargo invocations from this project
+# read it and write artifacts to the shared cache, allowing bevy and
+# jackdaw_editor to be compiled once globally per jackdaw version.

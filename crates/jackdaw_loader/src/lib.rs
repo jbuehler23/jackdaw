@@ -32,15 +32,14 @@
 //! # Shared-type ABI requirement
 //!
 //! Both sides must share one compiled copy of the jackdaw types
-//! that cross the boundary so `TypeId::of::<T>()` agrees. That's
-//! what `jackdaw_api`'s `dynamic_linking` feature sets up: it links
-//! `jackdaw_dylib`, a single `.so` bundling `jackdaw_api_internal`,
-//! `jackdaw_panels`, and `jackdaw_commands`. The host binary must
-//! be built with `jackdaw`'s `dylib` feature; otherwise this
-//! loader reads the entry point and compat stamp fine but the
-//! extension panics as soon as it touches `ExtensionContext::
-//! register_window` because the host's `WindowRegistry` is keyed by
-//! a different `TypeId`.
+//! that cross the boundary so `TypeId::of::<T>()` agrees. The new
+//! per-project editor binary architecture (subsequent phases) builds
+//! the editor and the user's cdylib in a single workspace so cargo's
+//! normal dep resolution unifies the shared types automatically.
+//! Without that, this loader reads the entry point and compat stamp
+//! fine but the extension panics as soon as it touches
+//! `ExtensionContext::register_window` because the host's
+//! `WindowRegistry` is keyed by a different `TypeId`.
 
 mod compat;
 
@@ -431,6 +430,12 @@ fn open_and_verify(path: &Path) -> Result<OpenedDylib, LoadError> {
         .map_err(|_| LoadError::EntryPanicked)?;
 
         compat::verify_game_compat(&entry)?;
+        // Layout fingerprint check: detects shared-dep layout drift
+        // (Bevy version bump, rust-toolchain change, feature flag
+        // flip) that the API/Bevy/profile string-compare would miss.
+        // Cheap to read, runs once per dlopen, refuses the swap on
+        // mismatch with a clear "restart needed" message.
+        compat::verify_layout_fingerprint(&lib)?;
 
         // SAFETY: `verify_game_compat` rejected null; the library
         // stays alive at least until `lib` is dropped by the caller.
@@ -461,6 +466,11 @@ fn open_and_verify(path: &Path) -> Result<OpenedDylib, LoadError> {
     .map_err(|_| LoadError::EntryPanicked)?;
 
     compat::verify_compat(&entry)?;
+    // Layout fingerprint check, same rationale as the game path
+    // above. Older extension cdylibs that pre-date the fingerprint
+    // export will trip `FingerprintMissing` and need a rebuild
+    // against the current `jackdaw_api`.
+    compat::verify_layout_fingerprint(&lib)?;
 
     let construct_extension = move || -> Box<dyn JackdawExtension> {
         // SAFETY: the dylib stays loaded because its
@@ -587,8 +597,13 @@ fn try_load(app: &mut App, path: &Path) -> Result<LoadedKind, LoadError> {
 /// reconstructs a fresh `Box<dyn Plugin>` each time it's called.
 /// Used to build a [`GameSubAppHolder`] whose `reset` reuses the
 /// same factory pointer for clean Stop semantics.
+///
+/// `shared_registry` is the editor's `AppTypeRegistry`, threaded
+/// into the `SubApp` so user-registered reflect components are
+/// visible to the editor world's reverse-extract path.
 fn make_dylib_rebuild_fn(
     factory: unsafe extern "C" fn() -> jackdaw_api_internal::ffi::JackdawGamePluginPtr,
+    shared_registry: bevy::ecs::reflect::AppTypeRegistry,
 ) -> Box<dyn Fn() -> bevy::app::SubApp + Send + Sync> {
     Box::new(move || {
         // Factory panic falls back to a null plugin pointer; the
@@ -606,7 +621,8 @@ fn make_dylib_rebuild_fn(
         }))
         .unwrap_or(null_ptr);
 
-        let mut sub = jackdaw_runtime::create_game_sub_app();
+        let mut sub =
+            jackdaw_runtime::create_game_sub_app_with_registry(Some(shared_registry.clone()));
         if !plugin_ptr.data.is_null() {
             // Reconstruct the Box<dyn Plugin> from the fat-pointer
             // halves. SAFETY: the factory split a `Box<dyn Plugin>`
@@ -662,7 +678,11 @@ fn install_game_plugin_into_world(
         }
     }
 
-    let holder = jackdaw_runtime::GameSubAppHolder::new(make_dylib_rebuild_fn(factory));
+    let shared_registry = world
+        .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+        .clone();
+    let holder =
+        jackdaw_runtime::GameSubAppHolder::new(make_dylib_rebuild_fn(factory, shared_registry));
     world.insert_non_send_resource(holder);
     Ok(())
 }
@@ -691,12 +711,12 @@ impl bevy::app::Plugin for BoxedPlugin {
 
 /// Load a dylib at runtime from a `&mut World` context.
 ///
-/// Requires the host binary to have been built with `jackdaw`'s
-/// `dylib` feature (which pulls in `jackdaw_api/dynamic_linking`)
-/// so both sides share one compiled copy of the jackdaw types.
-/// Without that, `ExtensionContext::register_window` and similar
-/// calls panic because the host keyed resources under different
-/// `TypeId`s than the dylib sees.
+/// Requires the host binary and the dylib to have compiled through
+/// a single shared graph (the per-project editor binary architecture
+/// rebuilt in subsequent phases) so both sides share one compiled
+/// copy of the jackdaw types. Without that, `ExtensionContext::
+/// register_window` and similar calls panic because the host keyed
+/// resources under different `TypeId`s than the dylib sees.
 ///
 /// Mirrors the startup loader path but skips the BEI input-context
 /// registration that requires `&mut App`. In practice that means:

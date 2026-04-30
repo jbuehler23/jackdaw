@@ -2,11 +2,10 @@
 //!
 //! User-scaffolded projects are plain single-crate cargo projects
 //! with `bevy = "0.18"` in `[dependencies]` and `crate-type =
-//! ["cdylib"]` on the library. Jackdaw compiles them via `cargo
-//! build` with `RUSTC_WRAPPER` pointing at `jackdaw-rustc-wrapper`,
-//! which intercepts rustc and rewrites `--extern bevy=<user>.rlib`
-//! to `--extern bevy=libjackdaw_sdk.so`. That keeps the user's
-//! cdylib `TypeIds` in sync with the editor.
+//! ["cdylib"]` on the library. Jackdaw compiles them via plain
+//! `cargo build`; the editor and the user's cdylib share one
+//! compile graph through the per-project `.cargo/config.toml`'s
+//! shared target dir, so no rustc wrapper is needed.
 //!
 //! Why not `bevy build`? The bevy CLI's build subcommand requires
 //! a binary target and errors on library-only projects ("No
@@ -29,7 +28,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crate::new_project::TemplateLinkage;
-use crate::sdk_paths::SdkPaths;
 
 /// Everything that can go wrong while building an extension/game
 /// project.
@@ -37,14 +35,6 @@ use crate::sdk_paths::SdkPaths;
 pub enum BuildError {
     NotADirectory(PathBuf),
     MissingCargoToml(PathBuf),
-    SdkNotFound {
-        expected_path: PathBuf,
-        hint: &'static str,
-    },
-    WrapperNotFound {
-        expected_path: PathBuf,
-        hint: &'static str,
-    },
     BuildSpawn(std::io::Error),
     BuildFailed {
         status: std::process::ExitStatus,
@@ -62,24 +52,6 @@ impl std::fmt::Display for BuildError {
             Self::MissingCargoToml(p) => {
                 write!(f, "{} has no Cargo.toml", p.display())
             }
-            Self::SdkNotFound {
-                expected_path,
-                hint,
-            } => write!(
-                f,
-                "SDK dylib not found at {}. {}",
-                expected_path.display(),
-                hint
-            ),
-            Self::WrapperNotFound {
-                expected_path,
-                hint,
-            } => write!(
-                f,
-                "rustc wrapper not found at {}. {}",
-                expected_path.display(),
-                hint
-            ),
             Self::BuildSpawn(e) => write!(f, "failed to spawn cargo: {e}"),
             Self::BuildFailed {
                 status,
@@ -141,29 +113,6 @@ impl BuildProgress {
     }
 }
 
-/// Discover `libjackdaw_sdk` + `jackdaw-rustc-wrapper` on disk, or
-/// surface a typed error the Build-and-Install dialog can translate
-/// into a user-actionable message.
-fn discover_sdk() -> Result<SdkPaths, BuildError> {
-    let paths = SdkPaths::compute();
-    if !paths.dylib_exists() {
-        return Err(BuildError::SdkNotFound {
-            expected_path: paths.dylib,
-            hint: "Rebuild the editor with `--features dylib` so \
-                   libjackdaw_sdk is emitted, or set JACKDAW_SDK_DIR \
-                   to the directory that contains it.",
-        });
-    }
-    if !paths.wrapper_exists() {
-        return Err(BuildError::WrapperNotFound {
-            expected_path: paths.wrapper,
-            hint: "Run `cargo build -p jackdaw_rustc_wrapper` so the \
-                   wrapper binary is emitted next to the editor.",
-        });
-    }
-    Ok(paths)
-}
-
 /// Build the extension or game project rooted at `project_dir`.
 ///
 /// Convenience wrapper around
@@ -200,15 +149,6 @@ pub fn build_extension_project_with_progress(
         return Err(BuildError::MissingCargoToml(project_dir));
     }
 
-    // The wrapper only applies to dylib builds. A static project
-    // depends on `jackdaw` directly; rewriting `--extern bevy` to the
-    // SDK dylib gives it a bevy whose hash doesn't match what cargo
-    // compiled, and the build fails with `can't find crate for jackdaw`.
-    let sdk = match linkage {
-        TemplateLinkage::Dylib => Some(discover_sdk()?),
-        TemplateLinkage::Static => None,
-    };
-
     // Best-effort: probe the expected artifact count via cargo
     // metadata before kicking off the real build. Runs in the
     // current thread because it's usually <1s and we want the
@@ -230,11 +170,6 @@ pub fn build_extension_project_with_progress(
             .expect("Cargo.toml path must be valid UTF-8"),
         "--message-format=json-render-diagnostics",
     ]);
-    if let Some(sdk) = sdk.as_ref() {
-        cmd.env("RUSTC_WRAPPER", &sdk.wrapper);
-        cmd.env("JACKDAW_SDK_DYLIB", &sdk.dylib);
-        cmd.env("JACKDAW_SDK_DEPS", &sdk.deps);
-    }
 
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -374,13 +309,44 @@ fn estimate_total_artifacts(project_dir: &Path) -> Option<u32> {
     Some(packages.len() as u32)
 }
 
+/// Run `cargo build --bin <project_name>_editor` against the project,
+/// streaming progress to stdout. Used by the launcher when the
+/// per-project editor binary is missing or stale.
+///
+/// Blocks until cargo exits. Call from a worker thread for non-
+/// blocking UI integration.
+pub fn build_editor_for_project(project_root: &Path) -> Result<(), BuildError> {
+    let Some(project_name) = crate::editor_resolver::project_name(project_root) else {
+        return Err(BuildError::MissingCargoToml(project_root.to_path_buf()));
+    };
+    let bin_target = format!("{project_name}_editor");
+
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(project_root).args([
+        "build",
+        "--bin",
+        &bin_target,
+        "--message-format=json-render-diagnostics",
+    ]);
+
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+
+    let status = cmd.status().map_err(BuildError::BuildSpawn)?;
+    if !status.success() {
+        return Err(BuildError::BuildFailed {
+            status,
+            stderr_tail: String::new(),
+        });
+    }
+    Ok(())
+}
+
 /// Run `cargo clean -p <package>` for the project rooted at
-/// `project_dir`. Used by the auto-recovery path: when the editor
-/// SDK is rebuilt, the user's project `.so` cached in
-/// `<project>/target/debug/` still references the old SDK symbol
-/// hashes. Cleaning just the user's package (not `-p bevy`) drops
-/// that stale artifact without forcing a multi-minute bevy
-/// rebuild; the bevy rlib cache stays.
+/// `project_dir`. Used by the auto-recovery path when the user's
+/// project `.so` references a stale symbol set: cleaning just the
+/// user's package (not `-p bevy`) drops that stale artifact without
+/// forcing a multi-minute bevy rebuild; the bevy rlib cache stays.
 ///
 /// Blocks until cargo exits. Call from a task pool.
 pub fn cargo_clean_project(project_dir: &Path) -> Result<(), BuildError> {

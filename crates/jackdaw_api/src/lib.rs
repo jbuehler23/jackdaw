@@ -12,24 +12,6 @@
 //! ```toml
 //! jackdaw_api = "0.4"
 //! ```
-//!
-//! # Dylib extension
-//!
-//! ```toml
-//! jackdaw_api = { version = "0.4", features = ["dynamic_linking"] }
-//! bevy = "0.18"
-//! ```
-//!
-//! The host binary must also enable jackdaw's `dylib` feature so the
-//! editor and loaded dylibs share one compilation of the shared types.
-
-// Links against the shared proxy dylib so the editor and every
-// loaded extension share one compilation of the types that cross
-// the FFI boundary. Mirrors how `bevy/dynamic_linking` pulls in
-// `bevy_dylib`.
-#[cfg(feature = "dynamic_linking")]
-#[expect(unused_imports)]
-use jackdaw_dylib as _;
 
 // --- Extension authoring surface ---
 

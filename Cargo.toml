@@ -13,25 +13,6 @@ exclude = ["assets/environment_maps/"]
 [features]
 default = []
 hot-reload = ["dep:bevy_simple_subsecond_system"]
-# Opt-in dylib-based extension flow. Enables Bevy's
-# `dynamic_linking` plus Jackdaw's own `bevy_dylib`-style facade
-# so the editor and every loaded extension share one compiled
-# copy of every type that crosses the boundary, and pulls in
-# `jackdaw_sdk` — the proxy dylib that scaffolded extension
-# projects link against via `--extern bevy=libjackdaw_sdk.{so,dll,dylib}`.
-#
-# Off by default: the current stable path for scaffolded projects
-# is the static game/extension templates, which compile plainly
-# against `bevy` and don't need the SDK dylib. Opt in with
-# `--features dylib` when you want to exercise the hot-reloadable
-# dylib extension flow.
-#
-# Known Windows MSVC limitation: `jackdaw_sdk`'s proxy dylib
-# re-exports all of bevy + jackdaw_api, which on Windows is right
-# up against the 65,535 PE export cap (see issue #183 and
-# bevyengine/bevy#1110). Further symbol-trimming work is needed
-# before this is green on Windows.
-dylib = ["dep:jackdaw_sdk", "jackdaw_api/dynamic_linking"]
 
 [workspace]
 members = [
@@ -46,6 +27,7 @@ members = [
 exclude = ["templates"]
 
 [dependencies]
+jackdaw_editor = { path = "crates/jackdaw_editor" }
 bevy.workspace = true
 jackdaw_jsn.workspace = true
 jackdaw_geometry.workspace = true
@@ -70,15 +52,6 @@ jackdaw_api.workspace = true
 jackdaw_api_internal.workspace = true
 jackdaw_loader.workspace = true
 jackdaw_runtime.workspace = true
-# Optional and activated only by the `dylib` feature. Nothing in
-# the editor's own Rust code imports `jackdaw_sdk` — it's a pure
-# build artifact consumed at runtime by the extension build
-# pipeline (`SdkPaths::compute` / `ext_build`), which already
-# handles a missing SDK with a user-actionable error. Keeping it
-# optional means default `cargo build` doesn't try to link
-# `jackdaw_sdk.dll` on Windows, where the dylib's re-exports
-# would otherwise blow past the 65,535 PE export cap. See issue #183.
-jackdaw_sdk = { workspace = true, optional = true }
 bevy_enhanced_input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -131,9 +104,7 @@ jackdaw_panels = { version = "0.4.0", path = "crates/jackdaw_panels" }
 jackdaw_api = { version = "0.4.0", path = "crates/jackdaw_api" }
 jackdaw_api_internal = { version = "0.4.0", path = "crates/jackdaw_api_internal" }
 jackdaw_api_macros = { version = "0.4.0", path = "crates/jackdaw_api_macros" }
-jackdaw_dylib = { version = "0.4.0", path = "crates/jackdaw_dylib" }
 jackdaw_loader = { version = "0.4.0", path = "crates/jackdaw_loader" }
-jackdaw_sdk = { version = "0.4.0", path = "crates/jackdaw_sdk" }
 bevy_enhanced_input = "0.24"
 rfd = "0.15"
 bevy_rerecast = { version = "0.4", default-features = true }
@@ -196,26 +167,9 @@ opt-level = 3
 [profile.dev.package.wgpu-types]
 debug-assertions = false
 
-# `jackdaw_sdk`'s dylib re-exports all of bevy + jackdaw_api, which
-# is right at the Windows MSVC PE export cap (65,535 symbols). Force
-# full optimisation and a single codegen unit on just this one crate
-# so the linker has a chance of fitting it under the cap when
-# `--features dylib` is active on Windows. See issue #183.
-[profile.dev.package.jackdaw_sdk]
-opt-level = 3
-codegen-units = 1
-
 [profile.release]
 codegen-units = 1
 lto = "thin"
-
-# Same rationale as `[profile.dev.package.jackdaw_sdk]`. `lto` isn't
-# a valid per-package option (it controls the final link), so we only
-# tighten codegen-units here; the workspace-wide `[profile.release]
-# lto = "thin"` covers the cross-crate dedup that actually helps the
-# PE export cap.
-[profile.release.package.jackdaw_sdk]
-codegen-units = 1
 
 [[example]]
 name = "minimal_extension"

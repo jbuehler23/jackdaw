@@ -20,7 +20,7 @@ pub(super) struct MeshPlugin;
 
 impl Plugin for MeshPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "../../assets/textures/jd_grid.png");
+        embedded_asset!(app, "../../../../assets/textures/jd_grid.png");
     }
 }
 
@@ -47,7 +47,7 @@ pub(super) fn setup_default_materials(
     // Create grid-textured default materials with nearest-neighbor sampling
     let grid_handle = load_embedded_asset!(
         &*assets,
-        "../../assets/textures/jd_grid.png",
+        "../../../../assets/textures/jd_grid.png",
         |settings: &mut ImageLoaderSettings| {
             let sampler = settings.sampler.get_or_init_descriptor();
             sampler.mag_filter = ImageFilterMode::Nearest;

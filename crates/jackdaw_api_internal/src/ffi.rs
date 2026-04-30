@@ -80,6 +80,13 @@ pub const ENTRY_SYMBOL: &[u8] = b"jackdaw_extension_entry_v1\0";
 /// [`ENTRY_SYMBOL`] is looked up next.
 pub const GAME_ENTRY_SYMBOL: &[u8] = b"jackdaw_game_entry_v1\0";
 
+/// Symbol name for the cdylib's layout fingerprint, emitted by the
+/// [`export_game_plugin!`](crate::export_game_plugin) macro. The
+/// loader reads this `u64` constant at dlopen and compares it to
+/// `jackdaw_runtime::LAYOUT_FINGERPRINT`; any mismatch refuses the
+/// swap. See [`crate::fingerprint`] for the rationale.
+pub const FINGERPRINT_SYMBOL: &[u8] = b"__JACKDAW_LAYOUT_FINGERPRINT\0";
+
 /// Optional symbol each extension or game dylib may expose to
 /// register its own `#[derive(Reflect)]` types into the host's
 /// `AppTypeRegistry` after `dlopen`. The loader calls it with a
@@ -106,9 +113,9 @@ pub const GAME_ENTRY_SYMBOL: &[u8] = b"jackdaw_game_entry_v1\0";
 pub const REFLECT_REGISTER_SYMBOL: &[u8] = b"jackdaw_register_reflect_types_v1\0";
 
 /// Signature for [`REFLECT_REGISTER_SYMBOL`]. `extern "Rust"` is
-/// sound because both sides share `TypeRegistry`'s type layout
-/// through `libjackdaw_sdk.so` (via `bevy/dynamic_linking` plus
-/// jackdaw's rustc wrapper).
+/// sound when both sides share `TypeRegistry`'s type layout through
+/// a single shared compilation graph (the per-project editor binary
+/// model that subsequent phases rebuild).
 pub type ReflectRegisterFn = unsafe extern "Rust" fn(&mut bevy::reflect::TypeRegistry);
 
 /// Shape returned by every dylib extension's entry function.
@@ -155,12 +162,11 @@ pub struct JackdawExtensionPtr {
 /// # Safety
 ///
 /// Same contract as [`ExtensionEntry`]: NUL-terminated static
-/// strings, same allocator on both sides (guaranteed by
-/// `bevy/dynamic_linking` + `jackdaw_sdk`'s proxy dylib). The
-/// factory is callable any number of times; each call returns a
-/// freshly-boxed plugin instance the caller owns. The loader wraps
-/// the call in `catch_unwind` so a panic in game code doesn't abort
-/// the editor.
+/// strings, same allocator on both sides (guaranteed when both
+/// sides compile through one shared graph). The factory is
+/// callable any number of times; each call returns a freshly-boxed
+/// plugin instance the caller owns. The loader wraps the call in
+/// `catch_unwind` so a panic in game code doesn't abort the editor.
 #[repr(C)]
 pub struct GameEntry {
     pub api_version: u32,
@@ -177,11 +183,12 @@ pub struct GameEntry {
 /// Stable-ABI representation of a `Box<dyn bevy::app::Plugin>`.
 ///
 /// Bevy's `Box<dyn Plugin>` is not `extern "C"`-safe across rustc
-/// compilations — it's a fat pointer (data + vtable) whose vtable
+/// compilations. It's a fat pointer (data + vtable) whose vtable
 /// layout depends on the rustc that built the `dyn Plugin`. We rely
-/// on `bevy/dynamic_linking` + `jackdaw_sdk` ensuring both editor
-/// and dylib see one Bevy compilation, so the vtable is shared and
-/// the fat pointer reconstructs correctly on the loader side.
+/// on a shared compile graph (Bevy's `dynamic_linking` plus the
+/// per-project editor binary architecture) so both editor and dylib
+/// see one Bevy compilation and the fat pointer reconstructs
+/// correctly on the loader side.
 #[repr(C)]
 pub struct JackdawGamePluginPtr {
     pub data: *mut (),

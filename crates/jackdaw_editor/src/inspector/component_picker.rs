@@ -106,10 +106,17 @@ pub(crate) fn on_add_component_button_click(
             continue;
         }
 
-        // Skip if no component ID is registered for this type
-        if components.get_id(type_id).is_none() {
-            continue;
-        }
+        // Note: we deliberately don't gate on `components.get_id(type_id).is_some()`
+        // here. That would hide types whose `Component` slot hasn't yet
+        // been used in the editor's main world. User-defined components
+        // (registered via the SubApp's plugin into the shared
+        // `AppTypeRegistry`) only get a `ComponentId` in the editor
+        // world after the reverse-extract path inserts them onto a
+        // mirror, which doesn't happen until Play has run at least
+        // once. Skipping the check makes them appear in the picker
+        // immediately after the dylib loads. Bevy auto-registers the
+        // `ComponentId` on first insert, so adding the component
+        // through this picker still works.
 
         let short_name = table.short_path().to_string();
         let module = table.module_path().unwrap_or("").to_string();

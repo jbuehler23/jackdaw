@@ -16,7 +16,7 @@ use rfd::{AsyncFileDialog, FileHandle};
 use crate::{
     AppState,
     new_project::{ScaffoldError, TemplateLinkage, TemplatePreset, scaffold_project},
-    project::{self, ProjectRoot},
+    project::{self},
 };
 
 pub struct ProjectSelectPlugin;
@@ -719,50 +719,63 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
     world.resource_mut::<NewProjectState>().build_task = Some(task);
 }
 
-/// Apply the project-root state change and flip `AppState` to
-/// `Editor`. Called from [`enter_project`] (no build needed) and
+/// Spawn the per-project editor binary as a subprocess and exit
+/// the launcher. Called from [`enter_project`] (no build needed) and
 /// from the build-complete poller (build finished, transitioning).
 ///
-/// If the project has a file at `<root>/assets/scene.jsn`, that
-/// scene is auto-loaded so the user lands in a populated editor
-/// rather than an empty one. This is the convention the game
-/// template ships with.
+/// Phase 5 process model: the launcher's job is project picker plus
+/// build orchestration. Once a project is opened, the launcher hands
+/// off to the per-project editor binary and exits, so `AppState`
+/// transitions inside the launcher are no longer used.
+///
+/// Logic that previously ran inside the launcher's editor world (PIE
+/// `PlayMode`, `ProjectRoot` resource insertion, auto-loading
+/// `assets/scene.jsn`) is now the per-project editor binary's
+/// responsibility. The editor binary picks all of that up by
+/// re-reading the project file at startup.
 fn transition_to_editor(world: &mut World, root: PathBuf) {
+    // Preserve the recent-projects metadata so the launcher's
+    // history list stays accurate even though we don't load the
+    // project into the launcher's world.
     let config = project::load_project_config(&root)
         .unwrap_or_else(|| project::create_default_project(&root));
-
     project::touch_recent(&root, &config.project.name);
 
-    // Honour the project's persisted play-mode preference. Older
-    // project.jsn files default to `InEditor` via `#[serde(default)]`.
-    world.insert_resource(crate::pie::PlayMode::from(config.project.default_play_mode));
-
-    world.insert_resource(ProjectRoot {
-        root: root.clone(),
-        config,
-    });
-
-    // Despawn the launcher UI.
-    let mut to_despawn = Vec::new();
-    let mut query = world.query_filtered::<Entity, With<ProjectSelectorRoot>>();
-    for entity in query.iter(world) {
-        to_despawn.push(entity);
-    }
-    for entity in to_despawn {
-        if let Ok(ec) = world.get_entity_mut(entity) {
-            ec.despawn();
+    // Build the per-project editor binary if missing or stale.
+    if !crate::editor_resolver::editor_binary_is_current(&root) {
+        info!(
+            "Per-project editor binary missing or stale for {}; building...",
+            root.display()
+        );
+        if let Err(e) = crate::ext_build::build_editor_for_project(&root) {
+            warn!("Failed to build editor for project: {e}");
+            return;
         }
     }
 
-    let mut next_state = world.resource_mut::<NextState<AppState>>();
-    next_state.set(AppState::Editor);
-
-    // Convention: auto-load `assets/scene.jsn` if present. The game
-    // template ships one so scaffolded projects open populated.
-    // Per-project last-opened-scene persistence is a follow-up.
-    let scene_path = root.join("assets").join("scene.jsn");
-    if scene_path.is_file() {
-        crate::scene_io::load_scene_from_file(world, &scene_path);
+    // Resolve the binary path and spawn it.
+    let Some(editor_bin) = crate::editor_resolver::editor_binary_path(&root) else {
+        warn!(
+            "Could not resolve editor binary path for {}",
+            root.display()
+        );
+        return;
+    };
+    info!("Spawning per-project editor: {}", editor_bin.display());
+    let spawn_result = std::process::Command::new(&editor_bin)
+        .current_dir(&root)
+        .spawn();
+    match spawn_result {
+        Ok(_child) => {
+            info!("Editor spawned; exiting launcher");
+            world.write_message(bevy::app::AppExit::Success);
+        }
+        Err(e) => {
+            warn!(
+                "Failed to spawn editor binary {}: {e}",
+                editor_bin.display()
+            );
+        }
     }
 }
 
@@ -1506,7 +1519,7 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         world.spawn((
             Text::new(
                 "Static: plainly-compiled rlib/bin (recommended). \
-                 Dylib: hot-reloadable cdylib, requires the editor's `dylib` feature.",
+                 Dylib: hot-reloadable cdylib (PIE).",
             ),
             TextFont {
                 font: editor_font.clone(),
@@ -2265,8 +2278,13 @@ fn apply_pending_install(world: &mut World) {
 }
 
 /// Static-scaffold sibling of [`apply_pending_install`]. Runs in
-/// `Last` and hands off to `enter_project`, which opens the fresh
-/// project directly (non-cdylib, so no second build).
+/// `Last` after the scaffold succeeds. The scaffold flow already
+/// kicked off a background build (`state.build_task`) and opened
+/// progress UI in the footer; calling [`enter_project`] here would
+/// detect the unified template's cdylib and open a SECOND modal
+/// that re-runs the build, blocking the user. Skip straight to the
+/// state transition so the editor opens immediately while the
+/// original background build keeps running.
 fn apply_pending_static_open(world: &mut World) {
     let project = world
         .resource_mut::<NewProjectState>()
@@ -2276,5 +2294,5 @@ fn apply_pending_static_open(world: &mut World) {
         return;
     };
     close_new_project_modal(world);
-    enter_project(world, project);
+    transition_to_editor(world, project);
 }

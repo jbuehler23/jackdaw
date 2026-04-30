@@ -13,11 +13,11 @@ impl Plugin for MaterialPreviewPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(
             app,
-            "../assets/environment_maps/voortrekker_interior_1k_diffuse.ktx2"
+            "../../../assets/environment_maps/voortrekker_interior_1k_diffuse.ktx2"
         );
         embedded_asset!(
             app,
-            "../assets/environment_maps/voortrekker_interior_1k_specular.ktx2"
+            "../../../assets/environment_maps/voortrekker_interior_1k_specular.ktx2"
         );
         app.add_systems(
             OnEnter(crate::AppState::Editor),
@@ -118,11 +118,11 @@ fn setup_material_preview_scene(
         EnvironmentMapLight {
             diffuse_map: load_embedded_asset!(
                 &*assets,
-                "../assets/environment_maps/voortrekker_interior_1k_diffuse.ktx2"
+                "../../../assets/environment_maps/voortrekker_interior_1k_diffuse.ktx2"
             ),
             specular_map: load_embedded_asset!(
                 &*assets,
-                "../assets/environment_maps/voortrekker_interior_1k_specular.ktx2"
+                "../../../assets/environment_maps/voortrekker_interior_1k_specular.ktx2"
             ),
             intensity: 2000.0,
             ..default()

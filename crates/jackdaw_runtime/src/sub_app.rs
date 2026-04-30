@@ -53,8 +53,31 @@ pub struct GameSubApp;
 /// a [`GameSubAppHolder`] non-send resource on the editor's main
 /// world).
 pub fn create_game_sub_app() -> SubApp {
+    create_game_sub_app_with_registry(None)
+}
+
+/// Build a [`SubApp`] like [`create_game_sub_app`], but pre-seed
+/// it with a shared [`bevy::ecs::reflect::AppTypeRegistry`] so the
+/// `SubApp`'s reflect registrations land in the same registry the
+/// editor uses. This lets the editor's reverse-extract path
+/// deserialize user components into editor-side mirror entities,
+/// since both worlds resolve `TypePath` strings against the same
+/// registry instance.
+///
+/// Pass `None` to fall back to the `SubApp`'s own private registry
+/// (the original behavior). Callers that want bidirectional reflect
+/// sync should pass `Some(editor_world.resource::<AppTypeRegistry>().clone())`.
+pub fn create_game_sub_app_with_registry(
+    shared_registry: Option<bevy::ecs::reflect::AppTypeRegistry>,
+) -> SubApp {
     let mut sub = SubApp::new();
     sub.update_schedule = Some(bevy::app::Main.intern());
+    // Insert the shared registry BEFORE MainSchedulePlugin runs so
+    // its own type registrations land in our registry, not a fresh
+    // one Bevy might initialize lazily.
+    if let Some(registry) = shared_registry {
+        sub.insert_resource(registry);
+    }
     sub.add_plugins(MainSchedulePlugin);
     sub.init_resource::<crate::extract::GameEntityMap>();
     // Default extract: walk `SceneEntity`-tagged authoring entities

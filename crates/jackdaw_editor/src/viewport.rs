@@ -89,11 +89,11 @@ impl Plugin for ViewportPlugin {
             );
         embedded_asset!(
             app,
-            "../assets/environment_maps/voortrekker_interior_1k_diffuse.ktx2"
+            "../../../assets/environment_maps/voortrekker_interior_1k_diffuse.ktx2"
         );
         embedded_asset!(
             app,
-            "../assets/environment_maps/voortrekker_interior_1k_specular.ktx2"
+            "../../../assets/environment_maps/voortrekker_interior_1k_specular.ktx2"
         );
     }
 }
@@ -132,11 +132,11 @@ pub(crate) fn setup_viewport(
             EnvironmentMapLight {
                 diffuse_map: load_embedded_asset!(
                     &*assets,
-                    "../assets/environment_maps/voortrekker_interior_1k_diffuse.ktx2"
+                    "../../../assets/environment_maps/voortrekker_interior_1k_diffuse.ktx2"
                 ),
                 specular_map: load_embedded_asset!(
                     &*assets,
-                    "../assets/environment_maps/voortrekker_interior_1k_specular.ktx2"
+                    "../../../assets/environment_maps/voortrekker_interior_1k_specular.ktx2"
                 ),
                 intensity: 500.0,
                 ..default()

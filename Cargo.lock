@@ -4489,6 +4489,7 @@ dependencies = [
  "jackdaw_avian_integration",
  "jackdaw_camera",
  "jackdaw_commands",
+ "jackdaw_editor",
  "jackdaw_feathers",
  "jackdaw_geometry",
  "jackdaw_jsn",
@@ -4497,7 +4498,6 @@ dependencies = [
  "jackdaw_panels",
  "jackdaw_remote",
  "jackdaw_runtime",
- "jackdaw_sdk",
  "jackdaw_terrain",
  "jackdaw_widgets",
  "libc",
@@ -4531,7 +4531,6 @@ dependencies = [
  "jackdaw_api_internal",
  "jackdaw_api_macros",
  "jackdaw_commands",
- "jackdaw_dylib",
  "jackdaw_feathers",
  "jackdaw_jsn",
  "jackdaw_panels",
@@ -4587,12 +4586,47 @@ dependencies = [
 ]
 
 [[package]]
-name = "jackdaw_dylib"
+name = "jackdaw_editor"
 version = "0.4.0"
 dependencies = [
+ "anyhow",
+ "arboard",
+ "avian3d",
+ "base64",
+ "bevy",
+ "bevy_enhanced_input",
+ "bevy_infinite_grid",
+ "bevy_monitors",
+ "bevy_rerecast",
+ "bevy_simple_subsecond_system",
+ "bincode",
+ "ctrlc",
+ "dirs",
+ "ehttp",
+ "jackdaw_animation",
+ "jackdaw_api",
  "jackdaw_api_internal",
+ "jackdaw_avian_integration",
+ "jackdaw_camera",
  "jackdaw_commands",
+ "jackdaw_feathers",
+ "jackdaw_geometry",
+ "jackdaw_jsn",
+ "jackdaw_loader",
+ "jackdaw_node_graph",
  "jackdaw_panels",
+ "jackdaw_remote",
+ "jackdaw_runtime",
+ "jackdaw_terrain",
+ "jackdaw_widgets",
+ "libc",
+ "notify",
+ "pathdiff",
+ "regex",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -4675,27 +4709,12 @@ name = "jackdaw_runtime"
 version = "0.4.0"
 dependencies = [
  "bevy",
+ "jackdaw_api_internal",
  "jackdaw_geometry",
  "jackdaw_jsn",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "jackdaw_rustc_wrapper"
-version = "0.4.0"
-dependencies = [
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "jackdaw_sdk"
-version = "0.4.0"
-dependencies = [
- "bevy",
- "jackdaw_api",
 ]
 
 [[package]]

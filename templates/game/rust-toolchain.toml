@@ -1,0 +1,7 @@
+# Pinned to the rustc version the launcher was built against.
+# Stabilizes the layout-fingerprint check; preventing `rustup update`
+# from breaking ABI compat mid-session. Changing this triggers the
+# fingerprint mismatch path; restart the editor after the rebuild.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

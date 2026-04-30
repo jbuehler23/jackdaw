@@ -3,8 +3,8 @@
 //! Registers one operator. No windows, no BEI input contexts. The
 //! integration tests exercise the loader's own job (open, ABI check,
 //! catalog entry, handle retention); cross-boundary component
-//! dispatch needs the `dylib` feature plus `jackdaw_sdk` for type
-//! coherence and lives in a separate harness.
+//! dispatch needs a shared compile graph and lives in a separate
+//! harness.
 
 use bevy::prelude::*;
 use jackdaw_api::export_extension;

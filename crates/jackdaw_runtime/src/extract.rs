@@ -161,9 +161,17 @@ pub struct MirrorEntityMap {
 }
 
 /// Reverse extract: walks the `SubApp` world, mirrors every entity
-/// with render-relevant components into the editor world tagged with
+/// with at least a `Transform` into the editor world tagged with
 /// [`GameMirror`]. Maintains [`MirrorEntityMap`] so the same `SubApp`
 /// entity always maps to the same editor mirror across frames.
+///
+/// Uses Bevy's [`DynamicSceneBuilder`] to capture every reflect-
+/// registered component on each entity, including user game
+/// components (`Player`, `Health`, etc.). For this to work, the
+/// `SubApp` and editor worlds must share an [`AppTypeRegistry`]
+/// (see [`crate::sub_app::create_game_sub_app_with_registry`]);
+/// without the shared registry, user types are unknown to the
+/// editor world and `write_to_world` silently skips them.
 ///
 /// Despawns mirrors whose `sub_entity` no longer exists in
 /// `sub_world`.
@@ -183,20 +191,35 @@ pub fn extract_game_mirrors(sub_world: &mut World, editor_world: &mut World) {
         .remove_resource::<MirrorEntityMap>()
         .unwrap_or_default();
 
-    // For each live SubApp entity, ensure a mirror exists in the
-    // editor world.
+    // Pre-spawn mirror entities tagged `GameMirror` for each live
+    // SubApp entity. `write_to_world` will then find them in the map
+    // and insert components onto the existing mirror rather than
+    // creating an untagged entity. This keeps the marker invariant
+    // even across frames where the user adds new components.
     for sub_entity in &live_sub_entities {
-        let mirror_entity = *map.entries.entry(*sub_entity).or_insert_with(|| {
-            editor_world
+        let already_present = map.entries.contains_key(sub_entity);
+        if !already_present {
+            let mirror = editor_world
                 .spawn(GameMirror {
                     sub_entity: *sub_entity,
                 })
-                .id()
-        });
+                .id();
+            map.entries.insert(*sub_entity, mirror);
+        }
+    }
 
-        if let Some(transform) = sub_world.get::<Transform>(*sub_entity) {
-            let transform = *transform;
-            editor_world.entity_mut(mirror_entity).insert(transform);
+    // Build a `DynamicScene` from the SubApp world capturing every
+    // reflect-registered component on each live entity. With the
+    // shared registry contract above, user components like `Player`
+    // are included automatically.
+    if !live_sub_entities.is_empty() {
+        let scene = DynamicSceneBuilder::from_world(sub_world)
+            .with_component_filter(SceneFilter::allow_all())
+            .extract_entities(live_sub_entities.iter().copied())
+            .build();
+
+        if let Err(err) = scene.write_to_world(editor_world, &mut map.entries) {
+            warn!("extract_game_mirrors: scene write failed: {err}");
         }
     }
 
@@ -274,16 +297,24 @@ pub fn extract_input_state(editor_world: &mut World, sub_world: &mut World) {
 mod tests {
     use super::*;
 
-    fn fresh_world() -> World {
-        let mut w = World::new();
-        w.init_resource::<bevy::ecs::reflect::AppTypeRegistry>();
-        w
+    /// Builds two `World`s sharing one `AppTypeRegistry` with
+    /// `Transform` registered, mimicking the production setup where
+    /// the `SubApp` and editor world share the same registry
+    /// instance. Without the share, `DynamicSceneBuilder` captures
+    /// nothing.
+    fn fresh_worlds_with_registry() -> (World, World) {
+        let registry = bevy::ecs::reflect::AppTypeRegistry::default();
+        registry.write().register::<Transform>();
+        let mut sub = World::new();
+        sub.insert_resource(registry.clone());
+        let mut editor = World::new();
+        editor.insert_resource(registry);
+        (sub, editor)
     }
 
     #[test]
     fn reverse_extract_mirrors_transform() {
-        let mut sub = fresh_world();
-        let mut editor = fresh_world();
+        let (mut sub, mut editor) = fresh_worlds_with_registry();
         let sub_entity = sub.spawn(Transform::from_xyz(1.0, 2.0, 3.0)).id();
 
         extract_game_mirrors(&mut sub, &mut editor);
@@ -299,8 +330,7 @@ mod tests {
 
     #[test]
     fn reverse_extract_despawns_mirror_when_source_gone() {
-        let mut sub = fresh_world();
-        let mut editor = fresh_world();
+        let (mut sub, mut editor) = fresh_worlds_with_registry();
         let sub_entity = sub.spawn(Transform::default()).id();
 
         extract_game_mirrors(&mut sub, &mut editor);
@@ -314,8 +344,7 @@ mod tests {
 
     #[test]
     fn reverse_extract_stable_identity_across_frames() {
-        let mut sub = fresh_world();
-        let mut editor = fresh_world();
+        let (mut sub, mut editor) = fresh_worlds_with_registry();
         let _sub_entity = sub.spawn(Transform::default()).id();
 
         extract_game_mirrors(&mut sub, &mut editor);

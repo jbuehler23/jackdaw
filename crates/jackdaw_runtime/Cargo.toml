@@ -8,6 +8,7 @@ repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
 bevy.workspace = true
+jackdaw_api_internal.workspace = true
 jackdaw_jsn.workspace = true
 jackdaw_geometry.workspace = true
 serde.workspace = true

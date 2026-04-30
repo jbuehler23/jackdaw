@@ -18,12 +18,31 @@ use serde::de::{DeserializeSeed, Visitor};
 pub use jackdaw_jsn::{Brush, BrushFaceData, CustomProperties, GltfSource, PropertyValue};
 
 pub mod sub_app;
-pub use sub_app::{GameSubApp, GameSubAppHolder, PostUpdateCallback, create_game_sub_app};
+pub use sub_app::{
+    GameSubApp, GameSubAppHolder, PostUpdateCallback, create_game_sub_app,
+    create_game_sub_app_with_registry,
+};
 
 pub mod extract;
 pub use extract::{
     GameEntityMap, GameMirror, MainEntity, MirrorEntityMap, SceneEntity, extract_scene_entities,
 };
+
+/// Re-export the layout fingerprint so editor-side code can
+/// `jackdaw_runtime::LAYOUT_FINGERPRINT` without reaching into
+/// `jackdaw_api_internal`. The fingerprint itself is defined in
+/// `jackdaw_api_internal::fingerprint` so the `export_game_plugin!`
+/// macro (also in `jackdaw_api_internal`) can resolve `$crate::
+/// fingerprint::LAYOUT_FINGERPRINT` without requiring user cdylibs to
+/// declare a dependency on `jackdaw_runtime` directly.
+pub use jackdaw_api_internal::fingerprint::LAYOUT_FINGERPRINT;
+
+/// Re-export of the `export_game_plugin!` macro so the scaffolded
+/// template's `jackdaw_runtime::export_game_plugin!(MyGame)` line
+/// works without forcing the user to also pull in `jackdaw_api`.
+/// Since `jackdaw_api` already re-exports from the same source, the
+/// two paths resolve to the same macro.
+pub use jackdaw_api_internal::export_game_plugin;
 
 pub mod prelude {
     pub use crate::{

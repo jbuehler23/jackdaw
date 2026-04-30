@@ -95,6 +95,13 @@ macro_rules! export_extension {
                     dtor: __jackdaw_dtor,
                 }
             }
+
+            // Layout fingerprint export. The loader reads this symbol
+            // at dlopen and refuses the swap if the cdylib's layout
+            // for boundary Bevy types disagrees with the editor's.
+            // See `jackdaw_api_internal::fingerprint`.
+            #[unsafe(no_mangle)]
+            pub static __JACKDAW_LAYOUT_FINGERPRINT: u64 = $crate::fingerprint::LAYOUT_FINGERPRINT;
         };
 
         $crate::__jackdaw_emit_reflect_register_symbol!();
@@ -164,7 +171,7 @@ macro_rules! export_game_plugin {
                 let raw: *mut dyn ::bevy::app::Plugin = ::std::boxed::Box::into_raw(plugin);
                 // Split the fat pointer into (data, vtable). This
                 // relies on the standard fat-pointer layout shared by
-                // both sides via `bevy/dynamic_linking` + `jackdaw_sdk`.
+                // both sides through a single compile graph.
                 let parts: (*mut (), *mut ()) = unsafe {
                     ::core::mem::transmute::<*mut dyn ::bevy::app::Plugin, (*mut (), *mut ())>(raw)
                 };
@@ -184,6 +191,13 @@ macro_rules! export_game_plugin {
                     factory: __jackdaw_game_factory,
                 }
             }
+
+            // Layout fingerprint export. The loader reads this symbol
+            // at dlopen and refuses the swap if the cdylib's layout
+            // for boundary Bevy types disagrees with the editor's.
+            // See `jackdaw_api_internal::fingerprint`.
+            #[unsafe(no_mangle)]
+            pub static __JACKDAW_LAYOUT_FINGERPRINT: u64 = $crate::fingerprint::LAYOUT_FINGERPRINT;
         };
 
         $crate::__jackdaw_emit_reflect_register_symbol!();

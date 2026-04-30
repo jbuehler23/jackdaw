@@ -1,0 +1,64 @@
+[package]
+name = "jackdaw_editor"
+version = "0.4.0"
+edition = "2024"
+description = "The jackdaw editor library; provides EditorPlugins for per-project editor binaries."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+bevy.workspace = true
+jackdaw_api.workspace = true
+jackdaw_api_internal.workspace = true
+jackdaw_runtime.workspace = true
+jackdaw_loader.workspace = true
+jackdaw_jsn.workspace = true
+jackdaw_geometry.workspace = true
+jackdaw_camera.workspace = true
+jackdaw_feathers.workspace = true
+jackdaw_panels.workspace = true
+jackdaw_widgets.workspace = true
+jackdaw_commands.workspace = true
+jackdaw_animation.workspace = true
+jackdaw_terrain.workspace = true
+jackdaw_remote.workspace = true
+jackdaw_avian_integration.workspace = true
+jackdaw_node_graph.workspace = true
+bevy_monitors.workspace = true
+bevy_infinite_grid.workspace = true
+bevy_enhanced_input.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+avian3d.workspace = true
+rfd.workspace = true
+bevy_rerecast.workspace = true
+ehttp.workspace = true
+bincode.workspace = true
+base64.workspace = true
+anyhow.workspace = true
+arboard = { version = "3", features = ["wayland-data-control"] }
+dirs.workspace = true
+regex.workspace = true
+pathdiff.workspace = true
+notify = "8"
+ctrlc = "3"
+bevy_simple_subsecond_system = { version = "0.2", optional = true }
+
+# Unix-only: used by `standalone_play` to send `SIGTERM` to the
+# game subprocess on Stop. Windows uses `Child::kill` directly and
+# has no need for libc.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[features]
+default = []
+hot-reload = ["dep:bevy_simple_subsecond_system"]
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

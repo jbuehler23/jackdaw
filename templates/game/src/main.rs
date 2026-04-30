@@ -4,6 +4,6 @@ use {{crate_name}}::MyGamePlugin;
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_plugins(MyGamePlugin)
+        .add_plugins(MyGamePlugin::default())
         .run();
 }

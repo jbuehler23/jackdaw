@@ -1021,14 +1021,28 @@ fn editor_status_bar() -> impl Bundle {
                         },
                         children![jackdaw_feathers::progress::progress_bar(0.0)],
                     ),
+                    // Fixed-width wrapper so the text content
+                    // changing length (e.g. "Building bevy_utils
+                    // (213/757)" → "Building ab_glyph_rasterizer
+                    // (308/757)") doesn't push neighboring items
+                    // around within the FlexEnd-justified region.
                     (
-                        status_bar::StatusBarRight,
-                        Text::new(""),
-                        TextFont {
-                            font_size: tokens::FONT_SM,
+                        Node {
+                            width: Val::Px(260.0),
+                            flex_shrink: 0.0,
+                            overflow: Overflow::clip(),
+                            align_items: AlignItems::Center,
                             ..Default::default()
                         },
-                        TextColor(tokens::TEXT_SECONDARY),
+                        children![(
+                            status_bar::StatusBarRight,
+                            Text::new(""),
+                            TextFont {
+                                font_size: tokens::FONT_SM,
+                                ..Default::default()
+                            },
+                            TextColor(tokens::TEXT_SECONDARY),
+                        )],
                     ),
                     // Connection indicator
                     crate::remote::panel::connection_indicator()

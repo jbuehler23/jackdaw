@@ -6,36 +6,12 @@ description = "Public API for Jackdaw editor extensions"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
-[features]
-# Link jackdaw's shared types as a single dynamic library so the
-# editor and every loaded extension agree on `TypeId` for types
-# they both touch. Required for `export_extension!`-style dylib
-# loading.
-#
-# The bevy feature list below must mirror what the jackdaw
-# workspace activates for its own bevy dependency. Feature
-# unification means cargo computes a different
-# `libbevy_dylib-<hash>.so` filename when feature sets differ, so
-# an extension building outside the workspace has to end up with
-# the same union of bevy features for its linked dylib to match
-# the editor's.
-dynamic_linking = [
-    "dep:jackdaw_dylib",
-    "bevy/dynamic_linking",
-    "bevy/experimental_bevy_feathers",
-    "bevy/serialize",
-    "bevy/debug",
-    "bevy/bevy_remote",
-    "bevy/file_watcher",
-]
-
 [dependencies]
 bevy.workspace = true
 bevy_enhanced_input.workspace = true
 jackdaw_api_internal.workspace = true
 jackdaw_api_macros.workspace = true
 jackdaw_commands.workspace = true
-jackdaw_dylib = { workspace = true, optional = true }
 jackdaw_feathers.workspace = true
 jackdaw_jsn.workspace = true
 jackdaw_panels.workspace = true

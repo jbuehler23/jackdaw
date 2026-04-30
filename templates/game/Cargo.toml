@@ -8,11 +8,20 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
+# Standalone game runner. `cargo run` launches a vanilla Bevy game in
+# its own window for testing the standalone shipping path.
 [[bin]]
 name = "{{project-name}}"
 path = "src/main.rs"
 
+# Per-project editor binary. The launcher orchestrates `cargo build`
+# of this target before spawning it. The editor `dlopen`s the cdylib
+# (this lib) at startup and runs the user's plugin in-process.
+[[bin]]
+name = "{{project-name}}_editor"
+path = "src/bin/editor.rs"
+
 [dependencies]
 bevy = "0.18"
-jackdaw = { version = "0.4", features = ["dylib"] }
-serde = { version = "1", features = ["derive"] }
+jackdaw_editor = "0.4"
+jackdaw_runtime = "0.4"

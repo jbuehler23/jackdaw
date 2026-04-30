@@ -9,12 +9,12 @@
 //! These tests cover the **loader's job**: dlopen, ABI version
 //! check, catalog registration, library-handle retention, error
 //! paths. They do **not** cover invoking operators or querying
-//! components from the loaded extension: without the `dylib` feature
-//! and the `jackdaw_sdk` proxy dylib, host and cdylib get separate
-//! static copies of bevy and `jackdaw_api_internal`, so `TypeId` and
+//! components from the loaded extension: without a shared compile
+//! graph between host and cdylib, the two sides get separate static
+//! copies of bevy and `jackdaw_api_internal`, so `TypeId` and
 //! `ComponentId` don't unify across the boundary. Operator-dispatch
-//! coverage belongs in a follow-up test harness built with
-//! `--features dylib` that wires the proxy SDK.
+//! coverage belongs in a follow-up test harness once the per-project
+//! editor binary architecture is in place.
 
 use std::{mem::ManuallyDrop, path::PathBuf};
 

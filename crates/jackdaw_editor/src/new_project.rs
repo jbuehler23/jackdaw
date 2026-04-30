@@ -19,8 +19,6 @@ use std::process::Command;
 
 use bevy::log::{info, warn};
 
-use crate::sdk_paths::SdkPaths;
-
 /// Repo root the four templates live under. Pre-fills the
 /// scaffolder's Template field; the user can edit the field to
 /// point at a fork or a local path. cargo-generate auto-detects
@@ -44,8 +42,9 @@ pub enum TemplateLinkage {
     /// Plain `rlib`/`bin` crate linking `jackdaw` directly.
     #[default]
     Static,
-    /// `cdylib` linked against `libjackdaw_sdk` for hot-reload.
-    /// Requires the editor built with `--features dylib`.
+    /// `cdylib` for hot-reload. The editor and the user's cdylib
+    /// share one compile graph through the per-project shared
+    /// `target-dir` written by [`write_cargo_config`].
     Dylib,
 }
 
@@ -182,10 +181,11 @@ impl std::error::Error for ScaffoldError {}
 /// branch.
 ///
 /// For `Dylib` linkage, writes a `.cargo/config.toml` that routes
-/// cargo through `jackdaw-rustc-wrapper` so the scaffolded project
-/// links against `libjackdaw_sdk`. For `Static` linkage the template
-/// ships its own `.cargo/config.toml` (with the `cargo editor` alias)
-/// and we leave it alone.
+/// the scaffolded project's `target-dir` at the shared jackdaw cache
+/// so the editor binary and the user's cdylib compile against one
+/// bevy build. For `Static` linkage the template ships its own
+/// `.cargo/config.toml` (with the `cargo editor` alias) and we leave
+/// it alone.
 pub fn scaffold_project(
     name: &str,
     location: &Path,
@@ -301,7 +301,7 @@ pub fn scaffold_project(
 /// build, not an installed binary). `CARGO_MANIFEST_DIR` is set at
 /// compile time; `JACKDAW_DEV_CHECKOUT` is a runtime override for
 /// CI and other unusual setups.
-fn jackdaw_dev_checkout() -> Option<PathBuf> {
+pub(crate) fn jackdaw_dev_checkout() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("JACKDAW_DEV_CHECKOUT") {
         let path = PathBuf::from(p);
         if path.is_dir() {
@@ -352,85 +352,59 @@ fn append_patch_section(project_path: &Path, checkout: &Path) -> std::io::Result
     Ok(())
 }
 
-/// Write a `.cargo/config.toml` into the scaffolded project with
-/// absolute paths pointing at jackdaw's rustc wrapper and SDK so
-/// that **any** cargo invocation (terminal, rust-analyzer, `VSCode`
-/// build task, etc.) picks up the same linkage jackdaw's Build
-/// button uses.
+/// Write a `.cargo/config.toml` into the scaffolded project that
+/// routes its `target-dir` at the shared jackdaw cache so the
+/// editor and the user's cdylib compile against one bevy build.
 ///
-/// Best-effort: if the SDK or wrapper isn't on disk where
-/// [`SdkPaths::compute`] expects it, we skip the write and log a
-/// warning. The user can still build through jackdaw's UI, which
-/// injects env vars directly regardless of on-disk discovery.
+/// The target dir comes from [`crate::cache_manager::target_dir`],
+/// which resolves to `~/.cache/jackdaw/<version>/target/` on the
+/// current platform.
 ///
-/// We never clobber an existing `.cargo/config.toml`; if the user
-/// has customised theirs, we log a hint and leave it alone. The
-/// template shouldn't ship one, so in practice we always write.
+/// We never clobber an existing `[build]` table; if the user has
+/// customised theirs, we leave it alone. The template ships an
+/// empty config so the first scaffold writes the full body.
 fn write_cargo_config(project_path: &Path) {
-    let paths = SdkPaths::compute();
-    if !paths.dylib_exists() || !paths.wrapper_exists() {
-        warn!(
-            "Skipping .cargo/config.toml write: SDK dylib or wrapper \
-             not found at {}. Scaffolded project will only build through \
-             jackdaw's Build button until you install jackdaw or set \
-             JACKDAW_SDK_DIR.",
-            paths
-                .dylib
-                .parent()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default()
-        );
-        return;
-    }
-
+    let target_dir = crate::cache_manager::target_dir();
     let cargo_dir = project_path.join(".cargo");
     let config_path = cargo_dir.join("config.toml");
-    if config_path.exists() {
-        warn!(
-            "{} already exists; leaving it alone. Merge the following keys \
-             manually if you want external-IDE builds to use jackdaw's SDK: \
-             build.rustc-wrapper, env.JACKDAW_SDK_DYLIB, env.JACKDAW_SDK_DEPS.",
-            config_path.display()
-        );
-        return;
-    }
+    let new_body = render_cargo_config(&target_dir);
 
-    if let Err(e) = std::fs::create_dir_all(&cargo_dir) {
-        warn!("Failed to create {}: {e}", cargo_dir.display());
-        return;
-    }
+    let final_body = if config_path.exists() {
+        let existing = match std::fs::read_to_string(&config_path) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Failed to read {}: {e}", config_path.display());
+                return;
+            }
+        };
+        if existing.contains("[build]") {
+            return;
+        }
+        format!("{existing}\n\n{new_body}")
+    } else {
+        if let Err(e) = std::fs::create_dir_all(&cargo_dir) {
+            warn!("Failed to create {}: {e}", cargo_dir.display());
+            return;
+        }
+        new_body
+    };
 
-    let body = render_cargo_config(&paths);
-    if let Err(e) = std::fs::write(&config_path, body) {
+    if let Err(e) = std::fs::write(&config_path, final_body) {
         warn!("Failed to write {}: {e}", config_path.display());
         return;
     }
-
     info!("Wrote {}", config_path.display());
 }
 
-fn render_cargo_config(paths: &SdkPaths) -> String {
-    // TOML strings need to be on a single line; backslashes on
-    // Windows escape, so we use the raw-string `'…'` form. Paths
-    // from SdkPaths are always absolute.
+fn render_cargo_config(target_dir: &std::path::Path) -> String {
     format!(
-        "# Activates jackdaw-rustc-wrapper so that any cargo\n\
-         # invocation in this project directory; terminal builds,\n\
-         # rust-analyzer, VSCode tasks; links the resulting cdylib\n\
-         # against the same bevy compilation the jackdaw editor\n\
-         # ships with, keeping TypeIds in sync.\n\
-         #\n\
-         # Regenerate via jackdaw's scaffolder if the SDK moves.\n\
+        "# Auto-generated by jackdaw scaffolder.\n\
+         # Routes builds through the shared jackdaw cache so bevy and\n\
+         # jackdaw_editor are compiled once globally per jackdaw version.\n\
          \n\
          [build]\n\
-         rustc-wrapper = '{wrapper}'\n\
-         \n\
-         [env]\n\
-         JACKDAW_SDK_DYLIB = '{dylib}'\n\
-         JACKDAW_SDK_DEPS = '{deps}'\n",
-        wrapper = paths.wrapper.display(),
-        dylib = paths.dylib.display(),
-        deps = paths.deps.display(),
+         target-dir = '{}'\n",
+        target_dir.display(),
     )
 }
 

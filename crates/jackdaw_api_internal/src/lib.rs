@@ -46,6 +46,7 @@
 mod export;
 pub mod extensions_config;
 pub mod ffi;
+pub mod fingerprint;
 pub mod lifecycle;
 pub mod operator;
 pub mod paths;
