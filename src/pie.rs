@@ -29,6 +29,66 @@ use jackdaw_api::pie::PlayState;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::SceneJsnAst;
 
+/// How the user's game runs when they hit Play.
+///
+/// Stored as a Resource so the toolbar's play-mode chevron can flip
+/// it at runtime, and persisted into `project.jsn` so each project
+/// remembers its preferred mode across editor restarts.
+#[derive(Resource, Reflect, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[reflect(Resource)]
+pub enum PlayMode {
+    /// Game runs in-process inside the editor via dlopen + `SubApp`.
+    /// Renders into the editor's viewport.
+    #[default]
+    InEditor,
+    /// Game runs as a child process (`cargo run`). Opens its own
+    /// OS window. Editor stays as the editor.
+    Standalone,
+}
+
+impl From<jackdaw_jsn::JsnPlayMode> for PlayMode {
+    fn from(value: jackdaw_jsn::JsnPlayMode) -> Self {
+        match value {
+            jackdaw_jsn::JsnPlayMode::InEditor => PlayMode::InEditor,
+            jackdaw_jsn::JsnPlayMode::Standalone => PlayMode::Standalone,
+        }
+    }
+}
+
+impl From<PlayMode> for jackdaw_jsn::JsnPlayMode {
+    fn from(value: PlayMode) -> Self {
+        match value {
+            PlayMode::InEditor => jackdaw_jsn::JsnPlayMode::InEditor,
+            PlayMode::Standalone => jackdaw_jsn::JsnPlayMode::Standalone,
+        }
+    }
+}
+
+/// Marker for the play-mode chevron sitting next to the
+/// Play / Pause / Stop transport buttons. `PiePlugin` installs an
+/// `On<Add, PlayModeDropdown>` observer that wires the click to a
+/// toggle on the [`PlayMode`] resource.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PlayModeDropdown;
+
+/// User-facing toggle (default off): when `true`, hot-reload during
+/// `PlayState::Playing` is queued instead of applied. The next click
+/// of Stop applies it; next click of Play uses the new dylib.
+///
+/// Lets the user opt into deterministic Play sessions (no surprise
+/// dylib swap mid-playtest). When `false` (default) the build-artifact
+/// watcher swaps the dylib in place and Bevy `Reflect` is used to
+/// round-trip `SubApp` state through a `DynamicScene` so game state
+/// survives.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct PauseHotReload(pub bool);
+
+/// Marker for the toolbar toggle that flips [`PauseHotReload`]. The
+/// `PiePlugin` installs an `On<Add, PauseHotReloadToggle>` observer
+/// that wires the click.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PauseHotReloadToggle;
+
 /// Frozen AST captured when the user clicks Play from `Stopped`.
 /// Restored on Stop so any game-spawned entities or authored-entity
 /// mutations are reverted.
@@ -66,7 +126,12 @@ impl Plugin for PiePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<PlayState>()
             .init_resource::<PrePlayScene>()
+            .init_resource::<PlayMode>()
+            .init_resource::<PauseHotReload>()
+            .register_type::<PlayMode>()
             .add_observer(wire_pie_button)
+            .add_observer(wire_play_mode_dropdown)
+            .add_observer(wire_pause_hot_reload_toggle)
             .add_observer(tag_game_spawned)
             // Drive the user's `GameSubAppHolder` (installed by
             // `EditorPlugins::with_game::<P>()` or by the dylib
@@ -74,7 +139,23 @@ impl Plugin for PiePlugin {
             // `extract` callback syncs editor-world state into the
             // game world; its `Main` schedule then ticks the user's
             // `Update` / `FixedUpdate` etc.
-            .add_systems(Update, drive_game_sub_app.run_if(play_is_playing));
+            .add_systems(Update, drive_game_sub_app.run_if(play_is_playing))
+            .add_systems(
+                OnEnter(PlayState::Playing),
+                crate::pie_camera::swap_active_camera_on_play_enter,
+            )
+            .add_systems(
+                OnEnter(PlayState::Stopped),
+                (
+                    crate::pie_camera::swap_active_camera_on_stop_enter,
+                    // If the user paused hot-reload during Play and a
+                    // build was queued, drain it now that we're back
+                    // in Stopped. The gate inside `apply_pending_install`
+                    // checks `is_playing`, so calling it from here
+                    // proceeds with the install rather than re-queueing.
+                    crate::hot_reload::apply_pending_install,
+                ),
+            );
     }
 }
 
@@ -135,7 +216,13 @@ fn play_is_running(state: Res<State<PlayState>>) -> bool {
     is_available = play_is_stopped_or_paused
 )]
 pub(crate) fn pie_play(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(handle_play);
+    commands.queue(|world: &mut World| {
+        let mode = *world.resource::<PlayMode>();
+        match mode {
+            PlayMode::InEditor => handle_play(world),
+            PlayMode::Standalone => crate::standalone_play::start_standalone_play(world),
+        }
+    });
     OperatorResult::Finished
 }
 
@@ -147,7 +234,15 @@ pub(crate) fn pie_play(_: In<OperatorParameters>, mut commands: Commands) -> Ope
     is_available = play_is_playing
 )]
 pub(crate) fn pie_pause(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(handle_pause);
+    commands.queue(|world: &mut World| {
+        let mode = *world.resource::<PlayMode>();
+        // Pause only makes sense for in-editor PIE; the standalone
+        // child process owns its own loop and there's no SubApp to
+        // freeze. Silently ignore the click in Standalone mode.
+        if matches!(mode, PlayMode::InEditor) {
+            handle_pause(world);
+        }
+    });
     OperatorResult::Finished
 }
 
@@ -160,7 +255,13 @@ pub(crate) fn pie_pause(_: In<OperatorParameters>, mut commands: Commands) -> Op
     is_available = play_is_running
 )]
 pub(crate) fn pie_stop(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(handle_stop);
+    commands.queue(|world: &mut World| {
+        let mode = *world.resource::<PlayMode>();
+        match mode {
+            PlayMode::InEditor => handle_stop(world),
+            PlayMode::Standalone => crate::standalone_play::stop_standalone_play(world),
+        }
+    });
     OperatorResult::Finished
 }
 
@@ -181,6 +282,37 @@ fn tag_game_spawned(
         return;
     }
     commands.entity(entity).insert(GameSpawned);
+}
+
+/// Spawn a click observer on each `PauseHotReloadToggle` as it's
+/// added. Click flips the [`PauseHotReload`] resource. v1 surface
+/// is a tiny labeled pill in the toolbar; a proper checkbox menu
+/// item under the play-mode dropdown is a polish item.
+fn wire_pause_hot_reload_toggle(trigger: On<Add, PauseHotReloadToggle>, mut commands: Commands) {
+    let entity = trigger.event_target();
+    commands.entity(entity).observe(
+        |_: On<Pointer<Click>>, mut toggle: ResMut<PauseHotReload>| {
+            toggle.0 = !toggle.0;
+            info!("PauseHotReload toggled: {}", toggle.0);
+        },
+    );
+}
+
+/// Spawn a click observer on each `PlayModeDropdown` as it's added.
+/// Click toggles the [`PlayMode`] resource between `InEditor` and
+/// `Standalone`. A proper popup menu is a polish item; click-to-toggle
+/// is enough for v1.
+fn wire_play_mode_dropdown(trigger: On<Add, PlayModeDropdown>, mut commands: Commands) {
+    let entity = trigger.event_target();
+    commands
+        .entity(entity)
+        .observe(|_: On<Pointer<Click>>, mut mode: ResMut<PlayMode>| {
+            *mode = match *mode {
+                PlayMode::InEditor => PlayMode::Standalone,
+                PlayMode::Standalone => PlayMode::InEditor,
+            };
+            info!("PlayMode toggled: {:?}", *mode);
+        });
 }
 
 /// Spawn a click observer on each `PieButton` as it's added. The

@@ -17,16 +17,17 @@ jobs:
   # Drive the editor's `project.new` operator via the CLI for each
   # template variant, then `cargo build` the resulting project. This
   # is the integration smoke that catches "templates compile against
-  # the editor sources currently on this branch" — without it,
+  # the editor sources currently on this branch" without which
   # template breakage only surfaces when a user actually scaffolds
   # one.
   roundtrip:
-    name: ${{ matrix.kind }} (${{ matrix.linkage }})
-    runs-on: ubuntu-latest
+    name: ${{ matrix.kind }} (${{ matrix.linkage }}) on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         kind: [game, extension]
         linkage: [static, dylib]
     steps:
@@ -39,6 +40,7 @@ jobs:
           toolchain: ${{ env.toolchain }}
 
       - name: Install Linux deps
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends \
@@ -53,7 +55,8 @@ jobs:
       - name: Build jackdaw
         run: cargo build --release --bin jackdaw
 
-      - name: Scaffold project via project.new
+      - name: Scaffold project via project.new (Linux/macOS)
+        if: matrix.os != 'windows-latest'
         run: |
           ./target/release/jackdaw project.new '{
             "path": "/tmp",
@@ -62,7 +65,49 @@ jobs:
             "linkage": "${{ matrix.linkage }}"
           }'
 
-      - name: Verify project compiles
+      - name: Scaffold project via project.new (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $tmp = "$env:RUNNER_TEMP"
+          $name = "ci_${{ matrix.kind }}_${{ matrix.linkage }}"
+          $json = "{`"path`":`"$tmp`",`"name`":`"$name`",`"kind`":`"${{ matrix.kind }}`",`"linkage`":`"${{ matrix.linkage }}`"}"
+          ./target/release/jackdaw.exe project.new $json
+
+      - name: Verify project compiles (Linux/macOS)
+        if: matrix.os != 'windows-latest'
         run: |
           cd /tmp/ci_${{ matrix.kind }}_${{ matrix.linkage }}
           cargo build
+
+      - name: Verify project compiles (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          cd "$env:RUNNER_TEMP/ci_${{ matrix.kind }}_${{ matrix.linkage }}"
+          cargo build
+
+      - name: Verify Windows DLL export count (game only)
+        if: matrix.os == 'windows-latest' && matrix.kind == 'game'
+        shell: pwsh
+        run: |
+          $proj = "$env:RUNNER_TEMP/ci_game_${{ matrix.linkage }}"
+          $dll = Get-ChildItem -Path "$proj/target/debug" -Filter "*.dll" -Recurse | Select-Object -First 1
+          if (-not $dll) {
+            throw "No DLL found in $proj/target/debug"
+          }
+          Write-Host "Inspecting $($dll.FullName)"
+          $exports = & dumpbin /EXPORTS $dll.FullName
+          $ordinalLines = $exports | Select-String "^\s+\d+\s+[A-F0-9]+\s+[A-F0-9]+"
+          $count = $ordinalLines.Count
+          Write-Host "DLL has $count exported symbols"
+          if ($count -gt 100) {
+            throw "DLL has $count exports, expected <100 (explicit-export linker config not working)"
+          }
+          $required = @("__jackdaw_game_factory", "__jackdaw_reflect_register")
+          foreach ($sym in $required) {
+            if (-not ($exports | Select-String -SimpleMatch $sym)) {
+              throw "Missing required export: $sym"
+            }
+          }
+          Write-Host "All required symbols present, export count within limits"

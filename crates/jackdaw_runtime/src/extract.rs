@@ -45,8 +45,13 @@
 //! auto-sync work.
 
 use bevy::ecs::entity::{Entity, EntityHashMap};
+use bevy::input::ButtonInput;
+use bevy::input::keyboard::{KeyCode, KeyboardInput};
+use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use bevy::scene::{DynamicSceneBuilder, SceneFilter};
+use bevy::time::Time;
+use bevy::window::CursorMoved;
 
 /// Marker on entities in the editor's authoring world that should
 /// appear in the game's runtime world during Play. Set by the scene
@@ -137,4 +142,201 @@ pub fn extract_scene_entities(main_world: &mut World, sub_world: &mut World) {
     }
 
     sub_world.insert_resource(map);
+}
+
+/// Marker on editor-world entities that mirror an entity in the
+/// `GameSubApp` world. Reverse-extract paired; despawned when the
+/// source entity vanishes.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct GameMirror {
+    pub sub_entity: Entity,
+}
+
+/// Editor-world resource mapping `SubApp`-world entities to their
+/// editor-world mirrors. Persists across frames so the same `SubApp`
+/// entity always maps to the same editor mirror entity.
+#[derive(Resource, Default, Debug)]
+pub struct MirrorEntityMap {
+    pub entries: bevy::ecs::entity::EntityHashMap<Entity>,
+}
+
+/// Reverse extract: walks the `SubApp` world, mirrors every entity
+/// with render-relevant components into the editor world tagged with
+/// [`GameMirror`]. Maintains [`MirrorEntityMap`] so the same `SubApp`
+/// entity always maps to the same editor mirror across frames.
+///
+/// Despawns mirrors whose `sub_entity` no longer exists in
+/// `sub_world`.
+///
+/// Identity uses `TypePath` strings (Reflect), not `TypeId`, so the
+/// mapping survives `dlopen` swaps where `TypeId` would diverge.
+pub fn extract_game_mirrors(sub_world: &mut World, editor_world: &mut World) {
+    // Collect every SubApp entity that has at least one render-
+    // relevant component. We use `Transform` as the cheap presence
+    // test; entities without a transform aren't visually relevant.
+    let live_sub_entities: Vec<Entity> = {
+        let mut q = sub_world.query_filtered::<Entity, With<Transform>>();
+        q.iter(sub_world).collect()
+    };
+
+    let mut map = editor_world
+        .remove_resource::<MirrorEntityMap>()
+        .unwrap_or_default();
+
+    // For each live SubApp entity, ensure a mirror exists in the
+    // editor world.
+    for sub_entity in &live_sub_entities {
+        let mirror_entity = *map.entries.entry(*sub_entity).or_insert_with(|| {
+            editor_world
+                .spawn(GameMirror {
+                    sub_entity: *sub_entity,
+                })
+                .id()
+        });
+
+        if let Some(transform) = sub_world.get::<Transform>(*sub_entity) {
+            let transform = *transform;
+            editor_world.entity_mut(mirror_entity).insert(transform);
+        }
+    }
+
+    // Despawn mirrors whose source is gone.
+    let live: bevy::platform::collections::HashSet<Entity> =
+        live_sub_entities.iter().copied().collect();
+    let stale: Vec<(Entity, Entity)> = map
+        .entries
+        .iter()
+        .filter(|(sub_e, _)| !live.contains(*sub_e))
+        .map(|(s, m)| (*s, *m))
+        .collect();
+    for (sub_e, mirror_e) in stale {
+        editor_world.despawn(mirror_e);
+        map.entries.remove(&sub_e);
+    }
+
+    editor_world.insert_resource(map);
+}
+
+/// Drains specific input messages from the editor's main world into
+/// the `SubApp` world's message queues so the user's gameplay systems
+/// see the same input the editor saw.
+///
+/// Bevy 0.18 renamed the buffered-event API to `Message` /
+/// `Messages<E>` (the resource); we forward the `current update`
+/// buffer rather than draining historic messages so we don't perturb
+/// editor-side readers that haven't run yet this frame.
+pub fn extract_input_events(editor_world: &mut World, sub_world: &mut World) {
+    forward_messages::<KeyboardInput>(editor_world, sub_world);
+    forward_messages::<MouseButtonInput>(editor_world, sub_world);
+    forward_messages::<MouseMotion>(editor_world, sub_world);
+    forward_messages::<MouseWheel>(editor_world, sub_world);
+    forward_messages::<CursorMoved>(editor_world, sub_world);
+}
+
+fn forward_messages<M: Message + Clone>(editor_world: &mut World, sub_world: &mut World) {
+    let Some(editor_messages) = editor_world.get_resource::<Messages<M>>() else {
+        return;
+    };
+    let pending: Vec<M> = editor_messages
+        .iter_current_update_messages()
+        .cloned()
+        .collect();
+    if pending.is_empty() {
+        return;
+    }
+
+    if !sub_world.contains_resource::<Messages<M>>() {
+        sub_world.init_resource::<Messages<M>>();
+    }
+    let mut sub_messages = sub_world.resource_mut::<Messages<M>>();
+    for message in pending {
+        sub_messages.write(message);
+    }
+}
+
+/// Mirrors per-frame input state resources from the editor world
+/// into the `SubApp` world. Cheaply clones the editor's authoritative
+/// keyboard / mouse-button state and copies the [`Time`] resource so
+/// the user's gameplay systems see consistent timing.
+pub fn extract_input_state(editor_world: &mut World, sub_world: &mut World) {
+    if let Some(buttons) = editor_world.get_resource::<ButtonInput<KeyCode>>() {
+        sub_world.insert_resource(buttons.clone());
+    }
+    if let Some(buttons) = editor_world.get_resource::<ButtonInput<MouseButton>>() {
+        sub_world.insert_resource(buttons.clone());
+    }
+    if let Some(time) = editor_world.get_resource::<Time>() {
+        sub_world.insert_resource(*time);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh_world() -> World {
+        let mut w = World::new();
+        w.init_resource::<bevy::ecs::reflect::AppTypeRegistry>();
+        w
+    }
+
+    #[test]
+    fn reverse_extract_mirrors_transform() {
+        let mut sub = fresh_world();
+        let mut editor = fresh_world();
+        let sub_entity = sub.spawn(Transform::from_xyz(1.0, 2.0, 3.0)).id();
+
+        extract_game_mirrors(&mut sub, &mut editor);
+
+        let mirror = editor
+            .query::<(&GameMirror, &Transform)>()
+            .iter(&editor)
+            .next()
+            .expect("mirror should exist");
+        assert_eq!(mirror.0.sub_entity, sub_entity);
+        assert_eq!(*mirror.1, Transform::from_xyz(1.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn reverse_extract_despawns_mirror_when_source_gone() {
+        let mut sub = fresh_world();
+        let mut editor = fresh_world();
+        let sub_entity = sub.spawn(Transform::default()).id();
+
+        extract_game_mirrors(&mut sub, &mut editor);
+        assert_eq!(editor.query::<&GameMirror>().iter(&editor).count(), 1);
+
+        sub.despawn(sub_entity);
+        extract_game_mirrors(&mut sub, &mut editor);
+
+        assert_eq!(editor.query::<&GameMirror>().iter(&editor).count(), 0);
+    }
+
+    #[test]
+    fn reverse_extract_stable_identity_across_frames() {
+        let mut sub = fresh_world();
+        let mut editor = fresh_world();
+        let _sub_entity = sub.spawn(Transform::default()).id();
+
+        extract_game_mirrors(&mut sub, &mut editor);
+        let mirror_e1 = editor
+            .query::<(Entity, &GameMirror)>()
+            .iter(&editor)
+            .next()
+            .map(|(e, _)| e)
+            .unwrap();
+
+        extract_game_mirrors(&mut sub, &mut editor);
+        let mirror_e2 = editor
+            .query::<(Entity, &GameMirror)>()
+            .iter(&editor)
+            .next()
+            .map(|(e, _)| e)
+            .unwrap();
+
+        assert_eq!(
+            mirror_e1, mirror_e2,
+            "mirror entity must persist across frames"
+        );
+    }
 }

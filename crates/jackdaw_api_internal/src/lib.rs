@@ -86,6 +86,19 @@ pub use operator::{CallOperatorError, OperatorResult, OperatorWorldExt as _};
 pub use pie::PlayState;
 pub use snapshot::SceneSnapshotter;
 
+/// Resource flag the editor flips on while a text-input widget has
+/// focus. The operator-dispatch observer (registered by
+/// [`ExtensionContext::register_operator`]) skips dispatching when
+/// this is `true`, preventing keybinds from firing while the user
+/// is typing into a text field.
+///
+/// Owned by the editor crate's `text_edit` widget; exposed here so
+/// the dispatch observer can query it from `&mut World` without
+/// reaching back into `jackdaw_feathers` for the `TextInputNode`
+/// type.
+#[derive(bevy::prelude::Resource, Default, Debug, Clone, Copy)]
+pub struct KeybindsBlocked(pub bool);
+
 /// Re-exports plugin authors will want in one import.
 pub mod prelude {
     pub use crate::{
@@ -324,13 +337,22 @@ impl<'a> ExtensionContext<'a> {
             move |_: bevy::prelude::On<bevy_enhanced_input::prelude::Fire<O>>,
                   mut commands: Commands| {
                 commands.queue(move |world: &mut World| {
-                    world
+                    // Suppress operator dispatch while a text-input
+                    // widget has focus. Set by the editor's
+                    // `text_edit` widget on focus / blur. Without
+                    // this gate, typing letters in a text field
+                    // would fire BEI-bound operators (e.g. typing
+                    // `b` would activate `viewport.draw_brush_modal`).
+                    if world.get_resource::<KeybindsBlocked>().is_some_and(|b| b.0) {
+                        return;
+                    }
+                    let _ = world
                         .operator(O::ID)
                         .settings(CallOperatorSettings {
                             execution_context: ExecutionContext::Invoke,
                             creates_history_entry: true,
                         })
-                        .call()
+                        .call();
                 });
             },
         );

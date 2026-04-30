@@ -268,4 +268,22 @@ pub struct JsnProjectConfig {
     /// Format is opaque to the JSN crate; consumers parse it as `jackdaw_panels::LayoutState`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<serde_json::Value>,
+    /// How the user's game runs when they hit Play. Mirrors the
+    /// editor's `PlayMode` resource; `#[serde(default)]` so older
+    /// `project.jsn` files load as `InEditor`.
+    #[serde(default)]
+    pub default_play_mode: JsnPlayMode,
+}
+
+/// Wire-format mirror of the editor's `PlayMode` resource. Defined
+/// here (rather than in the editor crate) so `JsnProjectConfig` stays
+/// fully serializable without `jackdaw_jsn` taking a dependency on
+/// the editor.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JsnPlayMode {
+    /// Game runs in-process inside the editor (PIE).
+    #[default]
+    InEditor,
+    /// Game runs as a child process (`cargo run`).
+    Standalone,
 }

@@ -97,6 +97,12 @@ notify = "8"
 ctrlc = "3"
 bevy_simple_subsecond_system = { version = "0.2", optional = true }
 
+# Unix-only: used by `standalone_play` to send `SIGTERM` to the
+# game subprocess on Stop. Windows uses `Child::kill` directly and
+# has no need for libc.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [workspace.dependencies]
 bevy = { version = "0.18", features = ["experimental_bevy_feathers", "serialize", "debug", "bevy_remote", "file_watcher"] }
 jackdaw_jsn = { version = "0.4.0", path = "crates/jackdaw_jsn" }

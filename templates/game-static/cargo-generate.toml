@@ -1,6 +1,0 @@
-[template]
-cargo_generate_version = ">=0.18.0"
-
-[placeholders]
-# No extra placeholders; cargo-generate's built-in `project-name` and
-# `crate_name` are enough for the file substitutions.

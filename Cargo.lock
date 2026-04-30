@@ -4500,6 +4500,7 @@ dependencies = [
  "jackdaw_sdk",
  "jackdaw_terrain",
  "jackdaw_widgets",
+ "libc",
  "notify",
  "pathdiff",
  "regex",

@@ -2,9 +2,10 @@
 //!
 //! The editor's **New Project** flow creates a fresh extension or
 //! game project by shelling out to `bevy new -t <URL/SUBDIR> --yes
-//! <NAME>`. Templates live in-tree under `templates/<kind>-<linkage>/`
-//! within the jackdaw repo; we pass cargo-generate's `URL SUBDIR`
-//! syntax so a single repo URL plus a subdir picks the right one.
+//! <NAME>`. Templates live in-tree under `templates/` within the
+//! jackdaw repo (extensions split by linkage; the game template is
+//! unified); we pass cargo-generate's `URL SUBDIR` syntax so a single
+//! repo URL plus a subdir picks the right one.
 //! Pinning to the running editor's [`CARGO_PKG_VERSION`] keeps users
 //! on stable jackdaw from picking up incompatible main-branch
 //! template changes.
@@ -29,14 +30,13 @@ pub const TEMPLATE_REPO_URL: &str = "https://github.com/jbuehler23/jackdaw";
 /// Static extension template subdir.
 pub const TEMPLATE_EXTENSION_STATIC_SUBDIR: &str = "templates/extension-static";
 
-/// Static game template subdir.
-pub const TEMPLATE_GAME_STATIC_SUBDIR: &str = "templates/game-static";
-
 /// Dylib extension template subdir.
 pub const TEMPLATE_EXTENSION_DYLIB_SUBDIR: &str = "templates/extension-dylib";
 
-/// Dylib game template subdir.
-pub const TEMPLATE_GAME_DYLIB_SUBDIR: &str = "templates/game-dylib";
+/// Unified game template subdir. Produces both a cdylib (for in-editor
+/// PIE via dlopen) and a bin (for standalone runs); the static/dylib
+/// distinction was collapsed in Phase 3 of the PIE render bridge.
+pub const TEMPLATE_GAME_SUBDIR: &str = "templates/game";
 
 /// Which template variant the scaffolded project uses.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -86,16 +86,17 @@ impl TemplatePreset {
 
     /// Just the subdir portion for the given linkage, or `None` if
     /// the preset doesn't have one (custom URL with no subdir).
+    ///
+    /// For `Game`, `linkage` is ignored: the unified game template
+    /// produces both a cdylib (for editor PIE) and a bin (for
+    /// standalone runs), so a single subdir covers both modes.
     pub fn subdir(&self, linkage: TemplateLinkage) -> Option<&str> {
         match self {
             Self::Extension => Some(match linkage {
                 TemplateLinkage::Static => TEMPLATE_EXTENSION_STATIC_SUBDIR,
                 TemplateLinkage::Dylib => TEMPLATE_EXTENSION_DYLIB_SUBDIR,
             }),
-            Self::Game => Some(match linkage {
-                TemplateLinkage::Static => TEMPLATE_GAME_STATIC_SUBDIR,
-                TemplateLinkage::Dylib => TEMPLATE_GAME_DYLIB_SUBDIR,
-            }),
+            Self::Game => Some(TEMPLATE_GAME_SUBDIR),
             Self::Custom(url) => {
                 let mut parts = url.split_whitespace();
                 let _ = parts.next();
@@ -104,10 +105,12 @@ impl TemplatePreset {
         }
     }
 
-    /// `true` for the two presets that have Static/Dylib variants
-    /// (so the UI knows whether to show the linkage selector).
+    /// `true` for the extension preset, which has Static/Dylib
+    /// variants (so the UI knows whether to show the linkage
+    /// selector). The game preset uses a unified template; the UI
+    /// shows a different control (default play mode) instead.
     pub fn supports_linkage_selector(&self) -> bool {
-        matches!(self, Self::Extension | Self::Game)
+        matches!(self, Self::Extension)
     }
 }
 
@@ -240,15 +243,20 @@ pub fn scaffold_project(
 
     let mut cmd = Command::new(&bevy);
     cmd.current_dir(location)
-        .args(["new", "-t", &template_arg, "--yes"]);
-    // Pin the template to a branch / tag when the caller supplied
-    // one (the UI's Branch field, the operator's `branch` param).
-    if let Some(branch) = branch {
-        cmd.args(["-b", branch]);
-    }
-    cmd.arg(name);
-    if let Some(subdir) = subdir {
-        cmd.arg("--").arg(subdir);
+        .args(["new", "-t", &template_arg, "--yes", name]);
+    // bevy CLI's `new` subcommand exposes only `-t`, `--yes`, and
+    // `<NAME>`. Anything else (branch pin, subfolder) rides through
+    // its `-- <ARGS>` passthrough to cargo-generate, which accepts
+    // `--branch BRANCH` and a positional subfolder.
+    let needs_passthrough = branch.is_some() || subdir.is_some();
+    if needs_passthrough {
+        cmd.arg("--");
+        if let Some(branch) = branch {
+            cmd.args(["--branch", branch]);
+        }
+        if let Some(subdir) = subdir {
+            cmd.arg(subdir);
+        }
     }
 
     let output = cmd.output().map_err(ScaffoldError::Spawn)?;
@@ -266,7 +274,82 @@ pub fn scaffold_project(
     if matches!(linkage, TemplateLinkage::Dylib) {
         write_cargo_config(&project_path);
     }
+
+    // Local-dev convenience: when the editor is running from its
+    // own source checkout, append a `[patch.crates-io]` section to
+    // the scaffolded project's `Cargo.toml` so its `jackdaw = "0.4"`
+    // dep resolves to our working tree instead of crates.io. The
+    // template stays vanilla; only this post-scaffold edit injects
+    // the patch. Released editor binaries skip this step (the
+    // `JACKDAW_DEV_CHECKOUT` env, or the `CARGO_MANIFEST_DIR` build-
+    // time embedded path, isn't available / valid).
+    if let Some(checkout) = jackdaw_dev_checkout()
+        && let Err(err) = append_patch_section(&project_path, &checkout)
+    {
+        warn!(
+            "Failed to write [patch.crates-io] block into {}: {err}",
+            project_path.display()
+        );
+    }
+
     Ok(project_path)
+}
+
+/// Resolve the path to the jackdaw source checkout the running
+/// editor was built from, if any. Returns `Some(path)` when the
+/// path exists on disk (i.e., the editor is being run from a dev
+/// build, not an installed binary). `CARGO_MANIFEST_DIR` is set at
+/// compile time; `JACKDAW_DEV_CHECKOUT` is a runtime override for
+/// CI and other unusual setups.
+fn jackdaw_dev_checkout() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("JACKDAW_DEV_CHECKOUT") {
+        let path = PathBuf::from(p);
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+    let compile_time = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if compile_time.join("crates").is_dir() {
+        Some(compile_time)
+    } else {
+        None
+    }
+}
+
+/// Append a `[patch.crates-io]` section to the scaffolded project's
+/// `Cargo.toml` overriding the `jackdaw*` deps with `path` deps
+/// pointing at the dev checkout. Idempotent: skips when the section
+/// is already present (prevents double-write on repeated scaffolds
+/// against the same project path, which shouldn't happen but is
+/// cheap to guard).
+fn append_patch_section(project_path: &Path, checkout: &Path) -> std::io::Result<()> {
+    let manifest = project_path.join("Cargo.toml");
+    let existing = std::fs::read_to_string(&manifest)?;
+    if existing.contains("[patch.crates-io]") {
+        return Ok(());
+    }
+    let checkout_str = checkout.display();
+    let block = format!(
+        "\n# Auto-injected by jackdaw editor running from a source\n\
+         # checkout. Overrides crates.io deps with the local working\n\
+         # tree so the scaffolded project tracks unpublished changes.\n\
+         # Safe to delete once jackdaw is published with the matching\n\
+         # version.\n\
+         [patch.crates-io]\n\
+         jackdaw = {{ path = \"{checkout_str}\" }}\n\
+         jackdaw_api = {{ path = \"{checkout_str}/crates/jackdaw_api\" }}\n\
+         jackdaw_api_internal = {{ path = \"{checkout_str}/crates/jackdaw_api_internal\" }}\n\
+         jackdaw_runtime = {{ path = \"{checkout_str}/crates/jackdaw_runtime\" }}\n",
+    );
+    let mut updated = existing;
+    updated.push_str(&block);
+    std::fs::write(&manifest, updated)?;
+    info!(
+        "Injected [patch.crates-io] into {} pointing at {}",
+        manifest.display(),
+        checkout_str
+    );
+    Ok(())
 }
 
 /// Write a `.cargo/config.toml` into the scaffolded project with
@@ -359,7 +442,7 @@ fn render_cargo_config(paths: &SdkPaths) -> String {
 /// 404 against unpublished local paths.
 ///
 /// `local_root[/subdir]` is the template's source directory (e.g.
-/// `~/Workspace/jackdaw/templates/game-static`). cargo-generate
+/// `~/Workspace/jackdaw/templates/game`). cargo-generate
 /// is required for bevy CLI to work anyway, so the binary is
 /// generally already on PATH.
 fn scaffold_from_local_path(
@@ -370,8 +453,7 @@ fn scaffold_from_local_path(
     linkage: TemplateLinkage,
     project_path: &Path,
 ) -> Result<PathBuf, ScaffoldError> {
-    let cargo_generate =
-        which_cargo_generate().ok_or(ScaffoldError::CargoGenerateNotFound)?;
+    let cargo_generate = which_cargo_generate().ok_or(ScaffoldError::CargoGenerateNotFound)?;
 
     let template_path = match subdir {
         Some(s) => Path::new(local_root).join(s),

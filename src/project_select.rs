@@ -25,27 +25,29 @@ impl Plugin for ProjectSelectPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NewProjectState>()
             .add_systems(OnEnter(AppState::ProjectSelect), spawn_project_selector)
+            // Modal-only systems: stop running once the user transitions
+            // into `AppState::Editor`. These touch UI nodes that only
+            // exist while the project selector is open.
             .add_systems(
                 Update,
-                (
-                    poll_folder_dialog,
-                    poll_new_project_tasks,
-                    refresh_build_progress_snapshot,
-                    refresh_build_progress_ui,
-                )
+                (poll_folder_dialog, refresh_build_progress_ui)
                     .run_if(in_state(AppState::ProjectSelect)),
             )
+            // Background systems: must keep running across the
+            // ProjectSelect → Editor transition so a scaffold's
+            // background build can still poll its task and feed the
+            // status-bar progress indicator after the editor opens.
+            .add_systems(
+                Update,
+                (poll_new_project_tasks, refresh_build_progress_snapshot),
+            )
             // The dylib-install step MUST run outside of `Update`'s
-            // `schedule_scope`. The game's `GameApp::add_systems(Update, …)`
+            // `schedule_scope`. The game's `add_systems(Update, …)`
             // inserts into `Schedules`; doing that while bevy has
             // `Update` checked out via `schedule_scope` causes the
             // modification to be overwritten when the scope re-inserts
             // at exit. `Last` has its own scope and doesn't clash.
-            .add_systems(
-                Last,
-                (apply_pending_install, apply_pending_static_open)
-                    .run_if(in_state(AppState::ProjectSelect)),
-            );
+            .add_systems(Last, (apply_pending_install, apply_pending_static_open));
     }
 }
 
@@ -141,15 +143,63 @@ struct NewProjectBrowseButton;
 #[derive(Component, Clone, Copy)]
 struct NewProjectLinkageButton(TemplateLinkage);
 
+/// Placeholder for Phase 4's `PlayMode`. Phase 3 stores it but
+/// doesn't wire it through to anything functional yet; it just
+/// appears in the modal UI so the user can pick a default that a
+/// later phase will honour.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+enum DefaultPlayModeChoice {
+    /// Run the game inside the editor viewport (PIE).
+    #[default]
+    InEditor,
+    /// Launch the standalone bin via `cargo run`.
+    Standalone,
+}
+
+impl DefaultPlayModeChoice {
+    fn label(self) -> &'static str {
+        match self {
+            Self::InEditor => "In editor",
+            Self::Standalone => "Standalone",
+        }
+    }
+
+    /// Platform-aware initial value for a freshly-opened New Project
+    /// modal. On Windows we default to `Standalone` because the
+    /// in-editor PIE path relies on an explicit-export linker config
+    /// to stay under the DLL symbol cap; until that's been validated
+    /// in the wild, Standalone is the safer default. On other
+    /// platforms we keep `InEditor` (the type-level default).
+    fn initial() -> Self {
+        if cfg!(target_os = "windows") {
+            Self::Standalone
+        } else {
+            Self::InEditor
+        }
+    }
+}
+
+/// One of the two segmented buttons that pick the default play mode
+/// for a freshly-scaffolded game project. Phase 4 will wire the
+/// stored choice through to the actual `PlayMode`; Phase 3 only
+/// displays it.
+#[derive(Component, Clone, Copy)]
+struct NewProjectPlayModeButton(DefaultPlayModeChoice);
+
 /// Drives the modal's async operations.
 #[derive(Resource, Default)]
 pub(crate) struct NewProjectState {
     /// Which preset the user opened the dialog with. `None` when
     /// the modal isn't open.
     preset: Option<TemplatePreset>,
-    /// Static vs dylib template choice. Ignored when `preset` is
-    /// `Custom` (the user pastes a raw URL).
+    /// Static vs dylib template choice. Used by the Extension
+    /// preset; ignored for Game (which uses the unified template)
+    /// and for `Custom` (the user pastes a raw URL).
     linkage: TemplateLinkage,
+    /// Default play mode the user chose for a freshly-scaffolded
+    /// game. Stored but not yet wired to anything functional;
+    /// Phase 4 of the PIE render bridge will pick this up.
+    default_play_mode: DefaultPlayModeChoice,
     /// Parent directory the new project will be placed under.
     /// Scaffolder produces `location/name/`.
     location: PathBuf,
@@ -683,6 +733,10 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
 
     project::touch_recent(&root, &config.project.name);
 
+    // Honour the project's persisted play-mode preference. Older
+    // project.jsn files default to `InEditor` via `#[serde(default)]`.
+    world.insert_resource(crate::pie::PlayMode::from(config.project.default_play_mode));
+
     world.insert_resource(ProjectRoot {
         root: root.clone(),
         config,
@@ -914,6 +968,133 @@ fn on_linkage_button_click(
     });
 }
 
+/// Spawn one segment of the In-editor / Standalone play-mode
+/// selector for game projects. Mirror of [`spawn_linkage_button`];
+/// uses the same paint logic and the same hover-skip-for-selected
+/// rule so the visual treatment is consistent across the two
+/// segmented controls in the modal.
+fn spawn_play_mode_button(
+    world: &mut World,
+    parent: Entity,
+    choice: DefaultPlayModeChoice,
+    initial: DefaultPlayModeChoice,
+    font: Handle<Font>,
+) {
+    let selected = choice == initial;
+    let bg_color = if selected {
+        tokens::SELECTED_BG
+    } else {
+        tokens::TOOLBAR_BG
+    };
+    let border_color = if selected {
+        tokens::SELECTED_BORDER
+    } else {
+        tokens::BORDER_SUBTLE
+    };
+
+    let button = world
+        .spawn((
+            NewProjectPlayModeButton(choice),
+            Node {
+                padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+                justify_content: JustifyContent::Center,
+                ..Default::default()
+            },
+            BackgroundColor(bg_color),
+            BorderColor::all(border_color),
+            children![(
+                Text::new(choice.label().to_string()),
+                TextFont {
+                    font,
+                    font_size: tokens::FONT_MD,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_PRIMARY),
+            )],
+            ChildOf(parent),
+        ))
+        .id();
+
+    world
+        .entity_mut(button)
+        .observe(on_play_mode_button_click)
+        .observe(
+            |hover: On<Pointer<Over>>,
+             buttons: Query<&NewProjectPlayModeButton>,
+             state: Res<NewProjectState>,
+             mut bg: Query<&mut BackgroundColor>| {
+                let Ok(button) = buttons.get(hover.event_target()) else {
+                    return;
+                };
+                if button.0 == state.default_play_mode {
+                    return;
+                }
+                if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
+                    bg.0 = tokens::HOVER_BG;
+                }
+            },
+        )
+        .observe(
+            |out: On<Pointer<Out>>,
+             buttons: Query<&NewProjectPlayModeButton>,
+             state: Res<NewProjectState>,
+             mut bg: Query<&mut BackgroundColor>| {
+                let Ok(button) = buttons.get(out.event_target()) else {
+                    return;
+                };
+                if button.0 == state.default_play_mode {
+                    return;
+                }
+                if let Ok(mut bg) = bg.get_mut(out.event_target()) {
+                    bg.0 = tokens::TOOLBAR_BG;
+                }
+            },
+        );
+}
+
+/// Click handler for the In-editor / Standalone segmented buttons.
+/// Updates `NewProjectState.default_play_mode` and repaints the two
+/// buttons. Phase 4 will read this value when launching Play.
+fn on_play_mode_button_click(
+    click: On<Pointer<Click>>,
+    buttons: Query<&NewProjectPlayModeButton>,
+    mut commands: Commands,
+) {
+    let Ok(button) = buttons.get(click.event_target()) else {
+        return;
+    };
+    let choice = button.0;
+    commands.queue(move |world: &mut World| {
+        world.resource_mut::<NewProjectState>().default_play_mode = choice;
+
+        let mut repaint: Vec<(Entity, bool)> = Vec::new();
+        {
+            let mut q = world.query::<(Entity, &NewProjectPlayModeButton)>();
+            for (entity, btn) in q.iter(world) {
+                repaint.push((entity, btn.0 == choice));
+            }
+        }
+        for (entity, is_selected) in repaint {
+            let bg_color = if is_selected {
+                tokens::SELECTED_BG
+            } else {
+                tokens::TOOLBAR_BG
+            };
+            let border_color = if is_selected {
+                tokens::SELECTED_BORDER
+            } else {
+                tokens::BORDER_SUBTLE
+            };
+            if let Ok(mut ec) = world.get_entity_mut(entity) {
+                ec.insert(BackgroundColor(bg_color));
+                ec.insert(BorderColor::all(border_color));
+            }
+        }
+    });
+}
+
 /// Push a new string into the Template URL text input.
 fn set_template_input_text(world: &mut World, new_text: String) {
     set_named_input_text::<NewProjectTemplateInput>(world, new_text);
@@ -976,6 +1157,7 @@ pub fn close_new_project_modal(world: &mut World) {
     let mut state = world.resource_mut::<NewProjectState>();
     state.preset = None;
     state.linkage = TemplateLinkage::default();
+    state.default_play_mode = DefaultPlayModeChoice::initial();
     state.folder_task = None;
     state.scaffold_task = None;
     state.status = None;
@@ -1132,6 +1314,7 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         let mut state = world.resource_mut::<NewProjectState>();
         state.preset = Some(preset.clone());
         state.linkage = initial_linkage;
+        state.default_play_mode = DefaultPlayModeChoice::initial();
         state.location = location.clone();
         state.status = None;
     }
@@ -1275,8 +1458,10 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         .id();
     world.entity_mut(browse).observe(on_browse_new_location);
 
-    // Linkage selector only appears for the Extension and Game
-    // presets; Custom pastes its own URL.
+    // Extensions still pick between Static and Dylib templates.
+    // Games use the unified template; the segmented selector here
+    // chooses the default play mode (in-editor PIE vs. standalone)
+    // instead. Custom presets show neither.
     if preset.supports_linkage_selector() {
         world.spawn((
             Text::new("Template type"),
@@ -1322,6 +1507,55 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
             Text::new(
                 "Static: plainly-compiled rlib/bin (recommended). \
                  Dylib: hot-reloadable cdylib, requires the editor's `dylib` feature.",
+            ),
+            TextFont {
+                font: editor_font.clone(),
+                font_size: tokens::FONT_SM,
+                ..default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+            ChildOf(card),
+        ));
+    } else if matches!(preset, TemplatePreset::Game) {
+        let initial_play_mode = DefaultPlayModeChoice::initial();
+        world.spawn((
+            Text::new("Default play mode"),
+            TextFont {
+                font: editor_font.clone(),
+                font_size: tokens::FONT_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+            ChildOf(card),
+        ));
+        let play_mode_row = world
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..Default::default()
+                },
+                ChildOf(card),
+            ))
+            .id();
+        spawn_play_mode_button(
+            world,
+            play_mode_row,
+            DefaultPlayModeChoice::InEditor,
+            initial_play_mode,
+            editor_font.clone(),
+        );
+        spawn_play_mode_button(
+            world,
+            play_mode_row,
+            DefaultPlayModeChoice::Standalone,
+            initial_play_mode,
+            editor_font.clone(),
+        );
+        world.spawn((
+            Text::new(
+                "In editor: Play runs the game inside the viewport. \
+                 Standalone: Play launches the game's bin via `cargo run`.",
             ),
             TextFont {
                 font: editor_font.clone(),
@@ -1377,7 +1611,7 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         ChildOf(card),
         text_edit(
             TextEditProps::default()
-                .with_placeholder("templates/game-static".to_string())
+                .with_placeholder("templates/game".to_string())
                 .with_default_value(
                     preset
                         .subdir(initial_linkage)

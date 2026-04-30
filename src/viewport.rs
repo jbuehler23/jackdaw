@@ -22,6 +22,12 @@ use jackdaw_widgets::file_browser::FileBrowserItem;
 #[derive(Component)]
 pub struct MainViewportCamera;
 
+/// Resource exposing the render-target image handle the
+/// `MainViewportCamera` renders into. `pie_camera::GameViewportCamera`
+/// uses this to render into the same viewport image.
+#[derive(Resource, Clone)]
+pub struct ViewportRenderImage(pub Handle<Image>);
+
 const DEFAULT_VIEWPORT_WIDTH: u32 = 1280;
 const DEFAULT_VIEWPORT_HEIGHT: u32 = 720;
 
@@ -115,6 +121,7 @@ pub(crate) fn setup_viewport(
         TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
     image.sampler = ImageSampler::linear();
     let image_handle = images.add(image);
+    commands.insert_resource(ViewportRenderImage(image_handle.clone()));
 
     // Spawn 3D camera (marked EditorEntity so it's hidden from hierarchy and undeletable)
     let camera = commands

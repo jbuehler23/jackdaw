@@ -18,15 +18,17 @@ use serde::de::{DeserializeSeed, Visitor};
 pub use jackdaw_jsn::{Brush, BrushFaceData, CustomProperties, GltfSource, PropertyValue};
 
 pub mod sub_app;
-pub use sub_app::{GameSubApp, GameSubAppHolder, create_game_sub_app};
+pub use sub_app::{GameSubApp, GameSubAppHolder, PostUpdateCallback, create_game_sub_app};
 
 pub mod extract;
-pub use extract::{GameEntityMap, MainEntity, SceneEntity, extract_scene_entities};
+pub use extract::{
+    GameEntityMap, GameMirror, MainEntity, MirrorEntityMap, SceneEntity, extract_scene_entities,
+};
 
 pub mod prelude {
     pub use crate::{
-        GameEntityMap, GameSubApp, GameSubAppHolder, JackdawPlugin, JackdawSceneRoot, MainEntity,
-        SceneEntity, create_game_sub_app, extract_scene_entities,
+        GameEntityMap, GameMirror, GameSubApp, GameSubAppHolder, JackdawPlugin, JackdawSceneRoot,
+        MainEntity, MirrorEntityMap, SceneEntity, create_game_sub_app, extract_scene_entities,
     };
 }
 

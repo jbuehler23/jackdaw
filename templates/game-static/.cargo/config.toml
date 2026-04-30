@@ -1,8 +1,0 @@
-# Project-local cargo aliases. Pair with the binaries declared in
-# `Cargo.toml`:
-#
-# - `cargo play`   runs the standalone game (DefaultPlugins).
-# - `cargo editor` opens the editor with this game's plugin loaded.
-[alias]
-play = "run"
-editor = "run --bin editor"

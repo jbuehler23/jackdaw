@@ -327,7 +327,63 @@ fn play_pause_controls() -> impl Bundle {
             pie_transport_button(crate::pie::PieButton::Play, Icon::Play),
             pie_transport_button(crate::pie::PieButton::Pause, Icon::Pause),
             pie_transport_button(crate::pie::PieButton::Stop, Icon::Square),
+            pie_play_mode_chevron(),
+            pie_pause_hot_reload_toggle(),
         ],
+    )
+}
+
+/// Chevron sitting next to the transport buttons that toggles
+/// between in-editor and standalone play mode. The `PiePlugin`
+/// installs a click observer via `On<Add, PlayModeDropdown>` that
+/// flips the `PlayMode` resource. A proper popup menu is a polish
+/// item; click-to-toggle is enough for v1.
+fn pie_play_mode_chevron() -> impl Bundle {
+    (
+        crate::pie::PlayModeDropdown,
+        EditorEntity,
+        Node {
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            padding: UiRect::horizontal(px(2.0)),
+            ..Default::default()
+        },
+        children![(
+            Text::new("v"),
+            TextFont {
+                font_size: 11.0,
+                ..Default::default()
+            },
+            TextColor(tokens::HEADER_CONTROL_LABEL),
+            Pickable::IGNORE,
+        )],
+    )
+}
+
+/// Tiny toolbar pill that toggles `PauseHotReload`. v1 surface is a
+/// labeled "HR" badge: clicking flips the resource. The `PiePlugin`
+/// installs an `On<Add, PauseHotReloadToggle>` observer that attaches
+/// the click handler. A proper checkbox menu item under the play-mode
+/// dropdown is a polish item.
+fn pie_pause_hot_reload_toggle() -> impl Bundle {
+    (
+        crate::pie::PauseHotReloadToggle,
+        EditorEntity,
+        Node {
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            padding: UiRect::horizontal(px(2.0)),
+            ..Default::default()
+        },
+        children![(
+            Text::new("HR"),
+            TextFont {
+                font_size: 11.0,
+                ..Default::default()
+            },
+            TextColor(tokens::HEADER_CONTROL_LABEL),
+            Pickable::IGNORE,
+        )],
     )
 }
 
@@ -887,7 +943,6 @@ fn editor_status_bar() -> impl Bundle {
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
-            justify_content: JustifyContent::SpaceBetween,
             width: Val::Percent(100.0),
             height: Val::Px(tokens::STATUS_BAR_HEIGHT),
             padding: UiRect::horizontal(Val::Px(tokens::SPACING_MD)),
@@ -896,30 +951,59 @@ fn editor_status_bar() -> impl Bundle {
         },
         BackgroundColor(tokens::WINDOW_BG),
         children![
-            (
-                status_bar::StatusBarLeft,
-                Text::new("Ready"),
-                TextFont {
-                    font_size: tokens::FONT_SM,
-                    ..Default::default()
-                },
-                bevy::feathers::theme::ThemedText,
-            ),
-            (
-                status_bar::StatusBarCenter,
-                Text::new(""),
-                TextFont {
-                    font_size: tokens::FONT_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-            ),
-            // Right side: build progress (when active) + gizmo info + connection indicator
+            // Left third: stays anchored to the left regardless of
+            // right-side content width.
             (
                 Node {
+                    flex_grow: 1.0,
+                    flex_basis: Val::Px(0.0),
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
+                    justify_content: JustifyContent::FlexStart,
+                    overflow: Overflow::clip(),
+                    ..Default::default()
+                },
+                children![(
+                    status_bar::StatusBarLeft,
+                    Text::new("Ready"),
+                    TextFont {
+                        font_size: tokens::FONT_SM,
+                        ..Default::default()
+                    },
+                    bevy::feathers::theme::ThemedText,
+                )],
+            ),
+            // Center third: anchored to the visual center of the bar.
+            (
+                Node {
+                    flex_grow: 1.0,
+                    flex_basis: Val::Px(0.0),
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    overflow: Overflow::clip(),
+                    ..Default::default()
+                },
+                children![(
+                    status_bar::StatusBarCenter,
+                    Text::new(""),
+                    TextFont {
+                        font_size: tokens::FONT_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                )],
+            ),
+            // Right third: build progress (when active) + gizmo info + connection indicator.
+            (
+                Node {
+                    flex_grow: 1.0,
+                    flex_basis: Val::Px(0.0),
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::FlexEnd,
                     column_gap: Val::Px(tokens::SPACING_LG),
+                    overflow: Overflow::clip(),
                     ..Default::default()
                 },
                 children![
@@ -932,6 +1016,7 @@ fn editor_status_bar() -> impl Bundle {
                         Node {
                             display: Display::None,
                             width: Val::Px(120.0),
+                            flex_shrink: 0.0,
                             ..Default::default()
                         },
                         children![jackdaw_feathers::progress::progress_bar(0.0)],

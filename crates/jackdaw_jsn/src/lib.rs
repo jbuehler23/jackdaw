@@ -16,7 +16,7 @@ pub use types::{
 pub use jackdaw_geometry;
 
 pub use ast::SceneJsnAst;
-pub use format::{JsnProject, JsnProjectConfig, JsnScene};
+pub use format::{JsnPlayMode, JsnProject, JsnProjectConfig, JsnScene};
 pub use loader::JsnAssetLoader;
 
 pub struct JsnPlugin {

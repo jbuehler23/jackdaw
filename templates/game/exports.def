@@ -1,0 +1,4 @@
+LIBRARY {{project-name}}
+EXPORTS
+    __jackdaw_game_factory
+    __jackdaw_reflect_register

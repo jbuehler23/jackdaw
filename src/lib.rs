@@ -43,6 +43,7 @@ pub mod layout;
 pub mod material_browser;
 pub mod material_preview;
 pub mod measure_tool;
+pub mod migration;
 pub mod modal_transform;
 pub mod navmesh;
 pub mod new_project;
@@ -50,6 +51,7 @@ pub mod operator_tooltip;
 pub mod physics_brush_bridge;
 pub mod physics_tool;
 pub mod pie;
+pub mod pie_camera;
 pub mod prefab_picker;
 pub mod project;
 pub mod project_files;
@@ -62,6 +64,7 @@ pub mod scene_ops;
 pub mod sdk_paths;
 pub mod selection;
 pub mod snapping;
+pub mod standalone_play;
 pub mod status_bar;
 pub mod terrain;
 pub mod transform_ops;
@@ -320,6 +323,7 @@ impl Plugin for EditorCorePlugin {
             .add_plugins((
                 viewport_overlays::ViewportOverlaysPlugin,
                 view_modes::ViewModesPlugin,
+                keybind_focus::KeybindFocusPlugin,
                 status_bar::StatusBarPlugin,
                 project_files::ProjectFilesPlugin,
                 modal_transform::ModalTransformPlugin,
@@ -379,6 +383,7 @@ impl Plugin for EditorCorePlugin {
             // "Install from file" path can push into it even when
             // `with_dylib_loader()` wasn't called.
             .init_resource::<jackdaw_loader::LoadedDylibs>()
+            .init_resource::<standalone_play::StandalonePlayState>()
             .add_observer(flag_menu_dirty_on_window_add)
             .add_observer(flag_menu_dirty_on_window_remove)
             .add_observer(flag_menu_dirty_on_menu_entry_add)
@@ -386,6 +391,10 @@ impl Plugin for EditorCorePlugin {
             .add_systems(
                 OnEnter(AppState::Editor),
                 (spawn_layout, init_layout, populate_menu).chain(),
+            )
+            .add_systems(
+                OnEnter(AppState::Editor),
+                pie_camera::setup_game_viewport_camera.after(viewport::setup_viewport),
             )
             .add_systems(
                 Update,
@@ -421,6 +430,18 @@ impl Plugin for EditorCorePlugin {
             .add_observer(on_timeline_keyframe_click);
 
         app.add_plugins(extension_lifecycle::plugin);
+
+        // Install the post-SubApp-tick callback that mirrors the
+        // user's primary Camera3d into the editor's
+        // `GameViewportCamera`. Lives as a non-send resource on the
+        // editor's main world so the runtime crate can call it
+        // without depending on the editor crate.
+        app.world_mut()
+            .insert_non_send_resource(jackdaw_runtime::PostUpdateCallback(Box::new(
+                |sub, editor| {
+                    crate::pie_camera::mirror_user_camera(sub, editor);
+                },
+            )));
     }
 }
 

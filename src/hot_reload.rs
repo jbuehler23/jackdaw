@@ -234,7 +234,17 @@ fn drain_artifact_changes(
 /// `extensions_dialog::handle_install_from_path` pipeline: atomic
 /// rename into the per-user games dir, teardown of the prior dylib,
 /// dlopen, new `build()`, catalog update.
-fn apply_pending_install(world: &mut World) {
+///
+/// When `PauseHotReload` is set and the game is currently `Playing`
+/// or `Paused`, the install is requeued onto `pending_install` so
+/// the next `OnEnter(PlayState::Stopped)` (or a manual flush) picks
+/// it up. This keeps Play sessions deterministic for users that
+/// want to opt into that behaviour.
+///
+/// On a swap during Play, the `SubApp` world's reflect-registered
+/// component state is round-tripped through a `DynamicScene` so
+/// game state survives the dlopen. See `crate::migration`.
+pub(crate) fn apply_pending_install(world: &mut World) {
     let artifact_opt = world
         .resource_mut::<HotReloadState>()
         .pending_install
@@ -242,9 +252,51 @@ fn apply_pending_install(world: &mut World) {
     let Some(artifact) = artifact_opt else {
         return;
     };
+
+    // If the user has paused hot-reload during Play, requeue the
+    // install for later. Re-using `pending_install` matches the way
+    // the watcher stages new artifacts; the next call (driven from
+    // OnEnter(PlayState::Stopped)) will pick it up.
+    let is_playing = matches!(
+        world.resource::<State<jackdaw_api::pie::PlayState>>().get(),
+        jackdaw_api::pie::PlayState::Playing | jackdaw_api::pie::PlayState::Paused
+    );
+    let pause_during_play = world.resource::<crate::pie::PauseHotReload>().0;
+    if is_playing && pause_during_play {
+        let mut state = world.resource_mut::<HotReloadState>();
+        state.pending_install = Some(artifact);
+        return;
+    }
+
     let outcome_arc = world.resource::<HotReloadState>().install_outcome.clone();
 
+    // Capture the SubApp's reflect state before the dlopen swap.
+    // `GameSubAppHolder` is a non-send resource; take it out so we
+    // get unaliased access to its inner `World`, then reinsert it.
+    let snapshot = if let Some(mut holder) =
+        world.remove_non_send_resource::<jackdaw_runtime::GameSubAppHolder>()
+    {
+        let snap = crate::migration::capture_subapp_snapshot(holder.sub.world_mut());
+        world.insert_non_send_resource(holder);
+        Some(snap)
+    } else {
+        None
+    };
+
     let result = crate::extensions_dialog::handle_install_from_path(world, artifact);
+
+    // Apply the captured snapshot to the freshly-built SubApp world.
+    // The new world has a different `TypeId` namespace; the scene
+    // writer uses `TypePath` strings (Reflect identity), which is
+    // why migration survives the dlopen swap.
+    if let Some(snapshot) = snapshot
+        && let Some(mut holder) =
+            world.remove_non_send_resource::<jackdaw_runtime::GameSubAppHolder>()
+    {
+        crate::migration::apply_subapp_snapshot(snapshot, holder.sub.world_mut());
+        world.insert_non_send_resource(holder);
+    }
+
     match &result {
         Ok(jackdaw_loader::LoadedKind::Game(name)) => {
             info!("HotReload: game `{name}` swapped in place.");

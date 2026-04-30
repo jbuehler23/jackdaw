@@ -62,6 +62,8 @@ pub fn create_game_sub_app() -> SubApp {
     // See `crate::extract` for the broader auto-sync direction.
     sub.set_extract(|main_world, sub_world| {
         crate::extract::extract_scene_entities(main_world, sub_world);
+        crate::extract::extract_input_events(main_world, sub_world);
+        crate::extract::extract_input_state(main_world, sub_world);
     });
     sub
 }
@@ -113,6 +115,11 @@ impl GameSubAppHolder {
     pub fn update(&mut self, world: &mut World) {
         self.sub.extract(world);
         self.sub.update();
+        crate::extract::extract_game_mirrors(self.sub.world_mut(), world);
+        if let Some(callback) = world.remove_non_send_resource::<PostUpdateCallback>() {
+            (callback.0)(self.sub.world_mut(), world);
+            world.insert_non_send_resource(callback);
+        }
     }
 
     /// Drop the current `SubApp` and rebuild from the cached
@@ -122,3 +129,10 @@ impl GameSubAppHolder {
         self.sub = (self.rebuild)();
     }
 }
+
+/// Hook for the editor to install behavior into `GameSubAppHolder::update`
+/// without `jackdaw_runtime` depending on the editor crate.
+///
+/// Stored as a non-send resource on the editor's main world; the holder's
+/// `update` invokes it (if present) after each `SubApp` tick.
+pub struct PostUpdateCallback(pub Box<dyn Fn(&mut World, &mut World) + Send + Sync>);

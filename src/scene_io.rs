@@ -339,6 +339,11 @@ pub fn save_layout_to_project(world: &mut World) {
         .config
         .clone();
     project.project.layout = Some(layout_json);
+    // Mirror the current PlayMode resource into the on-disk config
+    // so project.jsn always reflects the user's latest choice.
+    if let Some(mode) = world.get_resource::<crate::pie::PlayMode>() {
+        project.project.default_play_mode = (*mode).into();
+    }
 
     if let Err(e) = crate::project::save_project_config(&root, &project) {
         warn!("Failed to save project config: {e}");

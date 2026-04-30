@@ -1,4 +1,2 @@
 [template]
 cargo_generate_version = ">=0.18.0"
-
-[placeholders]

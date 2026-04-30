@@ -17,6 +17,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
+use jackdaw_api_internal::KeybindsBlocked;
 use jackdaw_feathers::text_edit::TextInputNode;
 
 /// `SystemParam` that returns whether keybinds and operator dispatches
@@ -36,5 +37,28 @@ impl KeybindFocus<'_, '_> {
             return false;
         };
         self.text_inputs.contains(focused)
+    }
+}
+
+/// Plugin that mirrors [`KeybindFocus::is_typing`] into the
+/// [`KeybindsBlocked`] resource so the BEI dispatch observer in
+/// `jackdaw_api_internal` can suppress operator firing while the
+/// user is editing a text field. The dispatch observer can't
+/// import `KeybindFocus` directly (no editor-crate dependency from
+/// `jackdaw_api_internal`), so the editor side mirrors the bool
+/// each frame.
+pub struct KeybindFocusPlugin;
+
+impl Plugin for KeybindFocusPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<KeybindsBlocked>()
+            .add_systems(PreUpdate, sync_keybinds_blocked);
+    }
+}
+
+fn sync_keybinds_blocked(focus: KeybindFocus, mut blocked: ResMut<KeybindsBlocked>) {
+    let typing = focus.is_typing();
+    if blocked.0 != typing {
+        blocked.0 = typing;
     }
 }

@@ -1,9 +1,0 @@
-# Project-local cargo aliases. The `editor` alias opens the editor
-# with this game's `.so` loaded — the loader picks it up automatically
-# from the build output path.
-#
-# `play` is intentionally not aliased: dylib games run only inside
-# the editor, where Play is the toolbar transport button. Use
-# `cargo editor` and click Play.
-[alias]
-editor = "run --bin editor"
