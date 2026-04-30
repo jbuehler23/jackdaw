@@ -82,8 +82,17 @@ fn run_gui() {
     // `EditorCorePlugin` calls `app.init_state::<AppState>()`, which
     // depends on the `StateTransition` schedule that `StatesPlugin`
     // (part of `DefaultPlugins`) installs.
-    bevy::prelude::App::new()
-        .add_plugins(bevy::prelude::DefaultPlugins)
-        .add_plugins(jackdaw_editor::EditorPlugins::default())
-        .run();
+    let mut app = bevy::prelude::App::new();
+    app.add_plugins(bevy::prelude::DefaultPlugins)
+        .add_plugins(jackdaw_editor::EditorPlugins::default());
+    app.run();
+
+    // After the launcher's GUI loop exits, check for a pending
+    // editor-binary handoff. On Unix this `exec`s the editor binary,
+    // replacing the launcher process so the editor inherits the
+    // controlling terminal (Ctrl+C, job control, stdin/stdout all
+    // work). On Windows it `spawn`s and exits. If no handoff was
+    // requested (user closed the launcher without picking a project)
+    // this is a no-op and the launcher exits normally.
+    jackdaw_editor::handoff_to_editor_if_pending(&mut app);
 }

@@ -364,14 +364,24 @@ impl From<BevyError> for LoadError {
 
 fn walk_dylibs(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    for dir in paths {
-        let Ok(entries) = std::fs::read_dir(dir) else {
+    for path in paths {
+        // Per-project editor binaries hand the loader a specific
+        // `lib<project>.so` file (rather than its containing dir,
+        // which holds dozens of unrelated bevy/jackdaw cache
+        // artefacts). Allow file paths in addition to directories.
+        if path.is_file() {
+            if is_dylib(path) {
+                out.push(path.clone());
+            }
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(path) else {
             continue;
         };
         for entry in entries.flatten() {
-            let path = entry.path();
-            if is_dylib(&path) {
-                out.push(path);
+            let p = entry.path();
+            if is_dylib(&p) {
+                out.push(p);
             }
         }
     }

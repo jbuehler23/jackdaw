@@ -72,14 +72,24 @@ impl TemplatePreset {
 
     /// Just the git URL portion (no subdir). Used to pre-fill the
     /// Template field in the New Project modal.
-    pub fn git_url(&self) -> &str {
+    ///
+    /// When running from a jackdaw source checkout, returns the local
+    /// checkout path instead of the GitHub URL so contributors iterate
+    /// against their working-tree templates without push/clone cycles.
+    /// `scaffold_project` detects the local-path case and routes to
+    /// `cargo-generate --path` accordingly.
+    pub fn git_url(&self) -> std::borrow::Cow<'static, str> {
         match self {
-            Self::Extension | Self::Game => TEMPLATE_REPO_URL,
-            Self::Custom(url) => {
-                // Custom URLs may already carry a subdir (`URL
-                // SUBDIR`); split and return the leading word.
-                url.split_whitespace().next().unwrap_or(url)
+            Self::Extension | Self::Game => {
+                if let Some(checkout) = jackdaw_dev_checkout() {
+                    std::borrow::Cow::Owned(checkout.display().to_string())
+                } else {
+                    std::borrow::Cow::Borrowed(TEMPLATE_REPO_URL)
+                }
             }
+            Self::Custom(url) => std::borrow::Cow::Owned(
+                url.split_whitespace().next().unwrap_or(url).to_string(),
+            ),
         }
     }
 
@@ -456,6 +466,20 @@ fn scaffold_from_local_path(
     // builds through the shared cache regardless of `linkage`.
     let _ = linkage;
     write_cargo_config(project_path);
+
+    // Mirror the bevy-CLI branch: when scaffolding from a source
+    // checkout the project's `jackdaw_*` deps need to resolve to the
+    // local working tree, not crates.io (those crates aren't published
+    // yet at this jackdaw version).
+    if let Some(checkout) = jackdaw_dev_checkout()
+        && let Err(err) = append_patch_section(project_path, &checkout)
+    {
+        warn!(
+            "Failed to write [patch.crates-io] block into {}: {err}",
+            project_path.display()
+        );
+    }
+
     Ok(project_path.to_path_buf())
 }
 

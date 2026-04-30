@@ -24,13 +24,44 @@ fn main() -> ExitCode {
         }
     }
 
+    // The launcher spawns this binary with `cwd` set to the project
+    // root, so `current_dir()` resolves to the project we should open.
+    // `AutoOpenProjectPlugin` reads it on Startup, inserts `ProjectRoot`,
+    // and transitions `AppState::ProjectSelect → Editor` so the binary
+    // skips the project picker entirely.
+    let project_root = std::env::current_dir().expect("CWD must be readable");
+
+    // The project's cdylib lives in the shared jackdaw cache (the
+    // launcher routes builds there via `CARGO_TARGET_DIR`). Hand the
+    // explicit file path to `DylibLoaderPlugin` so it dlopens the
+    // game plugin and registers it against the editor's `GameSubApp`.
+    // We disable the default loader (which scans the per-user config
+    // dirs for installed games) so the per-project editor only loads
+    // its own project's plugin.
+    let project_cdylib =
+        jackdaw_editor::editor_resolver::cdylib_path(&project_root)
+            .expect("project cdylib path resolves");
+
     // `DefaultPlugins` must precede `EditorPlugins` because
     // `EditorCorePlugin` calls `app.init_state::<AppState>()`, which
     // needs the `StateTransition` schedule that `StatesPlugin` (part
     // of `DefaultPlugins`) installs.
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_plugins(jackdaw_editor::EditorPlugins::default())
+        .add_plugins(
+            jackdaw_editor::EditorPlugins::default()
+                .build()
+                .disable::<jackdaw_editor::DylibLoaderPlugin>(),
+        )
+        .add_plugins(
+            jackdaw_editor::DylibLoaderPlugin::default()
+                .with_user_extension_dir(false)
+                .with_extension_env_var(false)
+                .with_extension_search_path(project_cdylib),
+        )
+        .add_plugins(jackdaw_editor::auto_open::AutoOpenProjectPlugin {
+            root: project_root,
+        })
         .run();
     ExitCode::SUCCESS
 }

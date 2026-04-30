@@ -5,6 +5,8 @@ pub mod alignment_guides;
 pub mod app_ops;
 pub mod asset_browser;
 pub mod asset_catalog;
+pub mod auto_open;
+pub mod sigint;
 pub mod brush;
 pub mod brush_drag_ops;
 pub mod brush_element_ops;
@@ -134,6 +136,61 @@ pub enum AppState {
     #[default]
     ProjectSelect,
     Editor,
+}
+
+/// Stash of "we're done, please launch the per-project editor binary
+/// now" details that `transition_to_editor` writes to the world before
+/// triggering `AppExit`. The launcher binary's `main()` reads it back
+/// after `App::run()` returns and performs the actual handoff (on Unix:
+/// `exec` so the editor inherits the controlling terminal; elsewhere:
+/// `spawn` + immediate process exit).
+#[derive(Resource, Clone)]
+pub struct PendingEditorHandoff {
+    pub editor_bin: std::path::PathBuf,
+    pub cwd: std::path::PathBuf,
+    pub lib_dir: std::path::PathBuf,
+}
+
+/// Drain a [`PendingEditorHandoff`] from a finished launcher `App` and
+/// hand off control to the per-project editor binary. On Unix this
+/// `exec`s, replacing the launcher process; the editor inherits the
+/// terminal so Ctrl+C, job control, and stdin/stdout work as if the
+/// user had run the editor directly. On Windows (where `exec` doesn't
+/// exist), `spawn` + exit is the fallback.
+pub fn handoff_to_editor_if_pending(app: &mut App) {
+    let handoff = app
+        .world_mut()
+        .remove_resource::<PendingEditorHandoff>();
+    let Some(handoff) = handoff else {
+        return;
+    };
+    handoff_to_editor(&handoff);
+}
+
+#[cfg(unix)]
+fn handoff_to_editor(handoff: &PendingEditorHandoff) -> ! {
+    use std::os::unix::process::CommandExt;
+    let err = std::process::Command::new(&handoff.editor_bin)
+        .current_dir(&handoff.cwd)
+        .env("LD_LIBRARY_PATH", &handoff.lib_dir)
+        .env("DYLD_FALLBACK_LIBRARY_PATH", &handoff.lib_dir)
+        .exec();
+    // `exec` only returns on failure.
+    eprintln!(
+        "error: failed to exec editor binary {}: {err}",
+        handoff.editor_bin.display()
+    );
+    std::process::exit(1);
+}
+
+#[cfg(not(unix))]
+fn handoff_to_editor(handoff: &PendingEditorHandoff) -> ! {
+    let _ = std::process::Command::new(&handoff.editor_bin)
+        .current_dir(&handoff.cwd)
+        .env("LD_LIBRARY_PATH", &handoff.lib_dir)
+        .env("DYLD_FALLBACK_LIBRARY_PATH", &handoff.lib_dir)
+        .spawn();
+    std::process::exit(0);
 }
 
 #[derive(Component, Default)]
@@ -312,6 +369,7 @@ impl Plugin for EditorCorePlugin {
         // Disable InputDispatchPlugin from FeathersPlugins because bevy_ui_text_input's
         // TextInputPlugin also adds it unconditionally and panics on duplicates.
         app.init_state::<AppState>()
+            .add_plugins(sigint::SigintExitPlugin)
             .add_plugins((
                 FeathersPlugins.build().disable::<InputDispatchPlugin>(),
                 EditorFeathersPlugin,

@@ -22,6 +22,12 @@ name = "{{project-name}}_editor"
 path = "src/bin/editor.rs"
 
 [dependencies]
-bevy = "0.18"
+# `dynamic_linking` is required for PIE: the per-project editor binary
+# `dlopen`s this crate's cdylib at runtime to load the game plugin.
+# Without it, the editor and the cdylib each statically link their own
+# bevy copy and disagree on `TypeId::of::<Transform>()`, breaking every
+# query / reflection lookup across the boundary. Disable for release
+# (`--no-default-features`) when shipping a standalone game build.
+bevy = { version = "0.18", features = ["dynamic_linking"] }
 jackdaw_editor = "0.4"
 jackdaw_runtime = "0.4"

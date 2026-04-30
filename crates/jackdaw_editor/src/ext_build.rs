@@ -233,14 +233,18 @@ pub fn build_extension_project_with_progress(
     match linkage {
         TemplateLinkage::Dylib => {
             let artifact_name = artifact_file_name(&project_dir);
-            let artifact = project_dir.join("target/debug").join(&artifact_name);
+            // The build was routed through the shared cache via
+            // CARGO_TARGET_DIR; look the artifact up there, not at
+            // the project-local `target/` (which cargo no longer
+            // writes to).
+            let artifact = crate::cache_manager::target_dir()
+                .join("debug")
+                .join(&artifact_name);
             if !artifact.is_file() {
                 return Err(BuildError::OutputNotProduced { expected: artifact });
             }
             Ok(artifact)
         }
-        // Static builds have no cdylib to install; return the project
-        // dir so the caller can `enter_project(..)` on it.
         TemplateLinkage::Static => Ok(project_dir),
     }
 }
@@ -327,8 +331,14 @@ pub fn build_editor_for_project(project_root: &Path) -> Result<(), BuildError> {
     // inherited (we want cargo's standard "Compiling X (N/M)" progress
     // line in the terminal). The JSON format is only useful when a
     // downstream parser consumes the events; the launcher doesn't.
+    //
+    // Build BOTH the editor bin and the cdylib (`--lib`). The cdylib
+    // is what the editor binary `dlopen`s at startup to load the
+    // user's game plugin into the `GameSubApp`; building it alongside
+    // the editor bin keeps the launcher's open-project flow self-
+    // contained (no separate `cargo build --lib` step needed).
     cmd.current_dir(project_root)
-        .args(["build", "--bin", &bin_target]);
+        .args(["build", "--bin", &bin_target, "--lib"]);
     // Belt-and-suspenders: route the build through the shared cache
     // even if the project's `.cargo/config.toml` is missing or has
     // diverged. The launcher reads `editor_binary_path()` from the
@@ -376,6 +386,7 @@ pub fn cargo_clean_project(project_dir: &Path) -> Result<(), BuildError> {
         "-p",
         &package_name,
     ]);
+    cmd.env("CARGO_TARGET_DIR", crate::cache_manager::target_dir());
     let output = cmd.output().map_err(BuildError::BuildSpawn)?;
     if !output.status.success() {
         return Err(BuildError::BuildFailed {

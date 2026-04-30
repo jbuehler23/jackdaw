@@ -761,22 +761,31 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
         );
         return;
     };
-    info!("Spawning per-project editor: {}", editor_bin.display());
-    let spawn_result = std::process::Command::new(&editor_bin)
-        .current_dir(&root)
-        .spawn();
-    match spawn_result {
-        Ok(_child) => {
-            info!("Editor spawned; exiting launcher");
-            world.write_message(bevy::app::AppExit::Success);
-        }
-        Err(e) => {
-            warn!(
-                "Failed to spawn editor binary {}: {e}",
-                editor_bin.display()
-            );
-        }
-    }
+    info!("Handing off to per-project editor: {}", editor_bin.display());
+    // The editor binary is built with `bevy/dynamic_linking`, so it
+    // depends on `libbevy_dylib.so` (and friends) at runtime. Those
+    // sit alongside the binary in `<cache>/debug/`. Cargo bakes that
+    // path into RPATH (`$ORIGIN`) at link time, but if the launcher
+    // itself was started via `cargo run` it has an inherited
+    // `LD_LIBRARY_PATH` pointing at the LAUNCHER's build dir; that
+    // overrides RPATH on Linux and the editor would then fail to
+    // resolve `libbevy_dylib.so` (or pick up an incompatible copy).
+    // Override the env var explicitly to the editor's own debug dir.
+    //
+    // Stash everything needed for the actual handoff in a resource;
+    // `main.rs` performs the launch after `App::run()` returns so
+    // that on Unix we can `exec` (replacing the launcher process)
+    // and the editor inherits the controlling terminal — without
+    // that, the editor is orphaned from the shell's job control and
+    // Ctrl+C in the user's terminal can't reach it.
+    let lib_dir = crate::cache_manager::target_dir().join("debug");
+    world.insert_resource(crate::PendingEditorHandoff {
+        editor_bin,
+        cwd: root,
+        lib_dir,
+    });
+    info!("Editor binary build complete; exiting launcher to hand off");
+    world.write_message(bevy::app::AppExit::Success);
 }
 
 /// Spawn a pill-style button inside the "+ New Extension / + New
