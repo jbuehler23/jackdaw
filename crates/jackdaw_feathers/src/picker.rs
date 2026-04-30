@@ -214,7 +214,7 @@ impl<T: Pickable> PickerProps<T> {
 
         let scrollbar = commands.spawn(scrollbar(list)).id();
 
-        let dismiss = if props.dismissible {
+        let mut dismiss = if props.dismissible {
             Some((
                 PickerDismissButton,
                 icon_button(
@@ -229,6 +229,7 @@ impl<T: Pickable> PickerProps<T> {
         let mut header_items = vec![];
 
         if let Some(title) = props.title.take() {
+            let dismiss = dismiss.take();
             let titlebar = commands
                 .spawn((
                     Node {
@@ -261,24 +262,25 @@ impl<T: Pickable> PickerProps<T> {
                 ))
                 .id();
 
-            header_items.extend(&[titlebar, input]);
-        } else if let Some(dismiss) = dismiss {
+            header_items.push(titlebar);
+        }
+
+        let mut input_container = commands.spawn(Node {
+            width: percent(100),
+            column_gap: px(tokens::SPACING_SM),
+            align_items: AlignItems::Center,
+            ..default()
+        });
+
+        input_container.add_child(input);
+
+        if let Some(dismiss) = dismiss {
             // if we put the dismiss button in the title bar with no title, it looks ugly
             // because there's a lot of empty space so we put it after the input instead
-            let dismiss = commands.spawn(dismiss).id();
-            let input_container = commands
-                .spawn(Node {
-                    width: percent(100),
-                    column_gap: px(tokens::SPACING_SM),
-                    ..default()
-                })
-                .add_children(&[input, dismiss])
-                .id();
-
-            header_items.push(input_container);
-        } else {
-            header_items.push(input);
+            input_container.with_child(dismiss);
         }
+
+        header_items.push(input_container.id());
 
         let picker_entity = commands
             .spawn((
@@ -286,7 +288,6 @@ impl<T: Pickable> PickerProps<T> {
                     flex_direction: FlexDirection::Column,
                     border: px(1).all(),
                     border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
-                    padding: px(tokens::SPACING_MD).all(),
                     row_gap: px(tokens::SPACING_MD),
                     width: px(600),
                     ..default()
@@ -305,6 +306,7 @@ impl<T: Pickable> PickerProps<T> {
             .with_child((
                 Node {
                     flex_direction: FlexDirection::Column,
+                    padding: ButtonSize::MD.padding().all().with_bottom(px(0)),
                     row_gap: px(tokens::SPACING_MD),
                     ..default()
                 },
@@ -375,6 +377,7 @@ pub fn picker_item(index: usize) -> impl Bundle {
             ButtonSize::MD,
             true,
             FlexDirection::Column,
+            BorderRadius::ZERO,
         ),
         PickerItem(index),
         // if everything is the same tab index, it's ordered by the child index
@@ -598,6 +601,10 @@ fn process_pickers(
                     Children::spawn(SpawnWith(move |spawner: &mut RelatedSpawner<ChildOf>| {
                         if let Some(name) = name {
                             spawner.spawn((
+                                Node {
+                                    margin: px(tokens::SPACING_MD).horizontal(),
+                                    ..default()
+                                },
                                 Text(name),
                                 TextFont::from(font).with_font_size(tokens::TEXT_SIZE_SM),
                                 TextColor(tokens::TEXT_MUTED_COLOR.into()),
