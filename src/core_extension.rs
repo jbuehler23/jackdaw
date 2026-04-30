@@ -2,7 +2,10 @@ use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
-use jackdaw_feathers::button::{ButtonClickEvent, ButtonOperatorCall};
+use jackdaw_feathers::{
+    button::{ButtonClickEvent, ButtonOperatorCall},
+    picker::{DismissPickerEvent, Picker},
+};
 use jackdaw_jsn::PropertyValue;
 
 /// Catalog name of the Core extension. Exported so
@@ -225,11 +228,21 @@ pub struct CoreExtensionInputContext;
     allows_undo = false,
     is_available = is_any_modal_active
 )]
-fn cancel_modal(_: In<OperatorParameters>, mut active: ActiveModalQuery) -> OperatorResult {
+fn cancel_modal(
+    _: In<OperatorParameters>,
+    mut active: ActiveModalQuery,
+    pickers: Query<Entity, With<Picker>>,
+    mut commands: Commands,
+) -> OperatorResult {
     active.cancel();
+
+    for picker in pickers {
+        commands.trigger(DismissPickerEvent(picker));
+    }
+
     OperatorResult::Finished
 }
 
-fn is_any_modal_active(active: ActiveModalQuery) -> bool {
-    active.is_modal_running()
+fn is_any_modal_active(active: ActiveModalQuery, pickers: Query<(), With<Picker>>) -> bool {
+    active.is_modal_running() || !pickers.is_empty()
 }

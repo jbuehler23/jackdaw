@@ -518,20 +518,6 @@ fn on_picker_dismissed(
     });
 }
 
-fn handle_esc_key(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    pickers: Query<Entity, With<Picker>>,
-    mut commands: Commands,
-) {
-    if !keyboard.just_pressed(KeyCode::Escape) {
-        return;
-    }
-
-    for picker in &pickers {
-        commands.trigger(DismissPickerEvent(picker));
-    }
-}
-
 #[derive(Component)]
 #[component(on_insert)]
 struct MatchText;
@@ -814,12 +800,7 @@ impl Matchable for Item {
 pub(crate) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
-        (
-            process_pickers,
-            on_text_edit_submit,
-            scroll_to_picker_item,
-            handle_esc_key,
-        ),
+        (process_pickers, on_text_edit_submit, scroll_to_picker_item),
     )
     .add_observer(on_picker_selected)
     .add_observer(on_picker_dismissed)
