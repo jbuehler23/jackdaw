@@ -1940,27 +1940,18 @@ fn poll_new_project_tasks(
                     .unwrap_or("project")
                     .to_owned();
 
-                state.status = Some(format!("Building `{project_name}` in background…"));
+                state.status = Some(format!("Building `{project_name}`…"));
                 state.pending_project = Some(project_path.clone());
 
-                // Open the editor IMMEDIATELY: the user can author
-                // the scene, place entities, and explore the
-                // template's `assets/scene.jsn` while the first
-                // build runs. For dylib linkage the build artifact
-                // gets installed when the build finishes (via
-                // `pending_install` in the build-completion branch
-                // below); `pie.play` is gated on build readiness so
-                // hitting Play before the build finishes is a no-op
-                // with a clear tooltip.
+                // Per-project editor architecture: the launcher must
+                // build the project's `<name>_editor` binary before it
+                // can spawn anything, so we wait for `build_task` to
+                // complete before transitioning. The progress modal
+                // (driven by `refresh_build_progress_ui` against
+                // `state.build_progress`) stays visible during the
+                // build. The Static-vs-Dylib branch is folded into
+                // the build-completion handler below.
                 let linkage = state.linkage;
-                if matches!(linkage, TemplateLinkage::Static) {
-                    // Static path can open right away — the editor
-                    // works without the binary being built; only the
-                    // standalone `cargo play` runner needs it.
-                    state.pending_static_open = Some(project_path.clone());
-                    state.pending_project = None;
-                    state.retry_attempted = false;
-                }
 
                 let progress = std::sync::Arc::new(std::sync::Mutex::new(
                     crate::ext_build::BuildProgress::default(),
@@ -2005,12 +1996,12 @@ fn poll_new_project_tasks(
                     state.pending_install = Some(artifact_or_project);
                 }
                 TemplateLinkage::Static => {
-                    // Editor was already opened against the project
-                    // when the scaffold finished. Just log success;
-                    // no further action needed for static linkage
-                    // (the binary built here is for the user's
-                    // standalone `cargo play`, not the editor).
+                    // Build produced the per-project editor binary
+                    // alongside the cdylib. Hand off to
+                    // `apply_pending_static_open`, which spawns the
+                    // editor binary and exits the launcher.
                     info!("Static build succeeded: {}", artifact_or_project.display());
+                    state.pending_static_open = state.pending_project.take();
                     state.retry_attempted = false;
                 }
             },

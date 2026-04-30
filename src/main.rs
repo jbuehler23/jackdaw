@@ -77,7 +77,13 @@ fn run_gui() {
     // `AppState::ProjectSelect`, and once `transition_to_editor`
     // runs (now spawn-and-exit), the launcher exits before
     // `AppState::Editor` would do anything.
+    //
+    // `DefaultPlugins` is required before `EditorPlugins` because
+    // `EditorCorePlugin` calls `app.init_state::<AppState>()`, which
+    // depends on the `StateTransition` schedule that `StatesPlugin`
+    // (part of `DefaultPlugins`) installs.
     bevy::prelude::App::new()
+        .add_plugins(bevy::prelude::DefaultPlugins)
         .add_plugins(jackdaw_editor::EditorPlugins::default())
         .run();
 }

@@ -24,7 +24,12 @@ fn main() -> ExitCode {
         }
     }
 
+    // `DefaultPlugins` must precede `EditorPlugins` because
+    // `EditorCorePlugin` calls `app.init_state::<AppState>()`, which
+    // needs the `StateTransition` schedule that `StatesPlugin` (part
+    // of `DefaultPlugins`) installs.
     App::new()
+        .add_plugins(DefaultPlugins)
         .add_plugins(jackdaw_editor::EditorPlugins::default())
         .run();
     ExitCode::SUCCESS

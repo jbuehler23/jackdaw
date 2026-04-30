@@ -44,19 +44,27 @@ pub fn run_setup() -> std::io::Result<SetupOutcome> {
     let target_dir = cache_manager::target_dir();
     let mut cmd = Command::new("cargo");
     cmd.current_dir(&scaffold_dir)
-        .args(["build", "--message-format=json-render-diagnostics"])
-        .env("CARGO_TARGET_DIR", &target_dir);
+        .args(["build"])
+        .env("CARGO_TARGET_DIR", &target_dir)
+        // Stream cargo's "Compiling X (N/M)" output directly to the
+        // launcher's stderr so the user sees real-time progress
+        // through the ~10 minute warm-up rather than a single
+        // post-mortem dump on completion.
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
 
-    let output = cmd.output()?;
-    let success = output.status.success();
-    let stderr_text = String::from_utf8_lossy(&output.stderr);
-    let log_tail = last_n_lines(&stderr_text, 20);
+    let status = cmd.status()?;
+    let success = status.success();
 
     if success {
         cache_manager::mark_warmed()?;
     }
 
-    Ok(SetupOutcome { success, log_tail })
+    // With inherited stdio we don't capture output, so the log_tail
+    // is empty. The user already saw cargo's output stream live; no
+    // need to repeat. The field is kept on `SetupOutcome` for future
+    // UI work that may want to capture + display in a dialog.
+    Ok(SetupOutcome { success, log_tail: String::new() })
 }
 
 /// Detect whether setup is needed. Returns `true` if `.warmed` is
@@ -65,20 +73,19 @@ pub fn needs_setup() -> bool {
     !cache_manager::is_warmed()
 }
 
-fn last_n_lines(s: &str, n: usize) -> String {
-    let mut lines: Vec<&str> = s.lines().collect();
-    if lines.len() > n {
-        lines = lines.split_off(lines.len() - n);
-    }
-    lines.join("\n")
-}
-
 /// Write the warm-up project's files. Depends on the same crates the
 /// user's projects depend on (`bevy` + `jackdaw_editor` + `jackdaw_runtime`),
 /// so cargo's content-addressable build store populates the shared
 /// cache with everything every user project subsequently needs.
+///
+/// When the editor is running from a source checkout (detected via
+/// `crate::new_project::jackdaw_dev_checkout`), the manifest also
+/// gets a `[patch.crates-io]` section pointing at the local working
+/// tree. Otherwise the `jackdaw_editor` / `jackdaw_runtime` version
+/// references would fail to resolve since those crates aren't yet
+/// published to crates.io.
 fn scaffold_warmup_project(dir: &Path) -> std::io::Result<()> {
-    let cargo_toml = format!(
+    let mut cargo_toml = format!(
         r#"[package]
 name = "jackdaw_setup_warmup"
 version = "0.1.0"
@@ -96,6 +103,22 @@ jackdaw_runtime = "{version}"
 "#,
         version = env!("CARGO_PKG_VERSION"),
     );
+
+    if let Some(checkout) = crate::new_project::jackdaw_dev_checkout() {
+        let checkout_str = checkout.display();
+        cargo_toml.push_str(&format!(
+            "\n# Auto-injected by jackdaw setup flow running from a source\n\
+             # checkout. Routes the warm-up build at the local working tree\n\
+             # so the shared cache populates with the same artifacts user\n\
+             # projects will reference. Released editor binaries skip this.\n\
+             [patch.crates-io]\n\
+             jackdaw_editor = {{ path = \"{checkout_str}/crates/jackdaw_editor\" }}\n\
+             jackdaw_api = {{ path = \"{checkout_str}/crates/jackdaw_api\" }}\n\
+             jackdaw_api_internal = {{ path = \"{checkout_str}/crates/jackdaw_api_internal\" }}\n\
+             jackdaw_runtime = {{ path = \"{checkout_str}/crates/jackdaw_runtime\" }}\n",
+        ));
+    }
+
     std::fs::write(dir.join("Cargo.toml"), cargo_toml)?;
 
     let src_dir = dir.join("src");
@@ -110,22 +133,3 @@ jackdaw_runtime = "{version}"
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn last_n_lines_short_input() {
-        assert_eq!(last_n_lines("a\nb\nc", 5), "a\nb\nc");
-    }
-
-    #[test]
-    fn last_n_lines_truncates() {
-        assert_eq!(last_n_lines("a\nb\nc\nd\ne\nf", 3), "d\ne\nf");
-    }
-
-    #[test]
-    fn last_n_lines_empty_input() {
-        assert_eq!(last_n_lines("", 5), "");
-    }
-}

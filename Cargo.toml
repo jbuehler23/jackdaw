@@ -27,7 +27,7 @@ members = [
 exclude = ["templates"]
 
 [dependencies]
-jackdaw_editor = { path = "crates/jackdaw_editor" }
+jackdaw_editor = { version = "0.4.0", path = "crates/jackdaw_editor" }
 bevy.workspace = true
 jackdaw_jsn.workspace = true
 jackdaw_geometry.workspace = true

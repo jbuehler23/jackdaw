@@ -170,6 +170,7 @@ pub fn build_extension_project_with_progress(
             .expect("Cargo.toml path must be valid UTF-8"),
         "--message-format=json-render-diagnostics",
     ]);
+    cmd.env("CARGO_TARGET_DIR", crate::cache_manager::target_dir());
 
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -322,12 +323,17 @@ pub fn build_editor_for_project(project_root: &Path) -> Result<(), BuildError> {
     let bin_target = format!("{project_name}_editor");
 
     let mut cmd = Command::new("cargo");
-    cmd.current_dir(project_root).args([
-        "build",
-        "--bin",
-        &bin_target,
-        "--message-format=json-render-diagnostics",
-    ]);
+    // No `--message-format=json-render-diagnostics` here: stdio is
+    // inherited (we want cargo's standard "Compiling X (N/M)" progress
+    // line in the terminal). The JSON format is only useful when a
+    // downstream parser consumes the events; the launcher doesn't.
+    cmd.current_dir(project_root)
+        .args(["build", "--bin", &bin_target]);
+    // Belt-and-suspenders: route the build through the shared cache
+    // even if the project's `.cargo/config.toml` is missing or has
+    // diverged. The launcher reads `editor_binary_path()` from the
+    // same `cache_manager::target_dir()` so both ends agree.
+    cmd.env("CARGO_TARGET_DIR", crate::cache_manager::target_dir());
 
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::inherit());

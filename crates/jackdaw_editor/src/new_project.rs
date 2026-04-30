@@ -271,9 +271,13 @@ pub fn scaffold_project(
 
     // `bevy new` is consistent about where it drops the project:
     // `<location>/<name>/`. Trust that and return.
-    if matches!(linkage, TemplateLinkage::Dylib) {
-        write_cargo_config(&project_path);
-    }
+    //
+    // Write the shared `target-dir` `.cargo/config.toml` for both
+    // game and dylib-extension projects; the new architecture's
+    // unified game template always produces a cdylib (so the editor
+    // can dlopen it) and routes builds through the shared cache
+    // regardless of `linkage`.
+    write_cargo_config(&project_path);
 
     // Local-dev convenience: when the editor is running from its
     // own source checkout, append a `[patch.crates-io]` section to
@@ -308,11 +312,17 @@ pub(crate) fn jackdaw_dev_checkout() -> Option<PathBuf> {
             return Some(path);
         }
     }
+    // After Phase 1's workspace restructure, this code lives in
+    // `crates/jackdaw_editor`, so `CARGO_MANIFEST_DIR` resolves to the
+    // crate's dir, not the workspace root. Walk up to find a parent
+    // that contains the `crates/` directory (i.e., the workspace root).
     let compile_time = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    if compile_time.join("crates").is_dir() {
-        Some(compile_time)
-    } else {
-        None
+    let mut candidate = compile_time.as_path();
+    loop {
+        if candidate.join("crates").is_dir() && candidate.join("Cargo.toml").is_file() {
+            return Some(candidate.to_path_buf());
+        }
+        candidate = candidate.parent()?;
     }
 }
 
@@ -336,7 +346,7 @@ fn append_patch_section(project_path: &Path, checkout: &Path) -> std::io::Result
          # Safe to delete once jackdaw is published with the matching\n\
          # version.\n\
          [patch.crates-io]\n\
-         jackdaw = {{ path = \"{checkout_str}\" }}\n\
+         jackdaw_editor = {{ path = \"{checkout_str}/crates/jackdaw_editor\" }}\n\
          jackdaw_api = {{ path = \"{checkout_str}/crates/jackdaw_api\" }}\n\
          jackdaw_api_internal = {{ path = \"{checkout_str}/crates/jackdaw_api_internal\" }}\n\
          jackdaw_runtime = {{ path = \"{checkout_str}/crates/jackdaw_runtime\" }}\n",
@@ -360,36 +370,21 @@ fn append_patch_section(project_path: &Path, checkout: &Path) -> std::io::Result
 /// which resolves to `~/.cache/jackdaw/<version>/target/` on the
 /// current platform.
 ///
-/// We never clobber an existing `[build]` table; if the user has
-/// customised theirs, we leave it alone. The template ships an
-/// empty config so the first scaffold writes the full body.
+/// Always overwrites: the template ships a placeholder comment
+/// header; the scaffolder replaces it with the real `[build]`
+/// section. A returning user who has customised their config is
+/// not in scope here (this only runs at create time).
 fn write_cargo_config(project_path: &Path) {
     let target_dir = crate::cache_manager::target_dir();
     let cargo_dir = project_path.join(".cargo");
     let config_path = cargo_dir.join("config.toml");
-    let new_body = render_cargo_config(&target_dir);
+    let body = render_cargo_config(&target_dir);
 
-    let final_body = if config_path.exists() {
-        let existing = match std::fs::read_to_string(&config_path) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("Failed to read {}: {e}", config_path.display());
-                return;
-            }
-        };
-        if existing.contains("[build]") {
-            return;
-        }
-        format!("{existing}\n\n{new_body}")
-    } else {
-        if let Err(e) = std::fs::create_dir_all(&cargo_dir) {
-            warn!("Failed to create {}: {e}", cargo_dir.display());
-            return;
-        }
-        new_body
-    };
-
-    if let Err(e) = std::fs::write(&config_path, final_body) {
+    if let Err(e) = std::fs::create_dir_all(&cargo_dir) {
+        warn!("Failed to create {}: {e}", cargo_dir.display());
+        return;
+    }
+    if let Err(e) = std::fs::write(&config_path, &body) {
         warn!("Failed to write {}: {e}", config_path.display());
         return;
     }
@@ -457,9 +452,10 @@ fn scaffold_from_local_path(
         });
     }
 
-    if matches!(linkage, TemplateLinkage::Dylib) {
-        write_cargo_config(project_path);
-    }
+    // Unified game template always produces a cdylib + bin and routes
+    // builds through the shared cache regardless of `linkage`.
+    let _ = linkage;
+    write_cargo_config(project_path);
     Ok(project_path.to_path_buf())
 }
 
