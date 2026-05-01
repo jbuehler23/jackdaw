@@ -211,22 +211,6 @@ struct NewProjectState {
     /// after the scaffold task succeeds so the user lands in the
     /// editor with the game/extension dylib already installed.
     build_task: Option<Task<Result<PathBuf, crate::ext_build::BuildError>>>,
-    /// In-flight `cargo clean -p <crate>` triggered by the
-    /// auto-recovery path when the first install fails with an
-    /// SDK symbol mismatch. When this completes successfully, the
-    /// poller re-runs `build_task` against the same project path.
-    clean_task: Option<Task<Result<(), crate::ext_build::BuildError>>>,
-    /// `true` after we've triggered the clean+rebuild once. Stops
-    /// us from infinite-looping if a second build still fails with
-    /// the same symbol mismatch (indicating the project has some
-    /// other issue).
-    retry_attempted: bool,
-    /// Tunnel from the install-runs-in-commands-queue closure back
-    /// into this poller. The closure pushes its install result
-    /// here; the next frame the poller drains it and either
-    /// proceeds or triggers the auto-clean recovery.
-    metadata_outcome:
-        Option<std::sync::Arc<std::sync::Mutex<Option<Result<(), jackdaw_loader::LoadError>>>>>,
     /// Artifact waiting to be installed by `apply_pending_install`
     /// (runs in `Last`, not `Update`, so modifications to the
     /// `Update` schedule by the game's `GameApp::add_systems` don't
@@ -729,7 +713,6 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
         state.status = Some(format!("Building editor for `{project_name}`…"));
         state.build_progress = Some(std::sync::Arc::clone(&progress));
         state.build_progress_snapshot = Some(crate::ext_build::BuildProgress::default());
-        state.retry_attempted = false;
         state.pending_static_editor_build = Some((root, true));
         return;
     }
@@ -775,7 +758,6 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
         state.status = Some(format!("Building `{project_name}`…"));
         state.build_progress = Some(std::sync::Arc::clone(&progress));
         state.build_progress_snapshot = Some(crate::ext_build::BuildProgress::default());
-        state.retry_attempted = false;
     }
 
     let root_for_task = root;
@@ -2073,7 +2055,6 @@ fn poll_new_project_tasks(
                         state.build_progress = Some(std::sync::Arc::clone(&progress));
                         state.build_progress_snapshot =
                             Some(crate::ext_build::BuildProgress::default());
-                        state.retry_attempted = false;
                         state.pending_static_editor_build = Some((project_path.clone(), true));
                     }
                     TemplateLinkage::Dylib => {
@@ -2104,8 +2085,7 @@ fn poll_new_project_tasks(
     }
 
     // Build task completed. Dylib: stash the artifact for the
-    // install-in-Last step (which also drives the SDK-mismatch
-    // auto-recovery). Static: stash the project dir for
+    // install-in-Last step. Static: stash the project dir for
     // `apply_pending_static_open`, which calls `enter_project`.
     if let Some(task) = state.build_task.as_mut()
         && let Some(result) = future::block_on(future::poll_once(task))
@@ -2116,10 +2096,6 @@ fn poll_new_project_tasks(
             Ok(artifact_or_project) => match linkage {
                 TemplateLinkage::Dylib => {
                     info!("Build produced {}", artifact_or_project.display());
-                    let outcome: std::sync::Arc<
-                        std::sync::Mutex<Option<Result<(), jackdaw_loader::LoadError>>>,
-                    > = std::sync::Arc::new(std::sync::Mutex::new(None));
-                    state.metadata_outcome = Some(outcome);
                     state.pending_install = Some(artifact_or_project);
                 }
                 TemplateLinkage::Static => {
@@ -2128,7 +2104,6 @@ fn poll_new_project_tasks(
                     // build-progress state so the footer collapses.
                     info!("Static build succeeded: {}", artifact_or_project.display());
                     state.pending_project = None;
-                    state.retry_attempted = false;
                 }
             },
             Err(err) => {
@@ -2138,93 +2113,6 @@ fn poll_new_project_tasks(
                          Fix the issue and try opening the project again."
                 ));
                 state.pending_project = None;
-                state.retry_attempted = false;
-            }
-        }
-    }
-
-    // Install-outcome poller: reads the Arc<Mutex<...>> we handed
-    // to the commands.queue closure. On Ok we're done. On an
-    // Err-with-symbol-mismatch, kick off `cargo clean` (one retry
-    // max, tracked via `retry_attempted`).
-    if let Some(outcome) = state.metadata_outcome.clone() {
-        let taken = {
-            let Ok(mut slot) = outcome.lock() else {
-                return;
-            };
-            slot.take()
-        };
-        if let Some(result) = taken {
-            state.metadata_outcome = None;
-            match result {
-                Ok(()) => {
-                    state.retry_attempted = false;
-                }
-                Err(err) if err.is_symbol_mismatch() && !state.retry_attempted => {
-                    state.retry_attempted = true;
-                    let Some(project) = state.pending_project.clone() else {
-                        state.status = Some("Auto-recovery failed: no project context".into());
-                        return;
-                    };
-                    state.status =
-                        Some("Editor SDK changed since last build; cleaning project cache…".into());
-                    let project_for_task = project;
-                    state.clean_task = Some(AsyncComputeTaskPool::get().spawn(async move {
-                        crate::ext_build::cargo_clean_project(&project_for_task)
-                    }));
-                }
-                Err(err) => {
-                    warn!("Install failed (no retry): {err}");
-                    state.status = Some(format!(
-                        "Install failed: {err}. Try opening the project again."
-                    ));
-                    state.pending_project = None;
-                    state.retry_attempted = false;
-                }
-            }
-        }
-    }
-
-    // Clean-task completed; kick off a fresh build.
-    if let Some(task) = state.clean_task.as_mut()
-        && let Some(result) = future::block_on(future::poll_once(task))
-    {
-        state.clean_task = None;
-        match result {
-            Ok(()) => {
-                let Some(project) = state.pending_project.clone() else {
-                    return;
-                };
-                let project_name = project
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("project")
-                    .to_owned();
-                state.status = Some(format!("Rebuilding `{project_name}` from scratch…"));
-                // Fresh progress sink; the old one had the prior
-                // build's log tail, which would mislead the user.
-                let progress = std::sync::Arc::new(std::sync::Mutex::new(
-                    crate::ext_build::BuildProgress::default(),
-                ));
-                state.build_progress = Some(std::sync::Arc::clone(&progress));
-                state.build_progress_snapshot = Some(crate::ext_build::BuildProgress::default());
-
-                let project_for_task = project;
-                let progress_for_task = std::sync::Arc::clone(&progress);
-                // SDK symbol mismatch is a dylib-only failure mode.
-                state.build_task = Some(AsyncComputeTaskPool::get().spawn(async move {
-                    crate::ext_build::build_extension_project_with_progress(
-                        &project_for_task,
-                        Some(progress_for_task),
-                        TemplateLinkage::Dylib,
-                    )
-                }));
-            }
-            Err(err) => {
-                warn!("Cargo clean failed: {err}");
-                state.status = Some(format!("Auto-recovery failed during cargo clean: {err}"));
-                state.pending_project = None;
-                state.retry_attempted = false;
             }
         }
     }
@@ -2359,10 +2247,12 @@ fn refresh_build_progress_ui(
 /// `schedule_scope`. See the plugin-registration block at the top
 /// of this file for context.
 ///
-/// Takes `&mut World` directly; reads `NewProjectState.pending_install`,
-/// calls `handle_install_from_path`, writes the install result into
-/// `NewProjectState.metadata_outcome` for the auto-recovery poller
-/// to pick up on the next frame.
+/// On success: closes the modal and transitions to the editor.
+/// On `LoadError::SymbolMismatch`: closes the modal and opens an info
+/// dialog with instructions to run `cargo clean -p <name> && cargo
+/// build` from the project directory.
+/// On any other error: closes the modal and opens an info dialog
+/// with the error message.
 fn apply_pending_install(world: &mut World) {
     let artifact_opt = world
         .resource_mut::<NewProjectState>()
@@ -2371,25 +2261,51 @@ fn apply_pending_install(world: &mut World) {
     let Some(artifact) = artifact_opt else {
         return;
     };
-    let outcome_arc = world.resource::<NewProjectState>().metadata_outcome.clone();
 
     let result = crate::extensions_dialog::handle_install_from_path(world, artifact);
-    let is_ok = result.is_ok();
 
-    if let Some(arc) = outcome_arc
-        && let Ok(mut slot) = arc.lock()
-    {
-        *slot = Some(result.map(|_| ()));
-    }
-
-    if is_ok {
-        let project = world
-            .resource_mut::<NewProjectState>()
-            .pending_project
-            .clone();
-        close_new_project_modal(world);
-        if let Some(p) = project {
-            transition_to_editor(world, p);
+    match result {
+        Ok(_) => {
+            let project = world
+                .resource_mut::<NewProjectState>()
+                .pending_project
+                .clone();
+            close_new_project_modal(world);
+            if let Some(p) = project {
+                transition_to_editor(world, p);
+            }
+        }
+        Err(ref err) if err.is_symbol_mismatch() => {
+            let project_name = world
+                .resource::<NewProjectState>()
+                .pending_project
+                .as_deref()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+                .unwrap_or("project")
+                .to_owned();
+            warn!("Install failed (SDK mismatch) for `{project_name}`");
+            close_new_project_modal(world);
+            world.trigger(
+                jackdaw_feathers::dialog::OpenDialogEvent::new("SDK mismatch", "OK")
+                    .with_description(format!(
+                        "Project `{project_name}` was built against a different jackdaw \
+                         SDK build. Run this from the project directory to refresh:\n\n\
+                         \tcargo clean -p {project_name}\n\
+                         \tcargo build\n\n\
+                         Then re-open the project."
+                    ))
+                    .without_cancel(),
+            );
+        }
+        Err(err) => {
+            warn!("Install failed: {err}");
+            close_new_project_modal(world);
+            world.trigger(
+                jackdaw_feathers::dialog::OpenDialogEvent::new("Install failed", "OK")
+                    .with_description(format!("{err}"))
+                    .without_cancel(),
+            );
         }
     }
 }
