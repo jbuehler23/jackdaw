@@ -11,6 +11,7 @@ use bevy::image::ImageLoaderSettings;
 use bevy::prelude::*;
 use bevy::reflect::serde::{ReflectDeserializerProcessor, TypedReflectDeserializer};
 use bevy::reflect::{TypeRegistration, TypeRegistry};
+use jackdaw_jsn::JsnPlugin;
 use jackdaw_jsn::format::{JsnAssets, JsnScene, JsnSceneV2};
 use serde::Deserializer;
 use serde::de::{DeserializeSeed, Visitor};
@@ -25,16 +26,15 @@ pub struct JackdawPlugin;
 
 impl Plugin for JackdawPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<jackdaw_jsn::Brush>()
-            .register_type::<jackdaw_jsn::BrushGroup>()
-            .register_type::<jackdaw_jsn::BrushFaceData>()
-            .register_type::<jackdaw_jsn::BrushPlane>()
-            .register_type::<jackdaw_jsn::CustomProperties>()
-            .register_type::<jackdaw_jsn::PropertyValue>()
-            .register_type::<jackdaw_jsn::GltfSource>()
-            .register_type::<jackdaw_jsn::JsnPrefab>()
-            .register_type::<jackdaw_jsn::NavmeshRegion>()
-            .register_type::<jackdaw_jsn::Terrain>();
+        // `JsnPlugin` registers every authored scene type for
+        // reflection AND installs `MeshRebuildPlugin`, which calls
+        // `embedded_asset!` on the bundled grid texture used as the
+        // brush fallback material. Without it the runtime spawns
+        // brushes whose materials reference an unregistered embedded
+        // path and the asset server logs `Path not found:
+        // jackdaw_jsn/../assets/jd_grid.png`. Routing through the
+        // plugin avoids duplicating either responsibility here.
+        app.add_plugins(JsnPlugin::default());
 
         app.init_asset::<JackdawScene>()
             .init_asset_loader::<JackdawSceneLoader>();
@@ -43,7 +43,6 @@ impl Plugin for JackdawPlugin {
             Update,
             (clear_modified_scene_roots, spawn_loaded_scenes).chain(),
         );
-        app.add_observer(jackdaw_jsn::mesh_rebuild::rebuild_brush_meshes);
     }
 }
 
@@ -54,7 +53,18 @@ pub struct JackdawScene {
 }
 
 /// Scene entities become children of the entity this is spawned on.
+///
+/// Requires `Transform` and `Visibility` so the spawned hierarchy has
+/// a propagation backbone: without them, every authored child ends up
+/// with `GlobalTransform`/`InheritedVisibility` but a parent missing
+/// the upstream pair, which breaks transform/visibility propagation
+/// (Bevy emits B0004 warnings and meshes silently fail to render).
+/// The `#[require(...)]` annotation means callers can keep spawning
+/// `JackdawSceneRoot(handle)` on its own; Bevy auto-inserts the
+/// required components if the spawn bundle didn't already include
+/// them.
 #[derive(Component, Deref)]
+#[require(Transform, Visibility)]
 pub struct JackdawSceneRoot(pub Handle<JackdawScene>);
 
 #[derive(Component)]
