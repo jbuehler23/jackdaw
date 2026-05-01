@@ -1,0 +1,63 @@
+[package]
+name = "{{project-name}}"
+authors = ["{{authors}}"]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Mark as its own workspace root so it doesn't get pulled into
+# whatever parent workspace the user happens to scaffold under.
+[workspace]
+
+# Game logic lives here so both the standalone game binary AND the
+# editor binary share the exact same source.
+[lib]
+path = "src/lib.rs"
+
+# Standalone game runner. `cargo run` (or `cargo play`) launches
+# this without any editor in the loop.
+[[bin]]
+name = "{{project-name}}"
+path = "src/main.rs"
+
+# Editor + game in one statically-linked binary. Compiled in only
+# when the `editor` feature is on; the `cargo editor` alias is the
+# happy-path invocation.
+[[bin]]
+name = "editor"
+path = "src/bin/editor.rs"
+required-features = ["editor"]
+
+[features]
+default = []
+# Pulls in jackdaw and compiles the editor binary alongside the
+# game. Activate via `cargo editor` (alias) or
+# `cargo run --features editor`.
+editor = ["dep:jackdaw"]
+
+[dependencies]
+bevy = "0.18"
+# Static-embed build: jackdaw links into the editor binary as a
+# regular library (no rustc-wrapper, no Windows linker cap to
+# worry about). `default-features = false` drops jackdaw's `dylib`
+# feature; static templates don't need the cdylib proxy.
+#
+# jackdaw 0.4 isn't on crates.io yet; pin to the main branch until
+# it ships. Switch to `jackdaw = { version = "0.4", default-features = false, optional = true }`
+# when available.
+jackdaw = { git = "https://github.com/jbuehler23/jackdaw", branch = "main", default-features = false, optional = true }
+# Claims the SIGINT/SIGTERM handler at startup so Ctrl+C in the
+# terminal actually kills the process. Without this, transitive
+# deps (wgpu, gilrs) install their own handler that swallows the
+# signal and the user is stuck closing the window manually.
+ctrlc = "3"
+
+# Bevy's recommended dev profile. Keeps your game code at
+# opt-level = 1 (fast recompiles) while all third-party deps
+# (Bevy, jackdaw, everything in the transitive graph) stay at
+# opt-level = 3.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

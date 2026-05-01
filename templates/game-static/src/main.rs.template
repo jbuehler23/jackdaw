@@ -1,0 +1,21 @@
+//! Standalone game binary for {{project-name}}.
+//!
+//! `cargo run` launches the game in its own window with no editor
+//! in the loop. For the editor-and-game-together flow, run
+//! `cargo editor` (alias for `cargo run --features editor`).
+
+use bevy::prelude::*;
+
+fn main() -> AppExit {
+    // Install our own Ctrl+C handler before any other crate
+    // claims one. wgpu / gilrs / etc. install handlers that
+    // swallow the signal without exiting, so the binary becomes
+    // un-killable from the terminal without this.
+    let _ = ctrlc::set_handler(|| std::process::exit(130));
+
+    App::new()
+        .set_error_handler(bevy::ecs::error::error)
+        .add_plugins(DefaultPlugins)
+        .add_plugins({{crate_name}}::MyGamePlugin)
+        .run()
+}

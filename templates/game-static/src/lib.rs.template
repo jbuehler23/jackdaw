@@ -1,0 +1,85 @@
+//! {{project-name}}: gameplay code shared between the standalone
+//! binary (`cargo run`, `cargo play`) and the editor binary
+//! (`cargo editor`).
+//!
+//! Jackdaw follows the same content/code split as
+//! Unity/Unreal/Godot:
+//!
+//! - **Scene content** (entities, their components, their
+//!   positions) lives in the project's `.jsn` scene file. You
+//!   author this in the viewport + hierarchy + inspector.
+//! - **Game behaviour** (systems that move things, handle input,
+//!   run every frame) lives in this file's [`MyGamePlugin`].
+//!
+//! No entities are spawned from code. Add them in the editor.
+//!
+//! # Try it
+//!
+//! 1. `cargo editor` (alias for `cargo run --features editor`).
+//!    The editor opens.
+//! 2. File → Open Project. Pick this directory.
+//! 3. In the hierarchy, right-click → Add → Cube.
+//! 4. In the inspector, Add Component → `SpinningCube`. Set
+//!    `speed` to e.g. `1.5`.
+//! 5. File → Save.
+//! 6. Click Play. The cube spins. Drag `speed` to change it live.
+//! 7. Click Stop. The authored entity is preserved.
+//! 8. `cargo play` (or `cargo run`) launches the same game without
+//!    the editor in the loop.
+
+use bevy::prelude::*;
+
+/// Your game's Bevy plugin. Register components, systems,
+/// observers, and resources here the same way you would in any
+/// standalone Bevy app.
+///
+/// `Update` systems are gated through [`play_gate::is_playing`] so
+/// they only run while the editor's PIE play mode is active. In
+/// standalone (no editor compiled in) the gate is a no-op and the
+/// systems run every frame.
+#[derive(Default)]
+pub struct MyGamePlugin;
+
+impl Plugin for MyGamePlugin {
+    fn build(&self, app: &mut App) {
+        app.register_type::<SpinningCube>().add_systems(
+            Update,
+            spin_cube.run_if(play_gate::is_playing),
+        );
+    }
+}
+
+/// Spin-rate in radians per second. Attach to any scene entity in
+/// the inspector; [`spin_cube`] rotates every entity carrying it
+/// while play is active.
+#[derive(Component, Reflect, Default)]
+#[reflect(Component, Default)]
+pub struct SpinningCube {
+    pub speed: f32,
+}
+
+fn spin_cube(time: Res<Time>, mut cubes: Query<(&SpinningCube, &mut Transform)>) {
+    let dt = time.delta_secs();
+    for (cube, mut transform) in &mut cubes {
+        transform.rotate_y(cube.speed * dt);
+    }
+}
+
+/// Bridges the editor's `PlayState` to gameplay code without
+/// requiring the user to depend on jackdaw in standalone builds.
+/// In `cargo run` (no editor): always returns `true` so gameplay
+/// systems run every frame. In `cargo editor` (editor compiled
+/// in): returns `true` only while the PIE state is `Playing`.
+pub mod play_gate {
+    #[cfg(feature = "editor")]
+    pub fn is_playing(
+        state: bevy::prelude::Res<bevy::state::state::State<jackdaw::prelude::PlayState>>,
+    ) -> bool {
+        matches!(*state.get(), jackdaw::prelude::PlayState::Playing)
+    }
+
+    #[cfg(not(feature = "editor"))]
+    pub fn is_playing() -> bool {
+        true
+    }
+}

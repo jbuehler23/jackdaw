@@ -1,0 +1,27 @@
+//! Editor + game binary for {{project-name}}.
+//!
+//! Compiled only when the `editor` feature is on (e.g.
+//! `cargo editor` / `cargo run --features editor`). Runs the
+//! jackdaw editor with this project's [`MyGamePlugin`] statically
+//! linked, so PIE Play runs the game's systems in-process inside
+//! the editor's window.
+//!
+//! For a vanilla game runner with no editor, see `src/main.rs`.
+
+use bevy::prelude::*;
+use jackdaw::prelude::*;
+
+fn main() -> AppExit {
+    // Install our own Ctrl+C handler before any other crate
+    // claims one. wgpu / gilrs / etc. install handlers that
+    // swallow the signal without exiting, so the binary becomes
+    // un-killable from the terminal without this.
+    let _ = ctrlc::set_handler(|| std::process::exit(130));
+
+    App::new()
+        .set_error_handler(bevy::ecs::error::error)
+        .add_plugins(DefaultPlugins)
+        .add_plugins(EditorPlugins::default())
+        .add_plugins({{crate_name}}::MyGamePlugin)
+        .run()
+}

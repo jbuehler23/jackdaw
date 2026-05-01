@@ -1,0 +1,36 @@
+//! {{project-name}} — a jackdaw extension.
+
+use std::sync::Arc;
+
+// `use bevy::prelude::*` reaches everything — jackdaw's SDK proxy
+// exposes bevy primitives and jackdaw extension APIs
+// (`JackdawExtension`, `ExtensionContext`, `WindowDescriptor`, …)
+// through a single unified prelude. No need for a separate
+// `use jackdaw_api::prelude::*;`.
+use bevy::prelude::*;
+
+pub struct {{crate_name | pascal_case}};
+
+impl JackdawExtension for {{crate_name | pascal_case}} {
+    fn name(&self) -> &str {
+        "{{project-name}}"
+    }
+
+    fn register(&self, ctx: &mut ExtensionContext) {
+        ctx.register_window(WindowDescriptor {
+            id: "{{project-name}}.hello".into(),
+            name: "Hello from {{project-name}}".into(),
+            icon: None,
+            default_area: None,
+            priority: None,
+            build: Arc::new(|world: &mut World, parent: Entity| {
+                world.spawn((
+                    ChildOf(parent),
+                    Text::new("Hello from {{project-name}}!"),
+                ));
+            }),
+        });
+    }
+}
+
+jackdaw_api::export_extension!("{{project-name}}", || Box::new({{crate_name | pascal_case}}));

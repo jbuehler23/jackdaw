@@ -1,0 +1,54 @@
+# {{project-name | title_case}}
+
+A jackdaw game scaffolded from the
+[jackdaw-template-game-static](https://github.com/jbuehler23/jackdaw_template_game_static)
+template.
+
+## Run
+
+```sh
+cargo run
+```
+
+The editor opens. Use **File → Open Project** to open this
+directory. Then author a scene; see the module-level docstring in
+`src/main.rs` for the happy-path walkthrough.
+
+## Shape
+
+This is a single-binary project: jackdaw's editor is linked in as
+a library and your game code lives in `MyGamePlugin` (a regular
+Bevy `Plugin`). There's no dylib loading or rustc-wrapper
+machinery. It builds like any other Bevy crate on every
+platform, including Windows.
+
+Split, Unity/Unreal/Godot-style:
+
+- **Scene content** (entities + components) lives in `.jsn` files
+  in `assets/`, authored through the editor UI.
+- **Game behaviour** (systems, observers, resources) lives in
+  `src/main.rs`.
+
+## Components
+
+Any `#[derive(Component, Reflect, Default)]` struct that's
+registered through `App::register_type::<T>()` shows up
+automatically in the editor's **Add Component** picker.
+`#[reflect(Component, Default)]` is required so the picker can
+see the type.
+
+The scaffold ships with one such component: `SpinningCube`. See
+`src/main.rs` for the shape.
+
+## PlayState gating
+
+Systems that should only run in Play mode (physics, AI, combat,
+anything that shouldn't be ticking while you're editing) go
+behind:
+
+```rust
+.add_systems(Update, my_system.run_if(in_state(PlayState::Playing)))
+```
+
+Editor-time systems (e.g. custom gizmos) can omit the run
+condition and they'll run in both modes.

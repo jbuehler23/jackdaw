@@ -1,0 +1,48 @@
+# {{project-name | title_case}}
+
+A jackdaw extension generated from the
+[jackdaw-template-extension](https://github.com/jbuehler23/jackdaw_template_extension)
+template.
+
+## Build and install
+
+1. Open jackdaw.
+2. **File → Extensions → Build from project folder…**
+3. Select this project's root directory.
+
+Jackdaw runs `cargo build` with `RUSTC_WRAPPER=jackdaw-rustc-wrapper`
+so the produced `.so` links against the editor's shared bevy
+compilation. The resulting dylib is installed to
+`~/.config/jackdaw/extensions/` (platform-specific) and live-loaded
+immediately — your extension's windows, operators, and menu entries
+become available the same frame.
+
+## Editing
+
+Put your extension logic inside `register`. `ExtensionContext`
+exposes the registries (`register_window`, `register_operator`,
+`register_menu_entry`, `register_panel_extension`). Each registration
+is reversible — reloading the extension cleans up what the previous
+version registered.
+
+## Rebuild
+
+Edit the code, save, click **Build from project folder…** again.
+Future live-reload will do this automatically on source change.
+
+## Why `bevy` is declared but the rlib is thrown away
+
+Bevy's derive macros (`#[derive(Component)]`, `#[derive(Resource)]`)
+read `CARGO_MANIFEST_DIR/Cargo.toml` at expansion time to figure
+out how to name bevy's crate. `bevy = "0.18"` in `[dependencies]`
+is just there so the macros emit correct paths. Cargo compiles
+the real bevy into this project's `target/` on the first build,
+but that `libbevy-<hash>.rlib` is never actually linked: jackdaw's
+rustc wrapper rewrites `--extern bevy=<rlib>` to point at
+`libjackdaw_sdk.so` so the TypeIds in your cdylib match the
+editor's.
+
+`jackdaw_api` isn't declared in Cargo.toml — the wrapper injects
+its `--extern` flag unconditionally. `use bevy::prelude::*;`
+reaches both bevy and jackdaw extension APIs through a single
+unified prelude.

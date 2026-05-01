@@ -178,8 +178,26 @@ pub(crate) fn build_inspector_displays(
                 {
                     return None;
                 }
-                // AST filter: only show components tracked in the AST
-                if !jsn_type_paths.is_empty() && !jsn_type_paths.contains(full_path) {
+                // AST filter: hide Bevy-internal components that
+                // aren't tracked in the scene file. User-defined
+                // components — anything outside the `bevy::*`,
+                // `core::*`, `std::*`, and `jackdaw_*` namespaces —
+                // are always shown so the inspector reflects the
+                // actual ECS state. Without this exception, a user
+                // component newly added via the picker would be
+                // invisible if `AddComponent::execute`'s AST
+                // serialization failed silently (e.g., a struct
+                // field whose `Reflect` impl can't round-trip
+                // through `TypedReflectSerializer`), leaving the
+                // user wondering whether the click registered.
+                let is_user_type = !full_path.starts_with("bevy")
+                    && !full_path.starts_with("core")
+                    && !full_path.starts_with("std")
+                    && !full_path.starts_with("jackdaw");
+                if !is_user_type
+                    && !jsn_type_paths.is_empty()
+                    && !jsn_type_paths.contains(full_path)
+                {
                     return None;
                 }
                 let short = table.short_path().to_string();

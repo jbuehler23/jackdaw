@@ -255,14 +255,46 @@ impl EditorCommand for AddComponent {
             &registry,
         );
 
-        // Sync the explicitly-added component to AST
+        // Sync the explicitly-added component to AST so it
+        // round-trips through scene save/load and the inspector's
+        // AST filter recognises it. Two failure modes worth
+        // logging because they leave the entity in a state the
+        // inspector might gloss over:
+        //
+        //   * Reflection-based serialization fails (the user's
+        //     `Reflect` impl couldn't be coerced to JSON via
+        //     `TypedReflectSerializer`). The component is on the
+        //     entity but the AST doesn't know about it; the
+        //     inspector's user-type fallback in
+        //     `component_display::build_inspector_displays` shows
+        //     it anyway, but save/load won't preserve it.
+        //   * The target entity isn't tracked in the AST (e.g.,
+        //     it was spawned outside the scene-loader path);
+        //     `set_component` is a silent no-op. Same UX
+        //     consequence as above.
         let serializer =
             bevy::reflect::serde::TypedReflectSerializer::new(default_value.as_ref(), &registry);
-        if let Ok(json_value) = serde_json::to_value(&serializer) {
-            drop(registry);
-            world
-                .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-                .set_component(self.entity, &self.type_path, json_value);
+        match serde_json::to_value(&serializer) {
+            Ok(json_value) => {
+                drop(registry);
+                let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
+                let entity_in_ast = ast.contains_entity(self.entity);
+                ast.set_component(self.entity, &self.type_path, json_value);
+                if !entity_in_ast {
+                    warn!(
+                        "AddComponent: entity {:?} is not tracked in the scene AST; \
+                         {} is on the entity but won't persist through save/load.",
+                        self.entity, self.type_path
+                    );
+                }
+            }
+            Err(err) => {
+                warn!(
+                    "AddComponent: failed to serialize default `{}` for AST: {err}. \
+                     Component is on the entity but the AST doesn't track it.",
+                    self.type_path
+                );
+            }
         }
 
         // Sync any components added by #[require] to the AST so they're

@@ -1,0 +1,46 @@
+[package]
+name = "{{project-name}}"
+authors = ["{{authors}}"]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Mark as its own workspace root so it doesn't get pulled into
+# whatever parent workspace the user happens to scaffold under.
+[workspace]
+
+# Dual target: `[lib]` lets other jackdaw projects depend on this
+# extension as a plain library and register it into their own
+# editor binary via
+# `EditorPlugin::new().with_extension("{{project-name}}", || Box::new({{crate_name | pascal_case}}))`.
+# `[[bin]]` gives you a local launcher: `cargo run` spawns a
+# jackdaw editor with only this extension registered, so you can
+# exercise it end-to-end without a separate editor project.
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "{{project-name}}"
+path = "src/main.rs"
+
+[dependencies]
+bevy = "0.18"
+# Static-embed build: jackdaw links into this binary as a plain
+# library, not a dylib. No rustc-wrapper, no Windows LNK1189/LNK1181
+# failure modes. Builds like any other Bevy project.
+#
+# `default-features = false` drops jackdaw's `dylib` feature, which
+# would otherwise pull in `jackdaw_sdk`'s proxy dylib (the Rust
+# `dylib` crate-type that hits Windows MSVC's 65,535 export cap).
+# The static path doesn't need it.
+#
+# jackdaw 0.4 isn't on crates.io yet; pin to the main branch until
+# it ships. Switch to `jackdaw = { version = "0.4", default-features = false }`
+# when available.
+jackdaw = { git = "https://github.com/jbuehler23/jackdaw", branch = "main", default-features = false }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

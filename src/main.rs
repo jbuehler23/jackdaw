@@ -27,19 +27,40 @@ fn main() -> AppExit {
     let project_root = jackdaw::project::read_last_project()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
-    // If the parent process respawned us after scaffolding or
-    // installing a game, skip the launcher entirely and jump back
-    // to wherever the user was. The parent already built +
-    // installed the dylib; the startup loader will pick it up
-    // normally, so we don't need to rebuild.
+    // Auto-open the last project on launch. The launcher's project
+    // picker is most useful on first launch (no recent projects to
+    // resume) and when explicitly switching projects; for the
+    // common case of "I just built my game and want to keep
+    // editing", going through it again is a wasted click. If the
+    // last-recent path no longer exists on disk (deleted, renamed,
+    // moved), or doesn't have a `Cargo.toml`, fall back to the
+    // picker so the user isn't stuck on an error modal.
+    //
+    // To force the picker (e.g., to switch projects from the
+    // command line), set `JACKDAW_PICK=1` or remove the most
+    // recent entry from `~/.config/jackdaw/recent.json`.
     let respawn_skip_build = std::env::var_os(jackdaw::restart::ENV_SKIP_INITIAL_BUILD).is_some();
-    let auto_open = if respawn_skip_build {
+    let force_picker = std::env::var_os("JACKDAW_PICK").is_some();
+    let auto_open = if force_picker {
+        None
+    } else if respawn_skip_build {
+        // Respawn after a scaffold/install: parent already built,
+        // so just transition into the editor without a build step.
         jackdaw::project::read_last_project().map(|path| jackdaw::project_select::PendingAutoOpen {
             path,
             skip_build: true,
         })
     } else {
-        None
+        // Normal launch: re-open the last project, running through
+        // the standard build → install/handoff path. Validates the
+        // path so a renamed-out-from-under-us project doesn't lock
+        // the user in a broken state.
+        jackdaw::project::read_last_project()
+            .filter(|p| p.is_dir() && p.join("Cargo.toml").is_file())
+            .map(|path| jackdaw::project_select::PendingAutoOpen {
+                path,
+                skip_build: false,
+            })
     };
 
     let mut app = App::new();

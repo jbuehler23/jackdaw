@@ -236,6 +236,98 @@ pub fn build_extension_project_with_progress(
         cmd.env("JACKDAW_SDK_DEPS", &sdk.deps);
     }
 
+    run_cargo_with_progress(cmd, sink.as_ref())?;
+
+    match linkage {
+        TemplateLinkage::Dylib => {
+            let artifact_name = artifact_file_name(&project_dir);
+            let artifact = project_dir.join("target/debug").join(&artifact_name);
+            if !artifact.is_file() {
+                return Err(BuildError::OutputNotProduced { expected: artifact });
+            }
+            Ok(artifact)
+        }
+        // Static builds have no cdylib to install; return the project
+        // dir so the caller can `enter_project(..)` on it.
+        TemplateLinkage::Static => Ok(project_dir),
+    }
+}
+
+/// Build a static-template project's editor binary with the
+/// `editor` cargo feature on. Used by the launcher's
+/// background-build flow to produce
+/// `<project>/target/debug/editor`, which carries the user's
+/// `MyGamePlugin` statically linked next to jackdaw's editor stack.
+///
+/// Streams progress into `sink` the same way
+/// [`build_extension_project_with_progress`] does. Returns the path
+/// to the built binary on success; the caller can then spawn it as
+/// a subprocess to hand off the editor session.
+pub fn build_static_editor_with_progress(
+    project_dir: &Path,
+    sink: Option<Arc<Mutex<BuildProgress>>>,
+) -> Result<PathBuf, BuildError> {
+    let project_dir = project_dir
+        .canonicalize()
+        .map_err(|_| BuildError::NotADirectory(project_dir.to_path_buf()))?;
+    if !project_dir.is_dir() {
+        return Err(BuildError::NotADirectory(project_dir));
+    }
+    let manifest = project_dir.join("Cargo.toml");
+    if !manifest.is_file() {
+        return Err(BuildError::MissingCargoToml(project_dir));
+    }
+
+    if let Some(ref s) = sink
+        && let Some(total) = estimate_total_artifacts(&project_dir)
+        && let Ok(mut g) = s.lock()
+    {
+        g.artifacts_total = Some(total);
+    }
+
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&project_dir);
+    cmd.args([
+        "build",
+        "--manifest-path",
+        manifest
+            .to_str()
+            .expect("Cargo.toml path must be valid UTF-8"),
+        "--bin",
+        "editor",
+        "--features",
+        "editor",
+        "--message-format=json-render-diagnostics",
+    ]);
+
+    run_cargo_with_progress(cmd, sink.as_ref())?;
+
+    let bin_name = if cfg!(target_os = "windows") {
+        "editor.exe"
+    } else {
+        "editor"
+    };
+    let bin = project_dir.join("target/debug").join(bin_name);
+    if !bin.is_file() {
+        return Err(BuildError::OutputNotProduced { expected: bin });
+    }
+    Ok(bin)
+}
+
+/// Spawn `cmd` with stdout/stderr piped, pump cargo's JSON
+/// progress stream into `sink`, and wait for completion. Marks the
+/// sink `finished = true` on the way out (success or failure) and
+/// returns a [`BuildError::BuildFailed`] with a short stderr tail
+/// when cargo exits non-zero.
+///
+/// Shared between [`build_extension_project_with_progress`] (used
+/// by the dylib install flow + the original Phase D scaffold-time
+/// build) and [`build_static_editor_with_progress`] (used by the
+/// background static-editor handoff).
+fn run_cargo_with_progress(
+    mut cmd: Command,
+    sink: Option<&Arc<Mutex<BuildProgress>>>,
+) -> Result<(), BuildError> {
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -244,7 +336,7 @@ pub fn build_extension_project_with_progress(
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
 
-    let stdout_sink = sink.clone();
+    let stdout_sink = sink.cloned();
     let stdout_handle = thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines().map_while(Result::ok) {
@@ -252,7 +344,7 @@ pub fn build_extension_project_with_progress(
         }
     });
 
-    let stderr_sink = sink.clone();
+    let stderr_sink = sink.cloned();
     let stderr_tail: Arc<Mutex<VecDeque<String>>> =
         Arc::new(Mutex::new(VecDeque::with_capacity(LOG_TAIL_CAPACITY)));
     let stderr_tail_for_thread = Arc::clone(&stderr_tail);
@@ -277,7 +369,7 @@ pub fn build_extension_project_with_progress(
     let _ = stdout_handle.join();
     let _ = stderr_handle.join();
 
-    if let Some(ref s) = sink
+    if let Some(s) = sink
         && let Ok(mut g) = s.lock()
     {
         g.finished = true;
@@ -293,20 +385,7 @@ pub fn build_extension_project_with_progress(
             stderr_tail: tail,
         });
     }
-
-    match linkage {
-        TemplateLinkage::Dylib => {
-            let artifact_name = artifact_file_name(&project_dir);
-            let artifact = project_dir.join("target/debug").join(&artifact_name);
-            if !artifact.is_file() {
-                return Err(BuildError::OutputNotProduced { expected: artifact });
-            }
-            Ok(artifact)
-        }
-        // Static builds have no cdylib to install; return the project
-        // dir so the caller can `enter_project(..)` on it.
-        TemplateLinkage::Static => Ok(project_dir),
-    }
+    Ok(())
 }
 
 /// Parse a single line from `cargo --message-format=json-…`. On a

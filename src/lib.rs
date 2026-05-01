@@ -8,6 +8,7 @@ pub mod asset_catalog;
 pub mod brush;
 pub mod brush_drag_ops;
 pub mod brush_element_ops;
+pub mod build_status;
 pub mod builtin_extensions;
 pub mod clip_ops;
 pub mod commands;

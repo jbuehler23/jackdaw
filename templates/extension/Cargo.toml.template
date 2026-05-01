@@ -1,0 +1,25 @@
+[package]
+name = "{{project-name}}"
+authors = ["{{authors}}"]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Mark as its own workspace root so it doesn't get pulled into
+# whatever parent workspace the user happens to scaffold under.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+# `bevy` is a plain crates.io dep so bevy's derive macros find it
+# in the manifest and emit correct `::bevy::…` paths. When jackdaw
+# builds this project via **File > Extensions > Build from project
+# folder…** it sets `RUSTC_WRAPPER=jackdaw-rustc-wrapper`, which
+# rewrites `--extern bevy=` at the editor's `libjackdaw_sdk.so` so
+# TypeIds match.
+#
+# `jackdaw_api` is never declared here — the wrapper injects its
+# `--extern` flag unconditionally.
+[dependencies]
+bevy = "0.18"

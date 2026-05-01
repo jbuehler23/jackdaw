@@ -1,0 +1,14 @@
+[template]
+cargo_generate_version = ">=0.10.0"
+
+# Only `.template` files are processed through Liquid substitution.
+# Everything else (README.md, LICENSE files, dotfiles) is copied
+# verbatim. The post-generate hook renames the `.template` files.
+include = ["*.template"]
+ignore = [
+    "target",
+    "README.md",
+]
+
+[hooks]
+post = ["post-generate.rhai"]
