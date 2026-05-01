@@ -26,13 +26,10 @@ path = "src/main.rs"
 [dependencies]
 bevy = "0.18"
 # Static-embed build: jackdaw links into this binary as a plain
-# library, not a dylib. No rustc-wrapper, no Windows LNK1189/LNK1181
-# failure modes. Builds like any other Bevy project.
-#
-# `default-features = false` drops jackdaw's `dylib` feature, which
-# would otherwise pull in `jackdaw_sdk`'s proxy dylib (the Rust
-# `dylib` crate-type that hits Windows MSVC's 65,535 export cap).
-# The static path doesn't need it.
+# library, not a dylib. This is the recommended path. Builds with
+# vanilla cargo, no rustc-wrapper, no SDK proxy, and no
+# platform-specific link issues. `default-features = false` keeps
+# us off the experimental dylib path.
 #
 # jackdaw 0.4 isn't on crates.io yet; pin to the main branch until
 # it ships. Switch to `jackdaw = { version = "0.4", default-features = false }`

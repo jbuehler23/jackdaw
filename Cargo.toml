@@ -9,28 +9,34 @@ readme = "README.md"
 keywords = ["bevy", "editor", "3d", "level-editor"]
 categories = ["game-development", "graphics"]
 exclude = ["assets/environment_maps/"]
+# The package now ships two binaries: `jackdaw` (the editor) and
+# `jackdaw-rustc-wrapper` (the rustc interceptor used by scaffolded
+# dylib projects). `default-run` makes `cargo run` resolve to the
+# editor without an explicit `--bin` flag; the wrapper still builds
+# alongside via `cargo build` and is installed by `cargo install`.
+default-run = "jackdaw"
 
 [features]
 default = []
 hot-reload = ["dep:bevy_simple_subsecond_system"]
-# Opt-in dylib-based extension flow. Enables Bevy's
-# `dynamic_linking` plus Jackdaw's own `bevy_dylib`-style facade
-# so the editor and every loaded extension share one compiled
-# copy of every type that crosses the boundary, and pulls in
-# `jackdaw_sdk` — the proxy dylib that scaffolded extension
-# projects link against via `--extern bevy=libjackdaw_sdk.{so,dll,dylib}`.
+# Experimental dylib-based extension flow. Enables Bevy's
+# `dynamic_linking` plus jackdaw's `bevy_dylib`-style facade so
+# the editor and every loaded extension share one compiled copy
+# of every type that crosses the boundary, and pulls in
+# `jackdaw_sdk`, the proxy dylib that scaffolded extension
+# projects link against via
+# `--extern bevy=libjackdaw_sdk.{so,dll,dylib}`.
 #
-# Off by default: the current stable path for scaffolded projects
-# is the static game/extension templates, which compile plainly
-# against `bevy` and don't need the SDK dylib. Opt in with
-# `--features dylib` when you want to exercise the hot-reloadable
-# dylib extension flow.
+# Off by default. The recommended path is the static templates,
+# which compile plainly against `bevy` and produce normal Bevy
+# crates with no rustc-wrapper, no SDK proxy, and no dlopen.
+# Opt in with `--features dylib` to exercise the experimental
+# hot-reloadable dylib flow. ABI mismatches, install state, and
+# Windows-specific linker setup are still rough; expect issues.
 #
-# Known Windows MSVC limitation: `jackdaw_sdk`'s proxy dylib
-# re-exports all of bevy + jackdaw_api, which on Windows is right
-# up against the 65,535 PE export cap (see issue #183 and
-# bevyengine/bevy#1110). Further symbol-trimming work is needed
-# before this is green on Windows.
+# Windows builds route through `rust-lld` via `.cargo/config.toml`
+# so the SDK proxy clears MSVC's 65,535 PE export cap when this
+# feature is enabled.
 dylib = ["dep:jackdaw_sdk", "jackdaw_api/dynamic_linking"]
 
 [workspace]
@@ -74,6 +80,13 @@ jackdaw_loader.workspace = true
 # `jackdaw_sdk.dll` on Windows, where the dylib's re-exports
 # would otherwise blow past the 65,535 PE export cap. See issue #183.
 jackdaw_sdk = { workspace = true, optional = true }
+# The wrapper's logic also lives in this crate's `[[bin]]` so that
+# `cargo install jackdaw` ships `jackdaw-rustc-wrapper` next to the
+# editor binary. Both binaries call into the same library entry
+# point. For dev builds running from a source checkout the standalone
+# wrapper crate's `[[bin]]` is also available; either path works at
+# runtime.
+jackdaw_rustc_wrapper.workspace = true
 bevy_enhanced_input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -123,6 +136,7 @@ jackdaw_api_macros = { version = "0.4.0", path = "crates/jackdaw_api_macros" }
 jackdaw_dylib = { version = "0.4.0", path = "crates/jackdaw_dylib" }
 jackdaw_loader = { version = "0.4.0", path = "crates/jackdaw_loader" }
 jackdaw_sdk = { version = "0.4.0", path = "crates/jackdaw_sdk" }
+jackdaw_rustc_wrapper = { version = "0.4.0", path = "crates/jackdaw_rustc_wrapper" }
 bevy_enhanced_input = "0.24"
 rfd = "0.15"
 bevy_rerecast = { version = "0.4", default-features = true }

@@ -29,7 +29,11 @@ impl Plugin for ProjectSelectPlugin {
             .add_systems(OnEnter(AppState::ProjectSelect), spawn_project_selector)
             .add_systems(
                 Update,
-                (poll_folder_dialog, refresh_build_progress_ui)
+                (
+                    poll_folder_dialog,
+                    poll_template_folder_dialog,
+                    refresh_build_progress_ui,
+                )
                     .run_if(in_state(AppState::ProjectSelect)),
             )
             // Build-progress polling and task draining run in BOTH
@@ -94,6 +98,12 @@ pub struct PendingAutoOpen {
 #[derive(Resource)]
 struct FolderDialogTask(Task<Option<rfd::FileHandle>>);
 
+/// Resource holding the async folder picker task for the template-
+/// folder Browse button in the New Project modal. Kept separate from
+/// `FolderDialogTask` (which routes results into the Location field).
+#[derive(Resource)]
+struct TemplateFolderDialogTask(Task<Option<rfd::FileHandle>>);
+
 /// Root marker for the New Project modal overlay. Spawned when the
 /// user clicks **+ New Extension** / **+ New Game**; despawned on
 /// Cancel or on successful scaffold.
@@ -110,6 +120,21 @@ struct NewProjectNameInput;
 /// any Bevy-CLI-compatible URL.
 #[derive(Component)]
 struct NewProjectTemplateInput;
+
+/// Wraps the local-path `TextEdit`. Empty by default; when
+/// non-empty it takes precedence over the Git URL on Create.
+#[derive(Component)]
+struct NewProjectLocalTemplateInput;
+
+/// Marks the Browse button next to the local template path field.
+#[derive(Component)]
+struct NewProjectLocalBrowseButton;
+
+/// Wraps the Git branch `TextEdit`. Used only when scaffolding via
+/// the Git URL field; ignored for local-path scaffolds. Default
+/// value comes from `template_branch()`.
+#[derive(Component)]
+struct NewProjectBranchInput;
 
 #[derive(Component)]
 struct NewProjectLocationText;
@@ -1005,7 +1030,16 @@ fn on_linkage_button_click(
         let Some(preset) = world.resource::<NewProjectState>().preset.clone() else {
             return;
         };
-        let new_url = preset.url(linkage);
+        // Re-derive both fields so dev users see the right
+        // pre-fills after toggling Static/Dylib: Local field
+        // tracks `<checkout>/templates/<subdir>` and the Git URL
+        // field stays a real remote.
+        let new_local = preset
+            .local_template_path(linkage)
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        set_local_template_input_text(world, new_local);
+        let new_url = preset.git_url_with_subdir(linkage);
         set_template_input_text(world, new_url);
     });
 }
@@ -1439,8 +1473,10 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         ),
     ));
 
-    // Template URL field. Prefilled from preset+linkage, editable
-    // so power users can point at a fork or custom template.
+    // Template section: shared parent label, then two sub-labelled
+    // rows (Local path and Git URL). The Local path field is empty
+    // by default; when non-empty it takes precedence over the Git
+    // URL on Create.
     world.spawn((
         Text::new("Template"),
         TextFont {
@@ -1451,15 +1487,154 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         TextColor(tokens::TEXT_SECONDARY),
         ChildOf(card),
     ));
+
+    // Sub-label: Local path
+    world.spawn((
+        Text::new("Local path"),
+        TextFont {
+            font: editor_font.clone(),
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        Node {
+            margin: UiRect::top(Val::Px(4.0)),
+            ..Default::default()
+        },
+        ChildOf(card),
+    ));
+    // Row: local-path text input + Browse button
+    let local_row = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                ..Default::default()
+            },
+            ChildOf(card),
+        ))
+        .id();
+    // Mirror the NewProjectTemplateInput pattern: marker + ChildOf
+    // + text_edit in a single bundle. The text_edit widget supplies
+    // its own Node, so we cannot stack another Node onto this entity
+    // (Bevy rejects duplicate components). Layout falls back to the
+    // text_edit's intrinsic width; flex_grow on the input is a
+    // future polish if this looks too narrow next to the Browse
+    // button.
+    let initial_local_path = preset
+        .local_template_path(initial_linkage)
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    world.spawn((
+        NewProjectLocalTemplateInput,
+        ChildOf(local_row),
+        text_edit(
+            TextEditProps::default()
+                .with_placeholder(
+                    "Local folder (e.g. ~/Workspace/jackdaw/templates/game)".to_string(),
+                )
+                .with_default_value(initial_local_path)
+                .allow_empty(),
+        ),
+    ));
+    let local_browse = world
+        .spawn((
+            NewProjectLocalBrowseButton,
+            Node {
+                padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+                ..Default::default()
+            },
+            BackgroundColor(tokens::TOOLBAR_BG),
+            children![(
+                Text::new("Browse..."),
+                TextFont {
+                    font: editor_font.clone(),
+                    font_size: tokens::FONT_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_PRIMARY),
+            )],
+            ChildOf(local_row),
+        ))
+        .id();
+    world.entity_mut(local_browse).observe(on_browse_template_folder);
+
+    // Sub-label: Git URL
+    world.spawn((
+        Text::new("Git URL"),
+        TextFont {
+            font: editor_font.clone(),
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        Node {
+            margin: UiRect::top(Val::Px(4.0)),
+            ..Default::default()
+        },
+        ChildOf(card),
+    ));
+    // Git URL text input. Prefilled from preset+linkage, editable
+    // so power users can point at a fork or custom template.
     world.spawn((
         NewProjectTemplateInput,
         ChildOf(card),
         text_edit(
             TextEditProps::default()
-                .with_placeholder("https://github.com/…/your_template".to_string())
-                .with_default_value(preset.url(initial_linkage))
+                .with_placeholder("https://github.com/.../your_template".to_string())
+                .with_default_value(preset.git_url_with_subdir(initial_linkage))
                 .allow_empty(),
         ),
+    ));
+
+    // Sub-label: Branch
+    world.spawn((
+        Text::new("Branch"),
+        TextFont {
+            font: editor_font.clone(),
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        Node {
+            margin: UiRect::top(Val::Px(4.0)),
+            ..Default::default()
+        },
+        ChildOf(card),
+    ));
+    // Git branch text input. Pre-filled with the configured default
+    // (`template_branch()` honors `JACKDAW_TEMPLATE_BRANCH` and
+    // otherwise returns the compile-time default). Ignored for the
+    // local-path scaffold; the local checkout's working tree IS the
+    // branch.
+    world.spawn((
+        NewProjectBranchInput,
+        ChildOf(card),
+        text_edit(
+            TextEditProps::default()
+                .with_placeholder("main".to_string())
+                .with_default_value(crate::new_project::template_branch())
+                .allow_empty(),
+        ),
+    ));
+
+    // Precedence hint. With both fields populated, the local path
+    // wins; this line tells the user so they aren't surprised.
+    world.spawn((
+        Text::new("If both are filled, the local path is used."),
+        TextFont {
+            font: editor_font.clone(),
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        Node {
+            margin: UiRect::top(Val::Px(4.0)),
+            ..Default::default()
+        },
+        ChildOf(card),
     ));
 
     // Status line
@@ -1621,19 +1796,82 @@ fn on_browse_new_location(
     });
 }
 
+/// Observer for the Browse button on the local template path field.
+/// Opens a folder picker; on completion, writes the picked path into
+/// the `NewProjectLocalTemplateInput` text field via `TextInputQueue`.
+fn on_browse_template_folder(
+    _: On<Pointer<Click>>,
+    mut commands: Commands,
+    raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
+) {
+    let mut dialog = AsyncFileDialog::new().set_title("Select template folder");
+    if let Ok(rh) = raw_handle.single() {
+        // SAFETY: called on the main thread during an observer.
+        let handle = unsafe { rh.get_handle() };
+        dialog = dialog.set_parent(&handle);
+    }
+    // Default starting directory: in-tree templates dir for dev
+    // checkouts, otherwise the user's home directory.
+    let start_dir = crate::new_project::jackdaw_dev_checkout()
+        .map(|p| p.join("templates"))
+        .or_else(dirs::home_dir);
+    if let Some(dir) = start_dir {
+        dialog = dialog.set_directory(dir);
+    }
+    let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_folder().await });
+    commands.queue(move |world: &mut World| {
+        world.insert_resource(TemplateFolderDialogTask(task));
+    });
+}
+
+/// Push a new string into the local template path text input.
+fn set_local_template_input_text(world: &mut World, new_text: String) {
+    use jackdaw_feathers::text_edit::{TextInputQueue, set_text_input_value};
+
+    let mut q = world.query_filtered::<Entity, With<NewProjectLocalTemplateInput>>();
+    let Some(outer) = q.iter(world).next() else {
+        return;
+    };
+    let Some((_wrapper, inner)) = find_text_edit_entities_for_template(world, outer) else {
+        return;
+    };
+    if let Some(mut queue) = world.get_mut::<TextInputQueue>(inner) {
+        set_text_input_value(&mut queue, new_text);
+    }
+}
+
+/// Polling system for `TemplateFolderDialogTask`. Drains the task
+/// when the picker resolves and writes the picked path into the
+/// local template text input.
+fn poll_template_folder_dialog(world: &mut World) {
+    let Some(mut task_res) = world.get_resource_mut::<TemplateFolderDialogTask>() else {
+        return;
+    };
+    let Some(result) = future::block_on(future::poll_once(&mut task_res.0)) else {
+        return;
+    };
+    world.remove_resource::<TemplateFolderDialogTask>();
+    if let Some(handle) = result {
+        let path = handle.path().to_path_buf();
+        set_local_template_input_text(world, path.to_string_lossy().into_owned());
+    }
+}
+
 fn on_create_new_project(
     _: On<Pointer<Click>>,
     mut commands: Commands,
     name_inputs: Query<Entity, With<NewProjectNameInput>>,
     template_inputs: Query<Entity, With<NewProjectTemplateInput>>,
+    local_template_inputs: Query<Entity, With<NewProjectLocalTemplateInput>>,
+    branch_inputs: Query<Entity, With<NewProjectBranchInput>>,
     text_edit_values: Query<&TextEditValue>,
     build_checkbox: Query<
         &jackdaw_feathers::checkbox::CheckboxState,
         With<BuildAfterScaffoldCheckbox>,
     >,
 ) {
-    // Read the name + template URL from the text inputs' synced
-    // TextEditValue.
+    // Read the name, local template path, git URL, and branch from
+    // the text inputs' synced TextEditValue.
     let Some(name_entity) = name_inputs.iter().next() else {
         return;
     };
@@ -1641,7 +1879,19 @@ fn on_create_new_project(
         .get(name_entity)
         .map(|v| v.0.trim().to_string())
         .unwrap_or_default();
-    let template_url_from_input = template_inputs
+    let local_path_from_input = local_template_inputs
+        .iter()
+        .next()
+        .and_then(|e| text_edit_values.get(e).ok())
+        .map(|v| v.0.trim().to_string())
+        .unwrap_or_default();
+    let git_url_from_input = template_inputs
+        .iter()
+        .next()
+        .and_then(|e| text_edit_values.get(e).ok())
+        .map(|v| v.0.trim().to_string())
+        .unwrap_or_default();
+    let branch_from_input = branch_inputs
         .iter()
         .next()
         .and_then(|e| text_edit_values.get(e).ok())
@@ -1649,7 +1899,7 @@ fn on_create_new_project(
         .unwrap_or_default();
     // Snapshot the "Open editor after creating" checkbox into the
     // resource so the post-scaffold poller can branch on it. Falls
-    // back to `true` if the checkbox isn't found (defensive — for
+    // back to `true` if the checkbox isn't found (defensive, for
     // presets that don't render the checkbox UI).
     let build_after_scaffold = build_checkbox
         .iter()
@@ -1676,28 +1926,49 @@ fn on_create_new_project(
                 Some("Please enter a project name.".into());
             return;
         }
-        let template_url = template_url_from_input.clone();
-        if template_url.is_empty() {
+
+        // Precedence: local path wins when non-empty; fall through to
+        // git URL otherwise. Both empty is an error.
+        let local_path = local_path_from_input.clone();
+        let git_url = git_url_from_input.clone();
+        let template_url = if !local_path.is_empty() {
+            // Validate that the local path exists as a directory before
+            // launching the scaffold subprocess.
+            if !std::path::Path::new(&local_path).is_dir() {
+                world.resource_mut::<NewProjectState>().status =
+                    Some(format!("Local template path does not exist: {local_path}"));
+                return;
+            }
+            local_path
+        } else if !git_url.is_empty() {
+            git_url
+        } else {
             world.resource_mut::<NewProjectState>().status =
-                Some("Please enter a template URL.".into());
+                Some("Provide a template (local path or git URL).".into());
             return;
-        }
+        };
 
         let name_for_task = name.clone();
         let location_for_task = location.clone();
         let url_for_task = template_url.clone();
+        // Branch field only matters for git URL scaffolds; the
+        // local-path branch ignores it (the working tree IS the
+        // branch). An empty branch falls through to
+        // `template_branch()` inside `scaffold_project`.
+        let branch_for_task = if branch_from_input.is_empty() {
+            None
+        } else {
+            Some(branch_from_input.clone())
+        };
 
-        world.resource_mut::<NewProjectState>().status = Some(format!("Scaffolding `{name}`…"));
+        world.resource_mut::<NewProjectState>().status = Some(format!("Scaffolding `{name}`..."));
 
-        // `None` for branch: `scaffold_project` falls back to
-        // `template_branch()` which honours `JACKDAW_TEMPLATE_BRANCH`
-        // and otherwise pins to the configured default.
         let task = AsyncComputeTaskPool::get().spawn(async move {
             scaffold_project(
                 &name_for_task,
                 &location_for_task,
                 &url_for_task,
-                None,
+                branch_for_task.as_deref(),
                 linkage,
             )
         });

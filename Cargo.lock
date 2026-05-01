@@ -4497,6 +4497,7 @@ dependencies = [
  "jackdaw_panels",
  "jackdaw_remote",
  "jackdaw_runtime",
+ "jackdaw_rustc_wrapper",
  "jackdaw_sdk",
  "jackdaw_terrain",
  "jackdaw_widgets",

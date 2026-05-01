@@ -4,6 +4,21 @@ A jackdaw extension scaffolded from the
 [jackdaw-template-extension-static](https://github.com/jbuehler23/jackdaw_template_extension_static)
 template.
 
+> ## Static template (recommended)
+>
+> This template produces a normal Bevy crate that builds with
+> vanilla `cargo build` and does not depend on jackdaw's runtime
+> SDK proxy. This is the recommended path for new jackdaw projects.
+>
+> To run your extension in jackdaw, run `cargo run` from the project
+> root. The launcher's "Open from recents" path opens the project
+> for level editing only and does not auto-build the extension
+> binary.
+>
+> An experimental dylib `extension` template exists for users who
+> want hot-reloadable cdylib loading. It is rougher around the
+> edges and is not recommended for new projects yet.
+
 ## Try it
 
 ```sh

@@ -38,9 +38,9 @@ editor = ["dep:jackdaw"]
 [dependencies]
 bevy = "0.18"
 # Static-embed build: jackdaw links into the editor binary as a
-# regular library (no rustc-wrapper, no Windows linker cap to
-# worry about). `default-features = false` drops jackdaw's `dylib`
-# feature; static templates don't need the cdylib proxy.
+# regular library. This is the recommended path. Builds with
+# vanilla cargo, no rustc-wrapper, no SDK proxy. `default-features = false`
+# keeps us off the experimental dylib path.
 #
 # jackdaw 0.4 isn't on crates.io yet; pin to the main branch until
 # it ships. Switch to `jackdaw = { version = "0.4", default-features = false, optional = true }`

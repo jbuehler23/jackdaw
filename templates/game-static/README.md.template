@@ -4,6 +4,22 @@ A jackdaw game scaffolded from the
 [jackdaw-template-game-static](https://github.com/jbuehler23/jackdaw_template_game_static)
 template.
 
+> ## Static template (recommended)
+>
+> This template produces a normal Bevy crate that builds with
+> vanilla `cargo build` and does not depend on jackdaw's runtime
+> SDK proxy. This is the recommended path for new jackdaw projects.
+>
+> To open this project in jackdaw with your custom components,
+> either open it from the launcher (the launcher auto-builds the
+> editor binary in the background and hands off) or run
+> `cargo editor` from the project root yourself.
+>
+> An experimental dylib `game` template exists for users who want
+> hot-reloadable cdylib loading. It is rougher around the edges
+> (ABI mismatches, install state, Windows linker setup) and is
+> not recommended for new projects yet.
+
 ## Run
 
 ```sh

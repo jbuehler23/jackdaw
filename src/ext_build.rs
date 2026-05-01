@@ -145,21 +145,60 @@ impl BuildProgress {
 /// surface a typed error the Build-and-Install dialog can translate
 /// into a user-actionable message.
 fn discover_sdk() -> Result<SdkPaths, BuildError> {
-    let paths = SdkPaths::compute();
+    let mut paths = SdkPaths::compute();
     if !paths.dylib_exists() {
         return Err(BuildError::SdkNotFound {
             expected_path: paths.dylib,
-            hint: "Rebuild the editor with `--features dylib` so \
-                   libjackdaw_sdk is emitted, or set JACKDAW_SDK_DIR \
-                   to the directory that contains it.",
+            hint: "libjackdaw_sdk was not found. Reinstall jackdaw, \
+                   or set JACKDAW_SDK_DIR to the directory that \
+                   contains it.",
         });
     }
     if !paths.wrapper_exists() {
-        return Err(BuildError::WrapperNotFound {
-            expected_path: paths.wrapper,
-            hint: "Run `cargo build -p jackdaw_rustc_wrapper` so the \
-                   wrapper binary is emitted next to the editor.",
-        });
+        // Dev mode: contributors running `cargo run` get jackdaw built
+        // but not jackdaw_rustc_wrapper (the wrapper is a separate
+        // workspace member, not a dependency of jackdaw). Auto-build
+        // it before giving up so the first scaffold-then-build flow
+        // just works.
+        if let Some(checkout) = crate::new_project::jackdaw_dev_checkout() {
+            bevy::log::info!(
+                "Auto-building jackdaw_rustc_wrapper from dev checkout at {}",
+                checkout.display()
+            );
+            let status = std::process::Command::new("cargo")
+                .args(["build", "-p", "jackdaw_rustc_wrapper"])
+                .current_dir(&checkout)
+                .status();
+            match status {
+                Ok(s) if s.success() => {
+                    paths = SdkPaths::compute();
+                    if !paths.wrapper_exists() {
+                        return Err(BuildError::WrapperNotFound {
+                            expected_path: paths.wrapper,
+                            hint: "Auto-build of jackdaw_rustc_wrapper \
+                                   completed but the binary is still \
+                                   missing. Try `cargo build -p \
+                                   jackdaw_rustc_wrapper` manually.",
+                        });
+                    }
+                }
+                _ => {
+                    return Err(BuildError::WrapperNotFound {
+                        expected_path: paths.wrapper,
+                        hint: "Auto-build of jackdaw_rustc_wrapper \
+                               failed. Run `cargo build -p \
+                               jackdaw_rustc_wrapper` from the jackdaw \
+                               source checkout manually.",
+                    });
+                }
+            }
+        } else {
+            return Err(BuildError::WrapperNotFound {
+                expected_path: paths.wrapper,
+                hint: "The jackdaw_rustc_wrapper binary was not found. \
+                       Reinstall jackdaw to repair this.",
+            });
+        }
     }
     Ok(paths)
 }

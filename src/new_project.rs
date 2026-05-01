@@ -89,6 +89,63 @@ impl TemplatePreset {
         }
     }
 
+    /// Composed `<URL> [SUBDIR]` form using ONLY the git URL (never
+    /// the local source-checkout path). Used for the modal's
+    /// Git URL field, which should always show a real remote even
+    /// in dev mode; the dev-mode local shortcut surfaces through
+    /// `local_template_path` and the modal's separate Local path
+    /// field.
+    pub fn git_url_with_subdir(&self, linkage: TemplateLinkage) -> String {
+        match (self.git_url_only(linkage), self.subdir(linkage)) {
+            (url, Some(subdir)) => format!("{url} {subdir}"),
+            (url, None) => url.into_owned(),
+        }
+    }
+
+    /// Just the git URL, ignoring source-checkout detection. Used
+    /// for the modal's Git URL field; the dev-mode shortcut goes
+    /// through `local_template_path` instead.
+    pub fn git_url_only(&self, linkage: TemplateLinkage) -> Cow<'static, str> {
+        let preset_override = match self {
+            Self::Extension => match linkage {
+                TemplateLinkage::Static => {
+                    std::env::var("JACKDAW_TEMPLATE_EXTENSION_STATIC_URL").ok()
+                }
+                TemplateLinkage::Dylib => std::env::var("JACKDAW_TEMPLATE_EXTENSION_DYLIB_URL")
+                    .or_else(|_| std::env::var("JACKDAW_TEMPLATE_EXTENSION_URL"))
+                    .ok(),
+            },
+            Self::Game => match linkage {
+                TemplateLinkage::Static => std::env::var("JACKDAW_TEMPLATE_GAME_STATIC_URL").ok(),
+                TemplateLinkage::Dylib => std::env::var("JACKDAW_TEMPLATE_GAME_DYLIB_URL")
+                    .or_else(|_| std::env::var("JACKDAW_TEMPLATE_GAME_URL"))
+                    .ok(),
+            },
+            Self::Custom(url) => Some(url.split_whitespace().next().unwrap_or(url).to_string()),
+        };
+        if let Some(url) = preset_override {
+            return Cow::Owned(url);
+        }
+        if let Ok(repo) = std::env::var("JACKDAW_TEMPLATE_REPO_URL") {
+            return Cow::Owned(repo);
+        }
+        Cow::Borrowed(TEMPLATE_REPO_URL)
+    }
+
+    /// Resolved local template directory when running from a jackdaw
+    /// source checkout. Pre-fills the modal's Local path field so
+    /// dev users can scaffold from the in-tree templates without
+    /// typing the path. Returns `None` for released binaries (no
+    /// checkout) or `Custom` presets (no built-in path).
+    pub fn local_template_path(&self, linkage: TemplateLinkage) -> Option<PathBuf> {
+        if !matches!(self, Self::Extension | Self::Game) {
+            return None;
+        }
+        let checkout = jackdaw_dev_checkout()?;
+        let subdir = self.subdir(linkage)?;
+        Some(checkout.join(subdir))
+    }
+
     /// Just the URL portion (no subdir). Honours env var overrides
     /// and source-checkout detection.
     pub fn git_url(&self, linkage: TemplateLinkage) -> Cow<'static, str> {
