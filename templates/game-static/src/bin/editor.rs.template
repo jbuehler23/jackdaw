@@ -8,8 +8,11 @@
 //!
 //! For a vanilla game runner with no editor, see `src/main.rs`.
 
+use std::path::PathBuf;
+
 use bevy::prelude::*;
 use jackdaw::prelude::*;
+use jackdaw::project_select::PendingAutoOpen;
 
 fn main() -> AppExit {
     // Install our own Ctrl+C handler before any other crate
@@ -18,10 +21,63 @@ fn main() -> AppExit {
     // un-killable from the terminal without this.
     let _ = ctrlc::set_handler(|| std::process::exit(130));
 
-    App::new()
-        .set_error_handler(bevy::ecs::error::error)
+    // Resolve which project this editor binary is for. The
+    // launcher's handoff sets `JACKDAW_PROJECT` to the project
+    // root; for `cargo editor` from a project shell, we fall back
+    // to the current working directory. Without one of these,
+    // the editor would land on the launcher's picker instead of
+    // opening the project this binary was built for.
+    let project_root = std::env::var_os("JACKDAW_PROJECT")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok());
+
+    let mut app = App::new();
+    app.set_error_handler(bevy::ecs::error::error)
         .add_plugins(DefaultPlugins)
         .add_plugins(EditorPlugins::default())
-        .add_plugins({{crate_name}}::MyGamePlugin)
-        .run()
+        .add_plugins({{crate_name}}::MyGamePlugin);
+
+    if let Some(root) = project_root.filter(|p| p.is_dir()) {
+        // `skip_build = true`: this binary IS the editor for the
+        // project; there's no further build step to wait for.
+        // `enter_project_with` early-outs to `transition_to_editor`,
+        // which loads the scene and flips `AppState` to `Editor`.
+        app.insert_resource(PendingAutoOpen {
+            path: root,
+            skip_build: true,
+        });
+    }
+
+    // Force-exit when `AppExit` fires. Without this, closing the
+    // window logs "No windows are open, exiting" but the process
+    // can hang for an indefinite time while wgpu's device cleanup
+    // and AsyncComputeTaskPool's worker threads fail to release.
+    // Calling `std::process::exit` from the `Last` schedule
+    // bypasses the bevy event loop's normal cleanup and lets the
+    // user's terminal recover immediately on window close.
+    app.add_systems(
+        Last,
+        |mut events: bevy::ecs::message::MessageReader<AppExit>| {
+            if let Some(exit) = events.read().next() {
+                let code = match exit {
+                    AppExit::Success => 0,
+                    AppExit::Error(c) => c.get() as i32,
+                };
+                std::process::exit(code);
+            }
+        },
+    );
+
+    let exit = app.run();
+
+    // Force-exit after App.run() returns. AsyncComputeTaskPool's
+    // worker threads + wgpu's device-cleanup paths can keep the
+    // process alive after the last window closes; bevy logs "No
+    // windows are open, exiting" but the process hangs. Calling
+    // `process::exit` short-circuits drop ordering and the user
+    // gets their terminal back immediately.
+    std::process::exit(match exit {
+        AppExit::Success => 0,
+        AppExit::Error(code) => code.get() as i32,
+    });
 }

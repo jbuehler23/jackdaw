@@ -15,16 +15,17 @@
 //!
 //! # Try it
 //!
-//! 1. `cargo editor` (alias for `cargo run --features editor`).
-//!    The editor opens.
-//! 2. File → Open Project. Pick this directory.
-//! 3. In the hierarchy, right-click → Add → Cube.
-//! 4. In the inspector, Add Component → `SpinningCube`. Set
+//! 1. Open this project in jackdaw. Either run `cargo editor` from
+//!    the project root, or launch `jackdaw` and click this project
+//!    in the recents list. Either way the editor opens with the
+//!    project's scene loaded.
+//! 2. In the hierarchy, right-click and pick `Add > Cube`.
+//! 3. In the inspector, `Add Component > SpinningCube`. Set
 //!    `speed` to e.g. `1.5`.
-//! 5. File → Save.
-//! 6. Click Play. The cube spins. Drag `speed` to change it live.
-//! 7. Click Stop. The authored entity is preserved.
-//! 8. `cargo play` (or `cargo run`) launches the same game without
+//! 4. `File > Save`.
+//! 5. Click Play. The cube spins. Drag `speed` to change it live.
+//! 6. Click Stop. The authored entity is preserved.
+//! 7. `cargo play` (or `cargo run`) launches the same game without
 //!    the editor in the loop.
 
 use bevy::prelude::*;

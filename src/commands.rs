@@ -249,10 +249,23 @@ impl EditorCommand for AddComponent {
         // Insert the component  -- this triggers #[require] which may add
         // many more components (e.g. RigidBody requires Position, Rotation,
         // LinearVelocity, etc.).
+        info!(
+            "AddComponent: inserting `{}` (type_id {:?}, component_id {:?}) on entity {:?}",
+            self.type_path, self.type_id, self.component_id, self.entity
+        );
         reflect_component.insert(
             &mut world.entity_mut(self.entity),
             default_value.as_partial_reflect(),
             &registry,
+        );
+        let has_after = world
+            .get_entity(self.entity)
+            .ok()
+            .map(|e| e.archetype().components().contains(&self.component_id))
+            .unwrap_or(false);
+        info!(
+            "AddComponent: post-insert, entity {:?} has component_id {:?}: {has_after}",
+            self.entity, self.component_id
         );
 
         // Sync the explicitly-added component to AST so it

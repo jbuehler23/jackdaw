@@ -339,6 +339,26 @@ pub fn build_static_editor_with_progress(
         "--message-format=json-render-diagnostics",
     ]);
 
+    // When the launcher is running from a jackdaw source checkout,
+    // route the user-project build into a shared target dir under
+    // the checkout. Cargo's content-addressable artifact reuse then
+    // means jackdaw + bevy + transitive deps compile once globally
+    // and incremental rebuilds finish in seconds, instead of taking
+    // 2+ minutes per project per session as the user re-iterates.
+    //
+    // Falls through to the user-project's own `target/` for
+    // released binaries (no dev checkout detected). The released
+    // build path is the user's normal cargo target; nothing
+    // surprising.
+    let editor_target_dir = match crate::new_project::jackdaw_dev_checkout() {
+        Some(checkout) => checkout.join("target").join("user-projects"),
+        None => project_dir.join("target"),
+    };
+    let editor_target_str = editor_target_dir
+        .to_str()
+        .expect("CARGO_TARGET_DIR path must be valid UTF-8");
+    cmd.env("CARGO_TARGET_DIR", editor_target_str);
+
     run_cargo_with_progress(cmd, sink.as_ref())?;
 
     let bin_name = if cfg!(target_os = "windows") {
@@ -346,7 +366,7 @@ pub fn build_static_editor_with_progress(
     } else {
         "editor"
     };
-    let bin = project_dir.join("target/debug").join(bin_name);
+    let bin = editor_target_dir.join("debug").join(bin_name);
     if !bin.is_file() {
         return Err(BuildError::OutputNotProduced { expected: bin });
     }
@@ -390,6 +410,13 @@ fn run_cargo_with_progress(
     let stderr_handle = thread::spawn(move || {
         let reader = BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
+            // Tee to the parent's stderr too, so users running
+            // `cargo run` from a terminal see the familiar
+            // "Compiling X" stream alongside the launcher modal's
+            // crate counter. Without this the user sees a
+            // launcher window with no apparent activity for
+            // several minutes on first build.
+            eprintln!("{line}");
             if let Some(ref s) = stderr_sink
                 && let Ok(mut g) = s.lock()
             {

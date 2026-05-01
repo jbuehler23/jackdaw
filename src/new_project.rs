@@ -453,6 +453,7 @@ pub fn scaffold_project(
     if matches!(linkage, TemplateLinkage::Dylib) {
         write_cargo_config(&project_path);
     }
+    rewrite_jackdaw_dep_for_dev_checkout(&project_path, linkage);
     Ok(project_path)
 }
 
@@ -508,7 +509,83 @@ fn scaffold_from_local_path(
     if matches!(linkage, TemplateLinkage::Dylib) {
         write_cargo_config(project_path);
     }
+    rewrite_jackdaw_dep_for_dev_checkout(project_path, linkage);
     Ok(project_path.to_path_buf())
+}
+
+/// When the launcher is running from a jackdaw source checkout,
+/// rewrite the scaffolded project's `Cargo.toml` so the `jackdaw =`
+/// dep points at the local checkout via `path = "..."` rather than
+/// at the template's default git+branch ref.
+///
+/// Why: dev contributors testing a feature branch want the
+/// scaffolded project to compile against THEIR working tree, not
+/// against `main`. Without this rewrite they had to manually edit
+/// the scaffolded `Cargo.toml` after every scaffold to swap the
+/// dep, which was a recurring papercut.
+///
+/// Released binaries (no source checkout detected) leave the
+/// template's default in place. The template currently pins to
+/// `branch = "main"` pre-1.0; switch to `tag = "v0.4.0"` (or
+/// `version = "0.4"` once published to crates.io) when the next
+/// release ships.
+///
+/// Static templates declare `jackdaw` with `optional = true`
+/// (gated behind the `editor` feature); the rewrite preserves
+/// that. Dylib templates don't declare `jackdaw` at all (the
+/// rustc-wrapper injects `jackdaw_api`), so this function is a
+/// no-op for them.
+fn rewrite_jackdaw_dep_for_dev_checkout(project_path: &Path, linkage: TemplateLinkage) {
+    let _ = linkage; // currently unused; kept so future linkage-specific tweaks are obvious.
+    let Some(checkout) = jackdaw_dev_checkout() else {
+        return;
+    };
+    let manifest_path = project_path.join("Cargo.toml");
+    let Ok(contents) = std::fs::read_to_string(&manifest_path) else {
+        return;
+    };
+    if !contents.contains("jackdaw = {") && !contents.contains("jackdaw=") {
+        return; // dylib template has no jackdaw dep; nothing to rewrite.
+    }
+    // Cheap line-by-line rewrite: find the line that starts with
+    // `jackdaw = {` and replace it with a path-dep variant. We
+    // preserve `optional = true` and `default-features = false` if
+    // they were on the original line, since the template's `editor`
+    // feature gate depends on `optional = true`.
+    let mut new_contents = String::with_capacity(contents.len());
+    let mut rewritten = false;
+    for line in contents.lines() {
+        let trimmed = line.trim_start();
+        if !rewritten && trimmed.starts_with("jackdaw = {") {
+            let optional = trimmed.contains("optional = true");
+            let mut replacement = format!(
+                "jackdaw = {{ path = \"{}\", default-features = false",
+                checkout.display()
+            );
+            if optional {
+                replacement.push_str(", optional = true");
+            }
+            replacement.push_str(" }");
+            new_contents.push_str(&replacement);
+            new_contents.push('\n');
+            rewritten = true;
+            continue;
+        }
+        new_contents.push_str(line);
+        new_contents.push('\n');
+    }
+    if rewritten && let Err(e) = std::fs::write(&manifest_path, new_contents) {
+        warn!(
+            "Failed to rewrite jackdaw dep in {} for dev checkout: {e}",
+            manifest_path.display()
+        );
+    } else if rewritten {
+        info!(
+            "Rewrote jackdaw dep in {} to path = \"{}\" (dev checkout detected)",
+            manifest_path.display(),
+            checkout.display()
+        );
+    }
 }
 
 /// Write a `.cargo/config.toml` into the scaffolded project with

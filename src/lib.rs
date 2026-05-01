@@ -193,10 +193,19 @@ impl Default for EditorPlugins {
 
 impl PluginGroup for EditorPlugins {
     fn build(self) -> PluginGroupBuilder {
+        // DylibLoaderPlugin is intentionally NOT in this group. The
+        // launcher binary (`jackdaw`) opts in by adding it directly,
+        // because the launcher is the sole consumer of the
+        // `~/.config/jackdaw/games/` and `~/.config/jackdaw/extensions/`
+        // dylib install dirs. Per-project static editor binaries
+        // built from the static-game template use EditorPlugins +
+        // their own statically-linked plugin; they should NOT scan
+        // those install dirs (the dylibs there were built against
+        // a different bevy compilation and panic at FFI boundary
+        // when loaded).
         PluginGroupBuilder::start::<Self>()
             .add(EditorCorePlugin)
             .add(ExtensionPlugin::default())
-            .add(DylibLoaderPlugin::default())
     }
 }
 

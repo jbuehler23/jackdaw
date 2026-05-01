@@ -62,36 +62,9 @@ jobs:
       - name: Run doctests
         run: cargo test --locked --workspace --doc
 
-  # Run the dylib build + fixture-load smoke on Windows.
-  # Validates the rust-lld linker config in `.cargo/config.toml`
-  # clears MSVC's 65,535 PE export cap on `jackdaw_sdk`.
-  tests-windows:
-    name: Tests (Windows)
-    runs-on: windows-latest
-    timeout-minutes: 60
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.toolchain }}
-
-      - name: Populate target directory from cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          shared-key: windows
-
-      - name: Build workspace with default features (dylib on)
-        run: cargo build --workspace --locked
-
-      - name: Build the test fixture extension
-        run: cargo build --locked --manifest-path tests/fixtures/test_fixture_extension/Cargo.toml
-
-      - name: Run dylib loader smoke test
-        run: cargo test --locked --package jackdaw --test dylib_loading
+  # The Windows dylib smoke job that previously ran here is removed
+  # while the dylib path is experimental. Re-add when the dylib flow
+  # is stable enough to gate PRs on.
 
   # Run clippy lints.
   clippy:
