@@ -4602,9 +4602,17 @@ dependencies = [
  "bevy_easings",
  "bevy_monitors",
  "bevy_ui_text_input",
+ "jackdaw_fuzzy",
  "jackdaw_jsn",
  "jackdaw_widgets",
  "lucide-icons",
+]
+
+[[package]]
+name = "jackdaw_fuzzy"
+version = "0.4.0"
+dependencies = [
+ "nucleo-matcher",
 ]
 
 [[package]]
@@ -5360,6 +5368,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "nucleo-matcher"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf33f538733d1a5a3494b836ba913207f14d9d4a1d3cd67030c5061bdd2cac85"
+dependencies = [
+ "memchr",
+ "unicode-segmentation",
 ]
 
 [[package]]

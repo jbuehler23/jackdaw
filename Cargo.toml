@@ -119,6 +119,7 @@ jackdaw_terrain = { version = "0.4.0", path = "crates/jackdaw_terrain" }
 jackdaw_remote = { version = "0.4.0", path = "crates/jackdaw_remote" }
 jackdaw_node_graph = { version = "0.4.0", path = "crates/jackdaw_node_graph" }
 jackdaw_animation = { version = "0.4.0", path = "crates/jackdaw_animation" }
+jackdaw_fuzzy = { version = "0.4.0", path = "crates/jackdaw_fuzzy"}
 noise = "0.9"
 rand = "0.9"
 serde = "1"

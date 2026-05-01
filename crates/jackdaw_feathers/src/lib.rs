@@ -14,6 +14,7 @@ pub mod list_view;
 pub mod menu_bar;
 pub mod panel_header;
 pub mod panel_section;
+pub mod picker;
 pub mod popover;
 pub mod progress;
 pub mod scroll;
@@ -55,12 +56,13 @@ impl Plugin for EditorFeathersPlugin {
             toast::plugin,
         ));
         app.add_plugins((
+            tooltip::TooltipPlugin,
             alert::plugin,
             color_picker::plugin,
             menu_bar::plugin,
             context_menu::plugin,
             panel_header::plugin,
-            tooltip::TooltipPlugin,
+            picker::plugin,
         ));
     }
 }

@@ -131,7 +131,6 @@ impl Plugin for InspectorPlugin {
                 (
                     reflect_fields::refresh_inspector_fields,
                     reflect_fields::refresh_enum_variants,
-                    component_picker::filter_component_picker,
                     brush_display::update_brush_face_properties,
                     component_display::filter_inspector_components,
                     anim_diamond::decorate_animatable_fields,
@@ -271,28 +270,9 @@ pub(super) struct ComponentDisplayBody;
 #[derive(Component)]
 pub struct AddComponentButton;
 
-/// Marker for the component picker panel
+/// The component picker panel
 #[derive(Component)]
-pub(super) struct ComponentPicker;
-
-/// Marker for the search input in the component picker
-#[derive(Component)]
-pub(super) struct ComponentPickerSearch;
-
-/// A selectable component entry in the picker list
-#[derive(Component)]
-pub(super) struct ComponentPickerEntry {
-    pub(super) short_name: String,
-    pub(super) module_path: String,
-    pub(super) category: String,
-    pub(super) description: String,
-}
-
-/// Section header in the component picker (e.g. "Game", "Bevy", or a custom category)
-#[derive(Component)]
-pub(super) struct ComponentPickerSectionHeader {
-    pub(super) group: String,
-}
+pub(super) struct ComponentPicker(pub Entity);
 
 /// Marker for the search input in the inspector.
 #[derive(Component)]

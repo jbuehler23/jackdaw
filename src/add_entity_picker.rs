@@ -3,18 +3,13 @@
 //! plus extension-contributed `RegisteredMenuEntry` rows under
 //! `menu == "Add"`.
 
-use bevy::feathers::theme::ThemedText;
 use bevy::prelude::*;
-use bevy::ui_widgets::observe;
-use bevy_enhanced_input::prelude::{Press, *};
-use jackdaw_api::TopLevelMenu;
 use jackdaw_api::prelude::*;
-use jackdaw_feathers::text_edit::{self, TextEditProps, TextEditValue};
+use jackdaw_feathers::picker::{
+    Category, Matchable, PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text,
+    picker_item,
+};
 use jackdaw_feathers::tokens;
-
-use crate::core_extension::CoreExtensionInputContext;
-
-use std::collections::HashSet;
 
 use crate::entity_ops::{
     EntityAddCameraOp, EntityAddCubeOp, EntityAddDirectionalLightOp, EntityAddEmptyOp,
@@ -54,44 +49,79 @@ fn op_action<O: Operator>() -> String {
 
 /// Built-in Add items grouped by category. Order here is the order in
 /// the picker and in the toolbar Add menu.
-fn builtin_groups() -> Vec<(&'static str, Vec<(String, &'static str)>)> {
+fn builtin_groups() -> Vec<AddMenuItem> {
+    let shapes = Category {
+        name: Some(String::from("Shapes")),
+        order: 0,
+    };
+    let lights = Category {
+        name: Some(String::from("Lights")),
+        order: -1,
+    };
+    let cameras_entities = Category {
+        name: Some(String::from("Cameras & Entities")),
+        order: -2,
+    };
+    let regions = Category {
+        name: Some(String::from("Regions")),
+        order: -3,
+    };
+    let prefabs = Category {
+        name: Some(String::from("Prefabs")),
+        order: -4,
+    };
+
     vec![
-        (
-            "Shapes",
-            vec![
-                (op_action::<EntityAddCubeOp>(), "Cube"),
-                (op_action::<EntityAddSphereOp>(), "Sphere"),
-            ],
-        ),
-        (
-            "Lights",
-            vec![
-                (op_action::<EntityAddPointLightOp>(), "Point Light"),
-                (
-                    op_action::<EntityAddDirectionalLightOp>(),
-                    "Directional Light",
-                ),
-                (op_action::<EntityAddSpotLightOp>(), "Spot Light"),
-            ],
-        ),
-        (
-            "Cameras & Entities",
-            vec![
-                (op_action::<EntityAddCameraOp>(), "Camera"),
-                (op_action::<EntityAddEmptyOp>(), "Empty"),
-            ],
-        ),
-        (
-            "Regions",
-            vec![
-                (op_action::<EntityAddNavmeshOp>(), "Navmesh Region"),
-                (op_action::<EntityAddTerrainOp>(), "Terrain"),
-            ],
-        ),
-        (
-            "Prefabs",
-            vec![(op_action::<EntityAddPrefabOp>(), "Prefab...")],
-        ),
+        AddMenuItem {
+            action: op_action::<EntityAddCubeOp>(),
+            label: "Cube".into(),
+            category: shapes.clone(),
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddSphereOp>(),
+            label: "Sphere".into(),
+            category: shapes,
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddPointLightOp>(),
+            label: "Point Light".into(),
+            category: lights.clone(),
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddDirectionalLightOp>(),
+            label: "Directional Light".into(),
+            category: lights.clone(),
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddSpotLightOp>(),
+            label: "Spot Light".into(),
+            category: lights,
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddCameraOp>(),
+            label: "Camera".into(),
+            category: cameras_entities.clone(),
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddEmptyOp>(),
+            label: "Empty".into(),
+            category: cameras_entities,
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddNavmeshOp>(),
+            label: "Navmesh Region".into(),
+            category: regions.clone(),
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddTerrainOp>(),
+            label: "Terrain".into(),
+            category: regions,
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddPrefabOp>(),
+            label: "Prefab...".into(),
+            category: prefabs,
+        },
     ]
 }
 
@@ -102,22 +132,13 @@ fn builtin_groups() -> Vec<(&'static str, Vec<(String, &'static str)>)> {
 pub struct AddMenuItem {
     pub action: String,
     pub label: String,
-    pub category: String,
+    pub category: Category,
 }
 
 /// Shared source of truth for Add menu contents, consumed by both the
 /// toolbar Add menu and the scene-tree Add Entity picker.
 pub fn collect_add_menu_items(world: &mut World) -> Vec<AddMenuItem> {
-    let mut items: Vec<AddMenuItem> = builtin_groups()
-        .into_iter()
-        .flat_map(|(category, entries)| {
-            entries.into_iter().map(move |(action, label)| AddMenuItem {
-                action,
-                label: label.to_string(),
-                category: category.to_string(),
-            })
-        })
-        .collect();
+    let mut items: Vec<AddMenuItem> = builtin_groups();
 
     // Extension items grouped by owning extension so entries cluster by
     // author in the picker.
@@ -145,7 +166,10 @@ pub fn collect_add_menu_items(world: &mut World) -> Vec<AddMenuItem> {
         items.push(AddMenuItem {
             action,
             label,
-            category,
+            category: Category {
+                name: Some(category),
+                order: -5,
+            },
         });
     }
 
@@ -170,323 +194,82 @@ pub fn open_add_entity_picker(
 
     let items = collect_add_menu_items(world);
 
-    // Group by category, preserving insertion order so built-in groups
-    // render before any extension groups.
-    let mut grouped: Vec<(String, Vec<AddMenuItem>)> = Vec::new();
-    for item in items {
-        if let Some((_, entries)) = grouped.iter_mut().find(|(cat, _)| *cat == item.category) {
-            entries.push(item);
-        } else {
-            grouped.push((item.category.clone(), vec![item]));
-        }
-    }
+    let picker = PickerProps::new(spawn_item, on_select)
+        .items(items)
+        .title("Add Entity")
+        .placeholder(Some("Search Entities.."));
 
     let mut commands = world.commands();
 
-    let backdrop = commands
+    commands.spawn((
+        AddEntityPicker,
+        crate::EditorEntity,
+        crate::BlocksCameraInput,
+        picker,
+    ));
+}
+
+fn spawn_item(
+    In(SpawnItemInput { matched, entities }): In<SpawnItemInput>,
+    items: Query<&PickerItems<AddMenuItem>>,
+    mut commands: Commands,
+) -> Result {
+    let item = items.get(entities.picker)?.at(matched.index)?;
+
+    let entry_id = commands
+        .spawn((picker_item(matched.index), ChildOf(entities.list)))
+        .id();
+
+    let row = commands
         .spawn((
-            AddEntityPicker,
-            crate::EditorEntity,
-            Interaction::default(),
-            bevy::ui::FocusPolicy::Block,
             Node {
-                position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::SpaceBetween,
                 width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
                 ..Default::default()
             },
-            BackgroundColor(tokens::DIALOG_BACKDROP),
-            GlobalZIndex(100),
-            crate::BlocksCameraInput,
-            observe(
-                |_: On<Pointer<Click>>,
-                 mut commands: Commands,
-                 pickers: Query<Entity, With<AddEntityPicker>>| {
-                    for picker in &pickers {
-                        commands.entity(picker).despawn();
-                    }
-                },
-            ),
+            ChildOf(entry_id),
         ))
         .id();
 
-    let picker = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                width: Val::Px(tokens::DIALOG_WIDTH),
-                max_height: Val::Px(tokens::DIALOG_MAX_HEIGHT),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
-                ..Default::default()
-            },
-            BackgroundColor(tokens::PANEL_BG),
-            BorderColor::all(tokens::PANEL_BORDER),
-            BoxShadow(vec![ShadowStyle {
-                x_offset: Val::ZERO,
-                y_offset: Val::Px(4.0),
-                blur_radius: Val::Px(16.0),
-                spread_radius: Val::ZERO,
-                color: tokens::SHADOW_COLOR,
-            }]),
-            ChildOf(backdrop),
-            // Stop clicks inside the panel from closing the dialog.
-            observe(|mut click: On<Pointer<Click>>| {
-                click.propagate(false);
-            }),
-        ))
-        .id();
+    commands.spawn((match_text(matched.segments), ChildOf(row)));
 
-    commands.spawn((
-        Node {
-            flex_direction: FlexDirection::Row,
-            justify_content: JustifyContent::SpaceBetween,
-            align_items: AlignItems::Center,
-            width: Val::Percent(100.0),
-            padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_SM)),
-            border_radius: BorderRadius::top(Val::Px(tokens::BORDER_RADIUS_LG)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::COMPONENT_CARD_HEADER_BG),
-        ChildOf(picker),
-        children![(
-            Text::new("Add Entity"),
-            TextFont {
-                font_size: tokens::FONT_MD,
-                weight: FontWeight::MEDIUM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-        )],
-    ));
-
-    commands.spawn((
-        AddEntityPickerSearch,
-        text_edit::text_edit(
-            TextEditProps::default()
-                .with_placeholder("Search entities...")
-                .auto_focus()
-                .allow_empty(),
-        ),
-        ChildOf(picker),
-    ));
-
-    let list = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                overflow: Overflow::scroll_y(),
-                flex_grow: 1.0,
-                min_height: Val::Px(0.0),
-                ..Default::default()
-            },
-            ChildOf(picker),
-        ))
-        .id();
-
-    for (category, entries) in &grouped {
-        let count = entries.len();
-
-        let header_id = commands
-            .spawn((
-                AddEntityPickerSectionHeader {
-                    category: category.clone(),
-                },
-                Node {
-                    padding: UiRect::new(
-                        Val::Px(tokens::SPACING_LG),
-                        Val::Px(tokens::SPACING_LG),
-                        Val::Px(tokens::SPACING_MD),
-                        Val::Px(tokens::SPACING_XS),
-                    ),
-                    width: Val::Percent(100.0),
-                    border: UiRect::bottom(Val::Px(1.0)),
-                    ..Default::default()
-                },
-                BorderColor::all(tokens::BORDER_SUBTLE),
-                ChildOf(list),
-            ))
-            .id();
-
+    if let Some(name) = item.category.clone().name {
         commands.spawn((
-            Text::new(format!("{category} ({count})")),
+            Text::new(name),
             TextFont {
                 font_size: tokens::FONT_SM,
                 ..Default::default()
             },
             TextColor(tokens::TEXT_SECONDARY),
-            ChildOf(header_id),
+            ChildOf(row),
         ));
-
-        for item in entries {
-            let label = item.label.clone();
-            let category = item.category.clone();
-            let action = item.action.clone();
-
-            let entry_id = commands
-                .spawn((
-                    AddEntityPickerEntry {
-                        label: label.clone(),
-                        category: category.clone(),
-                    },
-                    Node {
-                        flex_direction: FlexDirection::Column,
-                        padding: UiRect::axes(
-                            Val::Px(tokens::SPACING_LG),
-                            Val::Px(tokens::SPACING_SM),
-                        ),
-                        width: Val::Percent(100.0),
-                        ..Default::default()
-                    },
-                    BackgroundColor(Color::NONE),
-                    ChildOf(list),
-                    observe({
-                        let action = action.clone();
-                        move |mut click: On<Pointer<Click>>, mut commands: Commands| {
-                            click.propagate(false);
-                            // Route through the menu-bar dispatch path
-                            // so the toolbar Add menu and this picker
-                            // share one code path.
-                            commands.trigger(jackdaw_widgets::menu_bar::MenuAction {
-                                action: action.clone(),
-                            });
-                            fn despawn_pickers(
-                                mut commands: Commands,
-                                pickers: Query<Entity, With<AddEntityPicker>>,
-                            ) {
-                                for picker in &pickers {
-                                    commands.entity(picker).try_despawn();
-                                }
-                            }
-                            commands.run_system_cached(despawn_pickers);
-                        }
-                    }),
-                    observe(
-                        move |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
-                            if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                                bg.0 = tokens::HOVER_BG;
-                            }
-                        },
-                    ),
-                    observe(
-                        move |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-                            if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                                bg.0 = Color::NONE;
-                            }
-                        },
-                    ),
-                ))
-                .id();
-
-            let row = commands
-                .spawn((
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        justify_content: JustifyContent::SpaceBetween,
-                        width: Val::Percent(100.0),
-                        ..Default::default()
-                    },
-                    ChildOf(entry_id),
-                ))
-                .id();
-
-            commands.spawn((
-                Text::new(label),
-                TextFont {
-                    font_size: tokens::FONT_MD,
-                    ..Default::default()
-                },
-                ThemedText,
-                ChildOf(row),
-            ));
-
-            commands.spawn((
-                Text::new(category),
-                TextFont {
-                    font_size: tokens::FONT_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-                ChildOf(row),
-            ));
-        }
-    }
-}
-
-/// Filter picker entries by the search input.
-pub fn filter_add_entity_picker(
-    search_query: Query<&TextEditValue, (With<AddEntityPickerSearch>, Changed<TextEditValue>)>,
-    entries: Query<(Entity, &AddEntityPickerEntry)>,
-    headers: Query<(Entity, &AddEntityPickerSectionHeader)>,
-    mut node_query: Query<&mut Node>,
-) {
-    let Ok(search) = search_query.single() else {
-        return;
-    };
-    let filter = search.0.trim().to_lowercase();
-
-    let mut visible_categories: HashSet<String> = HashSet::new();
-
-    for (entity, entry) in &entries {
-        let matches = filter.is_empty()
-            || entry.label.to_lowercase().contains(&filter)
-            || entry.category.to_lowercase().contains(&filter);
-
-        if let Ok(mut node) = node_query.get_mut(entity) {
-            node.display = if matches {
-                Display::Flex
-            } else {
-                Display::None
-            };
-        }
-
-        if matches {
-            visible_categories.insert(entry.category.clone());
-        }
     }
 
-    for (entity, header) in &headers {
-        if let Ok(mut node) = node_query.get_mut(entity) {
-            node.display = if filter.is_empty() || visible_categories.contains(&header.category) {
-                Display::Flex
-            } else {
-                Display::None
-            };
-        }
-    }
+    Ok(())
 }
 
-pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<AddEntityPickerCloseOp>();
-    let ext = ctx.id();
-    ctx.spawn((
-        Action::<AddEntityPickerCloseOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Escape, Press::default())],
-    ));
-}
-
-fn add_entity_picker_open(pickers: Query<(), With<AddEntityPicker>>) -> bool {
-    !pickers.is_empty()
-}
-
-/// Close the Add Entity picker. Triggered by Escape via BEI.
-#[operator(
-    id = "add_entity_picker.close",
-    label = "Close Add Entity Picker",
-    description = "Close the Add Entity picker.",
-    is_available = add_entity_picker_open,
-    allows_undo = false,
-)]
-pub(crate) fn add_entity_picker_close(
-    _: In<OperatorParameters>,
-    pickers: Query<Entity, With<AddEntityPicker>>,
+fn on_select(
+    input: In<SelectInput>,
+    items: Query<&PickerItems<AddMenuItem>>,
     mut commands: Commands,
-) -> OperatorResult {
-    for entity in &pickers {
-        commands.entity(entity).despawn();
+) -> Result {
+    let item = items.get(input.entities.picker)?.at(input.index)?;
+
+    commands.trigger(jackdaw_widgets::menu_bar::MenuAction {
+        action: item.action.clone(),
+    });
+    commands.entity(input.entities.picker).try_despawn();
+
+    Ok(())
+}
+
+impl Matchable for AddMenuItem {
+    fn haystack(&self) -> String {
+        self.label.to_string()
     }
-    OperatorResult::Finished
+
+    fn category(&self) -> Category {
+        self.category.clone()
+    }
 }

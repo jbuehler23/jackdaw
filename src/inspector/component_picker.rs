@@ -1,28 +1,20 @@
 use crate::EditorEntity;
-use crate::core_extension::CoreExtensionInputContext;
 use crate::selection::{Selected, Selection};
 use std::any::TypeId;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
-use bevy::{
-    ecs::{
-        archetype::Archetype,
-        component::Components,
-        reflect::{AppTypeRegistry, ReflectComponent},
-    },
-    feathers::theme::ThemedText,
-    prelude::*,
-    ui_widgets::observe,
-};
-use bevy_enhanced_input::prelude::{Press, *};
+use bevy::ecs::archetype::Archetype;
+use bevy::ecs::component::Components;
+use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
+use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_feathers::text_edit::{self, TextEditProps, TextEditValue};
+use jackdaw_feathers::picker::{
+    Category, Matchable, PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text,
+    picker_item,
+};
 use jackdaw_feathers::tokens;
 
-use super::{
-    AddComponentButton, ComponentPicker, ComponentPickerEntry, ComponentPickerSearch,
-    ComponentPickerSectionHeader, Inspector, ReflectEditorMeta,
-};
+use super::{AddComponentButton, ComponentPicker, Inspector, ReflectEditorMeta};
 
 /// Grouping key for sorting: custom categories first, then Game, then Bevy.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
@@ -32,12 +24,43 @@ enum GroupOrder {
     Bevy,
 }
 
+impl GroupOrder {
+    fn name(self) -> String {
+        match self {
+            GroupOrder::Custom(name) => name,
+            GroupOrder::Game => String::from("Game"),
+            GroupOrder::Bevy => String::from("Bevy"),
+        }
+    }
+
+    fn order(&self) -> i32 {
+        match *self {
+            GroupOrder::Custom(_) => 2,
+            GroupOrder::Game => 1,
+            GroupOrder::Bevy => 0,
+        }
+    }
+}
+
 struct ComponentInfo {
     short_name: String,
     module_path: String,
-    category: String,
+    group: GroupOrder,
     description: String,
     type_path_full: String,
+}
+
+impl Matchable for ComponentInfo {
+    fn haystack(&self) -> String {
+        self.short_name.clone()
+    }
+
+    fn category(&self) -> Category {
+        Category {
+            name: Some(self.group.clone().name()),
+            order: self.group.order(),
+        }
+    }
 }
 
 /// Handle click on the "+" button to open the component picker.
@@ -83,7 +106,7 @@ pub(crate) fn on_add_component_button_click(
     let registry = type_registry.read();
 
     // Collect all registered components that have ReflectComponent + ReflectDefault
-    let mut grouped: BTreeMap<GroupOrder, Vec<ComponentInfo>> = BTreeMap::new();
+    let mut searchable_components: Vec<ComponentInfo> = vec![];
     for registration in registry.iter() {
         let type_id = registration.type_id();
 
@@ -130,374 +153,108 @@ pub(crate) fn on_add_component_button_click(
             GroupOrder::Game
         };
 
-        grouped.entry(group).or_default().push(ComponentInfo {
+        searchable_components.push(ComponentInfo {
             short_name,
             module_path: module,
-            category,
+            group,
             description,
             type_path_full: full_path.to_string(),
         });
     }
 
-    // Sort within each group alphabetically by short name
-    for entries in grouped.values_mut() {
-        entries.sort_by(|a, b| {
-            a.short_name
-                .to_lowercase()
-                .cmp(&b.short_name.to_lowercase())
-        });
-    }
+    let picker = PickerProps::new(spawn_item, on_select)
+        .items(searchable_components)
+        .title("Add Component")
+        .placeholder(Some("Search Components.."));
 
-    // Spawn as a centered blocking dialog overlay
-    // Backdrop absorbs all pointer events and dims the background
-    let backdrop = commands
+    commands.spawn((
+        picker,
+        EditorEntity,
+        crate::BlocksCameraInput,
+        ComponentPicker(primary),
+    ));
+}
+
+fn on_select(
+    input: In<SelectInput>,
+    items: Query<(&ComponentPicker, &PickerItems<ComponentInfo>)>,
+    mut commands: Commands,
+) -> Result {
+    let (picker, items) = items.get(input.entities.picker)?;
+    let info = items.at(input.index)?;
+
+    commands
+        .operator(crate::inspector::ops::ComponentAddOp::ID)
+        .param("entity", picker.0)
+        .param("type_path", info.type_path_full.clone())
+        .call();
+
+    commands.entity(input.entities.picker).try_despawn();
+
+    Ok(())
+}
+
+fn spawn_item(
+    In(SpawnItemInput { matched, entities }): In<SpawnItemInput>,
+    items: Query<&PickerItems<ComponentInfo>>,
+    mut commands: Commands,
+) -> Result {
+    let info = items.get(entities.picker)?.at(matched.index)?;
+
+    let category = info.group.clone().name();
+    let description = info.description.clone();
+    let module_path = info.module_path.clone();
+
+    // Subtitle: description takes priority, otherwise module path
+    let subtitle = if !description.is_empty() {
+        description.clone()
+    } else {
+        module_path.clone()
+    };
+
+    let entry_id = commands
+        .spawn((picker_item(matched.index), ChildOf(entities.list)))
+        .id();
+
+    // Line 1: short name + optional category badge
+    let row = commands
         .spawn((
-            ComponentPicker,
-            crate::EditorEntity,
-            Interaction::default(),
-            bevy::ui::FocusPolicy::Block,
             Node {
-                position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::SpaceBetween,
                 width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
                 ..Default::default()
             },
-            BackgroundColor(tokens::DIALOG_BACKDROP),
-            GlobalZIndex(100),
-            crate::BlocksCameraInput,
-            // Click on backdrop to close
-            observe(
-                |_: On<Pointer<Click>>,
-                 mut commands: Commands,
-                 pickers: Query<Entity, With<ComponentPicker>>| {
-                    for picker in &pickers {
-                        commands.entity(picker).despawn();
-                    }
-                },
-            ),
+            ChildOf(entry_id),
         ))
         .id();
 
-    let picker = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                width: Val::Px(tokens::DIALOG_WIDTH),
-                max_height: Val::Px(tokens::DIALOG_MAX_HEIGHT),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
-                ..Default::default()
-            },
-            BackgroundColor(tokens::PANEL_BG),
-            BorderColor::all(tokens::PANEL_BORDER),
-            BoxShadow(vec![ShadowStyle {
-                x_offset: Val::ZERO,
-                y_offset: Val::Px(4.0),
-                blur_radius: Val::Px(16.0),
-                spread_radius: Val::ZERO,
-                color: tokens::SHADOW_COLOR,
-            }]),
-            ChildOf(backdrop),
-        ))
-        .id();
+    commands.spawn((match_text(matched.segments), ChildOf(row)));
 
-    // Dialog title bar
-    commands.spawn((
-        Node {
-            flex_direction: FlexDirection::Row,
-            justify_content: JustifyContent::SpaceBetween,
-            align_items: AlignItems::Center,
-            width: Val::Percent(100.0),
-            padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_SM)),
-            border_radius: BorderRadius::top(Val::Px(tokens::BORDER_RADIUS_LG)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::COMPONENT_CARD_HEADER_BG),
-        ChildOf(picker),
-        children![(
-            Text::new("Add Component"),
-            TextFont {
-                font_size: tokens::FONT_MD,
-                weight: FontWeight::MEDIUM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-        )],
-    ));
-
-    // Search input
-    commands.spawn((
-        ComponentPickerSearch,
-        text_edit::text_edit(
-            TextEditProps::default()
-                .with_placeholder("Search components...")
-                .auto_focus()
-                .allow_empty(),
-        ),
-        ChildOf(picker),
-    ));
-
-    // Scrollable list
-    let list = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                overflow: Overflow::scroll_y(),
-                flex_grow: 1.0,
-                min_height: Val::Px(0.0),
-                ..Default::default()
-            },
-            ChildOf(picker),
-        ))
-        .id();
-
-    let source_entity = primary;
-
-    for (group, entries) in &grouped {
-        let group_name = match group {
-            GroupOrder::Custom(name) => name.clone(),
-            GroupOrder::Game => "Game".to_string(),
-            GroupOrder::Bevy => "Bevy".to_string(),
-        };
-
-        let count = entries.len();
-
-        // Section header
-        let header_id = commands
-            .spawn((
-                ComponentPickerSectionHeader {
-                    group: group_name.clone(),
-                },
-                Node {
-                    padding: UiRect::new(
-                        Val::Px(tokens::SPACING_LG),
-                        Val::Px(tokens::SPACING_LG),
-                        Val::Px(tokens::SPACING_MD),
-                        Val::Px(tokens::SPACING_XS),
-                    ),
-                    width: Val::Percent(100.0),
-                    border: UiRect::bottom(Val::Px(1.0)),
-                    ..Default::default()
-                },
-                BorderColor::all(tokens::BORDER_SUBTLE),
-                ChildOf(list),
-            ))
-            .id();
-
+    if !category.is_empty() {
         commands.spawn((
-            Text::new(format!("{group_name} ({count})")),
+            Text::new(category),
             TextFont {
                 font_size: tokens::FONT_SM,
                 ..Default::default()
             },
             TextColor(tokens::TEXT_SECONDARY),
-            ChildOf(header_id),
+            ChildOf(row),
         ));
-
-        // Component entries
-        for info in entries {
-            let short_name = info.short_name.clone();
-            let category = info.category.clone();
-            let description = info.description.clone();
-            let module_path = info.module_path.clone();
-            let type_path_full = info.type_path_full.clone();
-
-            // Subtitle: description takes priority, otherwise module path
-            let subtitle = if !description.is_empty() {
-                description.clone()
-            } else {
-                module_path.clone()
-            };
-
-            let entry_id = commands
-                .spawn((
-                    ComponentPickerEntry {
-                        short_name: short_name.clone(),
-                        module_path: module_path.clone(),
-                        category: category.clone(),
-                        description: description.clone(),
-                    },
-                    Node {
-                        flex_direction: FlexDirection::Column,
-                        padding: UiRect::axes(
-                            Val::Px(tokens::SPACING_LG),
-                            Val::Px(tokens::SPACING_SM),
-                        ),
-                        width: Val::Percent(100.0),
-                        ..Default::default()
-                    },
-                    BackgroundColor(Color::NONE),
-                    ChildOf(list),
-                    observe({
-                        let type_path_full = type_path_full.clone();
-                        move |mut click: On<Pointer<Click>>,
-                              mut commands: Commands,
-                              mut pickers: Query<Entity, With<ComponentPicker>>| {
-                            click.propagate(false); // Don't let click through to backdrop
-                            commands
-                                .operator(crate::inspector::ops::ComponentAddOp::ID)
-                                .param("entity", source_entity)
-                                .param("type_path", type_path_full.clone())
-                                .call();
-                            // Close the picker dialog
-                            for picker in &mut pickers {
-                                commands.entity(picker).despawn();
-                            }
-                        }
-                    }),
-                    observe(
-                        move |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
-                            if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                                bg.0 = tokens::HOVER_BG;
-                            }
-                        },
-                    ),
-                    observe(
-                        move |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-                            if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                                bg.0 = Color::NONE;
-                            }
-                        },
-                    ),
-                ))
-                .id();
-
-            // Line 1: short name + optional category badge
-            let row = commands
-                .spawn((
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        justify_content: JustifyContent::SpaceBetween,
-                        width: Val::Percent(100.0),
-                        ..Default::default()
-                    },
-                    ChildOf(entry_id),
-                ))
-                .id();
-
-            commands.spawn((
-                Text::new(short_name),
-                TextFont {
-                    font_size: tokens::FONT_MD,
-                    ..Default::default()
-                },
-                ThemedText,
-                ChildOf(row),
-            ));
-
-            if !category.is_empty() {
-                commands.spawn((
-                    Text::new(category),
-                    TextFont {
-                        font_size: tokens::FONT_SM,
-                        ..Default::default()
-                    },
-                    TextColor(tokens::TEXT_SECONDARY),
-                    ChildOf(row),
-                ));
-            }
-
-            // Line 2: subtitle (description or module path)
-            if !subtitle.is_empty() {
-                commands.spawn((
-                    Text::new(subtitle),
-                    TextFont {
-                        font_size: tokens::FONT_SM,
-                        ..Default::default()
-                    },
-                    TextColor(tokens::TEXT_SECONDARY),
-                    ChildOf(entry_id),
-                ));
-            }
-        }
-    }
-}
-
-/// Filter the component picker list based on search input.
-pub(crate) fn filter_component_picker(
-    search_query: Query<&TextEditValue, (With<ComponentPickerSearch>, Changed<TextEditValue>)>,
-    entries: Query<(Entity, &ComponentPickerEntry)>,
-    headers: Query<(Entity, &ComponentPickerSectionHeader)>,
-    mut node_query: Query<&mut Node>,
-) {
-    let Ok(search) = search_query.single() else {
-        return;
-    };
-    let filter = search.0.trim().to_lowercase();
-
-    // Track which groups have visible entries
-    let mut visible_groups: HashSet<String> = HashSet::new();
-
-    for (entity, entry) in &entries {
-        let matches = filter.is_empty()
-            || entry.short_name.to_lowercase().contains(&filter)
-            || entry.module_path.to_lowercase().contains(&filter)
-            || entry.category.to_lowercase().contains(&filter)
-            || entry.description.to_lowercase().contains(&filter);
-
-        if let Ok(mut node) = node_query.get_mut(entity) {
-            node.display = if matches {
-                Display::Flex
-            } else {
-                Display::None
-            };
-        }
-
-        if matches {
-            // Determine which group this entry belongs to
-            if !entry.category.is_empty() {
-                visible_groups.insert(entry.category.clone());
-            } else if entry.module_path.starts_with("bevy") {
-                visible_groups.insert("Bevy".to_string());
-            } else {
-                visible_groups.insert("Game".to_string());
-            }
-        }
     }
 
-    // Show/hide section headers based on whether their group has visible entries
-    for (entity, header) in &headers {
-        if let Ok(mut node) = node_query.get_mut(entity) {
-            node.display = if filter.is_empty() || visible_groups.contains(&header.group) {
-                Display::Flex
-            } else {
-                Display::None
-            };
-        }
+    // Line 2: subtitle (description or module path)
+    if !subtitle.is_empty() {
+        commands.spawn((
+            Text::new(subtitle),
+            TextFont {
+                font_size: tokens::TEXT_SIZE_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+            ChildOf(entry_id),
+        ));
     }
-}
 
-pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<ComponentPickerCloseOp>();
-    let ext = ctx.id();
-    ctx.spawn((
-        Action::<ComponentPickerCloseOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Escape, Press::default())],
-    ));
-}
-
-fn component_picker_open(pickers: Query<(), With<ComponentPicker>>) -> bool {
-    !pickers.is_empty()
-}
-
-/// Close the component picker dialog. Triggered by Escape via BEI.
-#[operator(
-    id = "component_picker.close",
-    label = "Close Component Picker",
-    description = "Close the component picker.",
-    is_available = component_picker_open,
-    allows_undo = false,
-)]
-pub(crate) fn component_picker_close(
-    _: In<OperatorParameters>,
-    pickers: Query<Entity, With<ComponentPicker>>,
-    mut commands: Commands,
-) -> OperatorResult {
-    for entity in &pickers {
-        commands.entity(entity).despawn();
-    }
-    OperatorResult::Finished
+    Ok(())
 }

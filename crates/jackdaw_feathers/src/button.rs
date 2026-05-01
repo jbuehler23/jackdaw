@@ -1,3 +1,4 @@
+use bevy::input_focus::InputFocus;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use jackdaw_jsn::PropertyValue;
@@ -6,7 +7,7 @@ use std::borrow::Cow;
 
 use crate::icons::EditorFont;
 use crate::tokens::{
-    CORNER_RADIUS_LG, PRIMARY_COLOR, TEXT_BODY_COLOR, TEXT_DISPLAY_COLOR, TEXT_MUTED_COLOR,
+    BORDER_RADIUS_MD, PRIMARY_COLOR, TEXT_BODY_COLOR, TEXT_DISPLAY_COLOR, TEXT_MUTED_COLOR,
     TEXT_SIZE, TEXT_SIZE_SM,
 };
 
@@ -234,7 +235,7 @@ impl ButtonVariant {
 }
 
 impl ButtonSize {
-    fn width(&self) -> Val {
+    pub fn width(&self) -> Val {
         match self {
             // 22px frame fits inside the 30px-tall toolbar with 4px
             // vertical breathing. Glyph at `icon_size = 16` fills
@@ -247,19 +248,19 @@ impl ButtonSize {
             Self::MD => Val::Auto,
         }
     }
-    fn height(&self) -> Val {
+    pub fn height(&self) -> Val {
         match self {
             Self::IconSM => Val::Px(20.0),
             _ => Val::Px(22.0),
         }
     }
-    fn padding(&self) -> Val {
+    pub fn padding(&self) -> Val {
         match self {
             Self::MD => px(12.0),
             Self::Icon | Self::IconSM => px(0.0),
         }
     }
-    fn icon_size(&self) -> f32 {
+    pub fn icon_size(&self) -> f32 {
         match self {
             Self::IconSM => 14.0,
             Self::Icon | Self::MD => 16.0,
@@ -277,17 +278,17 @@ struct ButtonConfig {
     initialized: bool,
 }
 
-#[derive(Default)]
 pub struct ButtonProps {
     pub content: String,
     pub variant: ButtonVariant,
+    pub call_operator: Option<Cow<'static, str>>,
     pub size: ButtonSize,
     pub align_left: bool,
     pub left_icon: Option<Icon>,
     pub right_icon: Option<Icon>,
     pub direction: FlexDirection,
     pub subtitle: Option<String>,
-    pub call_operator: Option<Cow<'static, str>>,
+    pub border_radius: BorderRadius,
 }
 
 impl ButtonProps {
@@ -323,6 +324,10 @@ impl ButtonProps {
     }
     pub fn with_subtitle(mut self, subtitle: impl Into<String>) -> Self {
         self.subtitle = Some(subtitle.into());
+        self
+    }
+    pub fn with_border_radius(mut self, radius: BorderRadius) -> Self {
+        self.border_radius = radius;
         self
     }
     /// Override the button's main label. Useful in combination with
@@ -383,6 +388,7 @@ pub(crate) fn button_base(
     size: ButtonSize,
     align_left: bool,
     direction: FlexDirection,
+    border_radius: BorderRadius,
 ) -> impl Bundle {
     let is_column = direction == FlexDirection::Column;
 
@@ -402,7 +408,7 @@ pub(crate) fn button_base(
             height: if is_column { Val::Auto } else { size.height() },
             padding: UiRect::axes(size.padding(), if is_column { px(6.0) } else { px(0.0) }),
             border: UiRect::all(variant.border()),
-            border_radius: BorderRadius::all(CORNER_RADIUS_LG),
+            border_radius,
             flex_direction: direction,
             column_gap: px(6.0),
             row_gap: px(6.0),
@@ -443,10 +449,11 @@ pub fn button(props: ButtonProps) -> impl Bundle {
         direction,
         subtitle,
         call_operator,
+        border_radius,
     } = props;
 
     (
-        button_base(variant, size, align_left, direction),
+        button_base(variant, size, align_left, direction, border_radius),
         ButtonConfig {
             content,
             left_icon,
@@ -604,27 +611,32 @@ fn setup_button(
 }
 
 fn handle_hover(
+    // Re-render when either the hover state OR the variant
+    // changed. Without `Changed<ButtonVariant>` a toolbar button
+    // whose variant flips Active <-> Ghost (driven by an external
+    // system, e.g. `update_toolbar_button_variants`) only picks
+    // up the new bg the next time the cursor crosses it; the
+    // user sees stale highlights.
+    changed: Query<(), Or<(Changed<Hovered>, Changed<ButtonVariant>)>>,
     mut buttons: Query<
         (
+            Entity,
             &ButtonVariant,
             &Hovered,
             &mut BackgroundColor,
             &mut BorderColor,
         ),
-        // Re-render when either the hover state OR the variant
-        // changed. Without `Changed<ButtonVariant>` a toolbar button
-        // whose variant flips Active <-> Ghost (driven by an external
-        // system, e.g. `update_toolbar_button_variants`) only picks
-        // up the new bg the next time the cursor crosses it; the
-        // user sees stale highlights.
-        (
-            With<EditorButton>,
-            Or<(Changed<Hovered>, Changed<ButtonVariant>)>,
-        ),
+        With<EditorButton>,
     >,
+    focus: Res<InputFocus>,
 ) {
-    for (variant, hovered, mut bg, mut border) in &mut buttons {
-        let is_hovered = hovered.get();
+    let focus_changed = focus.is_changed();
+    for (entity, variant, hovered, mut bg, mut border) in &mut buttons {
+        if !(focus_changed || changed.get(entity).is_ok()) {
+            continue;
+        };
+
+        let is_hovered = hovered.get() || focus.0 == Some(entity);
         bg.0 = variant
             .bg_color(is_hovered)
             .with_alpha(variant.bg_opacity(is_hovered))
@@ -676,7 +688,13 @@ pub fn icon_button(props: IconButtonProps, icon_font: &Handle<Font>) -> impl Bun
     let icon_color = color.unwrap_or(variant.text_color()).with_alpha(alpha);
 
     (
-        button_base(variant, size, false, FlexDirection::Row),
+        button_base(
+            variant,
+            size,
+            false,
+            FlexDirection::Row,
+            BorderRadius::all(px(BORDER_RADIUS_MD)),
+        ),
         children![(
             Text::new(icon.unicode()),
             TextFont {
@@ -703,4 +721,21 @@ pub fn set_button_variant(
             .border_color()
             .with_alpha(variant.border_opacity(false)),
     );
+}
+
+impl Default for ButtonProps {
+    fn default() -> Self {
+        Self {
+            content: Default::default(),
+            variant: Default::default(),
+            call_operator: Default::default(),
+            size: Default::default(),
+            align_left: Default::default(),
+            left_icon: Default::default(),
+            right_icon: Default::default(),
+            direction: Default::default(),
+            subtitle: Default::default(),
+            border_radius: BorderRadius::all(px(BORDER_RADIUS_MD)),
+        }
+    }
 }
