@@ -30,11 +30,7 @@ bevy = "0.18"
 # vanilla cargo, no rustc-wrapper, no SDK proxy, and no
 # platform-specific link issues. `default-features = false` keeps
 # us off the experimental dylib path.
-#
-# jackdaw 0.4 isn't on crates.io yet; pin to the main branch until
-# it ships. Switch to `jackdaw = { version = "0.4", default-features = false }`
-# when available.
-jackdaw = { git = "https://github.com/jbuehler23/jackdaw", branch = "main", default-features = false }
+jackdaw = { version = "0.4", default-features = false }
 
 [profile.dev]
 opt-level = 1

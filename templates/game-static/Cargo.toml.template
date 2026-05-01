@@ -41,15 +41,11 @@ bevy = "0.18"
 # regular library. This is the recommended path. Builds with
 # vanilla cargo, no rustc-wrapper, no SDK proxy. `default-features = false`
 # keeps us off the experimental dylib path.
-#
-# jackdaw 0.4 isn't on crates.io yet; pin to the main branch until
-# it ships. Switch to `jackdaw = { version = "0.4", default-features = false, optional = true }`
-# when available.
-jackdaw = { git = "https://github.com/jbuehler23/jackdaw", branch = "main", default-features = false, optional = true }
+jackdaw = { version = "0.4", default-features = false, optional = true }
 # Runtime-only loader for the .jsn scenes the editor authors. The
 # standalone binary uses this to spawn the same scene the editor
 # previews, with no editor dependencies pulled in.
-jackdaw_runtime = { git = "https://github.com/jbuehler23/jackdaw", branch = "main" }
+jackdaw_runtime = "0.4"
 # Claims the SIGINT/SIGTERM handler at startup so Ctrl+C in the
 # terminal actually kills the process. Without this, transitive
 # deps (wgpu, gilrs) install their own handler that swallows the

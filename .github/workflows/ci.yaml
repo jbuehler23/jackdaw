@@ -138,10 +138,14 @@ jobs:
             --silent
           # Pin the scaffolded project's `jackdaw` / `jackdaw_runtime`
           # deps to THIS checkout so we test the template against
-          # the PR under review, not against `main`.
+          # the PR under review, not against whatever's on crates.io
+          # (or even before 0.4.0 ships at all). `[patch.crates-io]`
+          # overrides the source: cargo resolves the version
+          # constraint against the patched path's Cargo.toml, so
+          # this works pre-publish.
           cat >> "$RUNNER_TEMP/$name/Cargo.toml" <<EOF
 
-          [patch."https://github.com/jbuehler23/jackdaw"]
+          [patch.crates-io]
           jackdaw = { path = "$checkout" }
           jackdaw_runtime = { path = "$checkout/crates/jackdaw_runtime" }
           EOF
