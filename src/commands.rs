@@ -229,20 +229,37 @@ impl AddComponent {
 
 impl EditorCommand for AddComponent {
     fn execute(&mut self, world: &mut World) {
+        info!(
+            "AddComponent::execute entered: type_path={}, type_id={:?}, component_id={:?}, entity={:?}",
+            self.type_path, self.type_id, self.component_id, self.entity
+        );
         let registry = world.resource::<AppTypeRegistry>().clone();
         let registry = registry.read();
 
         let Some(registration) = registry.get(self.type_id) else {
+            warn!(
+                "AddComponent::execute: registry has no entry for type_id {:?} (type_path={})",
+                self.type_id, self.type_path
+            );
             return;
         };
 
         // Create default value
         let Some(reflect_default) = registration.data::<ReflectDefault>() else {
-            warn!("No ReflectDefault for component  -- cannot add");
+            warn!(
+                "AddComponent::execute: type {} has no ReflectDefault. Add `Default` to derives \
+                 and `Default` to `#[reflect(...)]`.",
+                self.type_path
+            );
             return;
         };
         let default_value = reflect_default.default();
         let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+            warn!(
+                "AddComponent::execute: type {} has no ReflectComponent. Add `Component` to \
+                 `#[reflect(...)]` (e.g. `#[reflect(Component, Default)]`).",
+                self.type_path
+            );
             return;
         };
 

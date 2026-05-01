@@ -677,40 +677,6 @@ fn render_cargo_config(paths: &SdkPaths) -> String {
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[test]
-    fn render_cargo_config_includes_windows_linker_block() {
-        let paths = SdkPaths {
-            wrapper: PathBuf::from("/abs/path/jackdaw-rustc-wrapper"),
-            dylib: PathBuf::from("/abs/path/libjackdaw_sdk.so"),
-            deps: PathBuf::from("/abs/path/deps"),
-        };
-        let body = render_cargo_config(&paths);
-        assert!(body.contains("[target.x86_64-pc-windows-msvc]"));
-        assert!(body.contains("linker = 'rust-lld'"));
-        assert!(body.contains("link-arg=-fuse-ld=lld"));
-    }
-
-    #[test]
-    fn render_cargo_config_preserves_wrapper_and_env_blocks() {
-        let paths = SdkPaths {
-            wrapper: PathBuf::from("/w"),
-            dylib: PathBuf::from("/d"),
-            deps: PathBuf::from("/p"),
-        };
-        let body = render_cargo_config(&paths);
-        assert!(body.contains("[build]"));
-        assert!(body.contains("rustc-wrapper = '/w'"));
-        assert!(body.contains("[env]"));
-        assert!(body.contains("JACKDAW_SDK_DYLIB = '/d'"));
-        assert!(body.contains("JACKDAW_SDK_DEPS = '/p'"));
-    }
-}
-
 /// Resolve `bevy` on PATH. Returns the absolute path if found, so
 /// the caller can invoke it without relying on shell resolution
 /// (useful in GUI sessions with minimal env).
@@ -745,4 +711,38 @@ pub fn which_cargo_generate() -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn render_cargo_config_includes_windows_linker_block() {
+        let paths = SdkPaths {
+            wrapper: PathBuf::from("/abs/path/jackdaw-rustc-wrapper"),
+            dylib: PathBuf::from("/abs/path/libjackdaw_sdk.so"),
+            deps: PathBuf::from("/abs/path/deps"),
+        };
+        let body = render_cargo_config(&paths);
+        assert!(body.contains("[target.x86_64-pc-windows-msvc]"));
+        assert!(body.contains("linker = 'rust-lld'"));
+        assert!(body.contains("link-arg=-fuse-ld=lld"));
+    }
+
+    #[test]
+    fn render_cargo_config_preserves_wrapper_and_env_blocks() {
+        let paths = SdkPaths {
+            wrapper: PathBuf::from("/w"),
+            dylib: PathBuf::from("/d"),
+            deps: PathBuf::from("/p"),
+        };
+        let body = render_cargo_config(&paths);
+        assert!(body.contains("[build]"));
+        assert!(body.contains("rustc-wrapper = '/w'"));
+        assert!(body.contains("[env]"));
+        assert!(body.contains("JACKDAW_SDK_DYLIB = '/d'"));
+        assert!(body.contains("JACKDAW_SDK_DEPS = '/p'"));
+    }
 }

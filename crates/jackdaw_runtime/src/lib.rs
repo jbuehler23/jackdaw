@@ -39,7 +39,10 @@ impl Plugin for JackdawPlugin {
         app.init_asset::<JackdawScene>()
             .init_asset_loader::<JackdawSceneLoader>();
 
-        app.add_systems(Update, spawn_loaded_scenes);
+        app.add_systems(
+            Update,
+            (clear_modified_scene_roots, spawn_loaded_scenes).chain(),
+        );
         app.add_observer(jackdaw_jsn::mesh_rebuild::rebuild_brush_meshes);
     }
 }
@@ -115,6 +118,46 @@ pub enum JackdawLoadError {
     Io(String),
     #[error("Parse error: {0}")]
     Parse(String),
+}
+
+/// React to `assets/scene.jsn` (or any `JackdawScene`) changing on
+/// disk: despawn the previously-spawned scene children and clear
+/// the `SceneSpawned` marker so the next tick of
+/// `spawn_loaded_scenes` re-instantiates the scene from the new
+/// asset content. Combined with Bevy's `AssetPlugin {
+/// watch_for_changes_override: Some(true), .. }` this gives the
+/// editor-running-alongside-game live-reload workflow: save in
+/// jackdaw, see updated entities in the standalone runner without
+/// restarting it.
+fn clear_modified_scene_roots(
+    mut events: bevy::ecs::message::MessageReader<bevy::asset::AssetEvent<JackdawScene>>,
+    roots: Query<(Entity, &JackdawSceneRoot, Option<&Children>), With<SceneSpawned>>,
+    mut commands: Commands,
+) {
+    use bevy::asset::AssetEvent;
+
+    let modified: Vec<bevy::asset::AssetId<JackdawScene>> = events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Modified { id } | AssetEvent::LoadedWithDependencies { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    if modified.is_empty() {
+        return;
+    }
+
+    for (root_entity, root, kids) in &roots {
+        if !modified.contains(&root.0.id()) {
+            continue;
+        }
+        if let Some(kids) = kids {
+            for child in kids.iter() {
+                commands.entity(child).despawn();
+            }
+        }
+        commands.entity(root_entity).remove::<SceneSpawned>();
+    }
 }
 
 fn spawn_loaded_scenes(

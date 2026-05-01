@@ -951,7 +951,7 @@ fn on_context_menu_action(
             if let Some(target) = target_entity {
                 commands
                     .operator(RenameBeginOp::ID)
-                    .param("entity", target.to_bits() as i64)
+                    .param("entity", target)
                     .call();
             }
         }
@@ -1113,7 +1113,7 @@ fn on_tree_row_start_rename(event: On<TreeRowStartRename>, mut commands: Command
     let target = event.source_entity;
     commands
         .operator(RenameBeginOp::ID)
-        .param("entity", target.to_bits() as i64)
+        .param("entity", target)
         .call();
 }
 

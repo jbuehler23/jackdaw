@@ -26,7 +26,9 @@
 //! 5. Click Play. The cube spins. Drag `speed` to change it live.
 //! 6. Click Stop. The authored entity is preserved.
 //! 7. `cargo play` (or `cargo run`) launches the same game without
-//!    the editor in the loop.
+//!    the editor in the loop. The standalone binary loads
+//!    `assets/scene.jsn`, registers your reflected components, and
+//!    runs `MyGamePlugin` against the spawned entities.
 
 use bevy::prelude::*;
 

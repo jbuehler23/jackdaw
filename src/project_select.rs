@@ -1443,7 +1443,7 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         spawn_linkage_button(
             world,
             linkage_row,
-            "Dylib",
+            "Dylib (experimental)",
             TemplateLinkage::Dylib,
             initial_linkage,
             editor_font.clone(),
@@ -1454,8 +1454,10 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         // yet at the project-select stage.
         world.spawn((
             Text::new(
-                "Static: plainly-compiled rlib/bin (recommended). \
-                 Dylib: hot-reloadable cdylib, requires the editor's `dylib` feature.",
+                "Static: plainly-compiled rlib/bin (recommended, ships with the bundled \
+                 templates/game-static and templates/extension-static). \
+                 Dylib: hot-reloadable cdylib, experimental and requires the editor's \
+                 `dylib` feature.",
             ),
             TextFont {
                 font: editor_font.clone(),
@@ -1581,7 +1583,9 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
             ChildOf(local_row),
         ))
         .id();
-    world.entity_mut(local_browse).observe(on_browse_template_folder);
+    world
+        .entity_mut(local_browse)
+        .observe(on_browse_template_folder);
 
     // Sub-label: Git URL
     world.spawn((
@@ -1947,10 +1951,7 @@ fn on_create_new_project(
             // editor-binary build.
             let build_after_scaffold = if matches!(
                 (state.linkage, state.preset.as_ref()),
-                (
-                    TemplateLinkage::Static,
-                    Some(TemplatePreset::Extension)
-                )
+                (TemplateLinkage::Static, Some(TemplatePreset::Extension))
             ) {
                 false
             } else {
@@ -2452,7 +2453,7 @@ fn apply_pending_static_open(world: &mut World) {
 /// Three steps:
 ///   1. If `pending_static_editor_build` is queued and no task is
 ///      running, kick off `cargo build --bin editor --features
-///      editor` and flip [`BuildStatus`] to `Building`.
+///      editor` and flip [`BuildStatus`](crate::build_status::BuildStatus) to `Building`.
 ///   2. If a task is running, poll it. On completion, flip
 ///      `BuildStatus` to `Ready { auto_reload }` or `Failed`.
 ///   3. If `BuildStatus` is `Ready` AND `auto_reload`, fire

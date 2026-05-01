@@ -338,7 +338,7 @@ pub(crate) fn on_add_component_button_click(
                             click.propagate(false); // Don't let click through to backdrop
                             commands
                                 .operator(crate::inspector::ops::ComponentAddOp::ID)
-                                .param("entity", source_entity.to_bits() as i64)
+                                .param("entity", source_entity)
                                 .param("type_path", type_path_full.clone())
                                 .call();
                             // Close the picker dialog

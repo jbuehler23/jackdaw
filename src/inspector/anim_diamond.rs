@@ -117,7 +117,7 @@ pub fn on_diamond_click(
     };
     commands
         .operator(super::ops::AnimationToggleKeyframeOp::ID)
-        .param("entity", button_ref.source_entity.to_bits() as i64)
+        .param("entity", button_ref.source_entity)
         .param(
             "component_type_path",
             button_ref.component_type_path.clone(),

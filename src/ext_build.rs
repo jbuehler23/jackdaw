@@ -415,8 +415,19 @@ fn run_cargo_with_progress(
             // "Compiling X" stream alongside the launcher modal's
             // crate counter. Without this the user sees a
             // launcher window with no apparent activity for
-            // several minutes on first build.
-            eprintln!("{line}");
+            // several minutes on first build. `print_stderr` is
+            // disallowed in the rest of the editor where logs go
+            // through `tracing`, but here we're proxying child
+            // process output for the human watching the terminal,
+            // not emitting our own diagnostics, so the workspace
+            // lint is suppressed deliberately.
+            #[expect(
+                clippy::print_stderr,
+                reason = "tee child cargo stderr to user terminal"
+            )]
+            {
+                eprintln!("{line}");
+            }
             if let Some(ref s) = stderr_sink
                 && let Ok(mut g) = s.lock()
             {

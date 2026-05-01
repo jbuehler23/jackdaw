@@ -7,18 +7,19 @@
 //! and calling:
 //!
 //! ```ignore
+//! use bevy::prelude::*;
 //! use jackdaw::prelude::*;
 //!
-//! App::new()
-//!     .add_plugins(DefaultPlugins)
-//!     .add_plugins(
-//!         EditorPlugin::new()
-//!             .with_extension("{{project-name}}", || {
-//!                 Box::new({{crate_name}}::{{crate_name | pascal_case}})
-//!             })
-//!             .build(),
-//!     )
-//!     .run();
+//! fn main() {
+//!     App::new()
+//!         .add_plugins(DefaultPlugins)
+//!         .add_plugins(EditorPlugins::default())
+//!         .add_plugins(
+//!             ExtensionPlugin::new()
+//!                 .with_extension::<{{crate_name}}::{{crate_name | pascal_case}}>(),
+//!         )
+//!         .run();
+//! }
 //! ```
 //!
 //! A `src/main.rs` launcher that does exactly this is bundled
@@ -29,13 +30,15 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use jackdaw::prelude::*;
 
-/// The extension's entry point. Instantiate with
-/// `Box::new({{crate_name | pascal_case}})` and pass to
-/// [`EditorPlugin::with_extension`].
+/// The extension's entry point. Register it with
+/// `ExtensionPlugin::new().with_extension::<{{crate_name | pascal_case}}>()`.
+/// Must be a zero-sized type implementing `Default` so the editor
+/// can construct it on demand at startup.
+#[derive(Default)]
 pub struct {{crate_name | pascal_case}};
 
 impl JackdawExtension for {{crate_name | pascal_case}} {
-    fn name() -> String {
+    fn id(&self) -> String {
         "{{project-name}}".into()
     }
 
@@ -46,10 +49,9 @@ impl JackdawExtension for {{crate_name | pascal_case}} {
             icon: None,
             default_area: None,
             priority: None,
-            build: Arc::new(|world: &mut World, parent: Entity| {
-                world.spawn((
-                    ChildOf(parent),
-                    Text::new("Hello from the {{project-name}} extension!"),
+            build: Arc::new(|spawner: &mut ChildSpawner| {
+                spawner.spawn(Text::new(
+                    "Hello from the {{project-name}} extension!",
                 ));
             }),
         });

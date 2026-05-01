@@ -19,12 +19,10 @@ use jackdaw::prelude::*;
 fn main() -> AppExit {
     App::new()
         .add_plugins(DefaultPlugins)
+        .add_plugins(EditorPlugins::default())
         .add_plugins(
-            EditorPlugin::new()
-                .with_extension("{{project-name}}", || {
-                    Box::new({{crate_name}}::{{crate_name | pascal_case}})
-                })
-                .build(),
+            ExtensionPlugin::new()
+                .with_extension::<{{crate_name}}::{{crate_name | pascal_case}}>(),
         )
         .run()
 }

@@ -707,7 +707,7 @@ pub(crate) fn spawn_component_display(
 
     if component.is_some() {
         let type_path_owned = type_path.to_string();
-        let entity_bits = entity.to_bits() as i64;
+        let entity_param = entity;
 
         // Revert button (only shown for overridden prefab components).
         // `Hovered + ButtonOperatorCall` are tooltip data sources for
@@ -717,7 +717,7 @@ pub(crate) fn spawn_component_display(
         if is_overridden {
             let revert_type_path = type_path_owned.clone();
             let bo_call = ButtonOperatorCall::new(super::ops::ComponentRevertBaselineOp::ID)
-                .with_param("entity", entity_bits)
+                .with_param("entity", entity_param)
                 .with_param("type_path", revert_type_path.clone());
             commands.spawn((
                 Text::new(String::from(Icon::RotateCcw.unicode())),
@@ -733,7 +733,7 @@ pub(crate) fn spawn_component_display(
                 bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                     commands
                         .operator(super::ops::ComponentRevertBaselineOp::ID)
-                        .param("entity", entity_bits)
+                        .param("entity", entity_param)
                         .param("type_path", revert_type_path.clone())
                         .call();
                 }),
@@ -744,7 +744,7 @@ pub(crate) fn spawn_component_display(
         // tooltip-data + manual-dispatch pattern.
         let remove_path = type_path_owned.clone();
         let remove_call = ButtonOperatorCall::new(super::ops::ComponentRemoveOp::ID)
-            .with_param("entity", entity_bits)
+            .with_param("entity", entity_param)
             .with_param("type_path", remove_path.clone());
         commands.spawn((
             Text::new(String::from(Icon::X.unicode())),
@@ -760,7 +760,7 @@ pub(crate) fn spawn_component_display(
             bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                 commands
                     .operator(super::ops::ComponentRemoveOp::ID)
-                    .param("entity", entity_bits)
+                    .param("entity", entity_param)
                     .param("type_path", type_path_owned.clone())
                     .call();
             }),

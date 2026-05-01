@@ -221,6 +221,16 @@ lto = "thin"
 [profile.release.package.jackdaw_sdk]
 codegen-units = 1
 
+# Thin shim that re-exports `jackdaw_rustc_wrapper::run()`. We turn
+# off doc generation because rustdoc's output path collides with the
+# `jackdaw_rustc_wrapper` lib crate's docs (cargo translates dashes
+# to underscores), and the shim has nothing user-facing to document
+# anyway.
+[[bin]]
+name = "jackdaw-rustc-wrapper"
+path = "src/bin/jackdaw-rustc-wrapper.rs"
+doc = false
+
 [[example]]
 name = "minimal_extension"
 path = "examples/extension/minimal_extension.rs"
