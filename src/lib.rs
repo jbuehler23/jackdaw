@@ -32,7 +32,7 @@ pub mod keybinds;
 
 use std::{collections::BTreeMap, marker::PhantomData};
 
-pub use inspector::{EditorMeta, ReflectEditorMeta};
+pub use inspector::{EditorCategory, EditorDescription};
 pub mod core_extension;
 pub mod document_ops;
 pub mod ext_build;
@@ -56,6 +56,7 @@ pub mod prefab_picker;
 pub mod project;
 pub mod project_files;
 pub mod project_select;
+pub mod reflect_default;
 pub mod remote;
 pub mod restart;
 pub mod scene_io;
@@ -97,8 +98,18 @@ use selection::Selection;
 
 /// Everything needed to start using Jackdaw.
 pub mod prelude {
-    pub use crate::{DylibLoaderPlugin, EditorPlugins, ExtensionPlugin};
+    pub use crate::{
+        DylibLoaderPlugin, EditorCategory, EditorDescription, EditorPlugins, ExtensionPlugin,
+    };
     pub use jackdaw_api::prelude::*;
+
+    // Ambient plugins re-exported so binaries can write
+    // `add_plugins((PhysicsPlugins::default(), EnhancedInputPlugin))`
+    // without direct deps on avian3d / bevy_enhanced_input.
+    // Editor plugins assert presence rather than adding, so user
+    // code can add the same plugins without conflict.
+    pub use avian3d::prelude::PhysicsPlugins;
+    pub use bevy_enhanced_input::prelude::EnhancedInputPlugin;
 }
 
 /// System set for all editor interaction systems (input handling, viewport clicks,
@@ -216,133 +227,160 @@ pub struct EditorCorePlugin;
 
 impl Plugin for EditorCorePlugin {
     fn build(&self, app: &mut App) {
-        // Disable InputDispatchPlugin from FeathersPlugins because bevy_ui_text_input's
-        // TextInputPlugin also adds it unconditionally and panics on duplicates.
-        app.init_state::<AppState>()
-            .add_plugins((
-                FeathersPlugins.build().disable::<InputDispatchPlugin>(),
-                EditorFeathersPlugin,
-                EnhancedInputPlugin,
-            ))
-            .add_plugins((
-                jackdaw_jsn::JsnPlugin {
-                    runtime_mesh_rebuild: false,
-                },
-                project_select::ProjectSelectPlugin,
-                inspector::InspectorPlugin,
-                hierarchy::HierarchyPlugin,
-                viewport::ViewportPlugin,
-                gizmos::TransformGizmosPlugin,
-                commands::CommandHistoryPlugin,
-                selection::SelectionPlugin,
-                entity_ops::EntityOpsPlugin,
-                scene_io::SceneIoPlugin,
-                asset_browser::AssetBrowserPlugin,
-                viewport_select::ViewportSelectPlugin,
-                snapping::SnappingPlugin,
-            ))
-            .add_plugins(keybinds::KeybindsPlugin)
-            .add_plugins(keybind_settings::KeybindSettingsPlugin)
-            .add_plugins((
-                viewport_overlays::ViewportOverlaysPlugin,
-                view_modes::ViewModesPlugin,
-                status_bar::StatusBarPlugin,
-                project_files::ProjectFilesPlugin,
-                modal_transform::ModalTransformPlugin,
-                custom_properties::CustomPropertiesPlugin,
-                entity_templates::EntityTemplatesPlugin,
-                brush::BrushPlugin,
-                material_preview::MaterialPreviewPlugin,
-                undo_snapshot::plugin,
-            ))
-            .add_plugins((
-                material_browser::MaterialBrowserPlugin,
-                measure_tool::MeasureToolPlugin,
-                draw_brush::DrawBrushPlugin,
-                face_grid::FaceGridPlugin,
-                alignment_guides::AlignmentGuidesPlugin,
-                navmesh::NavmeshPlugin,
-                terrain::TerrainPlugin,
-                remote::RemoteConnectionPlugin,
-            ))
-            .add_plugins(jackdaw_avian_integration::PhysicsOverlaysPlugin::<
-                selection::Selected,
-            >::new())
-            .add_plugins(jackdaw_avian_integration::simulation::PhysicsSimulationPlugin)
-            .add_plugins(physics_brush_bridge::PhysicsBrushBridgePlugin)
-            .add_plugins(physics_tool::PhysicsToolPlugin)
-            .add_plugins(operator_tooltip::OperatorTooltipPlugin)
-            .add_plugins(jackdaw_node_graph::NodeGraphPlugin)
-            .add_plugins(jackdaw_animation::AnimationPlugin)
-            .add_plugins(jackdaw_panels::DockPlugin)
-            .add_plugins(jackdaw_api_internal::ExtensionLoaderPlugin)
-            .add_plugins(extension_watcher::ExtensionWatcherPlugin)
-            .add_plugins(extensions_dialog::ExtensionsDialogPlugin)
-            .add_plugins(hot_reload::HotReloadPlugin)
-            .add_plugins(pie::PiePlugin)
-            .add_systems(Startup, (register_workspaces, sync_icon_font))
-            .configure_sets(
-                Update,
-                EditorInteractionSystems
-                    .run_if(in_state(AppState::Editor))
-                    .run_if(no_dialog_open),
+        // Disable `InputDispatchPlugin` from FeathersPlugins
+        // because `bevy_ui_text_input`'s `TextInputPlugin` adds
+        // it unconditionally and panics on duplicates.
+        //
+        // `EnhancedInputPlugin` is owned by the hosting binary's
+        // `main.rs` (launcher + the static template's
+        // `editor.rs.template`). Asserting presence here, rather
+        // than adding it, lets user `MyGamePlugin`s add the same
+        // plugin without a duplicate-plugin panic.
+        debug_assert!(
+            app.is_plugin_added::<EnhancedInputPlugin>(),
+            "EditorCorePlugin requires EnhancedInputPlugin first; \
+             add `EnhancedInputPlugin` in main.rs before EditorPlugins."
+        );
+        app.init_state::<AppState>().add_plugins((
+            FeathersPlugins.build().disable::<InputDispatchPlugin>(),
+            EditorFeathersPlugin,
+        ));
+        app.add_plugins((
+            jackdaw_jsn::JsnPlugin {
+                runtime_mesh_rebuild: false,
+            },
+            project_select::ProjectSelectPlugin,
+            inspector::InspectorPlugin,
+            hierarchy::HierarchyPlugin,
+            viewport::ViewportPlugin,
+            gizmos::TransformGizmosPlugin,
+            commands::CommandHistoryPlugin,
+            selection::SelectionPlugin,
+            entity_ops::EntityOpsPlugin,
+            scene_io::SceneIoPlugin,
+            asset_browser::AssetBrowserPlugin,
+            viewport_select::ViewportSelectPlugin,
+            snapping::SnappingPlugin,
+        ))
+        .add_plugins(keybinds::KeybindsPlugin)
+        .add_plugins(keybind_settings::KeybindSettingsPlugin)
+        .add_plugins((
+            viewport_overlays::ViewportOverlaysPlugin,
+            view_modes::ViewModesPlugin,
+            status_bar::StatusBarPlugin,
+            project_files::ProjectFilesPlugin,
+            modal_transform::ModalTransformPlugin,
+            custom_properties::CustomPropertiesPlugin,
+            entity_templates::EntityTemplatesPlugin,
+            brush::BrushPlugin,
+            material_preview::MaterialPreviewPlugin,
+            undo_snapshot::plugin,
+        ))
+        .add_plugins((
+            material_browser::MaterialBrowserPlugin,
+            measure_tool::MeasureToolPlugin,
+            draw_brush::DrawBrushPlugin,
+            face_grid::FaceGridPlugin,
+            alignment_guides::AlignmentGuidesPlugin,
+            navmesh::NavmeshPlugin,
+            terrain::TerrainPlugin,
+            remote::RemoteConnectionPlugin,
+        ))
+        .add_plugins(jackdaw_avian_integration::PhysicsOverlaysPlugin::<
+            selection::Selected,
+        >::new())
+        .add_plugins(jackdaw_avian_integration::simulation::PhysicsSimulationPlugin)
+        .add_plugins(physics_brush_bridge::PhysicsBrushBridgePlugin)
+        .add_plugins(physics_tool::PhysicsToolPlugin)
+        .add_plugins(operator_tooltip::OperatorTooltipPlugin)
+        .add_plugins(jackdaw_node_graph::NodeGraphPlugin)
+        .add_plugins(jackdaw_animation::AnimationPlugin)
+        .add_plugins(jackdaw_panels::DockPlugin)
+        .add_plugins(jackdaw_api_internal::ExtensionLoaderPlugin)
+        .add_plugins(extension_watcher::ExtensionWatcherPlugin)
+        .add_plugins(extensions_dialog::ExtensionsDialogPlugin)
+        .add_plugins(hot_reload::HotReloadPlugin)
+        .add_plugins(pie::PiePlugin)
+        // Force-exit on `AppExit`: bypass wgpu device cleanup
+        // and AsyncComputeTaskPool shutdown that otherwise hang
+        // the process after window close. Hosted here so every
+        // editor binary (launcher + user `cargo editor`) gets
+        // the same shutdown behaviour.
+        .add_systems(
+            Last,
+            |mut events: bevy::ecs::message::MessageReader<AppExit>| {
+                if let Some(exit) = events.read().next() {
+                    let code = match exit {
+                        AppExit::Success => 0,
+                        AppExit::Error(c) => c.get() as i32,
+                    };
+                    std::process::exit(code);
+                }
+            },
+        )
+        .add_systems(Startup, (register_workspaces, sync_icon_font))
+        .configure_sets(
+            Update,
+            EditorInteractionSystems
+                .run_if(in_state(AppState::Editor))
+                .run_if(no_dialog_open),
+        )
+        .configure_sets(
+            PostUpdate,
+            JackdawDrawSystems
+                .after(bevy::transform::TransformSystems::Propagate)
+                .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+                .run_if(in_state(crate::AppState::Editor)),
+        )
+        .insert_resource(UiTheme(create_dark_theme()))
+        .init_resource::<layout::ActiveDocument>()
+        .init_resource::<layout::SceneViewPreset>()
+        .init_resource::<asset_catalog::AssetCatalog>()
+        .init_resource::<jackdaw_jsn::SceneJsnAst>()
+        .init_resource::<MenuBarDirty>()
+        // Always available so the Extensions dialog's runtime
+        // "Install from file" path can push into it even when
+        // `with_dylib_loader()` wasn't called.
+        .init_resource::<jackdaw_loader::LoadedDylibs>()
+        .add_observer(flag_menu_dirty_on_window_add)
+        .add_observer(flag_menu_dirty_on_window_remove)
+        .add_observer(flag_menu_dirty_on_menu_entry_add)
+        .add_observer(flag_menu_dirty_on_menu_entry_remove)
+        .add_systems(
+            OnEnter(AppState::Editor),
+            (spawn_layout, init_layout, populate_menu).chain(),
+        )
+        .add_systems(
+            Update,
+            rebuild_menu_if_dirty.run_if(in_state(AppState::Editor)),
+        )
+        .add_systems(OnExit(AppState::Editor), cleanup_editor)
+        .add_systems(
+            Update,
+            (
+                send_scroll_events,
+                layout::update_toolbar_button_variants,
+                layout::update_active_document_display,
+                layout::update_tab_strip_highlights,
+                auto_hide_internal_entities,
+                decorate_timeline_tooltips,
+                discover_gltf_clips,
+                register_animation_entities_in_ast,
+                follow_scene_selection_to_clip,
+                sync_selected_keyframes_from_selection,
+                auto_save_layout_on_change,
             )
-            .configure_sets(
-                PostUpdate,
-                JackdawDrawSystems
-                    .after(bevy::transform::TransformSystems::Propagate)
-                    .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
-                    .run_if(in_state(crate::AppState::Editor)),
-            )
-            .insert_resource(UiTheme(create_dark_theme()))
-            .init_resource::<layout::ActiveDocument>()
-            .init_resource::<layout::SceneViewPreset>()
-            .init_resource::<asset_catalog::AssetCatalog>()
-            .init_resource::<jackdaw_jsn::SceneJsnAst>()
-            .init_resource::<MenuBarDirty>()
-            // Always available so the Extensions dialog's runtime
-            // "Install from file" path can push into it even when
-            // `with_dylib_loader()` wasn't called.
-            .init_resource::<jackdaw_loader::LoadedDylibs>()
-            .add_observer(flag_menu_dirty_on_window_add)
-            .add_observer(flag_menu_dirty_on_window_remove)
-            .add_observer(flag_menu_dirty_on_menu_entry_add)
-            .add_observer(flag_menu_dirty_on_menu_entry_remove)
-            .add_systems(
-                OnEnter(AppState::Editor),
-                (spawn_layout, init_layout, populate_menu).chain(),
-            )
-            .add_systems(
-                Update,
-                rebuild_menu_if_dirty.run_if(in_state(AppState::Editor)),
-            )
-            .add_systems(OnExit(AppState::Editor), cleanup_editor)
-            .add_systems(
-                Update,
-                (
-                    send_scroll_events,
-                    layout::update_toolbar_button_variants,
-                    layout::update_active_document_display,
-                    layout::update_tab_strip_highlights,
-                    auto_hide_internal_entities,
-                    decorate_timeline_tooltips,
-                    discover_gltf_clips,
-                    register_animation_entities_in_ast,
-                    follow_scene_selection_to_clip,
-                    sync_selected_keyframes_from_selection,
-                    auto_save_layout_on_change,
-                )
-                    .run_if(in_state(AppState::Editor)),
-            )
-            .add_observer(on_workspace_changed)
-            .add_observer(on_scroll)
-            .add_observer(handle_menu_action)
-            .add_observer(on_create_clip_for_selection)
-            .add_observer(on_create_blend_graph_for_selection)
-            .add_observer(on_clip_selector_change)
-            .add_observer(on_clip_name_commit)
-            .add_observer(on_duration_input_commit)
-            .add_observer(on_timeline_keyframe_click);
+                .run_if(in_state(AppState::Editor)),
+        )
+        .add_observer(on_workspace_changed)
+        .add_observer(on_scroll)
+        .add_observer(handle_menu_action)
+        .add_observer(on_create_clip_for_selection)
+        .add_observer(on_create_blend_graph_for_selection)
+        .add_observer(on_clip_selector_change)
+        .add_observer(on_clip_name_commit)
+        .add_observer(on_duration_input_commit)
+        .add_observer(on_timeline_keyframe_click);
 
         app.add_plugins(extension_lifecycle::plugin);
     }
@@ -1738,7 +1776,7 @@ fn on_timeline_keyframe_click(
     event.propagate(false);
 }
 
-/// Mirror the main [`selection::Selection`] → the animation crate's
+/// Mirror the main [`selection::Selection`] ->the animation crate's
 /// [`jackdaw_animation::SelectedKeyframes`] so the timeline
 /// highlight system can tell which diamonds to light up without
 /// the animation crate needing to import `Selection` itself.
@@ -2018,7 +2056,7 @@ fn populate_menu(
         add_menu.push((item.action, item.label));
     }
 
-    // Current hot-reload state → reflect in the menu label.
+    // Current hot-reload state ->reflect in the menu label.
     let hot_reload_on = world
         .get_resource::<hot_reload::HotReloadEnabled>()
         .map(|h| h.0)

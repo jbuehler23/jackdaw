@@ -38,6 +38,18 @@ struct OperatorParamTestMarker {
     value: i32,
 }
 
+/// Minimum-viable component shape: derive + reflect, no
+/// `Default`. The bool/String/f32 fields exercise three
+/// different primitive `ReflectDefault` paths through
+/// `build_reflective_default`.
+#[derive(Component, Reflect, Debug, PartialEq)]
+#[reflect(Component)]
+struct OperatorParamNoDefaultMarker {
+    a: bool,
+    b: String,
+    c: f32,
+}
+
 /// Build the editor test app and register `OperatorParamTestMarker`
 /// for reflection so `component_id_for_path` can find it. The
 /// component starts unseen by the world (no entity has it), so this
@@ -46,6 +58,7 @@ struct OperatorParamTestMarker {
 fn app_with_test_marker() -> App {
     let mut app = util::editor_test_app();
     app.register_type::<OperatorParamTestMarker>();
+    app.register_type::<OperatorParamNoDefaultMarker>();
     app
 }
 
@@ -91,6 +104,37 @@ fn component_add_with_entity_param_inserts_component() {
             .contains::<OperatorParamTestMarker>(),
         "component.add did not insert OperatorParamTestMarker; the entity-param plumbing regressed"
     );
+}
+
+#[test]
+fn component_add_inserts_component_without_default_derive() {
+    // Regression guard: components without a `Default` derive
+    // must still reach the picker and insert via
+    // `build_reflective_default` (which walks field defaults).
+    let mut app = app_with_test_marker();
+    let entity = spawn_selected_target(&mut app);
+
+    let result = app
+        .world_mut()
+        .operator("component.add")
+        .param("entity", entity)
+        .param(
+            "type_path",
+            "operator_entity_params::OperatorParamNoDefaultMarker".to_string(),
+        )
+        .call()
+        .expect("dispatch resolves");
+    assert_eq!(result, OperatorResult::Finished);
+
+    app.update();
+    let inserted = app
+        .world()
+        .entity(entity)
+        .get::<OperatorParamNoDefaultMarker>()
+        .expect("no-default component should land on the entity");
+    assert!(!inserted.a);
+    assert_eq!(inserted.b, "");
+    assert_eq!(inserted.c, 0.0);
 }
 
 #[test]

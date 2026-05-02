@@ -32,16 +32,12 @@ fn has_primary_selection(selection: Res<Selection>) -> bool {
     selection.primary().is_some()
 }
 
-/// Look up the component id and type id for a fully-qualified type
-/// path. If the type is registered for reflection but the world
-/// hasn't seen the component yet (i.e., never inserted into any
-/// entity), force registration via a throwaway temp entity so the
-/// component picker can add user-defined components on first use.
-///
-/// Without this, components like `my_game::SpinningCube` that the
-/// user only `register_type`d (without ever inserting) returned
-/// `None` from `world.components().get_id`, and the picker silently
-/// no-op'd on click.
+/// Look up `(ComponentId, TypeId)` for a type path, registering
+/// the component on a throwaway entity first if the world hasn't
+/// seen it yet. Without this, types only `register_type`'d
+/// (never inserted) would return `None` from
+/// `world.components().get_id` and the picker would silently
+/// no-op on click.
 fn component_id_for_path(
     world: &mut World,
     type_path: &str,
@@ -58,14 +54,18 @@ fn component_id_for_path(
         return Some((component_id, type_id));
     }
 
-    // Slow path: spawn a temp entity, insert the component via
-    // ReflectComponent (auto-registers), look up the id, despawn.
+    // Slow path: insert on a throwaway entity to auto-register
+    // the ComponentId. `build_reflective_default` covers types
+    // without `#[derive(Default)]`.
     let (reflect_component, default_value) = {
         let registry_read = registry.read();
-        let registration = registry_read.get_with_type_path(type_path)?;
-        let reflect_component = registration.data::<ReflectComponent>()?.clone();
-        let reflect_default = registration.data::<ReflectDefault>()?;
-        (reflect_component, reflect_default.default())
+        let reflect_component = registry_read
+            .get_with_type_path(type_path)?
+            .data::<ReflectComponent>()?
+            .clone();
+        let default_value =
+            crate::reflect_default::build_reflective_default(type_id, &registry_read)?;
+        (reflect_component, default_value)
     };
 
     let temp = world.spawn_empty().id();

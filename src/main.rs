@@ -83,6 +83,14 @@ fn main() -> AppExit {
                     },
                 }),
         )
+        // Ambient plugins added next to `DefaultPlugins`. The
+        // editor's `EditorCorePlugin` and `PhysicsSimulationPlugin`
+        // assert presence, so user `MyGamePlugin`s can add the
+        // same plugins without conflict.
+        .add_plugins((
+            avian3d::prelude::PhysicsPlugins::default(),
+            bevy_enhanced_input::prelude::EnhancedInputPlugin,
+        ))
         .add_plugins(editor_plugins)
         .add_systems(OnEnter(jackdaw::AppState::Editor), spawn_scene);
 

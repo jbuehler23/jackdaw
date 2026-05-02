@@ -45,6 +45,9 @@ pub use jackdaw_api_internal::lifecycle::ExtensionKind;
 /// supported keys.
 pub use jackdaw_api_macros::operator;
 
+// `#[editor]` macro removed; metadata now lives on the type via
+// Bevy reflect custom attributes plus reflected doc comments.
+
 /// Emit the FFI entry symbol a dylib extension needs.
 pub use jackdaw_api_internal::export_extension;
 

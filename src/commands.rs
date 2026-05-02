@@ -244,28 +244,33 @@ impl EditorCommand for AddComponent {
             return;
         };
 
-        // Create default value
-        let Some(reflect_default) = registration.data::<ReflectDefault>() else {
+        // `build_reflective_default` lets user components reach
+        // the editor without `#[derive(Default)]` by walking
+        // their fields recursively. Falls back to
+        // `ReflectDefault` when the type opted in.
+        let Some(default_value) =
+            crate::reflect_default::build_reflective_default(self.type_id, &registry)
+        else {
             warn!(
-                "AddComponent::execute: type {} has no ReflectDefault. Add `Default` to derives \
-                 and `Default` to `#[reflect(...)]`.",
+                "AddComponent::execute: type {} has no `ReflectDefault` and a field is an \
+                 opaque type, list, map, or set with no default. Add `Default` to derives \
+                 and `#[reflect(...)]`, or simplify the fields to reflected primitives.",
                 self.type_path
             );
             return;
         };
-        let default_value = reflect_default.default();
         let Some(reflect_component) = registration.data::<ReflectComponent>() else {
             warn!(
-                "AddComponent::execute: type {} has no ReflectComponent. Add `Component` to \
-                 `#[reflect(...)]` (e.g. `#[reflect(Component, Default)]`).",
+                "AddComponent::execute: type {} has no ReflectComponent. Add `Component` \
+                 to `#[reflect(...)]`.",
                 self.type_path
             );
             return;
         };
 
-        // Insert the component  -- this triggers #[require] which may add
-        // many more components (e.g. RigidBody requires Position, Rotation,
-        // LinearVelocity, etc.).
+        // Insert triggers `#[require]`, which may pull in
+        // dependents (e.g. `RigidBody` requires `Position`,
+        // `Rotation`, etc.).
         info!(
             "AddComponent: inserting `{}` (type_id {:?}, component_id {:?}) on entity {:?}",
             self.type_path, self.type_id, self.component_id, self.entity
@@ -582,7 +587,7 @@ pub(crate) fn snapshot_rebuild(scene: &DynamicScene) -> DynamicScene {
     }
 }
 
-// ─────────────────────────────────── JSN-First Commands ───────────────────────────────────
+// ============================== JSN-First Commands ==============================
 
 pub struct SetJsnField {
     pub entity: Entity,

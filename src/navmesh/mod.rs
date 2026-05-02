@@ -8,7 +8,7 @@ mod visualization;
 use bevy::prelude::*;
 use bevy_rerecast::{TriMeshFromBevyMesh as _, prelude::*, rerecast::TriMesh};
 
-use crate::{EditorEntity, EditorMeta};
+use crate::EditorEntity;
 
 pub use toolbar::NavmeshToolbar;
 pub use visualization::NavmeshVizConfig;
@@ -17,7 +17,8 @@ pub struct NavmeshPlugin;
 
 impl Plugin for NavmeshPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type_data::<jackdaw_jsn::NavmeshRegion, crate::ReflectEditorMeta>();
+        // Picker category lives on `NavmeshRegion` via
+        // `#[reflect(@EditorCategory("Navmesh"))]`.
         app.add_plugins(
             NavmeshPlugins::default()
                 .build()
@@ -89,12 +90,6 @@ impl std::fmt::Display for NavmeshStatus {
             Self::Ready => write!(f, "Navmesh: Ready"),
             Self::Error(e) => write!(f, "Navmesh: Error - {e}"),
         }
-    }
-}
-
-impl EditorMeta for jackdaw_jsn::NavmeshRegion {
-    fn category() -> &'static str {
-        "Navmesh"
     }
 }
 

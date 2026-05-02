@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod editor_meta;
 pub mod format;
 mod loader;
 pub mod mesh_rebuild;
@@ -7,6 +8,7 @@ pub mod types;
 use bevy::prelude::*;
 
 // Re-export core types for consumer convenience
+pub use editor_meta::{EditorCategory, EditorDescription};
 pub use types::{
     Brush, BrushFaceData, BrushGroup, BrushPlane, CustomProperties, GltfSource, JsnPrefab,
     JsnPrefabBaseline, NavmeshRegion, PropertyValue, Terrain,

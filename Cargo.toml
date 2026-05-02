@@ -71,6 +71,12 @@ jackdaw_api.workspace = true
 # doesn't re-export.
 jackdaw_api_internal.workspace = true
 jackdaw_loader.workspace = true
+# `jackdaw_runtime` hosts the standalone scene loader plus the
+# `EditorMeta`/`ReflectEditorMeta` trait that user game crates
+# implement. The editor depends on it (rather than the other way
+# around) so the trait is reachable from a game crate that only
+# pulls in `jackdaw_runtime` and never compiles the editor.
+jackdaw_runtime.workspace = true
 # Optional and activated only by the `dylib` feature. Nothing in
 # the editor's own Rust code imports `jackdaw_sdk` — it's a pure
 # build artifact consumed at runtime by the extension build
@@ -106,7 +112,7 @@ ctrlc = "3"
 bevy_simple_subsecond_system = { version = "0.2", optional = true }
 
 [workspace.dependencies]
-bevy = { version = "0.18", features = ["experimental_bevy_feathers", "serialize", "debug", "bevy_remote", "file_watcher"] }
+bevy = { version = "0.18", features = ["experimental_bevy_feathers", "serialize", "debug", "bevy_remote", "file_watcher", "reflect_documentation"] }
 jackdaw_jsn = { version = "0.4.0", path = "crates/jackdaw_jsn" }
 jackdaw_geometry = { version = "0.4.0", path = "crates/jackdaw_geometry" }
 bevy_monitors = "0.2"
@@ -127,7 +133,7 @@ lucide-icons = "0.563"
 serde_json = "1"
 bevy_ui_text_input = "0.7"
 bevy_easings = "0.18.0"
-avian3d = { version = "0.5", default-features = false, features = ["3d", "parry-f32", "collider-from-mesh"] }
+avian3d = { version = "0.6", default-features = false, features = ["3d", "parry-f32", "collider-from-mesh"] }
 jackdaw_avian_integration = { version = "0.4.0", path = "crates/jackdaw_avian_integration" }
 jackdaw_runtime = { version = "0.4.0", path = "crates/jackdaw_runtime" }
 jackdaw_panels = { version = "0.4.0", path = "crates/jackdaw_panels" }

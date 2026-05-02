@@ -17,7 +17,7 @@ pub struct BrushGroup;
 
 /// Canonical brush data. Serialized. Geometry derived from this.
 #[derive(Component, Reflect, Clone, Debug, Default)]
-#[reflect(Component, Default)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Brush"))]
 pub struct Brush {
     pub faces: Vec<BrushFaceData>,
 }
@@ -54,7 +54,7 @@ impl Brush {
 
     /// Create a prism brush from a polygon base and extrusion depth along a normal.
     ///
-    /// `vertices` are the polygon vertices in local space (must be coplanar, convex, ≥3).
+    /// `vertices` are the polygon vertices in local space (must be coplanar, convex, >= 3).
     /// `normal` is the extrusion direction (unit vector, perpendicular to the polygon plane).
     /// `depth` is the total extrusion distance (can be negative; absolute value is used).
     ///
@@ -384,7 +384,7 @@ pub struct JsnPrefabBaseline {
 }
 
 #[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component, Default)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Navmesh"))]
 pub struct NavmeshRegion {
     pub agent_radius: f32,
     pub agent_height: f32,
@@ -406,7 +406,7 @@ pub struct NavmeshRegion {
 
 /// Terrain heightmap component. Stores all data needed for serialization.
 #[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component, Default)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Terrain"))]
 pub struct Terrain {
     /// Vertices per edge.
     pub resolution: u32,

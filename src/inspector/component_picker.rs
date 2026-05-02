@@ -14,7 +14,26 @@ use jackdaw_feathers::picker::{
 };
 use jackdaw_feathers::tokens;
 
-use super::{AddComponentButton, ComponentPicker, Inspector, ReflectEditorMeta};
+use bevy::reflect::{TypeInfo, attributes::CustomAttributes};
+use jackdaw_runtime::{EditorCategory, EditorDescription};
+
+use super::{AddComponentButton, ComponentPicker, Inspector};
+
+/// `custom_attributes()` lives on the variant types
+/// (`StructInfo`, `EnumInfo`, etc.), not on `TypeInfo` itself.
+fn type_info_custom_attributes(info: &TypeInfo) -> Option<&CustomAttributes> {
+    match info {
+        TypeInfo::Struct(s) => Some(s.custom_attributes()),
+        TypeInfo::TupleStruct(s) => Some(s.custom_attributes()),
+        TypeInfo::Enum(e) => Some(e.custom_attributes()),
+        TypeInfo::Tuple(_)
+        | TypeInfo::List(_)
+        | TypeInfo::Array(_)
+        | TypeInfo::Map(_)
+        | TypeInfo::Set(_)
+        | TypeInfo::Opaque(_) => None,
+    }
+}
 
 /// Grouping key for sorting: custom categories first, then Game, then Bevy.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
@@ -105,44 +124,61 @@ pub(crate) fn on_add_component_button_click(
 
     let registry = type_registry.read();
 
-    // Collect all registered components that have ReflectComponent + ReflectDefault
     let mut searchable_components: Vec<ComponentInfo> = vec![];
     for registration in registry.iter() {
         let type_id = registration.type_id();
 
-        // Must have ReflectComponent and ReflectDefault
-        if registration.data::<ReflectComponent>().is_none()
-            || registration.data::<ReflectDefault>().is_none()
-        {
+        // Must be a component.
+        if registration.data::<ReflectComponent>().is_none() {
             continue;
         }
 
-        // Skip components already on the entity
+        // Pre-flight the same builder `AddComponent::execute`
+        // uses; if it returns None the type can't be default-
+        // constructed (e.g. `Box<dyn Foo>`) and we skip it.
+        if crate::reflect_default::build_reflective_default(type_id, &registry).is_none() {
+            continue;
+        }
+
+        // Already on the entity.
         if existing_types.contains(&type_id) {
             continue;
         }
 
-        // Skip editor-internal types
+        // Editor-internal types stay out of the picker.
         let table = registration.type_info().type_path_table();
         let full_path = table.path();
         if full_path.starts_with("jackdaw") && !full_path.starts_with("jackdaw_avian_integration") {
             continue;
         }
 
-        // Skip if no component ID is registered for this type
-        if components.get_id(type_id).is_none() {
-            continue;
-        }
+        // No `world.components().get_id(...)` filter: that table
+        // only populates when a system queries / observes /
+        // inserts the type, which would silently drop register-
+        // only user components. `component_id_for_path` registers
+        // on demand via a temp-entity insert, so accepting any
+        // reflected component is safe.
 
         let short_name = table.short_path().to_string();
         let module = table.module_path().unwrap_or("").to_string();
 
-        // Read EditorMeta if present
-        let (category, description) = if let Some(meta) = registration.data::<ReflectEditorMeta>() {
-            (meta.category.to_string(), meta.description.to_string())
-        } else {
-            (String::new(), String::new())
-        };
+        // `EditorDescription` overrides the reflected doc
+        // comment; if neither is present, the tooltip stays empty.
+        let info = registration.type_info();
+        let custom_attrs = type_info_custom_attributes(info);
+        let description = custom_attrs
+            .and_then(|a| a.get::<EditorDescription>())
+            .map(|d| d.0.to_string())
+            .or_else(|| {
+                info.docs()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or_default();
+        let category: String = custom_attrs
+            .and_then(|a| a.get::<EditorCategory>())
+            .map(|c| c.0.to_string())
+            .unwrap_or_default();
 
         // Determine group
         let group = if !category.is_empty() {

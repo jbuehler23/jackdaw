@@ -57,14 +57,22 @@ pub struct PhysicsSimulationPlugin;
 
 impl Plugin for PhysicsSimulationPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(PhysicsPlugins::default())
-            .init_resource::<PhysicsToolState>()
+        // `PhysicsPlugins` is owned by the hosting binary's
+        // `main.rs`. Asserting presence here lets user
+        // `MyGamePlugin`s add the same plugin without conflict.
+        // This plugin only owns jackdaw-specific physics state.
+        debug_assert!(
+            app.is_plugin_added::<PhysicsSchedulePlugin>(),
+            "PhysicsSimulationPlugin requires PhysicsPlugins first; \
+             add `PhysicsPlugins::default()` in main.rs before EditorPlugins."
+        );
+        app.init_resource::<PhysicsToolState>()
             .add_systems(Startup, pause_physics_on_startup);
     }
 }
 
-/// Physics stays paused by default  -- the editor only runs it when the
-/// Physics tool is active and the user has initiated a drag.
+/// Physics stays paused by default; the editor only runs it
+/// when the Physics tool is active and the user is dragging.
 fn pause_physics_on_startup(mut time: ResMut<Time<Physics>>) {
     time.pause();
 }

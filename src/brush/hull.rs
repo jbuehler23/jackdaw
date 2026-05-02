@@ -1,19 +1,10 @@
 use std::collections::HashSet;
 
-use avian3d::parry::math::Point as ParryPoint;
 use avian3d::parry::transformation::convex_hull;
 use bevy::prelude::*;
 
 use jackdaw_geometry::{EPSILON, sort_face_vertices_by_winding};
 use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
-
-fn vec3_to_point(v: Vec3) -> ParryPoint<f32> {
-    ParryPoint::new(v.x, v.y, v.z)
-}
-
-fn point_to_vec3(p: &ParryPoint<f32>) -> Vec3 {
-    Vec3::new(p.x, p.y, p.z)
-}
 
 pub struct HullFace {
     pub normal: Vec3,
@@ -113,21 +104,22 @@ pub(crate) fn rebuild_brush_from_vertices(
         return None;
     }
 
-    let points: Vec<ParryPoint<f32>> = new_vertices.iter().map(|v| vec3_to_point(*v)).collect();
-    let (hull_verts, hull_tris) = convex_hull(&points);
+    // parry 0.26 (avian 0.6) takes / returns plain `Vec3` for vertex
+    // inputs; the explicit `Point<f32>` wrapper that was needed in
+    // 0.5 is gone. Pass `new_vertices` straight through.
+    let (hull_positions, hull_tris) = convex_hull(new_vertices);
 
-    if hull_verts.len() < 4 || hull_tris.is_empty() {
+    if hull_positions.len() < 4 || hull_tris.is_empty() {
         return None;
     }
 
-    let hull_positions: Vec<Vec3> = hull_verts.iter().map(point_to_vec3).collect();
     let hull_faces = merge_hull_triangles(&hull_positions, &hull_tris);
 
     if hull_faces.len() < 4 {
         return None;
     }
 
-    // Map hull vertex indices → input vertex indices (closest position match)
+    // Map hull vertex indices to input vertex indices (closest position match)
     let hull_to_input: Vec<usize> = hull_positions
         .iter()
         .map(|hp| {
@@ -217,7 +209,7 @@ pub(crate) fn rebuild_brush_from_vertices(
         });
     }
 
-    // Build old→new face index mapping by inverting best_old_per_new
+    // Build old-to-new face index mapping by inverting best_old_per_new
     let mut old_to_new = vec![0usize; old_brush.faces.len()];
     for (new_idx, &old_idx) in best_old_per_new.iter().enumerate() {
         old_to_new[old_idx] = new_idx;

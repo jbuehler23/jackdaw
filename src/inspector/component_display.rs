@@ -29,10 +29,12 @@ use std::collections::HashSet;
 
 use bevy_monitors::prelude::{Addition, Monitor, NotifyAdded};
 
+use jackdaw_runtime::EditorCategory;
+
 use super::{
     AddComponentButton, ComponentDisplay, ComponentDisplayBody, ComponentName, ComponentPicker,
     Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch, InspectorTarget,
-    ReflectDisplayable, ReflectEditorMeta, brush_display, component_tooltip::ReflectedTypeTooltip,
+    ReflectDisplayable, brush_display, component_tooltip::ReflectedTypeTooltip,
     custom_props_display, extract_module_group, material_display, reflect_fields,
 };
 use bevy::picking::hover::Hovered;
@@ -180,8 +182,8 @@ pub(crate) fn build_inspector_displays(
                 }
                 // AST filter: hide Bevy-internal components that
                 // aren't tracked in the scene file. User-defined
-                // components — anything outside the `bevy::*`,
-                // `core::*`, `std::*`, and `jackdaw_*` namespaces —
+                // components (anything outside the `bevy::*`,
+                // `core::*`, `std::*`, and `jackdaw_*` namespaces)
                 // are always shown so the inspector reflects the
                 // actual ECS state. Without this exception, a user
                 // component newly added via the picker would be
@@ -201,10 +203,18 @@ pub(crate) fn build_inspector_displays(
                     return None;
                 }
                 let short = table.short_path().to_string();
-                let module_group = if let Some(meta) = registration.data::<ReflectEditorMeta>()
-                    && !meta.category.is_empty()
+                let info = registration.type_info();
+                let attrs = match info {
+                    bevy::reflect::TypeInfo::Struct(s) => Some(s.custom_attributes()),
+                    bevy::reflect::TypeInfo::TupleStruct(s) => Some(s.custom_attributes()),
+                    bevy::reflect::TypeInfo::Enum(e) => Some(e.custom_attributes()),
+                    _ => None,
+                };
+                let module_group = if let Some(cat) = attrs
+                    .and_then(|a| a.get::<EditorCategory>())
+                    .map(|c| c.0.to_string())
+                    .filter(|s| !s.is_empty())
                 {
-                    let cat = meta.category.to_string();
                     custom_groups.insert(cat.clone());
                     cat
                 } else {
