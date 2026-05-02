@@ -14,8 +14,8 @@ use jackdaw_camera::{JackdawCameraPlugin, JackdawCameraSettings};
 
 use bevy::ecs::system::SystemParam;
 
-use crate::core_extension::CoreExtensionInputContext;
 use crate::selection::{Selected, Selection};
+use crate::{core_extension::CoreExtensionInputContext, keybind_focus::KeybindFocus};
 use jackdaw_widgets::file_browser::FileBrowserItem;
 
 /// Marker for the main 3D viewport camera (layer 0).
@@ -339,6 +339,7 @@ pub struct CameraBookmark {
 /// corresponding op with a `slot` param. BEI bindings can't carry
 /// payloads, so the slot index lives in a sidecar trigger system.
 fn camera_bookmark_keys(
+    focus: KeybindFocus,
     keyboard: Res<ButtonInput<KeyCode>>,
     edit_mode: Res<crate::brush::EditMode>,
     selection: Res<Selection>,
@@ -347,6 +348,9 @@ fn camera_bookmark_keys(
     mut commands: Commands,
 ) {
     if modal.active.is_some() {
+        return;
+    }
+    if focus.is_typing() {
         return;
     }
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);

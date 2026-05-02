@@ -324,6 +324,7 @@ impl Plugin for EditorCorePlugin {
                 )
                     .run_if(in_state(AppState::Editor)),
             )
+            .add_systems(Update, keybind_focus::disable_keyboard_input_when_typing)
             .add_observer(on_workspace_changed)
             .add_observer(on_scroll)
             .add_observer(handle_menu_action)

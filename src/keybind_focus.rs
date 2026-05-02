@@ -17,6 +17,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
+use jackdaw_api::prelude::ActionSources;
 use jackdaw_feathers::text_edit::TextInputNode;
 
 /// `SystemParam` that returns whether keybinds and operator dispatches
@@ -37,4 +38,20 @@ impl KeybindFocus<'_, '_> {
         };
         self.text_inputs.contains(focused)
     }
+
+    /// True if the input focus changed since the system last ran.
+    pub fn is_changed(&self) -> bool {
+        self.input_focus.is_changed()
+    }
+}
+
+pub(crate) fn disable_keyboard_input_when_typing(
+    focus: KeybindFocus,
+    mut sources: ResMut<ActionSources>,
+) {
+    if !focus.is_changed() {
+        return;
+    }
+
+    sources.keyboard = !focus.is_typing();
 }
