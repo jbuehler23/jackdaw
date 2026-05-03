@@ -43,8 +43,5 @@ fn main() -> AppExit {
         });
     }
 
-    // `EditorPlugins` includes the `Last`-stage `AppExit`
-    // force-exit handler, so window close returns the terminal
-    // immediately. Nothing else to wire.
     app.run()
 }

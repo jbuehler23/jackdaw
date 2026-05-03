@@ -438,6 +438,3 @@ fn param_default_variant(ty: &Ident, expr: &Expr) -> syn::Result<TokenStream2> {
         }
     })
 }
-
-// `#[editor]` proc-macro removed; metadata flows through Bevy
-// reflect (doc comments + custom typed attributes).
