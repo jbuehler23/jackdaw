@@ -19,8 +19,8 @@ use jackdaw_runtime::{EditorCategory, EditorDescription};
 
 use super::{AddComponentButton, ComponentPicker, Inspector};
 
-/// `custom_attributes()` lives on the variant types
-/// (`StructInfo`, `EnumInfo`, etc.), not on `TypeInfo` itself.
+// `custom_attributes()` lives on the variant types
+// (`StructInfo`, `EnumInfo`, etc.), not on `TypeInfo` itself.
 fn type_info_custom_attributes(info: &TypeInfo) -> Option<&CustomAttributes> {
     match info {
         TypeInfo::Struct(s) => Some(s.custom_attributes()),
@@ -165,12 +165,10 @@ pub(crate) fn on_add_component_button_click(
     entity_query: Query<&Archetype, (With<Selected>, Without<EditorEntity>)>,
     _inspector: Single<Entity, With<Inspector>>,
 ) {
-    // Check if this click is on an AddComponentButton
     if add_buttons.get(event.entity).is_err() {
         return;
     }
 
-    // Toggle: if picker already open, close it
     if let Some(picker) = existing_pickers.iter().next() {
         commands.entity(picker).despawn();
         return;
@@ -183,7 +181,6 @@ pub(crate) fn on_add_component_button_click(
         return;
     };
 
-    // Collect existing component TypeIds on the entity
     let existing_types: HashSet<TypeId> = archetype
         .iter_components()
         .filter_map(|cid| {
@@ -258,7 +255,6 @@ fn spawn_item(
     let description = info.description.clone();
     let module_path = info.module_path.clone();
 
-    // Subtitle: description takes priority, otherwise module path
     let subtitle = if !description.is_empty() {
         description.clone()
     } else {

@@ -1,21 +1,6 @@
-//! Picker enumeration coverage. These tests drive
-//! [`enumerate_pickable_components`] directly with a hand-built
-//! `TypeRegistry` so we can pin filter behaviour without needing
-//! to spin up the full editor app.
-//!
-//! Cases:
-//!  * Component with `Default` derive shows up.
-//!  * Component WITHOUT `Default` still shows up (the
-//!    `build_reflective_default` walker covers it).
-//!  * Reflected types that lack `ReflectComponent` are skipped.
-//!  * `@EditorCategory("...")` overrides the bucket.
-//!  * `@EditorDescription("...")` overrides the doc comment.
-//!  * Doc comments fall through as the description when no
-//!    `@EditorDescription` is set.
-//!  * Components whose `TypeId` is in the `existing_types` set
-//!    (already on the entity) drop out.
-//!  * Components needing `Box<dyn Trait>` style fields drop out
-//!    because the default-builder can't synthesise a value.
+//! Picker enumeration coverage. Drives [`enumerate_pickable_components`]
+//! directly with a hand-built `TypeRegistry` so filter behaviour
+//! can be pinned without spinning up the full editor app.
 
 use std::any::TypeId;
 use std::collections::HashSet;
@@ -25,15 +10,12 @@ use bevy::reflect::TypeRegistry;
 use jackdaw::inspector::component_picker::{PickableComponent, enumerate_pickable_components};
 use jackdaw_runtime::{EditorCategory, EditorDescription};
 
-/// Component with the full ceremony (Default derive + reflect
-/// data). Stand-in for "user opted into Default".
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default)]
 struct WithDefault {
     value: i32,
 }
 
-/// Jan's minimum-viable shape: derive + reflect, NO Default.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
 struct NoDefault {
@@ -42,25 +24,19 @@ struct NoDefault {
     c: f32,
 }
 
-/// `EditorCategory` override.
 #[derive(Component, Reflect)]
 #[reflect(Component, @EditorCategory::new("Actor"))]
 struct CategoriesAsActor;
 
-/// `EditorDescription` override.
 #[derive(Component, Reflect)]
 #[reflect(Component, @EditorDescription::new("explicit text"))]
 struct DescribedExplicitly;
 
-/// Description should fall back to the doc comment captured via
-/// the `reflect_documentation` feature.
-///
 /// Spawns the player.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
 struct DocCommentDescribed;
 
-/// Reflected type that is NOT a `Component`; must be filtered out.
 #[derive(Reflect, Default)]
 #[reflect(Default)]
 struct NotAComponent {

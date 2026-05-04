@@ -1,18 +1,8 @@
-//! End-to-end coverage for the scaffolded user flow:
-//!  1. Register a custom component (the shapes a static-game
-//!     template author would write).
-//!  2. Make sure the editor's component picker lists it.
-//!  3. Dispatch `component.add` to attach it to an authored
-//!     entity (one tracked in the scene AST).
-//!  4. Confirm the component lands on the entity AND the AST
-//!     records it, so a save/load round-trip would persist the
-//!     value.
-//!
-//! Together these prove the picker + operator + AST sync agree
-//! on what a user can author in the editor and have survive a
-//! scene reload.
+//! End-to-end coverage for the scaffolded user flow: a custom
+//! component reaches the picker, `component.add` attaches it to
+//! an authored entity, and the AST records the addition so a
+//! save/load round-trip would persist it.
 
-use std::any::TypeId;
 use std::collections::HashSet;
 
 use bevy::prelude::*;
@@ -25,9 +15,6 @@ use jackdaw_runtime::EditorCategory;
 
 mod util;
 
-/// Mirrors the static template's `SpinningCube`: derive +
-/// reflect, no `Default`. Two primitive fields exercise the
-/// `build_reflective_default` walker.
 #[derive(Component, Reflect)]
 #[reflect(Component, @EditorCategory::new("Gameplay"))]
 struct SpinningCube {
@@ -35,7 +22,6 @@ struct SpinningCube {
     enabled: bool,
 }
 
-/// Marker component without fields.
 #[derive(Component, Reflect)]
 #[reflect(Component, @EditorCategory::new("Actor"))]
 struct PlayerSpawn;
@@ -100,7 +86,6 @@ fn add_component_lands_on_entity_and_in_ast() {
 
     app.update();
 
-    // ECS state.
     let cube = app
         .world()
         .entity(entity)
@@ -109,7 +94,6 @@ fn add_component_lands_on_entity_and_in_ast() {
     assert_eq!(cube.speed, 0.0, "default-constructed value");
     assert!(!cube.enabled);
 
-    // AST state, so save/load preserves the addition.
     let ast = app.world().resource::<SceneJsnAst>();
     let node = ast
         .node_for_entity(entity)
@@ -155,14 +139,12 @@ fn add_marker_component_round_trips_through_ast() {
 
 #[test]
 fn inspector_field_edit_updates_ecs_and_ast() {
-    // Mirrors what the inspector does when the user types into a
-    // `f32` field and commits: a `SetJsnField` command runs,
-    // mutating both the scene AST (so save persists the value)
-    // and the ECS component (so Play picks it up immediately).
+    // Inspector field commits dispatch `SetJsnField`, which must
+    // mutate both the AST (so save persists) and the ECS
+    // component (so play picks it up immediately).
     let mut app = app_with_user_components();
     let entity = spawn_authored_entity(&mut app);
 
-    // Add the component as the user would.
     let result = app
         .world_mut()
         .operator("component.add")
@@ -176,7 +158,6 @@ fn inspector_field_edit_updates_ecs_and_ast() {
     assert_eq!(result, OperatorResult::Finished);
     app.update();
 
-    // Sanity: starts at the primitive default.
     let cube = app
         .world()
         .entity(entity)
@@ -184,8 +165,6 @@ fn inspector_field_edit_updates_ecs_and_ast() {
         .expect("SpinningCube on entity");
     assert_eq!(cube.speed, 0.0);
 
-    // Edit `speed` to 1.5 the same way the inspector text input
-    // does it: build a `SetJsnField` and execute it on the world.
     let mut cmd: Box<dyn EditorCommand> = Box::new(SetJsnField {
         entity,
         type_path: "scaffolded_component_flow::SpinningCube".to_string(),
@@ -197,7 +176,6 @@ fn inspector_field_edit_updates_ecs_and_ast() {
     cmd.execute(app.world_mut());
     app.update();
 
-    // ECS reflects the new value.
     let cube = app
         .world()
         .entity(entity)
@@ -209,7 +187,6 @@ fn inspector_field_edit_updates_ecs_and_ast() {
         cube.speed,
     );
 
-    // AST reflects the new value too, so save preserves it.
     let registry = app
         .world()
         .resource::<bevy::ecs::reflect::AppTypeRegistry>()
@@ -235,9 +212,8 @@ fn inspector_field_edit_updates_ecs_and_ast() {
 
 #[test]
 fn inspector_field_edit_undoes_back_to_original() {
-    // The inspector's edits go through the undo stack. Verify
-    // execute then undo restores the original value in both ECS
-    // and AST (matches what Ctrl-Z does in the UI).
+    // Inspector edits go through the undo stack; execute + undo
+    // must restore the original value (Ctrl-Z in the UI).
     let mut app = app_with_user_components();
     let entity = spawn_authored_entity(&mut app);
 
@@ -274,7 +250,4 @@ fn inspector_field_edit_undoes_back_to_original() {
         "undo must restore ECS speed to 0; got {}",
         cube.speed,
     );
-
-    // Suppress unused-import warning when only this test uses TypeId.
-    let _ = TypeId::of::<SpinningCube>();
 }
