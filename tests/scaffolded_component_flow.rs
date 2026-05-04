@@ -201,9 +201,7 @@ fn inspector_field_edit_updates_ecs_and_ast() {
             &registry,
         )
         .expect("AST must store the edited field");
-    let speed = value
-        .as_f64()
-        .expect("speed serialises as a JSON number");
+    let speed = value.as_f64().expect("speed serialises as a JSON number");
     assert!(
         (speed - 1.5).abs() < 1e-6,
         "AST field must update; got speed = {speed}",
@@ -240,11 +238,7 @@ fn inspector_field_edit_undoes_back_to_original() {
     cmd.undo(app.world_mut());
     app.update();
 
-    let cube = app
-        .world()
-        .entity(entity)
-        .get::<SpinningCube>()
-        .unwrap();
+    let cube = app.world().entity(entity).get::<SpinningCube>().unwrap();
     assert!(
         (cube.speed - 0.0).abs() < f32::EPSILON,
         "undo must restore ECS speed to 0; got {}",
