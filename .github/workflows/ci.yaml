@@ -159,6 +159,21 @@ jobs:
           cd "$RUNNER_TEMP/$name"
           cargo check --all-targets
 
+      - name: Test ${{ matrix.template }} with editor feature
+        # Game-static ships a smoke test that exercises the
+        # editor's component picker against the project's own
+        # `MyGamePlugin`. Skip for templates without a `tests/`
+        # directory.
+        run: |
+          set -euxo pipefail
+          name="test_$(echo "${{ matrix.template }}" | tr - _)"
+          cd "$RUNNER_TEMP/$name"
+          if [[ -d tests ]]; then
+            cargo test --features editor
+          else
+            echo "no tests/ directory in scaffolded ${{ matrix.template }}; skipping"
+          fi
+
   # Run clippy lints.
   clippy:
     name: Clippy

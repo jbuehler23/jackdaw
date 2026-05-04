@@ -69,6 +69,77 @@ struct ComponentInfo {
     type_path_full: String,
 }
 
+/// Public view of one row the component picker would render.
+/// Matches the UI's filter rules so tests can assert what users
+/// will actually see.
+pub struct PickableComponent {
+    pub short_name: String,
+    pub module_path: String,
+    pub category: String,
+    pub description: String,
+    pub type_path_full: String,
+}
+
+/// Enumerate every component the picker would display for a
+/// target entity. Filters: must be a `Component`, must be
+/// default-constructible (via [`build_reflective_default`]), not
+/// already on `existing_types`, and not editor-internal. Reads
+/// `EditorCategory` / `EditorDescription` from custom reflect
+/// attributes; falls back to the reflected doc comment for
+/// description.
+///
+/// [`build_reflective_default`]: crate::reflect_default::build_reflective_default
+pub fn enumerate_pickable_components(
+    registry: &bevy::reflect::TypeRegistry,
+    existing_types: &HashSet<TypeId>,
+) -> Vec<PickableComponent> {
+    let mut out = Vec::new();
+    for registration in registry.iter() {
+        let type_id = registration.type_id();
+
+        if registration.data::<ReflectComponent>().is_none() {
+            continue;
+        }
+        if crate::reflect_default::build_reflective_default(type_id, registry).is_none() {
+            continue;
+        }
+        if existing_types.contains(&type_id) {
+            continue;
+        }
+
+        let table = registration.type_info().type_path_table();
+        let full_path = table.path();
+        if full_path.starts_with("jackdaw") && !full_path.starts_with("jackdaw_avian_integration") {
+            continue;
+        }
+
+        let info = registration.type_info();
+        let custom_attrs = type_info_custom_attributes(info);
+        let description = custom_attrs
+            .and_then(|a| a.get::<EditorDescription>())
+            .map(|d| d.0.to_string())
+            .or_else(|| {
+                info.docs()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or_default();
+        let category = custom_attrs
+            .and_then(|a| a.get::<EditorCategory>())
+            .map(|c| c.0.to_string())
+            .unwrap_or_default();
+
+        out.push(PickableComponent {
+            short_name: table.short_path().to_string(),
+            module_path: table.module_path().unwrap_or("").to_string(),
+            category,
+            description,
+            type_path_full: full_path.to_string(),
+        });
+    }
+    out
+}
+
 impl Matchable for ComponentInfo {
     fn haystack(&self) -> String {
         self.short_name.clone()
@@ -123,80 +194,26 @@ pub(crate) fn on_add_component_button_click(
         .collect();
 
     let registry = type_registry.read();
-
-    let mut searchable_components: Vec<ComponentInfo> = vec![];
-    for registration in registry.iter() {
-        let type_id = registration.type_id();
-
-        // Must be a component.
-        if registration.data::<ReflectComponent>().is_none() {
-            continue;
-        }
-
-        // Pre-flight the same builder `AddComponent::execute`
-        // uses; if it returns None the type can't be default-
-        // constructed (e.g. `Box<dyn Foo>`) and we skip it.
-        if crate::reflect_default::build_reflective_default(type_id, &registry).is_none() {
-            continue;
-        }
-
-        // Already on the entity.
-        if existing_types.contains(&type_id) {
-            continue;
-        }
-
-        // Editor-internal types stay out of the picker.
-        let table = registration.type_info().type_path_table();
-        let full_path = table.path();
-        if full_path.starts_with("jackdaw") && !full_path.starts_with("jackdaw_avian_integration") {
-            continue;
-        }
-
-        // No `world.components().get_id(...)` filter: that table
-        // only populates when a system queries / observes /
-        // inserts the type, which would silently drop register-
-        // only user components. `component_id_for_path` registers
-        // on demand via a temp-entity insert, so accepting any
-        // reflected component is safe.
-
-        let short_name = table.short_path().to_string();
-        let module = table.module_path().unwrap_or("").to_string();
-
-        // `EditorDescription` overrides the reflected doc
-        // comment; if neither is present, the tooltip stays empty.
-        let info = registration.type_info();
-        let custom_attrs = type_info_custom_attributes(info);
-        let description = custom_attrs
-            .and_then(|a| a.get::<EditorDescription>())
-            .map(|d| d.0.to_string())
-            .or_else(|| {
-                info.docs()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
+    let searchable_components: Vec<ComponentInfo> =
+        enumerate_pickable_components(&registry, &existing_types)
+            .into_iter()
+            .map(|p| {
+                let group = if !p.category.is_empty() {
+                    GroupOrder::Custom(p.category)
+                } else if p.module_path.starts_with("bevy") {
+                    GroupOrder::Bevy
+                } else {
+                    GroupOrder::Game
+                };
+                ComponentInfo {
+                    short_name: p.short_name,
+                    module_path: p.module_path,
+                    group,
+                    description: p.description,
+                    type_path_full: p.type_path_full,
+                }
             })
-            .unwrap_or_default();
-        let category: String = custom_attrs
-            .and_then(|a| a.get::<EditorCategory>())
-            .map(|c| c.0.to_string())
-            .unwrap_or_default();
-
-        // Determine group
-        let group = if !category.is_empty() {
-            GroupOrder::Custom(category.clone())
-        } else if module.starts_with("bevy") {
-            GroupOrder::Bevy
-        } else {
-            GroupOrder::Game
-        };
-
-        searchable_components.push(ComponentInfo {
-            short_name,
-            module_path: module,
-            group,
-            description,
-            type_path_full: full_path.to_string(),
-        });
-    }
+            .collect();
 
     let picker = PickerProps::new(spawn_item, on_select)
         .items(searchable_components)

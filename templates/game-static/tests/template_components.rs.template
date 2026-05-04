@@ -1,0 +1,32 @@
+//! Smoke test verifying this project's components reach the
+//! editor's component picker. Compiled only with the `editor`
+//! feature; `cargo check` without features sees an empty file.
+
+#![cfg(feature = "editor")]
+
+use std::collections::HashSet;
+
+use bevy::prelude::*;
+use jackdaw::inspector::component_picker::enumerate_pickable_components;
+
+#[test]
+fn user_components_reach_picker() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins({{crate_name}}::MyGamePlugin);
+    // Drain Startup so plugin registration settles.
+    app.update();
+
+    let registry = app
+        .world()
+        .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+        .read();
+    let pickables = enumerate_pickable_components(&registry, &HashSet::new());
+    let names: Vec<&str> = pickables.iter().map(|p| p.short_name.as_str()).collect();
+
+    assert!(
+        names.contains(&"SpinningCube"),
+        "SpinningCube must appear in the editor's component picker. \
+         Available: {names:?}",
+    );
+}
