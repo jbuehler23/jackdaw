@@ -29,10 +29,12 @@ use std::collections::HashSet;
 
 use bevy_monitors::prelude::{Addition, Monitor, NotifyAdded};
 
+use jackdaw_runtime::EditorCategory;
+
 use super::{
     AddComponentButton, ComponentDisplay, ComponentDisplayBody, ComponentName, ComponentPicker,
     Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch, InspectorTarget,
-    ReflectDisplayable, ReflectEditorMeta, brush_display, component_tooltip::ReflectedTypeTooltip,
+    ReflectDisplayable, brush_display, component_tooltip::ReflectedTypeTooltip,
     custom_props_display, extract_module_group, material_display, reflect_fields,
 };
 use bevy::picking::hover::Hovered;
@@ -178,15 +180,41 @@ pub(crate) fn build_inspector_displays(
                 {
                     return None;
                 }
-                // AST filter: only show components tracked in the AST
-                if !jsn_type_paths.is_empty() && !jsn_type_paths.contains(full_path) {
+                // AST filter: hide Bevy-internal components that
+                // aren't tracked in the scene file. User-defined
+                // components (anything outside the `bevy::*`,
+                // `core::*`, `std::*`, and `jackdaw_*` namespaces)
+                // are always shown so the inspector reflects the
+                // actual ECS state. Without this exception, a user
+                // component newly added via the picker would be
+                // invisible if `AddComponent::execute`'s AST
+                // serialization failed silently (e.g., a struct
+                // field whose `Reflect` impl can't round-trip
+                // through `TypedReflectSerializer`), leaving the
+                // user wondering whether the click registered.
+                let is_user_type = !full_path.starts_with("bevy")
+                    && !full_path.starts_with("core")
+                    && !full_path.starts_with("std")
+                    && !full_path.starts_with("jackdaw");
+                if !is_user_type
+                    && !jsn_type_paths.is_empty()
+                    && !jsn_type_paths.contains(full_path)
+                {
                     return None;
                 }
                 let short = table.short_path().to_string();
-                let module_group = if let Some(meta) = registration.data::<ReflectEditorMeta>()
-                    && !meta.category.is_empty()
+                let info = registration.type_info();
+                let attrs = match info {
+                    bevy::reflect::TypeInfo::Struct(s) => Some(s.custom_attributes()),
+                    bevy::reflect::TypeInfo::TupleStruct(s) => Some(s.custom_attributes()),
+                    bevy::reflect::TypeInfo::Enum(e) => Some(e.custom_attributes()),
+                    _ => None,
+                };
+                let module_group = if let Some(cat) = attrs
+                    .and_then(|a| a.get::<EditorCategory>())
+                    .map(|c| c.0.to_string())
+                    .filter(|s| !s.is_empty())
                 {
-                    let cat = meta.category.to_string();
                     custom_groups.insert(cat.clone());
                     cat
                 } else {
@@ -689,7 +717,7 @@ pub(crate) fn spawn_component_display(
 
     if component.is_some() {
         let type_path_owned = type_path.to_string();
-        let entity_bits = entity.to_bits() as i64;
+        let entity_param = entity;
 
         // Revert button (only shown for overridden prefab components).
         // `Hovered + ButtonOperatorCall` are tooltip data sources for
@@ -699,7 +727,7 @@ pub(crate) fn spawn_component_display(
         if is_overridden {
             let revert_type_path = type_path_owned.clone();
             let bo_call = ButtonOperatorCall::new(super::ops::ComponentRevertBaselineOp::ID)
-                .with_param("entity", entity_bits)
+                .with_param("entity", entity_param)
                 .with_param("type_path", revert_type_path.clone());
             commands.spawn((
                 Text::new(String::from(Icon::RotateCcw.unicode())),
@@ -715,7 +743,7 @@ pub(crate) fn spawn_component_display(
                 bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                     commands
                         .operator(super::ops::ComponentRevertBaselineOp::ID)
-                        .param("entity", entity_bits)
+                        .param("entity", entity_param)
                         .param("type_path", revert_type_path.clone())
                         .call();
                 }),
@@ -726,7 +754,7 @@ pub(crate) fn spawn_component_display(
         // tooltip-data + manual-dispatch pattern.
         let remove_path = type_path_owned.clone();
         let remove_call = ButtonOperatorCall::new(super::ops::ComponentRemoveOp::ID)
-            .with_param("entity", entity_bits)
+            .with_param("entity", entity_param)
             .with_param("type_path", remove_path.clone());
         commands.spawn((
             Text::new(String::from(Icon::X.unicode())),
@@ -742,7 +770,7 @@ pub(crate) fn spawn_component_display(
             bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                 commands
                     .operator(super::ops::ComponentRemoveOp::ID)
-                    .param("entity", entity_bits)
+                    .param("entity", entity_param)
                     .param("type_path", type_path_owned.clone())
                     .call();
             }),

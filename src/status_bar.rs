@@ -4,6 +4,7 @@ use jackdaw_feathers::status_bar::{StatusBarCenter, StatusBarLeft, StatusBarRigh
 use crate::{
     EditorEntity,
     brush::{BrushEditMode, EditMode},
+    build_status::{BuildState, BuildStatus},
     draw_brush::DrawBrushState,
     gizmos::{GizmoMode, GizmoSpace},
     modal_transform::{ModalOp, ModalTransformState},
@@ -34,6 +35,15 @@ impl Plugin for StatusBarPlugin {
                 update_scene_stats,
             )
                 .run_if(in_state(crate::AppState::Editor)),
+        );
+        // Click observer on `StatusBarRight` so a Ready / Failed
+        // build indicator becomes interactive (Reload / open log).
+        // Attached on every entry into the editor; the launcher's
+        // status bar is rebuilt across project re-opens, so this
+        // catches each fresh entity.
+        app.add_systems(
+            OnEnter(crate::AppState::Editor),
+            attach_status_bar_click_observer,
         );
     }
 }
@@ -114,9 +124,22 @@ fn update_status_right(
     modal: Res<ModalTransformState>,
     edit_mode: Res<EditMode>,
     draw_state: Res<DrawBrushState>,
-    mut text_query: Query<&mut Text, With<StatusBarRight>>,
+    build_status: Res<BuildStatus>,
+    mut text_query: Query<(&mut Text, &mut TextColor), With<StatusBarRight>>,
 ) {
-    if !mode.is_changed()
+    // The build-progress states (`Building` / `Ready` / `Failed`)
+    // need to re-render every frame because the `progress` Arc is
+    // mutated by the cargo reader thread (no `is_changed`
+    // observation available on data outside the ECS) and because
+    // `Ready` is what the click observer reacts to. The other
+    // status sources are change-detected to keep this cheap when
+    // no build is active. Builds typically happen pre-editor (the
+    // launcher's modal renders them); this footer rendering covers
+    // any build that fires while the user is already in the editor
+    // (e.g., a future file-watch / user-triggered rebuild).
+    let build_active = !matches!(build_status.state, BuildState::Idle);
+    if !build_active
+        && !mode.is_changed()
         && !space.is_changed()
         && !modal.is_changed()
         && !edit_mode.is_changed()
@@ -124,9 +147,48 @@ fn update_status_right(
     {
         return;
     }
-    let Ok(mut text) = text_query.single_mut() else {
+    let Ok((mut text, mut color)) = text_query.single_mut() else {
         return;
     };
+
+    match &build_status.state {
+        BuildState::Building { progress, .. } => {
+            let (current, done, total) = progress
+                .lock()
+                .map(|g| (g.current_crate.clone(), g.artifacts_done, g.artifacts_total))
+                .unwrap_or((None, 0, None));
+            let crate_label = current.unwrap_or_else(|| "dependencies".to_string());
+            let count = match total {
+                Some(t) => format!(" ({done}/{t})"),
+                None => format!(" ({done})"),
+            };
+            text.0 = format!("Compiling {crate_label}{count}");
+            color.0 = jackdaw_feathers::tokens::TEXT_SECONDARY;
+            return;
+        }
+        BuildState::Ready { .. } => {
+            text.0 = "Project editor ready — Reload".to_string();
+            color.0 = jackdaw_feathers::tokens::TEXT_ACCENT;
+            return;
+        }
+        BuildState::Failed { log_tail, .. } => {
+            // Tail is multi-line cargo error text; the right-side
+            // region is one line of UI, so trim to the first non-
+            // empty line. Click handler can surface the full tail.
+            let head = log_tail
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("see terminal for details");
+            text.0 = format!("Build failed: {head}");
+            color.0 = bevy::color::Color::srgb(0.95, 0.4, 0.4);
+            return;
+        }
+        BuildState::Idle => {
+            color.0 = jackdaw_feathers::tokens::TEXT_SECONDARY;
+            // Fall through to the existing gizmo / edit-mode
+            // rendering below.
+        }
+    }
 
     // Show draw brush mode status
     if draw_state.active.is_some() {
@@ -168,6 +230,43 @@ fn update_status_right(
     };
 
     text.0 = format!("{mode_str} ({space_str})");
+}
+
+/// Attach a `Pointer<Click>` observer to the `StatusBarRight`
+/// node so the user can click the "Reload" / "Build failed"
+/// indicator. Idempotent across re-entry into Editor (the layout
+/// is rebuilt across project switches; each fresh entity needs
+/// its own observer).
+fn attach_status_bar_click_observer(
+    mut commands: Commands,
+    targets: Query<Entity, With<StatusBarRight>>,
+) {
+    for entity in targets.iter() {
+        commands.entity(entity).observe(handle_status_bar_click);
+    }
+}
+
+fn handle_status_bar_click(
+    _click: On<Pointer<Click>>,
+    build_status: Res<BuildStatus>,
+    mut commands: Commands,
+) {
+    match &build_status.state {
+        BuildState::Ready { project, bin, .. } => {
+            let project = project.clone();
+            let bin = bin.clone();
+            commands.queue(move |world: &mut World| {
+                crate::project_select::do_handoff(world, &bin, &project);
+            });
+        }
+        BuildState::Failed { log_tail, .. } => {
+            // Surface the tail to the terminal for now. A modal
+            // log viewer is a follow-up; this is the cheapest path
+            // that doesn't lose the user's debug info.
+            warn!("Static editor build failed:\n{log_tail}");
+        }
+        _ => {}
+    }
 }
 
 /// System to update the scene stats text in the hierarchy panel footer.

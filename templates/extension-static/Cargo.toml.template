@@ -1,0 +1,39 @@
+[package]
+name = "{{project-name}}"
+authors = ["{{authors}}"]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Mark as its own workspace root so it doesn't get pulled into
+# whatever parent workspace the user happens to scaffold under.
+[workspace]
+
+# Dual target: `[lib]` lets other jackdaw projects depend on this
+# extension as a plain library and register it into their own
+# editor binary via
+# `EditorPlugin::new().with_extension("{{project-name}}", || Box::new({{crate_name | pascal_case}}))`.
+# `[[bin]]` gives you a local launcher: `cargo run` spawns a
+# jackdaw editor with only this extension registered, so you can
+# exercise it end-to-end without a separate editor project.
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "{{project-name}}"
+path = "src/main.rs"
+
+[dependencies]
+bevy = "0.18"
+# Static-embed build: jackdaw links into this binary as a plain
+# library, not a dylib. This is the recommended path. Builds with
+# vanilla cargo, no rustc-wrapper, no SDK proxy, and no
+# platform-specific link issues. `default-features = false` keeps
+# us off the experimental dylib path.
+jackdaw = { version = "0.4", default-features = false }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

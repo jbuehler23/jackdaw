@@ -2,8 +2,8 @@
 //! and the small set of typed actions (`physics.enable` / `physics.disable`,
 //! `animation.toggle_keyframe`).
 
-use bevy::ecs::component::{ComponentId, Components};
-use bevy::ecs::reflect::AppTypeRegistry;
+use bevy::ecs::component::ComponentId;
+use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 
@@ -32,17 +32,54 @@ fn has_primary_selection(selection: Res<Selection>) -> bool {
     selection.primary().is_some()
 }
 
-/// Look up the component id and type id for a fully-qualified type path.
+/// Look up `(ComponentId, TypeId)` for a type path, registering
+/// the component on a throwaway entity first if the world hasn't
+/// seen it yet. Without this, types only `register_type`'d
+/// (never inserted) would return `None` from
+/// `world.components().get_id` and the picker would silently
+/// no-op on click.
 fn component_id_for_path(
-    type_registry: &AppTypeRegistry,
-    components: &Components,
+    world: &mut World,
     type_path: &str,
 ) -> Option<(ComponentId, std::any::TypeId)> {
-    let registry = type_registry.read();
-    let registration = registry.get_with_type_path(type_path)?;
-    let type_id = registration.type_id();
-    let component_id = components.get_id(type_id)?;
-    Some((component_id, type_id))
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let type_id = {
+        let registry_read = registry.read();
+        let registration = registry_read.get_with_type_path(type_path)?;
+        registration.type_id()
+    };
+
+    // Fast path: the world already knows about this component.
+    if let Some(component_id) = world.components().get_id(type_id) {
+        return Some((component_id, type_id));
+    }
+
+    // Slow path: insert on a throwaway entity to auto-register
+    // the ComponentId. `build_reflective_default` covers types
+    // without `#[derive(Default)]`.
+    let (reflect_component, default_value) = {
+        let registry_read = registry.read();
+        let reflect_component = registry_read
+            .get_with_type_path(type_path)?
+            .data::<ReflectComponent>()?
+            .clone();
+        let default_value =
+            crate::reflect_default::build_reflective_default(type_id, &registry_read)?;
+        (reflect_component, default_value)
+    };
+
+    let temp = world.spawn_empty().id();
+    {
+        let registry_read = registry.read();
+        reflect_component.insert(
+            &mut world.entity_mut(temp),
+            default_value.as_partial_reflect(),
+            &registry_read,
+        );
+    }
+    let component_id = world.components().get_id(type_id);
+    world.despawn(temp);
+    component_id.map(|id| (id, type_id))
 }
 
 /// Add a component to the target entity. Pushes a single undoable
@@ -68,10 +105,12 @@ pub(crate) fn component_add(
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        let registry = world.resource::<AppTypeRegistry>().clone();
-        let Some((component_id, type_id)) =
-            component_id_for_path(&registry, world.components(), &type_path)
-        else {
+        let Some((component_id, type_id)) = component_id_for_path(world, &type_path) else {
+            warn!(
+                "component.add: no registration for type_path '{type_path}'. \
+                 Make sure your plugin calls `register_type::<T>()` and that `T` \
+                 derives `Reflect, Default` with `#[reflect(Component, Default)]`."
+            );
             return;
         };
         let mut cmd: Box<dyn EditorCommand> =
@@ -107,10 +146,7 @@ pub(crate) fn component_remove(
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        let registry = world.resource::<AppTypeRegistry>().clone();
-        let Some((component_id, _)) =
-            component_id_for_path(&registry, world.components(), &type_path)
-        else {
+        let Some((component_id, _)) = component_id_for_path(world, &type_path) else {
             return;
         };
         if let Ok(mut ec) = world.get_entity_mut(entity) {
@@ -144,10 +180,7 @@ pub(crate) fn component_revert_baseline(
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        let registry = world.resource::<AppTypeRegistry>().clone();
-        let Some((component_id, _)) =
-            component_id_for_path(&registry, world.components(), &type_path)
-        else {
+        let Some((component_id, _)) = component_id_for_path(world, &type_path) else {
             return;
         };
         if let Err(err) =

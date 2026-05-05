@@ -1,0 +1,89 @@
+# {{project-name | title_case}}
+
+A jackdaw game scaffolded from the
+[jackdaw-template-game-static](https://github.com/jbuehler23/jackdaw_template_game_static)
+template.
+
+> ## Static template (recommended)
+>
+> This template produces a normal Bevy crate that builds with
+> vanilla `cargo build` and does not depend on jackdaw's runtime
+> SDK proxy. This is the recommended path for new jackdaw projects.
+>
+> To open this project in jackdaw with your custom components,
+> either open it from the launcher (the launcher auto-builds the
+> editor binary in the background and hands off) or run
+> `cargo editor` from the project root yourself.
+>
+> An experimental dylib `game` template exists for users who want
+> hot-reloadable cdylib loading. It is rougher around the edges
+> (ABI mismatches, install state, Windows linker setup) and is
+> not recommended for new projects yet.
+
+## Open in jackdaw
+
+Two ways. Either works.
+
+**From the jackdaw launcher** (recommended for most users): launch
+`jackdaw`, click this project in the recents list (or "Open
+existing project" if it isn't listed yet). The launcher builds the
+editor binary in the background and hands off; the project opens
+in the editor with your custom components visible in the
+inspector.
+
+**From this project's terminal** (faster iteration after edits):
+
+```sh
+cargo editor
+```
+
+Alias for `cargo run --features editor --bin editor`. Builds the
+editor binary against the current source and launches it with the
+project pre-loaded.
+
+For a vanilla game runner with no editor:
+
+```sh
+cargo run
+```
+
+(Or `cargo play`, the alias.) Launches `MyGamePlugin` against
+`DefaultPlugins` only, no editor in the loop.
+
+## Shape
+
+Single-crate project: jackdaw's editor is linked in as a library
+and your game code lives in `MyGamePlugin` (a regular Bevy
+`Plugin`). There's no dylib loading, no rustc-wrapper, no SDK
+proxy. Builds like any other Bevy crate on every platform.
+
+Split, Unity/Unreal/Godot-style:
+
+- **Scene content** (entities + components) lives in `.jsn` files
+  in `assets/`, authored through the editor UI.
+- **Game behaviour** (systems, observers, resources) lives in
+  `src/lib.rs`.
+
+## Components
+
+Any `#[derive(Component, Reflect, Default)]` struct that's
+registered through `App::register_type::<T>()` shows up
+automatically in the editor's **Add Component** picker.
+`#[reflect(Component, Default)]` is required so the picker can
+see the type.
+
+The scaffold ships with one such component: `SpinningCube`. See
+`src/lib.rs` for the shape.
+
+## PlayState gating
+
+Systems that should only run in Play mode (physics, AI, combat,
+anything that shouldn't be ticking while you're editing) go
+behind:
+
+```rust
+.add_systems(Update, my_system.run_if(in_state(PlayState::Playing)))
+```
+
+Editor-time systems (e.g. custom gizmos) can omit the run
+condition and they'll run in both modes.

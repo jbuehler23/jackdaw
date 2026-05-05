@@ -8,15 +8,14 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 
-use crate::EditorMeta;
-
 pub use toolbar::TerrainToolbar;
 
 pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type_data::<jackdaw_jsn::Terrain, crate::ReflectEditorMeta>();
+        // Picker category lives on the `Terrain` struct via
+        // `#[reflect(@EditorCategory("Terrain"))]`.
         app.init_resource::<TerrainEditMode>()
             .init_resource::<TerrainBrushSettings>()
             .init_resource::<TerrainSculptState>()
@@ -114,12 +113,6 @@ pub(crate) struct TerrainSculptState {
 pub const CHUNK_SIZE: u32 = 32;
 
 // --- Spawn ---
-
-impl EditorMeta for jackdaw_jsn::Terrain {
-    fn category() -> &'static str {
-        "Terrain"
-    }
-}
 
 pub fn spawn_terrain_entity(commands: &mut Commands) -> Entity {
     commands

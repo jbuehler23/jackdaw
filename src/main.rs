@@ -27,17 +27,37 @@ fn main() -> AppExit {
     let project_root = jackdaw::project::read_last_project()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
-    // If the parent process respawned us after scaffolding or
-    // installing a game, skip the launcher entirely and jump back
-    // to wherever the user was. The parent already built +
-    // installed the dylib; the startup loader will pick it up
-    // normally, so we don't need to rebuild.
+    // Picker is the default landing screen on every launch. The
+    // user clicks the project they want from recents (or scaffolds
+    // a new one), which then triggers the build + handoff. Two
+    // exceptions:
+    //
+    // - Respawn after a scaffold/install: the parent process did
+    //   the build already, so we skip straight to the editor view
+    //   for the just-scaffolded project.
+    // - `JACKDAW_AUTO_OPEN=1` env var: opt in to "re-open last
+    //   project on launch" for power users who prefer that flow.
+    //
+    // We previously defaulted to auto-open; reverted because static
+    // game projects need a 5-10 minute build on first run, and
+    // auto-opening one means the user stares at a launcher window
+    // doing apparently nothing for several minutes. Showing the
+    // picker first lets the user explicitly choose to start that
+    // build.
     let respawn_skip_build = std::env::var_os(jackdaw::restart::ENV_SKIP_INITIAL_BUILD).is_some();
+    let auto_open_opt_in = std::env::var_os("JACKDAW_AUTO_OPEN").is_some();
     let auto_open = if respawn_skip_build {
         jackdaw::project::read_last_project().map(|path| jackdaw::project_select::PendingAutoOpen {
             path,
             skip_build: true,
         })
+    } else if auto_open_opt_in {
+        jackdaw::project::read_last_project()
+            .filter(|p| p.is_dir() && p.join("Cargo.toml").is_file())
+            .map(|path| jackdaw::project_select::PendingAutoOpen {
+                path,
+                skip_build: false,
+            })
     } else {
         None
     };
@@ -63,6 +83,14 @@ fn main() -> AppExit {
                     },
                 }),
         )
+        // Ambient plugins added next to `DefaultPlugins`. The
+        // editor's `EditorCorePlugin` and `PhysicsSimulationPlugin`
+        // assert presence, so user `MyGamePlugin`s can add the
+        // same plugins without conflict.
+        .add_plugins((
+            avian3d::prelude::PhysicsPlugins::default(),
+            bevy_enhanced_input::prelude::EnhancedInputPlugin,
+        ))
         .add_plugins(editor_plugins)
         .add_systems(OnEnter(jackdaw::AppState::Editor), spawn_scene);
 
@@ -84,6 +112,12 @@ fn main() -> AppExit {
 /// binary.
 fn editor_plugins(app: &mut App) {
     app.add_plugins(EditorPlugins::default());
+    // DylibLoaderPlugin is launcher-only. Static editor binaries
+    // built from the static-game template use EditorPlugins WITHOUT
+    // this plugin, since their game code is statically linked and
+    // they have no business scanning `~/.config/jackdaw/games/`
+    // (where dylibs from incompatible bevy compilations may live).
+    app.add_plugins(DylibLoaderPlugin::default());
 }
 
 fn spawn_scene(mut commands: Commands) {

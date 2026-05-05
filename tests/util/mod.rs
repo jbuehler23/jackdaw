@@ -25,11 +25,16 @@ pub fn headless_app() -> App {
             })
             .disable::<WinitPlugin>(),
     )
-    .add_plugins(EditorPlugins::default().set(DylibLoaderPlugin {
-        extra_paths: Vec::new(),
-        include_user_dir: false,
-        include_env_dir: false,
-    }));
+    // Ambient plugins moved to the binary entry point (matches
+    // the launcher's `src/main.rs` and the static template's
+    // `editor.rs.template`). Mirror that here so the editor's
+    // internal `debug_assert!`s for `PhysicsSchedulePlugin` and
+    // `EnhancedInputPlugin` find what they expect.
+    .add_plugins((
+        avian3d::prelude::PhysicsPlugins::default(),
+        bevy_enhanced_input::prelude::EnhancedInputPlugin,
+    ))
+    .add_plugins(EditorPlugins::default());
     app
 }
 

@@ -517,13 +517,13 @@ pub(super) fn on_physics_enable_toggle(
     let Ok(physics_cb) = checkboxes.get(event.entity) else {
         return;
     };
-    let entity_bits = physics_cb.0.to_bits() as i64;
+    let target = physics_cb.0;
     let op_id = if event.checked {
         super::ops::PhysicsEnableOp::ID
     } else {
         super::ops::PhysicsDisableOp::ID
     };
-    commands.operator(op_id).param("entity", entity_bits).call();
+    commands.operator(op_id).param("entity", target).call();
 }
 
 /// Command that disables physics on an entity. Captures the full pre-disable

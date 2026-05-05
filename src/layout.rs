@@ -108,7 +108,7 @@ pub struct HierarchyFilter;
 #[derive(Component)]
 pub struct Toolbar;
 
-pub fn editor_layout(_icon_font: &IconFont) -> impl Bundle {
+pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
     (
         EditorEntity,
         // Outer shell: dark background with padding (Figma: 10px padding, bg #171717)
@@ -138,7 +138,7 @@ pub fn editor_layout(_icon_font: &IconFont) -> impl Bundle {
             BorderColor::all(tokens::BORDER_SUBTLE),
             children![
                 // Integrated window header: menu bar + scene tabs + controls
-                window_header(),
+                window_header(icon_font.0.clone()),
                 // Content container (flex grow). Holds both workspaces.
                 // Figma: Editor (Rows) has padding: 0px 4px
                 (
@@ -236,7 +236,7 @@ pub fn editor_layout(_icon_font: &IconFont) -> impl Bundle {
 /// pill. A flex-grow spacer between them absorbs the slack, so resizing
 /// the dropdown label (e.g. `Scene View ▾` → `Animation View ▾`) can't
 /// shift the tabs.
-fn window_header() -> impl Bundle {
+fn window_header(icon_font: Handle<Font>) -> impl Bundle {
     (
         EditorEntity,
         Node {
@@ -297,7 +297,7 @@ fn window_header() -> impl Bundle {
                     column_gap: px(6.0),
                     ..Default::default()
                 },
-                children![play_pause_controls(),],
+                children![play_pause_controls(icon_font),],
             ),
         ],
     )
@@ -307,7 +307,7 @@ fn window_header() -> impl Bundle {
 /// the corresponding `PiePlugin` handler. The plugin installs a
 /// click observer on each `PieButton` via an `On<Add, PieButton>`
 /// observer, so wiring here is purely presentation.
-fn play_pause_controls() -> impl Bundle {
+fn play_pause_controls(icon_font: Handle<Font>) -> impl Bundle {
     (
         EditorEntity,
         Node {
@@ -324,16 +324,23 @@ fn play_pause_controls() -> impl Bundle {
         BackgroundColor(tokens::HEADER_CONTROL_BG),
         BorderColor::all(tokens::HEADER_CONTROL_BORDER),
         children![
-            pie_transport_button(crate::pie::PieButton::Play, Icon::Play),
-            pie_transport_button(crate::pie::PieButton::Pause, Icon::Pause),
-            pie_transport_button(crate::pie::PieButton::Stop, Icon::Square),
+            pie_transport_button(crate::pie::PieButton::Play, Icon::Play, icon_font.clone(),),
+            pie_transport_button(crate::pie::PieButton::Pause, Icon::Pause, icon_font.clone(),),
+            pie_transport_button(crate::pie::PieButton::Stop, Icon::Square, icon_font),
         ],
     )
 }
 
 /// Single clickable glyph. The `PieButton` marker is the hook the
-/// `PiePlugin` uses to attach the click observer.
-fn pie_transport_button(kind: crate::pie::PieButton, icon: Icon) -> impl Bundle {
+/// `PiePlugin` uses to attach the click observer. Lucide glyphs live
+/// in the Private Use Area, so the icon font handle must be passed
+/// explicitly: without it the default font (`FiraSans`) renders the
+/// codepoints as tofu/`?`.
+fn pie_transport_button(
+    kind: crate::pie::PieButton,
+    icon: Icon,
+    icon_font: Handle<Font>,
+) -> impl Bundle {
     (
         kind,
         EditorEntity,
@@ -346,6 +353,7 @@ fn pie_transport_button(kind: crate::pie::PieButton, icon: Icon) -> impl Bundle 
         children![(
             Text::new(String::from(icon.unicode())),
             TextFont {
+                font: icon_font,
                 font_size: 13.0,
                 ..Default::default()
             },

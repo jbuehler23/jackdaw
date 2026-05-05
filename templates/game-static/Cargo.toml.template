@@ -1,0 +1,52 @@
+[package]
+name = "{{project-name}}"
+authors = ["{{authors}}"]
+version = "0.1.0"
+edition = "2024"
+publish = false
+# `cargo run` (no `--bin`) resolves to the game binary. Without
+# this, cargo errors once the editor binary is also present.
+default-run = "{{project-name}}"
+
+# Own workspace root so this project isn't pulled into a parent.
+[workspace]
+
+# `[lib]` and the game-binary `[[bin]]` auto-detect from
+# `src/lib.rs` and `src/main.rs`. Library code in `src/lib.rs`
+# is shared between both binaries.
+
+# Editor + game in one statically-linked binary. Auto-detected
+# from `src/bin/editor.rs`; the block exists only to attach
+# `required-features` (cargo can't infer it), which keeps the
+# editor target out of plain `cargo build`.
+[[bin]]
+name = "editor"
+required-features = ["editor"]
+
+[features]
+default = []
+# `cargo editor` (alias) compiles the editor binary alongside.
+editor = ["dep:jackdaw"]
+
+[dependencies]
+# `file_watcher` enables hot reload of `assets/scene.jsn` in the
+# standalone runner via `JackdawPlugin`'s `AssetEvent::Modified`
+# handler.
+bevy = { version = "0.18", features = ["file_watcher"] }
+# Static-linked editor. `default-features = false` keeps us off
+# the experimental dylib path; vanilla cargo build, no
+# rustc-wrapper, no SDK proxy.
+jackdaw = { version = "0.4", default-features = false, optional = true }
+# Runtime-only `.jsn` loader for the standalone binary. No editor
+# deps pulled in.
+jackdaw_runtime = "0.4"
+# Claim SIGINT/SIGTERM before wgpu/gilrs swallow it.
+ctrlc = "3"
+
+# Bevy's recommended dev profile: your game at `opt-level = 1`
+# (fast recompiles), all deps at 3.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

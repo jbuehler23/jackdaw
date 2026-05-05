@@ -229,40 +229,107 @@ impl AddComponent {
 
 impl EditorCommand for AddComponent {
     fn execute(&mut self, world: &mut World) {
+        info!(
+            "AddComponent::execute entered: type_path={}, type_id={:?}, component_id={:?}, entity={:?}",
+            self.type_path, self.type_id, self.component_id, self.entity
+        );
         let registry = world.resource::<AppTypeRegistry>().clone();
         let registry = registry.read();
 
         let Some(registration) = registry.get(self.type_id) else {
+            warn!(
+                "AddComponent::execute: registry has no entry for type_id {:?} (type_path={})",
+                self.type_id, self.type_path
+            );
             return;
         };
 
-        // Create default value
-        let Some(reflect_default) = registration.data::<ReflectDefault>() else {
-            warn!("No ReflectDefault for component  -- cannot add");
+        // `build_reflective_default` lets user components reach
+        // the editor without `#[derive(Default)]` by walking
+        // their fields recursively. Falls back to
+        // `ReflectDefault` when the type opted in.
+        let Some(default_value) =
+            crate::reflect_default::build_reflective_default(self.type_id, &registry)
+        else {
+            warn!(
+                "AddComponent::execute: type {} has no `ReflectDefault` and a field is an \
+                 opaque type, list, map, or set with no default. Add `Default` to derives \
+                 and `#[reflect(...)]`, or simplify the fields to reflected primitives.",
+                self.type_path
+            );
             return;
         };
-        let default_value = reflect_default.default();
         let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+            warn!(
+                "AddComponent::execute: type {} has no ReflectComponent. Add `Component` \
+                 to `#[reflect(...)]`.",
+                self.type_path
+            );
             return;
         };
 
-        // Insert the component  -- this triggers #[require] which may add
-        // many more components (e.g. RigidBody requires Position, Rotation,
-        // LinearVelocity, etc.).
+        // Insert triggers `#[require]`, which may pull in
+        // dependents (e.g. `RigidBody` requires `Position`,
+        // `Rotation`, etc.).
+        info!(
+            "AddComponent: inserting `{}` (type_id {:?}, component_id {:?}) on entity {:?}",
+            self.type_path, self.type_id, self.component_id, self.entity
+        );
         reflect_component.insert(
             &mut world.entity_mut(self.entity),
             default_value.as_partial_reflect(),
             &registry,
         );
+        let has_after = world
+            .get_entity(self.entity)
+            .ok()
+            .map(|e| e.archetype().components().contains(&self.component_id))
+            .unwrap_or(false);
+        info!(
+            "AddComponent: post-insert, entity {:?} has component_id {:?}: {has_after}",
+            self.entity, self.component_id
+        );
 
-        // Sync the explicitly-added component to AST
+        // Sync the explicitly-added component to AST so it
+        // round-trips through scene save/load and the inspector's
+        // AST filter recognises it. Two failure modes worth
+        // logging because they leave the entity in a state the
+        // inspector might gloss over:
+        //
+        //   * Reflection-based serialization fails (the user's
+        //     `Reflect` impl couldn't be coerced to JSON via
+        //     `TypedReflectSerializer`). The component is on the
+        //     entity but the AST doesn't know about it; the
+        //     inspector's user-type fallback in
+        //     `component_display::build_inspector_displays` shows
+        //     it anyway, but save/load won't preserve it.
+        //   * The target entity isn't tracked in the AST (e.g.,
+        //     it was spawned outside the scene-loader path);
+        //     `set_component` is a silent no-op. Same UX
+        //     consequence as above.
         let serializer =
             bevy::reflect::serde::TypedReflectSerializer::new(default_value.as_ref(), &registry);
-        if let Ok(json_value) = serde_json::to_value(&serializer) {
-            drop(registry);
-            world
-                .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-                .set_component(self.entity, &self.type_path, json_value);
+        match serde_json::to_value(&serializer) {
+            Ok(json_value) => {
+                drop(registry);
+                let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
+                let entity_in_ast = ast.contains_entity(self.entity);
+                ast.set_component(self.entity, &self.type_path, json_value);
+                if !entity_in_ast {
+                    warn!(
+                        "AddComponent: entity {:?} is not tracked in the scene AST; \
+                         {} is on the entity but won't persist through save/load.",
+                        self.entity, self.type_path
+                    );
+                }
+            }
+            Err(err) => {
+                warn!(
+                    "AddComponent: failed to serialize default `{}` for AST: {err}. \
+                     Component is on the entity but the AST doesn't track it.",
+                    self.type_path
+                );
+            }
         }
 
         // Sync any components added by #[require] to the AST so they're
@@ -520,7 +587,7 @@ pub(crate) fn snapshot_rebuild(scene: &DynamicScene) -> DynamicScene {
     }
 }
 
-// ─────────────────────────────────── JSN-First Commands ───────────────────────────────────
+// ============================== JSN-First Commands ==============================
 
 pub struct SetJsnField {
     pub entity: Entity,

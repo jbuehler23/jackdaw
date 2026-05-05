@@ -62,6 +62,118 @@ jobs:
       - name: Run doctests
         run: cargo test --locked --workspace --doc
 
+  # The Windows dylib smoke job that previously ran here is removed
+  # while the dylib path is experimental. Re-add when the dylib flow
+  # is stable enough to gate PRs on.
+
+  # Scaffold each shipping template via `cargo generate` and run
+  # `cargo check` to catch template regressions: missing/renamed
+  # deps, stale API usage in main.rs/lib.rs, broken Cargo.toml
+  # syntax, etc. Modeled after bevy_new_2d's template CI: one job
+  # per template via matrix so each template gets its own CI line
+  # and failures don't cascade. The scaffolded project's `jackdaw`
+  # and `jackdaw_runtime` deps are patched to point at the
+  # workspace checkout under test so we exercise THIS PR's runtime
+  # against THIS PR's templates instead of whatever happens to be
+  # on `main`.
+  templates:
+    name: Template - ${{ matrix.template }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        template:
+          - game-static
+          - extension-static
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          components: rustc-codegen-cranelift-preview
+          toolchain: ${{ env.toolchain }}
+
+      - name: Set LD_LIBRARY_PATH
+        run: echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
+
+      - name: Activate CI cargo config
+        run: mv .cargo/config_ci.toml .cargo/config.toml
+
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild
+        run: cargo binstall wild-linker --locked --force
+
+      - name: Install cargo-generate
+        run: cargo binstall cargo-generate --locked --force
+
+      - name: Install dependencies
+        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+
+      - name: Populate target directory from cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: template-${{ matrix.template }}
+
+      - name: Scaffold ${{ matrix.template }}
+        env:
+          # Suppress cargo-generate's interactive author prompt; the
+          # scaffolder fills `authors` from this env in CI.
+          CARGO_GENERATE_VALUE_AUTHORS: "ci@jackdaw"
+        run: |
+          set -euxo pipefail
+          checkout="$GITHUB_WORKSPACE"
+          template="${{ matrix.template }}"
+          name="test_$(echo "$template" | tr - _)"
+          rm -rf "$RUNNER_TEMP/$name"
+          cargo generate \
+            --path "$checkout/templates/$template" \
+            --name "$name" \
+            --destination "$RUNNER_TEMP" \
+            --silent
+          # Pin the scaffolded project's `jackdaw` / `jackdaw_runtime`
+          # deps to THIS checkout so we test the template against
+          # the PR under review, not against whatever's on crates.io
+          # (or even before 0.4.0 ships at all). `[patch.crates-io]`
+          # overrides the source: cargo resolves the version
+          # constraint against the patched path's Cargo.toml, so
+          # this works pre-publish.
+          cat >> "$RUNNER_TEMP/$name/Cargo.toml" <<EOF
+
+          [patch.crates-io]
+          jackdaw = { path = "$checkout" }
+          jackdaw_runtime = { path = "$checkout/crates/jackdaw_runtime" }
+          EOF
+
+      - name: Compile ${{ matrix.template }}
+        # No `--locked`: cargo-generate doesn't ship a Cargo.lock,
+        # and the patched jackdaw deps would mismatch one anyway.
+        run: |
+          set -euxo pipefail
+          name="test_$(echo "${{ matrix.template }}" | tr - _)"
+          cd "$RUNNER_TEMP/$name"
+          cargo check --all-targets
+
+      - name: Test ${{ matrix.template }} with editor feature
+        # Game-static ships a smoke test that exercises the
+        # editor's component picker against the project's own
+        # `MyGamePlugin`. Skip for templates without a `tests/`
+        # directory.
+        run: |
+          set -euxo pipefail
+          name="test_$(echo "${{ matrix.template }}" | tr - _)"
+          cd "$RUNNER_TEMP/$name"
+          if [[ -d tests ]]; then
+            cargo test --features editor
+          else
+            echo "no tests/ directory in scaffolded ${{ matrix.template }}; skipping"
+          fi
+
   # Run clippy lints.
   clippy:
     name: Clippy

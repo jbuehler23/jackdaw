@@ -1,93 +1,71 @@
-//! Example showing how to register custom game components with the editor.
+//! Custom game components in the editor.
 //!
-//! Components that implement `EditorMeta` get descriptions and categories in the
-//! component picker. Components without it still appear under "Game" automatically.
+//! `reflect_documentation` (enabled in the workspace `bevy`
+//! dep) captures `///` doc comments into the type registry; the
+//! picker uses them as tooltip text. Override with
+//! `#[reflect(@EditorDescription("..."))]`, or bucket into a
+//! named group with `#[reflect(@EditorCategory("Gameplay"))]`.
 //!
-//! Run with: `cargo run --example custom_components`
+//! Run: `cargo run --example components_in_editor`
 
+use avian3d::prelude::PhysicsPlugins;
 use bevy::prelude::*;
-use jackdaw::{EditorMeta, ReflectEditorMeta, prelude::*};
+use bevy_enhanced_input::prelude::EnhancedInputPlugin;
+use jackdaw::prelude::*;
 
 fn main() -> AppExit {
     App::new()
-        .add_plugins((DefaultPlugins, EditorPlugins::default()))
-        .register_type::<Health>()
-        .register_type::<Speed>()
-        .register_type::<Team>()
-        .register_type::<DamageOverTime>()
-        .register_type::<Interactable>()
+        // Ambient plugins at the binary boundary. Editor crates
+        // assert presence, so user plugins can add the same
+        // plugins without a duplicate panic.
+        .add_plugins((
+            DefaultPlugins,
+            PhysicsPlugins::default(),
+            EnhancedInputPlugin,
+        ))
+        .add_plugins(EditorPlugins::default())
         .add_systems(Startup, spawn_scene)
         .run()
 }
 
-// --- Gameplay components ---
+// Gameplay components below: no `register_type` calls;
+// `reflect_auto_register` (default-on in bevy 0.18) handles it.
 
+/// Tracks entity health points.
 #[derive(Component, Reflect, Default)]
-#[reflect(Component, Default, EditorMeta)]
+#[reflect(Component, Default, @EditorCategory::new("Gameplay"))]
 struct Health {
     pub current: f32,
     pub max: f32,
 }
 
-impl EditorMeta for Health {
-    fn description() -> &'static str {
-        "Tracks entity health points"
-    }
-    fn category() -> &'static str {
-        "Gameplay"
-    }
-}
-
+/// Movement speed multiplier.
 #[derive(Component, Reflect, Default)]
-#[reflect(Component, Default, EditorMeta)]
+#[reflect(Component, Default, @EditorCategory::new("Gameplay"))]
 struct Speed {
     pub value: f32,
 }
 
-impl EditorMeta for Speed {
-    fn description() -> &'static str {
-        "Movement speed multiplier"
-    }
-    fn category() -> &'static str {
-        "Gameplay"
-    }
-}
-
+/// Applies damage each second for a duration.
 #[derive(Component, Reflect, Default)]
-#[reflect(Component, Default, EditorMeta)]
+#[reflect(Component, Default, @EditorCategory::new("Gameplay"))]
 struct DamageOverTime {
     pub damage_per_second: f32,
     pub duration: f32,
 }
 
-impl EditorMeta for DamageOverTime {
-    fn description() -> &'static str {
-        "Applies damage each second for a duration"
-    }
-    fn category() -> &'static str {
-        "Gameplay"
-    }
-}
-
 // --- AI components ---
 
+/// Faction/team assignment for AI.
 #[derive(Component, Reflect, Default)]
-#[reflect(Component, Default, EditorMeta)]
+#[reflect(Component, Default, @EditorCategory::new("AI"))]
 struct Team {
     pub id: u32,
 }
 
-impl EditorMeta for Team {
-    fn description() -> &'static str {
-        "Faction/team assignment for AI"
-    }
-    fn category() -> &'static str {
-        "AI"
-    }
-}
+// --- Component without category override (still works, appears under "Game") ---
 
-// --- Component without EditorMeta (still works, appears under "Game") ---
-
+/// Range within which the player can interact with this entity.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default)]
 struct Interactable {
@@ -144,5 +122,6 @@ fn spawn_scene(
             damage_per_second: 10.0,
             duration: 5.0,
         },
+        Interactable { radius: 1.5 },
     ));
 }

@@ -2,15 +2,18 @@
 //!
 //! The editor's **New Project** flow creates a fresh extension or
 //! game project by shelling out to `bevy new -t <URL> --yes
-//! <NAME>`. Templates live in their own GitHub repos (see
-//! [`TEMPLATE_EXTENSION_STATIC_URL`] / [`TEMPLATE_GAME_STATIC_URL`]
-//! and the Dylib counterparts) so the jackdaw binary itself carries
-//! no template files; users always pull the latest at scaffold time.
+//! <NAME>`. Templates live under `templates/` in the jackdaw repo
+//! (sub-dirs: `game-static`, `game`, `extension-static`,
+//! `extension`); released binaries pull them from GitHub at
+//! scaffold time, and dev builds running from a source checkout
+//! point at the working-tree copies via `cargo-generate --path`.
 //!
 //! Call [`scaffold_project`] from a worker thread (it spawns
-//! `bevy` and blocks until the subprocess exits). The UI wires
-//! this up behind an `AsyncComputeTaskPool` task.
+//! `bevy` or `cargo-generate` and blocks until the subprocess
+//! exits). The UI wires this up behind an `AsyncComputeTaskPool`
+//! task.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -18,26 +21,33 @@ use bevy::log::{info, warn};
 
 use crate::sdk_paths::SdkPaths;
 
-/// Static extension template. Overridable via
-/// `JACKDAW_TEMPLATE_EXTENSION_STATIC_URL`.
-pub const TEMPLATE_EXTENSION_STATIC_URL: &str =
-    "https://github.com/jbuehler23/jackdaw_template_extension_static";
+/// Single-repo URL for all built-in templates. Each variant lives
+/// in its own sub-directory; the scaffolder composes
+/// `<URL> <SUBDIR>` and passes the subdir through bevy CLI's
+/// passthrough to cargo-generate. Overridable via
+/// `JACKDAW_TEMPLATE_REPO_URL` for forks.
+pub const TEMPLATE_REPO_URL: &str = "https://github.com/jbuehler23/jackdaw";
 
-/// Static game template. Overridable via
-/// `JACKDAW_TEMPLATE_GAME_STATIC_URL`.
-pub const TEMPLATE_GAME_STATIC_URL: &str =
-    "https://github.com/jbuehler23/jackdaw_template_game_static";
+/// Static extension template subdir.
+pub const TEMPLATE_EXTENSION_STATIC_SUBDIR: &str = "templates/extension-static";
 
-/// Dylib extension template. Overridable via
-/// `JACKDAW_TEMPLATE_EXTENSION_DYLIB_URL`, falling back to the legacy
-/// `JACKDAW_TEMPLATE_EXTENSION_URL`.
-pub const TEMPLATE_EXTENSION_DYLIB_URL: &str =
-    "https://github.com/jbuehler23/jackdaw_template_extension";
+/// Dylib extension template subdir.
+pub const TEMPLATE_EXTENSION_DYLIB_SUBDIR: &str = "templates/extension";
 
-/// Dylib game template. Overridable via
-/// `JACKDAW_TEMPLATE_GAME_DYLIB_URL`, falling back to the legacy
-/// `JACKDAW_TEMPLATE_GAME_URL`.
-pub const TEMPLATE_GAME_DYLIB_URL: &str = "https://github.com/jbuehler23/jackdaw_template_game";
+/// Static game template subdir.
+pub const TEMPLATE_GAME_STATIC_SUBDIR: &str = "templates/game-static";
+
+/// Dylib game template subdir.
+pub const TEMPLATE_GAME_DYLIB_SUBDIR: &str = "templates/game";
+
+/// Default branch / tag to scaffold from when running a released
+/// jackdaw binary. Pinned to the jackdaw version at compile time so
+/// users on `0.4.x` don't accidentally pick up incompatible
+/// `main`-branch templates. Overridable via
+/// `JACKDAW_TEMPLATE_BRANCH`. When the editor runs from a local
+/// source checkout the branch is ignored (the working tree IS the
+/// branch).
+pub const TEMPLATE_DEFAULT_BRANCH: &str = "main";
 
 /// Which template variant the scaffolded project uses.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -61,26 +71,145 @@ pub enum TemplatePreset {
 }
 
 impl TemplatePreset {
-    /// Resolve the preset to a concrete URL for the given linkage,
-    /// consulting env vars for the built-in presets. `Custom` ignores
-    /// `linkage` (the URL is whatever the user pasted).
+    /// Resolve the preset to a `<URL> [SUBDIR]` string suitable for
+    /// the New Project modal's Template field. The scaffolder splits
+    /// it back apart.
+    ///
+    /// When the editor runs from a jackdaw source checkout
+    /// (detected via [`jackdaw_dev_checkout`]), `URL` is the local
+    /// checkout path so the scaffolder routes through
+    /// `cargo-generate --path`; this lets contributors iterate on
+    /// in-tree templates without push/clone cycles. Otherwise `URL`
+    /// is the GitHub repo (overridable via the
+    /// `JACKDAW_TEMPLATE_REPO_URL` / per-template env vars).
     pub fn url(&self, linkage: TemplateLinkage) -> String {
-        match self {
+        match (self.git_url(linkage), self.subdir(linkage)) {
+            (url, Some(subdir)) => format!("{url} {subdir}"),
+            (url, None) => url.into_owned(),
+        }
+    }
+
+    /// Composed `<URL> [SUBDIR]` form using ONLY the git URL (never
+    /// the local source-checkout path). Used for the modal's
+    /// Git URL field, which should always show a real remote even
+    /// in dev mode; the dev-mode local shortcut surfaces through
+    /// `local_template_path` and the modal's separate Local path
+    /// field.
+    pub fn git_url_with_subdir(&self, linkage: TemplateLinkage) -> String {
+        match (self.git_url_only(linkage), self.subdir(linkage)) {
+            (url, Some(subdir)) => format!("{url} {subdir}"),
+            (url, None) => url.into_owned(),
+        }
+    }
+
+    /// Just the git URL, ignoring source-checkout detection. Used
+    /// for the modal's Git URL field; the dev-mode shortcut goes
+    /// through `local_template_path` instead.
+    pub fn git_url_only(&self, linkage: TemplateLinkage) -> Cow<'static, str> {
+        let preset_override = match self {
             Self::Extension => match linkage {
-                TemplateLinkage::Static => std::env::var("JACKDAW_TEMPLATE_EXTENSION_STATIC_URL")
-                    .unwrap_or_else(|_| TEMPLATE_EXTENSION_STATIC_URL.to_string()),
+                TemplateLinkage::Static => {
+                    std::env::var("JACKDAW_TEMPLATE_EXTENSION_STATIC_URL").ok()
+                }
                 TemplateLinkage::Dylib => std::env::var("JACKDAW_TEMPLATE_EXTENSION_DYLIB_URL")
                     .or_else(|_| std::env::var("JACKDAW_TEMPLATE_EXTENSION_URL"))
-                    .unwrap_or_else(|_| TEMPLATE_EXTENSION_DYLIB_URL.to_string()),
+                    .ok(),
             },
             Self::Game => match linkage {
-                TemplateLinkage::Static => std::env::var("JACKDAW_TEMPLATE_GAME_STATIC_URL")
-                    .unwrap_or_else(|_| TEMPLATE_GAME_STATIC_URL.to_string()),
+                TemplateLinkage::Static => std::env::var("JACKDAW_TEMPLATE_GAME_STATIC_URL").ok(),
                 TemplateLinkage::Dylib => std::env::var("JACKDAW_TEMPLATE_GAME_DYLIB_URL")
                     .or_else(|_| std::env::var("JACKDAW_TEMPLATE_GAME_URL"))
-                    .unwrap_or_else(|_| TEMPLATE_GAME_DYLIB_URL.to_string()),
+                    .ok(),
             },
-            Self::Custom(url) => url.clone(),
+            Self::Custom(url) => Some(url.split_whitespace().next().unwrap_or(url).to_string()),
+        };
+        if let Some(url) = preset_override {
+            return Cow::Owned(url);
+        }
+        if let Ok(repo) = std::env::var("JACKDAW_TEMPLATE_REPO_URL") {
+            return Cow::Owned(repo);
+        }
+        Cow::Borrowed(TEMPLATE_REPO_URL)
+    }
+
+    /// Resolved local template directory when running from a jackdaw
+    /// source checkout. Pre-fills the modal's Local path field so
+    /// dev users can scaffold from the in-tree templates without
+    /// typing the path. Returns `None` for released binaries (no
+    /// checkout) or `Custom` presets (no built-in path).
+    pub fn local_template_path(&self, linkage: TemplateLinkage) -> Option<PathBuf> {
+        if !matches!(self, Self::Extension | Self::Game) {
+            return None;
+        }
+        let checkout = jackdaw_dev_checkout()?;
+        let subdir = self.subdir(linkage)?;
+        Some(checkout.join(subdir))
+    }
+
+    /// Just the URL portion (no subdir). Honours env var overrides
+    /// and source-checkout detection.
+    pub fn git_url(&self, linkage: TemplateLinkage) -> Cow<'static, str> {
+        // Source-checkout dev path. Local templates always win over
+        // remote URLs, so contributor edits to `templates/*` show
+        // up immediately on the next scaffold.
+        if matches!(self, Self::Extension | Self::Game)
+            && let Some(checkout) = jackdaw_dev_checkout()
+        {
+            return Cow::Owned(checkout.display().to_string());
+        }
+
+        // Per-preset override env vars (legacy compat) take
+        // precedence over the global repo override.
+        let preset_override = match self {
+            Self::Extension => match linkage {
+                TemplateLinkage::Static => {
+                    std::env::var("JACKDAW_TEMPLATE_EXTENSION_STATIC_URL").ok()
+                }
+                TemplateLinkage::Dylib => std::env::var("JACKDAW_TEMPLATE_EXTENSION_DYLIB_URL")
+                    .or_else(|_| std::env::var("JACKDAW_TEMPLATE_EXTENSION_URL"))
+                    .ok(),
+            },
+            Self::Game => match linkage {
+                TemplateLinkage::Static => std::env::var("JACKDAW_TEMPLATE_GAME_STATIC_URL").ok(),
+                TemplateLinkage::Dylib => std::env::var("JACKDAW_TEMPLATE_GAME_DYLIB_URL")
+                    .or_else(|_| std::env::var("JACKDAW_TEMPLATE_GAME_URL"))
+                    .ok(),
+            },
+            Self::Custom(url) => Some(url.split_whitespace().next().unwrap_or(url).to_string()),
+        };
+        if let Some(url) = preset_override {
+            return Cow::Owned(url);
+        }
+
+        if let Ok(repo) = std::env::var("JACKDAW_TEMPLATE_REPO_URL") {
+            return Cow::Owned(repo);
+        }
+        Cow::Borrowed(TEMPLATE_REPO_URL)
+    }
+
+    /// Just the subdir portion. `None` for `Custom` URLs that don't
+    /// embed one.
+    pub fn subdir(&self, linkage: TemplateLinkage) -> Option<&str> {
+        match self {
+            Self::Extension => Some(match linkage {
+                TemplateLinkage::Static => TEMPLATE_EXTENSION_STATIC_SUBDIR,
+                TemplateLinkage::Dylib => TEMPLATE_EXTENSION_DYLIB_SUBDIR,
+            }),
+            Self::Game => Some(match linkage {
+                TemplateLinkage::Static => TEMPLATE_GAME_STATIC_SUBDIR,
+                TemplateLinkage::Dylib => TEMPLATE_GAME_DYLIB_SUBDIR,
+            }),
+            Self::Custom(url) => {
+                let mut parts = url.split_whitespace();
+                let _ = parts.next();
+                parts.next().map(|s| {
+                    // Leak the heap allocation so we can return a
+                    // `&'static str` keyed off this `Custom` value.
+                    // Custom presets are constructed once per modal
+                    // open, so the leak is bounded.
+                    Box::leak(s.to_string().into_boxed_str()) as &'static str
+                })
+            }
         }
     }
 
@@ -91,9 +220,92 @@ impl TemplatePreset {
     }
 }
 
+/// What kind of jackdaw project lives at this path, as far as the
+/// launcher's editor-handoff logic cares. The launcher uses this
+/// to decide whether to dlopen a cdylib (Dylib), background-build
+/// a static editor binary (Static), or just open the scene in the
+/// launcher's own editor (Other / unrecognised).
+pub enum TemplateKind {
+    /// Has the `editor` cargo feature gating an optional jackdaw
+    /// dep, plus a `[[bin]] name = "editor"` with
+    /// `required-features = ["editor"]`. The launcher will
+    /// background-build the editor binary and offer a handoff.
+    StaticGameWithEditorFeature,
+    /// Has `[lib] crate-type = ["cdylib"]`. Existing dylib flow:
+    /// launcher dlopens, edits in launcher's own world.
+    DylibGame,
+    /// Plain Rust project (or some other shape we don't recognise).
+    /// Falls through to the existing scene-only authoring path.
+    Other,
+}
+
+/// Inspect a project's `Cargo.toml` to figure out which
+/// [`TemplateKind`] it is. Cheap text scan; returns
+/// [`TemplateKind::Other`] for anything we can't classify (missing
+/// manifest, malformed file, none of the known signatures).
+///
+/// Avoids pulling in a TOML parser dep for the launcher's
+/// hot-path detection. The text scan looks for stable substrings
+/// the templates emit; if a user customises their manifest in a
+/// way that hides the substring, they fall back to the `Other`
+/// path (open in launcher's editor with built-ins only) which is
+/// a safe degradation rather than a wrong-mode crash.
+pub fn detect_template_kind(project_root: &Path) -> TemplateKind {
+    let manifest = project_root.join("Cargo.toml");
+    let Ok(text) = std::fs::read_to_string(&manifest) else {
+        return TemplateKind::Other;
+    };
+    let normalized: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let has_editor_feature = normalized.contains("editor=[\"dep:jackdaw\"]")
+        || normalized.contains("editor=[\"dep:jackdaw\",");
+    let has_editor_bin = normalized.contains("name=\"editor\"")
+        && normalized.contains("required-features=[\"editor\"]");
+    if has_editor_feature && has_editor_bin {
+        return TemplateKind::StaticGameWithEditorFeature;
+    }
+    if normalized.contains("crate-type=[\"cdylib\"]") {
+        return TemplateKind::DylibGame;
+    }
+    TemplateKind::Other
+}
+
+/// Resolve the path to the jackdaw source checkout the running
+/// editor was built from, if any. Returns `Some(path)` when the
+/// path exists on disk and contains a `templates/` directory (i.e.,
+/// the editor is a dev build, not an installed binary). Honours
+/// `JACKDAW_DEV_CHECKOUT` as a runtime override for unusual
+/// setups.
+pub fn jackdaw_dev_checkout() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("JACKDAW_DEV_CHECKOUT") {
+        let path = PathBuf::from(p);
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+    let compile_time = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut candidate = compile_time.as_path();
+    loop {
+        if candidate.join("templates").is_dir() && candidate.join("Cargo.toml").is_file() {
+            return Some(candidate.to_path_buf());
+        }
+        candidate = candidate.parent()?;
+    }
+}
+
+/// Configured branch to scaffold from. Returns:
+///   * `JACKDAW_TEMPLATE_BRANCH` if set (any value).
+///   * Otherwise [`TEMPLATE_DEFAULT_BRANCH`].
+///
+/// The scaffolder ignores the branch when scaffolding from a local
+/// path (the working tree IS the branch).
+pub fn template_branch() -> String {
+    std::env::var("JACKDAW_TEMPLATE_BRANCH").unwrap_or_else(|_| TEMPLATE_DEFAULT_BRANCH.to_string())
+}
+
 #[derive(Debug)]
 pub enum ScaffoldError {
     BevyCliNotFound,
+    CargoGenerateNotFound,
     InvalidName(String),
     LocationNotFound(PathBuf),
     ProjectAlreadyExists(PathBuf),
@@ -112,6 +324,11 @@ impl std::fmt::Display for ScaffoldError {
                 f,
                 "`bevy` CLI not found on PATH. Install with \
                  `cargo install --locked --git https://github.com/TheBevyFlock/bevy_cli bevy_cli`."
+            ),
+            Self::CargoGenerateNotFound => write!(
+                f,
+                "`cargo-generate` not found on PATH (needed for local-path \
+                 templates). Install with `cargo install cargo-generate`."
             ),
             Self::InvalidName(name) => write!(
                 f,
@@ -134,9 +351,18 @@ impl std::fmt::Display for ScaffoldError {
 
 impl std::error::Error for ScaffoldError {}
 
-/// Run `bevy new -t <template_url> --yes <name>` in `location`.
+/// Scaffold a project from `template_url` into `<location>/<name>`.
 /// Returns the absolute path to the scaffolded project root.
-/// Blocks until `bevy` exits; call from a worker thread.
+/// Blocks until the subprocess exits; call from a worker thread.
+///
+/// `template_url` accepts the `<URL> [SUBDIR]` form: a single git
+/// URL or local directory followed by an optional sub-directory
+/// inside that repo. The composed form mirrors what
+/// `bevy new -t URL -- SUBDIR` accepts.
+///
+/// `branch` pins the git revision when `template_url` is a remote
+/// URL; ignored for local-path templates. `None` falls back to
+/// [`template_branch`].
 ///
 /// For `Dylib` linkage, writes a `.cargo/config.toml` that routes
 /// cargo through `jackdaw-rustc-wrapper` so the scaffolded project
@@ -146,6 +372,7 @@ pub fn scaffold_project(
     name: &str,
     location: &Path,
     template_url: &str,
+    branch: Option<&str>,
     linkage: TemplateLinkage,
 ) -> Result<PathBuf, ScaffoldError> {
     if name.is_empty()
@@ -165,16 +392,53 @@ pub fn scaffold_project(
         return Err(ScaffoldError::ProjectAlreadyExists(project_path));
     }
 
-    // Sanity-check that `bevy` is on PATH before invoking it, so
-    // the error surfaced to the user distinguishes a missing CLI
-    // from an actual scaffold failure.
+    // Split `URL [SUBDIR]`. The URL alone goes to bevy CLI's
+    // `-t/--template` flag; if a subdir is present it rides through
+    // bevy's `-- <args>` passthrough as cargo-generate's positional.
+    let mut parts = template_url.split_whitespace();
+    let template_arg = parts.next().unwrap_or("").to_string();
+    let subdir = parts.next();
+
+    // Path detection: bevy CLI's `-t` always treats its value as a
+    // git URL. When the user passes (or `TemplatePreset::git_url`
+    // computed) a directory that exists on disk, shell out to
+    // `cargo-generate --path` directly so it reads from the
+    // filesystem. This is how dev builds running from a source
+    // checkout pick up working-tree edits to `templates/*`.
+    if Path::new(&template_arg).is_dir() {
+        return scaffold_from_local_path(
+            name,
+            location,
+            &template_arg,
+            subdir,
+            linkage,
+            &project_path,
+        );
+    }
+
+    // Sanity-check that `bevy` is on PATH before invoking it.
     let bevy = which_bevy().ok_or(ScaffoldError::BevyCliNotFound)?;
 
-    let output = Command::new(&bevy)
-        .current_dir(location)
-        .args(["new", "-t", template_url, "--yes", name])
-        .output()
-        .map_err(ScaffoldError::Spawn)?;
+    let mut cmd = Command::new(&bevy);
+    cmd.current_dir(location)
+        .args(["new", "-t", &template_arg, "--yes", name]);
+    // bevy CLI's `new` subcommand exposes only `-t`, `--yes`, and
+    // `<NAME>`. Anything else (branch pin, subfolder) rides through
+    // its `-- <ARGS>` passthrough to cargo-generate, which accepts
+    // `--branch BRANCH` and a positional subfolder.
+    let resolved_branch = branch.map(str::to_owned).unwrap_or_else(template_branch);
+    let needs_passthrough = !resolved_branch.is_empty() || subdir.is_some();
+    if needs_passthrough {
+        cmd.arg("--");
+        if !resolved_branch.is_empty() {
+            cmd.args(["--branch", resolved_branch.as_str()]);
+        }
+        if let Some(subdir) = subdir {
+            cmd.arg(subdir);
+        }
+    }
+
+    let output = cmd.output().map_err(ScaffoldError::Spawn)?;
 
     if !output.status.success() {
         return Err(ScaffoldError::BevyCliFailed {
@@ -189,7 +453,139 @@ pub fn scaffold_project(
     if matches!(linkage, TemplateLinkage::Dylib) {
         write_cargo_config(&project_path);
     }
+    rewrite_jackdaw_dep_for_dev_checkout(&project_path, linkage);
     Ok(project_path)
+}
+
+/// Local-path scaffold: bypass `bevy new` entirely and call
+/// `cargo-generate` directly with `--path`. bevy CLI's `-t` flag
+/// always treats its value as a git URL (it doesn't expose
+/// `--path`), so contributors iterating on in-tree templates need
+/// this branch to skip the clone-to-tmp step that would otherwise
+/// 404 against unpublished local paths.
+///
+/// `local_root[/subdir]` is the template's source directory (e.g.
+/// `~/Workspace/jackdaw/templates/game-static`). `cargo-generate`
+/// is required for `bevy new` to work anyway, so the binary is
+/// generally already on PATH.
+fn scaffold_from_local_path(
+    name: &str,
+    location: &Path,
+    local_root: &str,
+    subdir: Option<&str>,
+    linkage: TemplateLinkage,
+    project_path: &Path,
+) -> Result<PathBuf, ScaffoldError> {
+    let cargo_generate = which_cargo_generate().ok_or(ScaffoldError::CargoGenerateNotFound)?;
+
+    let template_path = match subdir {
+        Some(s) => Path::new(local_root).join(s),
+        None => Path::new(local_root).to_path_buf(),
+    };
+    if !template_path.is_dir() {
+        return Err(ScaffoldError::LocationNotFound(template_path));
+    }
+
+    let mut cmd = Command::new(&cargo_generate);
+    cmd.current_dir(location)
+        .arg("generate")
+        .arg("--path")
+        .arg(&template_path)
+        .args(["--name", name])
+        .arg("--destination")
+        .arg(location)
+        .arg("--silent");
+
+    let output = cmd.output().map_err(ScaffoldError::Spawn)?;
+
+    if !output.status.success() {
+        return Err(ScaffoldError::BevyCliFailed {
+            status: output.status,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+
+    if matches!(linkage, TemplateLinkage::Dylib) {
+        write_cargo_config(project_path);
+    }
+    rewrite_jackdaw_dep_for_dev_checkout(project_path, linkage);
+    Ok(project_path.to_path_buf())
+}
+
+/// When the launcher is running from a jackdaw source checkout,
+/// rewrite the scaffolded project's `Cargo.toml` so the `jackdaw =`
+/// dep points at the local checkout via `path = "..."` rather than
+/// at the template's default git+branch ref.
+///
+/// Why: dev contributors testing a feature branch want the
+/// scaffolded project to compile against THEIR working tree, not
+/// against `main`. Without this rewrite they had to manually edit
+/// the scaffolded `Cargo.toml` after every scaffold to swap the
+/// dep, which was a recurring papercut.
+///
+/// Released binaries (no source checkout detected) leave the
+/// template's default in place. The template currently pins to
+/// `branch = "main"` pre-1.0; switch to `tag = "v0.4.0"` (or
+/// `version = "0.4"` once published to crates.io) when the next
+/// release ships.
+///
+/// Static templates declare `jackdaw` with `optional = true`
+/// (gated behind the `editor` feature); the rewrite preserves
+/// that. Dylib templates don't declare `jackdaw` at all (the
+/// rustc-wrapper injects `jackdaw_api`), so this function is a
+/// no-op for them.
+fn rewrite_jackdaw_dep_for_dev_checkout(project_path: &Path, linkage: TemplateLinkage) {
+    let _ = linkage; // currently unused; kept so future linkage-specific tweaks are obvious.
+    let Some(checkout) = jackdaw_dev_checkout() else {
+        return;
+    };
+    let manifest_path = project_path.join("Cargo.toml");
+    let Ok(contents) = std::fs::read_to_string(&manifest_path) else {
+        return;
+    };
+    if !contents.contains("jackdaw = {") && !contents.contains("jackdaw=") {
+        return; // dylib template has no jackdaw dep; nothing to rewrite.
+    }
+    // Cheap line-by-line rewrite: find the line that starts with
+    // `jackdaw = {` and replace it with a path-dep variant. We
+    // preserve `optional = true` and `default-features = false` if
+    // they were on the original line, since the template's `editor`
+    // feature gate depends on `optional = true`.
+    let mut new_contents = String::with_capacity(contents.len());
+    let mut rewritten = false;
+    for line in contents.lines() {
+        let trimmed = line.trim_start();
+        if !rewritten && trimmed.starts_with("jackdaw = {") {
+            let optional = trimmed.contains("optional = true");
+            let mut replacement = format!(
+                "jackdaw = {{ path = \"{}\", default-features = false",
+                checkout.display()
+            );
+            if optional {
+                replacement.push_str(", optional = true");
+            }
+            replacement.push_str(" }");
+            new_contents.push_str(&replacement);
+            new_contents.push('\n');
+            rewritten = true;
+            continue;
+        }
+        new_contents.push_str(line);
+        new_contents.push('\n');
+    }
+    if rewritten && let Err(e) = std::fs::write(&manifest_path, new_contents) {
+        warn!(
+            "Failed to rewrite jackdaw dep in {} for dev checkout: {e}",
+            manifest_path.display()
+        );
+    } else if rewritten {
+        info!(
+            "Rewrote jackdaw dep in {} to path = \"{}\" (dev checkout detected)",
+            manifest_path.display(),
+            checkout.display()
+        );
+    }
 }
 
 /// Write a `.cargo/config.toml` into the scaffolded project with
@@ -255,8 +651,8 @@ fn render_cargo_config(paths: &SdkPaths) -> String {
     // from SdkPaths are always absolute.
     format!(
         "# Activates jackdaw-rustc-wrapper so that any cargo\n\
-         # invocation in this project directory; terminal builds,\n\
-         # rust-analyzer, VSCode tasks; links the resulting cdylib\n\
+         # invocation in this project directory (terminal builds,\n\
+         # rust-analyzer, VSCode tasks) links the resulting cdylib\n\
          # against the same bevy compilation the jackdaw editor\n\
          # ships with, keeping TypeIds in sync.\n\
          #\n\
@@ -264,6 +660,13 @@ fn render_cargo_config(paths: &SdkPaths) -> String {
          \n\
          [build]\n\
          rustc-wrapper = '{wrapper}'\n\
+         \n\
+         # Windows: `rust-lld` clears MSVC's 65,535 PE export cap.\n\
+         # `jackdaw_sdk` re-exports the bevy + jackdaw_api surface,\n\
+         # which is over the cap on the default MSVC linker.\n\
+         [target.x86_64-pc-windows-msvc]\n\
+         linker = 'rust-lld'\n\
+         rustflags = ['-C', 'link-arg=-fuse-ld=lld']\n\
          \n\
          [env]\n\
          JACKDAW_SDK_DYLIB = '{dylib}'\n\
@@ -290,4 +693,56 @@ pub fn which_bevy() -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Resolve `cargo-generate` on PATH. Used by the local-path
+/// scaffold branch which shells out to `cargo-generate` directly
+/// because bevy CLI's `-t` flag doesn't expose `--path`.
+pub fn which_cargo_generate() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(if cfg!(target_os = "windows") {
+            "cargo-generate.exe"
+        } else {
+            "cargo-generate"
+        });
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn render_cargo_config_includes_windows_linker_block() {
+        let paths = SdkPaths {
+            wrapper: PathBuf::from("/abs/path/jackdaw-rustc-wrapper"),
+            dylib: PathBuf::from("/abs/path/libjackdaw_sdk.so"),
+            deps: PathBuf::from("/abs/path/deps"),
+        };
+        let body = render_cargo_config(&paths);
+        assert!(body.contains("[target.x86_64-pc-windows-msvc]"));
+        assert!(body.contains("linker = 'rust-lld'"));
+        assert!(body.contains("link-arg=-fuse-ld=lld"));
+    }
+
+    #[test]
+    fn render_cargo_config_preserves_wrapper_and_env_blocks() {
+        let paths = SdkPaths {
+            wrapper: PathBuf::from("/w"),
+            dylib: PathBuf::from("/d"),
+            deps: PathBuf::from("/p"),
+        };
+        let body = render_cargo_config(&paths);
+        assert!(body.contains("[build]"));
+        assert!(body.contains("rustc-wrapper = '/w'"));
+        assert!(body.contains("[env]"));
+        assert!(body.contains("JACKDAW_SDK_DYLIB = '/d'"));
+        assert!(body.contains("JACKDAW_SDK_DEPS = '/p'"));
+    }
 }

@@ -1,0 +1,81 @@
+//! {{project-name}}: gameplay shared between the standalone
+//! binary (`cargo run`) and the editor binary (`cargo editor`).
+//!
+//! Scene content (entities, components, positions) lives in
+//! `.jsn` files authored in the editor. Game behaviour
+//! (systems, observers, resources) lives in [`MyGamePlugin`].
+//! Don't spawn entities from code; add them in the editor.
+//!
+//! # Try it
+//!
+//! 1. `cargo editor` (or open this project from the launcher).
+//! 2. Hierarchy: right-click, `Add > Cube`.
+//! 3. Inspector: `Add Component > SpinningCube`. Set `speed`
+//!    to e.g. `1.5`.
+//! 4. `File > Save`.
+//! 5. Click Play. The cube spins. Drag `speed` while Playing.
+//! 6. Click Stop. The authored entity is preserved.
+//! 7. `cargo run` launches the same game without the editor.
+
+use bevy::prelude::*;
+// Brings `EditorCategory` and `EditorDescription` into scope so
+// `#[reflect(@EditorCategory::new("..."))]` resolves without a
+// fully-qualified path.
+use jackdaw_runtime::prelude::*;
+
+/// Your game's Bevy plugin. Register components, systems, and
+/// observers here. `Update` systems gated by
+/// [`play_gate::is_playing`] only run during PIE Play; standalone
+/// builds always run them.
+#[derive(Default)]
+pub struct MyGamePlugin;
+
+impl Plugin for MyGamePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, spin_cube.run_if(play_gate::is_playing));
+    }
+}
+
+/// Spin-rate in radians per second. Attach in the inspector;
+/// [`spin_cube`] rotates every entity carrying it while Playing.
+///
+/// Minimum to reach the picker: `#[derive(Component, Reflect)]`
+/// plus `#[reflect(Component)]`. The doc comment above becomes
+/// the picker tooltip (Bevy's `reflect_documentation` is enabled
+/// workspace-wide). No `register_type` call (Bevy 0.18's
+/// `reflect_auto_register` handles it). No `Default` derive
+/// either; jackdaw constructs one from primitive field defaults.
+///
+/// To bucket into a named category or override the tooltip, add
+/// a typed reflect attribute:
+/// `#[reflect(Component, @EditorCategory::new("Gameplay"))]`.
+#[derive(Component, Reflect)]
+#[reflect(Component)]
+pub struct SpinningCube {
+    pub speed: f32,
+}
+
+fn spin_cube(time: Res<Time>, mut cubes: Query<(&SpinningCube, &mut Transform)>) {
+    let dt = time.delta_secs();
+    for (cube, mut transform) in &mut cubes {
+        transform.rotate_y(cube.speed * dt);
+    }
+}
+
+/// Bridges the editor's `PlayState` to gameplay without forcing
+/// a `jackdaw` dep in standalone builds. Always returns `true`
+/// when built without the `editor` feature; gates on
+/// `PlayState::Playing` when the editor is compiled in.
+pub mod play_gate {
+    #[cfg(feature = "editor")]
+    pub fn is_playing(
+        state: bevy::prelude::Res<bevy::state::state::State<jackdaw::prelude::PlayState>>,
+    ) -> bool {
+        matches!(*state.get(), jackdaw::prelude::PlayState::Playing)
+    }
+
+    #[cfg(not(feature = "editor"))]
+    pub fn is_playing() -> bool {
+        true
+    }
+}

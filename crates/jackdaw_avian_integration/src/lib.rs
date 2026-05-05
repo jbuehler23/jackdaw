@@ -7,7 +7,6 @@
 use std::f32::consts::FRAC_PI_2;
 use std::marker::PhantomData;
 
-use avian3d::parry::math::{Point, Real};
 use avian3d::parry::shape::{SharedShape, TypedShape};
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -143,11 +142,6 @@ pub fn register_avian_types(app: &mut App) {
     // exported from avian3d::prelude. Register more as needed.
 }
 
-/// Convert a parry3d nalgebra Point to bevy Vec3.
-fn parry_point(p: &Point<Real>) -> Vec3 {
-    Vec3::new(p.x, p.y, p.z)
-}
-
 fn draw_collider_gizmos<S: Component>(
     mut gizmos: Gizmos<ColliderGizmoGroup>,
     config: Res<PhysicsOverlayConfig>,
@@ -277,8 +271,8 @@ fn draw_parry_shape(
         }
         TypedShape::Capsule(cap) => {
             let r = cap.radius;
-            let a = parry_point(&cap.segment.a);
-            let b = parry_point(&cap.segment.b);
+            let a = cap.segment.a;
+            let b = cap.segment.b;
             let half_h = (b - a).length() * 0.5;
             let up = rot * Vec3::Y;
             let right = rot * Vec3::X;
@@ -327,9 +321,9 @@ fn draw_parry_shape(
             let vertices = trimesh.vertices();
             let indices = trimesh.indices();
             for tri in indices {
-                let a = pos + rot * parry_point(&vertices[tri[0] as usize]);
-                let b = pos + rot * parry_point(&vertices[tri[1] as usize]);
-                let c = pos + rot * parry_point(&vertices[tri[2] as usize]);
+                let a = pos + rot * vertices[tri[0] as usize];
+                let b = pos + rot * vertices[tri[1] as usize];
+                let c = pos + rot * vertices[tri[2] as usize];
                 gizmos.line(a, b, color);
                 gizmos.line(b, c, color);
                 gizmos.line(c, a, color);
@@ -338,20 +332,15 @@ fn draw_parry_shape(
         TypedShape::ConvexPolyhedron(poly) => {
             let points = poly.points();
             for edge in poly.edges() {
-                let a = pos + rot * parry_point(&points[edge.vertices[0] as usize]);
-                let b = pos + rot * parry_point(&points[edge.vertices[1] as usize]);
+                let a = pos + rot * points[edge.vertices[0] as usize];
+                let b = pos + rot * points[edge.vertices[1] as usize];
                 gizmos.line(a, b, color);
             }
         }
         TypedShape::Compound(compound) => {
             for (iso, sub_shape) in compound.shapes() {
-                let sub_pos = pos
-                    + rot
-                        * Vec3::new(
-                            iso.translation.vector.x,
-                            iso.translation.vector.y,
-                            iso.translation.vector.z,
-                        );
+                let sub_pos =
+                    pos + rot * Vec3::new(iso.translation.x, iso.translation.y, iso.translation.z);
                 // Approximate sub-rotation: compose with iso rotation is a TODO
                 let sub_rot = rot;
                 draw_parry_shape(gizmos, sub_shape, sub_pos, sub_rot, color);
@@ -367,14 +356,14 @@ fn draw_parry_shape(
             gizmos.arrow(pos, pos + rot * Vec3::Y * 2.0, color);
         }
         TypedShape::Segment(seg) => {
-            let a = pos + rot * parry_point(&seg.a);
-            let b = pos + rot * parry_point(&seg.b);
+            let a = pos + rot * seg.a;
+            let b = pos + rot * seg.b;
             gizmos.line(a, b, color);
         }
         TypedShape::Triangle(tri) => {
-            let a = pos + rot * parry_point(&tri.a);
-            let b = pos + rot * parry_point(&tri.b);
-            let c = pos + rot * parry_point(&tri.c);
+            let a = pos + rot * tri.a;
+            let b = pos + rot * tri.b;
+            let c = pos + rot * tri.c;
             gizmos.line(a, b, color);
             gizmos.line(b, c, color);
             gizmos.line(c, a, color);

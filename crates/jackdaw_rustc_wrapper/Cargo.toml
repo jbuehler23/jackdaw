@@ -6,6 +6,9 @@ description = "Thin rustc interceptor that redirects --extern bevy= to libjackda
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "jackdaw-rustc-wrapper"
 path = "src/main.rs"

@@ -9,28 +9,34 @@ readme = "README.md"
 keywords = ["bevy", "editor", "3d", "level-editor"]
 categories = ["game-development", "graphics"]
 exclude = ["assets/environment_maps/"]
+# The package now ships two binaries: `jackdaw` (the editor) and
+# `jackdaw-rustc-wrapper` (the rustc interceptor used by scaffolded
+# dylib projects). `default-run` makes `cargo run` resolve to the
+# editor without an explicit `--bin` flag; the wrapper still builds
+# alongside via `cargo build` and is installed by `cargo install`.
+default-run = "jackdaw"
 
 [features]
 default = []
 hot-reload = ["dep:bevy_simple_subsecond_system"]
-# Opt-in dylib-based extension flow. Enables Bevy's
-# `dynamic_linking` plus Jackdaw's own `bevy_dylib`-style facade
-# so the editor and every loaded extension share one compiled
-# copy of every type that crosses the boundary, and pulls in
-# `jackdaw_sdk` — the proxy dylib that scaffolded extension
-# projects link against via `--extern bevy=libjackdaw_sdk.{so,dll,dylib}`.
+# Experimental dylib-based extension flow. Enables Bevy's
+# `dynamic_linking` plus jackdaw's `bevy_dylib`-style facade so
+# the editor and every loaded extension share one compiled copy
+# of every type that crosses the boundary, and pulls in
+# `jackdaw_sdk`, the proxy dylib that scaffolded extension
+# projects link against via
+# `--extern bevy=libjackdaw_sdk.{so,dll,dylib}`.
 #
-# Off by default: the current stable path for scaffolded projects
-# is the static game/extension templates, which compile plainly
-# against `bevy` and don't need the SDK dylib. Opt in with
-# `--features dylib` when you want to exercise the hot-reloadable
-# dylib extension flow.
+# Off by default. The recommended path is the static templates,
+# which compile plainly against `bevy` and produce normal Bevy
+# crates with no rustc-wrapper, no SDK proxy, and no dlopen.
+# Opt in with `--features dylib` to exercise the experimental
+# hot-reloadable dylib flow. ABI mismatches, install state, and
+# Windows-specific linker setup are still rough; expect issues.
 #
-# Known Windows MSVC limitation: `jackdaw_sdk`'s proxy dylib
-# re-exports all of bevy + jackdaw_api, which on Windows is right
-# up against the 65,535 PE export cap (see issue #183 and
-# bevyengine/bevy#1110). Further symbol-trimming work is needed
-# before this is green on Windows.
+# Windows builds route through `rust-lld` via `.cargo/config.toml`
+# so the SDK proxy clears MSVC's 65,535 PE export cap when this
+# feature is enabled.
 dylib = ["dep:jackdaw_sdk", "jackdaw_api/dynamic_linking"]
 
 [workspace]
@@ -65,6 +71,12 @@ jackdaw_api.workspace = true
 # doesn't re-export.
 jackdaw_api_internal.workspace = true
 jackdaw_loader.workspace = true
+# `jackdaw_runtime` hosts the standalone scene loader plus the
+# `EditorMeta`/`ReflectEditorMeta` trait that user game crates
+# implement. The editor depends on it (rather than the other way
+# around) so the trait is reachable from a game crate that only
+# pulls in `jackdaw_runtime` and never compiles the editor.
+jackdaw_runtime.workspace = true
 # Optional and activated only by the `dylib` feature. Nothing in
 # the editor's own Rust code imports `jackdaw_sdk` — it's a pure
 # build artifact consumed at runtime by the extension build
@@ -74,6 +86,13 @@ jackdaw_loader.workspace = true
 # `jackdaw_sdk.dll` on Windows, where the dylib's re-exports
 # would otherwise blow past the 65,535 PE export cap. See issue #183.
 jackdaw_sdk = { workspace = true, optional = true }
+# The wrapper's logic also lives in this crate's `[[bin]]` so that
+# `cargo install jackdaw` ships `jackdaw-rustc-wrapper` next to the
+# editor binary. Both binaries call into the same library entry
+# point. For dev builds running from a source checkout the standalone
+# wrapper crate's `[[bin]]` is also available; either path works at
+# runtime.
+jackdaw_rustc_wrapper.workspace = true
 bevy_enhanced_input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -93,7 +112,7 @@ ctrlc = "3"
 bevy_simple_subsecond_system = { version = "0.2", optional = true }
 
 [workspace.dependencies]
-bevy = { version = "0.18", features = ["experimental_bevy_feathers", "serialize", "debug", "bevy_remote", "file_watcher"] }
+bevy = { version = "0.18", features = ["experimental_bevy_feathers", "serialize", "debug", "bevy_remote", "file_watcher", "reflect_documentation"] }
 jackdaw_jsn = { version = "0.4.0", path = "crates/jackdaw_jsn" }
 jackdaw_geometry = { version = "0.4.0", path = "crates/jackdaw_geometry" }
 bevy_monitors = "0.2"
@@ -114,7 +133,7 @@ lucide-icons = "0.563"
 serde_json = "1"
 bevy_ui_text_input = "0.7"
 bevy_easings = "0.18.0"
-avian3d = { version = "0.5", default-features = false, features = ["3d", "parry-f32", "collider-from-mesh"] }
+avian3d = { version = "0.6", default-features = false, features = ["3d", "parry-f32", "collider-from-mesh"] }
 jackdaw_avian_integration = { version = "0.4.0", path = "crates/jackdaw_avian_integration" }
 jackdaw_runtime = { version = "0.4.0", path = "crates/jackdaw_runtime" }
 jackdaw_panels = { version = "0.4.0", path = "crates/jackdaw_panels" }
@@ -124,6 +143,7 @@ jackdaw_api_macros = { version = "0.4.0", path = "crates/jackdaw_api_macros" }
 jackdaw_dylib = { version = "0.4.0", path = "crates/jackdaw_dylib" }
 jackdaw_loader = { version = "0.4.0", path = "crates/jackdaw_loader" }
 jackdaw_sdk = { version = "0.4.0", path = "crates/jackdaw_sdk" }
+jackdaw_rustc_wrapper = { version = "0.4.0", path = "crates/jackdaw_rustc_wrapper" }
 bevy_enhanced_input = "0.24"
 rfd = "0.15"
 bevy_rerecast = { version = "0.4", default-features = true }
@@ -207,6 +227,16 @@ lto = "thin"
 # PE export cap.
 [profile.release.package.jackdaw_sdk]
 codegen-units = 1
+
+# Thin shim that re-exports `jackdaw_rustc_wrapper::run()`. We turn
+# off doc generation because rustdoc's output path collides with the
+# `jackdaw_rustc_wrapper` lib crate's docs (cargo translates dashes
+# to underscores), and the shim has nothing user-facing to document
+# anyway.
+[[bin]]
+name = "jackdaw-rustc-wrapper"
+path = "src/bin/jackdaw-rustc-wrapper.rs"
+doc = false
 
 [[example]]
 name = "minimal_extension"

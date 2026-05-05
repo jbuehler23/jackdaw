@@ -1,0 +1,66 @@
+//! {{project-name}}: a statically-linked jackdaw extension.
+//!
+//! Shaped for the static-embed pattern: this crate builds as a
+//! regular rlib on every platform (no `crate-type = ["cdylib"]`,
+//! no dylib machinery, no Windows linker cap to worry about).
+//! Consumers register the extension by depending on this crate
+//! and calling:
+//!
+//! ```ignore
+//! use bevy::prelude::*;
+//! use jackdaw::prelude::*;
+//!
+//! fn main() {
+//!     App::new()
+//!         .add_plugins(DefaultPlugins)
+//!         .add_plugins(EditorPlugins::default())
+//!         .add_plugins(
+//!             ExtensionPlugin::new()
+//!                 .with_extension::<{{crate_name}}::{{crate_name | pascal_case}}>(),
+//!         )
+//!         .run();
+//! }
+//! ```
+//!
+//! A `src/main.rs` launcher that does exactly this is bundled
+//! alongside; see it for a working starting point.
+
+use std::sync::Arc;
+
+use bevy::prelude::*;
+use jackdaw::prelude::*;
+
+/// The extension's entry point. Register it with
+/// `ExtensionPlugin::new().with_extension::<{{crate_name | pascal_case}}>()`.
+/// Must be a zero-sized type implementing `Default` so the editor
+/// can construct it on demand at startup.
+#[derive(Default)]
+pub struct {{crate_name | pascal_case}};
+
+impl JackdawExtension for {{crate_name | pascal_case}} {
+    fn id(&self) -> String {
+        "{{project-name}}".into()
+    }
+
+    fn register(&self, ctx: &mut ExtensionContext) {
+        ctx.register_window(WindowDescriptor {
+            id: "{{project-name}}.hello".into(),
+            name: "Hello from {{project-name | title_case}}".into(),
+            icon: None,
+            default_area: None,
+            priority: None,
+            build: Arc::new(|spawner: &mut ChildSpawner| {
+                spawner.spawn(Text::new(
+                    "Hello from the {{project-name}} extension!",
+                ));
+            }),
+        });
+    }
+}
+
+// To add an operator, use the `#[operator]` attribute macro from
+// `jackdaw::prelude`. The macro expands to code that references
+// `bevy_enhanced_input` and `jackdaw_api` as direct crate paths,
+// so you'll need to add both as dependencies in `Cargo.toml`
+// (matching the versions jackdaw pins) before using it. Once
+// jackdaw 0.4 ships on crates.io this boilerplate goes away.

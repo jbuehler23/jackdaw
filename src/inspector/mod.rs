@@ -1,7 +1,7 @@
 pub(crate) mod anim_diamond;
 mod brush_display;
 pub(crate) mod component_display;
-pub(crate) mod component_picker;
+pub mod component_picker;
 pub(crate) mod component_tooltip;
 mod custom_props_display;
 mod material_display;
@@ -52,34 +52,9 @@ fn extract_module_group(module_path: Option<&str>) -> String {
     }
 }
 
-/// Trait for annotating components with editor metadata.
-/// Implement this on your components and add `EditorMeta` to `#[reflect(...)]`
-/// to give them descriptions and categories in the component picker.
-pub trait EditorMeta {
-    fn description() -> &'static str {
-        ""
-    }
-    fn category() -> &'static str {
-        ""
-    }
-}
-
-/// Type data for [`EditorMeta`]. Captured at registration time via `FromType<T>`,
-/// so metadata is available without a component instance.
-#[derive(Clone)]
-pub struct ReflectEditorMeta {
-    pub description: &'static str,
-    pub category: &'static str,
-}
-
-impl<T: EditorMeta> bevy::reflect::FromType<T> for ReflectEditorMeta {
-    fn from_type() -> Self {
-        ReflectEditorMeta {
-            description: T::description(),
-            category: T::category(),
-        }
-    }
-}
+// Editor display metadata as Bevy reflect custom attributes.
+// Newtypes live in `jackdaw_jsn`, re-exported here.
+pub use jackdaw_runtime::{EditorCategory, EditorDescription};
 
 #[reflect_trait]
 pub trait Displayable {

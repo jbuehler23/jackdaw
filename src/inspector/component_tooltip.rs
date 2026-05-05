@@ -1,23 +1,20 @@
-//! Reflected-type bridge into the generic feathers tooltip pipeline.
+//! Reflected-type bridge into the feathers tooltip pipeline.
 //!
-//! Attach [`ReflectedTypeTooltip`] to any UI entity that displays a
-//! reflected Bevy type; component headers in the inspector, future
-//! type chips in the hierarchy, etc.; and the observer below
-//! derives a [`Tooltip`] from the registry: the short type name as
-//! the title, the [`ReflectEditorMeta`] description (when registered)
-//! as the description, and the full type path as the dim footer.
+//! Attach [`ReflectedTypeTooltip`] to any UI entity that
+//! displays a reflected Bevy type. The observer derives a
+//! [`Tooltip`]: short name as title, the
+//! [`EditorDescription`] attribute (or the reflected doc
+//! comment when absent) as body, full type path as footer.
 //!
-//! Mirrors the [`ButtonOperatorCall`] → `Tooltip` bridge in
-//! `src/operator_tooltip.rs`. Same shape, different domain.
-//!
-//! [`ButtonOperatorCall`]: jackdaw_feathers::button::ButtonOperatorCall
+//! Mirrors the `ButtonOperatorCall` to `Tooltip` bridge in
+//! `src/operator_tooltip.rs`.
 
 use std::borrow::Cow;
 
 use bevy::prelude::*;
 use jackdaw_feathers::tooltip::Tooltip;
 
-use crate::inspector::ReflectEditorMeta;
+use jackdaw_runtime::EditorDescription;
 
 /// Source component for type-reflection-driven tooltips. Carries
 /// the fully-qualified `type_path` of a Bevy reflected type that
@@ -61,9 +58,22 @@ fn auto_attach_reflected_type_tooltip(
     };
     let info = registration.type_info();
     let title = info.type_path_table().short_path().to_string();
-    let description = registration
-        .data::<ReflectEditorMeta>()
-        .map(|m| m.description.to_string())
+    // `custom_attributes()` lives on the variant types
+    // (StructInfo / EnumInfo / ...), so reach in via a match.
+    let attrs = match info {
+        bevy::reflect::TypeInfo::Struct(s) => Some(s.custom_attributes()),
+        bevy::reflect::TypeInfo::TupleStruct(s) => Some(s.custom_attributes()),
+        bevy::reflect::TypeInfo::Enum(e) => Some(e.custom_attributes()),
+        _ => None,
+    };
+    let description = attrs
+        .and_then(|a| a.get::<EditorDescription>())
+        .map(|d| d.0.to_string())
+        .or_else(|| {
+            info.docs()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or_default();
     let footer = source.type_path.to_string();
     commands.entity(entity).insert(

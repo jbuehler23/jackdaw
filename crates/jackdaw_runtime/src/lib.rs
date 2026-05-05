@@ -11,36 +11,37 @@ use bevy::image::ImageLoaderSettings;
 use bevy::prelude::*;
 use bevy::reflect::serde::{ReflectDeserializerProcessor, TypedReflectDeserializer};
 use bevy::reflect::{TypeRegistration, TypeRegistry};
+use jackdaw_jsn::JsnPlugin;
 use jackdaw_jsn::format::{JsnAssets, JsnScene, JsnSceneV2};
 use serde::Deserializer;
 use serde::de::{DeserializeSeed, Visitor};
 
-pub use jackdaw_jsn::{Brush, BrushFaceData, CustomProperties, GltfSource, PropertyValue};
+pub use jackdaw_jsn::{
+    Brush, BrushFaceData, CustomProperties, EditorCategory, EditorDescription, GltfSource,
+    PropertyValue,
+};
 
 pub mod prelude {
-    pub use crate::{JackdawPlugin, JackdawSceneRoot};
+    pub use crate::{EditorCategory, EditorDescription, JackdawPlugin, JackdawSceneRoot};
 }
 
 pub struct JackdawPlugin;
 
 impl Plugin for JackdawPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<jackdaw_jsn::Brush>()
-            .register_type::<jackdaw_jsn::BrushGroup>()
-            .register_type::<jackdaw_jsn::BrushFaceData>()
-            .register_type::<jackdaw_jsn::BrushPlane>()
-            .register_type::<jackdaw_jsn::CustomProperties>()
-            .register_type::<jackdaw_jsn::PropertyValue>()
-            .register_type::<jackdaw_jsn::GltfSource>()
-            .register_type::<jackdaw_jsn::JsnPrefab>()
-            .register_type::<jackdaw_jsn::NavmeshRegion>()
-            .register_type::<jackdaw_jsn::Terrain>();
+        // `JsnPlugin` registers every scene type for reflection
+        // and installs `MeshRebuildPlugin` (which embeds the
+        // bundled grid texture used as the brush fallback
+        // material).
+        app.add_plugins(JsnPlugin::default());
 
         app.init_asset::<JackdawScene>()
             .init_asset_loader::<JackdawSceneLoader>();
 
-        app.add_systems(Update, spawn_loaded_scenes);
-        app.add_observer(jackdaw_jsn::mesh_rebuild::rebuild_brush_meshes);
+        app.add_systems(
+            Update,
+            (clear_modified_scene_roots, spawn_loaded_scenes).chain(),
+        );
     }
 }
 
@@ -50,8 +51,16 @@ pub struct JackdawScene {
     parent_path: PathBuf,
 }
 
-/// Scene entities become children of the entity this is spawned on.
+/// Scene entities spawn as children of this root.
+///
+/// Requires `Transform` and `Visibility` so the hierarchy has a
+/// propagation backbone (otherwise every child would have
+/// `GlobalTransform`/`InheritedVisibility` but no upstream
+/// chain, triggering Bevy B0004 warnings and silently breaking
+/// rendering). Callers can spawn `JackdawSceneRoot(handle)` by
+/// itself; Bevy fills in the requires.
 #[derive(Component, Deref)]
+#[require(Transform, Visibility)]
 pub struct JackdawSceneRoot(pub Handle<JackdawScene>);
 
 #[derive(Component)]
@@ -117,6 +126,42 @@ pub enum JackdawLoadError {
     Parse(String),
 }
 
+/// On `JackdawScene` change, despawn the previously-spawned
+/// children and clear `SceneSpawned` so the next
+/// `spawn_loaded_scenes` tick re-instantiates from the new
+/// asset content. Pair with Bevy's `file_watcher` feature to get
+/// hot reload of `assets/scene.jsn` in the standalone runner.
+fn clear_modified_scene_roots(
+    mut events: bevy::ecs::message::MessageReader<bevy::asset::AssetEvent<JackdawScene>>,
+    roots: Query<(Entity, &JackdawSceneRoot, Option<&Children>), With<SceneSpawned>>,
+    mut commands: Commands,
+) {
+    use bevy::asset::AssetEvent;
+
+    let modified: Vec<bevy::asset::AssetId<JackdawScene>> = events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Modified { id } | AssetEvent::LoadedWithDependencies { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    if modified.is_empty() {
+        return;
+    }
+
+    for (root_entity, root, kids) in &roots {
+        if !modified.contains(&root.0.id()) {
+            continue;
+        }
+        if let Some(kids) = kids {
+            for child in kids.iter() {
+                commands.entity(child).despawn();
+            }
+        }
+        commands.entity(root_entity).remove::<SceneSpawned>();
+    }
+}
+
 fn spawn_loaded_scenes(
     world: &mut World,
     scene_roots: &mut QueryState<(Entity, &JackdawSceneRoot), Without<SceneSpawned>>,
@@ -153,7 +198,19 @@ fn spawn_scene_entities(
 
     let mut spawned: Vec<Entity> = Vec::new();
     for _ in entities {
-        spawned.push(world.spawn_empty().id());
+        // Pre-seed `Transform` and `Visibility` so Bevy's
+        // required-components mechanism inserts the companion
+        // markers (`GlobalTransform`, `InheritedVisibility`,
+        // etc.) upfront. The reflection-based inserts below
+        // bypass the require chain, and any `On<Insert, Brush>`
+        // observer that fires during deserialization would
+        // otherwise see a parent missing those companions and
+        // log B0004 warnings on every mesh child. Reflected
+        // values from the JSN overwrite these defaults below.
+        let entity = world
+            .spawn((Transform::default(), Visibility::default()))
+            .id();
+        spawned.push(entity);
     }
 
     for (i, jsn) in entities.iter().enumerate() {
@@ -168,7 +225,15 @@ fn spawn_scene_entities(
     for (i, jsn) in entities.iter().enumerate() {
         for (type_path, value) in &jsn.components {
             let Some(registration) = registry_guard.get_with_type_path(type_path) else {
-                warn!("Unknown type '{type_path}' -- skipping");
+                // `jackdaw::*` types are editor-only (e.g.
+                // `BrushStableId` for undo). Skip them silently so
+                // reload-on-save logs stay clean. Anything else
+                // logs at info so genuine missing-registration
+                // bugs surface.
+                if type_path.starts_with("jackdaw::") {
+                    continue;
+                }
+                info!("Skipping unknown type '{type_path}' (not registered in runtime)");
                 continue;
             };
             let Some(reflect_component) = registration.data::<ReflectComponent>() else {
@@ -187,7 +252,7 @@ fn spawn_scene_entities(
                 &mut processor,
             );
             let Ok(reflected) = deserializer.deserialize(value) else {
-                warn!("Failed to deserialize '{type_path}' -- skipping");
+                warn!("Failed to deserialize '{type_path}'; skipping");
                 continue;
             };
 
@@ -199,7 +264,7 @@ fn spawn_scene_entities(
                 );
             }));
             if result.is_err() {
-                warn!("Panic while inserting component '{type_path}' -- skipping");
+                warn!("Panic while inserting component '{type_path}'; skipping");
             }
         }
     }
@@ -277,7 +342,7 @@ fn load_inline_assets(
 
     for (type_path, named_entries) in &assets.0 {
         let Some(registration) = registry_guard.get_with_type_path(type_path) else {
-            warn!("Unknown asset type '{type_path}' in inline assets -- skipping");
+            warn!("Unknown asset type '{type_path}' in inline assets; skipping");
             continue;
         };
         let Some(reflect_asset) = registration.data::<ReflectAsset>() else {

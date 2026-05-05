@@ -1,0 +1,33 @@
+[package]
+name = "{{project-name}}"
+authors = ["{{authors}}"]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Mark as its own workspace root so it doesn't get pulled into
+# whatever parent workspace the user happens to scaffold under.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+# `bevy` is a plain crates.io dep so bevy's derive macros find it
+# in the manifest and emit correct `::bevy::…` paths. When the
+# jackdaw editor builds this project it runs cargo with
+# RUSTC_WRAPPER=jackdaw-rustc-wrapper, which rewrites
+# `--extern bevy=<rlib>` to `--extern bevy=libjackdaw_sdk.so` so
+# the TypeIds in this cdylib line up with the editor's.
+#
+# `jackdaw_api` is never declared here; the wrapper injects its
+# `--extern` flag unconditionally.
+[dependencies]
+bevy = "0.18"
+
+# The build.rs scans src/ for `#[derive(..., Reflect, ...)]` types
+# and emits an explicit registration function that jackdaw's
+# `export_game!` macro `include!`s. This is how jackdaw auto-
+# registers your types with the editor without forcing you to call
+# `ctx.register_type::<T>()` by hand.
+[build-dependencies]
+syn = { version = "2", features = ["full", "visit"] }

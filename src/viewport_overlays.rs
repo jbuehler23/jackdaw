@@ -5,7 +5,6 @@ use crate::entity_ops::EmptyEntity;
 use crate::selection::Selected;
 use crate::viewport::SceneViewport;
 use crate::{JackdawDrawSystems, default_style};
-use avian3d::parry::math::Point as ParryPoint;
 use avian3d::parry::transformation::convex_hull;
 use bevy::prelude::*;
 use jackdaw_jsn::BrushGroup;
@@ -164,19 +163,12 @@ fn draw_selection_bounding_boxes(
                 draw_aabb_wireframe(&mut gizmos, min, max, color);
             }
             BoundingBoxMode::ConvexHull => {
-                let parry_points: Vec<ParryPoint<f32>> = world_verts
-                    .iter()
-                    .map(|v| ParryPoint::new(v.x, v.y, v.z))
-                    .collect();
-                let (hull_verts, hull_tris) = convex_hull(&parry_points);
-                if hull_verts.is_empty() || hull_tris.is_empty() {
+                // parry 0.26 (avian 0.6) takes / returns plain `Vec3`.
+                let (hull_positions, hull_tris) = convex_hull(&world_verts);
+                if hull_positions.is_empty() || hull_tris.is_empty() {
                     continue;
                 }
 
-                let hull_positions: Vec<Vec3> = hull_verts
-                    .iter()
-                    .map(|p| Vec3::new(p.x, p.y, p.z))
-                    .collect();
                 let hull_faces = brush::merge_hull_triangles(&hull_positions, &hull_tris);
                 let face_polygons: Vec<Vec<usize>> =
                     hull_faces.into_iter().map(|f| f.vertex_indices).collect();

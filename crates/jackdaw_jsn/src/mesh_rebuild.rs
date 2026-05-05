@@ -100,7 +100,7 @@ pub fn rebuild_brush_meshes(
 
     let grid_handle = load_embedded_asset!(
         &*assets,
-        "../assets/textures/jd_grid.png",
+        "../assets/jd_grid.png",
         |settings: &mut ImageLoaderSettings| {
             let sampler = settings.sampler.get_or_init_descriptor();
             sampler.mag_filter = ImageFilterMode::Nearest;

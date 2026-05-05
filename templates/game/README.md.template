@@ -1,0 +1,85 @@
+# {{project-name | title_case}}
+
+A jackdaw game generated from the
+[jackdaw-template-game](https://github.com/jbuehler23/jackdaw_template_game)
+template.
+
+## How this template is structured
+
+Jackdaw follows the same split as Unity/Unreal/Godot:
+
+- **Scene content** (cubes, lights, cameras, their positions and
+  components) lives in the project's `.jsn` scene file. You author
+  this in jackdaw's viewport + hierarchy + inspector.
+- **Game behaviour** (systems that move things, handle input, run
+  every frame) lives in this crate's Rust code.
+
+The scaffold ships with one component and one system:
+
+- `SpinningCube { speed: f32 }`: attach to any scene entity you
+  want to spin.
+- `spin_cube`: rotates every entity carrying `SpinningCube` while
+  `PlayState::Playing`.
+
+No entities are spawned from code. You add them in the editor.
+
+## Your first cube
+
+1. Open this project in jackdaw.
+2. **File → Open** → pick `assets/scene.jsn` (ships with this
+   template). A starter scene with a cube appears.
+3. Select the cube, and in the **Inspector** scroll to **Add
+   Component** → `SpinningCube`. Set `speed` (e.g. `1.5`).
+4. **File → Save**. The component + transform are persisted back
+   into `assets/scene.jsn`.
+5. Press **Play** (top-right toolbar). The cube spins.
+6. While playing, drag the inspector's `speed` slider; rotation
+   rate changes immediately.
+7. Press **Stop**. The cube stays in its authored position. (Its
+   runtime-edited `speed` reverts to the saved value because Stop
+   reloads the scene snapshot.)
+
+### Why File → Open instead of auto-loading?
+
+Once a project has multiple scenes, auto-loading one specific
+path ("why this one?") gets confusing. Jackdaw keeps scene
+selection explicit. A future release will remember the last
+scene per project so you don't re-pick on every open.
+
+## Persisting edits
+
+- Transforms, component values, and structure edited in the
+  inspector **while Stopped** → go into the scene AST → survive
+  **File → Save**.
+- Edits **while Playing** go into the runtime World. Stop discards
+  them. This is the Unity/Unreal "Play is a simulation; Save while
+  Stopped to make changes permanent" model.
+
+## Edit this code
+
+Declare new components in `src/lib.rs` with
+`#[derive(Component, Reflect, Default)]` and
+`#[reflect(Component, Default)]`. Jackdaw sweeps the dylib's
+reflect inventory after loading it, so your new types appear in
+the Inspector's Add Component picker automatically. No explicit
+registration required.
+
+Add systems inside `GamePlugin::build`:
+
+```rust
+ctx.add_systems(Update, your_system.run_if(in_state(PlayState::Playing)));
+```
+
+With jackdaw open on the project, run `cargo build` in the project
+directory. Jackdaw's hot-reload watcher picks up the new artifact
+and swaps the game in place: no restart, no flicker, your scene
+stays put.
+
+## Why the first build is slow
+
+The first `cargo build` compiles all of bevy from crates.io
+(~500 crates, a few minutes). The resulting `libbevy-<hash>.rlib`
+is never actually linked; jackdaw's rustc wrapper redirects
+`--extern bevy=` at the editor's `libjackdaw_sdk.so` so TypeIds
+match across the FFI boundary. Subsequent edits to your own code
+rebuild in seconds.

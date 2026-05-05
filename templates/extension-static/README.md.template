@@ -1,0 +1,88 @@
+# {{project-name | title_case}}
+
+A jackdaw extension scaffolded from the
+[jackdaw-template-extension-static](https://github.com/jbuehler23/jackdaw_template_extension_static)
+template.
+
+> ## Static template (recommended)
+>
+> This template produces a normal Bevy crate that builds with
+> vanilla `cargo build` and does not depend on jackdaw's runtime
+> SDK proxy. This is the recommended path for new jackdaw projects.
+>
+> To run your extension in jackdaw, run `cargo run` from the project
+> root. The launcher's "Open from recents" path opens the project
+> for level editing only and does not auto-build the extension
+> binary.
+>
+> An experimental dylib `extension` template exists for users who
+> want hot-reloadable cdylib loading. It is rougher around the
+> edges and is not recommended for new projects yet.
+
+## Try it
+
+```sh
+cargo run
+```
+
+A jackdaw editor opens with this extension statically registered.
+Look for **Hello from {{project-name | title_case}}** in the
+Windows menu, and the `{{project-name}}.hello` operator in the
+Command Palette.
+
+## Shape
+
+Dual-target crate:
+
+- `src/lib.rs` exports
+  [`{{project-name}}::{{crate_name | pascal_case}}`], which
+  implements `JackdawExtension`. This is the public API: other
+  jackdaw projects consume this crate as a library and register
+  the extension into their own editor binary.
+- `src/main.rs` is a thin launcher that does exactly this. It's
+  there so `cargo run` works.
+
+Static-embed means no dylib, no cdylib, no FFI, and no
+platform-specific link issues. The trade-off is that consumers
+have to rebuild their editor binary to pick up extension
+changes.
+
+## Consuming this extension from another project
+
+From a jackdaw game project (e.g. one scaffolded from
+[`jackdaw_template_game_static`](https://github.com/jbuehler23/jackdaw_template_game_static)),
+add this crate as a dependency:
+
+```toml
+[dependencies]
+{{project-name}} = { path = "../{{project-name}}" }
+# or `{ git = "..." }` / `"0.1"` when published
+```
+
+Then register it alongside the game's `Plugin`:
+
+```rust
+App::new()
+    .add_plugins(DefaultPlugins)
+    .add_plugins(MyGamePlugin)
+    .add_plugins(
+        EditorPlugin::new()
+            .with_extension(
+                "{{project-name}}",
+                || Box::new({{crate_name}}::{{crate_name | pascal_case}}),
+            )
+            .build(),
+    )
+    .run();
+```
+
+## Next steps
+
+- Extend `register` in `src/lib.rs` with more windows, operators,
+  workspace descriptors, menu entries.
+- Add `#[operator]` functions for custom commands.
+- Register input contexts via `JackdawExtension::register_input_context`.
+
+See the
+[jackdaw docs](https://github.com/jbuehler23/jackdaw/tree/main/book)
+for the full extension authoring surface.

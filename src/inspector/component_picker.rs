@@ -14,7 +14,26 @@ use jackdaw_feathers::picker::{
 };
 use jackdaw_feathers::tokens;
 
-use super::{AddComponentButton, ComponentPicker, Inspector, ReflectEditorMeta};
+use bevy::reflect::{TypeInfo, attributes::CustomAttributes};
+use jackdaw_runtime::{EditorCategory, EditorDescription};
+
+use super::{AddComponentButton, ComponentPicker, Inspector};
+
+// `custom_attributes()` lives on the variant types
+// (`StructInfo`, `EnumInfo`, etc.), not on `TypeInfo` itself.
+fn type_info_custom_attributes(info: &TypeInfo) -> Option<&CustomAttributes> {
+    match info {
+        TypeInfo::Struct(s) => Some(s.custom_attributes()),
+        TypeInfo::TupleStruct(s) => Some(s.custom_attributes()),
+        TypeInfo::Enum(e) => Some(e.custom_attributes()),
+        TypeInfo::Tuple(_)
+        | TypeInfo::List(_)
+        | TypeInfo::Array(_)
+        | TypeInfo::Map(_)
+        | TypeInfo::Set(_)
+        | TypeInfo::Opaque(_) => None,
+    }
+}
 
 /// Grouping key for sorting: custom categories first, then Game, then Bevy.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
@@ -50,6 +69,77 @@ struct ComponentInfo {
     type_path_full: String,
 }
 
+/// Public view of one row the component picker would render.
+/// Matches the UI's filter rules so tests can assert what users
+/// will actually see.
+pub struct PickableComponent {
+    pub short_name: String,
+    pub module_path: String,
+    pub category: String,
+    pub description: String,
+    pub type_path_full: String,
+}
+
+/// Enumerate every component the picker would display for a
+/// target entity. Filters: must be a `Component`, must be
+/// default-constructible (via [`build_reflective_default`]), not
+/// already on `existing_types`, and not editor-internal. Reads
+/// `EditorCategory` / `EditorDescription` from custom reflect
+/// attributes; falls back to the reflected doc comment for
+/// description.
+///
+/// [`build_reflective_default`]: crate::reflect_default::build_reflective_default
+pub fn enumerate_pickable_components(
+    registry: &bevy::reflect::TypeRegistry,
+    existing_types: &HashSet<TypeId>,
+) -> Vec<PickableComponent> {
+    let mut out = Vec::new();
+    for registration in registry.iter() {
+        let type_id = registration.type_id();
+
+        if registration.data::<ReflectComponent>().is_none() {
+            continue;
+        }
+        if crate::reflect_default::build_reflective_default(type_id, registry).is_none() {
+            continue;
+        }
+        if existing_types.contains(&type_id) {
+            continue;
+        }
+
+        let table = registration.type_info().type_path_table();
+        let full_path = table.path();
+        if full_path.starts_with("jackdaw") && !full_path.starts_with("jackdaw_avian_integration") {
+            continue;
+        }
+
+        let info = registration.type_info();
+        let custom_attrs = type_info_custom_attributes(info);
+        let description = custom_attrs
+            .and_then(|a| a.get::<EditorDescription>())
+            .map(|d| d.0.to_string())
+            .or_else(|| {
+                info.docs()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or_default();
+        let category = custom_attrs
+            .and_then(|a| a.get::<EditorCategory>())
+            .map(|c| c.0.to_string())
+            .unwrap_or_default();
+
+        out.push(PickableComponent {
+            short_name: table.short_path().to_string(),
+            module_path: table.module_path().unwrap_or("").to_string(),
+            category,
+            description,
+            type_path_full: full_path.to_string(),
+        });
+    }
+    out
+}
+
 impl Matchable for ComponentInfo {
     fn haystack(&self) -> String {
         self.short_name.clone()
@@ -75,12 +165,10 @@ pub(crate) fn on_add_component_button_click(
     entity_query: Query<&Archetype, (With<Selected>, Without<EditorEntity>)>,
     _inspector: Single<Entity, With<Inspector>>,
 ) {
-    // Check if this click is on an AddComponentButton
     if add_buttons.get(event.entity).is_err() {
         return;
     }
 
-    // Toggle: if picker already open, close it
     if let Some(picker) = existing_pickers.iter().next() {
         commands.entity(picker).despawn();
         return;
@@ -93,7 +181,6 @@ pub(crate) fn on_add_component_button_click(
         return;
     };
 
-    // Collect existing component TypeIds on the entity
     let existing_types: HashSet<TypeId> = archetype
         .iter_components()
         .filter_map(|cid| {
@@ -104,63 +191,26 @@ pub(crate) fn on_add_component_button_click(
         .collect();
 
     let registry = type_registry.read();
-
-    // Collect all registered components that have ReflectComponent + ReflectDefault
-    let mut searchable_components: Vec<ComponentInfo> = vec![];
-    for registration in registry.iter() {
-        let type_id = registration.type_id();
-
-        // Must have ReflectComponent and ReflectDefault
-        if registration.data::<ReflectComponent>().is_none()
-            || registration.data::<ReflectDefault>().is_none()
-        {
-            continue;
-        }
-
-        // Skip components already on the entity
-        if existing_types.contains(&type_id) {
-            continue;
-        }
-
-        // Skip editor-internal types
-        let table = registration.type_info().type_path_table();
-        let full_path = table.path();
-        if full_path.starts_with("jackdaw") && !full_path.starts_with("jackdaw_avian_integration") {
-            continue;
-        }
-
-        // Skip if no component ID is registered for this type
-        if components.get_id(type_id).is_none() {
-            continue;
-        }
-
-        let short_name = table.short_path().to_string();
-        let module = table.module_path().unwrap_or("").to_string();
-
-        // Read EditorMeta if present
-        let (category, description) = if let Some(meta) = registration.data::<ReflectEditorMeta>() {
-            (meta.category.to_string(), meta.description.to_string())
-        } else {
-            (String::new(), String::new())
-        };
-
-        // Determine group
-        let group = if !category.is_empty() {
-            GroupOrder::Custom(category.clone())
-        } else if module.starts_with("bevy") {
-            GroupOrder::Bevy
-        } else {
-            GroupOrder::Game
-        };
-
-        searchable_components.push(ComponentInfo {
-            short_name,
-            module_path: module,
-            group,
-            description,
-            type_path_full: full_path.to_string(),
-        });
-    }
+    let searchable_components: Vec<ComponentInfo> =
+        enumerate_pickable_components(&registry, &existing_types)
+            .into_iter()
+            .map(|p| {
+                let group = if !p.category.is_empty() {
+                    GroupOrder::Custom(p.category)
+                } else if p.module_path.starts_with("bevy") {
+                    GroupOrder::Bevy
+                } else {
+                    GroupOrder::Game
+                };
+                ComponentInfo {
+                    short_name: p.short_name,
+                    module_path: p.module_path,
+                    group,
+                    description: p.description,
+                    type_path_full: p.type_path_full,
+                }
+            })
+            .collect();
 
     let picker = PickerProps::new(spawn_item, on_select)
         .items(searchable_components)
@@ -205,7 +255,6 @@ fn spawn_item(
     let description = info.description.clone();
     let module_path = info.module_path.clone();
 
-    // Subtitle: description takes priority, otherwise module path
     let subtitle = if !description.is_empty() {
         description.clone()
     } else {

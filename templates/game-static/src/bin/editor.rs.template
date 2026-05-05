@@ -1,0 +1,47 @@
+//! Editor + game binary for {{project-name}}, built only when
+//! the `editor` feature is on (typically via `cargo editor`).
+//! Statically links the jackdaw editor with [`MyGamePlugin`];
+//! PIE Play runs the game in-process inside the editor window.
+//!
+//! See `src/main.rs` for the standalone runner.
+
+use std::path::PathBuf;
+
+use bevy::prelude::*;
+use jackdaw::prelude::*;
+use jackdaw::project_select::PendingAutoOpen;
+
+fn main() -> AppExit {
+    // Claim SIGINT/SIGTERM before wgpu/gilrs install their own
+    // handlers that swallow the signal.
+    let _ = ctrlc::set_handler(|| std::process::exit(130));
+
+    // The launcher hands off via `JACKDAW_PROJECT`; for
+    // `cargo editor` from a project shell, fall back to cwd.
+    // Without one of these the editor would land on the
+    // launcher's picker instead of opening this project.
+    let project_root = std::env::var_os("JACKDAW_PROJECT")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok());
+
+    let mut app = App::new();
+    app.set_error_handler(bevy::ecs::error::error)
+        .add_plugins(DefaultPlugins)
+        // Ambient plugins. `jackdaw::prelude` re-exports both so
+        // we don't need direct deps on avian3d /
+        // bevy_enhanced_input.
+        .add_plugins((PhysicsPlugins::default(), EnhancedInputPlugin))
+        .add_plugins(EditorPlugins::default())
+        .add_plugins({{crate_name}}::MyGamePlugin);
+
+    if let Some(root) = project_root.filter(|p| p.is_dir()) {
+        // `skip_build = true`: this binary IS the editor; no
+        // build step to wait for.
+        app.insert_resource(PendingAutoOpen {
+            path: root,
+            skip_build: true,
+        });
+    }
+
+    app.run()
+}

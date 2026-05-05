@@ -1,0 +1,9 @@
+# Cargo aliases for the two run modes this template ships with.
+#
+# `cargo editor` builds the per-project editor binary (with
+# jackdaw + this project's plugin compiled in) and launches it.
+# `cargo play` (or plain `cargo run`) launches the standalone
+# game binary without the editor in the loop.
+[alias]
+editor = "run --bin editor --features editor"
+play = "run"

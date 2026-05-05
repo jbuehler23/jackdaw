@@ -541,7 +541,7 @@ pub(crate) struct ActiveDraw {
     pub polygon_vertices: Vec<Vec3>,
     /// Current cursor position on plane during polygon mode (for preview edge).
     pub polygon_cursor: Option<Vec3>,
-    /// When true, constrain cursor to nearest 45° angle from last vertex.
+    /// When true, constrain cursor to nearest 45-degree angle from last vertex.
     pub diagonal_snap: bool,
     /// Last successful face raycast hit point, for plane stickiness when raycast misses near edges.
     pub cached_face_hit: Option<Vec3>,
@@ -1076,7 +1076,7 @@ fn draw_brush_release(
 
 /// Sidecar trigger: an LMB inside an active draw modal dispatches
 /// the `draw_brush.confirm` operator. Mouse-button gestures aren't
-/// expressible as BEI key actions, so the click→operator translation
+/// expressible as BEI key actions, so the click-to-operator translation
 /// has to live in a system. The operator itself owns the actual
 /// phase-advance logic and works for both Add and Cut modes.
 fn draw_brush_confirm(
@@ -1378,7 +1378,6 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
     };
 
     commands.queue(move |world: &mut World| {
-        use avian3d::parry::math::Point as ParryPoint;
         use avian3d::parry::transformation::convex_hull;
 
         let Some(brush) = world.get::<Brush>(target_entity) else {
@@ -1405,20 +1404,14 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
             return;
         }
 
-        // Compute convex hull
-        let points: Vec<ParryPoint<f32>> = all_local_verts
-            .iter()
-            .map(|v| ParryPoint::new(v.x, v.y, v.z))
-            .collect();
-        let (hull_verts, hull_tris) = convex_hull(&points);
-        if hull_verts.len() < 4 || hull_tris.is_empty() {
+        // parry 0.26 (avian 0.6) takes / returns plain `Vec3` from
+        // `convex_hull`; the explicit `Point<f32>` wrapper that was
+        // needed in 0.5 is gone.
+        let (hull_positions, hull_tris) = convex_hull(&all_local_verts);
+        if hull_positions.len() < 4 || hull_tris.is_empty() {
             return;
         }
 
-        let hull_positions: Vec<Vec3> = hull_verts
-            .iter()
-            .map(|p| Vec3::new(p.x, p.y, p.z))
-            .collect();
         let hull_faces = crate::brush::merge_hull_triangles(&hull_positions, &hull_tris);
         if hull_faces.len() < 4 {
             return;
@@ -1608,7 +1601,7 @@ fn snap_to_plane_grid(
     plane.axis_u * snapped_u + plane.axis_v * snapped_v + plane.normal * plane_d
 }
 
-/// Constrain a hit point to the nearest 45° angle from an origin on the drawing plane.
+/// Constrain a hit point to the nearest 45-degree angle from an origin on the drawing plane.
 fn snap_to_diagonal(hit: Vec3, origin: Vec3, plane: &DrawPlane) -> Vec3 {
     let delta_u = hit.dot(plane.axis_u) - origin.dot(plane.axis_u);
     let delta_v = hit.dot(plane.axis_v) - origin.dot(plane.axis_v);
@@ -2518,7 +2511,6 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
     let others: Vec<Entity> = selected_brushes[1..].to_vec();
 
     {
-        use avian3d::parry::math::Point as ParryPoint;
         use avian3d::parry::transformation::convex_hull;
 
         // Read primary brush data
@@ -2557,20 +2549,12 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
             return;
         }
 
-        // Compute convex hull
-        let points: Vec<ParryPoint<f32>> = all_local_verts
-            .iter()
-            .map(|v| ParryPoint::new(v.x, v.y, v.z))
-            .collect();
-        let (hull_verts, hull_tris) = convex_hull(&points);
-        if hull_verts.len() < 4 || hull_tris.is_empty() {
+        // parry 0.26 (avian 0.6) takes / returns plain `Vec3`.
+        let (hull_positions, hull_tris) = convex_hull(&all_local_verts);
+        if hull_positions.len() < 4 || hull_tris.is_empty() {
             return;
         }
 
-        let hull_positions: Vec<Vec3> = hull_verts
-            .iter()
-            .map(|p| Vec3::new(p.x, p.y, p.z))
-            .collect();
         let hull_faces = crate::brush::merge_hull_triangles(&hull_positions, &hull_tris);
         if hull_faces.len() < 4 {
             return;
@@ -3163,7 +3147,7 @@ fn can_run_binary_brush_op(
 }
 
 /// `brush.extend_face_to_brush` needs either (a) Face edit mode with a
-/// face picked and another brush selected, or (b) Object mode with ≥ 2
+/// face picked and another brush selected, or (b) Object mode with >= 2
 /// brushes selected and a remembered/hovered face on the primary.
 fn can_run_extend_face(
     keybind_focus: KeybindFocus,
@@ -3203,9 +3187,9 @@ fn can_run_extend_face(
     label = "Extend to Brush",
     description = "Extend a face of the primary brush to conform to the shape of \
                    the other selected brushes. Two entry paths:\n\
-                   • `EditMode::BrushEdit(Face)` with a face selected on \
-                     `BrushSelection` and ≥ 1 other brush in `Selection::entities`.\n\
-                   • `EditMode::Object` with ≥ 2 brushes in `Selection::entities` \
+                   - `EditMode::BrushEdit(Face)` with a face selected on \
+                     `BrushSelection` and >= 1 other brush in `Selection::entities`.\n\
+                   - `EditMode::Object` with >= 2 brushes in `Selection::entities` \
                      and a remembered face on the primary.\n\
                    Availability (`can_run_extend_face`) is false when neither \
                    entry path applies. The Object-mode path additionally \
@@ -3398,8 +3382,8 @@ pub(crate) fn extend_face_to_brush_impl(
     }
 
     // Filter target faces: prefer angled faces (not anti-parallel or perpendicular to the
-    // removed face). Anti-parallel faces (dot ≈ -1) would just re-cap at the same level,
-    // and perpendicular/same-direction faces (dot ≥ 0) don't constrain the extension.
+    // removed face). Anti-parallel faces (dot approx -1) would just re-cap at the same level,
+    // and perpendicular/same-direction faces (dot >= 0) don't constrain the extension.
     let angled: Vec<BrushFaceData> = candidate_faces
         .iter()
         .filter(|f| {

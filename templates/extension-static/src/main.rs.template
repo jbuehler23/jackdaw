@@ -1,0 +1,28 @@
+//! Local launcher for {{project-name}}.
+//!
+//! Spawns a jackdaw editor with this extension statically
+//! registered so you can exercise it end-to-end without a separate
+//! editor project. Run with:
+//!
+//! ```text
+//! cargo run
+//! ```
+//!
+//! To consume the extension from another project, depend on this
+//! crate as a library and register
+//! [`{{crate_name}}::{{crate_name | pascal_case}}`] the same way this
+//! launcher does.
+
+use bevy::prelude::*;
+use jackdaw::prelude::*;
+
+fn main() -> AppExit {
+    App::new()
+        .add_plugins(DefaultPlugins)
+        .add_plugins(EditorPlugins::default())
+        .add_plugins(
+            ExtensionPlugin::new()
+                .with_extension::<{{crate_name}}::{{crate_name | pascal_case}}>(),
+        )
+        .run()
+}

@@ -290,7 +290,7 @@ fn to_pascal_case(snake: &str) -> String {
     out
 }
 
-/// Lower a `params(name(Type, default = …, doc = "…"), …)` block into
+/// Lower a `params(name(Type, default = ..., doc = "..."), ...)` block into
 /// the const slice expression that goes after `PARAMETERS: &'static [ParamSpec] =`.
 fn build_params_const(list: &syn::MetaList) -> syn::Result<TokenStream2> {
     let entries: Punctuated<Meta, Token![,]> =
@@ -306,7 +306,7 @@ fn build_param_spec(meta: &Meta) -> syn::Result<TokenStream2> {
     let Meta::List(list) = meta else {
         return Err(syn::Error::new(
             meta.span(),
-            "expected `name(Type, default = …, doc = \"…\")`",
+            "expected `name(Type, default = ..., doc = \"...\")`",
         ));
     };
     let name_ident = list.path.get_ident().ok_or_else(|| {
@@ -342,7 +342,7 @@ fn build_param_spec(meta: &Meta) -> syn::Result<TokenStream2> {
         let Meta::NameValue(nv) = m else {
             return Err(syn::Error::new(
                 m.span(),
-                "expected `default = …` or `doc = \"…\"`",
+                "expected `default = ...` or `doc = \"...\"`",
             ));
         };
         let key = nv.path.get_ident().ok_or_else(|| {
@@ -413,7 +413,7 @@ fn param_type_variant(ty: &Ident) -> syn::Result<TokenStream2> {
     Ok(quote! { #label })
 }
 
-/// Lower a `default = …` macro arg into a `PropertyValue` constructor.
+/// Lower a `default = ...` macro arg into a `PropertyValue` constructor.
 /// Strings go through `Cow::Borrowed` so the whole `ParamSpec` can sit
 /// in a `const` slice; numeric and bool literals are trivial.
 fn param_default_variant(ty: &Ident, expr: &Expr) -> syn::Result<TokenStream2> {
@@ -427,7 +427,7 @@ fn param_default_variant(ty: &Ident, expr: &Expr) -> syn::Result<TokenStream2> {
         "Vec2" | "Vec3" | "Color" | "Entity" => {
             return Err(syn::Error::new(
                 expr.span(),
-                "literal `default = …` for Vec2, Vec3, Color, Entity is not supported yet",
+                "literal `default = ...` for Vec2, Vec3, Color, Entity is not supported yet",
             ));
         }
         other => {

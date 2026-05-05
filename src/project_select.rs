@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use bevy::{
     prelude::*,
@@ -17,6 +17,7 @@ use crate::{
     AppState,
     new_project::{ScaffoldError, TemplateLinkage, TemplatePreset, scaffold_project},
     project::{self, ProjectRoot},
+    scene_io,
 };
 
 pub struct ProjectSelectPlugin;
@@ -24,16 +25,41 @@ pub struct ProjectSelectPlugin;
 impl Plugin for ProjectSelectPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NewProjectState>()
+            .init_resource::<crate::build_status::BuildStatus>()
             .add_systems(OnEnter(AppState::ProjectSelect), spawn_project_selector)
             .add_systems(
                 Update,
                 (
                     poll_folder_dialog,
-                    poll_new_project_tasks,
-                    refresh_build_progress_snapshot,
+                    poll_template_folder_dialog,
                     refresh_build_progress_ui,
                 )
                     .run_if(in_state(AppState::ProjectSelect)),
+            )
+            // Build-progress polling and task draining run in BOTH
+            // states. The static-template scaffold flow transitions
+            // to Editor immediately after scaffolding succeeds, but
+            // the build task keeps running in the background; the
+            // status_bar's progress region depends on
+            // `refresh_build_progress_snapshot` to keep updating,
+            // and `poll_new_project_tasks` needs to drain the build
+            // task when it completes (otherwise the progress
+            // indicator would never collapse). They're cheap no-ops
+            // when nothing is in flight.
+            //
+            // `drive_static_editor_build` runs in both states too:
+            // it kicks off the user's editor-binary build in the
+            // background after scaffold or open-existing, polls for
+            // completion, and updates `BuildStatus` so the status
+            // bar / click handler can render and dispatch the
+            // handoff.
+            .add_systems(
+                Update,
+                (
+                    poll_new_project_tasks,
+                    refresh_build_progress_snapshot,
+                    drive_static_editor_build,
+                ),
             )
             // The dylib-install step MUST run outside of `Update`'s
             // `schedule_scope`. The game's `GameApp::add_systems(Update, …)`
@@ -68,6 +94,12 @@ pub struct PendingAutoOpen {
 #[derive(Resource)]
 struct FolderDialogTask(Task<Option<rfd::FileHandle>>);
 
+/// Resource holding the async folder picker task for the template-
+/// folder Browse button in the New Project modal. Kept separate from
+/// `FolderDialogTask` (which routes results into the Location field).
+#[derive(Resource)]
+struct TemplateFolderDialogTask(Task<Option<rfd::FileHandle>>);
+
 /// Root marker for the New Project modal overlay. Spawned when the
 /// user clicks **+ New Extension** / **+ New Game**; despawned on
 /// Cancel or on successful scaffold.
@@ -85,11 +117,37 @@ struct NewProjectNameInput;
 #[derive(Component)]
 struct NewProjectTemplateInput;
 
+/// Wraps the local-path `TextEdit`. Empty by default; when
+/// non-empty it takes precedence over the Git URL on Create.
+#[derive(Component)]
+struct NewProjectLocalTemplateInput;
+
+/// Marks the Browse button next to the local template path field.
+#[derive(Component)]
+struct NewProjectLocalBrowseButton;
+
+/// Wraps the Git branch `TextEdit`. Used only when scaffolding via
+/// the Git URL field; ignored for local-path scaffolds. Default
+/// value comes from `template_branch()`.
+#[derive(Component)]
+struct NewProjectBranchInput;
+
 #[derive(Component)]
 struct NewProjectLocationText;
 
 #[derive(Component)]
 struct NewProjectStatusText;
+
+/// Marker for the "Open editor after creating" checkbox in the New
+/// Project modal. The checkbox lets the user opt out of the
+/// auto-build/auto-spawn flow for static templates: when checked
+/// (default) the launcher kicks off `cargo build --bin editor
+/// --features editor` and hands off to the user's editor binary.
+/// When unchecked, the launcher stops at "files written" and
+/// surfaces a dialog with the cargo command the user should run
+/// from their terminal.
+#[derive(Component)]
+struct BuildAfterScaffoldCheckbox;
 
 /// Outer container for the progress-bar + log-tail UI, toggled on
 /// when a build is in flight so the idle modal doesn't leave a
@@ -127,7 +185,34 @@ struct NewProjectBrowseButton;
 #[derive(Component, Clone, Copy)]
 struct NewProjectLinkageButton(TemplateLinkage);
 
-/// Drives the modal's async operations.
+/// State for the static-editor build pipeline. The launcher
+/// background-builds `<project>/target/debug/editor` (via
+/// `cargo build --bin editor --features editor`) for static-game
+/// projects, then hands off to that binary. Three pieces of state
+/// belong together: the queued request, the in-flight task, and
+/// the auto-reload flag.
+#[derive(Default)]
+struct StaticEditorBuild {
+    /// Queued request to start a build. The bool is `auto_reload`:
+    /// `true` from the post-scaffold path (driver auto-fires the
+    /// handoff once the build is `Ready`); `false` from "open
+    /// existing project" (user clicks the footer indicator to
+    /// reload manually). `drive_static_editor_build` consumes this
+    /// on the next `Update` and spawns the cargo task.
+    pending: Option<(PathBuf, bool)>,
+    /// In-flight static-editor cargo task. Polled each frame by
+    /// `drive_static_editor_build`; on completion the driver
+    /// updates `BuildStatus` to `Ready` or `Failed`.
+    task: Option<Task<Result<PathBuf, crate::ext_build::BuildError>>>,
+    /// Auto-reload flag remembered between dispatch and completion.
+    /// Mirrors the second member of `pending`, stashed once the task
+    /// is spawned because `pending` is drained on dispatch.
+    auto_reload: bool,
+}
+
+/// Drives the modal's async operations. Internal to this module;
+/// external systems that need to observe build progress read the
+/// public `BuildStatus` resource instead.
 #[derive(Resource, Default)]
 struct NewProjectState {
     /// Which preset the user opened the dialog with. `None` when
@@ -146,23 +231,15 @@ struct NewProjectState {
     /// In-flight initial build after scaffold. Queued immediately
     /// after the scaffold task succeeds so the user lands in the
     /// editor with the game/extension dylib already installed.
-    build_task: Option<Task<Result<PathBuf, crate::ext_build::BuildError>>>,
-    /// In-flight `cargo clean -p <crate>` triggered by the
-    /// auto-recovery path when the first install fails with an
-    /// SDK symbol mismatch. When this completes successfully, the
-    /// poller re-runs `build_task` against the same project path.
-    clean_task: Option<Task<Result<(), crate::ext_build::BuildError>>>,
-    /// `true` after we've triggered the clean+rebuild once. Stops
-    /// us from infinite-looping if a second build still fails with
-    /// the same symbol mismatch (indicating the project has some
-    /// other issue).
-    retry_attempted: bool,
-    /// Tunnel from the install-runs-in-commands-queue closure back
-    /// into this poller. The closure pushes its install result
-    /// here; the next frame the poller drains it and either
-    /// proceeds or triggers the auto-clean recovery.
-    metadata_outcome:
-        Option<std::sync::Arc<std::sync::Mutex<Option<Result<(), jackdaw_loader::LoadError>>>>>,
+    /// In-flight build task plus the linkage it was kicked off with.
+    /// The linkage travels with the task so the poller branches on
+    /// the actual in-flight linkage, not on the modal's stale
+    /// `state.linkage` (which describes the modal's current selection,
+    /// not whatever build is running).
+    build_task: Option<(
+        Task<Result<PathBuf, crate::ext_build::BuildError>>,
+        TemplateLinkage,
+    )>,
     /// Artifact waiting to be installed by `apply_pending_install`
     /// (runs in `Last`, not `Update`, so modifications to the
     /// `Update` schedule by the game's `GameApp::add_systems` don't
@@ -171,6 +248,18 @@ struct NewProjectState {
     /// Static scaffold whose pre-build finished. Picked up in `Last`
     /// by `apply_pending_static_open`, which calls `enter_project`.
     pending_static_open: Option<PathBuf>,
+    /// Static-editor build pipeline state grouped into one field.
+    /// See [`StaticEditorBuild`].
+    static_editor: StaticEditorBuild,
+    /// Whether the post-scaffold path should kick off the editor
+    /// build immediately (default `true` — the user lands in their
+    /// editor without leaving the launcher) or stop at "files
+    /// written, run `cargo editor` from the project root yourself"
+    /// (`false` — for users who'd rather drive the build from
+    /// their own terminal). Read by the scaffold-success branch
+    /// in `poll_new_project_tasks`; set from the New Project
+    /// modal's checkbox in `on_create_new_project`.
+    build_after_scaffold: bool,
     /// Shared progress sink the build task writes to. The
     /// `refresh_build_progress_ui` system reads a snapshot from
     /// here each frame and copies it into `build_progress_snapshot`
@@ -178,6 +267,8 @@ struct NewProjectState {
     /// the hot path.
     build_progress: Option<std::sync::Arc<std::sync::Mutex<crate::ext_build::BuildProgress>>>,
     /// Latest snapshot of `build_progress`, copied each frame.
+    /// Used by `refresh_build_progress_ui` to render the dylib
+    /// install modal's progress bar.
     build_progress_snapshot: Option<crate::ext_build::BuildProgress>,
     /// Path to the freshly-scaffolded project, kept around so the
     /// build-completion handler can transition into the editor
@@ -199,6 +290,14 @@ fn spawn_project_selector(
     icon_font: Res<jackdaw_feathers::icons::IconFont>,
     pending: Option<Res<PendingAutoOpen>>,
 ) {
+    // UI camera for the project selector screen. Spawned BEFORE the
+    // auto-open early-return so the build-progress modal renders
+    // against a valid camera even when the user lands directly in
+    // an opening project. Without this, the launcher window stays
+    // fully blank for several minutes during a static-editor build
+    // because the modal had no camera to draw on.
+    commands.spawn((ProjectSelectorRoot, Camera2d));
+
     if let Some(pending) = pending {
         let path = pending.path.clone();
         let skip_build = pending.skip_build;
@@ -218,9 +317,6 @@ fn spawn_project_selector(
     let cwd_has_project = cwd.join(".jsn/project.jsn").is_file()
         || cwd.join("project.jsn").is_file()
         || cwd.join("assets").is_dir();
-
-    // UI camera for the project selector screen
-    commands.spawn((ProjectSelectorRoot, Camera2d));
 
     commands
         .spawn((
@@ -594,6 +690,41 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
         transition_to_editor(world, root);
         return;
     }
+    // Static-template games: don't open the launcher's editor at
+    // all. The launcher's editor doesn't carry the user's
+    // `MyGamePlugin` types (different binary, different
+    // `AppTypeRegistry`), so the inspector + PIE Play would be
+    // missing exactly the user-defined components the user wants
+    // to author. Build the user's `editor` binary first, then
+    // hand off (`drive_static_editor_build` -> `do_handoff`).
+    if matches!(
+        crate::new_project::detect_template_kind(&root),
+        crate::new_project::TemplateKind::StaticGameWithEditorFeature
+    ) {
+        let project_name = root
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("project")
+            .to_owned();
+        let scaffold_modal_already_open = {
+            let mut q = world.query_filtered::<Entity, With<NewProjectModalRoot>>();
+            q.iter(world).next().is_some()
+        };
+        if !scaffold_modal_already_open {
+            open_project_progress_modal(world, &project_name);
+        }
+
+        let progress = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::ext_build::BuildProgress::default(),
+        ));
+        let mut state = world.resource_mut::<NewProjectState>();
+        state.pending_project = Some(root.clone());
+        state.status = Some(format!("Building editor for `{project_name}`…"));
+        state.build_progress = Some(std::sync::Arc::clone(&progress));
+        state.build_progress_snapshot = Some(crate::ext_build::BuildProgress::default());
+        state.static_editor.pending = Some((root, true));
+        return;
+    }
     // If the Cargo.toml is a plain binary crate (e.g., the editor's
     // own source tree, or any non-extension cargo project the user
     // points at) there's no cdylib for the loader to pick up. Skip
@@ -636,7 +767,6 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
         state.status = Some(format!("Building `{project_name}`…"));
         state.build_progress = Some(std::sync::Arc::clone(&progress));
         state.build_progress_snapshot = Some(crate::ext_build::BuildProgress::default());
-        state.retry_attempted = false;
     }
 
     let root_for_task = root;
@@ -649,7 +779,7 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
             TemplateLinkage::Dylib,
         )
     });
-    world.resource_mut::<NewProjectState>().build_task = Some(task);
+    world.resource_mut::<NewProjectState>().build_task = Some((task, TemplateLinkage::Dylib));
 }
 
 /// Apply the project-root state change and flip `AppState` to
@@ -891,7 +1021,16 @@ fn on_linkage_button_click(
         let Some(preset) = world.resource::<NewProjectState>().preset.clone() else {
             return;
         };
-        let new_url = preset.url(linkage);
+        // Re-derive both fields so dev users see the right
+        // pre-fills after toggling Static/Dylib: Local field
+        // tracks `<checkout>/templates/<subdir>` and the Git URL
+        // field stays a real remote.
+        let new_local = preset
+            .local_template_path(linkage)
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        set_local_template_input_text(world, new_local);
+        let new_url = preset.git_url_with_subdir(linkage);
         set_template_input_text(world, new_url);
     });
 }
@@ -1013,6 +1152,24 @@ pub fn open_project_progress_modal(world: &mut World, project_name: &str) {
         ChildOf(card),
     ));
 
+    // Up-front hint about how long the build can take. Without this
+    // users see a blank-looking launcher for several minutes on a
+    // first run and assume jackdaw has hung.
+    world.spawn((
+        Text::new(
+            "Building the per-project editor binary. First run with a fresh \
+             cargo cache can take 5 to 10 minutes (bevy is ~500 crates). \
+             Subsequent opens are incremental and finish in seconds.",
+        ),
+        TextFont {
+            font: editor_font.clone(),
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        ChildOf(card),
+    ));
+
     world.spawn((
         NewProjectStatusText,
         Text::new(String::new()),
@@ -1027,6 +1184,9 @@ pub fn open_project_progress_modal(world: &mut World, project_name: &str) {
 
     // Progress container + children mirror the scaffold modal so
     // `refresh_build_progress_ui` walks the same marker chain.
+    // `display: Flex` (not None) so the user sees the placeholder
+    // text + empty progress bar right away, instead of a blank
+    // card while cargo's first artifact event is pending.
     let progress_container = world
         .spawn((
             NewProjectProgressContainer,
@@ -1034,7 +1194,7 @@ pub fn open_project_progress_modal(world: &mut World, project_name: &str) {
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(6.0),
                 margin: UiRect::top(Val::Px(8.0)),
-                display: Display::None,
+                display: Display::Flex,
                 ..Default::default()
             },
             ChildOf(card),
@@ -1043,7 +1203,7 @@ pub fn open_project_progress_modal(world: &mut World, project_name: &str) {
 
     world.spawn((
         NewProjectProgressCrateLabel,
-        Text::new(String::new()),
+        Text::new("Preparing build...".to_string()),
         TextFont {
             font: editor_font.clone(),
             font_size: tokens::FONT_SM,
@@ -1103,9 +1263,14 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         state.linkage = initial_linkage;
         state.location = location.clone();
         state.status = None;
+        state.build_after_scaffold = true;
     }
 
     let editor_font = world.resource::<EditorFont>().0.clone();
+    let icon_font = world
+        .resource::<jackdaw_feathers::icons::IconFont>()
+        .0
+        .clone();
     let (heading, name_placeholder) = match preset {
         TemplatePreset::Extension => ("New Extension", "my_extension"),
         TemplatePreset::Game => ("New Game", "my_game"),
@@ -1278,7 +1443,7 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         spawn_linkage_button(
             world,
             linkage_row,
-            "Dylib",
+            "Dylib (experimental)",
             TemplateLinkage::Dylib,
             initial_linkage,
             editor_font.clone(),
@@ -1289,8 +1454,10 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         // yet at the project-select stage.
         world.spawn((
             Text::new(
-                "Static: plainly-compiled rlib/bin (recommended). \
-                 Dylib: hot-reloadable cdylib, requires the editor's `dylib` feature.",
+                "Static: plainly-compiled rlib/bin (recommended, ships with the bundled \
+                 templates/game-static and templates/extension-static). \
+                 Dylib: hot-reloadable cdylib, experimental and requires the editor's \
+                 `dylib` feature.",
             ),
             TextFont {
                 font: editor_font.clone(),
@@ -1302,8 +1469,38 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         ));
     }
 
-    // Template URL field. Prefilled from preset+linkage, editable
-    // so power users can point at a fork or custom template.
+    // "Open editor after creating" checkbox: lets the user opt
+    // out of the auto-build/auto-spawn flow. Default on. When off,
+    // the post-scaffold path stops at "files written" and shows a
+    // dialog with the cargo command to run from the project root.
+    //
+    // Hidden for static-extension scaffolds: there's no `editor`
+    // binary to build (extensions launch via `cargo run` against
+    // their own bin), so the checkbox would be a no-op. See
+    // `on_create_new_project` for the consumer side; if the
+    // checkbox isn't spawned, it falls back to `true` and the
+    // post-scaffold instructions modal renders for the extension.
+    let show_build_checkbox = !matches!(
+        (initial_linkage, &preset),
+        (TemplateLinkage::Static, TemplatePreset::Extension)
+    );
+    if show_build_checkbox {
+        world.spawn((
+            BuildAfterScaffoldCheckbox,
+            ChildOf(card),
+            jackdaw_feathers::checkbox::checkbox(
+                jackdaw_feathers::checkbox::CheckboxProps::new("Open editor after creating")
+                    .checked(true),
+                &editor_font,
+                &icon_font,
+            ),
+        ));
+    }
+
+    // Template section: shared parent label, then two sub-labelled
+    // rows (Local path and Git URL). The Local path field is empty
+    // by default; when non-empty it takes precedence over the Git
+    // URL on Create.
     world.spawn((
         Text::new("Template"),
         TextFont {
@@ -1314,15 +1511,156 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         TextColor(tokens::TEXT_SECONDARY),
         ChildOf(card),
     ));
+
+    // Sub-label: Local path
+    world.spawn((
+        Text::new("Local path"),
+        TextFont {
+            font: editor_font.clone(),
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        Node {
+            margin: UiRect::top(Val::Px(4.0)),
+            ..Default::default()
+        },
+        ChildOf(card),
+    ));
+    // Row: local-path text input + Browse button
+    let local_row = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                ..Default::default()
+            },
+            ChildOf(card),
+        ))
+        .id();
+    // Mirror the NewProjectTemplateInput pattern: marker + ChildOf
+    // + text_edit in a single bundle. The text_edit widget supplies
+    // its own Node, so we cannot stack another Node onto this entity
+    // (Bevy rejects duplicate components). Layout falls back to the
+    // text_edit's intrinsic width; flex_grow on the input is a
+    // future polish if this looks too narrow next to the Browse
+    // button.
+    let initial_local_path = preset
+        .local_template_path(initial_linkage)
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    world.spawn((
+        NewProjectLocalTemplateInput,
+        ChildOf(local_row),
+        text_edit(
+            TextEditProps::default()
+                .with_placeholder(
+                    "Local folder (e.g. ~/Workspace/jackdaw/templates/game)".to_string(),
+                )
+                .with_default_value(initial_local_path)
+                .allow_empty(),
+        ),
+    ));
+    let local_browse = world
+        .spawn((
+            NewProjectLocalBrowseButton,
+            Node {
+                padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+                ..Default::default()
+            },
+            BackgroundColor(tokens::TOOLBAR_BG),
+            children![(
+                Text::new("Browse..."),
+                TextFont {
+                    font: editor_font.clone(),
+                    font_size: tokens::FONT_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_PRIMARY),
+            )],
+            ChildOf(local_row),
+        ))
+        .id();
+    world
+        .entity_mut(local_browse)
+        .observe(on_browse_template_folder);
+
+    // Sub-label: Git URL
+    world.spawn((
+        Text::new("Git URL"),
+        TextFont {
+            font: editor_font.clone(),
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        Node {
+            margin: UiRect::top(Val::Px(4.0)),
+            ..Default::default()
+        },
+        ChildOf(card),
+    ));
+    // Git URL text input. Prefilled from preset+linkage, editable
+    // so power users can point at a fork or custom template.
     world.spawn((
         NewProjectTemplateInput,
         ChildOf(card),
         text_edit(
             TextEditProps::default()
-                .with_placeholder("https://github.com/…/your_template".to_string())
-                .with_default_value(preset.url(initial_linkage))
+                .with_placeholder("https://github.com/.../your_template".to_string())
+                .with_default_value(preset.git_url_with_subdir(initial_linkage))
                 .allow_empty(),
         ),
+    ));
+
+    // Sub-label: Branch
+    world.spawn((
+        Text::new("Branch"),
+        TextFont {
+            font: editor_font.clone(),
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        Node {
+            margin: UiRect::top(Val::Px(4.0)),
+            ..Default::default()
+        },
+        ChildOf(card),
+    ));
+    // Git branch text input. Pre-filled with the configured default
+    // (`template_branch()` honors `JACKDAW_TEMPLATE_BRANCH` and
+    // otherwise returns the compile-time default). Ignored for the
+    // local-path scaffold; the local checkout's working tree IS the
+    // branch.
+    world.spawn((
+        NewProjectBranchInput,
+        ChildOf(card),
+        text_edit(
+            TextEditProps::default()
+                .with_placeholder("main".to_string())
+                .with_default_value(crate::new_project::template_branch())
+                .allow_empty(),
+        ),
+    ));
+
+    // Precedence hint. With both fields populated, the local path
+    // wins; this line tells the user so they aren't surprised.
+    world.spawn((
+        Text::new("If both are filled, the local path is used."),
+        TextFont {
+            font: editor_font.clone(),
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        Node {
+            margin: UiRect::top(Val::Px(4.0)),
+            ..Default::default()
+        },
+        ChildOf(card),
     ));
 
     // Status line
@@ -1484,15 +1822,82 @@ fn on_browse_new_location(
     });
 }
 
+/// Observer for the Browse button on the local template path field.
+/// Opens a folder picker; on completion, writes the picked path into
+/// the `NewProjectLocalTemplateInput` text field via `TextInputQueue`.
+fn on_browse_template_folder(
+    _: On<Pointer<Click>>,
+    mut commands: Commands,
+    raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
+) {
+    let mut dialog = AsyncFileDialog::new().set_title("Select template folder");
+    if let Ok(rh) = raw_handle.single() {
+        // SAFETY: called on the main thread during an observer.
+        let handle = unsafe { rh.get_handle() };
+        dialog = dialog.set_parent(&handle);
+    }
+    // Default starting directory: in-tree templates dir for dev
+    // checkouts, otherwise the user's home directory.
+    let start_dir = crate::new_project::jackdaw_dev_checkout()
+        .map(|p| p.join("templates"))
+        .or_else(dirs::home_dir);
+    if let Some(dir) = start_dir {
+        dialog = dialog.set_directory(dir);
+    }
+    let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_folder().await });
+    commands.queue(move |world: &mut World| {
+        world.insert_resource(TemplateFolderDialogTask(task));
+    });
+}
+
+/// Push a new string into the local template path text input.
+fn set_local_template_input_text(world: &mut World, new_text: String) {
+    use jackdaw_feathers::text_edit::{TextInputQueue, set_text_input_value};
+
+    let mut q = world.query_filtered::<Entity, With<NewProjectLocalTemplateInput>>();
+    let Some(outer) = q.iter(world).next() else {
+        return;
+    };
+    let Some((_wrapper, inner)) = find_text_edit_entities_for_template(world, outer) else {
+        return;
+    };
+    if let Some(mut queue) = world.get_mut::<TextInputQueue>(inner) {
+        set_text_input_value(&mut queue, new_text);
+    }
+}
+
+/// Polling system for `TemplateFolderDialogTask`. Drains the task
+/// when the picker resolves and writes the picked path into the
+/// local template text input.
+fn poll_template_folder_dialog(world: &mut World) {
+    let Some(mut task_res) = world.get_resource_mut::<TemplateFolderDialogTask>() else {
+        return;
+    };
+    let Some(result) = future::block_on(future::poll_once(&mut task_res.0)) else {
+        return;
+    };
+    world.remove_resource::<TemplateFolderDialogTask>();
+    if let Some(handle) = result {
+        let path = handle.path().to_path_buf();
+        set_local_template_input_text(world, path.to_string_lossy().into_owned());
+    }
+}
+
 fn on_create_new_project(
     _: On<Pointer<Click>>,
     mut commands: Commands,
     name_inputs: Query<Entity, With<NewProjectNameInput>>,
     template_inputs: Query<Entity, With<NewProjectTemplateInput>>,
+    local_template_inputs: Query<Entity, With<NewProjectLocalTemplateInput>>,
+    branch_inputs: Query<Entity, With<NewProjectBranchInput>>,
     text_edit_values: Query<&TextEditValue>,
+    build_checkbox: Query<
+        &jackdaw_feathers::checkbox::CheckboxState,
+        With<BuildAfterScaffoldCheckbox>,
+    >,
 ) {
-    // Read the name + template URL from the text inputs' synced
-    // TextEditValue.
+    // Read the name, local template path, git URL, and branch from
+    // the text inputs' synced TextEditValue.
     let Some(name_entity) = name_inputs.iter().next() else {
         return;
     };
@@ -1500,22 +1905,59 @@ fn on_create_new_project(
         .get(name_entity)
         .map(|v| v.0.trim().to_string())
         .unwrap_or_default();
-    let template_url_from_input = template_inputs
+    let local_path_from_input = local_template_inputs
         .iter()
         .next()
         .and_then(|e| text_edit_values.get(e).ok())
         .map(|v| v.0.trim().to_string())
         .unwrap_or_default();
+    let git_url_from_input = template_inputs
+        .iter()
+        .next()
+        .and_then(|e| text_edit_values.get(e).ok())
+        .map(|v| v.0.trim().to_string())
+        .unwrap_or_default();
+    let branch_from_input = branch_inputs
+        .iter()
+        .next()
+        .and_then(|e| text_edit_values.get(e).ok())
+        .map(|v| v.0.trim().to_string())
+        .unwrap_or_default();
+    // Snapshot the "Open editor after creating" checkbox into the
+    // resource so the post-scaffold poller can branch on it. Falls
+    // back to `true` if the checkbox isn't found (defensive, for
+    // presets that don't render the checkbox UI). For static-
+    // extension we forcibly reset to `false` below: extensions
+    // don't ship an editor binary to build, so the auto-open flow
+    // would fail and the instructions modal is the right path.
+    let checkbox_value = build_checkbox
+        .iter()
+        .next()
+        .map(|state| state.checked)
+        .unwrap_or(true);
 
     commands.queue(move |world: &mut World| {
         let (location, linkage) = {
-            let state = world.resource::<NewProjectState>();
+            let mut state = world.resource_mut::<NewProjectState>();
             if state.preset.is_none() {
                 return;
             }
             if state.scaffold_task.is_some() {
                 return; // already running
             }
+            // Force `build_after_scaffold = false` for static-
+            // extension scaffolds so the post-scaffold path goes to
+            // the instructions modal rather than the (nonexistent)
+            // editor-binary build.
+            let build_after_scaffold = if matches!(
+                (state.linkage, state.preset.as_ref()),
+                (TemplateLinkage::Static, Some(TemplatePreset::Extension))
+            ) {
+                false
+            } else {
+                checkbox_value
+            };
+            state.build_after_scaffold = build_after_scaffold;
             (state.location.clone(), state.linkage)
         };
 
@@ -1525,27 +1967,58 @@ fn on_create_new_project(
                 Some("Please enter a project name.".into());
             return;
         }
-        let template_url = template_url_from_input.clone();
-        if template_url.is_empty() {
+
+        // Precedence: local path wins when non-empty; fall through to
+        // git URL otherwise. Both empty is an error.
+        let local_path = local_path_from_input.clone();
+        let git_url = git_url_from_input.clone();
+        let template_url = if !local_path.is_empty() {
+            // Validate that the local path exists as a directory before
+            // launching the scaffold subprocess.
+            if !std::path::Path::new(&local_path).is_dir() {
+                world.resource_mut::<NewProjectState>().status =
+                    Some(format!("Local template path does not exist: {local_path}"));
+                return;
+            }
+            local_path
+        } else if !git_url.is_empty() {
+            git_url
+        } else {
             world.resource_mut::<NewProjectState>().status =
-                Some("Please enter a template URL.".into());
+                Some("Provide a template (local path or git URL).".into());
             return;
-        }
+        };
 
         let name_for_task = name.clone();
         let location_for_task = location.clone();
         let url_for_task = template_url.clone();
+        // Branch field only matters for git URL scaffolds; the
+        // local-path branch ignores it (the working tree IS the
+        // branch). An empty branch falls through to
+        // `template_branch()` inside `scaffold_project`.
+        let branch_for_task = if branch_from_input.is_empty() {
+            None
+        } else {
+            Some(branch_from_input.clone())
+        };
 
-        world.resource_mut::<NewProjectState>().status = Some(format!("Scaffolding `{name}`…"));
+        world.resource_mut::<NewProjectState>().status = Some(format!("Scaffolding `{name}`..."));
 
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            scaffold_project(&name_for_task, &location_for_task, &url_for_task, linkage)
+            scaffold_project(
+                &name_for_task,
+                &location_for_task,
+                &url_for_task,
+                branch_for_task.as_deref(),
+                linkage,
+            )
         });
         world.resource_mut::<NewProjectState>().scaffold_task = Some(task);
     });
 }
 
 fn poll_new_project_tasks(
+    mut commands: Commands,
     mut state: ResMut<NewProjectState>,
     mut location_texts: Query<&mut Text, With<NewProjectLocationText>>,
     mut status_texts: Query<
@@ -1577,28 +2050,100 @@ fn poll_new_project_tasks(
                     .unwrap_or("project")
                     .to_owned();
 
-                // Both linkages kick off `cargo build` with the
-                // same progress stream. Post-build: dylib installs
-                // the cdylib, static opens the project in place.
-                state.status = Some(format!("Building `{project_name}`…"));
+                // "Open editor after creating" was unchecked in the
+                // modal: stop here. Close the modal and open the
+                // info dialog inline via commands.queue, which runs
+                // in apply_deferred (full World access, no
+                // schedule_scope conflict).
+                if !state.build_after_scaffold {
+                    info!(
+                        "Scaffolded `{project_name}` at {}; skipping build per modal toggle.",
+                        project_path.display()
+                    );
+                    let dialog_root = project_path.clone();
+                    let dialog_linkage = state.linkage;
+                    let dialog_preset = state.preset.clone();
+                    commands.queue(move |world: &mut World| {
+                        close_new_project_modal(world);
+                        open_skip_build_dialog(
+                            world,
+                            &dialog_root,
+                            dialog_linkage,
+                            dialog_preset.as_ref(),
+                        );
+                    });
+                    state.pending_project = None;
+                    state.scaffold_task = None;
+                    state.status = None;
+                    return;
+                }
+
+                state.status = Some(format!("Building `{project_name}` in background…"));
                 state.pending_project = Some(project_path.clone());
 
-                let progress = std::sync::Arc::new(std::sync::Mutex::new(
-                    crate::ext_build::BuildProgress::default(),
-                ));
-                state.build_progress = Some(std::sync::Arc::clone(&progress));
-                state.build_progress_snapshot = Some(crate::ext_build::BuildProgress::default());
-
-                let project_for_task = project_path;
-                let progress_for_task = std::sync::Arc::clone(&progress);
+                // Static linkage: open the editor immediately, and
+                // background-build the user's `editor` binary so
+                // they can later hand off into the full inspector +
+                // PIE without leaving the editor session. The
+                // launcher's own editor handles authoring with
+                // built-in components in the meantime.
+                //
+                // Dylib linkage: still needs the build to finish
+                // before transitioning, because the launcher
+                // dlopens the cdylib at install time. The
+                // build-completion branch below sets
+                // `pending_install` for that path.
                 let linkage = state.linkage;
-                state.build_task = Some(AsyncComputeTaskPool::get().spawn(async move {
-                    crate::ext_build::build_extension_project_with_progress(
-                        &project_for_task,
-                        Some(progress_for_task),
-                        linkage,
-                    )
-                }));
+                match linkage {
+                    TemplateLinkage::Static => {
+                        // Build the user's editor binary first;
+                        // the launcher's modal stays up showing
+                        // progress through the existing modal
+                        // infrastructure (`refresh_build_progress_ui`
+                        // reads `state.build_progress_snapshot`).
+                        // When the build is `Ready`, the driver in
+                        // `drive_static_editor_build` closes the
+                        // modal, spawns the user's binary, and
+                        // exits the launcher. We don't transition
+                        // into the launcher's own editor for
+                        // static templates — the launcher's editor
+                        // doesn't carry the user's component types,
+                        // so opening it would just confuse users.
+                        //
+                        // The shared `Arc<Mutex<BuildProgress>>` is
+                        // assigned to `state.build_progress` here
+                        // and re-used by the driver as the cargo
+                        // task's sink, so both the modal and the
+                        // `BuildStatus::Building` variant point at
+                        // the same data.
+                        let progress = std::sync::Arc::new(std::sync::Mutex::new(
+                            crate::ext_build::BuildProgress::default(),
+                        ));
+                        state.build_progress = Some(std::sync::Arc::clone(&progress));
+                        state.build_progress_snapshot =
+                            Some(crate::ext_build::BuildProgress::default());
+                        state.static_editor.pending = Some((project_path.clone(), true));
+                    }
+                    TemplateLinkage::Dylib => {
+                        let progress = std::sync::Arc::new(std::sync::Mutex::new(
+                            crate::ext_build::BuildProgress::default(),
+                        ));
+                        state.build_progress = Some(std::sync::Arc::clone(&progress));
+                        state.build_progress_snapshot =
+                            Some(crate::ext_build::BuildProgress::default());
+
+                        let project_for_task = project_path;
+                        let progress_for_task = std::sync::Arc::clone(&progress);
+                        let task = AsyncComputeTaskPool::get().spawn(async move {
+                            crate::ext_build::build_extension_project_with_progress(
+                                &project_for_task,
+                                Some(progress_for_task),
+                                linkage,
+                            )
+                        });
+                        state.build_task = Some((task, linkage));
+                    }
+                }
             }
             Err(err) => {
                 warn!("Scaffold failed: {err}");
@@ -1608,29 +2153,28 @@ fn poll_new_project_tasks(
     }
 
     // Build task completed. Dylib: stash the artifact for the
-    // install-in-Last step (which also drives the SDK-mismatch
-    // auto-recovery). Static: stash the project dir for
+    // install-in-Last step. Static: stash the project dir for
     // `apply_pending_static_open`, which calls `enter_project`.
-    if let Some(task) = state.build_task.as_mut()
+    // The linkage comes off the task tuple so we branch on the
+    // actual in-flight build's linkage, not on `state.linkage`
+    // which describes the modal's current selection.
+    if let Some((task, build_linkage)) = state.build_task.as_mut()
         && let Some(result) = future::block_on(future::poll_once(task))
     {
+        let linkage = *build_linkage;
         state.build_task = None;
-        let linkage = state.linkage;
         match result {
             Ok(artifact_or_project) => match linkage {
                 TemplateLinkage::Dylib => {
                     info!("Build produced {}", artifact_or_project.display());
-                    let outcome: std::sync::Arc<
-                        std::sync::Mutex<Option<Result<(), jackdaw_loader::LoadError>>>,
-                    > = std::sync::Arc::new(std::sync::Mutex::new(None));
-                    state.metadata_outcome = Some(outcome);
                     state.pending_install = Some(artifact_or_project);
                 }
                 TemplateLinkage::Static => {
+                    // Editor was already opened at scaffold time;
+                    // this branch just logs success and clears the
+                    // build-progress state so the footer collapses.
                     info!("Static build succeeded: {}", artifact_or_project.display());
-                    state.pending_static_open = Some(artifact_or_project);
                     state.pending_project = None;
-                    state.retry_attempted = false;
                 }
             },
             Err(err) => {
@@ -1640,93 +2184,6 @@ fn poll_new_project_tasks(
                          Fix the issue and try opening the project again."
                 ));
                 state.pending_project = None;
-                state.retry_attempted = false;
-            }
-        }
-    }
-
-    // Install-outcome poller: reads the Arc<Mutex<...>> we handed
-    // to the commands.queue closure. On Ok we're done. On an
-    // Err-with-symbol-mismatch, kick off `cargo clean` (one retry
-    // max, tracked via `retry_attempted`).
-    if let Some(outcome) = state.metadata_outcome.clone() {
-        let taken = {
-            let Ok(mut slot) = outcome.lock() else {
-                return;
-            };
-            slot.take()
-        };
-        if let Some(result) = taken {
-            state.metadata_outcome = None;
-            match result {
-                Ok(()) => {
-                    state.retry_attempted = false;
-                }
-                Err(err) if err.is_symbol_mismatch() && !state.retry_attempted => {
-                    state.retry_attempted = true;
-                    let Some(project) = state.pending_project.clone() else {
-                        state.status = Some("Auto-recovery failed: no project context".into());
-                        return;
-                    };
-                    state.status =
-                        Some("Editor SDK changed since last build; cleaning project cache…".into());
-                    let project_for_task = project;
-                    state.clean_task = Some(AsyncComputeTaskPool::get().spawn(async move {
-                        crate::ext_build::cargo_clean_project(&project_for_task)
-                    }));
-                }
-                Err(err) => {
-                    warn!("Install failed (no retry): {err}");
-                    state.status = Some(format!(
-                        "Install failed: {err}. Try opening the project again."
-                    ));
-                    state.pending_project = None;
-                    state.retry_attempted = false;
-                }
-            }
-        }
-    }
-
-    // Clean-task completed; kick off a fresh build.
-    if let Some(task) = state.clean_task.as_mut()
-        && let Some(result) = future::block_on(future::poll_once(task))
-    {
-        state.clean_task = None;
-        match result {
-            Ok(()) => {
-                let Some(project) = state.pending_project.clone() else {
-                    return;
-                };
-                let project_name = project
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("project")
-                    .to_owned();
-                state.status = Some(format!("Rebuilding `{project_name}` from scratch…"));
-                // Fresh progress sink; the old one had the prior
-                // build's log tail, which would mislead the user.
-                let progress = std::sync::Arc::new(std::sync::Mutex::new(
-                    crate::ext_build::BuildProgress::default(),
-                ));
-                state.build_progress = Some(std::sync::Arc::clone(&progress));
-                state.build_progress_snapshot = Some(crate::ext_build::BuildProgress::default());
-
-                let project_for_task = project;
-                let progress_for_task = std::sync::Arc::clone(&progress);
-                // SDK symbol mismatch is a dylib-only failure mode.
-                state.build_task = Some(AsyncComputeTaskPool::get().spawn(async move {
-                    crate::ext_build::build_extension_project_with_progress(
-                        &project_for_task,
-                        Some(progress_for_task),
-                        TemplateLinkage::Dylib,
-                    )
-                }));
-            }
-            Err(err) => {
-                warn!("Cargo clean failed: {err}");
-                state.status = Some(format!("Auto-recovery failed during cargo clean: {err}"));
-                state.pending_project = None;
-                state.retry_attempted = false;
             }
         }
     }
@@ -1861,10 +2318,12 @@ fn refresh_build_progress_ui(
 /// `schedule_scope`. See the plugin-registration block at the top
 /// of this file for context.
 ///
-/// Takes `&mut World` directly; reads `NewProjectState.pending_install`,
-/// calls `handle_install_from_path`, writes the install result into
-/// `NewProjectState.metadata_outcome` for the auto-recovery poller
-/// to pick up on the next frame.
+/// On success: closes the modal and transitions to the editor.
+/// On `LoadError::SymbolMismatch`: closes the modal and opens an info
+/// dialog with instructions to run `cargo clean -p <name> && cargo
+/// build` from the project directory.
+/// On any other error: closes the modal and opens an info dialog
+/// with the error message.
 fn apply_pending_install(world: &mut World) {
     let artifact_opt = world
         .resource_mut::<NewProjectState>()
@@ -1873,27 +2332,101 @@ fn apply_pending_install(world: &mut World) {
     let Some(artifact) = artifact_opt else {
         return;
     };
-    let outcome_arc = world.resource::<NewProjectState>().metadata_outcome.clone();
 
     let result = crate::extensions_dialog::handle_install_from_path(world, artifact);
-    let is_ok = result.is_ok();
 
-    if let Some(arc) = outcome_arc
-        && let Ok(mut slot) = arc.lock()
-    {
-        *slot = Some(result.map(|_| ()));
-    }
-
-    if is_ok {
-        let project = world
-            .resource_mut::<NewProjectState>()
-            .pending_project
-            .clone();
-        close_new_project_modal(world);
-        if let Some(p) = project {
-            transition_to_editor(world, p);
+    match result {
+        Ok(_) => {
+            let project = world
+                .resource_mut::<NewProjectState>()
+                .pending_project
+                .clone();
+            close_new_project_modal(world);
+            if let Some(p) = project {
+                transition_to_editor(world, p);
+            }
+        }
+        Err(ref err) if err.is_symbol_mismatch() => {
+            let project_name = world
+                .resource::<NewProjectState>()
+                .pending_project
+                .as_deref()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+                .unwrap_or("project")
+                .to_owned();
+            warn!("Install failed (SDK mismatch) for `{project_name}`");
+            close_new_project_modal(world);
+            world.trigger(
+                jackdaw_feathers::dialog::OpenDialogEvent::new("SDK mismatch", "OK")
+                    .with_description(format!(
+                        "Project `{project_name}` was built against a different jackdaw \
+                         SDK build. Run this from the project directory to refresh:\n\n\
+                         \tcargo clean -p {project_name}\n\
+                         \tcargo build\n\n\
+                         Then re-open the project."
+                    ))
+                    .without_cancel(),
+            );
+        }
+        Err(err) => {
+            warn!("Install failed: {err}");
+            close_new_project_modal(world);
+            world.trigger(
+                jackdaw_feathers::dialog::OpenDialogEvent::new("Install failed", "OK")
+                    .with_description(format!("{err}"))
+                    .without_cancel(),
+            );
         }
     }
+}
+
+/// Open the post-scaffold info dialog telling the user how to
+/// launch the project from their terminal. Called inline from
+/// `poll_new_project_tasks` via `commands.queue` when the user
+/// unchecked "Open editor after creating" in the modal. Replaces
+/// the older `apply_pending_skip_build` system that drained a
+/// `pending_skip_build_dialog` resource field.
+///
+/// The body adapts per linkage and preset:
+///
+/// - Dylib: "open from launcher when ready" (no specific command).
+/// - Static + Game: `cd <path> && cargo editor`.
+/// - Static + Extension: `cd <path> && cargo run`.
+/// - Static + Custom: `cd <path>` with a generic "follow the
+///   template's README" pointer.
+fn open_skip_build_dialog(
+    world: &mut World,
+    root: &Path,
+    linkage: TemplateLinkage,
+    preset: Option<&TemplatePreset>,
+) {
+    let display_path = root.display().to_string();
+    let project_name = root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project")
+        .to_owned();
+    let description = match (linkage, preset) {
+        (TemplateLinkage::Dylib, _) => format!(
+            "Files written to {display_path}.\n\nOpen the project from the launcher's recent-projects list when you're ready to build the cdylib and load it into the editor."
+        ),
+        (TemplateLinkage::Static, Some(TemplatePreset::Game)) => format!(
+            "Files written to {display_path}.\n\nTo open in jackdaw with custom components, run:\n\n    cd {display_path}\n    cargo editor\n\n(equivalent to `cargo run --bin editor --features editor`).\n\nThe launcher's recent-projects list opens the project later."
+        ),
+        (TemplateLinkage::Static, Some(TemplatePreset::Extension)) => format!(
+            "Files written to {display_path}.\n\nTo run your extension in jackdaw, run:\n\n    cd {display_path}\n    cargo run\n\nThe launcher's recent-projects list opens the project for level editing only and does NOT auto-build the extension binary."
+        ),
+        (TemplateLinkage::Static, Some(TemplatePreset::Custom(_)) | None) => format!(
+            "Files written to {display_path}.\n\nFollow the template's README for the right cargo command. The launcher's recent-projects list can open the project for level editing later."
+        ),
+    };
+
+    world.trigger(
+        jackdaw_feathers::dialog::OpenDialogEvent::new(format!("`{project_name}` created"), "OK")
+            .with_description(description)
+            .without_cancel(),
+    );
 }
 
 /// Static-scaffold sibling of [`apply_pending_install`]. Runs in
@@ -1909,4 +2442,244 @@ fn apply_pending_static_open(world: &mut World) {
     };
     close_new_project_modal(world);
     enter_project(world, project);
+}
+
+/// Background-build the user's static editor binary so the
+/// inspector can pick up `MyGamePlugin`'s reflected types and PIE
+/// can run game code in-process. Runs in `Update` in BOTH
+/// `AppState`s so the build keeps progressing after the launcher
+/// transitions into the editor.
+///
+/// Three steps:
+///   1. If `pending_static_editor_build` is queued and no task is
+///      running, kick off `cargo build --bin editor --features
+///      editor` and flip [`BuildStatus`](crate::build_status::BuildStatus) to `Building`.
+///   2. If a task is running, poll it. On completion, flip
+///      `BuildStatus` to `Ready { auto_reload }` or `Failed`.
+///   3. If `BuildStatus` is `Ready` AND `auto_reload`, fire
+///      [`do_handoff`] once and clear the flag. Otherwise wait
+///      for the user to click the footer indicator.
+fn drive_static_editor_build(world: &mut World) {
+    use crate::build_status::BuildState;
+
+    // Step 1: dispatch a queued request.
+    let pending = world
+        .resource_mut::<NewProjectState>()
+        .static_editor
+        .pending
+        .take();
+    if let Some((root, auto_reload)) = pending {
+        // Don't dispatch if another build is already running.
+        let already_running = world
+            .resource::<NewProjectState>()
+            .static_editor
+            .task
+            .is_some();
+        if already_running {
+            // Drop the request silently; the in-flight build will
+            // produce a binary the next handoff can use. A cleaner
+            // design would queue, but it'd just stack same-project
+            // requests; one in-flight is enough.
+        } else {
+            // Re-use the `Arc<Mutex<BuildProgress>>` already
+            // installed on `state.build_progress` (set by the
+            // post-scaffold path or the recents-click path) so the
+            // launcher's modal — already wired to render
+            // `state.build_progress_snapshot` — and
+            // `BuildStatus::Building` both observe the same sink.
+            // If neither path set one, allocate a fresh sink and
+            // install it ourselves so the modal still renders if
+            // it's open.
+            let progress = world
+                .resource::<NewProjectState>()
+                .build_progress
+                .as_ref()
+                .map(std::sync::Arc::clone)
+                .unwrap_or_else(|| {
+                    std::sync::Arc::new(std::sync::Mutex::new(
+                        crate::ext_build::BuildProgress::default(),
+                    ))
+                });
+            let progress_for_task = std::sync::Arc::clone(&progress);
+            let root_for_task = root.clone();
+            let task = AsyncComputeTaskPool::get().spawn(async move {
+                crate::ext_build::build_static_editor_with_progress(
+                    &root_for_task,
+                    Some(progress_for_task),
+                )
+            });
+
+            {
+                let mut state = world.resource_mut::<NewProjectState>();
+                state.static_editor.task = Some(task);
+                state.static_editor.auto_reload = auto_reload;
+                if state.build_progress.is_none() {
+                    state.build_progress = Some(std::sync::Arc::clone(&progress));
+                    state.build_progress_snapshot =
+                        Some(crate::ext_build::BuildProgress::default());
+                }
+            }
+
+            world
+                .resource_mut::<crate::build_status::BuildStatus>()
+                .state = BuildState::Building {
+                project: root,
+                started: std::time::Instant::now(),
+                progress,
+            };
+        }
+    }
+
+    // Step 2: poll the in-flight task.
+    let result_opt = {
+        let mut state = world.resource_mut::<NewProjectState>();
+        state
+            .static_editor
+            .task
+            .as_mut()
+            .and_then(|task| future::block_on(future::poll_once(task)))
+    };
+    if let Some(result) = result_opt {
+        let auto_reload = {
+            let mut state = world.resource_mut::<NewProjectState>();
+            state.static_editor.task = None;
+            state.static_editor.auto_reload
+        };
+
+        let project = match &world.resource::<crate::build_status::BuildStatus>().state {
+            BuildState::Building { project, .. } => project.clone(),
+            _ => return,
+        };
+
+        match result {
+            Ok(bin) => {
+                info!("Static editor build finished: {}", bin.display());
+                world
+                    .resource_mut::<crate::build_status::BuildStatus>()
+                    .state = BuildState::Ready {
+                    project,
+                    bin,
+                    auto_reload,
+                };
+            }
+            Err(err) => {
+                warn!("Static editor build failed: {err}");
+                world
+                    .resource_mut::<crate::build_status::BuildStatus>()
+                    .state = BuildState::Failed {
+                    project,
+                    log_tail: format!("{err}"),
+                };
+            }
+        }
+    }
+
+    // Step 3: auto-fire the handoff once for the scaffold case.
+    let auto_handoff = matches!(
+        world.resource::<crate::build_status::BuildStatus>().state,
+        BuildState::Ready {
+            auto_reload: true,
+            ..
+        }
+    );
+    if auto_handoff {
+        // Drain the Ready, do the handoff. After this `do_handoff`
+        // writes `AppExit`, so we won't loop.
+        let (bin, project) = match std::mem::take(
+            &mut world
+                .resource_mut::<crate::build_status::BuildStatus>()
+                .state,
+        ) {
+            BuildState::Ready { bin, project, .. } => (bin, project),
+            other => {
+                world
+                    .resource_mut::<crate::build_status::BuildStatus>()
+                    .state = other;
+                return;
+            }
+        };
+        // Close the launcher modal before spawning so the user's
+        // editor window comes up against a clean launcher viewport
+        // (briefly, until `AppExit` tears it down).
+        close_new_project_modal(world);
+        do_handoff(world, &bin, &project);
+    }
+}
+
+/// Save the active scene if dirty, spawn the user's static editor
+/// binary, and exit the launcher process. The user's binary loads
+/// the same scene file from disk on its first frame, so anything
+/// the user authored in the launcher's editor round-trips
+/// transparently.
+///
+/// Called from [`drive_static_editor_build`]'s auto-fire branch
+/// (post-scaffold case) and from the status-bar click observer
+/// (user-driven reload).
+pub(crate) fn do_handoff(world: &mut World, bin: &Path, project_root: &Path) {
+    info!(
+        "Handing off to static editor {} (cwd={})",
+        bin.display(),
+        project_root.display()
+    );
+    // The user's editor binary reads its scene from disk on its
+    // first frame; if the launcher has unsaved edits and a path
+    // is already set, persist them first so the round-trip is
+    // transparent. If no path is set (untouched scaffold or
+    // unsaved-as-yet scene), skip — opening a Save As dialog
+    // mid-handoff would be jarring; the user can save manually
+    // before clicking Reload.
+    let has_scene_path = world
+        .get_resource::<scene_io::SceneFilePath>()
+        .is_some_and(|p| p.path.is_some());
+    if has_scene_path {
+        scene_io::save_scene(world);
+    }
+
+    // Touch the project in the launcher's recents list so it
+    // shows up next launch. The static-handoff path doesn't go
+    // through `transition_to_editor` (which is where dylib /
+    // launcher-internal opens get touch_recent'd), so without
+    // this the freshly-scaffolded project disappears from the
+    // launcher between sessions.
+    let project_name = project::load_project_config(project_root)
+        .map(|cfg| cfg.project.name)
+        .unwrap_or_else(|| {
+            project_root
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("project")
+                .to_string()
+        });
+    project::touch_recent(project_root, &project_name);
+
+    // `JACKDAW_PROJECT` tells the spawned editor binary which
+    // project to auto-open on its first frame. Without this, the
+    // editor's `main()` defaults to `AppState::ProjectSelect` and
+    // the user lands on the launcher's picker again instead of
+    // the editor view for `project_root`.
+    let spawn_result = std::process::Command::new(bin)
+        .current_dir(project_root)
+        .env("JACKDAW_PROJECT", project_root)
+        .spawn();
+    match spawn_result {
+        Ok(_child) => {
+            info!("Static editor spawned; exiting launcher");
+            world.write_message(bevy::app::AppExit::Success);
+        }
+        Err(e) => {
+            warn!(
+                "Failed to spawn static editor binary {}: {e}",
+                bin.display()
+            );
+            // Surface to the UI so the user can retry. Reset
+            // BuildStatus to Ready (without auto_reload) so the
+            // footer keeps offering the click target.
+            let mut status = world.resource_mut::<crate::build_status::BuildStatus>();
+            if let crate::build_status::BuildState::Ready { auto_reload, .. } = &mut status.state {
+                *auto_reload = false;
+            }
+            world.resource_mut::<NewProjectState>().status =
+                Some(format!("Failed to spawn editor binary: {e}"));
+        }
+    }
 }

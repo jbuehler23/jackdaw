@@ -1,0 +1,11 @@
+[template]
+cargo_generate_version = ">=0.10.0"
+
+include = ["*.template"]
+ignore = [
+    "target",
+    "README.md",
+]
+
+[hooks]
+post = ["post-generate.rhai"]
