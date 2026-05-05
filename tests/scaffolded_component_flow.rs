@@ -215,7 +215,8 @@ fn inspector_field_edit_undoes_back_to_original() {
     let mut app = app_with_user_components();
     let entity = spawn_authored_entity(&mut app);
 
-    app.world_mut()
+    let result = app
+        .world_mut()
         .operator("component.add")
         .param("entity", entity)
         .param(
@@ -224,6 +225,7 @@ fn inspector_field_edit_undoes_back_to_original() {
         )
         .call()
         .expect("dispatch resolves");
+    assert_eq!(result, OperatorResult::Finished);
     app.update();
 
     let mut cmd: Box<dyn EditorCommand> = Box::new(SetJsnField {

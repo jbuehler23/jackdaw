@@ -11,11 +11,13 @@ use jackdaw::inspector::component_picker::enumerate_pickable_components;
 
 #[test]
 fn user_components_reach_picker() {
+    // No `app.update()`: `Plugin::build` populates the type
+    // registry synchronously, and running systems would trip the
+    // play-gate run-condition that needs editor state we don't
+    // install here.
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins({{crate_name}}::MyGamePlugin);
-    // Drain Startup so plugin registration settles.
-    app.update();
 
     let registry = app
         .world()
