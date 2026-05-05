@@ -62,9 +62,120 @@ jobs:
       - name: Run doctests
         run: cargo test --locked --workspace --doc
 
-  # The Windows dylib smoke job that previously ran here is removed
-  # while the dylib path is experimental. Re-add when the dylib flow
-  # is stable enough to gate PRs on.
+  # Windows dylib experiment. Builds the editor with the `dylib`
+  # feature engaged (so the SDK proxy + jackdaw_dylib + bevy_dylib
+  # chain is active), then dumps the export count for each DLL in
+  # the chain so we can see what the actual PE 65,535 cap pressure
+  # looks like. Designed to surface diagnostics even on failure;
+  # does not block other jobs.
+  windows-dylib-diag:
+    name: Windows dylib diagnostic
+    runs-on: windows-latest
+    timeout-minutes: 90
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.toolchain }}
+
+      - name: Populate target directory from cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: windows-dylib-diag
+
+      - name: Build editor with dylib feature
+        # Builds the workspace with `--features dylib`, which pulls
+        # in `jackdaw_sdk` and turns on `jackdaw_api/dynamic_linking`
+        # (which transitively enables `bevy/dynamic_linking`). The
+        # full SDK proxy + jackdaw_dylib + bevy_dylib chain is
+        # exercised. We don't `--locked` the build because the
+        # cancel-aware/dylib path may pull in deps not yet in
+        # Cargo.lock.
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cargo build -p jackdaw --features dylib 2>&1 | tee build.log
+        continue-on-error: true
+
+      - name: Surface build log on failure
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f build.log ]]; then
+            echo "===== last 100 lines of build.log ====="
+            tail -100 build.log
+          fi
+
+      - name: Dump exported symbol counts per DLL
+        # `dumpbin /exports` is shipped by MSVC build tools; works
+        # for any PE binary. Counts the rows under the "ordinal
+        # hint  RVA  name" header. Includes the SDK proxy, the
+        # jackdaw bundle dylib, and any libbevy_dylib*.dll cargo
+        # produced.
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          dlls=(
+            target/debug/jackdaw_sdk.dll
+            target/debug/jackdaw_dylib.dll
+            target/debug/deps/jackdaw_sdk*.dll
+            target/debug/deps/jackdaw_dylib*.dll
+            target/debug/deps/bevy_dylib*.dll
+          )
+          for dll in "${dlls[@]}"; do
+            if [[ -f "$dll" ]]; then
+              echo "===== $dll ====="
+              ls -l "$dll"
+              # Count export rows: dumpbin prints a header then rows
+              # of the form "  N    HINT   RVA  name" — match lines
+              # starting with whitespace + a number.
+              count=$(dumpbin /exports "$dll" 2>/dev/null | grep -cE '^\s+[0-9]+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s' || true)
+              echo "exported symbols (heuristic): $count"
+              echo
+            fi
+          done
+
+      - name: Build test fixture cdylib
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cargo build --features dylib --manifest-path tests/fixtures/test_fixture_extension/Cargo.toml 2>&1 | tee fixture.log
+        continue-on-error: true
+
+      - name: Surface fixture log on failure
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f fixture.log ]]; then
+            echo "===== last 100 lines of fixture.log ====="
+            tail -100 fixture.log
+          fi
+
+      - name: Run dylib loader smoke test
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cargo test --features dylib --package jackdaw --test dylib_loading 2>&1 | tee smoke.log
+        continue-on-error: true
+
+      - name: Surface smoke test log
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f smoke.log ]]; then
+            echo "===== last 100 lines of smoke.log ====="
+            tail -100 smoke.log
+          fi
+
 
   # Scaffold each shipping template via `cargo generate` and run
   # `cargo check` to catch template regressions: missing/renamed
