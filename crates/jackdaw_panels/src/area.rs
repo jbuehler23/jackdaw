@@ -50,6 +50,7 @@ pub struct DockTabContent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DefaultArea {
     Left,
+    Center,
     BottomDock,
     RightSidebar,
 }
@@ -61,9 +62,7 @@ pub trait ToAnchorId: Copy {
 impl ToAnchorId for Option<DefaultArea> {
     fn anchor_id(self) -> String {
         match self {
-            Some(area @ DefaultArea::Left)
-            | Some(area @ DefaultArea::BottomDock)
-            | Some(area @ DefaultArea::RightSidebar) => area.anchor_id(),
+            Some(area) => area.anchor_id(),
             None => String::new(),
         }
     }
@@ -73,6 +72,7 @@ impl ToAnchorId for DefaultArea {
     fn anchor_id(self) -> String {
         match self {
             DefaultArea::Left => "left",
+            DefaultArea::Center => "center",
             DefaultArea::BottomDock => "bottom_dock",
             DefaultArea::RightSidebar => "right_sidebar",
         }

@@ -8,6 +8,13 @@
 //! Binary tree: every split has exactly two children. Multi-way layouts
 //! are nested binary splits. Matches `egui_dock`'s `Node` enum and `ImGui`'s
 //! `DockNode.ChildNodes[2]`.
+//!
+//! There is exactly one tree per workspace: a single `root` node that
+//! is either a `Leaf` (the whole layout is one tabbed area) or a
+//! `Split` containing the rest of the layout. Earlier versions kept a
+//! separate sub-tree per named anchor (`left`, `right_sidebar`, etc.);
+//! that's gone now in favour of a flat single-tree, which lets panels
+//! be dragged anywhere without an anchor wall between them.
 
 use std::collections::HashMap;
 
@@ -15,6 +22,10 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::area::DockAreaStyle;
+
+/// Synthetic-area-id prefix produced by [`fresh_area_id`] for leaves
+/// born from runtime splits.
+pub const SYNTHETIC_AREA_ID_PREFIX: &str = "split.";
 
 /// Stable handle to a node inside a [`DockTree`].
 ///
@@ -67,6 +78,16 @@ pub struct DockLeaf {
     pub windows: Vec<String>,
     /// Which window is currently shown. `None` means the leaf is empty.
     pub active: Option<String>,
+    /// If true, [`DockTree::simplify`] keeps this leaf in the tree
+    /// even when its window list is empty. Built-in editor regions
+    /// (left sidebar, right sidebar, bottom dock, viewport center)
+    /// flip this on so closing the last panel inside them leaves an
+    /// empty placeholder rather than collapsing the surrounding split.
+    ///
+    /// Defaults to `false`; runtime splits and ad-hoc leaves are
+    /// transient and should collapse when drained.
+    #[serde(default)]
+    pub persistent: bool,
 }
 
 impl DockLeaf {
@@ -76,6 +97,7 @@ impl DockLeaf {
             style,
             windows: Vec::new(),
             active: None,
+            persistent: false,
         }
     }
 
@@ -83,6 +105,19 @@ impl DockLeaf {
         self.active = windows.first().cloned();
         self.windows = windows;
         self
+    }
+
+    /// Mark the leaf as persistent. Persistent leaves are preserved by
+    /// [`DockTree::simplify`] when their window list goes empty.
+    pub fn persistent(mut self) -> Self {
+        self.persistent = true;
+        self
+    }
+
+    /// True if [`DockTree::simplify`] should preserve this leaf when
+    /// it goes empty.
+    pub fn is_persistent(&self) -> bool {
+        self.persistent
     }
 }
 
@@ -142,14 +177,10 @@ impl DockNode {
 #[derive(Resource, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DockTree {
     pub nodes: HashMap<NodeId, DockNode>,
-    /// Single-tree root. Used by simple cases (and unit tests).
+    /// Single tree root. Splits and leaves below it form the entire
+    /// editor layout. `None` means the workspace has no layout yet
+    /// (caller should seed one before reconciliation).
     pub root: Option<NodeId>,
-    /// Multi-tree anchors keyed by stable slot id (e.g. `"left_top"`).
-    /// Each anchor's value is the root of a sub-tree for that slot.
-    /// When a sub-tree is split at runtime, the anchor is updated to
-    /// point at the new sub-tree root.
-    #[serde(default)]
-    pub anchors: HashMap<String, NodeId>,
     #[serde(default)]
     next_id: u64,
 }
@@ -186,31 +217,7 @@ impl DockTree {
         id
     }
 
-    /// Create a new leaf and bind it to the named anchor. If the anchor
-    /// already exists, its previous root is replaced (but not despawned;
-    /// the caller should clean up if needed).
-    pub fn set_anchor_leaf(&mut self, anchor: impl Into<String>, leaf: DockLeaf) -> NodeId {
-        let id = self.insert(DockNode::Leaf(leaf));
-        self.anchors.insert(anchor.into(), id);
-        id
-    }
-
-    /// Look up the root node for a named anchor.
-    pub fn anchor(&self, anchor: &str) -> Option<NodeId> {
-        self.anchors.get(anchor).copied()
-    }
-
-    /// Iterate `(anchor_name, root_node_id)` pairs in arbitrary order.
-    pub fn iter_anchors(&self) -> impl Iterator<Item = (&str, NodeId)> {
-        self.anchors.iter().map(|(k, v)| (k.as_str(), *v))
-    }
-
-    /// True if the given node is referenced by an anchor.
-    pub fn is_anchor_root(&self, id: NodeId) -> bool {
-        self.anchors.values().any(|v| *v == id)
-    }
-
-    /// Iterate every leaf reachable from a specific anchor's sub-tree.
+    /// Iterate every leaf reachable from the given subtree root.
     pub fn leaves_under(&self, root: NodeId) -> Vec<(NodeId, &DockLeaf)> {
         let mut out = Vec::new();
         self.leaves_under_inner(root, &mut out);
@@ -326,7 +333,7 @@ impl DockTree {
             b,
         }));
 
-        // Rewrite the parent pointer (or root / anchor) to point at the new split.
+        // Rewrite the parent pointer (or root) to point at the new split.
         match parent {
             Some(parent_id) => {
                 if let Some(DockNode::Split(s)) = self.nodes.get_mut(&parent_id) {
@@ -339,15 +346,8 @@ impl DockTree {
                 }
             }
             None => {
-                // Target was a root. Update the single root and any anchor
-                // pointing at it.
                 if self.root == Some(target) {
                     self.root = Some(split_id);
-                }
-                for v in self.anchors.values_mut() {
-                    if *v == target {
-                        *v = split_id;
-                    }
                 }
             }
         }
@@ -436,24 +436,23 @@ impl DockTree {
     }
 
     /// Collapse the tree:
-    /// - Remove empty leaves that aren't a top-level root or anchor root.
+    /// - Remove empty leaves that aren't the root or marked persistent.
     ///   The surviving sibling of a removed leaf takes its place in the parent.
     /// - Splits whose children collapsed away are themselves removed.
     ///
-    /// Never removes a leaf referenced by `root` or `anchors` even if
-    /// empty. An empty root/anchor keeps the slot valid (e.g. after
-    /// closing the last window in a built-in panel).
+    /// Never removes a persistent leaf (one with a stable hand-picked
+    /// `area_id`, see [`DockLeaf::is_persistent`]) even when empty. An
+    /// empty persistent leaf keeps the built-in slot visible (e.g.
+    /// after closing the last panel in the right sidebar).
     pub fn simplify(&mut self) {
         loop {
-            let single_root = self.root;
+            let root = self.root;
             let empty_leaf_with_parent: Option<NodeId> = self
                 .nodes
                 .iter()
                 .find(|(id, node)| match node {
                     DockNode::Leaf(l) => {
-                        l.windows.is_empty()
-                            && Some(**id) != single_root
-                            && !self.is_anchor_root(**id)
+                        l.windows.is_empty() && Some(**id) != root && !l.is_persistent()
                     }
                     _ => false,
                 })
@@ -473,7 +472,7 @@ impl DockTree {
             // The other child of the parent replaces the parent.
             let survivor = if s.a == empty_id { s.b } else { s.a };
 
-            // Rewrite grandparent pointer (or root / anchor).
+            // Rewrite grandparent pointer (or root).
             let grandparent = self.parent_of(parent_id);
             match grandparent {
                 Some(gp_id) => {
@@ -490,11 +489,6 @@ impl DockTree {
                     if self.root == Some(parent_id) {
                         self.root = Some(survivor);
                     }
-                    for v in self.anchors.values_mut() {
-                        if *v == parent_id {
-                            *v = survivor;
-                        }
-                    }
                 }
             }
 
@@ -507,9 +501,12 @@ impl DockTree {
 
 /// Generate a unique synthetic area id for a newly-created split leaf.
 /// Pairs the source window with the new leaf's `NodeId` so independent
-/// splits of the same window don't collide.
+/// splits of the same window don't collide. The
+/// [`SYNTHETIC_AREA_ID_PREFIX`] is what [`DockLeaf::is_persistent`]
+/// uses to distinguish runtime-split leaves from built-in canonical
+/// regions.
 fn fresh_area_id(window_id: &str, leaf_id: NodeId) -> String {
-    format!("split.{window_id}.{}", leaf_id.0)
+    format!("{SYNTHETIC_AREA_ID_PREFIX}{window_id}.{}", leaf_id.0)
 }
 
 #[cfg(test)]
@@ -665,29 +662,23 @@ mod tests {
     }
 
     #[test]
-    fn anchors_track_split_root_changes() {
+    fn persistent_leaf_kept_when_emptied_via_simplify() {
+        // A leaf marked persistent stays in the tree even after its
+        // windows go empty, so closing the last panel in a built-in
+        // sidebar leaves an empty placeholder rather than collapsing
+        // the surrounding split.
         let mut t = DockTree::new();
-        let leaf_id = t.set_anchor_leaf("left_top", leaf("left_top", &["scene_tree"]));
-        assert_eq!(t.anchor("left_top"), Some(leaf_id));
-
-        // Split the anchor's leaf. The anchor must follow.
-        let _new = t.split(leaf_id, Edge::Bottom, "import".into()).unwrap();
-        let new_anchor_root = t.anchor("left_top").unwrap();
-        assert_ne!(new_anchor_root, leaf_id);
-        assert!(matches!(t.nodes[&new_anchor_root], DockNode::Split(_)));
-    }
-
-    #[test]
-    fn anchors_track_simplify_collapses() {
-        let mut t = DockTree::new();
-        let original = t.set_anchor_leaf("right", leaf("right", &["a"]));
-        t.split(original, Edge::Right, "b".into()).unwrap();
-        // Drain "a" out so the original leaf goes empty and gets collapsed.
-        t.move_window("a", t.find_leaf("b").unwrap());
-        // Anchor should now point at the surviving leaf containing "b".
-        let anchor_root = t.anchor("right").unwrap();
-        let surviving = t.nodes[&anchor_root].as_leaf().unwrap();
-        assert!(surviving.windows.iter().any(|w| w == "b"));
+        let original = t.insert(DockNode::Leaf(
+            DockLeaf::new("right", DockAreaStyle::TabBar)
+                .with_windows(vec!["a".into()])
+                .persistent(),
+        ));
+        t.root = Some(original);
+        let other = t.split(original, Edge::Right, "b".into()).unwrap();
+        t.move_window("a", other);
+        let persistent_leaf = t.nodes[&original].as_leaf().unwrap();
+        assert!(persistent_leaf.windows.is_empty());
+        assert!(persistent_leaf.is_persistent());
     }
 
     #[test]

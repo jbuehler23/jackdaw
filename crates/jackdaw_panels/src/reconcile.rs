@@ -1,11 +1,11 @@
 //! Materialize a [`DockTree`] into UI entities.
 //!
 //! The tree is the source of truth for layout. Editor code spawns one
-//! `AnchorHost` entity per named anchor (e.g. `"left_top"`), and the
-//! reconciler walks the tree from each anchor and shapes the entity
-//! sub-tree to match: leaves become `DockArea`s with tab bar + content,
-//! splits become flex containers wrapping two child anchor-style entities
-//! plus a `PanelHandle` between them.
+//! `DockTreeHost` entity (typically the editor's main content area),
+//! and the reconciler walks the tree from its single root and shapes
+//! the entity sub-tree to match: leaves become `DockArea`s with tab
+//! bar + content, splits become flex containers wrapping two child
+//! anchor-style entities plus a `PanelHandle` between them.
 //!
 //! Drag/move/resize operations mutate the tree only; the reconciler
 //! rebuilds the affected entity sub-tree on the next frame.
@@ -20,11 +20,27 @@ use crate::split::{Panel, PanelGroup, PanelHandle};
 use crate::tabs;
 use crate::tree::{DockLeaf, DockNode, DockSplit, DockTree, NodeId, SplitAxis};
 
-/// Marker on entities the editor created as anchor host slots.
+/// Marker for the single editor entity the reconciler renders the dock
+/// tree underneath. Spawn one of these inside the editor's content
+/// area; the reconciler will fill it with split / leaf entities matching
+/// the current [`DockTree`].
+///
+/// Earlier versions had per-anchor `AnchorHost` entities. The flat
+/// single-tree model has just one host.
 #[derive(Component, Clone, Debug)]
-pub struct AnchorHost {
-    pub anchor_id: String,
+pub struct DockTreeHost {
+    /// Default style applied to a freshly-seeded root leaf if the tree
+    /// is empty when the host is first encountered. Most callers will
+    /// pre-build a default tree separately and never trigger this path.
     pub default_style: DockAreaStyle,
+}
+
+impl Default for DockTreeHost {
+    fn default() -> Self {
+        Self {
+            default_style: DockAreaStyle::TabBar,
+        }
+    }
 }
 
 /// Binds an entity to a tree node. Present on both leaf-style entities
@@ -38,22 +54,22 @@ impl Plugin for ReconcilePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DockTree>().add_systems(
             Update,
-            (seed_anchors_from_hosts, reconcile_tree, sync_leaf_visuals).chain(),
+            (seed_root_from_host, reconcile_tree, sync_leaf_visuals).chain(),
         );
     }
 }
 
-/// Public entry point for the editor's `OnEnter(Editor)` chain so
-/// anchors + entities exist before saved-layout application runs.
+/// Public entry point for the editor's `OnEnter(Editor)` chain so the
+/// root entity exists before saved-layout application runs.
 pub fn run_initial_reconcile(world: &mut World) {
-    seed_anchors_from_hosts(world);
+    seed_root_from_host(world);
     reconcile_tree(world);
 }
 
 /// Public for editor flows that want to seed before applying defaults
 /// then reconcile in a single materialization pass.
-pub fn seed_anchors(world: &mut World) {
-    seed_anchors_from_hosts(world);
+pub fn seed_root(world: &mut World) {
+    seed_root_from_host(world);
 }
 
 /// Public for editor flows that build the final tree shape (saved or
@@ -62,32 +78,24 @@ pub fn reconcile(world: &mut World) {
     reconcile_tree(world);
 }
 
-/// Ensure each `AnchorHost` has a tree anchor. New anchors are seeded
-/// with the registry's default windows for that area id. Re-running is a
-/// no-op once anchors exist (e.g. when restoring saved layout first).
-fn seed_anchors_from_hosts(world: &mut World) {
-    let hosts: Vec<(String, DockAreaStyle)> = {
-        let mut q = world.query::<&AnchorHost>();
-        q.iter(world)
-            .map(|h| (h.anchor_id.clone(), h.default_style.clone()))
-            .collect()
-    };
-
-    for (anchor_id, default_style) in hosts {
-        if world.resource::<DockTree>().anchor(&anchor_id).is_some() {
-            continue;
-        }
-        let windows: Vec<String> = world
-            .resource::<WindowRegistry>()
-            .by_area(&anchor_id)
-            .iter()
-            .map(|d| d.id.clone())
-            .collect();
-        let leaf = DockLeaf::new(anchor_id.clone(), default_style).with_windows(windows);
-        world
-            .resource_mut::<DockTree>()
-            .set_anchor_leaf(anchor_id, leaf);
+/// If the dock tree has no root and a `DockTreeHost` exists, seed a
+/// minimal root leaf from the host's default style. This is a safety
+/// net for callers that forgot to build a default tree; the editor's
+/// `init_layout` builds the canonical multi-region tree directly and
+/// never triggers this path.
+fn seed_root_from_host(world: &mut World) {
+    if world.resource::<DockTree>().root.is_some() {
+        return;
     }
+    let default_style = {
+        let mut q = world.query::<&DockTreeHost>();
+        q.iter(world).next().map(|h| h.default_style.clone())
+    };
+    let Some(default_style) = default_style else {
+        return;
+    };
+    let leaf = DockLeaf::new("root", default_style);
+    world.resource_mut::<DockTree>().set_root_leaf(leaf);
 }
 
 fn reconcile_tree(world: &mut World) {
@@ -95,26 +103,18 @@ fn reconcile_tree(world: &mut World) {
         return;
     }
 
-    let anchors: Vec<(String, NodeId)> = {
-        let tree = world.resource::<DockTree>();
-        tree.iter_anchors()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect()
+    let Some(root) = world.resource::<DockTree>().root else {
+        return;
     };
-
-    for (anchor_id, root_node) in anchors {
-        let Some(host) = find_anchor_host(world, &anchor_id) else {
-            continue;
-        };
-        reconcile_at(world, host, root_node);
-    }
+    let Some(host) = find_dock_tree_host(world) else {
+        return;
+    };
+    reconcile_at(world, host, root);
 }
 
-fn find_anchor_host(world: &mut World, anchor_id: &str) -> Option<Entity> {
-    let mut q = world.query::<(Entity, &AnchorHost)>();
-    q.iter(world)
-        .find(|(_, h)| h.anchor_id == anchor_id)
-        .map(|(e, _)| e)
+fn find_dock_tree_host(world: &mut World) -> Option<Entity> {
+    let mut q = world.query::<(Entity, &DockTreeHost)>();
+    q.iter(world).next().map(|(e, _)| e)
 }
 
 fn reconcile_at(world: &mut World, entity: Entity, node_id: NodeId) {
@@ -166,9 +166,15 @@ fn reconcile_leaf(world: &mut World, entity: Entity, node_id: NodeId, leaf: &Doc
         .insert(ActiveDockWindow(leaf.active.clone()));
     world.entity_mut(entity).insert(NodeBinding(node_id));
 
-    // Auto-collapse: when an anchor leaf has no windows, hide the host
-    // entity and its adjacent handle so siblings can take the space.
-    set_host_visible(world, entity, !leaf.windows.is_empty());
+    // Auto-collapse: when a non-persistent leaf has no windows, hide
+    // the host entity and its adjacent handle so siblings can reclaim
+    // the space. Persistent leaves (built-in dock regions like the
+    // viewport center, right sidebar, etc.) stay visible even when
+    // empty so they remain drop targets and so non-window content
+    // mounted inside them (the SceneViewport in Phase 1) keeps
+    // rendering.
+    let visible = !leaf.windows.is_empty() || leaf.is_persistent();
+    set_host_visible(world, entity, visible);
 }
 
 fn reconcile_split(world: &mut World, entity: Entity, node_id: NodeId, split: &DockSplit) {

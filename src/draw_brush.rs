@@ -11,8 +11,7 @@ use crate::{
     },
     selection::{Selected, Selection},
     snapping::SnapSettings,
-    viewport::{MainViewportCamera, SceneViewport},
-    viewport_util::window_to_viewport_cursor,
+    viewport::ViewportCursor,
 };
 use bevy::{
     input_focus::InputFocus,
@@ -20,7 +19,6 @@ use bevy::{
     mesh::{Indices, PrimitiveTopology},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
     prelude::*,
-    ui::UiGlobalTransform,
 };
 use bevy_enhanced_input::prelude::Press;
 use jackdaw_geometry::{
@@ -186,6 +184,12 @@ pub fn activate_draw_brush_modal(
             polygon_cursor: None,
             diagonal_snap: false,
             cached_face_hit: None,
+            // The viewport that owns this modal is captured the first
+            // time a per-frame system needs to bind to one (typically
+            // when the user places the first corner). Until then the
+            // modal hovers on whatever viewport the cursor is over.
+            camera: None,
+            viewport: None,
         });
     }
     if draw_state.active.is_none() {
@@ -262,9 +266,7 @@ pub(crate) fn draw_brush_toggle_mode(
 pub(crate) fn draw_brush_commit_polygon(
     _: In<OperatorParameters>,
     mut draw_state: ResMut<DrawBrushState>,
-    windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    vp: ViewportCursor,
 ) -> OperatorResult {
     let Some(ref mut active) = draw_state.active else {
         return OperatorResult::Cancelled;
@@ -275,10 +277,11 @@ pub(crate) fn draw_brush_commit_polygon(
     }
     active.polygon_vertices = hull;
     let viewport_cursor = (|| {
-        let window = windows.single().ok()?;
-        let cursor_pos = window.cursor_position()?;
-        let (camera, _) = camera_query.single().ok()?;
-        window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
+        let cursor_pos = vp.windows.single().ok()?.cursor_position()?;
+        let camera_entity = active.camera.or_else(|| vp.camera_entity())?;
+        let viewport_entity = active.viewport.or_else(|| vp.viewport_entity())?;
+        let (camera, _) = vp.camera_for(camera_entity)?;
+        vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)
     })();
     active.phase = DrawPhase::ExtrudingDepth;
     active.extrude_start_cursor = viewport_cursor.unwrap_or(Vec2::ZERO);
@@ -336,9 +339,7 @@ pub(crate) fn draw_brush_cancel_cut(
 fn confirm_draw_brush(
     _: In<OperatorParameters>,
     mut draw_state: ResMut<DrawBrushState>,
-    windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    vp: ViewportCursor,
     mut commands: Commands,
 ) -> OperatorResult {
     let Some(ref mut active) = draw_state.active else {
@@ -346,17 +347,21 @@ fn confirm_draw_brush(
     };
 
     // Verify cursor is in viewport
-    let Ok(window) = windows.single() else {
+    let Ok(window) = vp.windows.single() else {
         return OperatorResult::Cancelled;
     };
     let Some(cursor_pos) = window.cursor_position() else {
         return OperatorResult::Cancelled;
     };
-    let Ok((camera, _)) = camera_query.single() else {
+    let camera_entity = active.camera.or_else(|| vp.camera_entity());
+    let viewport_entity = active.viewport.or_else(|| vp.viewport_entity());
+    let (Some(camera_entity), Some(viewport_entity)) = (camera_entity, viewport_entity) else {
         return OperatorResult::Cancelled;
     };
-    let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
-    else {
+    let Some((camera, _)) = vp.camera_for(camera_entity) else {
+        return OperatorResult::Cancelled;
+    };
+    let Some(viewport_cursor) = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos) else {
         return OperatorResult::Cancelled;
     };
 
@@ -545,6 +550,12 @@ pub(crate) struct ActiveDraw {
     pub diagonal_snap: bool,
     /// Last successful face raycast hit point, for plane stickiness when raycast misses near edges.
     pub cached_face_hit: Option<Vec3>,
+    /// Multi-viewport: camera + UI-node entities of the viewport this
+    /// draw started in. Subsequent operators / per-frame updates
+    /// route through these so the in-progress polygon stays bound to
+    /// its origin viewport even if the cursor wanders elsewhere.
+    pub camera: Option<Entity>,
+    pub viewport: Option<Entity>,
 }
 
 #[derive(Resource, Debug, Default)]
@@ -785,9 +796,7 @@ fn dispatch_start_cut(_: On<Start<StartDrawBrushCutAction>>, mut commands: Comma
 
 fn draw_brush_update(
     mut draw_state: ResMut<DrawBrushState>,
-    windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    vp: ViewportCursor,
     keyboard: Res<ButtonInput<KeyCode>>,
     snap_settings: Res<SnapSettings>,
     mut ray_cast: MeshRayCast,
@@ -798,17 +807,30 @@ fn draw_brush_update(
         return;
     };
 
-    let Ok(window) = windows.single() else {
+    let Ok(window) = vp.windows.single() else {
         return;
     };
     let Some(cursor_pos) = window.cursor_position() else {
         return;
     };
-    let Ok((camera, cam_tf)) = camera_query.single() else {
+    // First frame of an active draw captures the hovered viewport so
+    // every subsequent frame stays bound to it; if the captured
+    // viewport later disappears we silently fall back to the hover.
+    let camera_entity = active.camera.or_else(|| vp.camera_entity());
+    let viewport_entity = active.viewport.or_else(|| vp.viewport_entity());
+    let (Some(camera_entity), Some(viewport_entity)) = (camera_entity, viewport_entity) else {
         return;
     };
-    let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
-    else {
+    if active.camera.is_none() {
+        active.camera = Some(camera_entity);
+    }
+    if active.viewport.is_none() {
+        active.viewport = Some(viewport_entity);
+    }
+    let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
+        return;
+    };
+    let Some(viewport_cursor) = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos) else {
         return;
     };
     let Ok(ray) = camera.viewport_to_world(cam_tf, viewport_cursor) else {
@@ -1012,9 +1034,7 @@ fn draw_brush_update(
 fn draw_brush_release(
     mouse: Res<ButtonInput<MouseButton>>,
     mut draw_state: ResMut<DrawBrushState>,
-    windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    vp: ViewportCursor,
 ) {
     if !mouse.just_released(MouseButton::Left) {
         return;
@@ -1032,17 +1052,21 @@ fn draw_brush_release(
         return;
     };
 
-    let Ok(window) = windows.single() else {
+    let Ok(window) = vp.windows.single() else {
         return;
     };
     let Some(cursor_pos) = window.cursor_position() else {
         return;
     };
-    let Ok((camera, _)) = camera_query.single() else {
+    let camera_entity = active.camera.or_else(|| vp.camera_entity());
+    let viewport_entity = active.viewport.or_else(|| vp.viewport_entity());
+    let (Some(camera_entity), Some(viewport_entity)) = (camera_entity, viewport_entity) else {
         return;
     };
-    let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
-    else {
+    let Some((camera, _)) = vp.camera_for(camera_entity) else {
+        return;
+    };
+    let Some(viewport_cursor) = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos) else {
         return;
     };
 
@@ -3202,9 +3226,7 @@ pub(crate) fn brush_extend_face_to_brush(
     mut edit_mode: ResMut<crate::brush::EditMode>,
     selection: Res<Selection>,
     mut brush_selection: ResMut<crate::brush::BrushSelection>,
-    windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    vp: ViewportCursor,
     mut ray_cast: MeshRayCast,
     brush_faces: Query<&BrushFaceEntity>,
     brush_query: Query<(), With<Brush>>,
@@ -3253,9 +3275,7 @@ pub(crate) fn brush_extend_face_to_brush(
             // Try hover raycast first to find the face
             let face_index = find_hovered_face_on_brush(
                 primary,
-                &windows,
-                &camera_query,
-                &viewport_query,
+                &vp,
                 &mut ray_cast,
                 &brush_faces,
             )
@@ -3296,16 +3316,16 @@ pub(crate) fn brush_extend_face_to_brush(
 /// Returns the face index if found.
 fn find_hovered_face_on_brush(
     brush_entity: Entity,
-    windows: &Query<&Window>,
-    camera_query: &Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    vp: &ViewportCursor,
     ray_cast: &mut MeshRayCast,
     brush_faces: &Query<&BrushFaceEntity>,
 ) -> Option<usize> {
-    let window = windows.single().ok()?;
+    let window = vp.windows.single().ok()?;
     let cursor_pos = window.cursor_position()?;
-    let (camera, cam_tf) = camera_query.single().ok()?;
-    let viewport_cursor = window_to_viewport_cursor(cursor_pos, camera, viewport_query)?;
+    let camera_entity = vp.camera_entity()?;
+    let viewport_entity = vp.viewport_entity()?;
+    let (camera, cam_tf) = vp.camera_for(camera_entity)?;
+    let viewport_cursor = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)?;
     let ray = camera.viewport_to_world(cam_tf, viewport_cursor).ok()?;
 
     let settings = MeshRayCastSettings::default().with_visibility(RayCastVisibility::Any);

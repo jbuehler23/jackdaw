@@ -11,7 +11,6 @@ use crate::{
     selection::Selection,
     snapping::SnapSettings,
     viewport::{MainViewportCamera, SceneViewport},
-    viewport_util::window_to_viewport_cursor,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -56,6 +55,10 @@ pub struct PendingDrag {
     pub click_pos: Vec2,
     /// Viewport-local cursor position at drag start.
     pub start_viewport_cursor: Vec2,
+    /// Camera entity of the viewport this drag was started in.
+    pub camera: Entity,
+    /// `SceneViewport` UI-node entity of the same viewport.
+    pub viewport: Entity,
 }
 
 pub struct ActiveDrag {
@@ -63,6 +66,10 @@ pub struct ActiveDrag {
     pub start_transform: Transform,
     /// Viewport-local cursor position at drag start.
     pub start_viewport_cursor: Vec2,
+    /// Camera entity of the viewport this drag was started in.
+    pub camera: Entity,
+    /// `SceneViewport` UI-node entity of the same viewport.
+    pub viewport: Entity,
 }
 
 pub struct ModalTransformPlugin;
@@ -114,6 +121,7 @@ fn viewport_drag_detect(
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    active_viewport: Res<crate::viewport::ActiveViewport>,
     selection: Res<Selection>,
     transforms: Query<(&GlobalTransform, &Transform)>,
     gizmo_drag: Res<GizmoDragState>,
@@ -178,12 +186,24 @@ fn viewport_drag_detect(
     let Some(cursor_pos) = window.cursor_position() else {
         return;
     };
-    let Ok((camera, cam_tf)) = camera_query.single() else {
+    // Drag-start is hover-routed: the click happens in whichever
+    // viewport the cursor is currently over.
+    let Some(camera_entity) = active_viewport.camera else {
+        return;
+    };
+    let Some(viewport_entity) = active_viewport.ui_node else {
+        return;
+    };
+    let Ok((camera, cam_tf)) = camera_query.get(camera_entity) else {
         return;
     };
 
-    let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
-    else {
+    let Some(viewport_cursor) = crate::viewport_util::window_to_viewport_cursor_for(
+        cursor_pos,
+        camera,
+        viewport_entity,
+        &viewport_query,
+    ) else {
         return;
     };
 
@@ -219,6 +239,8 @@ fn viewport_drag_detect(
             start_transform: *local_tf,
             click_pos: cursor_pos,
             start_viewport_cursor: viewport_cursor,
+            camera: camera_entity,
+            viewport: viewport_entity,
         });
     }
 }
@@ -271,6 +293,8 @@ fn viewport_drag_update(
                 entity: pending.entity,
                 start_transform: pending.start_transform,
                 start_viewport_cursor: pending.start_viewport_cursor,
+                camera: pending.camera,
+                viewport: pending.viewport,
             };
             drag_state.active = Some(active);
             drag_state.pending = None;
@@ -287,15 +311,23 @@ fn viewport_drag_update(
     let Some(ref active) = drag_state.active else {
         return;
     };
-    let Ok((camera, cam_tf)) = camera_query.single() else {
+    // Use the captured viewport so the drag stays attached to its
+    // origin viewport across frames, not whichever one the cursor
+    // happens to be over now (multi-viewport).
+    let Ok((camera, cam_tf)) = camera_query.get(active.camera) else {
         return;
     };
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
 
-    let viewport_cursor =
-        window_to_viewport_cursor(cursor_pos, camera, &viewport_query).unwrap_or(cursor_pos);
+    let viewport_cursor = crate::viewport_util::window_to_viewport_cursor_for(
+        cursor_pos,
+        camera,
+        active.viewport,
+        &viewport_query,
+    )
+    .unwrap_or(cursor_pos);
 
     let start_pos = active.start_transform.translation;
     let cam_dist = (cam_tf.translation() - start_pos).length();

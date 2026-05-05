@@ -76,6 +76,13 @@ pub struct BoxSelectState {
     pub active: bool,
     pub start: Vec2,
     pub current: Vec2,
+    /// Camera entity of the viewport the drag started in. Captured at
+    /// modal start so the operator keeps querying the same viewport
+    /// across frames even if the cursor wanders into a different one
+    /// (multi-viewport setups).
+    pub camera: Option<Entity>,
+    /// `SceneViewport` UI-node entity of the same viewport.
+    pub viewport: Option<Entity>,
 }
 
 /// Tracks whether the user is editing inside a `BrushGroup` (entered via double-click).
@@ -145,8 +152,9 @@ pub(crate) fn handle_viewport_click(
         return;
     };
 
-    // Check if cursor is within viewport
-    let Ok((vp_computed, vp_tf)) = vp.viewport.single() else {
+    // Bail when the cursor isn't over any viewport. Multi-viewport
+    // routing: the active viewport is whichever one the cursor is in.
+    let Some((vp_computed, vp_tf)) = vp.viewport() else {
         return;
     };
     let scale = vp_computed.inverse_scale_factor();
@@ -154,18 +162,11 @@ pub(crate) fn handle_viewport_click(
     let vp_size = vp_computed.size() * scale;
     let vp_top_left = vp_pos - vp_size / 2.0;
     let local_cursor = cursor_pos - vp_top_left;
-    if local_cursor.x < 0.0
-        || local_cursor.y < 0.0
-        || local_cursor.x > vp_size.x
-        || local_cursor.y > vp_size.y
-    {
-        return;
-    }
 
     // Clear input focus so keyboard shortcuts (G/R/S) work after viewport click
     input_focus.0 = None;
 
-    let Ok((camera, cam_tf)) = vp.camera.single() else {
+    let Some((camera, cam_tf)) = vp.camera() else {
         return;
     };
 
@@ -346,6 +347,11 @@ pub fn box_select(
         box_state.active = true;
         box_state.start = cursor_pos;
         box_state.current = cursor_pos;
+        // Capture the viewport that owns this drag so subsequent
+        // frames keep referring to it even if the cursor wanders
+        // into a different viewport mid-drag.
+        box_state.camera = vp.camera_entity();
+        box_state.viewport = vp.viewport_entity();
         return OperatorResult::Running;
     }
 
@@ -355,10 +361,16 @@ pub fn box_select(
     }
     box_state.active = false;
 
-    let Ok((camera, cam_tf)) = vp.camera.single() else {
+    let Some(camera_entity) = box_state.camera else {
         return OperatorResult::Finished;
     };
-    let Ok((vp_computed, vp_tf)) = vp.viewport.single() else {
+    let Some(viewport_entity) = box_state.viewport else {
+        return OperatorResult::Finished;
+    };
+    let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
+        return OperatorResult::Finished;
+    };
+    let Some((vp_computed, vp_tf)) = vp.viewport_for(viewport_entity) else {
         return OperatorResult::Finished;
     };
     let map = crate::viewport_util::ViewportRemap::new(camera, vp_computed, vp_tf);

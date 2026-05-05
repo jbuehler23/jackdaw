@@ -51,6 +51,11 @@ pub struct PhysicsDrag {
     /// Starting positions of ALL selected `RigidBody` entities at drag start.
     /// Used to move the entire group by the same delta.
     pub start_positions: HashMap<Entity, Vec3>,
+    /// Multi-viewport: camera + UI-node entities captured at drag start
+    /// so the drag stays attached to the originating viewport even if
+    /// the cursor wanders into another panel mid-drag.
+    pub camera: Entity,
+    pub viewport: Entity,
 }
 
 pub struct PhysicsSimulationPlugin;

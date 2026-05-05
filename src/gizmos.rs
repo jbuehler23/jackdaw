@@ -13,7 +13,7 @@ use crate::{
     selection::{Selected, Selection},
     snapping::SnapSettings,
     viewport::{MainViewportCamera, SceneViewport},
-    viewport_util::{point_to_segment_dist, window_to_viewport_cursor},
+    viewport_util::{point_to_segment_dist, window_to_viewport_cursor_for},
 };
 
 /// Gizmo group for transform gizmos, rendered on top of all geometry.
@@ -64,6 +64,13 @@ pub struct GizmoDragState {
     pub start_transform: Transform,
     pub entity: Option<Entity>,
     pub accumulated_delta: f32,
+    /// Camera entity of the viewport this drag was started in.
+    /// Captured at modal start so subsequent frames keep referring to
+    /// the same viewport even if the cursor wanders into a different
+    /// one (multi-viewport setups).
+    pub camera: Option<Entity>,
+    /// `SceneViewport` UI-node entity of the same viewport.
+    pub viewport: Option<Entity>,
 }
 
 #[derive(Resource, Default)]
@@ -117,6 +124,7 @@ pub(crate) fn handle_gizmo_hover(
     drag_state: Res<GizmoDragState>,
     modal: Res<ModalTransformState>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    active: Res<crate::viewport::ActiveViewport>,
     edit_mode: Res<crate::brush::EditMode>,
     draw_state: Res<crate::draw_brush::DrawBrushState>,
 ) {
@@ -137,7 +145,15 @@ pub(crate) fn handle_gizmo_hover(
     let Ok(global_tf) = transforms.get(primary) else {
         return;
     };
-    let Ok((camera, cam_tf)) = camera_query.single() else {
+    // Hover-routed: only the camera + viewport pair under the cursor
+    // gets gizmo hover treatment (multi-viewport).
+    let Some(camera_entity) = active.camera else {
+        return;
+    };
+    let Some(viewport_entity) = active.ui_node else {
+        return;
+    };
+    let Ok((camera, cam_tf)) = camera_query.get(camera_entity) else {
         return;
     };
     let Ok(window) = windows.single() else {
@@ -148,8 +164,8 @@ pub(crate) fn handle_gizmo_hover(
         return;
     };
 
-    // Convert window cursor to viewport-local coordinates
-    let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
+    let Some(viewport_cursor) =
+        window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, &viewport_query)
     else {
         return;
     };
@@ -264,6 +280,7 @@ pub fn gizmo_drag(
     mode: Res<GizmoMode>,
     space: Res<GizmoSpace>,
     hover: Res<GizmoHoverState>,
+    active_viewport: Res<crate::viewport::ActiveViewport>,
     mut drag_state: ResMut<GizmoDragState>,
     mut history: ResMut<CommandHistory>,
     snap_settings: Res<SnapSettings>,
@@ -276,10 +293,31 @@ pub fn gizmo_drag(
     let Some(cursor_pos) = window.cursor_position() else {
         return OperatorResult::Cancelled;
     };
-    let Ok((camera, cam_tf)) = camera_query.single() else {
+    // First-frame: pick the active (hovered) viewport. Subsequent
+    // frames: use the captured one so the drag stays attached even
+    // if the cursor strays into a different viewport.
+    let (camera_entity, viewport_entity) = if modal.is_none() {
+        let Some(camera_entity) = active_viewport.camera else {
+            return OperatorResult::Cancelled;
+        };
+        let Some(viewport_entity) = active_viewport.ui_node else {
+            return OperatorResult::Cancelled;
+        };
+        (camera_entity, viewport_entity)
+    } else {
+        let Some(camera_entity) = drag_state.camera else {
+            return OperatorResult::Finished;
+        };
+        let Some(viewport_entity) = drag_state.viewport else {
+            return OperatorResult::Finished;
+        };
+        (camera_entity, viewport_entity)
+    };
+    let Ok((camera, cam_tf)) = camera_query.get(camera_entity) else {
         return OperatorResult::Cancelled;
     };
-    let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
+    let Some(viewport_cursor) =
+        window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, &viewport_query)
     else {
         return OperatorResult::Cancelled;
     };
@@ -299,6 +337,8 @@ pub fn gizmo_drag(
         drag_state.drag_start_screen = viewport_cursor;
         drag_state.start_transform = *transform;
         drag_state.entity = Some(primary);
+        drag_state.camera = Some(camera_entity);
+        drag_state.viewport = Some(viewport_entity);
         drag_state.accumulated_delta = 0.0;
         if let Ok(mut cursor_opts) = cursor_query.single_mut() {
             cursor_opts.grab_mode = CursorGrabMode::Confined;
@@ -416,6 +456,8 @@ fn clear_gizmo_drag_state(
     drag_state.active = false;
     drag_state.axis = None;
     drag_state.entity = None;
+    drag_state.camera = None;
+    drag_state.viewport = None;
     if let Ok(mut cursor_opts) = cursor_query.single_mut() {
         cursor_opts.grab_mode = CursorGrabMode::None;
     }
@@ -425,7 +467,8 @@ fn draw_gizmos(
     mut gizmos: Gizmos<TransformGizmoGroup>,
     selection: Res<Selection>,
     transforms: Query<&GlobalTransform, With<Selected>>,
-    camera_query: Query<&GlobalTransform, With<MainViewportCamera>>,
+    camera_query: Query<(Entity, &GlobalTransform), With<MainViewportCamera>>,
+    active: Res<crate::viewport::ActiveViewport>,
     mode: Res<GizmoMode>,
     space: Res<GizmoSpace>,
     hover: Res<GizmoHoverState>,
@@ -444,7 +487,17 @@ fn draw_gizmos(
     let Ok(global_tf) = transforms.get(primary) else {
         return;
     };
-    let Ok(cam_tf) = camera_query.single() else {
+    // Multi-viewport: scale the gizmo by the active (hovered)
+    // viewport's camera distance, falling back to any camera. The
+    // single Gizmos pass renders into every viewport, so the size will
+    // be visually correct in the hovered viewport and approximate in
+    // the others until the cursor moves.
+    let cam_tf = active
+        .camera
+        .and_then(|e| camera_query.get(e).ok())
+        .or_else(|| camera_query.iter().next())
+        .map(|(_, tf)| tf);
+    let Some(cam_tf) = cam_tf else {
         return;
     };
 

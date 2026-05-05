@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::ui::UiGlobalTransform;
 use jackdaw_feathers::tokens;
 
-use crate::area::{DefaultArea, DockArea, DockTab, ToAnchorId as _};
+use crate::area::{DockArea, DockTab};
 use crate::reconcile::NodeBinding;
 use crate::sidebar::DockSidebarIcon;
 use crate::tabs::{DockTabGrip, DockTabRow};
@@ -43,12 +43,6 @@ pub enum DropTarget {
         area: Entity,
         edge: DropEdge,
     },
-    /// Dropped on the editor viewport's edge. Routes to the anchor
-    /// associated with that edge (see [`DefaultArea`].
-    ViewportEdge {
-        anchor_id: String,
-        edge: DropEdge,
-    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,12 +58,6 @@ pub struct DragGhost;
 
 #[derive(Component)]
 pub struct DropOverlay;
-
-/// Marks the editor viewport entity as a drop target. The viewport is
-/// not an `AnchorHost`; dropping on its edge re-populates one of the
-/// side anchors (see [`DefaultArea`]) instead.
-#[derive(Component)]
-pub struct ViewportDropTarget;
 
 pub struct DockDragPlugin;
 
@@ -205,7 +193,6 @@ fn on_drag_move(
         ),
         With<DockTabRow>,
     >,
-    viewports: Query<(&ComputedNode, &UiGlobalTransform), With<ViewportDropTarget>>,
     node_query: Query<(&ComputedNode, &UiGlobalTransform)>,
     parent_query: Query<&ChildOf>,
 ) {
@@ -442,60 +429,6 @@ fn on_drag_move(
                 }
             }
 
-            // Fall through to viewport hit-test when the cursor isn't
-            // over any DockArea. Lets a tab drop on the viewport's edge
-            // re-populate a collapsed side panel.
-            if new_target.is_none() {
-                for (computed, ui_transform) in &viewports {
-                    let viewport_rect = logical_rect(computed, ui_transform);
-                    if !viewport_rect.contains(cursor) {
-                        continue;
-                    }
-
-                    let Some(edge) = cursor_edge(viewport_rect, cursor) else {
-                        break;
-                    };
-                    if edge == DropEdge::Top {
-                        // No top anchor above the viewport.
-                        break;
-                    }
-                    let anchor_id = match edge {
-                        DropEdge::Left => DefaultArea::Left,
-                        DropEdge::Right => DefaultArea::RightSidebar,
-                        DropEdge::Bottom => DefaultArea::BottomDock,
-                        DropEdge::Top => unreachable!(),
-                    }
-                    .anchor_id();
-
-                    new_target = Some(DropTarget::ViewportEdge {
-                        anchor_id: anchor_id.to_string(),
-                        edge,
-                    });
-
-                    let overlay_rect = edge_overlay_rect(viewport_rect, edge);
-                    let overlay = commands
-                        .spawn((
-                            DropOverlay,
-                            Node {
-                                position_type: PositionType::Absolute,
-                                left: Val::Px(overlay_rect.min.x),
-                                top: Val::Px(overlay_rect.min.y),
-                                width: Val::Px(overlay_rect.size().x),
-                                height: Val::Px(overlay_rect.size().y),
-                                border: UiRect::all(Val::Px(2.0)),
-                                border_radius: BorderRadius::all(Val::Px(4.0)),
-                                ..default()
-                            },
-                            BackgroundColor(Color::srgba(0.126, 0.431, 0.784, 0.25)),
-                            BorderColor::all(tokens::ACCENT_BLUE),
-                            GlobalZIndex(150),
-                        ))
-                        .id();
-                    new_overlay = Some(overlay);
-                    break;
-                }
-            }
-
             if let DockDragState::Dragging {
                 drop_target,
                 overlay_entity,
@@ -548,12 +481,6 @@ fn on_drag_end(
                         let wid = window_id.clone();
                         commands.queue(move |world: &mut World| {
                             drop_on_edge(world, &wid, area, edge);
-                        });
-                    }
-                    DropTarget::ViewportEdge { anchor_id, edge } => {
-                        let wid = window_id.clone();
-                        commands.queue(move |world: &mut World| {
-                            drop_on_viewport_edge(world, &wid, &anchor_id, edge);
                         });
                     }
                     DropTarget::TabRow { bar, index } => {
@@ -623,42 +550,6 @@ fn drop_on_edge(world: &mut World, window_id: &str, target_area: Entity, edge: D
     tree.split(binding.0, tree_edge, window_id.to_string());
 }
 
-/// Drop `window_id` onto the viewport's `edge`, routing into the anchor
-/// that owns that edge (e.g. `Right` → `right_sidebar`). If the anchor's
-/// first leaf is empty (collapsed panel), the window is added to it so
-/// the reconciler un-hides the host next tick. Otherwise the leaf is
-/// split at `edge` to create a sibling leaf holding the window.
-fn drop_on_viewport_edge(world: &mut World, window_id: &str, anchor_id: &str, edge: DropEdge) {
-    let mut tree = world.resource_mut::<DockTree>();
-    let Some(root) = tree.anchor(anchor_id) else {
-        return;
-    };
-    let Some((leaf_id, leaf_is_empty)) = tree
-        .leaves_under(root)
-        .first()
-        .map(|(id, leaf)| (*id, leaf.windows.is_empty()))
-    else {
-        return;
-    };
-
-    tree.remove_window(window_id);
-
-    if leaf_is_empty {
-        if let Some(crate::tree::DockNode::Leaf(l)) = tree.get_mut(leaf_id) {
-            l.windows.push(window_id.to_string());
-            l.active = Some(window_id.to_string());
-        }
-    } else {
-        let tree_edge = match edge {
-            DropEdge::Top => TreeEdge::Top,
-            DropEdge::Bottom => TreeEdge::Bottom,
-            DropEdge::Left => TreeEdge::Left,
-            DropEdge::Right => TreeEdge::Right,
-        };
-        tree.split(leaf_id, tree_edge, window_id.to_string());
-    }
-}
-
 /// Drop `window_id` onto the leaf bound to the `tab_row`'s area at index `index`
 fn drop_on_tab_row(world: &mut World, window_id: &str, tab_row: Entity, index: usize) {
     let mut parent_query = world.query::<&ChildOf>();
@@ -703,8 +594,9 @@ fn cursor_edge(rect: Rect, cursor: Vec2) -> Option<DropEdge> {
     let frac_x = rel.x / rect.size().x;
     let frac_y = rel.y / rect.size().y;
 
-    // The center region is a no-op.
-    // the outer n% of the rect's volume are the drop edges.
+    // The center region is a no-op. The outer n% on each side are the
+    // drop edges. All four edges are equal: dropping on the top of any
+    // panel splits it vertically with the dragged window above.
     const EDGE_PERCENT: f32 = 0.25;
 
     if frac_x < -EDGE_PERCENT {
@@ -714,7 +606,6 @@ fn cursor_edge(rect: Rect, cursor: Vec2) -> Option<DropEdge> {
     } else if frac_y > EDGE_PERCENT {
         Some(DropEdge::Bottom)
     } else if frac_y < -EDGE_PERCENT {
-        // Top is the lowest priority since the viewport is allowed to skip it
         Some(DropEdge::Top)
     } else {
         None

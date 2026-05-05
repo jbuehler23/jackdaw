@@ -225,7 +225,8 @@ fn draw_alignment_guides(
     modal_state: Res<ModalTransformState>,
     viewport_drag: Res<ViewportDragState>,
     transforms: Query<&GlobalTransform>,
-    camera_query: Query<&GlobalTransform, With<crate::viewport::MainViewportCamera>>,
+    camera_query: Query<(Entity, &GlobalTransform), With<crate::viewport::MainViewportCamera>>,
+    active: Res<crate::viewport::ActiveViewport>,
     selected: Query<(Entity, &GlobalTransform, Option<&BrushMeshCache>), With<Selected>>,
     mut selected_transforms: Query<&mut Transform, With<Selected>>,
     children_query: Query<&Children>,
@@ -246,7 +247,17 @@ fn draw_alignment_guides(
         return;
     };
 
-    let Ok(cam_tf) = camera_query.single() else {
+    // Multi-viewport: scale guides by the hovered viewport's camera
+    // distance, falling back to any camera. Like the gizmo overlay,
+    // alignment guides render to all cameras through a single Gizmos
+    // pass, so this is correct in the active viewport and approximate
+    // in the others.
+    let cam_tf = active
+        .camera
+        .and_then(|e| camera_query.get(e).ok())
+        .or_else(|| camera_query.iter().next())
+        .map(|(_, tf)| tf);
+    let Some(cam_tf) = cam_tf else {
         return;
     };
     let cam_distance = cam_tf.translation().distance(drag_pos);

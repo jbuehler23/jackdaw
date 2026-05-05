@@ -17,8 +17,8 @@ use crate::brush::{
 use crate::commands::{CommandGroup, CommandHistory};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::draw_brush::{CreateBrushCommand, brush_data_from_entity};
-use crate::viewport::{MainViewportCamera, SceneViewport};
-use crate::viewport_util::window_to_viewport_cursor;
+use crate::viewport::{ActiveViewport, MainViewportCamera, SceneViewport};
+use crate::viewport_util::window_to_viewport_cursor_for;
 use jackdaw_geometry::{EPSILON, compute_face_tangent_axes, point_inside_all_planes};
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -132,6 +132,7 @@ pub(crate) fn clip_place_point(
     primary_window: Query<&Window, With<PrimaryWindow>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    active: Res<ActiveViewport>,
     keyboard: Res<ButtonInput<KeyCode>>,
     brush_selection: Res<BrushSelection>,
     brushes: Query<&Brush>,
@@ -158,10 +159,17 @@ pub(crate) fn clip_place_point(
     let Some(cursor_pos) = window.cursor_position() else {
         return OperatorResult::Cancelled;
     };
-    let Ok((camera, cam_tf)) = camera_query.single() else {
+    let Some(camera_entity) = active.camera else {
         return OperatorResult::Cancelled;
     };
-    let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
+    let Some(viewport_entity) = active.ui_node else {
+        return OperatorResult::Cancelled;
+    };
+    let Ok((camera, cam_tf)) = camera_query.get(camera_entity) else {
+        return OperatorResult::Cancelled;
+    };
+    let Some(viewport_cursor) =
+        window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, &viewport_query)
     else {
         return OperatorResult::Cancelled;
     };

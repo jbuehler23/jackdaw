@@ -31,21 +31,35 @@ impl ViewportRemap {
     }
 }
 
-/// Convert window cursor position to viewport-local coordinates in camera space.
+/// Convert a window cursor position to camera-space viewport coordinates,
+/// remapping the cursor against a specific viewport UI-node entity rather
+/// than assuming there's only one. Used by hover-routed systems that
+/// already know which viewport the cursor is over (via `ActiveViewport`)
+/// and by modal operators that captured a viewport at start.
 ///
-/// The camera renders to an off-screen image whose logical size may differ from
-/// the UI node's logical size (they diverge on HiDPI/fractional-scaling displays).
-/// This function remaps from UI-logical space into the camera's viewport space so
-/// that `camera.viewport_to_world()` and `camera.world_to_viewport()` produce
-/// correct results.
-pub(crate) fn window_to_viewport_cursor(
+/// The camera renders to an off-screen image whose logical size may differ
+/// from the UI node's logical size (they diverge on HiDPI / fractional
+/// scaling displays). This remaps UI-logical space into camera viewport
+/// space so `camera.viewport_to_world()` / `camera.world_to_viewport()`
+/// produce correct results.
+pub(crate) fn window_to_viewport_cursor_for(
     cursor_pos: Vec2,
     camera: &Camera,
+    viewport_entity: Entity,
     viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
 ) -> Option<Vec2> {
-    let Ok((computed, vp_transform)) = viewport_query.single() else {
-        return Some(cursor_pos);
+    let Ok((computed, vp_transform)) = viewport_query.get(viewport_entity) else {
+        return None;
     };
+    remap_cursor(cursor_pos, camera, computed, vp_transform)
+}
+
+fn remap_cursor(
+    cursor_pos: Vec2,
+    camera: &Camera,
+    computed: &ComputedNode,
+    vp_transform: &UiGlobalTransform,
+) -> Option<Vec2> {
     let map = ViewportRemap::new(camera, computed, vp_transform);
     let local = cursor_pos - map.top_left;
     if local.x >= 0.0 && local.y >= 0.0 && local.x <= map.vp_size.x && local.y <= map.vp_size.y {
