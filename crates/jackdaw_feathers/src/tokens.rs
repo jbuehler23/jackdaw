@@ -286,6 +286,14 @@ pub const FONT_LG: f32 = TEXT_SIZE_LG;
 /// Truncation width for browser thumbnail filename labels (asset
 /// browser, material browser).
 pub const THUMB_NAME_MAX_WIDTH: f32 = 60.0;
+/// Browser thumbnail cell width (asset browser, material browser).
+pub const THUMB_CELL_WIDTH: f32 = 64.0;
+/// Browser thumbnail cell height (asset browser, material browser).
+pub const THUMB_CELL_HEIGHT: f32 = 80.0;
+/// Browser thumbnail image size (asset browser, material browser).
+pub const THUMB_IMAGE_SIZE: f32 = 56.0;
+/// Browser preview image size (asset browser, material browser).
+pub const PREVIEW_IMAGE_SIZE: f32 = 128.0;
 
 // ---------------------------------------------------------------------------
 // Icon sizes (Lucide frame sizes)

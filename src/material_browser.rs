@@ -86,6 +86,19 @@ impl MaterialRegistry {
     pub fn add(&mut self, name: String, handle: Handle<StandardMaterial>) {
         self.entries.push(MaterialRegistryEntry { name, handle });
     }
+
+    /// Insert a "None" entry at the top of the list if one isn't already present.
+    pub fn ensure_none_entry(&mut self) {
+        if !self.entries.iter().any(|e| e.handle == Handle::default()) {
+            self.entries.insert(
+                0,
+                MaterialRegistryEntry {
+                    name: "None".to_string(),
+                    handle: Handle::default(),
+                },
+            );
+        }
+    }
 }
 
 #[derive(Resource, Default)]
@@ -496,6 +509,8 @@ fn scan_material_definitions(world: &mut World) {
             world.resource_mut::<MaterialRegistry>().add(name, handle);
         }
     }
+
+    world.resource_mut::<MaterialRegistry>().ensure_none_entry();
 }
 
 fn on_material_grid_added(
@@ -574,6 +589,8 @@ fn rescan_material_definitions(world: &mut World) {
             world.resource_mut::<MaterialRegistry>().add(name, handle);
         }
     }
+
+    world.resource_mut::<MaterialRegistry>().ensure_none_entry();
 }
 
 fn save_catalog_if_dirty(world: &mut World) {
@@ -593,6 +610,7 @@ fn save_catalog_if_dirty(world: &mut World) {
         .resource::<MaterialRegistry>()
         .entries
         .iter()
+        .filter(|e| e.handle != Handle::default())
         .map(|e| (format!("@{}", e.name), e.handle.clone().untyped()))
         .collect();
 
@@ -779,18 +797,20 @@ fn update_preview_area(
     };
 
     // Show the preview image
-    let preview_img = preview_state.preview_image.clone();
-    commands.spawn((
-        PreviewAreaImage,
-        ImageNode::new(preview_img),
-        Node {
-            width: Val::Px(128.0),
-            height: Val::Px(128.0),
-            align_self: AlignSelf::Center,
-            ..Default::default()
-        },
-        ChildOf(container),
-    ));
+    if *active_handle != Handle::default() {
+        let preview_img = preview_state.preview_image.clone();
+        commands.spawn((
+            PreviewAreaImage,
+            ImageNode::new(preview_img),
+            Node {
+                width: Val::Px(tokens::PREVIEW_IMAGE_SIZE),
+                height: Val::Px(tokens::PREVIEW_IMAGE_SIZE),
+                align_self: AlignSelf::Center,
+                ..Default::default()
+            },
+            ChildOf(container),
+        ));
+    }
 
     // Material name
     let active_name = registry
@@ -1357,8 +1377,8 @@ fn update_material_browser_ui(
         let thumb_entity = commands
             .spawn((
                 Node {
-                    width: Val::Px(64.0),
-                    height: Val::Px(80.0),
+                    width: Val::Px(tokens::THUMB_CELL_WIDTH),
+                    height: Val::Px(tokens::THUMB_CELL_HEIGHT),
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
                     padding: UiRect::all(Val::Px(2.0)),
@@ -1381,8 +1401,8 @@ fn update_material_browser_ui(
             commands.spawn((
                 ImageNode::new(img),
                 Node {
-                    width: Val::Px(56.0),
-                    height: Val::Px(56.0),
+                    width: Val::Px(tokens::THUMB_IMAGE_SIZE),
+                    height: Val::Px(tokens::THUMB_IMAGE_SIZE),
                     ..Default::default()
                 },
                 ChildOf(thumb_entity),
@@ -1390,8 +1410,8 @@ fn update_material_browser_ui(
         } else {
             commands.spawn((
                 Node {
-                    width: Val::Px(56.0),
-                    height: Val::Px(56.0),
+                    width: Val::Px(tokens::THUMB_IMAGE_SIZE),
+                    height: Val::Px(tokens::THUMB_IMAGE_SIZE),
                     ..Default::default()
                 },
                 BackgroundColor(Color::srgb(0.3, 0.3, 0.3)),

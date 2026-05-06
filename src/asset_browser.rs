@@ -361,8 +361,8 @@ fn refresh_browser_on_change(
             let thumb_entity = commands
                 .spawn((
                     Node {
-                        width: Val::Px(64.0),
-                        height: Val::Px(80.0),
+                        width: Val::Px(tokens::THUMB_CELL_WIDTH),
+                        height: Val::Px(tokens::THUMB_CELL_HEIGHT),
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
                         padding: UiRect::all(Val::Px(2.0)),
@@ -381,8 +381,8 @@ fn refresh_browser_on_change(
                 commands.spawn((
                     ImageNode::new(img.clone()),
                     Node {
-                        width: Val::Px(56.0),
-                        height: Val::Px(56.0),
+                        width: Val::Px(tokens::THUMB_IMAGE_SIZE),
+                        height: Val::Px(tokens::THUMB_IMAGE_SIZE),
                         ..Default::default()
                     },
                     ChildOf(thumb_entity),
@@ -392,8 +392,8 @@ fn refresh_browser_on_change(
                 let placeholder = commands
                     .spawn((
                         Node {
-                            width: Val::Px(56.0),
-                            height: Val::Px(56.0),
+                            width: Val::Px(tokens::THUMB_IMAGE_SIZE),
+                            height: Val::Px(tokens::THUMB_IMAGE_SIZE),
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
                             ..Default::default()
@@ -986,8 +986,8 @@ fn update_preview_panel(
         commands.spawn((
             ImageNode::new(img.clone()),
             Node {
-                width: Val::Px(128.0),
-                height: Val::Px(128.0),
+                width: Val::Px(tokens::PREVIEW_IMAGE_SIZE),
+                height: Val::Px(tokens::PREVIEW_IMAGE_SIZE),
                 align_self: AlignSelf::Center,
                 ..Default::default()
             },
@@ -998,8 +998,8 @@ fn update_preview_panel(
         commands.spawn((
             ImageNode::new(preview_state.layer_images[idx].clone()),
             Node {
-                width: Val::Px(128.0),
-                height: Val::Px(128.0),
+                width: Val::Px(tokens::PREVIEW_IMAGE_SIZE),
+                height: Val::Px(tokens::PREVIEW_IMAGE_SIZE),
                 align_self: AlignSelf::Center,
                 ..Default::default()
             },
