@@ -893,9 +893,7 @@ pub(crate) fn revert_component_to_baseline(
         return;
     };
 
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        reflect_component.apply(world.entity_mut(entity), reflected.as_ref());
-    }));
+    reflect_component.apply(world.entity_mut(entity), reflected.as_ref());
 
     drop(registry);
 

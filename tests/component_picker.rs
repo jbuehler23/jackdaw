@@ -160,10 +160,10 @@ fn editor_hidden_marker_filters_component() {
         "`@EditorHidden` reflect attribute must keep a Component out of the picker",
     );
     // Sanity-check that unmarked components in the same registry
-    // remain visible — this is the regression Jan hit on 5/5 where
-    // `starts_with(\"jackdaw\")` filtered any user crate whose name
-    // started with `jackdaw_`. The current marker-based filter must
-    // not regress to a path-based heuristic.
+    // remain visible. This guards the regression where
+    // `starts_with("jackdaw")` filtered any user crate whose name
+    // started with `jackdaw_`. The current marker-based filter
+    // must not regress to a path-based heuristic.
     assert!(find(&pickables, "WithDefault").is_some());
     assert!(find(&pickables, "NoDefault").is_some());
 }

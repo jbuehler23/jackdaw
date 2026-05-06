@@ -1,11 +1,16 @@
 use crate::default_style;
 use crate::{
     EditorEntity,
+    brush::{BrushFaceEntity, BrushMeshCache},
+    brush_drag_ops::cursor_over_brush_face,
     gizmos::handle_gizmo_hover,
     selection::Selection,
-    viewport::{InteractionGuards, ViewportCursor},
+    viewport::{InteractionGuards, MainViewportCamera, SceneViewport, ViewportCursor},
+    viewport_util::window_to_viewport_cursor,
 };
 use bevy::input_focus::InputFocus;
+use bevy::ui::ui_transform::UiGlobalTransform;
+use bevy::window::PrimaryWindow;
 use bevy::{
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
     picking::prelude::Pickable,
@@ -13,7 +18,7 @@ use bevy::{
 };
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
-use jackdaw_jsn::BrushGroup;
+use jackdaw_jsn::{Brush, BrushGroup};
 
 /// Marker for the box-select visual overlay node.
 #[derive(Component)]
@@ -287,12 +292,25 @@ pub(crate) fn handle_viewport_click(
 /// because modifier+mouse gestures aren't expressible as BEI key
 /// actions. Surfacing them in the customisation UI is part of the
 /// keybind menu rebuild (Phase 11).
+///
+/// Yields to face-drag when the cursor is over a face of the
+/// selected brush; without that guard box-select wins the
+/// Shift+LMB race because face-drag's hit-test runs inside its
+/// operator a frame later. See `cursor_over_brush_face`.
+#[expect(clippy::too_many_arguments, reason = "trigger needs many guards + the brush-face hit-test")]
 fn box_select_invoke_trigger(
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     vp: ViewportCursor,
     guards: InteractionGuards,
     box_state: Res<BoxSelectState>,
+    primary_window: Query<&Window, With<PrimaryWindow>>,
+    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    selection: Res<Selection>,
+    brushes: Query<(), With<Brush>>,
+    face_entities: Query<(Entity, &BrushFaceEntity, &GlobalTransform)>,
+    brush_caches: Query<&BrushMeshCache>,
     mut commands: Commands,
 ) {
     if box_state.active
@@ -308,9 +326,30 @@ fn box_select_invoke_trigger(
     let Ok(window) = vp.windows.single() else {
         return;
     };
-    if window.cursor_position().is_none() {
+    let Some(cursor_pos) = window.cursor_position() else {
         return;
+    };
+
+    // Yield to face-drag when the cursor is over a face of the
+    // selected brush.
+    if let Some(brush_entity) = selection.primary().filter(|&e| brushes.contains(e))
+        && let Ok(window) = primary_window.single()
+        && let Ok((camera, cam_tf)) = camera_query.single()
+        && let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
+    {
+        let _ = window;
+        if cursor_over_brush_face(
+            brush_entity,
+            viewport_cursor,
+            camera,
+            cam_tf,
+            &face_entities,
+            &brush_caches,
+        ) {
+            return;
+        }
     }
+
     commands.queue(|world: &mut World| {
         if let Err(err) = world.operator(BoxSelectOp::ID).call() {
             error!("box-select dispatch failed: {err}");

@@ -112,7 +112,16 @@ pub fn create_entity(
 ) -> Entity {
     let entity = match template {
         EntityTemplate::Empty => commands
-            .spawn((Name::new("Empty"), EmptyEntity, Transform::default()))
+            .spawn((
+                Name::new("Empty"),
+                EmptyEntity,
+                Transform::default(),
+                // Required so `InheritedVisibility` exists on the
+                // entity. Without it, viewport-overlay systems that
+                // gate on `InheritedVisibility` (e.g. the empty
+                // wireframe gizmo) silently skip the entity.
+                Visibility::default(),
+            ))
             .id(),
         EntityTemplate::Cube => {
             let id = commands

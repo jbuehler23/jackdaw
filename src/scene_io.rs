@@ -1463,16 +1463,11 @@ pub fn load_scene_from_jsn(
                 continue;
             };
 
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                reflect_component.insert(
-                    &mut world.entity_mut(spawned[i]),
-                    reflected.as_ref(),
-                    &registry_guard,
-                );
-            }));
-            if result.is_err() {
-                warn!("Panic while inserting component '{type_path}'  -- skipping");
-            }
+            reflect_component.insert(
+                &mut world.entity_mut(spawned[i]),
+                reflected.as_ref(),
+                &registry_guard,
+            );
         }
     }
     drop(registry_guard);
@@ -1592,6 +1587,7 @@ fn collect_scene_entities_from_set(world: &mut World, editor_set: &HashSet<Entit
         .query_filtered::<Entity, (
             With<Name>,
             Without<bevy_enhanced_input::prelude::ActionSettings>,
+            Without<crate::EditorOnly>,
         )>()
         .iter(world)
         .filter(|e| !editor_set.contains(e))
@@ -1608,6 +1604,7 @@ fn collect_scene_entities_from_set(world: &mut World, editor_set: &HashSet<Entit
             for child in children.iter() {
                 if world.get::<EditorHidden>(child).is_none()
                     && world.get::<NonSerializable>(child).is_none()
+                    && world.get::<crate::EditorOnly>(child).is_none()
                 {
                     stack.push(child);
                 }
@@ -2033,5 +2030,82 @@ pub fn register_entity_in_ast(world: &mut World, entity: Entity) {
 pub fn register_entities_in_ast(world: &mut World, entities: &[Entity]) {
     for &entity in entities {
         register_entity_in_ast(world, entity);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::EditorOnly;
+
+    /// `EditorOnly` children must be excluded from the saved scene
+    /// graph alongside `EditorHidden` and `NonSerializable`. This
+    /// is the load-bearing check for Jan's showcase: a colored
+    /// helper mesh under `PlayerSpawn` shouldn't ride into the
+    /// shipped game's `.jsn`.
+    #[test]
+    fn editor_only_descendants_excluded_from_save() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+
+        let parent = app
+            .world_mut()
+            .spawn((Name::new("PlayerSpawn"), Transform::default()))
+            .id();
+        let plain_child = app
+            .world_mut()
+            .spawn((Name::new("PlainChild"), Transform::default(), ChildOf(parent)))
+            .id();
+        let editor_only_child = app
+            .world_mut()
+            .spawn((Name::new("Helper"), Transform::default(), EditorOnly, ChildOf(parent)))
+            .id();
+
+        let editor_set = collect_editor_entities(app.world_mut());
+        let scene_entities: HashSet<Entity> =
+            collect_scene_entities_from_set(app.world_mut(), &editor_set)
+                .into_iter()
+                .collect();
+
+        assert!(
+            scene_entities.contains(&parent),
+            "parent must be in the saved scene",
+        );
+        assert!(
+            scene_entities.contains(&plain_child),
+            "plain (non-editor-only) child must be in the saved scene",
+        );
+        assert!(
+            !scene_entities.contains(&editor_only_child),
+            "EditorOnly child must NOT be in the saved scene",
+        );
+    }
+
+    /// `EditorOnly` at the root level is also filtered.
+    #[test]
+    fn editor_only_root_excluded_from_save() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+
+        let plain = app
+            .world_mut()
+            .spawn((Name::new("Authored"), Transform::default()))
+            .id();
+        let editor_only_root = app
+            .world_mut()
+            .spawn((Name::new("HelperRoot"), Transform::default(), EditorOnly))
+            .id();
+
+        let editor_set = collect_editor_entities(app.world_mut());
+        let scene_entities: HashSet<Entity> =
+            collect_scene_entities_from_set(app.world_mut(), &editor_set)
+                .into_iter()
+                .collect();
+
+        assert!(scene_entities.contains(&plain));
+        assert!(
+            !scene_entities.contains(&editor_only_root),
+            "root entities tagged EditorOnly must NOT appear in saved scene",
+        );
     }
 }

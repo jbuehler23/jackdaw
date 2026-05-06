@@ -103,14 +103,20 @@ fn draw_selection_bounding_boxes(
     parents: Query<&ChildOf>,
     brush_groups: Query<(), With<BrushGroup>>,
 ) {
-    if !settings.show_bounding_boxes {
-        return;
-    }
-
     let color = default_style::SELECTION_BBOX;
 
     for (entity, global_tf, maybe_brush_cache, inherited_vis) in &selected {
         if !inherited_vis.get() {
+            continue;
+        }
+        // Brushes get their selection highlight via face-material
+        // swap (`ensure_brush_face_materials`), so their AABB is
+        // gated behind the explicit "show bounding boxes" overlay
+        // setting to avoid double visual feedback. Non-brush mesh
+        // entities (Cube/Sphere prefabs, user gltf imports, etc.)
+        // have no other selection cue and ALWAYS draw the AABB.
+        let is_brush = maybe_brush_cache.is_some();
+        if is_brush && !settings.show_bounding_boxes {
             continue;
         }
         // Skip children of BrushGroups (the group itself gets a bounding box)
@@ -435,19 +441,15 @@ fn draw_camera_gizmo(
     }
 }
 
-/// Fallback marker for entities tagged with
+/// Always-on gizmo marker for entities tagged with
 /// [`crate::entity_ops::EmptyEntity`]: small wireframe cube at the
-/// origin so the entity is findable and selectable. Driven by the
-/// explicit marker component rather than a brittle "has no other
-/// notable component" filter.
+/// origin so the entity is findable and selectable. Independent of
+/// the `show_bounding_boxes` setting because Empty entities have no
+/// other geometry to anchor the user's eye.
 fn draw_empty_entity_marker(
     mut gizmos: Gizmos,
-    settings: Res<OverlaySettings>,
     query: Query<(&GlobalTransform, &InheritedVisibility, Has<Selected>), With<EmptyEntity>>,
 ) {
-    if !settings.show_bounding_boxes {
-        return;
-    }
     // Fixed 0.5-unit cube so the marker is visible at any camera
     // distance. Not the world AABB: nothing to compute one from.
     const SIZE: f32 = 0.25;

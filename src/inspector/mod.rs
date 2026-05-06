@@ -54,7 +54,7 @@ fn extract_module_group(module_path: Option<&str>) -> String {
 
 // Editor display metadata as Bevy reflect custom attributes.
 // Newtypes live in `jackdaw_jsn`, re-exported here.
-pub use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden};
+pub use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden, EditorOnly};
 
 #[reflect_trait]
 pub trait Displayable {

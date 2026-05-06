@@ -162,20 +162,13 @@ pub fn populate_remote_proxy(world: &mut World) {
             };
 
             // Insert the component onto the proxy entity.
-            // Catch panics from components with required components we can't satisfy.
-            let insert_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut entity_mut = world.entity_mut(proxy_entity);
-                reflect_component.insert(&mut entity_mut, reflected.as_ref(), &registry);
-            }));
+            let mut entity_mut = world.entity_mut(proxy_entity);
+            reflect_component.insert(&mut entity_mut, reflected.as_ref(), &registry);
 
-            if insert_result.is_ok() {
-                // Track the component ID for cleanup
-                let type_id = registration.type_id();
-                if let Some(id) = world.components().get_id(type_id) {
-                    populated_ids.push(id);
-                }
-            } else {
-                fallback_components.push((type_path.clone(), json_value.clone()));
+            // Track the component ID for cleanup
+            let type_id = registration.type_id();
+            if let Some(id) = world.components().get_id(type_id) {
+                populated_ids.push(id);
             }
         }
     }

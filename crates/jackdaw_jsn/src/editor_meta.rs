@@ -66,21 +66,15 @@ impl From<String> for EditorDescription {
     }
 }
 
-/// Tag with two roles, both meaning "this thing should not appear
-/// in the editor's user-facing surfaces":
+/// Hides things from editor-facing surfaces. Used in two ways:
 ///
-/// 1. As a Bevy `Component`, attached to an entity, hides that
-///    entity from the hierarchy panel. Auto-applied to unnamed
-///    child entities (typically Bevy internals like shadow
-///    cascades). Users can attach it to runtime-generated entities
-///    they don't want surfaced.
-/// 2. As a reflect attribute via `#[reflect(@EditorHidden)]` on a
-///    `#[derive(Reflect)]` Component type, hides that Component
-///    type from the Add Component picker. Used by jackdaw's own
-///    scene types (brushes, navmesh, terrain, node graph,
-///    animation graph) and available to extension and game crates
-///    that surface helper Components which shouldn't be authorable
-///    via the picker UI.
+/// - As a Bevy `Component` on an entity: hides that entity from
+///   the hierarchy panel.
+/// - As a `#[reflect(@EditorHidden)]` attribute on a Component
+///   type: hides the type from the Add Component picker. Used by
+///   jackdaw's own scene types (brushes, navmesh, terrain, node
+///   graph, animation graph) and available to extension and game
+///   crates with helper Components.
 ///
 /// ```ignore
 /// #[derive(Component, Reflect, Default)]
@@ -90,3 +84,15 @@ impl From<String> for EditorDescription {
 #[derive(Component, Reflect, Default, Clone, Copy, Debug)]
 #[reflect(Component, Default)]
 pub struct EditorHidden;
+
+/// Marker for entities that exist as editor-time visual
+/// indicators. Skipped from `.jsn` save and from the play-mode
+/// game world; still renders in the editor viewport.
+///
+/// Pattern: under your scene-authored marker (e.g. `PlayerSpawn`),
+/// spawn a child carrying `EditorOnly` plus a `Mesh3d` +
+/// `MeshMaterial3d`. The editor renders the helper; the shipped
+/// game never sees it.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug)]
+#[reflect(Component, Default)]
+pub struct EditorOnly;

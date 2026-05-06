@@ -32,7 +32,7 @@ pub mod keybinds;
 
 use std::{collections::BTreeMap, marker::PhantomData};
 
-pub use inspector::{EditorCategory, EditorDescription, EditorHidden};
+pub use inspector::{EditorCategory, EditorDescription, EditorHidden, EditorOnly};
 pub mod core_extension;
 pub mod document_ops;
 pub mod ext_build;
@@ -99,8 +99,8 @@ use selection::Selection;
 /// Everything needed to start using Jackdaw.
 pub mod prelude {
     pub use crate::{
-        DylibLoaderPlugin, EditorCategory, EditorDescription, EditorHidden, EditorPlugins,
-        ExtensionPlugin,
+        DylibLoaderPlugin, EditorCategory, EditorDescription, EditorHidden, EditorOnly,
+        EditorPlugins, ExtensionPlugin,
     };
     pub use jackdaw_api::prelude::*;
 
@@ -155,6 +155,12 @@ pub struct BlocksCameraInput;
 /// that are rebuilt automatically from their parent's component data.
 #[derive(Component, Default)]
 pub struct NonSerializable;
+
+// `EditorOnly` is defined in `crates/jackdaw_jsn/src/editor_meta.rs`
+// alongside `EditorHidden` so user game crates that only depend on
+// `jackdaw_runtime` (the static-template default) can reach it
+// without pulling in the full editor crate. Re-exported via
+// `inspector` module + `prelude` below.
 
 /// The editor plugin group. Construct with [`EditorPlugins::default`] for the
 /// builder, or add the default instance directly with

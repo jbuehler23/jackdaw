@@ -420,6 +420,12 @@ fn open_and_verify(path: &Path) -> Result<OpenedDylib, LoadError> {
     // panicking, so this is safe to try speculatively.
     type GameEntryFn = unsafe extern "C" fn() -> GameEntry;
     if let Ok(game_sym) = unsafe { lib.get::<GameEntryFn>(GAME_ENTRY_SYMBOL) } {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "FFI dylib boundary: unwinding across the C ABI is UB. \
+                      catch_unwind is best-effort isolation under panic=unwind \
+                      and a no-op under panic=abort, which is documented."
+        )]
         let entry = std::panic::catch_unwind(AssertUnwindSafe(|| {
             // SAFETY: game_sym is guaranteed non-null by libloading's
             // successful lookup; calling convention matches the
@@ -451,6 +457,12 @@ fn open_and_verify(path: &Path) -> Result<OpenedDylib, LoadError> {
     type EntryFn = unsafe extern "C" fn() -> ExtensionEntry;
     let entry_sym: libloading::Symbol<EntryFn> = unsafe { lib.get(ENTRY_SYMBOL)? };
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "FFI dylib boundary: unwinding across the C ABI is UB. \
+                  catch_unwind is best-effort isolation under panic=unwind \
+                  and a no-op under panic=abort, which is documented."
+    )]
     let entry = std::panic::catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: entry_sym is guaranteed non-null by libloading's
         // successful lookup; calling convention matches the
@@ -559,6 +571,12 @@ fn try_load(app: &mut App, path: &Path) -> Result<LoadedKind, LoadError> {
             // context: we have `&mut App` here, so deriving
             // `&mut World` via `world_mut()` is fine.
             let world_ptr: *mut bevy::ecs::world::World = std::ptr::from_mut(app.world_mut());
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "FFI dylib boundary: unwinding across the C ABI is UB. \
+                          catch_unwind is best-effort isolation under panic=unwind \
+                          and a no-op under panic=abort, which is documented."
+            )]
             let build_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 // SAFETY: `build` is a function pointer from a
                 // compat-verified dylib; `world_ptr` is a valid
@@ -676,6 +694,12 @@ pub fn load_from_path(world: &mut World, path: &Path) -> Result<LoadedKind, Load
                 if let Some(prior_entry) = prior {
                     info!("Hot reload: tearing down prior version of `{name}`");
                     let world_ptr: *mut bevy::ecs::world::World = std::ptr::from_mut(world);
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "FFI dylib boundary: unwinding across the C ABI is UB. \
+                                  catch_unwind is best-effort isolation under panic=unwind \
+                                  and a no-op under panic=abort, which is documented."
+                    )]
                     let _ = std::panic::catch_unwind(AssertUnwindSafe(|| unsafe {
                         (prior_entry.teardown)(world_ptr);
                     }));
@@ -689,6 +713,12 @@ pub fn load_from_path(world: &mut World, path: &Path) -> Result<LoadedKind, Load
             register_derived_component_ids(world);
 
             let world_ptr: *mut bevy::ecs::world::World = std::ptr::from_mut(world);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "FFI dylib boundary: unwinding across the C ABI is UB. \
+                          catch_unwind is best-effort isolation under panic=unwind \
+                          and a no-op under panic=abort, which is documented."
+            )]
             let build_result =
                 std::panic::catch_unwind(AssertUnwindSafe(|| unsafe { build(world_ptr) }));
             if build_result.is_err() {
@@ -782,6 +812,12 @@ fn call_reflect_register_symbol(world: &mut World, lib: &libloading::Library) {
 
     let before = registry_handle.read().iter().count();
     let mut guard = registry_handle.write();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "FFI dylib boundary: unwinding across the C ABI is UB. \
+                  catch_unwind is best-effort isolation under panic=unwind \
+                  and a no-op under panic=abort, which is documented."
+    )]
     let call_result = std::panic::catch_unwind(AssertUnwindSafe(|| unsafe { reg_sym(&mut guard) }));
     let after = guard.iter().count();
     drop(guard);

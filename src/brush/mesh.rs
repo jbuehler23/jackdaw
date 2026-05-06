@@ -8,7 +8,7 @@ use bevy::{
 };
 
 use super::{BrushFaceEntity, BrushMaterialPalette, BrushMeshCache, BrushPreview};
-use crate::NonSerializable;
+use crate::{EditorHidden, NonSerializable};
 use crate::default_style;
 use crate::draw_brush::DrawBrushState;
 use crate::selection::Selected;
@@ -185,7 +185,11 @@ pub fn regenerate_brush_meshes(
                     MeshMaterial3d(material),
                     Transform::default(),
                     ChildOf(entity),
+                    // Skip from saved `.jsn` (derived from the
+                    // parent brush) and from the outliner. These
+                    // are jackdaw-managed children, not authored.
                     NonSerializable,
+                    EditorHidden,
                 ))
                 .id();
             if is_default {
