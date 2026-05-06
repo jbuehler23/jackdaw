@@ -99,8 +99,7 @@ fn on_insert_observer_sees_propagated_global_transform() {
         .resource_mut::<Assets<JackdawScene>>()
         .add(JackdawScene::new(scene, PathBuf::new()));
 
-    app.world_mut()
-        .spawn(JackdawSceneRoot(scene_handle));
+    app.world_mut().spawn(JackdawSceneRoot(scene_handle));
 
     // First update runs `spawn_loaded_scenes`; second covers any
     // normal-PostUpdate propagation.

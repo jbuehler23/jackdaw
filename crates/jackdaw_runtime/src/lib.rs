@@ -266,15 +266,15 @@ fn spawn_scene_entities(
             };
 
             if type_path == TRANSFORM_TYPE_PATH {
-                if let Some(t) = <Transform as bevy::reflect::FromReflect>::from_reflect(
-                    reflected.as_ref(),
-                ) {
+                if let Some(t) =
+                    <Transform as bevy::reflect::FromReflect>::from_reflect(reflected.as_ref())
+                {
                     local_transform = t;
                 }
             } else if type_path == VISIBILITY_TYPE_PATH {
-                if let Some(v) = <Visibility as bevy::reflect::FromReflect>::from_reflect(
-                    reflected.as_ref(),
-                ) {
+                if let Some(v) =
+                    <Visibility as bevy::reflect::FromReflect>::from_reflect(reflected.as_ref())
+                {
                     local_visibility = v;
                 }
             } else {

@@ -2054,11 +2054,20 @@ mod tests {
             .id();
         let plain_child = app
             .world_mut()
-            .spawn((Name::new("PlainChild"), Transform::default(), ChildOf(parent)))
+            .spawn((
+                Name::new("PlainChild"),
+                Transform::default(),
+                ChildOf(parent),
+            ))
             .id();
         let editor_only_child = app
             .world_mut()
-            .spawn((Name::new("Helper"), Transform::default(), EditorOnly, ChildOf(parent)))
+            .spawn((
+                Name::new("Helper"),
+                Transform::default(),
+                EditorOnly,
+                ChildOf(parent),
+            ))
             .id();
 
         let editor_set = collect_editor_entities(app.world_mut());

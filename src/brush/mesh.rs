@@ -8,10 +8,10 @@ use bevy::{
 };
 
 use super::{BrushFaceEntity, BrushMaterialPalette, BrushMeshCache, BrushPreview};
-use crate::{EditorHidden, NonSerializable};
 use crate::default_style;
 use crate::draw_brush::DrawBrushState;
 use crate::selection::Selected;
+use crate::{EditorHidden, NonSerializable};
 use jackdaw_geometry::{
     compute_brush_geometry, compute_face_tangent_axes, compute_face_uvs, triangulate_face,
 };

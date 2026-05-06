@@ -297,7 +297,10 @@ pub(crate) fn handle_viewport_click(
 /// selected brush; without that guard box-select wins the
 /// Shift+LMB race because face-drag's hit-test runs inside its
 /// operator a frame later. See `cursor_over_brush_face`.
-#[expect(clippy::too_many_arguments, reason = "trigger needs many guards + the brush-face hit-test")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "trigger needs many guards + the brush-face hit-test"
+)]
 fn box_select_invoke_trigger(
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -335,7 +338,8 @@ fn box_select_invoke_trigger(
     if let Some(brush_entity) = selection.primary().filter(|&e| brushes.contains(e))
         && let Ok(window) = primary_window.single()
         && let Ok((camera, cam_tf)) = camera_query.single()
-        && let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
+        && let Some(viewport_cursor) =
+            window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
     {
         let _ = window;
         if cursor_over_brush_face(
