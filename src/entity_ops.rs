@@ -62,7 +62,7 @@ impl Plugin for EntityOpsPlugin {
 /// fallback wireframe-cube marker. Serialises through the type registry
 /// so empties loaded from a `.jsn` scene keep the marker.
 #[derive(Component, Default, Reflect)]
-#[reflect(Component)]
+#[reflect(Component, @crate::EditorHidden)]
 pub struct EmptyEntity;
 
 /// Marks a camera as scene-authored (added via `Add > Camera` or by an
@@ -70,14 +70,14 @@ pub struct EmptyEntity;
 /// Editor-internal cameras (main viewport camera, material preview
 /// camera) deliberately don't carry this marker.
 #[derive(Component, Default, Reflect)]
-#[reflect(Component)]
+#[reflect(Component, @crate::EditorHidden)]
 pub struct SceneCamera;
 
 /// Marks a light as scene-authored, so viewport overlays draw
 /// light-specific gizmos for it. Editor-internal lights (e.g. the
 /// material-preview rig) deliberately don't carry this marker.
 #[derive(Component, Default, Reflect)]
-#[reflect(Component)]
+#[reflect(Component, @crate::EditorHidden)]
 pub struct SceneLight;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

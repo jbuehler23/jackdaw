@@ -17,12 +17,14 @@ use serde::Deserializer;
 use serde::de::{DeserializeSeed, Visitor};
 
 pub use jackdaw_jsn::{
-    Brush, BrushFaceData, CustomProperties, EditorCategory, EditorDescription, GltfSource,
-    PropertyValue,
+    Brush, BrushFaceData, CustomProperties, EditorCategory, EditorDescription, EditorHidden,
+    GltfSource, PropertyValue,
 };
 
 pub mod prelude {
-    pub use crate::{EditorCategory, EditorDescription, JackdawPlugin, JackdawSceneRoot};
+    pub use crate::{
+        EditorCategory, EditorDescription, EditorHidden, JackdawPlugin, JackdawSceneRoot,
+    };
 }
 
 pub struct JackdawPlugin;

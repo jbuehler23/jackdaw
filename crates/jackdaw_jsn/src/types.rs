@@ -12,12 +12,12 @@ pub use jackdaw_geometry::{BrushFaceData, BrushPlane, compute_face_tangent_axes}
 /// Groups multiple convex brush fragments produced by CSG subtraction.
 /// Fragments become children of the group entity.
 #[derive(Component, Reflect, Clone, Debug, Default)]
-#[reflect(Component, Default)]
+#[reflect(Component, Default, @crate::EditorHidden)]
 pub struct BrushGroup;
 
 /// Canonical brush data. Serialized. Geometry derived from this.
 #[derive(Component, Reflect, Clone, Debug, Default)]
-#[reflect(Component, Default, @crate::EditorCategory::new("Brush"))]
+#[reflect(Component, Default, @crate::EditorCategory::new("Brush"), @crate::EditorHidden)]
 pub struct Brush {
     pub faces: Vec<BrushFaceData>,
 }
@@ -205,7 +205,7 @@ impl Brush {
 }
 
 #[derive(Component, Reflect, Default, Clone, Debug, Deref, DerefMut)]
-#[reflect(Component, Default)]
+#[reflect(Component, Default, @crate::EditorHidden)]
 pub struct CustomProperties {
     pub properties: BTreeMap<String, PropertyValue>,
 }
@@ -363,7 +363,7 @@ impl PropertyValue {
 }
 
 #[derive(Component, Reflect, Clone)]
-#[reflect(Component)]
+#[reflect(Component, @crate::EditorHidden)]
 pub struct GltfSource {
     pub path: String,
     pub scene_index: usize,
@@ -371,7 +371,7 @@ pub struct GltfSource {
 
 /// Tracks the source `.jsn` file for a prefab instance.
 #[derive(Component, Reflect, Clone, Debug, Default, Serialize, Deserialize)]
-#[reflect(Component, Default)]
+#[reflect(Component, Default, @crate::EditorHidden)]
 pub struct JsnPrefab {
     pub path: String,
 }
@@ -384,7 +384,7 @@ pub struct JsnPrefabBaseline {
 }
 
 #[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component, Default, @crate::EditorCategory::new("Navmesh"))]
+#[reflect(Component, Default, @crate::EditorCategory::new("Navmesh"), @crate::EditorHidden)]
 pub struct NavmeshRegion {
     pub agent_radius: f32,
     pub agent_height: f32,
@@ -406,7 +406,7 @@ pub struct NavmeshRegion {
 
 /// Terrain heightmap component. Stores all data needed for serialization.
 #[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component, Default, @crate::EditorCategory::new("Terrain"))]
+#[reflect(Component, Default, @crate::EditorCategory::new("Terrain"), @crate::EditorHidden)]
 pub struct Terrain {
     /// Vertices per edge.
     pub resolution: u32,

@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 /// component; tracks are `AnimationTrack` children; keyframes are
 /// children of their track.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Copy)]
-#[reflect(Component, Serialize, Deserialize)]
+#[reflect(Component, Serialize, Deserialize, @jackdaw_jsn::EditorHidden)]
 pub struct Clip {
     pub duration: f32,
 }
@@ -63,7 +63,7 @@ pub enum Interpolation {
 /// inspector and `SetJsnField` use. Target entity is implicit: the
 /// clip's parent via `ChildOf`.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Default)]
-#[reflect(Component, Serialize, Deserialize)]
+#[reflect(Component, Serialize, Deserialize, @jackdaw_jsn::EditorHidden)]
 pub struct AnimationTrack {
     pub component_type_path: String,
     pub field_path: String,
@@ -94,7 +94,7 @@ impl AnimationTrack {
 /// A keyframe that stores a [`Vec3`] value. Used for translation,
 /// scale, and future Vec3-valued animated fields.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Copy, Default)]
-#[reflect(Component, Serialize, Deserialize)]
+#[reflect(Component, Serialize, Deserialize, @jackdaw_jsn::EditorHidden)]
 pub struct Vec3Keyframe {
     pub time: f32,
     pub value: Vec3,
@@ -102,7 +102,7 @@ pub struct Vec3Keyframe {
 
 /// A keyframe that stores a [`Quat`] value. Used for rotation.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Copy)]
-#[reflect(Component, Serialize, Deserialize)]
+#[reflect(Component, Serialize, Deserialize, @jackdaw_jsn::EditorHidden)]
 pub struct QuatKeyframe {
     pub time: f32,
     pub value: Quat,
@@ -120,7 +120,7 @@ impl Default for QuatKeyframe {
 /// A keyframe that stores an [`f32`] value. Used for light intensity,
 /// weights, camera FOV, or any scalar animated field.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Copy, Default)]
-#[reflect(Component, Serialize, Deserialize)]
+#[reflect(Component, Serialize, Deserialize, @jackdaw_jsn::EditorHidden)]
 pub struct F32Keyframe {
     pub time: f32,
     pub value: f32,
@@ -131,7 +131,7 @@ pub struct F32Keyframe {
 /// instead of building from keyframe children. Read-only in the
 /// timeline; persisted as two strings and re-resolved on reload.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Default)]
-#[reflect(Component, Serialize, Deserialize)]
+#[reflect(Component, Serialize, Deserialize, @jackdaw_jsn::EditorHidden)]
 pub struct GltfClipRef {
     pub gltf_path: String,
     pub clip_name: String,

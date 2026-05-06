@@ -15,7 +15,7 @@ use jackdaw_feathers::picker::{
 use jackdaw_feathers::tokens;
 
 use bevy::reflect::{TypeInfo, attributes::CustomAttributes};
-use jackdaw_runtime::{EditorCategory, EditorDescription};
+use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden};
 
 use super::{AddComponentButton, ComponentPicker, Inspector};
 
@@ -107,14 +107,21 @@ pub fn enumerate_pickable_components(
             continue;
         }
 
-        let table = registration.type_info().type_path_table();
-        let full_path = table.path();
-        if full_path.starts_with("jackdaw") && !full_path.starts_with("jackdaw_avian_integration") {
+        let info = registration.type_info();
+        let custom_attrs = type_info_custom_attributes(info);
+
+        // Single mechanism for picker hiding: types opt out via the
+        // `@EditorHidden` reflect attribute (defined alongside
+        // `EditorCategory` / `EditorDescription` in `jackdaw_jsn`).
+        // Used by jackdaw's own scene types and available to
+        // extension/game authors for their own helper Components.
+        if custom_attrs.is_some_and(|a| a.get::<EditorHidden>().is_some()) {
             continue;
         }
 
-        let info = registration.type_info();
-        let custom_attrs = type_info_custom_attributes(info);
+        let table = registration.type_info().type_path_table();
+        let full_path = table.path();
+
         let description = custom_attrs
             .and_then(|a| a.get::<EditorDescription>())
             .map(|d| d.0.to_string())

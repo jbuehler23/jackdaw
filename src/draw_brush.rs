@@ -456,7 +456,7 @@ const MIN_FRAGMENT_SIZE: f32 = 0.005;
 /// respawns fresh entity ids; selection is restored by matching
 /// on this).
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug, Reflect)]
-#[reflect(Component)]
+#[reflect(Component, @crate::EditorHidden)]
 pub struct BrushStableId(u64);
 
 #[derive(Resource, Default)]

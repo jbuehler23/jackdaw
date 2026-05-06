@@ -11,7 +11,7 @@ use jackdaw::inspector::component_picker::enumerate_pickable_components;
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::SceneJsnAst;
-use jackdaw_runtime::EditorCategory;
+use jackdaw_runtime::{EditorCategory, EditorHidden};
 
 mod util;
 
@@ -25,6 +25,14 @@ struct SpinningCube {
 #[derive(Component, Reflect)]
 #[reflect(Component, @EditorCategory::new("Actor"))]
 struct PlayerSpawn;
+
+/// Mirrors a plugin author marking a helper Component as
+/// editor-hidden. Used by the integration test to verify the
+/// dogfood-able public API works end-to-end through the real
+/// editor `App` lifecycle.
+#[derive(Component, Reflect, Default)]
+#[reflect(Component, Default, @EditorHidden)]
+struct PluginInternalSupport;
 
 fn app_with_user_components() -> App {
     let mut app = util::editor_test_app();
@@ -65,6 +73,35 @@ fn scaffolded_user_components_reach_picker() {
         .find(|p| p.short_name == "PlayerSpawn")
         .expect("PlayerSpawn must appear in the picker");
     assert_eq!(player.category, "Actor");
+}
+
+#[test]
+fn editor_hidden_marker_hides_component_in_real_app() {
+    // Mirrors a plugin author tagging a helper Component with
+    // `@EditorHidden`. Registered through the same path a user's
+    // crate would use; we then walk the full editor type registry
+    // and assert the picker enumeration filters it out.
+    let mut app = util::editor_test_app();
+    app.register_type::<PluginInternalSupport>();
+    app.register_type::<SpinningCube>();
+    app.update();
+
+    let registry = app
+        .world()
+        .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+        .read();
+    let pickables = enumerate_pickable_components(&registry, &HashSet::new());
+    let names: Vec<&str> = pickables.iter().map(|p| p.short_name.as_str()).collect();
+
+    assert!(
+        names.contains(&"SpinningCube"),
+        "control: unmarked component must still appear in the picker; got {names:?}",
+    );
+    assert!(
+        !names.contains(&"PluginInternalSupport"),
+        "@EditorHidden must hide a Component from the picker when \
+         registered through the same App lifecycle a user/extension would use; got {names:?}",
+    );
 }
 
 #[test]

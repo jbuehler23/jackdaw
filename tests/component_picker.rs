@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 use bevy::reflect::TypeRegistry;
 use jackdaw::inspector::component_picker::{PickableComponent, enumerate_pickable_components};
-use jackdaw_runtime::{EditorCategory, EditorDescription};
+use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden};
 
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default)]
@@ -43,6 +43,10 @@ struct NotAComponent {
     flag: bool,
 }
 
+#[derive(Component, Reflect, Default)]
+#[reflect(Component, Default, @EditorHidden)]
+struct HiddenByMarker;
+
 fn registry_with_test_types() -> TypeRegistry {
     let mut registry = TypeRegistry::default();
     registry.register::<WithDefault>();
@@ -51,6 +55,7 @@ fn registry_with_test_types() -> TypeRegistry {
     registry.register::<DescribedExplicitly>();
     registry.register::<DocCommentDescribed>();
     registry.register::<NotAComponent>();
+    registry.register::<HiddenByMarker>();
     registry
 }
 
@@ -144,4 +149,21 @@ fn category_default_is_empty_when_unset() {
         "no `EditorCategory` attribute means an empty category; \
          the picker UI assigns a fallback group from module path",
     );
+}
+
+#[test]
+fn editor_hidden_marker_filters_component() {
+    let registry = registry_with_test_types();
+    let pickables = enumerate_pickable_components(&registry, &HashSet::new());
+    assert!(
+        find(&pickables, "HiddenByMarker").is_none(),
+        "`@EditorHidden` reflect attribute must keep a Component out of the picker",
+    );
+    // Sanity-check that unmarked components in the same registry
+    // remain visible — this is the regression Jan hit on 5/5 where
+    // `starts_with(\"jackdaw\")` filtered any user crate whose name
+    // started with `jackdaw_`. The current marker-based filter must
+    // not regress to a path-based heuristic.
+    assert!(find(&pickables, "WithDefault").is_some());
+    assert!(find(&pickables, "NoDefault").is_some());
 }
