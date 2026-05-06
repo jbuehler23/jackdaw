@@ -1,11 +1,13 @@
 # Summary
 
 [Introduction](introduction.md)
+[Giving Feedback](giving-feedback.md)
 
 # Getting Started
 
 - [Installation](getting-started/installation.md)
 - [Your First Scene](getting-started/first-scene.md)
+- [Migrating an Existing Project](getting-started/migrating-an-existing-project.md)
 
 # User Guide
 
@@ -23,6 +25,7 @@
 - [Custom Components](developer-guide/custom-components.md)
 - [JSN Format](developer-guide/jsn-format.md)
 - [Extending the Editor](developer-guide/extending-the-editor.md)
+- [Open Challenges](developer-guide/open-challenges.md)
 
 # Reference
 

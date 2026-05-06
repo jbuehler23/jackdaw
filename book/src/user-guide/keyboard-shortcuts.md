@@ -1,4 +1,4 @@
-# Keyboard Shortcuts
+# Keyboard shortcuts
 
 ## Navigation
 
@@ -33,7 +33,7 @@
 | MMB | Toggle snap |
 | Ctrl (during drag) | Toggle snap |
 | Arrows | Nudge (grid-unit move) |
-| Alt+Arrows | 90° rotate |
+| Alt+Arrows | 90 deg rotate |
 | PageUp / PageDown | Nudge vertical |
 
 ## Entity
