@@ -150,6 +150,22 @@ jobs:
           jackdaw_runtime = { path = "$checkout/crates/jackdaw_runtime" }
           EOF
 
+      # Cache the *scaffolded* project's `target/` separately so the
+      # `Compile` / `Test` steps don't rebuild bevy + jackdaw from
+      # scratch every PR. The previous step caches the workspace
+      # root's `target/` (and `~/.cargo/`); this one piggybacks on
+      # the same registry/git cache and adds an entry for the
+      # scaffolded project's compile artefacts.
+      #
+      # Saves only on `main` (matches the workspace cache policy);
+      # PRs read but don't write so caches don't accumulate per-branch.
+      - name: Populate scaffolded target from cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: template-scaffolded-${{ matrix.template }}
+          workspaces: ${{ runner.temp }}/test_${{ matrix.template == 'game-static' && 'game_static' || 'extension_static' }} -> target
+
       - name: Compile ${{ matrix.template }}
         # No `--locked`: cargo-generate doesn't ship a Cargo.lock,
         # and the patched jackdaw deps would mismatch one anyway.
