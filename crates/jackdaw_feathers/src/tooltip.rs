@@ -218,6 +218,12 @@ fn tick_tooltip(
 /// flow shrinks the row to its content width, so the keybind stays
 /// adjacent to the title rather than stretching across the full
 /// `TOOLTIP_MAX_WIDTH`.
+///
+/// Every spawned descendant carries `Pickable::IGNORE`. Bevy's UI
+/// picking backend treats absent-`Pickable` nodes as blocking, so the
+/// popover root being click-through is not enough; without this, a
+/// text run hovering over a picker row would still capture the click
+/// and the underlying row would never see it.
 fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
     if tip.title.is_empty() {
         return;
@@ -231,6 +237,7 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
                 ..default()
             },
             TextColor(tokens::TEXT_PRIMARY),
+            bevy::picking::Pickable::IGNORE,
             ChildOf(popover),
         ));
         return;
@@ -243,6 +250,7 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
                 column_gap: Val::Px(tokens::SPACING_MD),
                 ..default()
             },
+            bevy::picking::Pickable::IGNORE,
             ChildOf(popover),
         ))
         .with_child((
@@ -253,6 +261,7 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
                 ..default()
             },
             TextColor(tokens::TEXT_PRIMARY),
+            bevy::picking::Pickable::IGNORE,
         ))
         .with_child((
             Text::new(tip.keybind.clone()),
@@ -261,6 +270,7 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
                 ..default()
             },
             TextColor(tokens::TEXT_SECONDARY),
+            bevy::picking::Pickable::IGNORE,
         ));
 }
 
@@ -277,6 +287,7 @@ fn spawn_body(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
                 ..default()
             },
             TextColor(tokens::TEXT_PRIMARY),
+            bevy::picking::Pickable::IGNORE,
             ChildOf(popover),
         ));
     }
@@ -288,6 +299,7 @@ fn spawn_body(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
                 ..default()
             },
             TextColor(tokens::TEXT_SECONDARY),
+            bevy::picking::Pickable::IGNORE,
             ChildOf(popover),
         ));
     }
