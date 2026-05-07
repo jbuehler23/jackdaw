@@ -15,8 +15,8 @@ use jackdaw_feathers::picker::{
 use jackdaw_feathers::tokens;
 
 use bevy::reflect::{TypeInfo, attributes::CustomAttributes};
-use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden};
 use jackdaw_feathers::tooltip::Tooltip;
+use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden};
 
 use super::{AddComponentButton, ComponentPicker, Inspector};
 

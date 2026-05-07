@@ -235,7 +235,7 @@ fn spawn_scene_entities(
         // rest for the post-spawn reflect-insert.
         let mut local_transform = Transform::default();
         let mut local_visibility = Visibility::default();
-        let mut deferred: Vec<(&ReflectComponent, Box<dyn PartialReflect>)> = Vec::new();
+        let mut deferred: Vec<Box<dyn PartialReflect>> = Vec::new();
 
         for (type_path, value) in &jsn.components {
             let Some(registration) = registry_guard.get_with_type_path(type_path) else {
@@ -246,9 +246,9 @@ fn spawn_scene_entities(
                 }
                 continue;
             };
-            let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+            if registration.data::<ReflectComponent>().is_none() {
                 continue;
-            };
+            }
             let mut processor = RuntimeDeserializerProcessor {
                 asset_server: &asset_server,
                 parent_path,
@@ -278,7 +278,7 @@ fn spawn_scene_entities(
                     local_visibility = v;
                 }
             } else {
-                deferred.push((reflect_component, reflected));
+                deferred.push(reflected);
             }
         }
 
@@ -313,12 +313,8 @@ fn spawn_scene_entities(
 
         // User components on top. `On<Insert, T>` fires here with
         // GlobalTransform / InheritedVisibility already correct.
-        for (reflect_component, reflected) in deferred {
-            reflect_component.insert(
-                &mut world.entity_mut(entity),
-                reflected.as_ref(),
-                &registry_guard,
-            );
+        for reflected in deferred {
+            world.entity_mut(entity).insert_reflect(reflected);
         }
     }
     drop(registry_guard);
