@@ -94,8 +94,8 @@ pub struct BoxSelectState {
 
 impl BoxSelectState {
     /// Begin an active box-select session, anchoring the rectangle at
-    /// the previously-pending press position if one was recorded by
-    /// [`box_select_pending_trigger`], otherwise at `cursor_pos`.
+    /// the previously-pending press position recorded by the trigger
+    /// system if any, otherwise at `cursor_pos`.
     pub fn activate(&mut self, cursor_pos: Vec2) {
         let start = self.pending.take().unwrap_or(cursor_pos);
         self.active = true;
