@@ -4765,6 +4765,7 @@ name = "jackdaw_widgets"
 version = "0.4.0"
 dependencies = [
  "bevy",
+ "bevy_enhanced_input",
  "bevy_monitors",
 ]
 

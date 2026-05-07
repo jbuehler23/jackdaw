@@ -9,6 +9,7 @@ repository = "https://github.com/jbuehler23/jackdaw"
 [dependencies]
 bevy.workspace = true
 bevy_monitors.workspace = true
+bevy_enhanced_input.workspace = true
 
 [lints]
 workspace = true

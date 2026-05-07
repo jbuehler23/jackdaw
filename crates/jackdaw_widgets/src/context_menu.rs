@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_enhanced_input::prelude::{Press, *};
 
 /// System set containing the context menu close systems.
 /// Order your context menu openers `.after(ContextMenuCloseSet)` to avoid
@@ -10,12 +11,39 @@ pub struct ContextMenuPlugin;
 
 impl Plugin for ContextMenuPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (close_context_menu_on_click, close_context_menu_on_escape)
-                .in_set(ContextMenuCloseSystems),
-        );
+        app.add_input_context::<ContextMenuInputContext>()
+            .add_systems(
+                Update,
+                close_context_menu_on_click.in_set(ContextMenuCloseSystems),
+            )
+            .add_observer(close_context_menu_on_escape)
+            .add_systems(Startup, spawn_context_menu_input_context);
     }
+}
+
+/// BEI input context that owns the Escape-closes-context-menu binding.
+/// Lives on its own entity so the binding can be remapped or scoped
+/// without colliding with other Escape handlers (e.g., modal cancel).
+#[derive(Component, Default)]
+pub struct ContextMenuInputContext;
+
+/// BEI action fired when the user wants to dismiss an open context menu.
+/// Bound to `Esc` by default; an observer translates the FIRE event
+/// into a despawn of the active menu.
+#[derive(Default, InputAction)]
+#[action_output(bool)]
+pub struct ContextMenuDismissAction;
+
+fn spawn_context_menu_input_context(mut commands: Commands) {
+    commands.spawn((
+        ContextMenuInputContext,
+        actions!(
+            ContextMenuInputContext[(
+                Action::<ContextMenuDismissAction>::new(),
+                bindings!((KeyCode::Escape, Press::default()))
+            )]
+        ),
+    ));
 }
 
 /// Marker component for the context menu container.
@@ -84,15 +112,15 @@ fn should_close_on_pointer_press(
     mouse.just_pressed(MouseButton::Left)
 }
 
-/// Close on Escape key.
+/// Close on Escape via the BEI dismiss action. Routing through BEI
+/// (instead of raw `keyboard.just_pressed(KeyCode::Escape)`) keeps the
+/// keybind remappable and lets BEI's context layering decide whether
+/// our action wins for the frame.
 fn close_context_menu_on_escape(
-    keyboard: Res<ButtonInput<KeyCode>>,
+    _: On<Fire<ContextMenuDismissAction>>,
     mut commands: Commands,
     mut state: Option<ResMut<ContextMenuState>>,
 ) {
-    if !keyboard.just_pressed(KeyCode::Escape) {
-        return;
-    }
     let Some(ref mut state) = state else {
         return;
     };

@@ -4,10 +4,9 @@
 //! registration for avian3d physics components, and an interactive
 //! simulation workflow (see [`simulation`]).
 
-use std::f32::consts::FRAC_PI_2;
 use std::marker::PhantomData;
 
-use avian3d::parry::shape::{SharedShape, TypedShape};
+use avian3d::debug_render::{PhysicsGizmoExt, PhysicsGizmos};
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
@@ -22,13 +21,11 @@ pub mod simulation;
 /// `init_collider_constructors` never fires because `ColliderConstructor`
 /// is never placed on the entity.
 ///
-/// `#[require(RigidBody)]` so picking `AvianCollider` from the component
-/// picker drops a working physics bundle on the entity in one click; the
-/// default body is `RigidBody::Dynamic`, switch to `Static` from the
-/// inspector for level geometry.
+/// No `#[require(RigidBody)]`: avian supports collider-on-child patterns
+/// where the rigid body lives on a parent entity, and forcing both onto
+/// the same entity would disable that.
 #[derive(Component, Clone, Debug, Default, PartialEq, Reflect)]
 #[reflect(Component, Default)]
-#[require(RigidBody)]
 pub struct AvianCollider(pub ColliderConstructor);
 
 pub mod physics_colors {
@@ -55,9 +52,6 @@ impl Default for PhysicsOverlayConfig {
         }
     }
 }
-
-#[derive(Default, Reflect, GizmoConfigGroup)]
-pub struct ColliderGizmoGroup;
 
 /// Plugin that renders collider wireframes and hierarchy arrows.
 ///
@@ -87,7 +81,7 @@ impl<S: Component> Plugin for PhysicsOverlaysPlugin<S> {
         register_avian_types(app);
 
         app.init_resource::<PhysicsOverlayConfig>()
-            .init_gizmo_group::<ColliderGizmoGroup>()
+            .init_gizmo_group::<PhysicsGizmos>()
             .add_systems(
                 PostUpdate,
                 // TODO: Use `JackdawDrawSystems` here
@@ -96,7 +90,7 @@ impl<S: Component> Plugin for PhysicsOverlaysPlugin<S> {
             );
 
         let mut store = app.world_mut().resource_mut::<GizmoConfigStore>();
-        let (config, _) = store.config_mut::<ColliderGizmoGroup>();
+        let (config, _) = store.config_mut::<PhysicsGizmos>();
         config.depth_bias = -0.5;
         config.line.width = 1.5;
     }
@@ -149,7 +143,7 @@ pub fn register_avian_types(app: &mut App) {
 }
 
 fn draw_collider_gizmos<S: Component>(
-    mut gizmos: Gizmos<ColliderGizmoGroup>,
+    mut gizmos: Gizmos<PhysicsGizmos>,
     config: Res<PhysicsOverlayConfig>,
     colliders: Query<(
         Entity,
@@ -166,7 +160,6 @@ fn draw_collider_gizmos<S: Component>(
         return;
     }
 
-    // Collect highlighted colliders (belonging to a selected rigid body)
     let mut highlighted = bevy::ecs::entity::EntityHashSet::default();
     for body_entity in &selected_bodies {
         collect_descendant_colliders(
@@ -193,246 +186,14 @@ fn draw_collider_gizmos<S: Component>(
             (true, true) => physics_colors::SENSOR_SELECTED,
         };
 
-        draw_parry_shape(&mut gizmos, collider.shape(), tf, color);
-    }
-}
-
-/// Draw a wireframe for any parry shape using `TypedShape` pattern matching.
-///
-/// Honours the entity's full `GlobalTransform`, including non-uniform
-/// scale: vertex-based shapes (`TriMesh`, `ConvexPolyhedron`, `Segment`,
-/// `Triangle`) round-trip every vertex through `transform_point`;
-/// primitive shapes (`Cuboid`, `Ball`, `Cylinder`, `Cone`, `Capsule`)
-/// scale their dimensional parameters by `tf.scale()` so the wireframe
-/// follows resize gizmo edits without needing to rebuild the underlying
-/// `Collider`.
-fn draw_parry_shape(
-    gizmos: &mut Gizmos<ColliderGizmoGroup>,
-    shape: &SharedShape,
-    tf: &GlobalTransform,
-    color: Color,
-) {
-    let pos = tf.translation();
-    let (scale, rot, _) = tf.to_scale_rotation_translation();
-    // Scale magnitude approximations for shapes whose dimensional
-    // params are scalars (radii, capsule heights). Picks the dominant
-    // axis so non-uniform scale on a Ball still looks roughly right.
-    let radial_scale = scale.x.max(scale.y).max(scale.z);
-
-    match shape.as_typed_shape() {
-        TypedShape::Ball(ball) => {
-            let r = if ball.radius > 0.0 { ball.radius } else { 0.5 } * radial_scale;
-            gizmos.circle(
-                Isometry3d::new(pos, rot * Quat::from_rotation_x(FRAC_PI_2)),
-                r,
-                color,
-            );
-            gizmos.circle(Isometry3d::new(pos, rot), r, color);
-            gizmos.circle(
-                Isometry3d::new(pos, rot * Quat::from_rotation_y(FRAC_PI_2)),
-                r,
-                color,
-            );
-        }
-        TypedShape::Cuboid(cuboid) => {
-            let he = &cuboid.half_extents;
-            let half = Vec3::new(he.x, he.y, he.z) * scale;
-            let half = if half.length_squared() < 0.0001 {
-                Vec3::splat(0.5) * scale
-            } else {
-                half
-            };
-            draw_box_wireframe(gizmos, pos, rot, half, color);
-        }
-        TypedShape::RoundCuboid(rc) => {
-            let he = &rc.inner_shape.half_extents;
-            let half = Vec3::new(he.x, he.y, he.z) * scale;
-            let half = if half.length_squared() < 0.0001 {
-                Vec3::splat(0.5) * scale
-            } else {
-                half
-            };
-            draw_box_wireframe(gizmos, pos, rot, half, color);
-        }
-        TypedShape::Cylinder(cyl) => {
-            let r = cyl.radius * scale.x.max(scale.z);
-            let half_h = cyl.half_height * scale.y;
-            let up = rot * Vec3::Y;
-            gizmos.circle(Isometry3d::new(pos + up * half_h, rot), r, color);
-            gizmos.circle(Isometry3d::new(pos - up * half_h, rot), r, color);
-            let right = rot * Vec3::X;
-            let fwd = rot * Vec3::Z;
-            for dir in [right, -right, fwd, -fwd] {
-                gizmos.line(
-                    pos + dir * r + up * half_h,
-                    pos + dir * r - up * half_h,
-                    color,
-                );
-            }
-        }
-        TypedShape::Cone(cone) => {
-            let r = cone.radius * scale.x.max(scale.z);
-            let half_h = cone.half_height * scale.y;
-            let up = rot * Vec3::Y;
-            let apex = pos + up * half_h;
-            gizmos.circle(Isometry3d::new(pos - up * half_h, rot), r, color);
-            let right = rot * Vec3::X;
-            let fwd = rot * Vec3::Z;
-            for dir in [right, -right, fwd, -fwd] {
-                gizmos.line(pos + dir * r - up * half_h, apex, color);
-            }
-        }
-        TypedShape::Capsule(cap) => {
-            let r = cap.radius * scale.x.max(scale.z);
-            let a = cap.segment.a;
-            let b = cap.segment.b;
-            let half_h = (b - a).length() * 0.5 * scale.y;
-            let up = rot * Vec3::Y;
-            let right = rot * Vec3::X;
-            let fwd = rot * Vec3::Z;
-            gizmos.circle(Isometry3d::new(pos + up * half_h, rot), r, color);
-            gizmos.circle(Isometry3d::new(pos - up * half_h, rot), r, color);
-            gizmos.arc_3d(
-                std::f32::consts::PI,
-                r,
-                Isometry3d::new(pos + up * half_h, rot * Quat::from_rotation_z(FRAC_PI_2)),
-                color,
-            );
-            gizmos.arc_3d(
-                std::f32::consts::PI,
-                r,
-                Isometry3d::new(pos - up * half_h, rot * Quat::from_rotation_z(-FRAC_PI_2)),
-                color,
-            );
-            gizmos.arc_3d(
-                std::f32::consts::PI,
-                r,
-                Isometry3d::new(
-                    pos + up * half_h,
-                    rot * Quat::from_rotation_z(FRAC_PI_2) * Quat::from_rotation_y(FRAC_PI_2),
-                ),
-                color,
-            );
-            gizmos.arc_3d(
-                std::f32::consts::PI,
-                r,
-                Isometry3d::new(
-                    pos - up * half_h,
-                    rot * Quat::from_rotation_z(-FRAC_PI_2) * Quat::from_rotation_y(FRAC_PI_2),
-                ),
-                color,
-            );
-            for dir in [right, -right, fwd, -fwd] {
-                gizmos.line(
-                    pos + dir * r + up * half_h,
-                    pos + dir * r - up * half_h,
-                    color,
-                );
-            }
-        }
-        TypedShape::TriMesh(trimesh) => {
-            let vertices = trimesh.vertices();
-            let indices = trimesh.indices();
-            for tri in indices {
-                let a = tf.transform_point(vertices[tri[0] as usize]);
-                let b = tf.transform_point(vertices[tri[1] as usize]);
-                let c = tf.transform_point(vertices[tri[2] as usize]);
-                gizmos.line(a, b, color);
-                gizmos.line(b, c, color);
-                gizmos.line(c, a, color);
-            }
-        }
-        TypedShape::ConvexPolyhedron(poly) => {
-            let points = poly.points();
-            for edge in poly.edges() {
-                let a = tf.transform_point(points[edge.vertices[0] as usize]);
-                let b = tf.transform_point(points[edge.vertices[1] as usize]);
-                gizmos.line(a, b, color);
-            }
-        }
-        TypedShape::Compound(compound) => {
-            for (iso, sub_shape) in compound.shapes() {
-                // Compose parent transform with sub-shape's local
-                // isometry. Sub-shape's local rotation matters for
-                // shapes-of-shapes (e.g. capsule-of-cuboids).
-                let sub_local = Transform {
-                    translation: Vec3::new(iso.translation.x, iso.translation.y, iso.translation.z),
-                    rotation: iso.rotation,
-                    scale: Vec3::ONE,
-                };
-                let sub_tf = tf.mul_transform(sub_local);
-                draw_parry_shape(gizmos, sub_shape, &sub_tf, color);
-            }
-        }
-        TypedShape::HalfSpace(_) => {
-            // Half-space is conceptually infinite; render a 5-unit
-            // square panel for the visible patch and an up-arrow
-            // for the normal. Honours rotation but ignores scale.
-            let right = rot * Vec3::X * 5.0;
-            let fwd = rot * Vec3::Z * 5.0;
-            gizmos.line(pos - right - fwd, pos + right - fwd, color);
-            gizmos.line(pos + right - fwd, pos + right + fwd, color);
-            gizmos.line(pos + right + fwd, pos - right + fwd, color);
-            gizmos.line(pos - right + fwd, pos - right - fwd, color);
-            gizmos.arrow(pos, pos + rot * Vec3::Y * 2.0, color);
-        }
-        TypedShape::Segment(seg) => {
-            let a = tf.transform_point(seg.a);
-            let b = tf.transform_point(seg.b);
-            gizmos.line(a, b, color);
-        }
-        TypedShape::Triangle(tri) => {
-            let a = tf.transform_point(tri.a);
-            let b = tf.transform_point(tri.b);
-            let c = tf.transform_point(tri.c);
-            gizmos.line(a, b, color);
-            gizmos.line(b, c, color);
-            gizmos.line(c, a, color);
-        }
-        _ => {
-            gizmos.sphere(Isometry3d::new(pos, rot), 0.1, color);
-        }
-    }
-}
-
-fn draw_box_wireframe(
-    gizmos: &mut Gizmos<ColliderGizmoGroup>,
-    pos: Vec3,
-    rot: Quat,
-    half: Vec3,
-    color: Color,
-) {
-    let corners = [
-        Vec3::new(-half.x, -half.y, -half.z),
-        Vec3::new(half.x, -half.y, -half.z),
-        Vec3::new(half.x, half.y, -half.z),
-        Vec3::new(-half.x, half.y, -half.z),
-        Vec3::new(-half.x, -half.y, half.z),
-        Vec3::new(half.x, -half.y, half.z),
-        Vec3::new(half.x, half.y, half.z),
-        Vec3::new(-half.x, half.y, half.z),
-    ];
-    let edges = [
-        (0, 1),
-        (1, 2),
-        (2, 3),
-        (3, 0),
-        (4, 5),
-        (5, 6),
-        (6, 7),
-        (7, 4),
-        (0, 4),
-        (1, 5),
-        (2, 6),
-        (3, 7),
-    ];
-    for (a, b) in edges {
-        gizmos.line(pos + rot * corners[a], pos + rot * corners[b], color);
+        let position = Position::from(tf);
+        let rotation = Rotation::from(tf);
+        gizmos.draw_collider(collider, position, rotation, color);
     }
 }
 
 fn draw_hierarchy_arrows<S: Component>(
-    mut gizmos: Gizmos<ColliderGizmoGroup>,
+    mut gizmos: Gizmos<PhysicsGizmos>,
     config: Res<PhysicsOverlayConfig>,
     selected_bodies: Query<(Entity, &GlobalTransform), (With<RigidBody>, With<S>)>,
     children_query: Query<&Children>,
