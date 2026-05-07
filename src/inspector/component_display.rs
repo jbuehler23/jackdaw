@@ -135,18 +135,6 @@ pub(crate) fn build_inspector_displays(
         ));
     }
 
-    // Physics section -- always visible, combines RigidBody + AvianCollider
-    super::physics_display::spawn_physics_section(
-        commands,
-        inspector_entity,
-        source_entity,
-        entity_ref,
-        &icon_font.0,
-        &editor_font.0,
-        type_registry,
-        names,
-    );
-
     let registry = type_registry.read();
 
     // Check for prefab baseline (override tracking)
@@ -173,13 +161,6 @@ pub(crate) fn build_inspector_displays(
                 {
                     return None;
                 }
-                // Hide all avian3d + AvianCollider components from generic
-                // groups -- they're managed by the dedicated Physics section.
-                if full_path.starts_with("avian3d::")
-                    || full_path == "jackdaw_avian_integration::AvianCollider"
-                {
-                    return None;
-                }
                 // AST filter: hide Bevy-internal components that
                 // aren't tracked in the scene file. User-defined
                 // components (anything outside the `bevy::*`,
@@ -195,7 +176,8 @@ pub(crate) fn build_inspector_displays(
                 let is_user_type = !full_path.starts_with("bevy")
                     && !full_path.starts_with("core")
                     && !full_path.starts_with("std")
-                    && !full_path.starts_with("jackdaw");
+                    && (!full_path.starts_with("jackdaw")
+                        || full_path.starts_with("jackdaw_avian_integration"));
                 if !is_user_type
                     && !jsn_type_paths.is_empty()
                     && !jsn_type_paths.contains(full_path)
@@ -242,13 +224,26 @@ pub(crate) fn build_inspector_displays(
         })
         .collect();
 
-    // Sort: custom-category groups first, then alphabetical within each tier
+    // Sort: custom-category groups first, then alphabetical within
+    // each tier. `AvianCollider` is pinned to the top of its group
+    // because it carries the collider-type dropdown the user reaches
+    // for most when iterating on physics; ordering it alphabetically
+    // (where it'd sit under `RigidBody` in the Avian3d group) buries
+    // it under runtime-state components.
+    let group_pin_priority = |type_path: &str| -> u8 {
+        if type_path == "jackdaw_avian_integration::AvianCollider" {
+            0
+        } else {
+            1
+        }
+    };
     comp_list.sort_by(|a, b| {
         let a_custom = custom_groups.contains(&a.1);
         let b_custom = custom_groups.contains(&b.1);
         b_custom
             .cmp(&a_custom)
             .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| group_pin_priority(&a.3).cmp(&group_pin_priority(&b.3)))
             .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
     });
 

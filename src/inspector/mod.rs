@@ -23,6 +23,13 @@ fn extract_module_group(module_path: Option<&str>) -> String {
     };
     // Get first path segment
     let first = path.split("::").next().unwrap_or(path);
+    // Group jackdaw's avian wrapper alongside avian3d's own types
+    // so AvianCollider sits in the same inspector section as
+    // RigidBody, Sensor, etc. instead of getting its own
+    // `Jackdaw_avian_integration` heading.
+    if first == "avian3d" || first == "jackdaw_avian_integration" {
+        return "Avian3d".to_string();
+    }
     // Strip "bevy_" prefix and capitalize
     let name = first.strip_prefix("bevy_").unwrap_or(first);
     // Map common module names to cleaner labels
@@ -86,6 +93,10 @@ pub struct InspectorPlugin;
 
 impl Plugin for InspectorPlugin {
     fn build(&self, app: &mut App) {
+        let mut denylist = component_picker::PickerDenylist::default();
+        component_picker::populate_avian_picker_denylist(&mut denylist);
+        app.insert_resource(denylist);
+
         app.register_type_data::<Name, ReflectDisplayable>()
             .add_plugins(component_tooltip::plugin)
             .add_observer(component_display::remove_component_displays)
@@ -94,7 +105,6 @@ impl Plugin for InspectorPlugin {
             .add_observer(component_picker::on_add_component_button_click)
             .add_observer(reflect_fields::on_checkbox_commit)
             .add_observer(reflect_fields::on_text_edit_commit)
-            .add_observer(physics_display::on_physics_enable_toggle)
             .add_observer(custom_props_display::on_custom_property_checkbox_commit)
             .add_observer(custom_props_display::on_custom_property_text_commit)
             .add_observer(brush_display::on_brush_face_text_commit)

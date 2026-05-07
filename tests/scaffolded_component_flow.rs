@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 use jackdaw::commands::{EditorCommand, SetJsnField};
-use jackdaw::inspector::component_picker::enumerate_pickable_components;
+use jackdaw::inspector::component_picker::{PickerDenylist, enumerate_pickable_components};
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::SceneJsnAst;
@@ -52,7 +52,7 @@ fn scaffolded_user_components_reach_picker() {
         .world()
         .resource::<bevy::ecs::reflect::AppTypeRegistry>()
         .read();
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new());
+    let pickables = enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
 
     let spinning = pickables
         .iter()

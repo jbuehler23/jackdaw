@@ -21,8 +21,14 @@ pub mod simulation;
 /// a `Collider` from the inner constructor and inserts it directly. Avian's
 /// `init_collider_constructors` never fires because `ColliderConstructor`
 /// is never placed on the entity.
+///
+/// `#[require(RigidBody)]` so picking `AvianCollider` from the component
+/// picker drops a working physics bundle on the entity in one click; the
+/// default body is `RigidBody::Dynamic`, switch to `Static` from the
+/// inspector for level geometry.
 #[derive(Component, Clone, Debug, Default, PartialEq, Reflect)]
 #[reflect(Component, Default)]
+#[require(RigidBody)]
 pub struct AvianCollider(pub ColliderConstructor);
 
 pub mod physics_colors {
@@ -187,28 +193,35 @@ fn draw_collider_gizmos<S: Component>(
             (true, true) => physics_colors::SENSOR_SELECTED,
         };
 
-        let transform = tf.compute_transform();
-        draw_parry_shape(
-            &mut gizmos,
-            collider.shape(),
-            transform.translation,
-            transform.rotation,
-            color,
-        );
+        draw_parry_shape(&mut gizmos, collider.shape(), tf, color);
     }
 }
 
 /// Draw a wireframe for any parry shape using `TypedShape` pattern matching.
+///
+/// Honours the entity's full `GlobalTransform`, including non-uniform
+/// scale: vertex-based shapes (`TriMesh`, `ConvexPolyhedron`, `Segment`,
+/// `Triangle`) round-trip every vertex through `transform_point`;
+/// primitive shapes (`Cuboid`, `Ball`, `Cylinder`, `Cone`, `Capsule`)
+/// scale their dimensional parameters by `tf.scale()` so the wireframe
+/// follows resize gizmo edits without needing to rebuild the underlying
+/// `Collider`.
 fn draw_parry_shape(
     gizmos: &mut Gizmos<ColliderGizmoGroup>,
     shape: &SharedShape,
-    pos: Vec3,
-    rot: Quat,
+    tf: &GlobalTransform,
     color: Color,
 ) {
+    let pos = tf.translation();
+    let (scale, rot, _) = tf.to_scale_rotation_translation();
+    // Scale magnitude approximations for shapes whose dimensional
+    // params are scalars (radii, capsule heights). Picks the dominant
+    // axis so non-uniform scale on a Ball still looks roughly right.
+    let radial_scale = scale.x.max(scale.y).max(scale.z);
+
     match shape.as_typed_shape() {
         TypedShape::Ball(ball) => {
-            let r = if ball.radius > 0.0 { ball.radius } else { 0.5 };
+            let r = if ball.radius > 0.0 { ball.radius } else { 0.5 } * radial_scale;
             gizmos.circle(
                 Isometry3d::new(pos, rot * Quat::from_rotation_x(FRAC_PI_2)),
                 r,
@@ -223,9 +236,9 @@ fn draw_parry_shape(
         }
         TypedShape::Cuboid(cuboid) => {
             let he = &cuboid.half_extents;
-            let half = Vec3::new(he.x, he.y, he.z);
+            let half = Vec3::new(he.x, he.y, he.z) * scale;
             let half = if half.length_squared() < 0.0001 {
-                Vec3::splat(0.5)
+                Vec3::splat(0.5) * scale
             } else {
                 half
             };
@@ -233,17 +246,17 @@ fn draw_parry_shape(
         }
         TypedShape::RoundCuboid(rc) => {
             let he = &rc.inner_shape.half_extents;
-            let half = Vec3::new(he.x, he.y, he.z);
+            let half = Vec3::new(he.x, he.y, he.z) * scale;
             let half = if half.length_squared() < 0.0001 {
-                Vec3::splat(0.5)
+                Vec3::splat(0.5) * scale
             } else {
                 half
             };
             draw_box_wireframe(gizmos, pos, rot, half, color);
         }
         TypedShape::Cylinder(cyl) => {
-            let r = cyl.radius;
-            let half_h = cyl.half_height;
+            let r = cyl.radius * scale.x.max(scale.z);
+            let half_h = cyl.half_height * scale.y;
             let up = rot * Vec3::Y;
             gizmos.circle(Isometry3d::new(pos + up * half_h, rot), r, color);
             gizmos.circle(Isometry3d::new(pos - up * half_h, rot), r, color);
@@ -258,8 +271,8 @@ fn draw_parry_shape(
             }
         }
         TypedShape::Cone(cone) => {
-            let r = cone.radius;
-            let half_h = cone.half_height;
+            let r = cone.radius * scale.x.max(scale.z);
+            let half_h = cone.half_height * scale.y;
             let up = rot * Vec3::Y;
             let apex = pos + up * half_h;
             gizmos.circle(Isometry3d::new(pos - up * half_h, rot), r, color);
@@ -270,10 +283,10 @@ fn draw_parry_shape(
             }
         }
         TypedShape::Capsule(cap) => {
-            let r = cap.radius;
+            let r = cap.radius * scale.x.max(scale.z);
             let a = cap.segment.a;
             let b = cap.segment.b;
-            let half_h = (b - a).length() * 0.5;
+            let half_h = (b - a).length() * 0.5 * scale.y;
             let up = rot * Vec3::Y;
             let right = rot * Vec3::X;
             let fwd = rot * Vec3::Z;
@@ -321,9 +334,9 @@ fn draw_parry_shape(
             let vertices = trimesh.vertices();
             let indices = trimesh.indices();
             for tri in indices {
-                let a = pos + rot * vertices[tri[0] as usize];
-                let b = pos + rot * vertices[tri[1] as usize];
-                let c = pos + rot * vertices[tri[2] as usize];
+                let a = tf.transform_point(vertices[tri[0] as usize]);
+                let b = tf.transform_point(vertices[tri[1] as usize]);
+                let c = tf.transform_point(vertices[tri[2] as usize]);
                 gizmos.line(a, b, color);
                 gizmos.line(b, c, color);
                 gizmos.line(c, a, color);
@@ -332,21 +345,33 @@ fn draw_parry_shape(
         TypedShape::ConvexPolyhedron(poly) => {
             let points = poly.points();
             for edge in poly.edges() {
-                let a = pos + rot * points[edge.vertices[0] as usize];
-                let b = pos + rot * points[edge.vertices[1] as usize];
+                let a = tf.transform_point(points[edge.vertices[0] as usize]);
+                let b = tf.transform_point(points[edge.vertices[1] as usize]);
                 gizmos.line(a, b, color);
             }
         }
         TypedShape::Compound(compound) => {
             for (iso, sub_shape) in compound.shapes() {
-                let sub_pos =
-                    pos + rot * Vec3::new(iso.translation.x, iso.translation.y, iso.translation.z);
-                // Approximate sub-rotation: compose with iso rotation is a TODO
-                let sub_rot = rot;
-                draw_parry_shape(gizmos, sub_shape, sub_pos, sub_rot, color);
+                // Compose parent transform with sub-shape's local
+                // isometry. Sub-shape's local rotation matters for
+                // shapes-of-shapes (e.g. capsule-of-cuboids).
+                let sub_local = Transform {
+                    translation: Vec3::new(
+                        iso.translation.x,
+                        iso.translation.y,
+                        iso.translation.z,
+                    ),
+                    rotation: iso.rotation,
+                    scale: Vec3::ONE,
+                };
+                let sub_tf = tf.mul_transform(sub_local);
+                draw_parry_shape(gizmos, sub_shape, &sub_tf, color);
             }
         }
         TypedShape::HalfSpace(_) => {
+            // Half-space is conceptually infinite; render a 5-unit
+            // square panel for the visible patch and an up-arrow
+            // for the normal. Honours rotation but ignores scale.
             let right = rot * Vec3::X * 5.0;
             let fwd = rot * Vec3::Z * 5.0;
             gizmos.line(pos - right - fwd, pos + right - fwd, color);
@@ -356,14 +381,14 @@ fn draw_parry_shape(
             gizmos.arrow(pos, pos + rot * Vec3::Y * 2.0, color);
         }
         TypedShape::Segment(seg) => {
-            let a = pos + rot * seg.a;
-            let b = pos + rot * seg.b;
+            let a = tf.transform_point(seg.a);
+            let b = tf.transform_point(seg.b);
             gizmos.line(a, b, color);
         }
         TypedShape::Triangle(tri) => {
-            let a = pos + rot * tri.a;
-            let b = pos + rot * tri.b;
-            let c = pos + rot * tri.c;
+            let a = tf.transform_point(tri.a);
+            let b = tf.transform_point(tri.b);
+            let c = tf.transform_point(tri.c);
             gizmos.line(a, b, color);
             gizmos.line(b, c, color);
             gizmos.line(c, a, color);

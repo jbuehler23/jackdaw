@@ -173,18 +173,29 @@ fn tick_tooltip(
         TooltipStage::None if elapsed >= SHORT_HOVER_DELAY => {
             let cursor_pos = window.cursor_position();
             let popover_entity = commands
-                .spawn(popover::popover(
-                    PopoverProps::new(entity)
-                        .with_position(cursor_pos)
-                        .with_placement(PopoverPlacement::BottomStart)
-                        .with_padding(TOOLTIP_PADDING)
-                        .with_gap(tokens::SPACING_XS)
-                        .with_z_index(300)
-                        .with_node(Node {
-                            flex_direction: FlexDirection::Column,
-                            max_width: Val::Px(TOOLTIP_MAX_WIDTH),
-                            ..Default::default()
-                        }),
+                .spawn((
+                    popover::popover(
+                        PopoverProps::new(entity)
+                            .with_position(cursor_pos)
+                            .with_placement(PopoverPlacement::BottomStart)
+                            .with_padding(TOOLTIP_PADDING)
+                            .with_gap(tokens::SPACING_XS)
+                            .with_z_index(300)
+                            .with_node(Node {
+                                flex_direction: FlexDirection::Column,
+                                max_width: Val::Px(TOOLTIP_MAX_WIDTH),
+                                ..Default::default()
+                            }),
+                    ),
+                    // Tooltips are decorative; they must not capture
+                    // pointer events. Without this, the popover spawns
+                    // at the cursor and blocks the next click on the
+                    // hovered row (picker items, operator buttons),
+                    // leaving keyboard activation as the only way to
+                    // confirm. `Pickable::IGNORE` makes the popover
+                    // hit-test transparent so pointer events fall
+                    // through to whatever is underneath.
+                    bevy::picking::Pickable::IGNORE,
                 ))
                 .id();
             spawn_title(&mut commands, popover_entity, tip);

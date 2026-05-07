@@ -38,10 +38,15 @@ fn remove_collider_when_avian_collider_removed(
     }
 }
 
-/// When `AvianCollider` is added or changed, build a `Collider` from
-/// the inner `ColliderConstructor` and insert it directly. Handles both
-/// mesh-backed entities (reads from `Mesh3d`) and brushes (reads from
-/// `BrushMeshCache`).
+/// When `AvianCollider` is added/changed, or the underlying brush
+/// geometry rebuilds, build a `Collider` from the inner
+/// `ColliderConstructor` and insert it directly. Watching
+/// `Changed<BrushMeshCache>` is what makes the collider track face
+/// drags / vertex edits: extending a brush updates `BrushMeshCache`,
+/// which fires this system, which rebuilds the trimesh collider so
+/// the green wireframe matches the new geometry. Handles both
+/// mesh-backed entities (reads from `Mesh3d`) and brushes (reads
+/// from `BrushMeshCache`).
 fn sync_editor_collider_config(
     mut commands: Commands,
     changed: Query<
@@ -51,7 +56,7 @@ fn sync_editor_collider_config(
             Option<&BrushMeshCache>,
             Option<&Mesh3d>,
         ),
-        Changed<AvianCollider>,
+        Or<(Changed<AvianCollider>, Changed<BrushMeshCache>)>,
     >,
     meshes: Res<Assets<Mesh>>,
 ) {

@@ -65,10 +65,30 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ));
 }
 
+/// Enter the Physics Tool placement mode.
+///
+/// Shift+P toggles the editor into `EditMode::Physics`. While the
+/// modal is active:
+///
+/// - **Selected** `RigidBody` entities simulate under gravity / forces.
+/// - **Non-selected** dynamic and kinematic bodies are paused
+///   (`RigidBodyDisabled`) so they act as static collision geometry
+///   for the simulated set to land on.
+/// - **Static** bodies always stay solid; they're never frozen.
+///
+/// The simulation starts paused. The first click-and-drag on a
+/// selected entity unpauses `Time<Physics>` and begins the sim;
+/// subsequent drags keep nudging while gravity continues.
+///
+/// Exit with **Space** (`physics.commit`) to keep the settled
+/// positions as one undoable change, or **Esc** to cancel the modal.
 #[operator(
     id = "physics.activate",
     label = "Physics Tool",
-    description = "Drop physics-enabled objects into the scene like a hammer.",
+    description = "Enter Physics Tool: Shift+P drops you into placement mode where selected \
+                   bodies simulate (others freeze as static collision). Drag a selected entity \
+                   to release it under gravity; Space commits the settled positions and exits, \
+                   Esc cancels.",
     modal = true,
     cancel = cancel_physics_activate,
 )]
@@ -103,14 +123,23 @@ fn is_physics_modal_running(active: ActiveModalQuery) -> bool {
     active.is_operator(PhysicsActivateOp::ID)
 }
 
-/// Drop the placed objects and exit the physics tool, keeping their
-/// settled positions. `allows_undo = true` so undoing the commit
-/// returns to physics mode at those positions for further nudging
-/// or re-simulation.
+/// Commit and exit the Physics Tool.
+///
+/// Space ends the placement modal. Every simulated body's transform
+/// diff (from where it sat when you entered Physics mode to where it
+/// settled) is pushed onto the undo stack as one `CommandGroup`, so
+/// `Ctrl+Z` returns you to physics mode at those positions for
+/// further nudging or re-simulation.
+///
+/// This is **not** a pause: physics simulation stops because
+/// `EditMode::Physics` ends, not because the simulation is held.
+/// To resume tweaking the same scene, hit Shift+P again.
 #[operator(
     id = "physics.commit",
     label = "Commit Physics Tool",
-    description = "Keep where the physics objects landed and exit the tool.",
+    description = "Commit Physics Tool (Space): keep the settled positions of every simulated \
+                   body, push the transform changes onto the undo stack as one entry, and \
+                   return to Object mode. This is not a pause; re-enter with Shift+P.",
     is_available = is_physics_modal_running,
 )]
 pub(crate) fn physics_commit(

@@ -196,6 +196,12 @@ fn update_status_right(
         return;
     }
 
+    // Show physics tool mode info; Space commits, Esc cancels.
+    if *edit_mode == EditMode::Physics {
+        text.0 = "Physics Tool | drag selected to release | Space commit | Esc cancel".to_string();
+        return;
+    }
+
     // Show brush edit mode info
     if let EditMode::BrushEdit(sub_mode) = *edit_mode {
         let sub_str = match sub_mode {
