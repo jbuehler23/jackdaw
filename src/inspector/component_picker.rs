@@ -15,6 +15,7 @@ use jackdaw_feathers::picker::{
 use jackdaw_feathers::tokens;
 
 use bevy::reflect::{TypeInfo, attributes::CustomAttributes};
+use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_runtime::{EditorCategory, EditorDescription};
 
 use super::{AddComponentButton, ComponentPicker, Inspector};
@@ -255,47 +256,21 @@ fn spawn_item(
     let description = info.description.clone();
     let module_path = info.module_path.clone();
 
-    let subtitle = if !description.is_empty() {
-        description.clone()
-    } else {
-        module_path.clone()
-    };
-
     let entry_id = commands
-        .spawn((picker_item(matched.index), ChildOf(entities.list)))
-        .id();
-
-    // Line 1: short name + optional category badge
-    let row = commands
         .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                justify_content: JustifyContent::SpaceBetween,
-                width: Val::Percent(100.0),
-                ..Default::default()
-            },
-            ChildOf(entry_id),
+            picker_item(matched.index),
+            ChildOf(entities.list),
+            Tooltip::title(matched.haystack)
+                .with_description(description.clone())
+                .with_footer(format!("{} - {}", module_path, category)),
+            children![match_text(matched.segments)],
         ))
         .id();
 
-    commands.spawn((match_text(matched.segments), ChildOf(row)));
-
-    if !category.is_empty() {
+    // Line 2: subtitle (module path)
+    if !module_path.is_empty() {
         commands.spawn((
-            Text::new(category),
-            TextFont {
-                font_size: tokens::FONT_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-            ChildOf(row),
-        ));
-    }
-
-    // Line 2: subtitle (description or module path)
-    if !subtitle.is_empty() {
-        commands.spawn((
-            Text::new(subtitle),
+            Text::new(module_path),
             TextFont {
                 font_size: tokens::TEXT_SIZE_SM,
                 ..Default::default()
