@@ -51,6 +51,51 @@ fn drag_environment_ok(
     !keybind_focus.is_typing() && modal.active.is_none() && draw_state.active.is_none()
 }
 
+/// Returns true if the cursor is over any face polygon of `brush_entity`.
+///
+/// Mirrors the face hit-test in `brush_face_drag`. Used by other
+/// invoke triggers (notably box-select) that must yield to
+/// face-drag when the user shift-clicks on a brush face. Without
+/// this guard, box-select races face-drag for the same `Shift + LMB`
+/// chord and wins because face-drag's hit-test runs inside the
+/// operator, which dispatches a frame later.
+pub(crate) fn cursor_over_brush_face(
+    brush_entity: Entity,
+    viewport_cursor: Vec2,
+    camera: &Camera,
+    cam_tf: &GlobalTransform,
+    face_entities: &Query<(Entity, &BrushFaceEntity, &GlobalTransform)>,
+    brush_caches: &Query<&BrushMeshCache>,
+) -> bool {
+    let Ok(cache) = brush_caches.get(brush_entity) else {
+        return false;
+    };
+    for (_, face_ent, face_global) in face_entities {
+        if face_ent.brush_entity != brush_entity {
+            continue;
+        }
+        let polygon = &cache.face_polygons[face_ent.face_index];
+        if polygon.len() < 3 {
+            continue;
+        }
+        let screen_verts: Vec<Vec2> = polygon
+            .iter()
+            .filter_map(|&vi| {
+                camera
+                    .world_to_viewport(cam_tf, face_global.transform_point(cache.vertices[vi]))
+                    .ok()
+            })
+            .collect();
+        if screen_verts.len() < 3 {
+            continue;
+        }
+        if point_in_polygon_2d(viewport_cursor, &screen_verts) {
+            return true;
+        }
+    }
+    false
+}
+
 // =====================================================================
 // Face drag
 // =====================================================================

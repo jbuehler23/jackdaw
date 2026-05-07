@@ -65,3 +65,35 @@ impl From<String> for EditorDescription {
         EditorDescription(Cow::Owned(value))
     }
 }
+
+/// Hides things from editor-facing surfaces. Used in two ways:
+///
+/// - As a Bevy `Component` on an entity: hides that entity from
+///   the hierarchy panel.
+/// - As a `#[reflect(@EditorHidden)]` attribute on a Component
+///   type: hides the type from the Add Component picker. Used by
+///   jackdaw's own scene types (brushes, navmesh, terrain, node
+///   graph, animation graph) and available to extension and game
+///   crates with helper Components.
+///
+/// ```ignore
+/// #[derive(Component, Reflect, Default)]
+/// #[reflect(Component, Default, @EditorHidden)]
+/// pub struct InternalRig;
+/// ```
+#[derive(Component, Reflect, Default, Clone, Copy, Debug)]
+#[reflect(Component, Default)]
+pub struct EditorHidden;
+
+/// Marker for entities that exist as editor-time visual
+/// indicators. The save filter skips this entity (and its
+/// subtree) so the helper never lands in `.jsn`; the editor
+/// viewport still renders it.
+///
+/// Pattern: under your scene-authored marker (e.g. `PlayerSpawn`),
+/// spawn a child carrying `SkipSerialization` plus a `Mesh3d` +
+/// `MeshMaterial3d`. The editor renders the helper; the saved
+/// scene never includes it.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug)]
+#[reflect(Component, Default)]
+pub struct SkipSerialization;

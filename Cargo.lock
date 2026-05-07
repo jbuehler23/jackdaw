@@ -4564,6 +4564,7 @@ dependencies = [
  "bevy",
  "jackdaw_commands",
  "jackdaw_feathers",
+ "jackdaw_jsn",
  "jackdaw_node_graph",
  "lucide-icons",
  "serde",
@@ -4698,6 +4699,7 @@ dependencies = [
  "bevy_monitors",
  "jackdaw_commands",
  "jackdaw_feathers",
+ "jackdaw_jsn",
  "jackdaw_widgets",
  "serde",
 ]

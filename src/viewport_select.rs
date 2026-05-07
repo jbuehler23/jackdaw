@@ -1,11 +1,15 @@
 use crate::default_style;
 use crate::{
     EditorEntity,
+    brush::{BrushFaceEntity, BrushMeshCache},
+    brush_drag_ops::cursor_over_brush_face,
     gizmos::handle_gizmo_hover,
     selection::Selection,
-    viewport::{InteractionGuards, ViewportCursor},
+    viewport::{InteractionGuards, MainViewportCamera, SceneViewport, ViewportCursor},
+    viewport_util::window_to_viewport_cursor,
 };
 use bevy::input_focus::InputFocus;
+use bevy::ui::ui_transform::UiGlobalTransform;
 use bevy::{
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
     picking::prelude::Pickable,
@@ -13,7 +17,7 @@ use bevy::{
 };
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
-use jackdaw_jsn::BrushGroup;
+use jackdaw_jsn::{Brush, BrushGroup};
 
 /// Marker for the box-select visual overlay node.
 #[derive(Component)]
@@ -30,7 +34,8 @@ impl Plugin for ViewportSelectPlugin {
                 Update,
                 (
                     handle_viewport_click.after(handle_gizmo_hover),
-                    box_select_invoke_trigger,
+                    box_select_pending_trigger,
+                    box_select_promote_pending.after(box_select_pending_trigger),
                     update_box_select_overlay,
                 )
                     .in_set(crate::EditorInteractionSystems),
@@ -71,11 +76,39 @@ pub(crate) fn viewport_exit_group_edit(
     OperatorResult::Finished
 }
 
+/// Cursor delta (in window pixels) that promotes a pending LMB-down
+/// into an active box-select. Below this, the press is treated as a
+/// plain click and `handle_viewport_click` keeps ownership of it.
+pub const BOX_SELECT_DRAG_THRESHOLD: f32 = 5.0;
+
 #[derive(Resource, Default)]
 pub struct BoxSelectState {
     pub active: bool,
     pub start: Vec2,
     pub current: Vec2,
+    /// Cursor position recorded at LMB-down before we know whether the
+    /// gesture is a click or a box-select drag. Cleared when promoted
+    /// to active or when LMB releases without crossing the threshold.
+    pub pending: Option<Vec2>,
+}
+
+impl BoxSelectState {
+    /// Begin an active box-select session, anchoring the rectangle at
+    /// the previously-pending press position recorded by the trigger
+    /// system if any, otherwise at `cursor_pos`.
+    pub fn activate(&mut self, cursor_pos: Vec2) {
+        let start = self.pending.take().unwrap_or(cursor_pos);
+        self.active = true;
+        self.start = start;
+        self.current = cursor_pos;
+    }
+}
+
+/// True when a cursor at `current` has moved far enough from `start`
+/// to promote a pending press into an active box-select.
+#[inline]
+pub fn cursor_dragged_past_threshold(start: Vec2, current: Vec2) -> bool {
+    current.distance_squared(start) >= BOX_SELECT_DRAG_THRESHOLD * BOX_SELECT_DRAG_THRESHOLD
 }
 
 /// Tracks whether the user is editing inside a `BrushGroup` (entered via double-click).
@@ -111,18 +144,20 @@ pub(crate) fn handle_viewport_click(
     // `Selected` from the just-spawned brush.
     mut was_drawing: Local<bool>,
 ) {
-    let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-
     let drawing_now = guards.draw_state.active.is_some();
     let just_finished_draw = *was_drawing && !drawing_now;
     *was_drawing = drawing_now;
 
-    // Don't select during gizmo drag, modal ops, viewport drag, brush edit mode, draw mode,
-    // terrain sculpt mode, or shift+click (which starts box select).
-    // Physics mode IS allowed, the user needs to click-select entities to
+    // Don't select during gizmo drag, modal ops, viewport drag,
+    // brush edit mode, draw mode, or terrain sculpt mode. Physics
+    // mode IS allowed: the user needs to click-select entities to
     // drag them in the physics tool.
+    //
+    // Plain LMB-down still fires here for the immediate click case;
+    // if the user starts dragging, `box_select_promote_pending`
+    // dispatches `BoxSelectOp` which then overrides whatever
+    // selection this handler set on press.
     if !mouse.just_pressed(MouseButton::Left)
-        || shift
         || guards.gizmo_drag.active
         || guards.gizmo_hover.hovered_axis.is_some()
         || guards.modal.active.is_some()
@@ -281,23 +316,33 @@ pub(crate) fn handle_viewport_click(
     }
 }
 
-/// Shift+LMB in the viewport dispatches [`BoxSelectOp`], and a release
-/// inside the operator commits it. Both the trigger here and the
-/// release detection on line 327 sit outside the BEI keybind menu
-/// because modifier+mouse gestures aren't expressible as BEI key
-/// actions. Surfacing them in the customisation UI is part of the
-/// keybind menu rebuild (Phase 11).
-fn box_select_invoke_trigger(
+/// LMB-down records a pending box-select start position. The press
+/// stays pending until either the cursor crosses
+/// [`BOX_SELECT_DRAG_THRESHOLD`] (promoted to active by
+/// [`box_select_promote_pending`]) or LMB releases without movement
+/// (cleared, leaving `handle_viewport_click` to handle the click as
+/// a single-select). Sit outside the BEI keybind menu because
+/// drag gestures aren't expressible as BEI key actions.
+///
+/// Yields to face-drag when the cursor is over a face of the
+/// selected brush; without that guard box-select would race
+/// face-drag because face-drag's hit-test runs inside its operator
+/// a frame later. See `cursor_over_brush_face`.
+fn box_select_pending_trigger(
     mouse: Res<ButtonInput<MouseButton>>,
-    keyboard: Res<ButtonInput<KeyCode>>,
     vp: ViewportCursor,
     guards: InteractionGuards,
-    box_state: Res<BoxSelectState>,
-    mut commands: Commands,
+    mut box_state: ResMut<BoxSelectState>,
+    camera: Option<Single<(&Camera, &GlobalTransform), With<MainViewportCamera>>>,
+    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    selection: Res<Selection>,
+    brushes: Query<(), With<Brush>>,
+    face_entities: Query<(Entity, &BrushFaceEntity, &GlobalTransform)>,
+    brush_caches: Query<&BrushMeshCache>,
 ) {
     if box_state.active
+        || box_state.pending.is_some()
         || !mouse.just_pressed(MouseButton::Left)
-        || !keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
         || guards.gizmo_drag.active
         || matches!(*guards.edit_mode, crate::brush::EditMode::BrushEdit(_))
         || guards.draw_state.active.is_some()
@@ -308,14 +353,64 @@ fn box_select_invoke_trigger(
     let Ok(window) = vp.windows.single() else {
         return;
     };
-    if window.cursor_position().is_none() {
+    let Some(cursor_pos) = window.cursor_position() else {
+        return;
+    };
+
+    // Yield to face-drag when the cursor is over a face of the
+    // selected brush.
+    if let Some(brush_entity) = selection.primary().filter(|&e| brushes.contains(e))
+        && let Some(camera_single) = camera
+    {
+        let (camera, cam_tf) = *camera_single;
+        if let Some(viewport_cursor) =
+            window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
+            && cursor_over_brush_face(
+                brush_entity,
+                viewport_cursor,
+                camera,
+                cam_tf,
+                &face_entities,
+                &brush_caches,
+            )
+        {
+            return;
+        }
+    }
+
+    box_state.pending = Some(cursor_pos);
+}
+
+/// Promotes a pending LMB-down to an active box-select once the
+/// cursor moves past [`BOX_SELECT_DRAG_THRESHOLD`]. Clears the
+/// pending state on LMB release without movement (so the press
+/// resolves as a plain click instead).
+fn box_select_promote_pending(
+    mouse: Res<ButtonInput<MouseButton>>,
+    vp: ViewportCursor,
+    mut box_state: ResMut<BoxSelectState>,
+    mut commands: Commands,
+) {
+    let Some(start) = box_state.pending else {
+        return;
+    };
+    if !mouse.pressed(MouseButton::Left) {
+        box_state.pending = None;
         return;
     }
-    commands.queue(|world: &mut World| {
-        if let Err(err) = world.operator(BoxSelectOp::ID).call() {
-            error!("box-select dispatch failed: {err}");
-        }
-    });
+    let Ok(window) = vp.windows.single() else {
+        return;
+    };
+    let Some(cursor_pos) = window.cursor_position() else {
+        return;
+    };
+    if cursor_dragged_past_threshold(start, cursor_pos) {
+        commands.queue(|world: &mut World| {
+            if let Err(err) = world.operator(BoxSelectOp::ID).call() {
+                error!("box-select dispatch failed: {err}");
+            }
+        });
+    }
 }
 
 #[operator(
@@ -343,9 +438,10 @@ pub fn box_select(
     };
 
     if !active.is_modal_running() {
-        box_state.active = true;
-        box_state.start = cursor_pos;
-        box_state.current = cursor_pos;
+        // Honour the press-down position recorded by
+        // `box_select_pending_trigger` so the rectangle anchors at
+        // the original click rather than where the threshold tripped.
+        box_state.activate(cursor_pos);
         return OperatorResult::Running;
     }
 
@@ -384,6 +480,7 @@ pub fn box_select(
 
 fn cancel_box_select(mut box_state: ResMut<BoxSelectState>) {
     box_state.active = false;
+    box_state.pending = None;
 }
 
 fn update_box_select_overlay(
@@ -464,5 +561,84 @@ fn find_selectable_ancestor(
         } else {
             return None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `BoxSelectOp`'s first call hands the rectangle's anchor over
+    /// from `pending`. Drag-threshold promotion records the press
+    /// position, so the rectangle should start there, not at the
+    /// later promotion point.
+    #[test]
+    fn activate_uses_pending_as_start_when_set() {
+        let mut state = BoxSelectState {
+            pending: Some(Vec2::new(50.0, 60.0)),
+            ..Default::default()
+        };
+
+        state.activate(Vec2::new(70.0, 90.0));
+
+        assert!(state.active);
+        assert_eq!(state.start, Vec2::new(50.0, 60.0));
+        assert_eq!(state.current, Vec2::new(70.0, 90.0));
+        assert!(state.pending.is_none(), "activate should consume `pending`",);
+    }
+
+    /// When no pending press is recorded (e.g. an external dispatch
+    /// of `BoxSelectOp` without going through the trigger pipeline),
+    /// the rectangle anchors at the cursor instead.
+    #[test]
+    fn activate_falls_back_to_cursor_without_pending() {
+        let mut state = BoxSelectState::default();
+
+        state.activate(Vec2::new(70.0, 90.0));
+
+        assert!(state.active);
+        assert_eq!(state.start, Vec2::new(70.0, 90.0));
+        assert_eq!(state.current, Vec2::new(70.0, 90.0));
+    }
+
+    /// A click that hasn't moved past the threshold must stay pending,
+    /// otherwise `handle_viewport_click` and box-select would race for
+    /// the same press.
+    #[test]
+    fn drag_below_threshold_does_not_promote() {
+        // Moves of 0, 2.83 (sqrt(2*2 + 2*2)), and 4.24 are all < 5.
+        assert!(!cursor_dragged_past_threshold(
+            Vec2::new(100.0, 100.0),
+            Vec2::new(100.0, 100.0),
+        ));
+        assert!(!cursor_dragged_past_threshold(
+            Vec2::new(100.0, 100.0),
+            Vec2::new(102.0, 102.0),
+        ));
+        assert!(!cursor_dragged_past_threshold(
+            Vec2::new(100.0, 100.0),
+            Vec2::new(103.0, 103.0),
+        ));
+    }
+
+    /// Once the cursor has moved at least `BOX_SELECT_DRAG_THRESHOLD`
+    /// pixels in any direction, the press promotes to box-select.
+    #[test]
+    fn drag_at_or_above_threshold_promotes() {
+        // Exactly the threshold (5px right): hits the `>=` boundary.
+        assert!(cursor_dragged_past_threshold(
+            Vec2::new(100.0, 100.0),
+            Vec2::new(105.0, 100.0),
+        ));
+        // 3-4-5 right triangle: hypotenuse = 5, exactly threshold.
+        assert!(cursor_dragged_past_threshold(
+            Vec2::new(100.0, 100.0),
+            Vec2::new(104.0, 103.0),
+        ));
+        // Comfortably past threshold.
+        assert!(cursor_dragged_past_threshold(
+            Vec2::new(100.0, 100.0),
+            Vec2::new(120.0, 80.0),
+        ));
     }
 }

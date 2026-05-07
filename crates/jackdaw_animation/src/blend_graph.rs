@@ -14,13 +14,13 @@ use serde::{Deserialize, Serialize};
 
 /// Marker on a `Clip` entity whose source is a node-canvas blend tree.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Default)]
-#[reflect(Component, Serialize, Deserialize)]
+#[reflect(Component, Serialize, Deserialize, @jackdaw_jsn::EditorHidden)]
 pub struct AnimationBlendGraph;
 
 /// Body component for an `anim.clip_ref` node. References another
 /// `Clip` entity whose compiled handle feeds into this graph.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone)]
-#[reflect(Component, Serialize, Deserialize)]
+#[reflect(Component, Serialize, Deserialize, @jackdaw_jsn::EditorHidden)]
 pub struct ClipNodeRef {
     pub clip_entity: Entity,
 }
@@ -37,7 +37,7 @@ impl Default for ClipNodeRef {
 /// `a` and `b`; the `weight` terminal is a compile-time constant if
 /// not connected, otherwise driven by the incoming scalar curve.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Copy)]
-#[reflect(Component, Serialize, Deserialize)]
+#[reflect(Component, Serialize, Deserialize, @jackdaw_jsn::EditorHidden)]
 pub struct BlendNode {
     pub weight: f32,
 }
@@ -51,7 +51,7 @@ impl Default for BlendNode {
 /// Body component for an `anim.additive` node. Adds `add` on top of
 /// `base` with intensity `weight`.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Copy)]
-#[reflect(Component, Serialize, Deserialize)]
+#[reflect(Component, Serialize, Deserialize, @jackdaw_jsn::EditorHidden)]
 pub struct AdditiveBlendNode {
     pub weight: f32,
 }
@@ -65,7 +65,7 @@ impl Default for AdditiveBlendNode {
 /// Body component for `anim.output`. One per graph; compile walks
 /// back from here.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Default)]
-#[reflect(Component, Serialize, Deserialize)]
+#[reflect(Component, Serialize, Deserialize, @jackdaw_jsn::EditorHidden)]
 pub struct OutputNode;
 
 /// Register the four animation node types with `NodeTypeRegistry`.

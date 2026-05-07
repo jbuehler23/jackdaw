@@ -1,0 +1,10 @@
+# Workspace-wide clippy configuration.
+#
+# `disallowed-methods` powers the `clippy::disallowed_methods` lint
+# declared in `Cargo.toml`'s `[workspace.lints.clippy]` block. Each
+# entry rejects calls to a specific function and surfaces the listed
+# rationale in the diagnostic.
+
+disallowed-methods = [
+    { path = "std::panic::catch_unwind", reason = "panic recovery is not idiomatic and silently no-ops under panic = \"abort\". Use Result-returning APIs at error sites; allow-attribute with rationale at FFI dylib boundaries where unwinding across the C ABI is UB." },
+]

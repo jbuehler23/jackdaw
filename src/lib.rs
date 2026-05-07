@@ -32,7 +32,7 @@ pub mod keybinds;
 
 use std::{collections::BTreeMap, marker::PhantomData};
 
-pub use inspector::{EditorCategory, EditorDescription};
+pub use inspector::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 pub mod core_extension;
 pub mod document_ops;
 pub mod ext_build;
@@ -99,7 +99,8 @@ use selection::Selection;
 /// Everything needed to start using Jackdaw.
 pub mod prelude {
     pub use crate::{
-        DylibLoaderPlugin, EditorCategory, EditorDescription, EditorPlugins, ExtensionPlugin,
+        DylibLoaderPlugin, EditorCategory, EditorDescription, EditorHidden, EditorPlugins,
+        ExtensionPlugin, SkipSerialization,
     };
     pub use jackdaw_api::prelude::*;
 
@@ -142,17 +143,24 @@ pub struct EditorEntity;
 #[derive(Component, Default)]
 pub struct BlocksCameraInput;
 
-/// Tag component that hides an entity from the hierarchy panel.
-/// Auto-applied to unnamed child entities (likely Bevy internals like shadow cascades).
-/// Users can remove it to make hidden entities visible, or add it to hide their own.
-#[derive(Component, Default)]
-pub struct EditorHidden;
+// `EditorHidden` is now defined in `crates/jackdaw_jsn/src/editor_meta.rs`
+// alongside `EditorCategory` / `EditorDescription`. It serves both
+// roles: as a Bevy `Component` for hiding entities from the hierarchy
+// (the original use), and as a `#[reflect(@EditorHidden)]` reflect
+// attribute for hiding Component types from the Add Component picker.
+// Re-exported via `inspector` module above.
 
 /// Marker component for entities that should not be included in scene serialization.
 /// Add this to runtime-generated child entities (brush face meshes, terrain chunks, etc.)
 /// that are rebuilt automatically from their parent's component data.
 #[derive(Component, Default)]
 pub struct NonSerializable;
+
+// `SkipSerialization` is defined in `crates/jackdaw_jsn/src/editor_meta.rs`
+// alongside `EditorHidden` so user game crates that only depend on
+// `jackdaw_runtime` (the static-template default) can reach it
+// without pulling in the full editor crate. Re-exported via
+// `inspector` module + `prelude` below.
 
 /// The editor plugin group. Construct with [`EditorPlugins::default`] for the
 /// builder, or add the default instance directly with

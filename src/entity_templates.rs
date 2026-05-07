@@ -253,16 +253,11 @@ fn spawn_jsn_entities(
                     warn!("Failed to deserialize '{type_path}', skipping");
                     continue;
                 };
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    reflect_component.insert(
-                        &mut world.entity_mut(spawned[i]),
-                        reflected.as_ref(),
-                        &registry,
-                    );
-                }));
-                if result.is_err() {
-                    warn!("Panic while inserting component '{type_path}', skipping");
-                }
+                reflect_component.insert(
+                    &mut world.entity_mut(spawned[i]),
+                    reflected.as_ref(),
+                    &registry,
+                );
             }
         }
     }

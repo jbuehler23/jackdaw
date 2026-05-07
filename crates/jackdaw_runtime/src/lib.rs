@@ -17,12 +17,15 @@ use serde::Deserializer;
 use serde::de::{DeserializeSeed, Visitor};
 
 pub use jackdaw_jsn::{
-    Brush, BrushFaceData, CustomProperties, EditorCategory, EditorDescription, GltfSource,
-    PropertyValue,
+    Brush, BrushFaceData, CustomProperties, EditorCategory, EditorDescription, EditorHidden,
+    GltfSource, PropertyValue, SkipSerialization,
 };
 
 pub mod prelude {
-    pub use crate::{EditorCategory, EditorDescription, JackdawPlugin, JackdawSceneRoot};
+    pub use crate::{
+        EditorCategory, EditorDescription, EditorHidden, JackdawPlugin, JackdawSceneRoot,
+        SkipSerialization,
+    };
 }
 
 pub struct JackdawPlugin;
@@ -49,6 +52,15 @@ impl Plugin for JackdawPlugin {
 pub struct JackdawScene {
     jsn: JsnScene,
     parent_path: PathBuf,
+}
+
+impl JackdawScene {
+    /// Build a scene asset directly from in-memory JSN data.
+    /// Used by integration tests that drive scene-load codepaths
+    /// without a real `.jsn` file on disk.
+    pub fn new(jsn: JsnScene, parent_path: PathBuf) -> Self {
+        Self { jsn, parent_path }
+    }
 }
 
 /// Scene entities spawn as children of this root.
@@ -186,6 +198,12 @@ fn spawn_loaded_scenes(
     }
 }
 
+/// Type paths the loader pulls out of the JSN reflected-component
+/// stream and bundles into the per-entity `world.spawn`, so the
+/// entity reaches its final structural state in one table move.
+const TRANSFORM_TYPE_PATH: &str = "bevy_transform::components::transform::Transform";
+const VISIBILITY_TYPE_PATH: &str = "bevy_render::view::visibility::Visibility";
+
 fn spawn_scene_entities(
     world: &mut World,
     root_entity: Entity,
@@ -196,50 +214,41 @@ fn spawn_scene_entities(
     let registry = world.resource::<AppTypeRegistry>().clone();
     let asset_server = world.resource::<AssetServer>().clone();
 
-    let mut spawned: Vec<Entity> = Vec::new();
-    for _ in entities {
-        // Pre-seed `Transform` and `Visibility` so Bevy's
-        // required-components mechanism inserts the companion
-        // markers (`GlobalTransform`, `InheritedVisibility`,
-        // etc.) upfront. The reflection-based inserts below
-        // bypass the require chain, and any `On<Insert, Brush>`
-        // observer that fires during deserialization would
-        // otherwise see a parent missing those companions and
-        // log B0004 warnings on every mesh child. Reflected
-        // values from the JSN overwrite these defaults below.
-        let entity = world
-            .spawn((Transform::default(), Visibility::default()))
-            .id();
-        spawned.push(entity);
-    }
-
-    for (i, jsn) in entities.iter().enumerate() {
-        let parent = match jsn.parent {
-            Some(idx) => spawned.get(idx).copied().unwrap_or(root_entity),
-            None => root_entity,
-        };
-        world.entity_mut(spawned[i]).insert(ChildOf(parent));
-    }
+    // Process parents before children. JSN array order isn't
+    // guaranteed parent-first (the save path reads from a HashSet),
+    // so sort here. `spawned[i]` holds the resulting `Entity`,
+    // reused for parent resolution and the gltf post-pass.
+    let topo: Vec<usize> = topological_index_order(entities);
+    let mut spawned: Vec<Entity> = vec![root_entity; entities.len()];
 
     let registry_guard = registry.read();
-    for (i, jsn) in entities.iter().enumerate() {
+
+    for &i in &topo {
+        let jsn = &entities[i];
+
+        let parent_entity = match jsn.parent {
+            Some(p_idx) if p_idx < entities.len() => spawned[p_idx],
+            _ => root_entity,
+        };
+
+        // Pull Transform / Visibility into typed locals; defer the
+        // rest for the post-spawn reflect-insert.
+        let mut local_transform = Transform::default();
+        let mut local_visibility = Visibility::default();
+        let mut deferred: Vec<Box<dyn PartialReflect>> = Vec::new();
+
         for (type_path, value) in &jsn.components {
             let Some(registration) = registry_guard.get_with_type_path(type_path) else {
-                // `jackdaw::*` types are editor-only (e.g.
-                // `BrushStableId` for undo). Skip them silently so
-                // reload-on-save logs stay clean. Anything else
-                // logs at info so genuine missing-registration
-                // bugs surface.
-                if type_path.starts_with("jackdaw::") {
-                    continue;
+                // `jackdaw::*` types are editor-only; skip them
+                // silently. Other unknowns log once.
+                if !type_path.starts_with("jackdaw::") {
+                    info!("Skipping unknown type '{type_path}' (not registered in runtime)");
                 }
-                info!("Skipping unknown type '{type_path}' (not registered in runtime)");
                 continue;
             };
-            let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+            if registration.data::<ReflectComponent>().is_none() {
                 continue;
-            };
-
+            }
             let mut processor = RuntimeDeserializerProcessor {
                 asset_server: &asset_server,
                 parent_path,
@@ -256,16 +265,56 @@ fn spawn_scene_entities(
                 continue;
             };
 
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                reflect_component.insert(
-                    &mut world.entity_mut(spawned[i]),
-                    reflected.as_ref(),
-                    &registry_guard,
-                );
-            }));
-            if result.is_err() {
-                warn!("Panic while inserting component '{type_path}'; skipping");
+            if type_path == TRANSFORM_TYPE_PATH {
+                if let Some(t) =
+                    <Transform as bevy::reflect::FromReflect>::from_reflect(reflected.as_ref())
+                {
+                    local_transform = t;
+                }
+            } else if type_path == VISIBILITY_TYPE_PATH {
+                if let Some(v) =
+                    <Visibility as bevy::reflect::FromReflect>::from_reflect(reflected.as_ref())
+                {
+                    local_visibility = v;
+                }
+            } else {
+                deferred.push(reflected);
             }
+        }
+
+        // GT / IV from parent's already-final values + local overrides.
+        let parent_gt = world
+            .get::<GlobalTransform>(parent_entity)
+            .copied()
+            .unwrap_or(GlobalTransform::IDENTITY);
+        let computed_gt = parent_gt.mul_transform(local_transform);
+
+        let parent_iv = world
+            .get::<InheritedVisibility>(parent_entity)
+            .copied()
+            .unwrap_or(InheritedVisibility::VISIBLE);
+        let computed_iv = match local_visibility {
+            Visibility::Hidden => InheritedVisibility::HIDDEN,
+            Visibility::Visible => InheritedVisibility::VISIBLE,
+            Visibility::Inherited => parent_iv,
+        };
+
+        // One archetype move for all structural state.
+        let entity = world
+            .spawn((
+                local_transform,
+                local_visibility,
+                computed_gt,
+                computed_iv,
+                ChildOf(parent_entity),
+            ))
+            .id();
+        spawned[i] = entity;
+
+        // User components on top. `On<Insert, T>` fires here with
+        // GlobalTransform / InheritedVisibility already correct.
+        for reflected in deferred {
+            world.entity_mut(entity).insert_reflect(reflected);
         }
     }
     drop(registry_guard);
@@ -289,6 +338,50 @@ fn spawn_scene_entities(
         let scene_handle: Handle<Scene> = asset_server.load(full_path);
         world.entity_mut(entity).insert(SceneRoot(scene_handle));
     }
+}
+
+/// Returns indices such that every parent appears before its
+/// children. JSN order isn't guaranteed parent-first because the
+/// save side reads from a `HashSet`. O(N); cycle-tolerant by
+/// treating the offending entry as a root.
+fn topological_index_order(entities: &[jackdaw_jsn::format::JsnEntity]) -> Vec<usize> {
+    let n = entities.len();
+    let mut order = Vec::with_capacity(n);
+    let mut emitted = vec![false; n];
+
+    for start in 0..n {
+        if emitted[start] {
+            continue;
+        }
+        let mut chain: Vec<usize> = Vec::new();
+        let mut cursor = start;
+        let mut steps = 0usize;
+        loop {
+            if emitted[cursor] {
+                break;
+            }
+            // Cycle guard: chain longer than `n` means a cycle.
+            if steps > n {
+                warn!(
+                    "Topological order: cycle detected at JSN entity index {cursor}; \
+                     remaining chain treated as roots"
+                );
+                break;
+            }
+            steps += 1;
+            chain.push(cursor);
+            match entities[cursor].parent {
+                Some(p) if p < n && !emitted[p] => cursor = p,
+                _ => break,
+            }
+        }
+        for &i in chain.iter().rev() {
+            order.push(i);
+            emitted[i] = true;
+        }
+    }
+
+    order
 }
 
 fn load_inline_assets(

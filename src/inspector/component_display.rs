@@ -843,9 +843,6 @@ pub(crate) fn filter_inspector_components(
 }
 
 /// Revert a single component on a prefab instance back to its baseline value.
-///
-/// Exclusive system; call via
-/// `world.run_system_cached_with(revert_component_to_baseline, (entity, component_id))`.
 pub(crate) fn revert_component_to_baseline(
     In((entity, component_id)): In<(Entity, ComponentId)>,
     world: &mut World,
@@ -888,9 +885,7 @@ pub(crate) fn revert_component_to_baseline(
         return;
     };
 
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        reflect_component.apply(world.entity_mut(entity), reflected.as_ref());
-    }));
+    reflect_component.apply(world.entity_mut(entity), reflected.as_ref());
 
     drop(registry);
 

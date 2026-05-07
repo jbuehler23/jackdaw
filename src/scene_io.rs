@@ -178,7 +178,9 @@ pub fn save_scene(world: &mut World) {
         return;
     }
 
-    save_scene_inner(world);
+    if let Err(err) = save_scene_inner(world) {
+        error!("scene save failed: {err}");
+    }
 }
 
 pub fn save_scene_as(world: &mut World) {
@@ -188,7 +190,7 @@ pub fn save_scene_as(world: &mut World) {
     spawn_save_dialog(world);
 }
 
-fn save_scene_inner(world: &mut World) {
+fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     let scene_file_path = world.resource::<SceneFilePath>();
     let parent_path: Cow<'_, Path> = match scene_file_path
         .path
@@ -196,12 +198,13 @@ fn save_scene_inner(world: &mut World) {
         .and_then(|p| Path::new(p).parent())
     {
         Some(parent_path) => Cow::Owned(parent_path.to_path_buf()),
-        None => Cow::Owned(env::current_dir().expect("Couldn't access the current directory")),
+        None => Cow::Owned(env::current_dir()?),
     };
 
     // Pre-compute entity lists while we have &mut World
-    let editor_set = collect_editor_entities(world);
-    let scene_entities = collect_scene_entities_from_set(world, &editor_set);
+    let editor_set = world.run_system_cached(collect_editor_entities)?;
+    let scene_entities =
+        world.run_system_cached_with(collect_scene_entities_from_set, editor_set)?;
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry_guard = registry.read();
@@ -252,13 +255,7 @@ fn save_scene_inner(world: &mut World) {
         scene: entities,
     };
 
-    let json = match serde_json::to_string_pretty(&jsn) {
-        Ok(json) => json,
-        Err(err) => {
-            warn!("Failed to serialize JSN: {err}");
-            return;
-        }
-    };
+    let json = serde_json::to_string_pretty(&jsn)?;
 
     let path = {
         let scene_path = world.resource::<SceneFilePath>();
@@ -299,6 +296,8 @@ fn save_scene_inner(world: &mut World) {
 
     // Persist current editor layout to project.jsn
     save_layout_to_project(world);
+
+    Ok(())
 }
 
 pub fn save_layout_to_project(world: &mut World) {
@@ -1441,10 +1440,10 @@ pub fn load_scene_from_jsn(
                 warn!("Unknown type '{type_path}'  -- skipping");
                 continue;
             };
-            let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+            if registration.data::<ReflectComponent>().is_none() {
                 warn!("Type '{type_path}' has no ReflectComponent  -- skipping");
                 continue;
-            };
+            }
 
             let mut deser_processor = JsnDeserializerProcessor {
                 asset_server: &asset_server,
@@ -1463,16 +1462,7 @@ pub fn load_scene_from_jsn(
                 continue;
             };
 
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                reflect_component.insert(
-                    &mut world.entity_mut(spawned[i]),
-                    reflected.as_ref(),
-                    &registry_guard,
-                );
-            }));
-            if result.is_err() {
-                warn!("Panic while inserting component '{type_path}'  -- skipping");
-            }
+            world.entity_mut(spawned[i]).insert_reflect(reflected);
         }
     }
     drop(registry_guard);
@@ -1579,20 +1569,34 @@ fn cleanup_pending_new_scene(
     }
 }
 
-/// Collect scene entities (named non-editor entities and all their descendants).
-/// Requires `&mut World` for `query_filtered`.
+/// Type alias for the query that collects every "real scene" root.
 ///
 /// BEI action entities carry a `Name` (via `Action<A>`'s
 /// `#[require(Name::new(any::type_name::<A>()), ActionSettings, …)]`)
 /// but are editor infrastructure; filter them out via
 /// `Without<ActionSettings>` so they don't get serialized into
 /// undo snapshots and re-spawned as scene entities on undo.
-fn collect_scene_entities_from_set(world: &mut World, editor_set: &HashSet<Entity>) -> Vec<Entity> {
-    let roots: Vec<Entity> = world
-        .query_filtered::<Entity, (
-            With<Name>,
-            Without<bevy_enhanced_input::prelude::ActionSettings>,
-        )>()
+/// `Without<SkipSerialization>` drops editor-only helpers
+/// (e.g. `PlayerSpawn` visualisation children) for the same reason.
+type ScenePersistableRootsQuery = QueryState<
+    Entity,
+    (
+        With<Name>,
+        Without<bevy_enhanced_input::prelude::ActionSettings>,
+        Without<crate::SkipSerialization>,
+    ),
+>;
+
+/// Collect scene entities: every named non-editor root, plus its
+/// descendant subtree, minus children carrying `EditorHidden`,
+/// `NonSerializable`, or `SkipSerialization`. The result is the
+/// set the save path serializes into the `.jsn`.
+fn collect_scene_entities_from_set(
+    In(editor_set): In<HashSet<Entity>>,
+    world: &mut World,
+    roots_query: &mut ScenePersistableRootsQuery,
+) -> Vec<Entity> {
+    let roots: Vec<Entity> = roots_query
         .iter(world)
         .filter(|e| !editor_set.contains(e))
         .collect();
@@ -1608,6 +1612,7 @@ fn collect_scene_entities_from_set(world: &mut World, editor_set: &HashSet<Entit
             for child in children.iter() {
                 if world.get::<EditorHidden>(child).is_none()
                     && world.get::<NonSerializable>(child).is_none()
+                    && world.get::<crate::SkipSerialization>(child).is_none()
                 {
                     stack.push(child);
                 }
@@ -1618,12 +1623,15 @@ fn collect_scene_entities_from_set(world: &mut World, editor_set: &HashSet<Entit
     scene_set.into_iter().collect()
 }
 
-/// Collect the set of all editor entities (those with `EditorEntity` and all their descendants).
-fn collect_editor_entities(world: &mut World) -> HashSet<Entity> {
-    let roots: Vec<Entity> = world
-        .query_filtered::<Entity, With<EditorEntity>>()
-        .iter(world)
-        .collect();
+/// Collect every editor entity: each `EditorEntity` root and its
+/// full descendant subtree. The save path uses this to exclude
+/// editor-internal trees (panels, gizmos, picker overlays) from
+/// the persisted scene.
+fn collect_editor_entities(
+    world: &mut World,
+    roots_query: &mut QueryState<Entity, With<EditorEntity>>,
+) -> HashSet<Entity> {
+    let roots: Vec<Entity> = roots_query.iter(world).collect();
 
     let mut editor_set = HashSet::new();
     let mut stack = roots;
@@ -1659,7 +1667,9 @@ pub(crate) fn clear_scene_entities(world: &mut World) {
     history.undo_stack.clear();
     history.redo_stack.clear();
 
-    despawn_scene_entities(world);
+    if let Err(err) = despawn_scene_entities(world) {
+        error!("clear_scene_entities failed: {err}");
+    }
 }
 
 /// Despawn every non-editor scene entity, leaving editor infrastructure
@@ -1674,8 +1684,8 @@ pub(crate) fn clear_scene_entities(world: &mut World) {
 /// alive across an `apply_ast_to_world` pass; without action
 /// entities in `Actions<CoreExtensionInputContext>`, BEI emits no
 /// `Fire` events and every editor keybind goes silent.
-pub(crate) fn despawn_scene_entities(world: &mut World) {
-    let editor_set = collect_editor_entities(world);
+pub(crate) fn despawn_scene_entities(world: &mut World) -> Result<(), BevyError> {
+    let editor_set = world.run_system_cached(collect_editor_entities)?;
 
     let roots: Vec<Entity> = world
         .query_filtered::<Entity, (
@@ -1702,6 +1712,8 @@ pub(crate) fn despawn_scene_entities(world: &mut World) {
             entity_mut.despawn();
         }
     }
+
+    Ok(())
 }
 
 /// Build a self-contained `SceneJsnAst` snapshot of the current
@@ -1722,6 +1734,16 @@ pub(crate) fn despawn_scene_entities(world: &mut World) {
 /// Called once per history-creating operator dispatch, not per
 /// frame; acceptable for the current editor workload.
 pub fn build_snapshot_ast(world: &mut World) -> jackdaw_jsn::SceneJsnAst {
+    match build_snapshot_ast_inner(world) {
+        Ok(ast) => ast,
+        Err(err) => {
+            error!("build_snapshot_ast failed, returning empty snapshot: {err}");
+            jackdaw_jsn::SceneJsnAst::default()
+        }
+    }
+}
+
+fn build_snapshot_ast_inner(world: &mut World) -> Result<jackdaw_jsn::SceneJsnAst, BevyError> {
     let parent_path: Cow<'_, Path> = match world
         .get_resource::<crate::project::ProjectRoot>()
         .map(|r| r.root.clone())
@@ -1730,8 +1752,9 @@ pub fn build_snapshot_ast(world: &mut World) -> jackdaw_jsn::SceneJsnAst {
         None => Cow::Owned(env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
     };
 
-    let editor_set = collect_editor_entities(world);
-    let scene_entities = collect_scene_entities_from_set(world, &editor_set);
+    let editor_set = world.run_system_cached(collect_editor_entities)?;
+    let scene_entities =
+        world.run_system_cached_with(collect_scene_entities_from_set, editor_set)?;
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry_guard = registry.read();
@@ -1767,7 +1790,10 @@ pub fn build_snapshot_ast(world: &mut World) -> jackdaw_jsn::SceneJsnAst {
         scene: entities,
     };
 
-    jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &scene_entities)
+    Ok(jackdaw_jsn::SceneJsnAst::from_jsn_scene(
+        &jsn,
+        &scene_entities,
+    ))
 }
 
 /// Replace the current world's scene with the one encoded in `ast`.
@@ -1801,7 +1827,9 @@ pub fn apply_ast_to_world(world: &mut World, ast: &jackdaw_jsn::SceneJsnAst) {
         error!("Failed to clear tree rows: {err}");
     }
 
-    despawn_scene_entities(world);
+    if let Err(err) = despawn_scene_entities(world) {
+        error!("apply_ast_to_world: despawn_scene_entities failed: {err}");
+    }
 
     let scene = ast.to_jsn_scene(JsnMetadata::default());
     let parent_path = world
@@ -1904,7 +1932,9 @@ fn poll_scene_dialog(world: &mut World) {
                 scene_path.path = Some(path_str);
                 scene_path.last_directory = last_dir;
 
-                save_scene_inner(world);
+                if let Err(err) = save_scene_inner(world) {
+                    error!("scene save (after Save As dialog) failed: {err}");
+                }
             }
         }
         SceneDialogTask::Load(t) => {
@@ -2033,5 +2063,105 @@ pub fn register_entity_in_ast(world: &mut World, entity: Entity) {
 pub fn register_entities_in_ast(world: &mut World, entities: &[Entity]) {
     for &entity in entities {
         register_entity_in_ast(world, entity);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SkipSerialization;
+
+    /// `SkipSerialization` children must be excluded from the saved
+    /// scene graph alongside `EditorHidden` and `NonSerializable`.
+    /// This is the load-bearing check for Jan's showcase: a colored
+    /// helper mesh under `PlayerSpawn` shouldn't ride into the
+    /// shipped game's `.jsn`.
+    #[test]
+    fn skip_serialization_descendants_excluded_from_save() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+
+        let parent = app
+            .world_mut()
+            .spawn((Name::new("PlayerSpawn"), Transform::default()))
+            .id();
+        let plain_child = app
+            .world_mut()
+            .spawn((
+                Name::new("PlainChild"),
+                Transform::default(),
+                ChildOf(parent),
+            ))
+            .id();
+        let helper_child = app
+            .world_mut()
+            .spawn((
+                Name::new("Helper"),
+                Transform::default(),
+                SkipSerialization,
+                ChildOf(parent),
+            ))
+            .id();
+
+        let editor_set = app
+            .world_mut()
+            .run_system_cached(collect_editor_entities)
+            .expect("collect_editor_entities runs cleanly");
+        let scene_entities: HashSet<Entity> = app
+            .world_mut()
+            .run_system_cached_with(collect_scene_entities_from_set, editor_set)
+            .expect("collect_scene_entities_from_set runs cleanly")
+            .into_iter()
+            .collect();
+
+        assert!(
+            scene_entities.contains(&parent),
+            "parent must be in the saved scene",
+        );
+        assert!(
+            scene_entities.contains(&plain_child),
+            "plain (non-skipped) child must be in the saved scene",
+        );
+        assert!(
+            !scene_entities.contains(&helper_child),
+            "SkipSerialization child must NOT be in the saved scene",
+        );
+    }
+
+    /// `SkipSerialization` at the root level is also filtered.
+    #[test]
+    fn skip_serialization_root_excluded_from_save() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+
+        let plain = app
+            .world_mut()
+            .spawn((Name::new("Authored"), Transform::default()))
+            .id();
+        let helper_root = app
+            .world_mut()
+            .spawn((
+                Name::new("HelperRoot"),
+                Transform::default(),
+                SkipSerialization,
+            ))
+            .id();
+
+        let editor_set = app
+            .world_mut()
+            .run_system_cached(collect_editor_entities)
+            .expect("collect_editor_entities runs cleanly");
+        let scene_entities: HashSet<Entity> = app
+            .world_mut()
+            .run_system_cached_with(collect_scene_entities_from_set, editor_set)
+            .expect("collect_scene_entities_from_set runs cleanly")
+            .into_iter()
+            .collect();
+
+        assert!(scene_entities.contains(&plain));
+        assert!(
+            !scene_entities.contains(&helper_root),
+            "root entities tagged SkipSerialization must NOT appear in saved scene",
+        );
     }
 }

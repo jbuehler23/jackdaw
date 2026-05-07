@@ -13,6 +13,7 @@ bevy_monitors.workspace = true
 jackdaw_widgets.workspace = true
 jackdaw_feathers.workspace = true
 jackdaw_commands.workspace = true
+jackdaw_jsn.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
 [lints]
