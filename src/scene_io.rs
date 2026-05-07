@@ -201,7 +201,9 @@ fn save_scene_inner(world: &mut World) {
 
     // Pre-compute entity lists while we have &mut World
     let editor_set = collect_editor_entities(world);
-    let scene_entities = collect_scene_entities_from_set(world, &editor_set);
+    let mut scene_roots_query: ScenePersistableRootsQuery = world.query_filtered();
+    let scene_entities =
+        collect_scene_entities_from_set(world, &mut scene_roots_query, &editor_set);
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry_guard = registry.read();
@@ -1441,10 +1443,10 @@ pub fn load_scene_from_jsn(
                 warn!("Unknown type '{type_path}'  -- skipping");
                 continue;
             };
-            let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+            if registration.data::<ReflectComponent>().is_none() {
                 warn!("Type '{type_path}' has no ReflectComponent  -- skipping");
                 continue;
-            };
+            }
 
             let mut deser_processor = JsnDeserializerProcessor {
                 asset_server: &asset_server,
@@ -1463,11 +1465,7 @@ pub fn load_scene_from_jsn(
                 continue;
             };
 
-            reflect_component.insert(
-                &mut world.entity_mut(spawned[i]),
-                reflected.as_ref(),
-                &registry_guard,
-            );
+            world.entity_mut(spawned[i]).insert_reflect(reflected);
         }
     }
     drop(registry_guard);
@@ -1574,21 +1572,35 @@ fn cleanup_pending_new_scene(
     }
 }
 
-/// Collect scene entities (named non-editor entities and all their descendants).
-/// Requires `&mut World` for `query_filtered`.
+/// Type alias for the query that collects every "real scene" root.
 ///
 /// BEI action entities carry a `Name` (via `Action<A>`'s
 /// `#[require(Name::new(any::type_name::<A>()), ActionSettings, …)]`)
 /// but are editor infrastructure; filter them out via
 /// `Without<ActionSettings>` so they don't get serialized into
 /// undo snapshots and re-spawned as scene entities on undo.
-fn collect_scene_entities_from_set(world: &mut World, editor_set: &HashSet<Entity>) -> Vec<Entity> {
-    let roots: Vec<Entity> = world
-        .query_filtered::<Entity, (
-            With<Name>,
-            Without<bevy_enhanced_input::prelude::ActionSettings>,
-            Without<crate::SkipSerialization>,
-        )>()
+/// `Without<SkipSerialization>` drops editor-only helpers
+/// (e.g. `PlayerSpawn` visualisation children) for the same reason.
+type ScenePersistableRootsQuery = QueryState<
+    Entity,
+    (
+        With<Name>,
+        Without<bevy_enhanced_input::prelude::ActionSettings>,
+        Without<crate::SkipSerialization>,
+    ),
+>;
+
+/// Collect scene entities (named non-editor entities and all their
+/// descendants). Caller injects the `roots_query` so the
+/// `QueryState` can be built once (e.g. by the calling system /
+/// exclusive function) and reused across calls instead of being
+/// rebuilt per save.
+fn collect_scene_entities_from_set(
+    world: &mut World,
+    roots_query: &mut ScenePersistableRootsQuery,
+    editor_set: &HashSet<Entity>,
+) -> Vec<Entity> {
+    let roots: Vec<Entity> = roots_query
         .iter(world)
         .filter(|e| !editor_set.contains(e))
         .collect();
@@ -1728,7 +1740,9 @@ pub fn build_snapshot_ast(world: &mut World) -> jackdaw_jsn::SceneJsnAst {
     };
 
     let editor_set = collect_editor_entities(world);
-    let scene_entities = collect_scene_entities_from_set(world, &editor_set);
+    let mut scene_roots_query: ScenePersistableRootsQuery = world.query_filtered();
+    let scene_entities =
+        collect_scene_entities_from_set(world, &mut scene_roots_query, &editor_set);
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry_guard = registry.read();
@@ -2071,10 +2085,15 @@ mod tests {
             .id();
 
         let editor_set = collect_editor_entities(app.world_mut());
-        let scene_entities: HashSet<Entity> =
-            collect_scene_entities_from_set(app.world_mut(), &editor_set)
-                .into_iter()
-                .collect();
+        let mut scene_roots_query: ScenePersistableRootsQuery =
+            app.world_mut().query_filtered();
+        let scene_entities: HashSet<Entity> = collect_scene_entities_from_set(
+            app.world_mut(),
+            &mut scene_roots_query,
+            &editor_set,
+        )
+        .into_iter()
+        .collect();
 
         assert!(
             scene_entities.contains(&parent),
@@ -2110,10 +2129,15 @@ mod tests {
             .id();
 
         let editor_set = collect_editor_entities(app.world_mut());
-        let scene_entities: HashSet<Entity> =
-            collect_scene_entities_from_set(app.world_mut(), &editor_set)
-                .into_iter()
-                .collect();
+        let mut scene_roots_query: ScenePersistableRootsQuery =
+            app.world_mut().query_filtered();
+        let scene_entities: HashSet<Entity> = collect_scene_entities_from_set(
+            app.world_mut(),
+            &mut scene_roots_query,
+            &editor_set,
+        )
+        .into_iter()
+        .collect();
 
         assert!(scene_entities.contains(&plain));
         assert!(
