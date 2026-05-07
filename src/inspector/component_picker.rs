@@ -84,8 +84,7 @@ pub fn fallback_category_for(type_path: &str) -> Option<&'static str> {
 /// sleep-state timers. The user-facing avian components (`RigidBody`,
 /// `Collider`, `Mass`, joints, etc.) are deliberately left in.
 ///
-/// This is a conservative starter list; refinements are welcome. See
-/// `https://github.com/jbuehler23/jackdaw/issues` for the tracker.
+/// This is a conservative starter list; refinements are welcome.
 pub fn populate_avian_picker_denylist(denylist: &mut PickerDenylist) {
     // Solver-internal state: contact constraints, islands, solver
     // bodies, schedule plumbing. None of it is user-authored.
