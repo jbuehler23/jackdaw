@@ -199,12 +199,13 @@ pub fn enumerate_pickable_components(
         if custom_attrs.is_some_and(|a| a.get::<EditorHidden>().is_some()) {
             continue;
         }
-        if denylist.contains(full_path) {
-            continue;
-        }
 
         let table = registration.type_info().type_path_table();
         let full_path = table.path();
+
+        if denylist.contains(full_path) {
+            continue;
+        }
 
         let description = custom_attrs
             .and_then(|a| a.get::<EditorDescription>())

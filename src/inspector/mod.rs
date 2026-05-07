@@ -388,10 +388,7 @@ fn flag_inspector_dirty_on_archetype_change(
 
     let current = world.get_entity(target).ok().map(|e| e.archetype().id());
 
-    let stored = last
-        .as_ref()
-        .filter(|(e, _)| *e == target)
-        .map(|(_, a)| *a);
+    let stored = last.as_ref().filter(|(e, _)| *e == target).map(|(_, a)| *a);
 
     if stored == current {
         return;
