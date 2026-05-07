@@ -11,7 +11,6 @@ use super::{BrushFaceEntity, BrushMaterialPalette, BrushMeshCache, BrushPreview}
 use crate::default_style;
 use crate::draw_brush::DrawBrushState;
 use crate::selection::Selected;
-use crate::{EditorHidden, NonSerializable};
 use jackdaw_geometry::{
     compute_brush_geometry, compute_face_tangent_axes, compute_face_uvs, triangulate_face,
 };
@@ -185,11 +184,8 @@ pub fn regenerate_brush_meshes(
                     MeshMaterial3d(material),
                     Transform::default(),
                     ChildOf(entity),
-                    // Skip from saved `.jsn` (derived from the
-                    // parent brush) and from the outliner. These
-                    // are jackdaw-managed children, not authored.
-                    NonSerializable,
-                    EditorHidden,
+                    // `BrushFaceEntity` requires `EditorHidden +
+                    // NonSerializable`; nothing to insert here.
                 ))
                 .id();
             if is_default {

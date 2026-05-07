@@ -86,13 +86,14 @@ impl From<String> for EditorDescription {
 pub struct EditorHidden;
 
 /// Marker for entities that exist as editor-time visual
-/// indicators. Skipped from `.jsn` save and from the play-mode
-/// game world; still renders in the editor viewport.
+/// indicators. The save filter skips this entity (and its
+/// subtree) so the helper never lands in `.jsn`; the editor
+/// viewport still renders it.
 ///
 /// Pattern: under your scene-authored marker (e.g. `PlayerSpawn`),
-/// spawn a child carrying `EditorOnly` plus a `Mesh3d` +
-/// `MeshMaterial3d`. The editor renders the helper; the shipped
-/// game never sees it.
+/// spawn a child carrying `SkipSerialization` plus a `Mesh3d` +
+/// `MeshMaterial3d`. The editor renders the helper; the saved
+/// scene never includes it.
 #[derive(Component, Reflect, Default, Clone, Copy, Debug)]
 #[reflect(Component, Default)]
-pub struct EditorOnly;
+pub struct SkipSerialization;

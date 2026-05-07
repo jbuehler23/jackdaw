@@ -18,13 +18,13 @@ use serde::de::{DeserializeSeed, Visitor};
 
 pub use jackdaw_jsn::{
     Brush, BrushFaceData, CustomProperties, EditorCategory, EditorDescription, EditorHidden,
-    EditorOnly, GltfSource, PropertyValue,
+    GltfSource, PropertyValue, SkipSerialization,
 };
 
 pub mod prelude {
     pub use crate::{
-        EditorCategory, EditorDescription, EditorHidden, EditorOnly, JackdawPlugin,
-        JackdawSceneRoot,
+        EditorCategory, EditorDescription, EditorHidden, JackdawPlugin, JackdawSceneRoot,
+        SkipSerialization,
     };
 }
 

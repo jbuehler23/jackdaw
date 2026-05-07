@@ -50,8 +50,11 @@ fn ensure_terrain_dirty_chunks(
 
 // --- Components ---
 
-/// Marks a child entity as a terrain chunk mesh.
+/// Marks a child entity as a terrain chunk mesh. Chunks are
+/// rebuilt from the parent terrain's heightmap, so they're always
+/// hidden from the outliner and excluded from the saved scene.
 #[derive(Component)]
+#[require(crate::EditorHidden, crate::NonSerializable)]
 pub struct TerrainChunk {
     pub terrain_entity: Entity,
     pub chunk_x: u32,
