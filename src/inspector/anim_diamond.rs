@@ -127,9 +127,7 @@ pub fn on_diamond_click(
 }
 
 /// Spawn (or replace) a keyframe at the current cursor time on the
-/// given entity's clip/track for the named property. Shared exclusive
-/// system; call via `world.run_system_cached_with(toggle_keyframe,
-/// (entity, type_path, field_path))`.
+/// given entity's clip/track for the named property.
 pub(crate) fn toggle_keyframe(
     In((source_entity, component_type_path, field_path)): In<(Entity, String, String)>,
     world: &mut World,

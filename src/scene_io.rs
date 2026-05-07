@@ -200,10 +200,12 @@ fn save_scene_inner(world: &mut World) {
     };
 
     // Pre-compute entity lists while we have &mut World
-    let editor_set = collect_editor_entities(world);
-    let mut scene_roots_query: ScenePersistableRootsQuery = world.query_filtered();
-    let scene_entities =
-        collect_scene_entities_from_set(world, &mut scene_roots_query, &editor_set);
+    let editor_set = world
+        .run_system_cached(collect_editor_entities)
+        .expect("collect_editor_entities runs cleanly");
+    let scene_entities = world
+        .run_system_cached_with(collect_scene_entities_from_set, editor_set)
+        .expect("collect_scene_entities_from_set runs cleanly");
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry_guard = registry.read();
@@ -1590,15 +1592,14 @@ type ScenePersistableRootsQuery = QueryState<
     ),
 >;
 
-/// Collect scene entities (named non-editor entities and all their
-/// descendants). Caller injects the `roots_query` so the
-/// `QueryState` can be built once (e.g. by the calling system /
-/// exclusive function) and reused across calls instead of being
-/// rebuilt per save.
+/// Collect scene entities: every named non-editor root, plus its
+/// descendant subtree, minus children carrying `EditorHidden`,
+/// `NonSerializable`, or `SkipSerialization`. The result is the
+/// set the save path serializes into the `.jsn`.
 fn collect_scene_entities_from_set(
+    In(editor_set): In<HashSet<Entity>>,
     world: &mut World,
     roots_query: &mut ScenePersistableRootsQuery,
-    editor_set: &HashSet<Entity>,
 ) -> Vec<Entity> {
     let roots: Vec<Entity> = roots_query
         .iter(world)
@@ -1627,12 +1628,15 @@ fn collect_scene_entities_from_set(
     scene_set.into_iter().collect()
 }
 
-/// Collect the set of all editor entities (those with `EditorEntity` and all their descendants).
-fn collect_editor_entities(world: &mut World) -> HashSet<Entity> {
-    let roots: Vec<Entity> = world
-        .query_filtered::<Entity, With<EditorEntity>>()
-        .iter(world)
-        .collect();
+/// Collect every editor entity: each `EditorEntity` root and its
+/// full descendant subtree. The save path uses this to exclude
+/// editor-internal trees (panels, gizmos, picker overlays) from
+/// the persisted scene.
+fn collect_editor_entities(
+    world: &mut World,
+    roots_query: &mut QueryState<Entity, With<EditorEntity>>,
+) -> HashSet<Entity> {
+    let roots: Vec<Entity> = roots_query.iter(world).collect();
 
     let mut editor_set = HashSet::new();
     let mut stack = roots;
@@ -1684,7 +1688,9 @@ pub(crate) fn clear_scene_entities(world: &mut World) {
 /// entities in `Actions<CoreExtensionInputContext>`, BEI emits no
 /// `Fire` events and every editor keybind goes silent.
 pub(crate) fn despawn_scene_entities(world: &mut World) {
-    let editor_set = collect_editor_entities(world);
+    let editor_set = world
+        .run_system_cached(collect_editor_entities)
+        .expect("collect_editor_entities runs cleanly");
 
     let roots: Vec<Entity> = world
         .query_filtered::<Entity, (
@@ -1739,10 +1745,12 @@ pub fn build_snapshot_ast(world: &mut World) -> jackdaw_jsn::SceneJsnAst {
         None => Cow::Owned(env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
     };
 
-    let editor_set = collect_editor_entities(world);
-    let mut scene_roots_query: ScenePersistableRootsQuery = world.query_filtered();
-    let scene_entities =
-        collect_scene_entities_from_set(world, &mut scene_roots_query, &editor_set);
+    let editor_set = world
+        .run_system_cached(collect_editor_entities)
+        .expect("collect_editor_entities runs cleanly");
+    let scene_entities = world
+        .run_system_cached_with(collect_scene_entities_from_set, editor_set)
+        .expect("collect_scene_entities_from_set runs cleanly");
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry_guard = registry.read();
@@ -2084,12 +2092,16 @@ mod tests {
             ))
             .id();
 
-        let editor_set = collect_editor_entities(app.world_mut());
-        let mut scene_roots_query: ScenePersistableRootsQuery = app.world_mut().query_filtered();
-        let scene_entities: HashSet<Entity> =
-            collect_scene_entities_from_set(app.world_mut(), &mut scene_roots_query, &editor_set)
-                .into_iter()
-                .collect();
+        let editor_set = app
+            .world_mut()
+            .run_system_cached(collect_editor_entities)
+            .expect("collect_editor_entities runs cleanly");
+        let scene_entities: HashSet<Entity> = app
+            .world_mut()
+            .run_system_cached_with(collect_scene_entities_from_set, editor_set)
+            .expect("collect_scene_entities_from_set runs cleanly")
+            .into_iter()
+            .collect();
 
         assert!(
             scene_entities.contains(&parent),
@@ -2124,12 +2136,16 @@ mod tests {
             ))
             .id();
 
-        let editor_set = collect_editor_entities(app.world_mut());
-        let mut scene_roots_query: ScenePersistableRootsQuery = app.world_mut().query_filtered();
-        let scene_entities: HashSet<Entity> =
-            collect_scene_entities_from_set(app.world_mut(), &mut scene_roots_query, &editor_set)
-                .into_iter()
-                .collect();
+        let editor_set = app
+            .world_mut()
+            .run_system_cached(collect_editor_entities)
+            .expect("collect_editor_entities runs cleanly");
+        let scene_entities: HashSet<Entity> = app
+            .world_mut()
+            .run_system_cached_with(collect_scene_entities_from_set, editor_set)
+            .expect("collect_scene_entities_from_set runs cleanly")
+            .into_iter()
+            .collect();
 
         assert!(scene_entities.contains(&plain));
         assert!(
