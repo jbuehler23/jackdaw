@@ -270,7 +270,8 @@ fn avian_denylist_includes_known_internals() {
 #[test]
 fn editor_hidden_marker_filters_component() {
     let registry = registry_with_test_types();
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new());
+    let pickables =
+        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
     assert!(
         find(&pickables, "HiddenByMarker").is_none(),
         "`@EditorHidden` reflect attribute must keep a Component out of the picker",
