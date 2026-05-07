@@ -91,7 +91,8 @@ fn editor_hidden_marker_hides_component_in_real_app() {
         .world()
         .resource::<bevy::ecs::reflect::AppTypeRegistry>()
         .read();
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new());
+    let pickables =
+        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
     let names: Vec<&str> = pickables.iter().map(|p| p.short_name.as_str()).collect();
 
     assert!(
