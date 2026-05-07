@@ -52,7 +52,8 @@ fn scaffolded_user_components_reach_picker() {
         .world()
         .resource::<bevy::ecs::reflect::AppTypeRegistry>()
         .read();
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables =
+        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
 
     let spinning = pickables
         .iter()

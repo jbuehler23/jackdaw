@@ -252,8 +252,8 @@ impl TextEditProps {
     }
 
     /// Numeric input for any integer type up to `i64`/`u32` range.
-    /// Same display/filter as [`numeric_i32`] but with bounds that
-    /// cover `u32` bitmasks (e.g. `CollisionLayers::memberships`)
+    /// Same display/filter as [`Self::numeric_i32`] but with bounds
+    /// that cover `u32` bitmasks (e.g. `CollisionLayers::memberships`)
     /// without clamping. Use for any inspector field whose source
     /// type is integer (`u32`, `i64`, `usize`, ...) but whose actual
     /// range is unknown at the call site.

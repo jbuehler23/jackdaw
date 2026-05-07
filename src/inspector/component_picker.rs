@@ -62,8 +62,7 @@ impl PickerDenylist {
 
     /// True when `type_path` is filtered.
     pub fn contains(&self, type_path: &str) -> bool {
-        self.paths.contains(type_path)
-            || self.prefixes.iter().any(|p| type_path.starts_with(p))
+        self.paths.contains(type_path) || self.prefixes.iter().any(|p| type_path.starts_with(p))
     }
 }
 
@@ -96,9 +95,7 @@ pub fn populate_avian_picker_denylist(denylist: &mut PickerDenylist) {
     // Derived mass / inertia caches recomputed every frame from the
     // canonical `Mass` / collider density. The `Computed*` shape is
     // for solver consumption.
-    denylist.deny_prefix(
-        "avian3d::dynamics::rigid_body::mass_properties::components::computed::",
-    );
+    denylist.deny_prefix("avian3d::dynamics::rigid_body::mass_properties::components::computed::");
     // Sleep-cycle timers (managed by avian, not the user).
     denylist
         .deny_path("avian3d::dynamics::rigid_body::sleeping::SleepTimer")

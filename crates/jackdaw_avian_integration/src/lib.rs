@@ -356,11 +356,7 @@ fn draw_parry_shape(
                 // isometry. Sub-shape's local rotation matters for
                 // shapes-of-shapes (e.g. capsule-of-cuboids).
                 let sub_local = Transform {
-                    translation: Vec3::new(
-                        iso.translation.x,
-                        iso.translation.y,
-                        iso.translation.z,
-                    ),
+                    translation: Vec3::new(iso.translation.x, iso.translation.y, iso.translation.z),
                     rotation: iso.rotation,
                     scale: Vec3::ONE,
                 };

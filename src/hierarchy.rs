@@ -1138,9 +1138,7 @@ pub(crate) fn resolve_rename_target(
     params: &OperatorParameters,
     selection: &Selection,
 ) -> Option<Entity> {
-    params
-        .as_entity("entity")
-        .or_else(|| selection.primary())
+    params.as_entity("entity").or_else(|| selection.primary())
 }
 
 fn entity_name(names: &Query<&Name>, entity: Entity) -> String {

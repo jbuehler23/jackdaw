@@ -64,7 +64,8 @@ fn find<'a>(pickables: &'a [PickableComponent], short_name: &str) -> Option<&'a 
 #[test]
 fn component_with_default_appears() {
     let registry = registry_with_test_types();
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables =
+        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
     assert!(
         find(&pickables, "WithDefault").is_some(),
         "components opting into Default must appear in the picker",
@@ -74,7 +75,8 @@ fn component_with_default_appears() {
 #[test]
 fn component_without_default_appears() {
     let registry = registry_with_test_types();
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables =
+        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
     assert!(
         find(&pickables, "NoDefault").is_some(),
         "components without `#[derive(Default)]` must still reach the picker; \
@@ -85,7 +87,8 @@ fn component_without_default_appears() {
 #[test]
 fn non_component_reflect_type_is_filtered() {
     let registry = registry_with_test_types();
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables =
+        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
     assert!(
         find(&pickables, "NotAComponent").is_none(),
         "reflected types without `ReflectComponent` must not appear",
@@ -95,7 +98,8 @@ fn non_component_reflect_type_is_filtered() {
 #[test]
 fn editor_category_override_sets_category() {
     let registry = registry_with_test_types();
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables =
+        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
     let entry = find(&pickables, "CategoriesAsActor").expect("entry present");
     assert_eq!(entry.category, "Actor");
 }
@@ -103,7 +107,8 @@ fn editor_category_override_sets_category() {
 #[test]
 fn editor_description_override_sets_description() {
     let registry = registry_with_test_types();
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables =
+        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
     let entry = find(&pickables, "DescribedExplicitly").expect("entry present");
     assert_eq!(entry.description, "explicit text");
 }
@@ -111,7 +116,8 @@ fn editor_description_override_sets_description() {
 #[test]
 fn doc_comment_falls_through_as_description() {
     let registry = registry_with_test_types();
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables =
+        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
     let entry = find(&pickables, "DocCommentDescribed").expect("entry present");
     assert!(
         entry.description.contains("Spawns the player"),
@@ -140,7 +146,8 @@ fn already_on_entity_components_are_filtered() {
 #[test]
 fn category_default_is_empty_when_unset() {
     let registry = registry_with_test_types();
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables =
+        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
     let entry = find(&pickables, "NoDefault").expect("entry present");
     assert_eq!(
         entry.category, "",
