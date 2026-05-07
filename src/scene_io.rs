@@ -203,7 +203,8 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
 
     // Pre-compute entity lists while we have &mut World
     let editor_set = world.run_system_cached(collect_editor_entities)?;
-    let scene_entities = world.run_system_cached_with(collect_scene_entities_from_set, editor_set)?;
+    let scene_entities =
+        world.run_system_cached_with(collect_scene_entities_from_set, editor_set)?;
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry_guard = registry.read();
@@ -1752,7 +1753,8 @@ fn build_snapshot_ast_inner(world: &mut World) -> Result<jackdaw_jsn::SceneJsnAs
     };
 
     let editor_set = world.run_system_cached(collect_editor_entities)?;
-    let scene_entities = world.run_system_cached_with(collect_scene_entities_from_set, editor_set)?;
+    let scene_entities =
+        world.run_system_cached_with(collect_scene_entities_from_set, editor_set)?;
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry_guard = registry.read();
@@ -1788,7 +1790,10 @@ fn build_snapshot_ast_inner(world: &mut World) -> Result<jackdaw_jsn::SceneJsnAs
         scene: entities,
     };
 
-    Ok(jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &scene_entities))
+    Ok(jackdaw_jsn::SceneJsnAst::from_jsn_scene(
+        &jsn,
+        &scene_entities,
+    ))
 }
 
 /// Replace the current world's scene with the one encoded in `ast`.
