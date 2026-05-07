@@ -2085,15 +2085,11 @@ mod tests {
             .id();
 
         let editor_set = collect_editor_entities(app.world_mut());
-        let mut scene_roots_query: ScenePersistableRootsQuery =
-            app.world_mut().query_filtered();
-        let scene_entities: HashSet<Entity> = collect_scene_entities_from_set(
-            app.world_mut(),
-            &mut scene_roots_query,
-            &editor_set,
-        )
-        .into_iter()
-        .collect();
+        let mut scene_roots_query: ScenePersistableRootsQuery = app.world_mut().query_filtered();
+        let scene_entities: HashSet<Entity> =
+            collect_scene_entities_from_set(app.world_mut(), &mut scene_roots_query, &editor_set)
+                .into_iter()
+                .collect();
 
         assert!(
             scene_entities.contains(&parent),
@@ -2129,15 +2125,11 @@ mod tests {
             .id();
 
         let editor_set = collect_editor_entities(app.world_mut());
-        let mut scene_roots_query: ScenePersistableRootsQuery =
-            app.world_mut().query_filtered();
-        let scene_entities: HashSet<Entity> = collect_scene_entities_from_set(
-            app.world_mut(),
-            &mut scene_roots_query,
-            &editor_set,
-        )
-        .into_iter()
-        .collect();
+        let mut scene_roots_query: ScenePersistableRootsQuery = app.world_mut().query_filtered();
+        let scene_entities: HashSet<Entity> =
+            collect_scene_entities_from_set(app.world_mut(), &mut scene_roots_query, &editor_set)
+                .into_iter()
+                .collect();
 
         assert!(scene_entities.contains(&plain));
         assert!(
