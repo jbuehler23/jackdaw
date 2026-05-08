@@ -6,7 +6,7 @@ use crate::area::{DockArea, DockTab};
 use crate::reconcile::NodeBinding;
 use crate::sidebar::DockSidebarIcon;
 use crate::tabs::{DockTabGrip, DockTabRow};
-use crate::tree::{DockTree, Edge as TreeEdge};
+use crate::tree::{DockTree, Edge as TreeEdge, TabId};
 
 const DRAG_THRESHOLD: f32 = 5.0;
 
@@ -16,12 +16,14 @@ pub enum DockDragState {
     Idle,
     PendingDrag {
         source_tab: Entity,
+        tab_id: TabId,
         window_id: String,
         window_name: String,
         start_pos: Vec2,
     },
     Dragging {
         source_tab: Entity,
+        tab_id: TabId,
         window_id: String,
         window_name: String,
         source_area: Entity,
@@ -91,6 +93,7 @@ fn on_tab_drag_start(
 
     *drag_state = DockDragState::PendingDrag {
         source_tab: entity,
+        tab_id: tab.tab_id,
         window_id: tab.window_id.clone(),
         window_name: display_name,
         start_pos: Vec2::new(
@@ -116,6 +119,7 @@ fn on_sidebar_icon_drag_start(
 
     *drag_state = DockDragState::PendingDrag {
         source_tab: entity,
+        tab_id: icon.tab_id,
         window_id: icon.window_id.clone(),
         window_name: display_name,
         start_pos: Vec2::new(
@@ -130,6 +134,8 @@ fn on_grip_drag_start(
     grips: Query<(), With<DockTabGrip>>,
     dock_areas: Query<&crate::ActiveDockWindow, With<DockArea>>,
     parent_query: Query<&ChildOf>,
+    tree: Res<DockTree>,
+    bindings: Query<&crate::reconcile::LeafBinding>,
     mut drag_state: ResMut<DockDragState>,
     registry: Res<crate::WindowRegistry>,
 ) {
@@ -138,11 +144,16 @@ fn on_grip_drag_start(
         return;
     }
 
+    // Walk to the dock area, grab the active tab id, then look up the
+    // matching window kind in the leaf so the ghost gets a meaningful
+    // label.
     let mut current = entity;
-    let mut active_window_id = None;
+    let mut active: Option<(TabId, Entity)> = None;
     loop {
-        if let Ok(active) = dock_areas.get(current) {
-            active_window_id = active.0.clone();
+        if let Ok(adw) = dock_areas.get(current)
+            && let Some(tab_id) = adw.0
+        {
+            active = Some((tab_id, current));
             break;
         }
         let Ok(parent) = parent_query.get(current) else {
@@ -151,10 +162,20 @@ fn on_grip_drag_start(
         current = parent.parent();
     }
 
-    let Some(window_id) = active_window_id else {
+    let Some((tab_id, area_entity)) = active else {
+        return;
+    };
+    let Ok(binding) = bindings.get(area_entity) else {
+        return;
+    };
+    let Some(leaf) = tree.get(binding.0).and_then(|n| n.as_leaf()) else {
+        return;
+    };
+    let Some(entry) = leaf.windows.iter().find(|t| t.id == tab_id) else {
         return;
     };
 
+    let window_id = entry.window_id.clone();
     let window_name = registry
         .get(&window_id)
         .map(|d| d.name.clone())
@@ -162,6 +183,7 @@ fn on_grip_drag_start(
 
     *drag_state = DockDragState::PendingDrag {
         source_tab: entity,
+        tab_id,
         window_id,
         window_name,
         start_pos: Vec2::new(
@@ -199,6 +221,7 @@ fn on_drag_move(
     match &*drag_state {
         DockDragState::PendingDrag {
             source_tab,
+            tab_id,
             window_id,
             window_name,
             start_pos,
@@ -208,6 +231,7 @@ fn on_drag_move(
             }
 
             let source_tab = *source_tab;
+            let tab_id = *tab_id;
             let window_id = window_id.clone();
             let window_name = window_name.clone();
 
@@ -241,6 +265,7 @@ fn on_drag_move(
 
             *drag_state = DockDragState::Dragging {
                 source_tab,
+                tab_id,
                 window_id,
                 window_name,
                 source_area: source_area.unwrap_or(Entity::PLACEHOLDER),
@@ -452,7 +477,7 @@ fn on_drag_end(
             ghost_entity,
             overlay_entity,
             drop_target,
-            window_id,
+            tab_id,
             source_area,
             ..
         } => {
@@ -465,22 +490,19 @@ fn on_drag_end(
                 match target {
                     DropTarget::Panel(target_area) => {
                         if target_area != source_area {
-                            let wid = window_id.clone();
                             commands.queue(move |world: &mut World| {
-                                drop_on_area(world, &wid, target_area);
+                                drop_on_area(world, tab_id, target_area);
                             });
                         }
                     }
                     DropTarget::AreaEdge { area, edge } => {
-                        let wid = window_id.clone();
                         commands.queue(move |world: &mut World| {
-                            drop_on_edge(world, &wid, area, edge);
+                            drop_on_edge(world, tab_id, area, edge);
                         });
                     }
                     DropTarget::TabRow { bar, index } => {
-                        let wid = window_id.clone();
                         commands.queue(move |world: &mut World| {
-                            drop_on_tab_row(world, &wid, bar, index);
+                            drop_on_tab_row(world, tab_id, bar, index);
                         });
                     }
                 }
@@ -517,19 +539,19 @@ fn cancel_drag_on_escape(
     *drag_state = DockDragState::Idle;
 }
 
-/// Move `window_id` into the leaf bound to `target_area`.
-fn drop_on_area(world: &mut World, window_id: &str, target_area: Entity) {
+/// Move the dragged tab into the leaf bound to `target_area`.
+fn drop_on_area(world: &mut World, tab: TabId, target_area: Entity) {
     let Some(binding) = world.entity(target_area).get::<NodeBinding>().copied() else {
         return;
     };
-    world
-        .resource_mut::<DockTree>()
-        .move_window(window_id, binding.0);
+    world.resource_mut::<DockTree>().move_tab(tab, binding.0);
 }
 
-/// Split the leaf bound to `target_area` along `edge` and place
-/// `window_id` into the new sibling.
-fn drop_on_edge(world: &mut World, window_id: &str, target_area: Entity, edge: DropEdge) {
+/// Split the leaf bound to `target_area` along `edge` and reseat the
+/// dragged tab into the new sibling. The tab keeps its window kind
+/// but receives a fresh [`TabId`] (we remove + split rather than
+/// move, since `tree.split` builds the leaf from a window id).
+fn drop_on_edge(world: &mut World, tab: TabId, target_area: Entity, edge: DropEdge) {
     let Some(binding) = world.entity(target_area).get::<NodeBinding>().copied() else {
         return;
     };
@@ -540,12 +562,22 @@ fn drop_on_edge(world: &mut World, window_id: &str, target_area: Entity, edge: D
         DropEdge::Right => TreeEdge::Right,
     };
     let mut tree = world.resource_mut::<DockTree>();
-    tree.remove_window(window_id);
-    tree.split(binding.0, tree_edge, window_id.to_string());
+    let Some(window_id) = tree.find_leaf_for_tab(tab).and_then(|leaf_id| {
+        tree.get(leaf_id)
+            .and_then(|n| n.as_leaf())
+            .and_then(|l| l.windows.iter().find(|t| t.id == tab))
+            .map(|t| t.window_id.clone())
+    }) else {
+        return;
+    };
+    tree.remove_tab(tab);
+    tree.split(binding.0, tree_edge, window_id);
 }
 
-/// Drop `window_id` onto the leaf bound to the `tab_row`'s area at index `index`
-fn drop_on_tab_row(world: &mut World, window_id: &str, tab_row: Entity, index: usize) {
+/// Drop the dragged tab onto the leaf bound to `tab_row` at slot
+/// `index`. Reordering within the source leaf is allowed (drag a tab
+/// to reorder it).
+fn drop_on_tab_row(world: &mut World, tab: TabId, tab_row: Entity, index: usize) {
     let mut parent_query = world.query::<&ChildOf>();
     let parent_query = parent_query.query(world);
 
@@ -563,7 +595,7 @@ fn drop_on_tab_row(world: &mut World, window_id: &str, tab_row: Entity, index: u
     };
 
     let mut tree = world.resource_mut::<DockTree>();
-    tree.insert_window(window_id, binding.0, true, Some(index));
+    tree.insert_tab(tab, binding.0, true, Some(index));
 }
 
 fn find_parent_area(

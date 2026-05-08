@@ -131,10 +131,11 @@ fn reconcile_at(world: &mut World, entity: Entity, node_id: NodeId) {
 fn reconcile_leaf(world: &mut World, entity: Entity, node_id: NodeId, leaf: &DockLeaf) {
     let current_binding = world.entity(entity).get::<NodeBinding>().map(|b| b.0);
     let was_split = world.entity(entity).contains::<PanelGroup>();
-    let current_windows = collect_content_window_ids(world, entity);
+    let current_tabs = collect_content_tab_ids(world, entity);
+    let leaf_tabs: Vec<crate::tree::TabId> = leaf.windows.iter().map(|t| t.id).collect();
 
     let needs_rebuild =
-        was_split || current_binding != Some(node_id) || current_windows != leaf.windows;
+        was_split || current_binding != Some(node_id) || current_tabs != leaf_tabs;
 
     if needs_rebuild {
         despawn_children(world, entity);
@@ -163,7 +164,7 @@ fn reconcile_leaf(world: &mut World, entity: Entity, node_id: NodeId, leaf: &Doc
 
     world
         .entity_mut(entity)
-        .insert(ActiveDockWindow(leaf.active.clone()));
+        .insert(ActiveDockWindow(leaf.active));
     world.entity_mut(entity).insert(NodeBinding(node_id));
 
     // Auto-collapse: when a non-persistent leaf has no windows, hide
@@ -272,13 +273,22 @@ fn reconcile_split(world: &mut World, entity: Entity, node_id: NodeId, split: &D
 }
 
 fn spawn_leaf_ui(world: &mut World, entity: Entity, leaf: &DockLeaf) {
-    let snapshot: Vec<(String, String, Option<String>, crate::DockWindowBuildFn)> = {
+    // Iterate `leaf.windows` so two tabs of the same window kind
+    // produce two entries with distinct `TabId`s.
+    let snapshot: Vec<(
+        crate::tree::TabId,
+        String,
+        String,
+        Option<String>,
+        crate::DockWindowBuildFn,
+    )> = {
         let registry = world.resource::<WindowRegistry>();
         leaf.windows
             .iter()
-            .filter_map(|wid| {
-                let desc = registry.get(wid)?;
+            .filter_map(|tab| {
+                let desc = registry.get(&tab.window_id)?;
                 Some((
+                    tab.id,
                     desc.id.clone(),
                     desc.name.clone(),
                     desc.icon.clone(),
@@ -290,31 +300,35 @@ fn spawn_leaf_ui(world: &mut World, entity: Entity, leaf: &DockLeaf) {
 
     match leaf.style {
         DockAreaStyle::TabBar => {
-            let tabs_data: Vec<(String, String)> = snapshot
+            let tabs_data: Vec<(crate::tree::TabId, String, String)> = snapshot
                 .iter()
-                .map(|(id, name, _, _)| (id.clone(), name.clone()))
+                .map(|(tab_id, id, name, _, _)| (*tab_id, id.clone(), name.clone()))
                 .collect();
             tabs::spawn_tab_bar_world(world, entity, &tabs_data);
         }
         DockAreaStyle::IconSidebar => {
-            let items: Vec<(String, String, Option<String>)> = snapshot
+            let items: Vec<(crate::tree::TabId, String, String, Option<String>)> = snapshot
                 .iter()
-                .map(|(id, name, icon, _)| (id.clone(), name.clone(), icon.clone()))
+                .map(|(tab_id, id, name, icon, _)| {
+                    (*tab_id, id.clone(), name.clone(), icon.clone())
+                })
                 .collect();
             sidebar::spawn_icon_sidebar_world(world, entity, &items);
         }
         DockAreaStyle::Headless => {}
     }
 
-    for (window_id, _name, _icon, build) in &snapshot {
-        let is_active = leaf.active.as_deref() == Some(window_id.as_str());
+    for (tab_id, window_id, _name, _icon, build) in &snapshot {
+        let is_active = leaf.active == Some(*tab_id);
         let content_entity = world
             .spawn((
                 DockWindow {
                     descriptor_id: window_id.clone(),
+                    tab_id: *tab_id,
                 },
                 DockTabContent {
                     window_id: window_id.clone(),
+                    tab_id: *tab_id,
                 },
                 Node {
                     flex_grow: 1.0,
@@ -336,7 +350,7 @@ fn spawn_leaf_ui(world: &mut World, entity: Entity, leaf: &DockLeaf) {
     }
 }
 
-fn collect_content_window_ids(world: &mut World, entity: Entity) -> Vec<String> {
+fn collect_content_tab_ids(world: &mut World, entity: Entity) -> Vec<crate::tree::TabId> {
     let children: Vec<Entity> = world
         .entity(entity)
         .get::<Children>()
@@ -345,7 +359,7 @@ fn collect_content_window_ids(world: &mut World, entity: Entity) -> Vec<String> 
     let mut out = Vec::new();
     for child in children {
         if let Some(c) = world.entity(child).get::<DockTabContent>() {
-            out.push(c.window_id.clone());
+            out.push(c.tab_id);
         }
     }
     out
@@ -533,7 +547,7 @@ fn sync_leaf_visuals(
             if tab_to_area.get(&tab_entity) != Some(&area_entity) {
                 continue;
             }
-            let is_active = leaf.active.as_deref() == Some(tab.window_id.as_str());
+            let is_active = leaf.active == Some(tab.tab_id);
             if let Ok(mut bg) = bgs.get_mut(tab_entity) {
                 bg.0 = if is_active {
                     tokens::TAB_ACTIVE_BG
@@ -568,7 +582,7 @@ fn sync_leaf_visuals(
             if icon_to_area.get(&icon_entity) != Some(&area_entity) {
                 continue;
             }
-            let is_active = leaf.active.as_deref() == Some(icon.window_id.as_str());
+            let is_active = leaf.active == Some(icon.tab_id);
             if let Ok(mut bc) = borders.get_mut(icon_entity) {
                 *bc = BorderColor::all(if is_active {
                     tokens::ACCENT_BLUE
@@ -593,7 +607,7 @@ fn sync_leaf_visuals(
             if child_of.parent() != area_entity {
                 continue;
             }
-            let should_show = leaf.active.as_deref() == Some(content.window_id.as_str());
+            let should_show = leaf.active == Some(content.tab_id);
             let target = if should_show {
                 Display::Flex
             } else {

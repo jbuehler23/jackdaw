@@ -34,6 +34,24 @@ pub const SYNTHETIC_AREA_ID_PREFIX: &str = "split.";
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct NodeId(pub u64);
 
+/// Stable handle to a tab inside a [`DockLeaf`].
+///
+/// Distinct from [`NodeId`]: a `TabId` identifies a specific tab
+/// instance, not the leaf that hosts it. Two tabs can carry the same
+/// `window_id` (e.g. two Outliner tabs side-by-side) and still be
+/// addressed independently for activate / move / close. Allocated
+/// from a per-tree monotonic counter; never reused.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+pub struct TabId(pub u64);
+
+impl TabId {
+    /// Sentinel used while a [`DockLeaf`] is being constructed via
+    /// [`DockLeaf::with_windows`]. The tree rewrites these to fresh
+    /// ids when the leaf is inserted, so they should never appear in
+    /// a live tree.
+    pub(crate) const PENDING: TabId = TabId(0);
+}
+
 /// Which way a split divides its two children.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum SplitAxis {
@@ -67,6 +85,15 @@ impl Edge {
     }
 }
 
+/// One tab inside a [`DockLeaf`]. Pairs a `window_id` with a
+/// per-tree-unique `TabId`, so two tabs of the same window kind can
+/// coexist in one leaf and still be addressed independently.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DockTabEntry {
+    pub window_id: String,
+    pub id: TabId,
+}
+
 /// A leaf in the dock tree: an area that hosts tabbed windows.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DockLeaf {
@@ -74,10 +101,10 @@ pub struct DockLeaf {
     /// dynamic split areas use synthetic ids.
     pub area_id: String,
     pub style: DockAreaStyle,
-    /// Window ids in tab order.
-    pub windows: Vec<String>,
-    /// Which window is currently shown. `None` means the leaf is empty.
-    pub active: Option<String>,
+    /// Tabs in display order.
+    pub windows: Vec<DockTabEntry>,
+    /// Which tab is currently shown. `None` means the leaf is empty.
+    pub active: Option<TabId>,
     /// If true, [`DockTree::simplify`] keeps this leaf in the tree
     /// even when its window list is empty. Built-in editor regions
     /// (left sidebar, right sidebar, bottom dock, viewport center)
@@ -101,9 +128,20 @@ impl DockLeaf {
         }
     }
 
+    /// Seed the leaf with one tab per window id. The tabs carry
+    /// [`TabId::PENDING`] until the leaf is inserted into a
+    /// [`DockTree`], which rewrites them to fresh ids. Direct callers
+    /// that already have a tree should use [`DockTree::add_tab`]
+    /// instead.
     pub fn with_windows(mut self, windows: Vec<String>) -> Self {
-        self.active = windows.first().cloned();
-        self.windows = windows;
+        self.windows = windows
+            .into_iter()
+            .map(|window_id| DockTabEntry {
+                window_id,
+                id: TabId::PENDING,
+            })
+            .collect();
+        self.active = self.windows.first().map(|t| t.id);
         self
     }
 
@@ -118,6 +156,24 @@ impl DockLeaf {
     /// it goes empty.
     pub fn is_persistent(&self) -> bool {
         self.persistent
+    }
+
+    /// Iterate `(window_id, tab_id)` pairs in display order. Helper
+    /// for callers that want both halves of every tab without
+    /// destructuring `DockTabEntry`.
+    pub fn tabs(&self) -> impl Iterator<Item = (&str, TabId)> {
+        self.windows.iter().map(|t| (t.window_id.as_str(), t.id))
+    }
+
+    /// Position of the given tab in the tab bar, or `None` if the tab
+    /// isn't in this leaf.
+    pub fn tab_index(&self, id: TabId) -> Option<usize> {
+        self.windows.iter().position(|t| t.id == id)
+    }
+
+    /// True if any tab in this leaf carries the given `window_id`.
+    pub fn has_window(&self, window_id: &str) -> bool {
+        self.windows.iter().any(|t| t.window_id == window_id)
     }
 }
 
@@ -183,6 +239,10 @@ pub struct DockTree {
     pub root: Option<NodeId>,
     #[serde(default)]
     next_id: u64,
+    /// Counter for [`TabId`] allocation. Starts at 1 so [`TabId::PENDING`]
+    /// (zero) never collides with a live id.
+    #[serde(default)]
+    next_tab_id: u64,
 }
 
 impl DockTree {
@@ -196,10 +256,59 @@ impl DockTree {
         id
     }
 
-    pub fn insert(&mut self, node: DockNode) -> NodeId {
+    fn fresh_tab_id(&mut self) -> TabId {
+        // Skip 0 so live ids never collide with [`TabId::PENDING`].
+        // The first call after a fresh tree returns `TabId(1)`.
+        self.next_tab_id = self.next_tab_id.saturating_add(1).max(1);
+        TabId(self.next_tab_id)
+    }
+
+    pub fn insert(&mut self, mut node: DockNode) -> NodeId {
+        // Stamp fresh `TabId`s on any pending tabs the leaf was
+        // constructed with via [`DockLeaf::with_windows`]. Splits
+        // pass through untouched.
+        if let DockNode::Leaf(ref mut leaf) = node {
+            self.assign_pending_tab_ids(leaf);
+        }
         let id = self.fresh_id();
         self.nodes.insert(id, node);
         id
+    }
+
+    fn assign_pending_tab_ids(&mut self, leaf: &mut DockLeaf) {
+        // Replace `TabId::PENDING` placeholders with fresh ids. Any
+        // already-real ids are kept (round-tripping a tree through
+        // serde shouldn't re-stamp).
+        let active_was_pending = leaf.active == Some(TabId::PENDING);
+        let mut first_real: Option<TabId> = None;
+        for tab in leaf.windows.iter_mut() {
+            if tab.id == TabId::PENDING {
+                tab.id = self.fresh_tab_id();
+            }
+            if first_real.is_none() {
+                first_real = Some(tab.id);
+            }
+        }
+        if active_was_pending {
+            leaf.active = first_real;
+        }
+    }
+
+    /// Append a fresh tab carrying `window_id` to `leaf`, allocate a
+    /// [`TabId`], and make it the active tab. Returns the new id.
+    /// No-op (returns `None`) if `leaf` isn't a leaf node.
+    pub fn add_tab(&mut self, leaf: NodeId, window_id: impl Into<String>) -> Option<TabId> {
+        let window_id = window_id.into();
+        if !matches!(self.nodes.get(&leaf), Some(DockNode::Leaf(_))) {
+            return None;
+        }
+        let id = self.fresh_tab_id();
+        let DockNode::Leaf(l) = self.nodes.get_mut(&leaf)? else {
+            return None;
+        };
+        l.windows.push(DockTabEntry { window_id, id });
+        l.active = Some(id);
+        Some(id)
     }
 
     pub fn get(&self, id: NodeId) -> Option<&DockNode> {
@@ -236,12 +345,30 @@ impl DockTree {
         }
     }
 
-    /// Find the leaf that contains the given window id.
-    pub fn find_leaf(&self, window_id: &str) -> Option<NodeId> {
+    /// Find the leaf that contains a tab carrying the given window
+    /// id. Returns the first match; multi-instance windows can live in
+    /// several leaves at once, in which case prefer
+    /// [`Self::find_leaf_for_tab`] with a specific [`TabId`].
+    pub fn find_leaf_with_window(&self, window_id: &str) -> Option<NodeId> {
         self.nodes.iter().find_map(|(id, node)| match node {
-            DockNode::Leaf(l) if l.windows.iter().any(|w| w == window_id) => Some(*id),
+            DockNode::Leaf(l) if l.has_window(window_id) => Some(*id),
             _ => None,
         })
+    }
+
+    /// Find the leaf hosting the given tab id.
+    pub fn find_leaf_for_tab(&self, tab: TabId) -> Option<NodeId> {
+        self.nodes.iter().find_map(|(id, node)| match node {
+            DockNode::Leaf(l) if l.windows.iter().any(|t| t.id == tab) => Some(*id),
+            _ => None,
+        })
+    }
+
+    /// Iterate every `(leaf, tab)` pair across the tree. Useful for
+    /// callers that need to enumerate every instance of a window kind.
+    pub fn tabs(&self) -> impl Iterator<Item = (NodeId, &DockTabEntry)> {
+        self.leaves()
+            .flat_map(|(leaf_id, leaf)| leaf.windows.iter().map(move |t| (leaf_id, t)))
     }
 
     /// Find the leaf with the given canonical `area_id`.
@@ -286,12 +413,19 @@ impl DockTree {
         }
     }
 
-    /// Split `target` along `edge` and place `window` into the newly-
-    /// created sibling leaf. Returns the id of the new leaf.
+    /// Split `target` along `edge` and place a new tab carrying
+    /// `window` into the freshly-created sibling leaf. Returns
+    /// `(new_leaf, tab_id)` so callers can drive follow-up
+    /// activate / move logic against the just-spawned tab.
     ///
     /// `target` must be a leaf. The split's fraction defaults to 0.5
     /// (equal sizes); adjust afterwards via [`Self::set_fraction`].
-    pub fn split(&mut self, target: NodeId, edge: Edge, window: String) -> Option<NodeId> {
+    pub fn split(
+        &mut self,
+        target: NodeId,
+        edge: Edge,
+        window: String,
+    ) -> Option<(NodeId, TabId)> {
         // Ensure target is a leaf.
         if !matches!(self.nodes.get(&target), Some(DockNode::Leaf(_))) {
             return None;
@@ -309,12 +443,19 @@ impl DockTree {
         // so we can use it to make the synthetic area_id unique;
         // otherwise multiple splits of the same window would collide.
         let new_leaf_id = self.fresh_id();
+        let tab_id = self.fresh_tab_id();
         self.nodes.insert(
             new_leaf_id,
-            DockNode::Leaf(
-                DockLeaf::new(fresh_area_id(&window, new_leaf_id), new_style)
-                    .with_windows(vec![window]),
-            ),
+            DockNode::Leaf(DockLeaf {
+                area_id: fresh_area_id(&window, new_leaf_id),
+                style: new_style,
+                windows: vec![DockTabEntry {
+                    window_id: window,
+                    id: tab_id,
+                }],
+                active: Some(tab_id),
+                persistent: false,
+            }),
         );
 
         // Figure out target's parent first.
@@ -352,7 +493,7 @@ impl DockTree {
             }
         }
 
-        Some(new_leaf_id)
+        Some((new_leaf_id, tab_id))
     }
 
     /// Set the split's fraction, clamped to `(0.05, 0.95)`.
@@ -362,35 +503,36 @@ impl DockTree {
         }
     }
 
-    /// Set which window is active in a leaf. No-op if the window isn't in
+    /// Make `tab` the active tab in `leaf`. No-op if the tab isn't in
     /// the leaf's tab list.
-    pub fn set_active(&mut self, leaf: NodeId, window_id: &str) {
+    pub fn set_active(&mut self, leaf: NodeId, tab: TabId) {
         if let Some(DockNode::Leaf(l)) = self.nodes.get_mut(&leaf)
-            && l.windows.iter().any(|w| w == window_id)
+            && l.windows.iter().any(|t| t.id == tab)
         {
-            l.active = Some(window_id.to_string());
+            l.active = Some(tab);
         }
     }
 
-    /// Move `window` out of its current leaf and into `to` as the active
-    /// tab. If the source leaf becomes empty, it is removed and the tree
-    /// simplified. No-op if `window` isn't in the tree or `to` isn't a leaf.
-    pub fn move_window(&mut self, window: &str, to: NodeId) {
-        self.insert_window(window, to, false, None);
+    /// Move `tab` out of its current leaf and into `to` as the active
+    /// tab. If the source leaf becomes empty (and isn't persistent), it
+    /// is removed and the tree simplified. No-op if `tab` isn't in the
+    /// tree or `to` isn't a leaf.
+    pub fn move_tab(&mut self, tab: TabId, to: NodeId) {
+        self.insert_tab(tab, to, false, None);
     }
 
-    /// Move `window` out of its current leaf and into `to` at index `index` if some,
-    /// otherwise as the last tab as the active tab.
-    /// If the source leaf becomes empty, it is removed and the tree
-    /// simplified. No-op if `window` isn't in the tree or `to` isn't a leaf.
-    pub fn insert_window(
+    /// Move `tab` out of its current leaf and into `to`. `index` slots
+    /// the tab at the given position (clamped); `None` appends.
+    /// `allow_same = true` lets a tab be reordered within its current
+    /// leaf, otherwise same-leaf moves are no-ops.
+    pub fn insert_tab(
         &mut self,
-        window: &str,
+        tab: TabId,
         to: NodeId,
         allow_same: bool,
         index: Option<usize>,
     ) {
-        let Some(from) = self.find_leaf(window) else {
+        let Some(from) = self.find_leaf_for_tab(tab) else {
             return;
         };
         if !allow_same && from == to {
@@ -399,40 +541,62 @@ impl DockTree {
         if !matches!(self.nodes.get(&to), Some(DockNode::Leaf(_))) {
             return;
         }
-        // Remove from source.
-        if let Some(DockNode::Leaf(l)) = self.nodes.get_mut(&from) {
-            l.windows.retain(|w| w != window);
-            if l.active.as_deref() == Some(window) {
-                l.active = l.windows.first().cloned();
+        // Pluck the entry out of the source. Holds the (window_id,
+        // tab_id) pair while we move it; ids never change as a tab
+        // changes leaves.
+        let entry = {
+            let Some(DockNode::Leaf(l)) = self.nodes.get_mut(&from) else {
+                return;
+            };
+            let Some(pos) = l.windows.iter().position(|t| t.id == tab) else {
+                return;
+            };
+            let entry = l.windows.remove(pos);
+            if l.active == Some(tab) {
+                l.active = l.windows.first().map(|t| t.id);
             }
-        }
-        // Append to destination and activate.
+            entry
+        };
         if let Some(DockNode::Leaf(l)) = self.nodes.get_mut(&to) {
-            if let Some(index) = index {
-                l.windows
-                    .insert(index.clamp(0, l.windows.len()), window.to_string());
-            } else {
-                l.windows.push(window.to_string());
+            let new_id = entry.id;
+            match index {
+                Some(idx) => l.windows.insert(idx.clamp(0, l.windows.len()), entry),
+                None => l.windows.push(entry),
             }
-            l.active = Some(window.to_string());
+            l.active = Some(new_id);
         }
         // Source may be empty now; simplify will collapse it.
         self.simplify();
     }
 
-    /// Remove a window from its leaf. If the leaf goes empty, the tree
-    /// is simplified.
-    pub fn remove_window(&mut self, window: &str) {
-        let Some(leaf) = self.find_leaf(window) else {
+    /// Remove `tab` from its leaf. If the leaf goes empty (and isn't
+    /// persistent), the tree is simplified.
+    pub fn remove_tab(&mut self, tab: TabId) {
+        let Some(leaf) = self.find_leaf_for_tab(tab) else {
             return;
         };
         if let Some(DockNode::Leaf(l)) = self.nodes.get_mut(&leaf) {
-            l.windows.retain(|w| w != window);
-            if l.active.as_deref() == Some(window) {
-                l.active = l.windows.first().cloned();
+            l.windows.retain(|t| t.id != tab);
+            if l.active == Some(tab) {
+                l.active = l.windows.first().map(|t| t.id);
             }
         }
         self.simplify();
+    }
+
+    /// Convenience: drop every tab whose `window_id` matches. Used by
+    /// dock-tree maintenance paths that want to purge a kind of
+    /// window wholesale (e.g. removing a viewport panel via the icon
+    /// sidebar's close action).
+    pub fn remove_window_kind(&mut self, window_id: &str) {
+        let to_remove: Vec<TabId> = self
+            .tabs()
+            .filter(|(_, t)| t.window_id == window_id)
+            .map(|(_, t)| t.id)
+            .collect();
+        for tab in to_remove {
+            self.remove_tab(tab);
+        }
     }
 
     /// Collapse the tree:
@@ -520,6 +684,39 @@ mod tests {
             .with_windows(windows.iter().map(ToString::to_string).collect())
     }
 
+    /// Window ids on a leaf in tab order (drops the `TabId`s for
+    /// readable assertions).
+    fn window_ids(t: &DockTree, leaf: NodeId) -> Vec<String> {
+        t.nodes[&leaf]
+            .as_leaf()
+            .unwrap()
+            .windows
+            .iter()
+            .map(|w| w.window_id.clone())
+            .collect()
+    }
+
+    /// `TabId` of the active tab on a leaf.
+    fn active_window_id<'a>(t: &'a DockTree, leaf: NodeId) -> Option<&'a str> {
+        let l = t.nodes[&leaf].as_leaf()?;
+        let id = l.active?;
+        l.windows.iter().find(|w| w.id == id).map(|w| w.window_id.as_str())
+    }
+
+    /// `TabId` of the first tab carrying the given `window_id` in the
+    /// given leaf. Useful in tests because builders insert tabs with
+    /// fresh ids that aren't known at the call site.
+    fn tab_id_for(t: &DockTree, leaf: NodeId, window_id: &str) -> TabId {
+        t.nodes[&leaf]
+            .as_leaf()
+            .unwrap()
+            .windows
+            .iter()
+            .find(|w| w.window_id == window_id)
+            .unwrap()
+            .id
+    }
+
     #[test]
     fn set_root_leaf_works() {
         let mut t = DockTree::new();
@@ -529,10 +726,22 @@ mod tests {
     }
 
     #[test]
+    fn pending_tab_ids_are_stamped_on_insert() {
+        // `with_windows` seeds tabs with `TabId::PENDING`; the tree
+        // must rewrite them as the leaf is inserted so live ids never
+        // collide with the sentinel and active points at a real tab.
+        let mut t = DockTree::new();
+        let root = t.set_root_leaf(leaf("root", &["a", "b"]));
+        let l = t.nodes[&root].as_leaf().unwrap();
+        assert!(l.windows.iter().all(|w| w.id != TabId::PENDING));
+        assert_eq!(l.active, Some(l.windows[0].id));
+    }
+
+    #[test]
     fn split_inserts_new_leaf_and_wraps_target() {
         let mut t = DockTree::new();
         let root = t.set_root_leaf(leaf("root", &["a"]));
-        let new_leaf = t.split(root, Edge::Right, "b".into()).unwrap();
+        let (new_leaf, _) = t.split(root, Edge::Right, "b".into()).unwrap();
 
         // Root is now a split.
         let root_split = t.nodes[&t.root.unwrap()].as_split().unwrap();
@@ -541,17 +750,15 @@ mod tests {
         assert_eq!(root_split.b, new_leaf);
         assert_eq!(root_split.fraction, 0.5);
 
-        // The original leaf still has window "a".
-        assert_eq!(t.nodes[&root].as_leaf().unwrap().windows, vec!["a"]);
-        // New leaf has "b".
-        assert_eq!(t.nodes[&new_leaf].as_leaf().unwrap().windows, vec!["b"]);
+        assert_eq!(window_ids(&t, root), vec!["a"]);
+        assert_eq!(window_ids(&t, new_leaf), vec!["b"]);
     }
 
     #[test]
     fn split_top_puts_new_in_a() {
         let mut t = DockTree::new();
         let root = t.set_root_leaf(leaf("root", &["a"]));
-        let new_leaf = t.split(root, Edge::Top, "b".into()).unwrap();
+        let (new_leaf, _) = t.split(root, Edge::Top, "b".into()).unwrap();
         let s = t.nodes[&t.root.unwrap()].as_split().unwrap();
         assert_eq!(s.a, new_leaf);
         assert_eq!(s.b, root);
@@ -561,7 +768,7 @@ mod tests {
     fn split_bottom_puts_new_in_b() {
         let mut t = DockTree::new();
         let root = t.set_root_leaf(leaf("root", &["a"]));
-        let new_leaf = t.split(root, Edge::Bottom, "b".into()).unwrap();
+        let (new_leaf, _) = t.split(root, Edge::Bottom, "b".into()).unwrap();
         let s = t.nodes[&t.root.unwrap()].as_split().unwrap();
         assert_eq!(s.a, root);
         assert_eq!(s.b, new_leaf);
@@ -571,49 +778,47 @@ mod tests {
     fn split_of_nested_leaf_preserves_other_sibling() {
         let mut t = DockTree::new();
         let root = t.set_root_leaf(leaf(&DefaultArea::Left.anchor_id(), &["a"]));
-        let right = t.split(root, Edge::Right, "b".into()).unwrap();
+        let (right, _) = t.split(root, Edge::Right, "b".into()).unwrap();
         let _deeper = t.split(right, Edge::Bottom, "c".into()).unwrap();
 
-        // Left leaf (id == root) still reachable and unchanged.
-        assert_eq!(t.nodes[&root].as_leaf().unwrap().windows, vec!["a"]);
-        // New leaf under `right` still has "b" in the correct leaf.
-        let b_leaf = t.find_leaf("b").unwrap();
-        assert_eq!(t.nodes[&b_leaf].as_leaf().unwrap().windows, vec!["b"]);
+        assert_eq!(window_ids(&t, root), vec!["a"]);
+        let b_leaf = t.find_leaf_with_window("b").unwrap();
+        assert_eq!(window_ids(&t, b_leaf), vec!["b"]);
     }
 
     #[test]
-    fn move_window_relocates_and_activates() {
+    fn move_tab_relocates_and_activates() {
         let mut t = DockTree::new();
         let root = t.set_root_leaf(leaf("root", &["a", "b"]));
-        let right = t.split(root, Edge::Right, "c".into()).unwrap();
-        t.move_window("a", right);
+        let (right, _) = t.split(root, Edge::Right, "c".into()).unwrap();
+        let tab_a = tab_id_for(&t, root, "a");
+        t.move_tab(tab_a, right);
 
-        assert_eq!(t.nodes[&root].as_leaf().unwrap().windows, vec!["b"]);
-        let dest = t.nodes[&right].as_leaf().unwrap();
-        assert_eq!(dest.windows, vec!["c", "a"]);
-        assert_eq!(dest.active.as_deref(), Some("a"));
+        assert_eq!(window_ids(&t, root), vec!["b"]);
+        assert_eq!(window_ids(&t, right), vec!["c", "a"]);
+        assert_eq!(active_window_id(&t, right), Some("a"));
     }
 
     #[test]
-    fn move_last_window_simplifies_tree() {
+    fn move_last_tab_simplifies_tree() {
         let mut t = DockTree::new();
         let root = t.set_root_leaf(leaf("root", &["a"]));
-        let right = t.split(root, Edge::Right, "b".into()).unwrap();
-        // Move "a" to the right leaf. Left leaf is now empty and should collapse.
-        t.move_window("a", right);
+        let (right, _) = t.split(root, Edge::Right, "b".into()).unwrap();
+        let tab_a = tab_id_for(&t, root, "a");
+        t.move_tab(tab_a, right);
 
-        // The tree should now be a single leaf (right) at the root.
         assert!(matches!(t.nodes[&t.root.unwrap()], DockNode::Leaf(_)));
         assert_eq!(t.leaves().count(), 1);
-        let surviving = t.nodes[&t.root.unwrap()].as_leaf().unwrap();
-        assert_eq!(surviving.windows, vec!["b", "a"]);
+        let surviving = t.root.unwrap();
+        assert_eq!(window_ids(&t, surviving), vec!["b", "a"]);
     }
 
     #[test]
-    fn remove_last_window_keeps_root_empty_leaf() {
+    fn remove_last_tab_keeps_root_empty_leaf() {
         let mut t = DockTree::new();
         let root = t.set_root_leaf(leaf("root", &["a"]));
-        t.remove_window("a");
+        let tab_a = tab_id_for(&t, root, "a");
+        t.remove_tab(tab_a);
 
         assert_eq!(t.root, Some(root));
         assert!(t.nodes[&root].as_leaf().unwrap().windows.is_empty());
@@ -632,20 +837,34 @@ mod tests {
     }
 
     #[test]
-    fn set_active_requires_window_in_leaf() {
+    fn set_active_requires_tab_in_leaf() {
         let mut t = DockTree::new();
         let root = t.set_root_leaf(leaf("root", &["a", "b"]));
-        t.set_active(root, "b");
-        assert_eq!(
-            t.nodes[&root].as_leaf().unwrap().active.as_deref(),
-            Some("b")
-        );
-        // Non-member window is a no-op.
-        t.set_active(root, "z");
-        assert_eq!(
-            t.nodes[&root].as_leaf().unwrap().active.as_deref(),
-            Some("b")
-        );
+        let tab_b = tab_id_for(&t, root, "b");
+        t.set_active(root, tab_b);
+        assert_eq!(active_window_id(&t, root), Some("b"));
+        // Stranger tab id from elsewhere is a no-op.
+        t.set_active(root, TabId(9999));
+        assert_eq!(active_window_id(&t, root), Some("b"));
+    }
+
+    #[test]
+    fn duplicate_window_kind_supported() {
+        // The point of `TabId`: two tabs of the same window kind can
+        // share a leaf and still be addressed independently.
+        let mut t = DockTree::new();
+        let root = t.set_root_leaf(DockLeaf::new("root", DockAreaStyle::TabBar));
+        let first = t.add_tab(root, "outliner").unwrap();
+        let second = t.add_tab(root, "outliner").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(window_ids(&t, root), vec!["outliner", "outliner"]);
+
+        // Closing the second leaves the first.
+        t.remove_tab(second);
+        let l = t.nodes[&root].as_leaf().unwrap();
+        assert_eq!(l.windows.len(), 1);
+        assert_eq!(l.windows[0].id, first);
+        assert_eq!(l.active, Some(first));
     }
 
     #[test]
@@ -657,8 +876,8 @@ mod tests {
         let json = serde_json::to_string(&t).unwrap();
         let restored: DockTree = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.leaves().count(), 2);
-        assert!(restored.find_leaf("a").is_some());
-        assert!(restored.find_leaf("b").is_some());
+        assert!(restored.find_leaf_with_window("a").is_some());
+        assert!(restored.find_leaf_with_window("b").is_some());
     }
 
     #[test]
@@ -674,8 +893,9 @@ mod tests {
                 .persistent(),
         ));
         t.root = Some(original);
-        let other = t.split(original, Edge::Right, "b".into()).unwrap();
-        t.move_window("a", other);
+        let (other, _) = t.split(original, Edge::Right, "b".into()).unwrap();
+        let tab_a = tab_id_for(&t, original, "a");
+        t.move_tab(tab_a, other);
         let persistent_leaf = t.nodes[&original].as_leaf().unwrap();
         assert!(persistent_leaf.windows.is_empty());
         assert!(persistent_leaf.is_persistent());
@@ -685,12 +905,15 @@ mod tests {
     fn nested_split_chain_simplifies_when_drained() {
         let mut t = DockTree::new();
         let root = t.set_root_leaf(leaf("root", &["a"]));
-        let right = t.split(root, Edge::Right, "b".into()).unwrap();
+        let (right, _) = t.split(root, Edge::Right, "b".into()).unwrap();
         let _bottom = t.split(right, Edge::Bottom, "c".into()).unwrap();
 
         // Drain everything off the right subtree via move.
-        t.move_window("b", root);
-        t.move_window("c", root);
+        let tab_b = tab_id_for(&t, right, "b");
+        t.move_tab(tab_b, root);
+        let bottom_leaf = t.find_leaf_with_window("c").unwrap();
+        let tab_c = tab_id_for(&t, bottom_leaf, "c");
+        t.move_tab(tab_c, root);
 
         assert!(matches!(t.nodes[&t.root.unwrap()], DockNode::Leaf(_)));
         assert_eq!(t.leaves().count(), 1);

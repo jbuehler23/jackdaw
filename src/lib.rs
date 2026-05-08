@@ -1166,16 +1166,13 @@ fn has_selected_keyframes(
 fn timeline_with_clip(
     input_focus: Res<bevy::input_focus::InputFocus>,
     active: ActiveModalQuery,
-    docks: Query<&jackdaw_panels::ActiveDockWindow>,
+    tree: Res<jackdaw_panels::tree::DockTree>,
     selected_clip: Res<jackdaw_animation::SelectedClip>,
 ) -> bool {
     if input_focus.0.is_some() || active.is_modal_running() {
         return false;
     }
-    if !docks
-        .iter()
-        .any(|d| d.0.as_deref() == Some("jackdaw.timeline"))
-    {
+    if !crate::transform_ops::active_tab_kind_present(&tree, "jackdaw.timeline") {
         return false;
     }
     selected_clip.0.is_some()
@@ -1184,17 +1181,14 @@ fn timeline_with_clip(
 fn timeline_paste_available(
     input_focus: Res<bevy::input_focus::InputFocus>,
     active: ActiveModalQuery,
-    docks: Query<&jackdaw_panels::ActiveDockWindow>,
+    tree: Res<jackdaw_panels::tree::DockTree>,
     selected_clip: Res<jackdaw_animation::SelectedClip>,
     clipboard: Res<jackdaw_animation::KeyframeClipboard>,
 ) -> bool {
     if input_focus.0.is_some() || active.is_modal_running() {
         return false;
     }
-    if !docks
-        .iter()
-        .any(|d| d.0.as_deref() == Some("jackdaw.timeline"))
-    {
+    if !crate::transform_ops::active_tab_kind_present(&tree, "jackdaw.timeline") {
         return false;
     }
     selected_clip.0.is_some() && !clipboard.entries.is_empty()
@@ -2861,7 +2855,7 @@ fn largest_visible_leaf(
 }
 
 fn open_window_in_default_area(world: &mut World, window_id: &str) {
-    use jackdaw_panels::tree::{DockNode, DockTree, Edge};
+    use jackdaw_panels::tree::DockTree;
 
     let Some(default_area) = world
         .resource::<jackdaw_panels::WindowRegistry>()
@@ -2905,39 +2899,30 @@ fn open_window_in_default_area(world: &mut World, window_id: &str) {
         return;
     };
 
-    let already_in_target = world
+    let target_is_empty = world
         .resource::<DockTree>()
         .get(target_leaf)
         .and_then(|n| n.as_leaf())
-        .map(|l| l.windows.iter().any(|w| w == window_id))
+        .map(|l| l.windows.is_empty())
         .unwrap_or(false);
 
     let mut tree = world.resource_mut::<DockTree>();
-    if already_in_target {
-        // Target leaf already hosts the window. Split off a sibling
-        // leaf so a fresh instance lands beside the existing one.
-        // Pushing a duplicate id into the same leaf would confuse the
-        // reconciler (which keys content entities by window_id), so
-        // we never do that. Existing instances elsewhere in the tree
-        // are left alone; each Window-menu click yields a new copy.
-        if let Some(new_leaf) = tree.split(target_leaf, Edge::Right, window_id.to_string()) {
-            tree.set_active(new_leaf, window_id);
-        }
-    } else if let Some(DockNode::Leaf(leaf)) = tree.get_mut(target_leaf) {
-        // Normalize: a leaf that was left over from a collapsed split
-        // still carries a synthetic `area_id` ("split.<window>.<id>")
-        // from when it was created. Now that the user is repopulating
-        // it via the canonical area name, rewrite the area_id back so
-        // downstream lookups (save/load diagnostics, find_by_area_id)
-        // see a consistent id.
-        if leaf.windows.is_empty() && leaf.area_id != default_area {
-            leaf.area_id = default_area.clone();
-        }
-        if !leaf.windows.iter().any(|w| w == window_id) {
-            leaf.windows.push(window_id.to_string());
-        }
-        leaf.active = Some(window_id.to_string());
+
+    // Normalize: a leaf left over from a collapsed split still
+    // carries a synthetic `area_id` ("split.<window>.<id>"). If the
+    // user is repopulating the canonical area, restore the canonical
+    // id so downstream lookups (save/load diagnostics,
+    // `find_by_area_id`) see a consistent value.
+    if target_is_empty
+        && let Some(leaf) = tree.get_mut(target_leaf).and_then(|n| n.as_leaf_mut())
+        && leaf.area_id != default_area
+    {
+        leaf.area_id = default_area.clone();
     }
+
+    // Each Window-menu click yields a fresh tab. The reconciler picks
+    // up the new entry on next tick and rebuilds the panel UI.
+    let _ = tree.add_tab(target_leaf, window_id);
 }
 
 /// Reset the active workspace to the default seed: clear the live
@@ -3060,8 +3045,9 @@ fn build_default_tree(world: &mut World) {
     // new leaf gets a synthetic area_id, so closing project_files
     // collapses it back into the rest of the left sidebar.
     if left_windows.iter().any(|w| w == "jackdaw.project_files") {
-        tree.remove_window("jackdaw.project_files");
-        if let Some(new_leaf) = tree.split(left, Edge::Bottom, "jackdaw.project_files".to_string())
+        tree.remove_window_kind("jackdaw.project_files");
+        if let Some((new_leaf, _)) =
+            tree.split(left, Edge::Bottom, "jackdaw.project_files".to_string())
             && let Some(split_id) = tree.parent_of(new_leaf)
         {
             tree.set_fraction(split_id, 0.75);

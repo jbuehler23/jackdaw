@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use jackdaw_feathers::tokens;
 
 use crate::reconcile::LeafBinding;
-use crate::tree::DockTree;
+use crate::tree::{DockTree, TabId};
 
 #[derive(Component)]
 pub struct DockSidebarContainer;
@@ -11,14 +11,15 @@ pub struct DockSidebarContainer;
 #[derive(Component)]
 pub struct DockSidebarIcon {
     pub window_id: String,
+    pub tab_id: TabId,
 }
 
 pub fn spawn_icon_sidebar_world(
     world: &mut World,
     area_entity: Entity,
-    windows: &[(String, String, Option<String>)],
+    windows: &[(TabId, String, String, Option<String>)],
 ) {
-    let first_id = windows.first().map(|(id, _, _)| id.clone());
+    let first = windows.first().map(|(id, _, _, _)| *id);
 
     let sidebar = world
         .spawn((
@@ -56,14 +57,15 @@ pub fn spawn_icon_sidebar_world(
         ))
         .id();
 
-    for (window_id, _name, icon_char) in windows {
-        let is_active = Some(window_id) == first_id.as_ref();
+    for (tab_id, window_id, _name, icon_char) in windows {
+        let is_active = Some(*tab_id) == first;
         let icon_text = icon_char.as_deref().unwrap_or("?");
 
         let icon_entity = world
             .spawn((
                 DockSidebarIcon {
                     window_id: window_id.clone(),
+                    tab_id: *tab_id,
                 },
                 Interaction::default(),
                 Node {
@@ -104,7 +106,7 @@ pub fn spawn_icon_sidebar_world(
         ));
     }
 
-    let _ = first_id; // ActiveDockWindow is set by reconcile::materialize_area
+    let _ = first; // ActiveDockWindow is set by reconcile::materialize_area
 }
 
 pub fn handle_sidebar_icon_clicks(
@@ -133,11 +135,11 @@ pub fn handle_sidebar_icon_clicks(
             continue;
         };
 
-        tree.set_active(binding.0, &icon.window_id);
+        tree.set_active(binding.0, icon.tab_id);
     }
 }
 
-/// Right-click on a sidebar icon closes (removes) that window from its
+/// Right-click on a sidebar icon closes (removes) that tab from its
 /// leaf. Sidebar icons don't have a visible X button, so this is the
 /// equivalent of clicking X on a tab.
 pub fn on_sidebar_icon_right_click(
@@ -151,5 +153,5 @@ pub fn on_sidebar_icon_right_click(
     let Ok(icon) = icons.get(trigger.event_target()) else {
         return;
     };
-    tree.remove_window(&icon.window_id);
+    tree.remove_tab(icon.tab_id);
 }

@@ -160,7 +160,7 @@ fn can_act_on_entities(
     modal: Res<crate::modal_transform::ModalTransformState>,
     draw_state: Res<crate::draw_brush::DrawBrushState>,
     edit_mode: Res<crate::brush::EditMode>,
-    docks: Query<&jackdaw_panels::ActiveDockWindow>,
+    tree: Res<jackdaw_panels::tree::DockTree>,
 ) -> bool {
     if input_focus.0.is_some() || active.is_modal_running() || modal.active.is_some() {
         return false;
@@ -168,13 +168,25 @@ fn can_act_on_entities(
     if draw_state.active.is_some() {
         return false;
     }
-    if docks
-        .iter()
-        .any(|d| d.0.as_deref() == Some("jackdaw.timeline"))
-    {
+    if active_tab_kind_present(&tree, "jackdaw.timeline") {
         return false;
     }
     matches!(*edit_mode, crate::brush::EditMode::Object)
+}
+
+/// True if any leaf in the dock tree has its active tab pointing at a
+/// window of the given kind. The active tab is keyed by `TabId`, so
+/// "is the timeline currently focused somewhere?" requires looking
+/// up the active id back to its window kind.
+pub(crate) fn active_tab_kind_present(
+    tree: &jackdaw_panels::tree::DockTree,
+    window_id: &str,
+) -> bool {
+    tree.leaves().any(|(_, leaf)| {
+        leaf.active
+            .and_then(|tab| leaf.windows.iter().find(|t| t.id == tab))
+            .is_some_and(|t| t.window_id == window_id)
+    })
 }
 
 // ── Reset ops ───────────────────────────────────────────────────

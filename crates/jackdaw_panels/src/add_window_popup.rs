@@ -6,7 +6,7 @@ use crate::{
     DockTabBar, DockTabContent, DockWindow, WindowRegistry,
     reconcile::LeafBinding,
     tabs::{DockTabAddButton, DockTabRow},
-    tree::{DockNode, DockTree, Edge},
+    tree::DockTree,
 };
 
 #[derive(Component)]
@@ -202,30 +202,12 @@ fn add_window_to_area(world: &mut World, window_id: &str, area_entity: Entity) {
         return;
     };
 
-    {
-        let mut tree = world.resource_mut::<DockTree>();
-        let already_in_leaf = matches!(
-            tree.get(binding.0),
-            Some(DockNode::Leaf(leaf)) if leaf.windows.iter().any(|w| w == window_id)
-        );
-        if already_in_leaf {
-            // The reconciler keys content entities by window_id, so
-            // two tabs with the same id in one leaf would be
-            // ambiguous. Split a sibling leaf to the right and seat
-            // the new instance there. The reconciler picks it up next
-            // pass and rebuilds; we leave the rest of this function
-            // as a no-op since the freshly-split leaf has no
-            // `area_entity` mapping yet.
-            tree.split(binding.0, Edge::Right, window_id.to_string());
-            return;
-        }
-        if let Some(DockNode::Leaf(leaf)) = tree.get_mut(binding.0) {
-            leaf.windows.push(window_id.to_string());
-            leaf.active = Some(window_id.to_string());
-        } else {
-            return;
-        }
-    }
+    // Allocate a fresh TabId in the tree; the reconciler keys both
+    // the tab button and content entity by this id, so duplicates of
+    // the same window kind stay distinguishable.
+    let Some(tab_id) = world.resource_mut::<DockTree>().add_tab(binding.0, window_id) else {
+        return;
+    };
 
     // Walk: area → DockTabBar → DockTabRow.
     let tab_row = world
@@ -244,16 +226,18 @@ fn add_window_to_area(world: &mut World, window_id: &str, area_entity: Entity) {
         });
 
     if let Some(tab_row) = tab_row {
-        crate::tabs::spawn_tab_in_world(world, tab_row, window_id, &name, false);
+        crate::tabs::spawn_tab_in_world(world, tab_row, tab_id, window_id, &name, false);
     }
 
     let content_entity = world
         .spawn((
             DockWindow {
                 descriptor_id: window_id.to_string(),
+                tab_id,
             },
             DockTabContent {
                 window_id: window_id.to_string(),
+                tab_id,
             },
             Node {
                 flex_grow: 1.0,
