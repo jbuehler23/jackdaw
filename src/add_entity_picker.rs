@@ -9,7 +9,7 @@ use jackdaw_feathers::picker::{
     Category, Matchable, PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text,
     picker_item,
 };
-use jackdaw_feathers::tokens;
+use jackdaw_feathers::tooltip::Tooltip;
 
 use crate::entity_ops::{
     EntityAddCameraOp, EntityAddCubeOp, EntityAddDirectionalLightOp, EntityAddEmptyOp,
@@ -216,35 +216,17 @@ fn spawn_item(
 ) -> Result {
     let item = items.get(entities.picker)?.at(matched.index)?;
 
-    let entry_id = commands
-        .spawn((picker_item(matched.index), ChildOf(entities.list)))
-        .id();
-
-    let row = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                justify_content: JustifyContent::SpaceBetween,
-                width: Val::Percent(100.0),
-                ..Default::default()
-            },
-            ChildOf(entry_id),
-        ))
-        .id();
-
-    commands.spawn((match_text(matched.segments), ChildOf(row)));
-
-    if let Some(name) = item.category.clone().name {
-        commands.spawn((
-            Text::new(name),
-            TextFont {
-                font_size: tokens::FONT_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-            ChildOf(row),
-        ));
+    let mut tooltip = Tooltip::title(matched.haystack);
+    if let Some(category) = &item.category.name {
+        tooltip = tooltip.with_footer(category);
     }
+
+    commands.spawn((
+        picker_item(matched.index),
+        ChildOf(entities.list),
+        tooltip,
+        children![match_text(matched.segments)],
+    ));
 
     Ok(())
 }

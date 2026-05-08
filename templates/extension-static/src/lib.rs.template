@@ -15,8 +15,7 @@
 //!         .add_plugins(DefaultPlugins)
 //!         .add_plugins(EditorPlugins::default())
 //!         .add_plugins(
-//!             ExtensionPlugin::new()
-//!                 .with_extension::<{{crate_name}}::{{crate_name | pascal_case}}>(),
+//!             ExtensionPlugin::new().with_extension::<{{crate_name}}::{{crate_name | pascal_case}}>(),
 //!         )
 //!         .run();
 //! }
@@ -50,9 +49,7 @@ impl JackdawExtension for {{crate_name | pascal_case}} {
             default_area: None,
             priority: None,
             build: Arc::new(|spawner: &mut ChildSpawner| {
-                spawner.spawn(Text::new(
-                    "Hello from the {{project-name}} extension!",
-                ));
+                spawner.spawn(Text::new("Hello from the {{project-name}} extension!"));
             }),
         });
     }

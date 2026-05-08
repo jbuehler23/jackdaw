@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 
 use bevy::prelude::*;
-use jackdaw::inspector::component_picker::enumerate_pickable_components;
+use jackdaw::inspector::component_picker::{PickerDenylist, enumerate_pickable_components};
 
 #[test]
 fn user_components_reach_picker() {
@@ -23,7 +23,8 @@ fn user_components_reach_picker() {
         .world()
         .resource::<bevy::ecs::reflect::AppTypeRegistry>()
         .read();
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new());
+    let pickables =
+        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
     let names: Vec<&str> = pickables.iter().map(|p| p.short_name.as_str()).collect();
 
     assert!(

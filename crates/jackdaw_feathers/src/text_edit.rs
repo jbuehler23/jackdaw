@@ -250,6 +250,27 @@ impl TextEditProps {
         self.max = i32::MAX as f64;
         self
     }
+
+    /// Numeric input for any integer type up to `i64`/`u32` range.
+    /// Same display/filter as [`Self::numeric_i32`] but with bounds
+    /// that cover `u32` bitmasks (e.g. `CollisionLayers::memberships`)
+    /// without clamping. Use for any inspector field whose source
+    /// type is integer (`u32`, `i64`, `usize`, ...) but whose actual
+    /// range is unknown at the call site.
+    pub fn numeric_int(mut self) -> Self {
+        self.variant = TextEditVariant::NumericI32;
+        self.filter = Some(FilterType::Integer);
+        self.prefix = Some(TextEditPrefix::Label {
+            label: "↔".to_string(),
+            size: TEXT_SIZE,
+            color: None,
+        });
+        // f64 covers exact integers up to 2^53; that's more than
+        // enough headroom for u32 (full range) and any practical i64.
+        self.min = -(1i64 << 53) as f64;
+        self.max = (1i64 << 53) as f64;
+        self
+    }
 }
 
 pub fn text_edit(props: TextEditProps) -> impl Bundle {
@@ -916,7 +937,13 @@ fn parse_numeric_value(text: &str, suffix: Option<&TextEditSuffix>) -> f64 {
 
 pub fn format_numeric_value(value: f64, variant: TextEditVariant) -> String {
     match variant {
-        TextEditVariant::NumericI32 => (value.round() as i32).to_string(),
+        // Round to integer; cast through `i64` so values that exceed
+        // the `i32` range (e.g. `u32` bitmasks like
+        // `CollisionLayers::filters` near `u32::MAX`) round-trip
+        // without saturation. The variant predates the wider
+        // `numeric_int()` builder; the name `NumericI32` now stands
+        // for "integer formatting", not the literal type.
+        TextEditVariant::NumericI32 => (value.round() as i64).to_string(),
         TextEditVariant::NumericF32 => {
             let rounded = (value * 100.0).round() / 100.0;
             format!("{rounded:.2}")
@@ -965,5 +992,63 @@ fn sync_text_edit_values(
             }
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Integer-typed reflect fields (e.g. `u32` bitmasks like
+    /// `CollisionLayers::filters`) flow through `format_numeric_value`
+    /// when the inspector refreshes their inputs from ECS state. The
+    /// `NumericI32` variant must format without a decimal *and*
+    /// preserve values that exceed the `i32` range (`u32::MAX` and
+    /// any `u32` with the high bit set).
+    #[test]
+    fn integer_variant_formats_without_decimal() {
+        assert_eq!(format_numeric_value(0.0, TextEditVariant::NumericI32), "0");
+        assert_eq!(
+            format_numeric_value(255.0, TextEditVariant::NumericI32),
+            "255",
+        );
+        assert_eq!(
+            format_numeric_value(-7.0, TextEditVariant::NumericI32),
+            "-7",
+        );
+    }
+
+    /// `u32::MAX` (`4294967295`) survives the round-trip through
+    /// `f64`. The previous implementation cast through `i32` and
+    /// saturated to `2147483647`, which corrupted the visible value
+    /// of any full-bitmask `CollisionLayers::filters`.
+    #[test]
+    fn integer_variant_preserves_full_u32_range() {
+        let u32_max = u32::MAX as f64;
+        assert_eq!(
+            format_numeric_value(u32_max, TextEditVariant::NumericI32),
+            "4294967295",
+        );
+
+        // High-bit-set u32 (above i32::MAX) used to round-trip to a
+        // negative i32; check the most-significant bit alone.
+        let high_bit = (1u32 << 31) as f64;
+        assert_eq!(
+            format_numeric_value(high_bit, TextEditVariant::NumericI32),
+            "2147483648",
+        );
+    }
+
+    /// Float variant keeps two decimals (drag-input UX).
+    #[test]
+    fn float_variant_keeps_two_decimals() {
+        assert_eq!(
+            format_numeric_value(1.234, TextEditVariant::NumericF32),
+            "1.23",
+        );
+        assert_eq!(
+            format_numeric_value(0.0, TextEditVariant::NumericF32),
+            "0.00",
+        );
     }
 }

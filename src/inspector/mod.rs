@@ -11,6 +11,7 @@ pub(crate) mod reflect_fields;
 
 use crate::EditorEntity;
 
+use bevy::ecs::archetype::ArchetypeId;
 use bevy::prelude::*;
 
 const MAX_REFLECT_DEPTH: usize = 4;
@@ -23,6 +24,13 @@ fn extract_module_group(module_path: Option<&str>) -> String {
     };
     // Get first path segment
     let first = path.split("::").next().unwrap_or(path);
+    // Group jackdaw's avian wrapper alongside avian3d's own types
+    // so AvianCollider sits in the same inspector section as
+    // RigidBody, Sensor, etc. instead of getting its own
+    // `Jackdaw_avian_integration` heading.
+    if first == "avian3d" || first == "jackdaw_avian_integration" {
+        return "Avian3d".to_string();
+    }
     // Strip "bevy_" prefix and capitalize
     let name = first.strip_prefix("bevy_").unwrap_or(first);
     // Map common module names to cleaner labels
@@ -54,7 +62,7 @@ fn extract_module_group(module_path: Option<&str>) -> String {
 
 // Editor display metadata as Bevy reflect custom attributes.
 // Newtypes live in `jackdaw_jsn`, re-exported here.
-pub use jackdaw_runtime::{EditorCategory, EditorDescription};
+pub use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 
 #[reflect_trait]
 pub trait Displayable {
@@ -86,6 +94,10 @@ pub struct InspectorPlugin;
 
 impl Plugin for InspectorPlugin {
     fn build(&self, app: &mut App) {
+        let mut denylist = component_picker::PickerDenylist::default();
+        component_picker::populate_avian_picker_denylist(&mut denylist);
+        app.insert_resource(denylist);
+
         app.register_type_data::<Name, ReflectDisplayable>()
             .add_plugins(component_tooltip::plugin)
             .add_observer(component_display::remove_component_displays)
@@ -94,7 +106,6 @@ impl Plugin for InspectorPlugin {
             .add_observer(component_picker::on_add_component_button_click)
             .add_observer(reflect_fields::on_checkbox_commit)
             .add_observer(reflect_fields::on_text_edit_commit)
-            .add_observer(physics_display::on_physics_enable_toggle)
             .add_observer(custom_props_display::on_custom_property_checkbox_commit)
             .add_observer(custom_props_display::on_custom_property_text_commit)
             .add_observer(brush_display::on_brush_face_text_commit)
@@ -111,6 +122,7 @@ impl Plugin for InspectorPlugin {
                     anim_diamond::decorate_animatable_fields,
                     anim_diamond::update_anim_diamond_highlights,
                     refresh_name_field,
+                    flag_inspector_dirty_on_archetype_change,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             );
@@ -348,4 +360,46 @@ pub(crate) struct InspectorDirty;
 /// Force inspector rebuild by marking the source entity dirty.
 pub(super) fn rebuild_inspector(world: &mut World, source_entity: Entity) {
     world.entity_mut(source_entity).insert(InspectorDirty);
+}
+
+/// Rebuild the inspector when the displayed entity's archetype changes.
+///
+/// Some component picks pull in extra components asynchronously (e.g.
+/// `AvianCollider` triggers our `PostUpdate` sync that builds a real
+/// `Collider`, after which avian's own systems insert `Position`,
+/// `Rotation`, `ColliderAabb`, mass aggregates, etc.). Without this
+/// watcher the panel built by `add_component_displays` keeps showing
+/// only the originally-added component until the user reselects.
+///
+/// Comparing the cached `ArchetypeId` to the live one is O(1) and only
+/// fires on real archetype transitions, so the rebuild cost matches
+/// the user's edit rate, not the framerate.
+fn flag_inspector_dirty_on_archetype_change(
+    world: &mut World,
+    mut last: Local<Option<(Entity, ArchetypeId)>>,
+) {
+    let mut targets = world.query_filtered::<&InspectorTarget, With<Inspector>>();
+    let target = targets.iter(world).next().map(|t| t.0);
+
+    let Some(target) = target else {
+        *last = None;
+        return;
+    };
+
+    let current = world.get_entity(target).ok().map(|e| e.archetype().id());
+
+    let stored = last.as_ref().filter(|(e, _)| *e == target).map(|(_, a)| *a);
+
+    if stored == current {
+        return;
+    }
+
+    if stored.is_some()
+        && current.is_some()
+        && let Ok(mut e) = world.get_entity_mut(target)
+    {
+        e.insert(InspectorDirty);
+    }
+
+    *last = current.map(|arch| (target, arch));
 }

@@ -12,6 +12,7 @@ bevy.workspace = true
 jackdaw_feathers.workspace = true
 jackdaw_commands.workspace = true
 jackdaw_node_graph.workspace = true
+jackdaw_jsn.workspace = true
 lucide-icons = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 

@@ -45,12 +45,8 @@ impl Plugin for MyGamePlugin {
 /// workspace-wide). No `register_type` call (Bevy 0.18's
 /// `reflect_auto_register` handles it). No `Default` derive
 /// either; jackdaw constructs one from primitive field defaults.
-///
-/// To bucket into a named category or override the tooltip, add
-/// a typed reflect attribute:
-/// `#[reflect(Component, @EditorCategory::new("Gameplay"))]`.
 #[derive(Component, Reflect)]
-#[reflect(Component)]
+#[reflect(Component, @EditorCategory::new("Actor"))]
 pub struct SpinningCube {
     pub speed: f32,
 }

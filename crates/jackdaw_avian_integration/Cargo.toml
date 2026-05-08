@@ -8,7 +8,9 @@ repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
 bevy.workspace = true
-avian3d.workspace = true
+# `debug-plugin` enables avian's `PhysicsGizmoExt::draw_collider` and the
+# `PhysicsGizmos` config group used by the editor's collider overlay.
+avian3d = { workspace = true, features = ["debug-plugin"] }
 
 [lints]
 workspace = true

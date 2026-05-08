@@ -165,7 +165,7 @@ fn update_active_preview_material(
     }
 
     match &preview_state.active_material {
-        Some(handle) => {
+        Some(handle) if *handle != Handle::default() => {
             if let Ok(mut sphere_mat) = sphere_q.single_mut() {
                 sphere_mat.0 = handle.clone();
             }
@@ -173,7 +173,7 @@ fn update_active_preview_material(
                 cam.is_active = true;
             }
         }
-        None => {
+        _ => {
             if let Ok(mut cam) = camera_q.single_mut() {
                 cam.is_active = false;
             }

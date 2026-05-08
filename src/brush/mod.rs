@@ -30,7 +30,11 @@ pub struct BrushMeshCache {
 }
 
 /// Marker on child entities that render individual brush faces.
+/// Brush faces are derived from the parent brush's `Brush` data,
+/// so they're always hidden from the outliner and excluded from
+/// the saved scene.
 #[derive(Component)]
+#[require(crate::EditorHidden, crate::NonSerializable)]
 pub struct BrushFaceEntity {
     pub brush_entity: Entity,
     pub face_index: usize,

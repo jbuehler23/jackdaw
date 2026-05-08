@@ -1,8 +1,8 @@
-# Extending the Editor
+# Extending the editor
 
 Jackdaw extensions are plain Rust crates that you write using
 bevy-native APIs. Scaffolding, building, and installing are all
-driven from inside the editor — no custom build scripts, no cargo
+driven from inside the editor. No custom build scripts, no cargo
 gymnastics, no hash-matching games.
 
 ## Prerequisite: install Bevy CLI
@@ -32,9 +32,9 @@ Projects list is empty.
 
 Click **+ New Extension** on the launcher. Fill in:
 
-- **Name** — the crate name for your extension (e.g. `my_tool`).
-- **Location** — parent directory the project will be created
-  under. `Browse…` opens a folder picker.
+- **Name**: the crate name for your extension (e.g. `my_tool`).
+- **Location**: parent directory the project will be created
+  under. The `Browse` button opens a folder picker.
 
 Click **Create**. Jackdaw invokes
 `bevy new -t https://github.com/jbuehler23/jackdaw_template_extension --yes <name>`
@@ -43,12 +43,12 @@ in the chosen location, then opens the newly-scaffolded project.
 ### 3. Edit and build
 
 Edit `my_tool/src/lib.rs` in your preferred editor. Then, inside
-jackdaw: **File → Extensions → Build from project folder…**, pick
-`my_tool/`. Jackdaw runs `cargo rustc` with the right `--extern`
-flags and live-loads the resulting dylib. Windows, operators, and
-menu entries activate immediately.
+jackdaw: **File > Extensions > Build from project folder**, and
+pick `my_tool/`. Jackdaw runs `cargo rustc` with the right
+`--extern` flags and live-loads the resulting dylib. Windows,
+operators, and menu entries activate immediately.
 
-Iterate: edit code, click **Build from project folder…** again,
+Iterate: edit code, click **Build from project folder** again,
 see the changes.
 
 ### Creating a game
@@ -68,7 +68,7 @@ an extension it invokes `cargo rustc` with explicit
 `--extern bevy=libjackdaw_sdk.so` and
 `--extern jackdaw_api=libjackdaw_sdk.so` flags. Your extension's
 code writes plain `use bevy::prelude::*;` and
-`use jackdaw_api::prelude::*;` — those names resolve at compile
+`use jackdaw_api::prelude::*;`, and those names resolve at compile
 time through the SDK.
 
 Scaffolded projects therefore have an *empty* `[dependencies]`
@@ -99,8 +99,8 @@ restart.
 ### Install a prebuilt dylib
 
 If you already have a compatible `.so` / `.dylib` / `.dll`
-(a teammate's build, a CI artefact), use **File → Extensions →
-Install prebuilt dylib…** and pick the file. The editor copies it
+(a teammate's build, a CI artefact), use **File > Extensions >
+Install prebuilt dylib** and pick the file. The editor copies it
 into the extension directory and live-loads.
 
 ### Statically link an extension
@@ -126,30 +126,29 @@ editor.
 
 ## Troubleshooting
 
-- *bevy CLI not found* — install it (`cargo install --locked
+- *bevy CLI not found*: install it (`cargo install --locked
   --git https://github.com/TheBevyFlock/bevy_cli bevy_cli`) and
   make sure `bevy` is on your `PATH`.
-- *SDK dylib not found* — rebuild the editor with
+- *SDK dylib not found*: rebuild the editor with
   `cargo run --features dylib`. Without that feature, jackdaw
   doesn't produce `libjackdaw_sdk.so`.
-- *cargo exited with non-zero status* during Build — your
+- *cargo exited with non-zero status* during Build: your
   extension has a compile error. The status line shows cargo's
   stderr.
-- *picked path has no Cargo.toml* — point at the project root,
+- *picked path has no Cargo.toml*: point at the project root,
   not the `src/` directory.
 
 ## In-tree examples
 
-The repo has two rich examples statically linked into the
-prebuilt binary (behind the `dev` feature):
+The workspace has two example extensions you can read or
+build against:
 
-- `examples/sample_extension/` — operators with keybinds,
-  availability checks, a dock window, and menu entries. Good
-  reference for what the API supports.
-- `examples/viewable_camera_extension/` — shows off heavier scene
-  manipulation through `ExtensionContext::world()`.
+- `examples/extension/dynamic_extension/`: operators with
+  keybinds, availability checks, a dock window, and menu
+  entries. Good reference for what the API supports.
+- `examples/extension/viewable_camera_extension/`: heavier
+  scene manipulation through `ExtensionContext::world()`.
 
-Both use the static-linking path, so they skip the build-button
-step. They're there to exercise the API surface; day-to-day
-authoring should use the `+ New Extension` / `+ New Game`
-workflow described above.
+They build like any other workspace crate. They're there to
+exercise the API surface; day-to-day authoring should use the
+`+ New Extension` / `+ New Game` workflow described above.

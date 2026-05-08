@@ -1100,6 +1100,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
         bindings![(MouseButton::Right, Press::default())],
     ));
+    ctx.spawn((
+        Action::<RenameBeginOp>::new(),
+        ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
+        bindings![(KeyCode::F2, Press::default())],
+    ));
 }
 
 /// Marker for inline rename `text_edit` entity, linking back to the label entity and source entity.
@@ -1121,6 +1126,19 @@ fn on_tree_row_start_rename(event: On<TreeRowStartRename>, mut commands: Command
 /// inline rename is already in progress.
 fn no_rename_in_progress(rename_check: Query<(), With<InlineRenameInput>>) -> bool {
     rename_check.is_empty()
+}
+
+/// Pick the entity to rename: the explicit `entity` operator
+/// parameter wins (used by the context-menu "Rename" action and the
+/// `TreeRowStartRename` event), otherwise fall back to the primary
+/// selection so a bare F2 press renames whatever the user has
+/// highlighted in the outliner. Pulled out so the regression check
+/// for the F2-without-selection path can run as a unit test.
+pub(crate) fn resolve_rename_target(
+    params: &OperatorParameters,
+    selection: &Selection,
+) -> Option<Entity> {
+    params.as_entity("entity").or_else(|| selection.primary())
 }
 
 fn entity_name(names: &Query<&Name>, entity: Entity) -> String {
@@ -1193,6 +1211,7 @@ pub fn rename_begin(
     names: Query<&Name>,
     rename_inputs: Query<(), With<InlineRenameInput>>,
     active: ActiveModalQuery,
+    selection: Res<Selection>,
 ) -> OperatorResult {
     if active.is_modal_running() {
         return if rename_inputs.is_empty() {
@@ -1202,7 +1221,7 @@ pub fn rename_begin(
         };
     }
 
-    let Some(source) = params.as_entity("entity") else {
+    let Some(source) = resolve_rename_target(&params, &selection) else {
         return OperatorResult::Cancelled;
     };
     let Some((label_entity, content_entity)) = find_rename_targets(
@@ -1612,5 +1631,64 @@ fn apply_hierarchy_filter(
                 Display::None
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jackdaw_api_internal::operator::OperatorParameters;
+    use jackdaw_jsn::PropertyValue;
+    use std::collections::BTreeMap;
+
+    fn empty_params() -> OperatorParameters {
+        OperatorParameters(BTreeMap::new())
+    }
+
+    fn params_with_entity(key: &str, entity: Entity) -> OperatorParameters {
+        let mut map = BTreeMap::new();
+        map.insert(key.to_string(), PropertyValue::Entity(entity));
+        OperatorParameters(map)
+    }
+
+    /// `RenameBeginOp` dispatched with an explicit `entity` param
+    /// (the path the context-menu "Rename" item and the
+    /// `TreeRowStartRename` event use) returns that entity. The
+    /// param wins over any selection state.
+    #[test]
+    fn resolve_rename_target_prefers_entity_param() {
+        let target = Entity::from_raw_u32(7).unwrap();
+        let other = Entity::from_raw_u32(42).unwrap();
+        let params = params_with_entity("entity", target);
+        let selection = Selection {
+            entities: vec![other],
+        };
+        assert_eq!(resolve_rename_target(&params, &selection), Some(target));
+    }
+
+    /// F2 keybind regression cover: the bare keypress dispatches
+    /// `RenameBeginOp` with no params, and the operator must read
+    /// the primary selection. Before the fix, the op early-returned
+    /// `Cancelled` whenever no `entity` param was supplied, so F2
+    /// silently did nothing even with a selected outliner row.
+    #[test]
+    fn resolve_rename_target_falls_back_to_selection_primary() {
+        let primary = Entity::from_raw_u32(11).unwrap();
+        let params = empty_params();
+        let selection = Selection {
+            // The last entry is the primary selection.
+            entities: vec![Entity::from_raw_u32(99).unwrap(), primary],
+        };
+        assert_eq!(resolve_rename_target(&params, &selection), Some(primary));
+    }
+
+    /// No param, no selection: the op cancels. Confirms the early
+    /// bail still fires, so a stray F2 in an empty scene doesn't
+    /// fall into find-rename-targets with a garbage entity.
+    #[test]
+    fn resolve_rename_target_returns_none_without_selection_or_param() {
+        let params = empty_params();
+        let selection = Selection::default();
+        assert_eq!(resolve_rename_target(&params, &selection), None);
     }
 }

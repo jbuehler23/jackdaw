@@ -40,6 +40,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ env.LD_LIBRARY_PATH }}
+          shared-key: tests
 
       - name: Install dependencies
         run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
@@ -57,10 +58,10 @@ jobs:
         run: cargo binstall cargo-nextest --locked --force
 
       - name: Run tests
-        run: cargo nextest run --locked --workspace --lib --bins --tests --no-fail-fast --no-tests warn
+        run: cargo nextest run --locked --workspace --lib --bins --tests --no-fail-fast --no-tests warn --features bevy/dynamic_linking
 
       - name: Run doctests
-        run: cargo test --locked --workspace --doc
+        run: cargo test --locked --workspace --doc --features bevy/dynamic_linking
 
   # The Windows dylib smoke job that previously ran here is removed
   # while the dylib path is experimental. Re-add when the dylib flow
@@ -93,7 +94,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustc-codegen-cranelift-preview
+          components: rustc-codegen-cranelift-preview, rustfmt, clippy
           toolchain: ${{ env.toolchain }}
 
       - name: Set LD_LIBRARY_PATH
@@ -111,6 +112,9 @@ jobs:
       - name: Install cargo-generate
         run: cargo binstall cargo-generate --locked --force
 
+      - name: Install nextest
+        run: cargo binstall cargo-nextest --locked --force
+
       - name: Install dependencies
         run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
@@ -118,7 +122,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          shared-key: template-${{ matrix.template }}
+          cache-directories: ${{ env.LD_LIBRARY_PATH }}
+          shared-key: template
 
       - name: Scaffold ${{ matrix.template }}
         env:
@@ -136,6 +141,7 @@ jobs:
             --name "$name" \
             --destination "$RUNNER_TEMP" \
             --silent
+          cp -r "$checkout/.cargo" "$RUNNER_TEMP/"
           # Pin the scaffolded project's `jackdaw` / `jackdaw_runtime`
           # deps to THIS checkout so we test the template against
           # the PR under review, not against whatever's on crates.io
@@ -150,16 +156,23 @@ jobs:
           jackdaw_runtime = { path = "$checkout/crates/jackdaw_runtime" }
           EOF
 
-      - name: Compile ${{ matrix.template }}
+      - name: Run cargo fmt
+        run: |
+          set -euxo pipefail
+          name="test_$(echo "${{ matrix.template }}" | tr - _)"
+          cd "$RUNNER_TEMP/$name"
+          cargo fmt --all -- --check
+
+      - name: Run cargo clippy
         # No `--locked`: cargo-generate doesn't ship a Cargo.lock,
         # and the patched jackdaw deps would mismatch one anyway.
         run: |
           set -euxo pipefail
           name="test_$(echo "${{ matrix.template }}" | tr - _)"
           cd "$RUNNER_TEMP/$name"
-          cargo check --all-targets
+          cargo clippy --workspace --all-targets --target-dir "$GITHUB_WORKSPACE/target" --features bevy/dynamic_linking -- --deny warnings
 
-      - name: Test ${{ matrix.template }} with editor feature
+      - name: Run tests
         # Game-static ships a smoke test that exercises the
         # editor's component picker against the project's own
         # `MyGamePlugin`. Skip for templates without a `tests/`
@@ -169,7 +182,7 @@ jobs:
           name="test_$(echo "${{ matrix.template }}" | tr - _)"
           cd "$RUNNER_TEMP/$name"
           if [[ -d tests ]]; then
-            cargo test --features editor
+            cargo nextest run --locked --workspace --lib --bins --tests --no-fail-fast --no-tests warn --features editor,bevy/dynamic_linking --target-dir "$GITHUB_WORKSPACE/target"
           else
             echo "no tests/ directory in scaffolded ${{ matrix.template }}; skipping"
           fi
@@ -208,10 +221,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: false
+          cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: lints
 
       - name: Run clippy lints
-        run: cargo clippy --locked --workspace --all-targets -- --deny warnings
+        run: cargo clippy --locked --workspace --all-targets --features bevy/dynamic_linking -- --deny warnings
 
   # Check formatting.
   format:
@@ -265,6 +279,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: false
+          cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: lints
 
       - name: Check documentation
@@ -292,6 +307,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: lints
 
       - name: Install Bevy linter
@@ -310,4 +326,4 @@ jobs:
         run: cargo binstall wild-linker --locked --force
 
       - name: Run Bevy linter
-        run: bevy_lint --locked --workspace --all-targets
+        run: bevy_lint --locked --workspace --all-targets --features bevy/dynamic_linking

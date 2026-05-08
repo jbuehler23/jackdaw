@@ -8,7 +8,6 @@ use bevy::{
 };
 
 use super::{BrushFaceEntity, BrushMaterialPalette, BrushMeshCache, BrushPreview};
-use crate::NonSerializable;
 use crate::default_style;
 use crate::draw_brush::DrawBrushState;
 use crate::selection::Selected;
@@ -185,7 +184,8 @@ pub fn regenerate_brush_meshes(
                     MeshMaterial3d(material),
                     Transform::default(),
                     ChildOf(entity),
-                    NonSerializable,
+                    // `BrushFaceEntity` requires `EditorHidden +
+                    // NonSerializable`; nothing to insert here.
                 ))
                 .id();
             if is_default {

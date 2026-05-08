@@ -250,38 +250,6 @@ fn is_editable_primitive(value: &dyn PartialReflect) -> bool {
         || value.try_downcast_ref::<String>().is_some()
 }
 
-/// Public entry point for spawning a single field row. Used by
-/// `physics_display` for collider variant fields.
-pub(super) fn spawn_field_row_public(
-    commands: &mut Commands,
-    parent: Entity,
-    name: &str,
-    value: &dyn PartialReflect,
-    depth: usize,
-    field_path: String,
-    source_entity: Entity,
-    type_path: &str,
-    entity_names: &Query<&Name>,
-    type_registry: &AppTypeRegistry,
-    editor_font: &Handle<Font>,
-    icon_font: &Handle<Font>,
-) {
-    spawn_field_row(
-        commands,
-        parent,
-        name,
-        value,
-        depth,
-        field_path,
-        source_entity,
-        type_path,
-        entity_names,
-        type_registry,
-        editor_font,
-        icon_font,
-    );
-}
-
 fn spawn_field_row(
     commands: &mut Commands,
     parent: Entity,
@@ -593,6 +561,7 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            false,
         );
         return;
     }
@@ -606,11 +575,15 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            false,
         );
         return;
     }
 
-    // Integer fields -> numeric input with drag-to-scrub
+    // Integer fields -> integer-only input. Renders without a
+    // trailing `.0` and refuses decimal point on commit, so
+    // bitmask types (e.g. `CollisionLayers::filters`, `LayerMask`)
+    // round-trip without lossy `f32` conversion.
     if let Some(&v) = value.try_downcast_ref::<i32>() {
         spawn_numeric_field(
             commands,
@@ -621,6 +594,7 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            true,
         );
         return;
     }
@@ -634,6 +608,7 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            true,
         );
         return;
     }
@@ -647,6 +622,7 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            true,
         );
         return;
     }
@@ -660,6 +636,7 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            true,
         );
         return;
     }
@@ -673,6 +650,7 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            true,
         );
         return;
     }
@@ -686,6 +664,7 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            true,
         );
         return;
     }
@@ -699,6 +678,7 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            true,
         );
         return;
     }
@@ -712,6 +692,7 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            true,
         );
         return;
     }
@@ -725,6 +706,7 @@ fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+            true,
         );
         return;
     }
@@ -1350,6 +1332,7 @@ fn spawn_numeric_field(
     source_entity: Entity,
     type_path: &str,
     depth: usize,
+    is_integer: bool,
 ) {
     let left_padding = depth as f32 * tokens::SPACING_MD;
     let col = commands
@@ -1382,13 +1365,23 @@ fn spawn_numeric_field(
         ChildOf(col),
     ));
 
+    // Integer source types (u32, i64, ...) format as integer and
+    // accept integer-only input; floats keep the f32 path. Without
+    // this split, a `u32` bitmask like `CollisionLayers::filters`
+    // would render as `4294967295` in a float-mode input that
+    // accepts decimals and rounds through `f32` on commit.
+    let (default_value, props) = if is_integer {
+        (
+            (value as i64).to_string(),
+            TextEditProps::default().numeric_int(),
+        )
+    } else {
+        (value.to_string(), TextEditProps::default().numeric_f32())
+    };
+
     // Input below
     commands.spawn((
-        text_edit::text_edit(
-            TextEditProps::default()
-                .numeric_f32()
-                .with_default_value(value.to_string()),
-        ),
+        text_edit::text_edit(props.with_default_value(default_value)),
         FieldBinding {
             source_entity,
             type_path: type_path.to_string(),
@@ -2343,18 +2336,6 @@ pub(super) fn spawn_variant_contents(
 }
 
 /// Apply an enum variant change with undo support.
-/// Public entry point for switching an enum variant with undo support.
-/// Used by `physics_display` for the collider type dropdown.
-pub(super) fn apply_enum_variant_with_undo_public(
-    world: &mut World,
-    entity: Entity,
-    type_path: &str,
-    field_path: &str,
-    variant_name: &str,
-) {
-    apply_enum_variant_with_undo(world, entity, type_path, field_path, variant_name);
-}
-
 fn apply_enum_variant_with_undo(
     world: &mut World,
     _entity: Entity,
