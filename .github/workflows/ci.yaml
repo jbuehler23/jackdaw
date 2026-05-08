@@ -151,14 +151,6 @@ jobs:
           jackdaw_runtime = { path = "$checkout/crates/jackdaw_runtime" }
           EOF
 
-      - name: Compile ${{ matrix.template }}
-        # No `--locked`: cargo-generate doesn't ship a Cargo.lock,
-        # and the patched jackdaw deps would mismatch one anyway.
-        run: |
-          set -euxo pipefail
-          name="test_$(echo "${{ matrix.template }}" | tr - _)"
-          cd "$RUNNER_TEMP/$name"
-
       - name: CD into ${{ matrix.template }}
         # Game-static ships a smoke test that exercises the
         # editor's component picker against the project's own
@@ -168,31 +160,6 @@ jobs:
           set -euxo pipefail
           name="test_$(echo "${{ matrix.template }}" | tr - _)"
           cd "$RUNNER_TEMP/$name"
-
-      - name: Set LD_LIBRARY_PATH
-        run: |
-          echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
-
-      - name: Populate target directory from cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-directories: ${{ env.LD_LIBRARY_PATH }}
-
-      - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
-
-      - name: Activate CI cargo config
-        run: mv .cargo/config_ci.toml .cargo/config.toml
-
-      - name: Install cargo binstall
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: Install Wild
-        run: cargo binstall wild-linker --locked --force
-
-      - name: Install nextest
-        run: cargo binstall cargo-nextest --locked --force
 
       - name: Run cargo check
         run: cargo check --all-targets
