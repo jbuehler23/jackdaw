@@ -2822,6 +2822,44 @@ fn init_layout(world: &mut World) {
 /// If it isn't in the tree at all, push it onto the target leaf and
 /// activate. Pushing populates the target leaf, which restores its
 /// visibility automatically.
+/// Pick the leaf with the largest relative area, excluding icon
+/// sidebars (which are too narrow to host most windows). Walks the
+/// split tree from the root and accumulates each split's `fraction`
+/// (or `1.0 - fraction` on the secondary side) so the result reflects
+/// the leaf's current proportional size in the workspace, not just
+/// its position in storage.
+fn largest_visible_leaf(
+    tree: &jackdaw_panels::tree::DockTree,
+) -> Option<jackdaw_panels::tree::NodeId> {
+    use jackdaw_panels::DockAreaStyle;
+    use jackdaw_panels::tree::{DockNode, NodeId};
+
+    fn walk(
+        tree: &jackdaw_panels::tree::DockTree,
+        node: NodeId,
+        area: f32,
+        out: &mut Vec<(NodeId, f32, DockAreaStyle)>,
+    ) {
+        match tree.get(node) {
+            Some(DockNode::Leaf(l)) => out.push((node, area, l.style.clone())),
+            Some(DockNode::Split(s)) => {
+                walk(tree, s.a, area * s.fraction, out);
+                walk(tree, s.b, area * (1.0 - s.fraction), out);
+            }
+            None => {}
+        }
+    }
+
+    let root = tree.root?;
+    let mut leaves = Vec::new();
+    walk(tree, root, 1.0, &mut leaves);
+    leaves
+        .into_iter()
+        .filter(|(_, _, style)| !matches!(style, DockAreaStyle::IconSidebar))
+        .max_by(|(_, a, _), (_, b, _)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(id, _, _)| id)
+}
+
 fn open_window_in_default_area(world: &mut World, window_id: &str) {
     use jackdaw_panels::tree::{DockNode, DockTree, Edge};
 
@@ -2835,16 +2873,33 @@ fn open_window_in_default_area(world: &mut World, window_id: &str) {
 
     let target_leaf = {
         let tree = world.resource::<DockTree>();
-        // If the window declared a canonical area_id, place it on that
-        // leaf. Otherwise (extension windows that don't pin a default
-        // location) fall back to the first leaf in the tree so the
-        // user can reposition from there.
-        if default_area.is_empty() {
-            tree.leaves().next().map(|(id, _)| id)
+        // First choice: the window's canonical area. Second choice:
+        // the largest non-IconSidebar leaf, computed by walking the
+        // split tree and accumulating fractions. The previous fallback
+        // (`tree.leaves().next()`) returned an arbitrary leaf because
+        // the underlying storage is a HashMap; a Window-menu open of
+        // "Viewport" could silently land in a thin sidebar tab where
+        // the user didn't see it.
+        let canonical = if default_area.is_empty() {
+            None
         } else {
             tree.find_by_area_id(&default_area)
-                .or_else(|| tree.leaves().next().map(|(id, _)| id))
-        }
+        };
+        canonical.or_else(|| {
+            let pick = largest_visible_leaf(tree);
+            if pick.is_none() {
+                warn!(
+                    "open_window_in_default_area({window_id}): no leaf matched \
+                     `{default_area}` and no visible leaf available as fallback",
+                );
+            } else if !default_area.is_empty() {
+                warn!(
+                    "open_window_in_default_area({window_id}): canonical area \
+                     `{default_area}` not found; placing in largest visible leaf",
+                );
+            }
+            pick
+        })
     };
     let Some(target_leaf) = target_leaf else {
         return;
@@ -2857,21 +2912,17 @@ fn open_window_in_default_area(world: &mut World, window_id: &str) {
         .map(|l| l.windows.iter().any(|w| w == window_id))
         .unwrap_or(false);
 
-    let lives_elsewhere =
-        !already_in_target && world.resource::<DockTree>().find_leaf(window_id).is_some();
-
     let mut tree = world.resource_mut::<DockTree>();
     if already_in_target {
-        // The target leaf already hosts this window. Split off a new
-        // sibling leaf so the user gets a second instance side-by-side
-        // with the existing one. Without this, clicking Window menu
-        // entries like "Viewport" would silently no-op once a panel of
-        // that type is already open.
+        // Target leaf already hosts the window. Split off a sibling
+        // leaf so a fresh instance lands beside the existing one.
+        // Pushing a duplicate id into the same leaf would confuse the
+        // reconciler (which keys content entities by window_id), so
+        // we never do that. Existing instances elsewhere in the tree
+        // are left alone; each Window-menu click yields a new copy.
         if let Some(new_leaf) = tree.split(target_leaf, Edge::Right, window_id.to_string()) {
             tree.set_active(new_leaf, window_id);
         }
-    } else if lives_elsewhere {
-        tree.move_window(window_id, target_leaf);
     } else if let Some(DockNode::Leaf(leaf)) = tree.get_mut(target_leaf) {
         // Normalize: a leaf that was left over from a collapsed split
         // still carries a synthetic `area_id` ("split.<window>.<id>")

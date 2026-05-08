@@ -6,7 +6,7 @@ use crate::{
     DockTabBar, DockTabContent, DockWindow, WindowRegistry,
     reconcile::LeafBinding,
     tabs::{DockTabAddButton, DockTabRow},
-    tree::{DockNode, DockTree},
+    tree::{DockNode, DockTree, Edge},
 };
 
 #[derive(Component)]
@@ -39,7 +39,6 @@ fn on_add_button_click(
     buttons: Query<(&DockTabAddButton, &UiGlobalTransform, &ComputedNode)>,
     existing_popups: Query<Entity, With<AddWindowPopup>>,
     registry: Res<WindowRegistry>,
-    existing_windows: Query<(&DockTabContent, &ChildOf)>,
     mut commands: Commands,
 ) {
     let entity = trigger.event_target();
@@ -53,15 +52,14 @@ fn on_add_button_click(
 
     let area_entity = button.area_entity;
 
-    let already_in_area: Vec<String> = existing_windows
-        .iter()
-        .filter(|(_, co)| co.parent() == area_entity)
-        .map(|(content, _)| content.window_id.clone())
-        .collect();
-
+    // Show every registered window, even ones already in this leaf.
+    // `add_window_to_area` handles the already-in-leaf case by
+    // splitting a sibling so each click reliably produces a fresh
+    // panel instance. Filtering the menu instead would force the
+    // user to drag panels around just to keep more than one of any
+    // given kind on screen.
     let available: Vec<(String, String)> = registry
         .iter()
-        .filter(|w| !already_in_area.contains(&w.id))
         .map(|w| (w.id.clone(), w.name.clone()))
         .collect();
 
@@ -206,10 +204,23 @@ fn add_window_to_area(world: &mut World, window_id: &str, area_entity: Entity) {
 
     {
         let mut tree = world.resource_mut::<DockTree>();
+        let already_in_leaf = matches!(
+            tree.get(binding.0),
+            Some(DockNode::Leaf(leaf)) if leaf.windows.iter().any(|w| w == window_id)
+        );
+        if already_in_leaf {
+            // The reconciler keys content entities by window_id, so
+            // two tabs with the same id in one leaf would be
+            // ambiguous. Split a sibling leaf to the right and seat
+            // the new instance there. The reconciler picks it up next
+            // pass and rebuilds; we leave the rest of this function
+            // as a no-op since the freshly-split leaf has no
+            // `area_entity` mapping yet.
+            tree.split(binding.0, Edge::Right, window_id.to_string());
+            return;
+        }
         if let Some(DockNode::Leaf(leaf)) = tree.get_mut(binding.0) {
-            if !leaf.windows.iter().any(|w| w == window_id) {
-                leaf.windows.push(window_id.to_string());
-            }
+            leaf.windows.push(window_id.to_string());
             leaf.active = Some(window_id.to_string());
         } else {
             return;
