@@ -136,6 +136,7 @@ jobs:
             --name "$name" \
             --destination "$RUNNER_TEMP" \
             --silent
+          cp -r "$checkout/.cargo" "$RUNNER_TEMP/"
           # Pin the scaffolded project's `jackdaw` / `jackdaw_runtime`
           # deps to THIS checkout so we test the template against
           # the PR under review, not against whatever's on crates.io
