@@ -35,14 +35,8 @@ pub enum DockDragState {
 #[derive(Clone, Debug)]
 pub enum DropTarget {
     Panel(Entity),
-    TabRow {
-        bar: Entity,
-        index: usize,
-    },
-    AreaEdge {
-        area: Entity,
-        edge: DropEdge,
-    },
+    TabRow { bar: Entity, index: usize },
+    AreaEdge { area: Entity, edge: DropEdge },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

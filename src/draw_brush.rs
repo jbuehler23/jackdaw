@@ -3273,20 +3273,15 @@ pub(crate) fn brush_extend_face_to_brush(
                 .collect();
 
             // Try hover raycast first to find the face
-            let face_index = find_hovered_face_on_brush(
-                primary,
-                &vp,
-                &mut ray_cast,
-                &brush_faces,
-            )
-            .or_else(|| {
-                // Fall back to remembered face
-                if brush_selection.last_face_entity == Some(primary) {
-                    brush_selection.last_face_index
-                } else {
-                    None
-                }
-            });
+            let face_index = find_hovered_face_on_brush(primary, &vp, &mut ray_cast, &brush_faces)
+                .or_else(|| {
+                    // Fall back to remembered face
+                    if brush_selection.last_face_entity == Some(primary) {
+                        brush_selection.last_face_index
+                    } else {
+                        None
+                    }
+                });
 
             let Some(face_index) = face_index else {
                 return OperatorResult::Cancelled;

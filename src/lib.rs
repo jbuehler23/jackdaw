@@ -2530,8 +2530,8 @@ fn register_workspaces(mut registry: ResMut<jackdaw_panels::WorkspaceRegistry>) 
 /// 7 / 1 / 3 once activated). Inspector on the right, hierarchy +
 /// project files on the left, asset/timeline/terminal on the bottom.
 fn build_level_design_tree() -> jackdaw_panels::tree::DockTree {
-    use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
     use jackdaw_panels::DockAreaStyle;
+    use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
 
     let mut tree = DockTree::default();
 
@@ -2638,8 +2638,8 @@ fn build_level_design_tree() -> jackdaw_panels::tree::DockTree {
 /// Timeline + asset browser docked at the bottom; hierarchy on the
 /// left, inspector on the right.
 fn build_animation_tree() -> jackdaw_panels::tree::DockTree {
-    use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
     use jackdaw_panels::DockAreaStyle;
+    use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
 
     let mut tree = DockTree::default();
 
@@ -2667,10 +2667,7 @@ fn build_animation_tree() -> jackdaw_panels::tree::DockTree {
 
     let bottom = tree.insert(DockNode::Leaf(
         DockLeaf::new("bottom_dock", DockAreaStyle::IconSidebar)
-            .with_windows(vec![
-                "jackdaw.timeline".into(),
-                "jackdaw.assets".into(),
-            ])
+            .with_windows(vec!["jackdaw.timeline".into(), "jackdaw.assets".into()])
             .persistent(),
     ));
     let center_over_bottom = tree.insert(DockNode::Split(DockSplit {

@@ -324,7 +324,12 @@ fn update_measure_labels(
 
     let entity = {
         let alive_check = |e: Entity| label_query.contains(e);
-        ensure_measure_label(&mut commands, &mut label_entities, alive_check, viewport_entity)
+        ensure_measure_label(
+            &mut commands,
+            &mut label_entities,
+            alive_check,
+            viewport_entity,
+        )
     };
     let Ok((mut text_comp, mut node, mut vis)) = label_query.get_mut(entity) else {
         // Freshly spawned label is not yet in the query; show it next frame.

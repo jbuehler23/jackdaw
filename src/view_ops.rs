@@ -15,7 +15,7 @@ use jackdaw_api::prelude::*;
 
 use crate::core_extension::CoreExtensionInputContext;
 use crate::selection::{Selected, Selection};
-use crate::viewport::{ActiveViewport, MainViewportCamera};
+use crate::viewport::{ActiveViewport, MainViewportCamera, ViewportGrid};
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ViewToggleWireframeOp>()
@@ -208,7 +208,17 @@ fn orthographic_default() -> Projection {
 pub(crate) fn view_set_axis(
     params: In<OperatorParameters>,
     active: Res<ActiveViewport>,
-    mut cameras: Query<(&mut Transform, &mut Projection), With<MainViewportCamera>>,
+    mut cameras: Query<
+        (&mut Transform, &mut Projection, Option<&ViewportGrid>),
+        With<MainViewportCamera>,
+    >,
+    mut grids: Query<
+        &mut Transform,
+        (
+            With<bevy_infinite_grid::InfiniteGrid>,
+            Without<MainViewportCamera>,
+        ),
+    >,
 ) -> OperatorResult {
     let axis = read_int_param(&params, "axis").unwrap_or(1);
     let sign_int = read_int_param(&params, "sign").unwrap_or(1);
@@ -224,23 +234,45 @@ pub(crate) fn view_set_axis(
     // For top/bottom views the camera's forward is parallel to world
     // up, so `looking_at` needs a non-parallel "up" hint. -Z gives the
     // standard top-down orientation (X right, Z down on screen).
-    let up = if axis == 1 {
-        Vec3::Z * -sign
-    } else {
-        Vec3::Y
-    };
+    let up = if axis == 1 { Vec3::Z * -sign } else { Vec3::Y };
 
     let Some(camera_entity) = active.camera else {
         return OperatorResult::Cancelled;
     };
-    let Ok((mut transform, mut projection)) = cameras.get_mut(camera_entity) else {
+    let Ok((mut transform, mut projection, grid_link)) = cameras.get_mut(camera_entity) else {
         return OperatorResult::Cancelled;
     };
 
     transform.translation = dir * ORTHO_DISTANCE;
     *transform = transform.looking_at(Vec3::ZERO, up);
     *projection = orthographic_default();
+
+    // Rotate this viewport's private grid so its plane faces the new
+    // view direction. Without this the grid stays on world XZ and
+    // disappears edge-on for front (axis=2) and side (axis=0) views.
+    // Top (axis=1) keeps the world XZ orientation since the floor is
+    // already correct.
+    if let Some(ViewportGrid(grid_entity)) = grid_link
+        && let Ok(mut grid_tf) = grids.get_mut(*grid_entity)
+    {
+        grid_tf.rotation = grid_rotation_for_axis(axis);
+    }
+
     OperatorResult::Finished
+}
+
+/// Quaternion that orients an infinite-grid entity so its plane faces
+/// the camera looking down the given world axis. The grid's local plane
+/// is XZ; we map it onto:
+/// - axis 0 (X, side view): YZ plane
+/// - axis 1 (Y, top view): XZ plane (no rotation)
+/// - axis 2 (Z, front view): XY plane
+fn grid_rotation_for_axis(axis: i64) -> Quat {
+    match axis {
+        0 => Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        2 => Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+        _ => Quat::IDENTITY,
+    }
 }
 
 /// Toggle the active viewport's camera between perspective and
@@ -254,18 +286,38 @@ pub(crate) fn view_set_axis(
 pub(crate) fn view_toggle_persp_ortho(
     _: In<OperatorParameters>,
     active: Res<ActiveViewport>,
-    mut cameras: Query<&mut Projection, With<MainViewportCamera>>,
+    mut cameras: Query<(&mut Projection, Option<&ViewportGrid>), With<MainViewportCamera>>,
+    mut grids: Query<
+        &mut Transform,
+        (
+            With<bevy_infinite_grid::InfiniteGrid>,
+            Without<MainViewportCamera>,
+        ),
+    >,
 ) -> OperatorResult {
     let Some(camera_entity) = active.camera else {
         return OperatorResult::Cancelled;
     };
-    let Ok(mut projection) = cameras.get_mut(camera_entity) else {
+    let Ok((mut projection, grid_link)) = cameras.get_mut(camera_entity) else {
         return OperatorResult::Cancelled;
     };
-    *projection = match projection.as_ref() {
-        Projection::Orthographic(_) => perspective_default(),
-        _ => orthographic_default(),
+    let now_persp = matches!(projection.as_ref(), Projection::Orthographic(_));
+    *projection = if now_persp {
+        perspective_default()
+    } else {
+        orthographic_default()
     };
+
+    // Reset this viewport's grid to the world XZ floor when returning
+    // to perspective. Ortho stays on whatever orientation a previous
+    // axis snap left (top is the default after `orthographic_default`).
+    if now_persp
+        && let Some(ViewportGrid(grid_entity)) = grid_link
+        && let Ok(mut grid_tf) = grids.get_mut(*grid_entity)
+    {
+        grid_tf.rotation = Quat::IDENTITY;
+    }
+
     OperatorResult::Finished
 }
 

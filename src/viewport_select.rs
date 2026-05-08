@@ -344,6 +344,13 @@ fn box_select_pending_trigger(
         || box_state.pending.is_some()
         || !mouse.just_pressed(MouseButton::Left)
         || guards.gizmo_drag.active
+        // The gizmo invoke-trigger queues the drag operator via
+        // `commands.queue`, so `gizmo_drag.active` doesn't flip until
+        // after this Update frame ends. Without checking the hover
+        // state here the press both arms a pending box-select and
+        // starts the gizmo drag, so the marquee draws while the user
+        // is dragging the gizmo.
+        || guards.gizmo_hover.hovered_axis.is_some()
         || matches!(*guards.edit_mode, crate::brush::EditMode::BrushEdit(_))
         || guards.draw_state.active.is_some()
         || guards.modal.active.is_some()
@@ -357,19 +364,24 @@ fn box_select_pending_trigger(
         return;
     };
 
+    // Bail when the cursor isn't over a viewport panel. Without this
+    // any LMB press anywhere in the editor (toolbar, panel header,
+    // tab being dragged) records a pending box-select and the
+    // overlay then renders across the whole window during the drag.
+    let Some((camera, cam_tf)) = vp.camera() else {
+        return;
+    };
+    let Some(viewport_entity) = vp.viewport_entity() else {
+        return;
+    };
+
     // Yield to face-drag when the cursor is over a face of the
     // selected brush. Routes through `vp` so we hit-test against the
     // viewport the cursor is actually over, not a hard-coded main
     // camera (multi-viewport setups can have several scene cameras).
     if let Some(brush_entity) = selection.primary().filter(|&e| brushes.contains(e))
-        && let Some((camera, cam_tf)) = vp.camera()
-        && let Some(viewport_entity) = vp.viewport_entity()
-        && let Some(viewport_cursor) = window_to_viewport_cursor_for(
-            cursor_pos,
-            camera,
-            viewport_entity,
-            &viewport_query,
-        )
+        && let Some(viewport_cursor) =
+            window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, &viewport_query)
         && cursor_over_brush_face(
             brush_entity,
             viewport_cursor,
@@ -392,6 +404,7 @@ fn box_select_pending_trigger(
 fn box_select_promote_pending(
     mouse: Res<ButtonInput<MouseButton>>,
     vp: ViewportCursor,
+    guards: InteractionGuards,
     mut box_state: ResMut<BoxSelectState>,
     mut commands: Commands,
 ) {
@@ -399,6 +412,20 @@ fn box_select_promote_pending(
         return;
     };
     if !mouse.pressed(MouseButton::Left) {
+        box_state.pending = None;
+        return;
+    }
+    // A modal that started in the same frame as the press (gizmo
+    // drag, viewport drag, transform shortcut, draw brush) won't have
+    // shown up in the trigger system's guard check, but it has by
+    // now. Drop the pending press so we don't dispatch a competing
+    // box-select on top of the active gesture.
+    if guards.gizmo_drag.active
+        || guards.viewport_drag.active.is_some()
+        || guards.modal.active.is_some()
+        || guards.draw_state.active.is_some()
+        || matches!(*guards.edit_mode, crate::brush::EditMode::BrushEdit(_))
+    {
         box_state.pending = None;
         return;
     }

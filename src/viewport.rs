@@ -1,6 +1,6 @@
 use bevy::{
     asset::{embedded_asset, load_embedded_asset},
-    camera::RenderTarget,
+    camera::{RenderTarget, visibility::RenderLayers},
     core_pipeline::oit::OrderIndependentTransparencySettings,
     image::ImageSampler,
     prelude::*,
@@ -43,6 +43,38 @@ pub struct SceneViewport;
 #[derive(Component)]
 pub(crate) struct ViewportPanelHost {
     pub camera: Entity,
+    /// Per-viewport infinite-grid entity. Spawned alongside the camera
+    /// on a private `RenderLayers` so each viewport renders its own
+    /// grid, oriented to its current view axis. Cleaned up together
+    /// with the camera on panel teardown.
+    pub grid: Entity,
+}
+
+/// Link from a viewport camera back to its private infinite-grid
+/// entity. `view.set_axis` reads this to rotate just the active
+/// viewport's grid when the user snaps to top / front / side, so other
+/// viewports keep their own orientation.
+#[derive(Component)]
+pub(crate) struct ViewportGrid(pub Entity);
+
+/// Shared counter that hands out a unique [`RenderLayers`] index per
+/// viewport. Layer 0 is the default world; layer 1 is reserved for
+/// the material preview. Per-viewport grids start at layer 2 so
+/// they only render to "their" camera.
+#[derive(Resource)]
+pub(crate) struct ViewportLayerCounter(usize);
+
+impl Default for ViewportLayerCounter {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
+impl ViewportLayerCounter {
+    fn next(&mut self) -> usize {
+        self.0 += 1;
+        self.0
+    }
 }
 
 /// Tracks which viewport panel currently has the mouse over it.
@@ -97,10 +129,7 @@ impl ViewportCursor<'_, '_> {
     /// The hovered viewport's UI-node geometry (for cursor remapping).
     pub fn viewport(&self) -> Option<(&ComputedNode, &UiGlobalTransform)> {
         let ui_entity = self.active.ui_node?;
-        self.viewports
-            .get(ui_entity)
-            .ok()
-            .map(|(c, t, _)| (c, t))
+        self.viewports.get(ui_entity).ok().map(|(c, t, _)| (c, t))
     }
 
     /// Camera entity of the hovered viewport (for modal capture).
@@ -123,14 +152,8 @@ impl ViewportCursor<'_, '_> {
 
     /// Look up a specific viewport UI node by entity (companion to
     /// [`Self::camera_for`]).
-    pub fn viewport_for(
-        &self,
-        entity: Entity,
-    ) -> Option<(&ComputedNode, &UiGlobalTransform)> {
-        self.viewports
-            .get(entity)
-            .ok()
-            .map(|(c, t, _)| (c, t))
+    pub fn viewport_for(&self, entity: Entity) -> Option<(&ComputedNode, &UiGlobalTransform)> {
+        self.viewports.get(entity).ok().map(|(c, t, _)| (c, t))
     }
 
     /// Convert a window-space cursor position into the camera-space
@@ -146,10 +169,7 @@ impl ViewportCursor<'_, '_> {
         let (computed, vp_tf, _) = self.viewports.get(viewport_entity).ok()?;
         let map = crate::viewport_util::ViewportRemap::new(camera, computed, vp_tf);
         let local = cursor - map.top_left;
-        if local.x >= 0.0
-            && local.y >= 0.0
-            && local.x <= map.vp_size.x
-            && local.y <= map.vp_size.y
+        if local.x >= 0.0 && local.y >= 0.0 && local.x <= map.vp_size.x && local.y <= map.vp_size.y
         {
             Some(local * map.remap)
         } else {
@@ -183,6 +203,7 @@ impl Plugin for ViewportPlugin {
         app.add_plugins((JackdawCameraPlugin, InfiniteGridPlugin))
             .init_resource::<CameraFlyActive>()
             .init_resource::<ActiveViewport>()
+            .init_resource::<ViewportLayerCounter>()
             .insert_resource(GlobalAmbientLight::NONE)
             .add_systems(
                 OnEnter(crate::AppState::Editor),
@@ -219,15 +240,13 @@ impl Plugin for ViewportPlugin {
     }
 }
 
-/// One-time global setup for the editor's viewport infrastructure:
-/// the infinite grid (rendered by every viewport camera via the
-/// default render layer). Per-viewport setup (camera, render-target
-/// image, `SceneViewport` UI node) lives in [`build_viewport_panel`],
-/// which runs each time the dock-tree reconciler instantiates a
+/// One-time global setup for the editor's viewport infrastructure.
+///
+/// Per-viewport setup (camera, render-target image, `SceneViewport`
+/// UI node, infinite grid) lives in [`build_viewport_panel`], which
+/// runs each time the dock-tree reconciler instantiates a
 /// `jackdaw.viewport` panel.
-pub(crate) fn setup_viewport(mut commands: Commands) {
-    commands.spawn((crate::EditorEntity, InfiniteGridBundle::default()));
-}
+pub(crate) fn setup_viewport() {}
 
 /// Build closure for the `jackdaw.viewport` `DockWindowDescriptor`.
 ///
@@ -274,6 +293,22 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
         "../assets/environment_maps/voortrekker_interior_1k_specular.ktx2"
     );
 
+    // Allocate a per-viewport render layer so we can attach an
+    // infinite grid that *only* this camera renders. Layer 0 stays
+    // in the camera's mask so scene content (default-layer entities)
+    // still draws here.
+    let viewport_layer = world.resource_mut::<ViewportLayerCounter>().next();
+    let camera_layers = RenderLayers::from_layers(&[0, viewport_layer]);
+    let grid_layers = RenderLayers::layer(viewport_layer);
+
+    let grid = world
+        .spawn((
+            crate::EditorEntity,
+            InfiniteGridBundle::default(),
+            grid_layers,
+        ))
+        .id();
+
     let camera = world
         .spawn((
             MainViewportCamera,
@@ -295,6 +330,8 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
             Msaa::Off,
             JackdawCameraSettings::default(),
             ViewportConfig::default(),
+            camera_layers,
+            ViewportGrid(grid),
         ))
         .id();
 
@@ -304,10 +341,7 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
     // `SceneViewport` UI node filling the rest; we attach
     // `ViewportNode` to that SceneViewport so its camera renders into
     // the UI node's bounds.
-    world.spawn((
-        ChildOf(parent),
-        crate::layout::viewport_with_toolbar(),
-    ));
+    world.spawn((ChildOf(parent), crate::layout::viewport_with_toolbar()));
 
     // Find the freshly-spawned SceneViewport that's a descendant of
     // `parent` and attach the camera link plus the drop observer.
@@ -323,7 +357,7 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
     // and clean up the camera when the reconciler tears the panel down.
     world
         .entity_mut(parent)
-        .insert(ViewportPanelHost { camera });
+        .insert(ViewportPanelHost { camera, grid });
 }
 
 /// Walk the descendants of `root` looking for the first entity that
@@ -353,10 +387,13 @@ pub(crate) fn on_viewport_panel_despawn(
     mut commands: Commands,
 ) {
     let entity = trigger.event_target();
-    if let Ok(host) = hosts.get(entity)
-        && let Ok(mut ec) = commands.get_entity(host.camera)
-    {
-        ec.despawn();
+    if let Ok(host) = hosts.get(entity) {
+        if let Ok(mut ec) = commands.get_entity(host.camera) {
+            ec.despawn();
+        }
+        if let Ok(mut ec) = commands.get_entity(host.grid) {
+            ec.despawn();
+        }
     }
 }
 
@@ -404,14 +441,9 @@ fn handle_viewport_drop(
         return;
     };
 
-    let position = cursor_to_ground_plane_for(
-        cursor_pos,
-        camera,
-        cam_tf,
-        viewport_entity,
-        &viewport_query,
-    )
-    .unwrap_or(Vec3::ZERO);
+    let position =
+        cursor_to_ground_plane_for(cursor_pos, camera, cam_tf, viewport_entity, &viewport_query)
+            .unwrap_or(Vec3::ZERO);
 
     let ctrl = false; // No Ctrl check needed for drop placement
     let snapped_pos = snap_settings.snap_translate_vec3_if(position, ctrl);
@@ -443,13 +475,12 @@ pub(crate) fn cursor_to_ground_plane_for(
     viewport_entity: Entity,
     viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
 ) -> Option<Vec3> {
-    let viewport_cursor =
-        crate::viewport_util::window_to_viewport_cursor_for(
-            cursor_pos,
-            camera,
-            viewport_entity,
-            viewport_query,
-        )?;
+    let viewport_cursor = crate::viewport_util::window_to_viewport_cursor_for(
+        cursor_pos,
+        camera,
+        viewport_entity,
+        viewport_query,
+    )?;
     raycast_to_ground(camera, cam_tf, viewport_cursor)
 }
 
@@ -512,12 +543,7 @@ fn disable_camera_on_dialog(mut camera_query: Query<&mut JackdawCameraSettings>)
 fn update_active_viewport(
     windows: Query<&Window>,
     viewports: Query<
-        (
-            Entity,
-            &ComputedNode,
-            &UiGlobalTransform,
-            &ViewportNode,
-        ),
+        (Entity, &ComputedNode, &UiGlobalTransform, &ViewportNode),
         With<SceneViewport>,
     >,
     mut active: ResMut<ActiveViewport>,

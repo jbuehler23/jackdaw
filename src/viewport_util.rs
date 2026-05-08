@@ -54,6 +54,28 @@ pub(crate) fn window_to_viewport_cursor_for(
     remap_cursor(cursor_pos, camera, computed, vp_transform)
 }
 
+/// Like [`window_to_viewport_cursor_for`] but does not bounds-check
+/// the cursor against the viewport rectangle. Returns `None` only if
+/// `viewport_entity` is no longer a `SceneViewport`.
+///
+/// Used by modal operators that captured the viewport at drag-start
+/// and need cursor coordinates to keep updating even when the user
+/// drags past the viewport's edge into another panel. Bounds-checking
+/// during a drag would force the operator to cancel mid-gesture and
+/// snap the entity back to its start transform.
+pub(crate) fn window_to_viewport_cursor_for_unbounded(
+    cursor_pos: Vec2,
+    camera: &Camera,
+    viewport_entity: Entity,
+    viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+) -> Option<Vec2> {
+    let Ok((computed, vp_transform)) = viewport_query.get(viewport_entity) else {
+        return None;
+    };
+    let map = ViewportRemap::new(camera, computed, vp_transform);
+    Some((cursor_pos - map.top_left) * map.remap)
+}
+
 fn remap_cursor(
     cursor_pos: Vec2,
     camera: &Camera,

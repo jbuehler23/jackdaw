@@ -13,7 +13,10 @@ use crate::{
     selection::{Selected, Selection},
     snapping::SnapSettings,
     viewport::{MainViewportCamera, SceneViewport},
-    viewport_util::{point_to_segment_dist, window_to_viewport_cursor_for},
+    viewport_util::{
+        point_to_segment_dist, window_to_viewport_cursor_for,
+        window_to_viewport_cursor_for_unbounded,
+    },
 };
 
 /// Gizmo group for transform gizmos, rendered on top of all geometry.
@@ -113,10 +116,28 @@ fn configure_transform_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
     config.line.width = 3.0;
 }
 
+/// World-space size for the transform gizmo, picked so it occupies a
+/// roughly constant slice of the viewport regardless of zoom.
+///
+/// In perspective the apparent size of a fixed world-space object falls
+/// off with camera distance, so we pre-multiply by `cam_dist` to keep
+/// it constant. In orthographic the camera distance is meaningless
+/// (`ORTHO_DISTANCE` is parked at 50 to stay outside scene geometry);
+/// the visible extent is set by `OrthographicProjection::area`, which
+/// shrinks as the user zooms in. Multiplying that height by the same
+/// `GIZMO_SCREEN_SCALE` keeps the gizmo at the same on-screen fraction
+/// in both projections.
+fn gizmo_world_scale(projection: &Projection, cam_tf: &GlobalTransform, gizmo_pos: Vec3) -> f32 {
+    match projection {
+        Projection::Orthographic(ortho) => ortho.area.height() * GIZMO_SCREEN_SCALE,
+        _ => (cam_tf.translation() - gizmo_pos).length() * GIZMO_SCREEN_SCALE,
+    }
+}
+
 pub(crate) fn handle_gizmo_hover(
     selection: Res<Selection>,
     transforms: Query<&GlobalTransform, With<Selected>>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    camera_query: Query<(&Camera, &GlobalTransform, &Projection), With<MainViewportCamera>>,
     windows: Query<&Window>,
     mode: Res<GizmoMode>,
     space: Res<GizmoSpace>,
@@ -153,7 +174,7 @@ pub(crate) fn handle_gizmo_hover(
     let Some(viewport_entity) = active.ui_node else {
         return;
     };
-    let Ok((camera, cam_tf)) = camera_query.get(camera_entity) else {
+    let Ok((camera, cam_tf, projection)) = camera_query.get(camera_entity) else {
         return;
     };
     let Ok(window) = windows.single() else {
@@ -179,8 +200,7 @@ pub(crate) fn handle_gizmo_hover(
     };
     let rotation = gizmo_rotation(global_tf, effective_space);
 
-    let cam_dist = (cam_tf.translation() - gizmo_pos).length();
-    let scale = cam_dist * GIZMO_SCREEN_SCALE;
+    let scale = gizmo_world_scale(projection, cam_tf, gizmo_pos);
 
     let axes = [
         (GizmoAxis::X, rotation * Vec3::X),
@@ -316,10 +336,30 @@ pub fn gizmo_drag(
     let Ok((camera, cam_tf)) = camera_query.get(camera_entity) else {
         return OperatorResult::Cancelled;
     };
-    let Some(viewport_cursor) =
-        window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, &viewport_query)
-    else {
-        return OperatorResult::Cancelled;
+    // Bounds-check on the first frame so a press that misses the
+    // viewport doesn't grab the gizmo. Once the modal is running the
+    // cursor belongs to the drag, so accept positions outside the
+    // viewport rectangle. Otherwise dragging across into a sibling
+    // viewport (or off the panel entirely) returns `None` here, the
+    // operator cancels, and the cancel handler restores the start
+    // transform, which the user sees as a snap-back.
+    let viewport_cursor = if modal.is_none() {
+        let Some(c) =
+            window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, &viewport_query)
+        else {
+            return OperatorResult::Cancelled;
+        };
+        c
+    } else {
+        let Some(c) = window_to_viewport_cursor_for_unbounded(
+            cursor_pos,
+            camera,
+            viewport_entity,
+            &viewport_query,
+        ) else {
+            return OperatorResult::Cancelled;
+        };
+        c
     };
 
     if modal.is_none() {
@@ -467,7 +507,7 @@ fn draw_gizmos(
     mut gizmos: Gizmos<TransformGizmoGroup>,
     selection: Res<Selection>,
     transforms: Query<&GlobalTransform, With<Selected>>,
-    camera_query: Query<(Entity, &GlobalTransform), With<MainViewportCamera>>,
+    camera_query: Query<(Entity, &GlobalTransform, &Projection), With<MainViewportCamera>>,
     active: Res<crate::viewport::ActiveViewport>,
     mode: Res<GizmoMode>,
     space: Res<GizmoSpace>,
@@ -488,16 +528,15 @@ fn draw_gizmos(
         return;
     };
     // Multi-viewport: scale the gizmo by the active (hovered)
-    // viewport's camera distance, falling back to any camera. The
-    // single Gizmos pass renders into every viewport, so the size will
-    // be visually correct in the hovered viewport and approximate in
+    // viewport's camera, falling back to any camera. The single
+    // Gizmos pass renders into every viewport, so the size will be
+    // visually correct in the hovered viewport and approximate in
     // the others until the cursor moves.
-    let cam_tf = active
+    let cam = active
         .camera
         .and_then(|e| camera_query.get(e).ok())
-        .or_else(|| camera_query.iter().next())
-        .map(|(_, tf)| tf);
-    let Some(cam_tf) = cam_tf else {
+        .or_else(|| camera_query.iter().next());
+    let Some((_, cam_tf, projection)) = cam else {
         return;
     };
 
@@ -509,8 +548,7 @@ fn draw_gizmos(
     };
     let rotation = gizmo_rotation(global_tf, effective_space);
 
-    let cam_dist = (cam_tf.translation() - pos).length();
-    let scale = cam_dist * GIZMO_SCREEN_SCALE;
+    let scale = gizmo_world_scale(projection, cam_tf, pos);
 
     let right = rotation * Vec3::X;
     let up = rotation * Vec3::Y;

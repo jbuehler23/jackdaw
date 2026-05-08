@@ -2,9 +2,7 @@ use bevy::{input_focus::InputFocus, prelude::*};
 
 use crate::default_style;
 use crate::{
-    selection::Selection,
-    viewport::MainViewportCamera,
-    viewport_util::point_in_polygon_2d,
+    selection::Selection, viewport::MainViewportCamera, viewport_util::point_in_polygon_2d,
 };
 
 use super::{BrushEditMode, BrushMeshCache, BrushSelection, EditMode};
