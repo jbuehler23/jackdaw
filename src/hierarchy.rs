@@ -146,6 +146,16 @@ fn has_visible_children(world: &World, entity: Entity) -> bool {
     })
 }
 
+/// Snapshot of every `HierarchyTreeContainer` in the world. Cached
+/// via `world.run_system_cached(...)` so the `QueryState` is reused
+/// across the per-frame observer dispatches that fan out spawns to
+/// every Outliner panel.
+fn collect_hierarchy_containers(
+    containers: Query<Entity, With<HierarchyTreeContainer>>,
+) -> Vec<Entity> {
+    containers.iter().collect()
+}
+
 /// Walk `entity`'s parent chain until a `HierarchyTreeContainer` is
 /// found, returning its [`Entity`]. Used by per-row code paths that
 /// need to address the owning Outliner panel for `TreeIndex` lookups
@@ -213,10 +223,10 @@ fn rebuild_hierarchy(world: &mut World) -> Result {
             ),
         >,
     ) {
-        // Multi-instance: every Outliner panel gets its own copy of
-        // the tree, so we iterate every container that's currently
-        // mounted. With zero containers (headless tests, pre-Editor
-        // state) the loop simply doesn't run.
+        // Every Outliner panel gets its own copy of the tree, so
+        // iterate every container that's currently mounted. Zero
+        // containers (headless tests, pre-Editor state) means there's
+        // nothing to rebuild against.
         let containers: Vec<Entity> = containers.iter(world).collect();
         if containers.is_empty() {
             return;
@@ -294,8 +304,9 @@ fn on_root_entity_added(
         if !world.resource::<HierarchyShowAll>().0 && world.get::<Name>(entity).is_none() {
             return;
         }
-        let mut q = world.query_filtered::<Entity, With<HierarchyTreeContainer>>();
-        let containers: Vec<Entity> = q.iter(world).collect();
+        let containers: Vec<Entity> = world
+            .run_system_cached(collect_hierarchy_containers)
+            .unwrap_or_default();
         for container in containers {
             if world.resource::<TreeIndex>().contains(container, entity) {
                 continue;
