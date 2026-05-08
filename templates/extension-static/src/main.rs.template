@@ -21,8 +21,7 @@ fn main() -> AppExit {
         .add_plugins(DefaultPlugins)
         .add_plugins(EditorPlugins::default())
         .add_plugins(
-            ExtensionPlugin::new()
-                .with_extension::<{{crate_name}}::{{crate_name | pascal_case}}>(),
+            ExtensionPlugin::new().with_extension::<{{crate_name}}::{{crate_name | pascal_case}}>(),
         )
         .run()
 }
