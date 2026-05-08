@@ -151,16 +151,14 @@ jobs:
           jackdaw_runtime = { path = "$checkout/crates/jackdaw_runtime" }
           EOF
 
-      - name: CD into ${{ matrix.template }}
+      - name: Run cargo check
+        # No `--locked`: cargo-generate doesn't ship a Cargo.lock,
+        # and the patched jackdaw deps would mismatch one anyway.
         run: |
           set -euxo pipefail
           name="test_$(echo "${{ matrix.template }}" | tr - _)"
           cd "$RUNNER_TEMP/$name"
-
-      - name: Run cargo check
-        # No `--locked`: cargo-generate doesn't ship a Cargo.lock,
-        # and the patched jackdaw deps would mismatch one anyway.
-        run: cargo check --all-targets --target-dir "$GITHUB_WORKSPACE/target"
+          cargo check --all-targets --target-dir "$GITHUB_WORKSPACE/target"
 
       - name: Run tests
         # Game-static ships a smoke test that exercises the
@@ -168,6 +166,9 @@ jobs:
         # `MyGamePlugin`. Skip for templates without a `tests/`
         # directory.
         run: |
+          set -euxo pipefail
+          name="test_$(echo "${{ matrix.template }}" | tr - _)"
+          cd "$RUNNER_TEMP/$name"
           if [[ -d tests ]]; then
             cargo nextest run --locked --workspace --lib --bins --tests --no-fail-fast --no-tests warn --features editor --target-dir "$GITHUB_WORKSPACE/target"
           else
