@@ -3,7 +3,7 @@ use std::f32::consts::FRAC_PI_2;
 use crate::brush::{self, BrushMeshCache};
 use crate::entity_ops::EmptyEntity;
 use crate::selection::Selected;
-use crate::viewport::SceneViewport;
+use crate::viewport::{AxisIndicator, SceneViewport};
 use crate::{JackdawDrawSystems, default_style};
 use avian3d::parry::transformation::convex_hull;
 use bevy::prelude::*;
@@ -515,27 +515,56 @@ fn ensure_axis_labels(
     }
 }
 
-/// Draw a small coordinate indicator showing camera orientation. With
-/// multi-viewport, one indicator + label trio is drawn for each
-/// registered `SceneViewport` so every panel gets its own gizmo
-/// positioned in front of its own camera.
+/// Position each viewport's axis indicator in front of its own camera
+/// and update the matching label positions.
+///
+/// The indicator itself is a retained [`bevy::gizmos::retained::Gizmo`]
+/// entity carrying the viewport's private `RenderLayers`, spawned in
+/// `viewport::build_viewport_panel`. Per-camera `RenderLayers` gating
+/// is what keeps each indicator scoped to one viewport: an immediate
+/// `Gizmos` line at a world-space position would otherwise leak into
+/// every camera that has the same point in its frustum, which is what
+/// produced ghost indicators in adjacent panels with overlapping
+/// world-space positions.
+///
+/// We write both `Transform` and `GlobalTransform` so the render
+/// extraction (which reads `GlobalTransform`) sees the updated pose
+/// the same frame, regardless of where the system slots relative to
+/// `TransformSystems::Propagate`.
 fn draw_coordinate_indicator(
-    mut gizmos: Gizmos,
     settings: Res<OverlaySettings>,
     cameras: Query<
         (&Camera, &GlobalTransform, &Projection),
-        With<crate::viewport::MainViewportCamera>,
+        (
+            With<crate::viewport::MainViewportCamera>,
+            Without<AxisIndicator>,
+        ),
     >,
     viewports: Query<(&ComputedNode, &ViewportNode, &ViewportAxisLabels), With<SceneViewport>>,
     mut label_query: Query<(&mut Node, &mut Visibility), With<AxisLabel>>,
+    mut indicators: Query<
+        (
+            &AxisIndicator,
+            &mut Transform,
+            &mut GlobalTransform,
+            &mut Visibility,
+        ),
+        (Without<AxisLabel>, Without<crate::viewport::MainViewportCamera>),
+    >,
 ) {
     if !settings.show_coordinate_indicator {
         for (_, mut vis) in &mut label_query {
             *vis = Visibility::Hidden;
         }
+        for (_, _, _, mut vis) in &mut indicators {
+            *vis = Visibility::Hidden;
+        }
         return;
     }
 
+    // Place each indicator entity in front of its camera and resize
+    // it for the camera's fov so it occupies a stable on-screen
+    // fraction; labels follow at the projected tip positions.
     for (computed, viewport_node, axis_labels) in &viewports {
         let Ok((camera, cam_tf, projection)) = cameras.get(viewport_node.camera) else {
             continue;
@@ -544,12 +573,9 @@ fn draw_coordinate_indicator(
             continue;
         };
 
-        // Compute visible extents at a fixed depth to place the
-        // indicator at a consistent screen position in this camera's view.
         let depth = 0.5;
         let half_height = depth * (proj.fov / 2.0).tan();
         let half_width = half_height * proj.aspect_ratio;
-
         let ndc_x = -0.85;
         let ndc_y = -0.80;
 
@@ -557,20 +583,23 @@ fn draw_coordinate_indicator(
             + cam_tf.forward().as_vec3() * depth
             + cam_tf.right().as_vec3() * (ndc_x * half_width)
             + cam_tf.up().as_vec3() * (ndc_y * half_height);
-
         let size = half_height * 0.07;
+        let pose = Transform {
+            translation: indicator_pos,
+            rotation: Quat::IDENTITY,
+            scale: Vec3::splat(size),
+        };
 
-        let axes = [Vec3::X, Vec3::Y, Vec3::Z];
-        let axis_colors = [
-            default_style::AXIS_X,
-            default_style::AXIS_Y,
-            default_style::AXIS_Z,
-        ];
-
-        for (axis, color) in axes.iter().zip(axis_colors.iter()) {
-            gizmos.line(indicator_pos, indicator_pos + *axis * size, *color);
+        for (link, mut tf, mut gtf, mut vis) in &mut indicators {
+            if link.camera != viewport_node.camera {
+                continue;
+            }
+            *tf = pose;
+            *gtf = GlobalTransform::from(pose);
+            *vis = Visibility::Inherited;
         }
 
+        let axes = [Vec3::X, Vec3::Y, Vec3::Z];
         let vp_node_size = computed.size();
         let render_target_size = camera.logical_viewport_size().unwrap_or(vp_node_size);
 

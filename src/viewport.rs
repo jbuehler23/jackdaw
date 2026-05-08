@@ -2,6 +2,7 @@ use bevy::{
     asset::{embedded_asset, load_embedded_asset},
     camera::{RenderTarget, visibility::RenderLayers},
     core_pipeline::oit::OrderIndependentTransparencySettings,
+    gizmos::{GizmoAsset, retained::Gizmo},
     image::ImageSampler,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
@@ -48,7 +49,28 @@ pub(crate) struct ViewportPanelHost {
     /// grid, oriented to its current view axis. Cleaned up together
     /// with the camera on panel teardown.
     pub grid: Entity,
+    /// Per-viewport axis-orientation indicator (the small XYZ gizmo
+    /// in the bottom-left). Lives on the same private `RenderLayers`
+    /// as the camera so adjacent viewports don't see each other's
+    /// indicators leaking through their shared world space.
+    pub axis_indicator: Entity,
 }
+
+/// Component on the retained-gizmo entity that paints a viewport's
+/// axis indicator. `viewport_overlays::draw_coordinate_indicator`
+/// reads this to reposition the indicator in front of the camera each
+/// frame; the despawn observer removes the entity when its panel is
+/// torn down.
+#[derive(Component)]
+pub struct AxisIndicator {
+    pub camera: Entity,
+}
+
+/// Shared retained-gizmo asset for the per-viewport axis indicator.
+/// One asset, many `Gizmo` entities (one per viewport), each with its
+/// own `Transform` + `RenderLayers`.
+#[derive(Resource)]
+struct AxisIndicatorAsset(Handle<GizmoAsset>);
 
 /// Link from a viewport camera back to its private infinite-grid
 /// entity. `view.set_axis` reads this to rotate just the active
@@ -205,6 +227,7 @@ impl Plugin for ViewportPlugin {
             .init_resource::<ActiveViewport>()
             .init_resource::<ViewportLayerCounter>()
             .insert_resource(GlobalAmbientLight::NONE)
+            .add_systems(Startup, init_axis_indicator_asset)
             .add_systems(
                 OnEnter(crate::AppState::Editor),
                 // Runs after init_layout so the dock-tree reconciler
@@ -247,6 +270,21 @@ impl Plugin for ViewportPlugin {
 /// runs each time the dock-tree reconciler instantiates a
 /// `jackdaw.viewport` panel.
 pub(crate) fn setup_viewport() {}
+
+/// Build a single shared [`GizmoAsset`] containing three world-axis
+/// lines (X red, Y green, Z blue) of unit length. Each viewport
+/// spawns a [`Gizmo`] entity referencing this handle so the asset
+/// content is allocated once and reused.
+fn init_axis_indicator_asset(
+    mut commands: Commands,
+    mut assets: ResMut<Assets<GizmoAsset>>,
+) {
+    let mut asset = GizmoAsset::default();
+    asset.line(Vec3::ZERO, Vec3::X, crate::default_style::AXIS_X);
+    asset.line(Vec3::ZERO, Vec3::Y, crate::default_style::AXIS_Y);
+    asset.line(Vec3::ZERO, Vec3::Z, crate::default_style::AXIS_Z);
+    commands.insert_resource(AxisIndicatorAsset(assets.add(asset)));
+}
 
 /// Build closure for the `jackdaw.viewport` `DockWindowDescriptor`.
 ///
@@ -305,7 +343,7 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
         .spawn((
             crate::EditorEntity,
             InfiniteGridBundle::default(),
-            grid_layers,
+            grid_layers.clone(),
         ))
         .id();
 
@@ -335,6 +373,36 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
         ))
         .id();
 
+    // Per-viewport axis indicator: a retained-gizmo entity on the
+    // same private `RenderLayers` mask as the camera, so the lines
+    // never bleed into a sibling viewport with an overlapping
+    // world-space frustum. The shared `AxisIndicatorAsset` resource
+    // holds the actual line content; only the entity's `Transform`
+    // and `RenderLayers` differ across viewports.
+    let asset_handle = world.resource::<AxisIndicatorAsset>().0.clone();
+    let axis_indicator = world
+        .spawn((
+            crate::EditorEntity,
+            AxisIndicator { camera },
+            Gizmo {
+                handle: asset_handle,
+                depth_bias: -0.5,
+                ..default()
+            },
+            Transform::default(),
+            // `Visibility` isn't required by `Gizmo`, but the
+            // overlay system that repositions the indicator keys
+            // off `&mut Visibility` (so the user-facing
+            // `show_coordinate_indicator` toggle can hide it).
+            // Without it the query filter excludes this entity,
+            // the system never updates its `GlobalTransform`, and
+            // the lines render at world origin instead of in front
+            // of the camera.
+            Visibility::Inherited,
+            grid_layers.clone(),
+        ))
+        .id();
+
     // Spawn the toolbar + SceneViewport bundle as a child of the
     // panel's content entity. The `viewport_with_toolbar` helper
     // produces a column with the editor toolbar(s) on top and a
@@ -355,9 +423,11 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
 
     // Tag the panel content entity so the despawn observer can find
     // and clean up the camera when the reconciler tears the panel down.
-    world
-        .entity_mut(parent)
-        .insert(ViewportPanelHost { camera, grid });
+    world.entity_mut(parent).insert(ViewportPanelHost {
+        camera,
+        grid,
+        axis_indicator,
+    });
 }
 
 /// Walk the descendants of `root` looking for the first entity that
@@ -392,6 +462,9 @@ pub(crate) fn on_viewport_panel_despawn(
             ec.despawn();
         }
         if let Ok(mut ec) = commands.get_entity(host.grid) {
+            ec.despawn();
+        }
+        if let Ok(mut ec) = commands.get_entity(host.axis_indicator) {
             ec.despawn();
         }
     }
