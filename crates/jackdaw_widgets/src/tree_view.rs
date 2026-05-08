@@ -4,15 +4,19 @@ use bevy::prelude::*;
 #[derive(Component)]
 pub struct TreeView;
 
-/// Links a tree row UI entity to the source entity it represents
+/// Links a tree row UI entity to the source entity it represents.
+///
+/// Multiple `TreeNode`s may point at the same source (one per
+/// container in a multi-instance Outliner setup), so the inverse
+/// `TreeNodeSource` holds a `Vec<Entity>`.
 #[derive(Component)]
 #[relationship(relationship_target = TreeNodeSource)]
 pub struct TreeNode(pub Entity);
 
-/// Inverse relationship: source entity -> tree row
-#[derive(Component)]
+/// Inverse relationship: source entity → every tree row referencing it.
+#[derive(Component, Default)]
 #[relationship_target(relationship = TreeNode)]
-pub struct TreeNodeSource(Entity);
+pub struct TreeNodeSource(Vec<Entity>);
 
 /// Marker for expand/collapse toggle button
 #[derive(Component)]

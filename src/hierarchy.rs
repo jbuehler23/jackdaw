@@ -175,9 +175,12 @@ fn ancestor_hierarchy_root(world: &World, entity: Entity) -> Option<Entity> {
 /// this with their own container; the `TreeIndex` is keyed by
 /// `(container, source)` so the rows don't collide.
 ///
-/// `TreeIndex` insertion is handled by `maintain_tree_index` once the
-/// new row's `TreeNode` is observed; doing it here would be
-/// redundant and would race the observer-driven update path.
+/// We register the new row in `TreeIndex` inline rather than waiting
+/// for `maintain_tree_index` (which doesn't run until later in
+/// `PostUpdate`). Without the immediate insert, two observers firing
+/// on the same scene-entity spawn (e.g. `on_root_entity_added` plus
+/// `on_name_changed`) both see an empty index and queue duplicate
+/// rows, which is what produced the doubled Outliner entries.
 fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: Entity) -> Entity {
     let label = world
         .get::<Name>(source)
@@ -188,12 +191,22 @@ fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: En
     let icon_font = world.resource::<IconFont>().0.clone();
     let style = TreeRowStyle { icon_font };
 
-    world
+    let tree_row_entity = world
         .spawn((
             tree_row(&label, has_children, false, source, category, &style),
             ChildOf(parent_container),
         ))
-        .id()
+        .id();
+
+    // Register immediately under the owning Outliner panel so the
+    // next caller in the same `commands.queue` flush sees the row
+    // and skips it.
+    if let Some(root) = ancestor_hierarchy_root(world, parent_container) {
+        world
+            .resource_mut::<TreeIndex>()
+            .insert(root, source, tree_row_entity);
+    }
+    tree_row_entity
 }
 
 // This has to be a system instead of an observer because it must run after `tree_view::maintain_tree_index`

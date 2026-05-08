@@ -77,7 +77,7 @@ struct AxisIndicatorAsset(Handle<GizmoAsset>);
 /// viewport's grid when the user snaps to top / front / side, so other
 /// viewports keep their own orientation.
 #[derive(Component)]
-pub(crate) struct ViewportGrid(pub Entity);
+pub struct ViewportGrid(pub Entity);
 
 /// Shared counter that hands out a unique [`RenderLayers`] index per
 /// viewport. Layer 0 is the default world; layer 1 is reserved for
@@ -103,7 +103,7 @@ impl ViewportLayerCounter {
 ///
 /// Hover-routed viewport input (camera fly mode, click handling,
 /// gizmo hover, etc.) reads this to decide which viewport to act on.
-/// Updated each frame by [`update_active_viewport`].
+/// Updated each frame by `update_active_viewport`.
 ///
 /// During a right-click fly session the resource keeps pointing at
 /// the camera that started the session, even if the cursor strays
@@ -534,10 +534,10 @@ fn handle_viewport_drop(
     }
 }
 
-/// Multi-viewport-aware variant of [`cursor_to_ground_plane`]:
-/// remaps the cursor against a specific viewport UI-node entity
-/// instead of querying for "the" viewport. Used by hover-routed
-/// systems that already know which viewport the cursor is over.
+/// Multi-viewport-aware variant of `cursor_to_ground_plane`: remaps
+/// the cursor against a specific viewport UI-node entity instead of
+/// querying for "the" viewport. Used by hover-routed systems that
+/// already know which viewport the cursor is over.
 pub(crate) fn cursor_to_ground_plane_for(
     cursor_pos: Vec2,
     camera: &Camera,
@@ -687,7 +687,7 @@ fn update_active_viewport(
 /// per-viewport overlay toggles, projection mode flags, etc.) don't
 /// bleed across panels.
 ///
-/// Inserted by [`build_viewport_panel`] alongside the camera.
+/// Inserted by `build_viewport_panel` alongside the camera.
 #[derive(Component, Clone, Default, Debug)]
 pub struct ViewportConfig {
     /// Numpad-1..9 camera bookmarks. Each slot holds a `Transform`
