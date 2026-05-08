@@ -275,10 +275,7 @@ pub(crate) fn setup_viewport() {}
 /// lines (X red, Y green, Z blue) of unit length. Each viewport
 /// spawns a [`Gizmo`] entity referencing this handle so the asset
 /// content is allocated once and reused.
-fn init_axis_indicator_asset(
-    mut commands: Commands,
-    mut assets: ResMut<Assets<GizmoAsset>>,
-) {
+fn init_axis_indicator_asset(mut commands: Commands, mut assets: ResMut<Assets<GizmoAsset>>) {
     let mut asset = GizmoAsset::default();
     asset.line(Vec3::ZERO, Vec3::X, crate::default_style::AXIS_X);
     asset.line(Vec3::ZERO, Vec3::Y, crate::default_style::AXIS_Y);

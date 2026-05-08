@@ -549,7 +549,10 @@ fn draw_coordinate_indicator(
             &mut GlobalTransform,
             &mut Visibility,
         ),
-        (Without<AxisLabel>, Without<crate::viewport::MainViewportCamera>),
+        (
+            Without<AxisLabel>,
+            Without<crate::viewport::MainViewportCamera>,
+        ),
     >,
 ) {
     if !settings.show_coordinate_indicator {

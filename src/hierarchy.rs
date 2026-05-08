@@ -1,9 +1,6 @@
 use std::collections::HashSet;
 
-use bevy::{
-    input_focus::InputFocus, prelude::*,
-    ui::ui_transform::UiGlobalTransform,
-};
+use bevy::{input_focus::InputFocus, prelude::*, ui::ui_transform::UiGlobalTransform};
 use bevy_enhanced_input::prelude::{Press, *};
 use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_api::prelude::*;
@@ -255,10 +252,7 @@ fn rebuild_hierarchy(world: &mut World) -> Result {
 
         for container in containers {
             for (entity, _category, _name) in &root_data {
-                if world
-                    .resource::<TreeIndex>()
-                    .contains(container, *entity)
-                {
+                if world.resource::<TreeIndex>().contains(container, *entity) {
                     continue;
                 }
                 spawn_single_tree_row(world, *entity, container);

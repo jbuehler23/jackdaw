@@ -420,12 +420,7 @@ impl DockTree {
     ///
     /// `target` must be a leaf. The split's fraction defaults to 0.5
     /// (equal sizes); adjust afterwards via [`Self::set_fraction`].
-    pub fn split(
-        &mut self,
-        target: NodeId,
-        edge: Edge,
-        window: String,
-    ) -> Option<(NodeId, TabId)> {
+    pub fn split(&mut self, target: NodeId, edge: Edge, window: String) -> Option<(NodeId, TabId)> {
         // Ensure target is a leaf.
         if !matches!(self.nodes.get(&target), Some(DockNode::Leaf(_))) {
             return None;
@@ -525,13 +520,7 @@ impl DockTree {
     /// the tab at the given position (clamped); `None` appends.
     /// `allow_same = true` lets a tab be reordered within its current
     /// leaf, otherwise same-leaf moves are no-ops.
-    pub fn insert_tab(
-        &mut self,
-        tab: TabId,
-        to: NodeId,
-        allow_same: bool,
-        index: Option<usize>,
-    ) {
+    pub fn insert_tab(&mut self, tab: TabId, to: NodeId, allow_same: bool, index: Option<usize>) {
         let Some(from) = self.find_leaf_for_tab(tab) else {
             return;
         };
@@ -700,7 +689,10 @@ mod tests {
     fn active_window_id<'a>(t: &'a DockTree, leaf: NodeId) -> Option<&'a str> {
         let l = t.nodes[&leaf].as_leaf()?;
         let id = l.active?;
-        l.windows.iter().find(|w| w.id == id).map(|w| w.window_id.as_str())
+        l.windows
+            .iter()
+            .find(|w| w.id == id)
+            .map(|w| w.window_id.as_str())
     }
 
     /// `TabId` of the first tab carrying the given `window_id` in the

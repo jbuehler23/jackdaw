@@ -205,7 +205,10 @@ fn add_window_to_area(world: &mut World, window_id: &str, area_entity: Entity) {
     // Allocate a fresh TabId in the tree; the reconciler keys both
     // the tab button and content entity by this id, so duplicates of
     // the same window kind stay distinguishable.
-    let Some(tab_id) = world.resource_mut::<DockTree>().add_tab(binding.0, window_id) else {
+    let Some(tab_id) = world
+        .resource_mut::<DockTree>()
+        .add_tab(binding.0, window_id)
+    else {
         return;
     };
 

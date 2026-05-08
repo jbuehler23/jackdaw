@@ -134,8 +134,7 @@ fn reconcile_leaf(world: &mut World, entity: Entity, node_id: NodeId, leaf: &Doc
     let current_tabs = collect_content_tab_ids(world, entity);
     let leaf_tabs: Vec<crate::tree::TabId> = leaf.windows.iter().map(|t| t.id).collect();
 
-    let needs_rebuild =
-        was_split || current_binding != Some(node_id) || current_tabs != leaf_tabs;
+    let needs_rebuild = was_split || current_binding != Some(node_id) || current_tabs != leaf_tabs;
 
     if needs_rebuild {
         despawn_children(world, entity);
