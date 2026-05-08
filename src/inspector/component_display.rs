@@ -46,7 +46,7 @@ pub(crate) fn add_component_displays(
     type_registry: Res<AppTypeRegistry>,
     selection: Res<Selection>,
     entity_query: Query<(&Archetype, EntityRef), (With<Selected>, Without<EditorEntity>)>,
-    inspector: Single<Entity, With<Inspector>>,
+    inspectors: Query<Entity, With<Inspector>>,
     names: Query<&Name>,
     icon_font: Res<IconFont>,
     editor_font: Res<EditorFont>,
@@ -69,29 +69,34 @@ pub(crate) fn add_component_displays(
         .map(|node| node.components.keys().cloned().collect())
         .unwrap_or_default();
 
-    build_inspector_displays(
-        &mut commands,
-        components,
-        &type_registry,
-        source_entity,
-        archetype,
-        entity_ref,
-        *inspector,
-        sel_count,
-        &names,
-        &icon_font,
-        &editor_font,
-        false,
-        &materials,
-        &jsn_type_paths,
-    );
+    // Build the same component panel into every Inspector instance.
+    // Multi-instance dock layouts can host more than one inspector
+    // tab; each gets its own UI subtree but mirrors the same data.
+    for inspector in &inspectors {
+        build_inspector_displays(
+            &mut commands,
+            components,
+            &type_registry,
+            source_entity,
+            archetype,
+            entity_ref,
+            inspector,
+            sel_count,
+            &names,
+            &icon_font,
+            &editor_font,
+            false,
+            &materials,
+            &jsn_type_paths,
+        );
 
-    // Set up monitoring: watch the selected entity for InspectorDirty
-    commands.entity(*inspector).insert((
-        InspectorTarget(primary),
-        Monitor(primary),
-        NotifyAdded::<InspectorDirty>::default(),
-    ));
+        // Set up monitoring: watch the selected entity for InspectorDirty
+        commands.entity(inspector).insert((
+            InspectorTarget(primary),
+            Monitor(primary),
+            NotifyAdded::<InspectorDirty>::default(),
+        ));
+    }
 }
 
 pub(crate) fn build_inspector_displays(
@@ -433,7 +438,7 @@ pub(crate) fn build_inspector_displays(
 pub(crate) fn remove_component_displays(
     _: On<Remove, Selected>,
     mut commands: Commands,
-    inspector: Single<(Entity, Option<&Children>), With<Inspector>>,
+    inspectors: Query<(Entity, Option<&Children>), With<Inspector>>,
     displays: Query<
         Entity,
         Or<(
@@ -443,30 +448,31 @@ pub(crate) fn remove_component_displays(
         )>,
     >,
 ) {
-    let (entity, children) = inspector.into_inner();
+    // Multi-instance: every inspector tab needs its own monitoring
+    // teardown and its own children despawned.
+    for (entity, children) in &inspectors {
+        commands
+            .entity(entity)
+            .remove::<(InspectorTarget, Monitor, NotifyAdded<InspectorDirty>)>();
 
-    // Clean up monitoring components
-    commands
-        .entity(entity)
-        .remove::<(InspectorTarget, Monitor, NotifyAdded<InspectorDirty>)>();
+        let Some(children) = children else {
+            continue;
+        };
 
-    let Some(children) = children else {
-        return;
-    };
-
-    // Collect then despawn inside a queued world closure so the
-    // cascade runs as one atomic step at flush time. See
-    // `on_inspector_dirty` for the rationale; piecemeal deferred
-    // despawns can interleave with lazy combobox/button setup
-    // spawns and orphan UI text at the root.
-    let old_children: Vec<Entity> = displays.iter_many(children.collection()).collect();
-    commands.queue(move |world: &mut World| {
-        for child in old_children {
-            if let Ok(ec) = world.get_entity_mut(child) {
-                ec.despawn();
+        // Collect then despawn inside a queued world closure so the
+        // cascade runs as one atomic step at flush time. See
+        // `on_inspector_dirty` for the rationale; piecemeal deferred
+        // despawns can interleave with lazy combobox/button setup
+        // spawns and orphan UI text at the root.
+        let old_children: Vec<Entity> = displays.iter_many(children.collection()).collect();
+        commands.queue(move |world: &mut World| {
+            for child in old_children {
+                if let Ok(ec) = world.get_entity_mut(child) {
+                    ec.despawn();
+                }
             }
-        }
-    });
+        });
+    }
 }
 
 /// Handles `Addition<InspectorDirty>` on the Inspector entity: despawn existing
@@ -476,7 +482,7 @@ pub(crate) fn on_inspector_dirty(
     mut commands: Commands,
     components: &Components,
     type_registry: Res<AppTypeRegistry>,
-    inspector: Single<(Entity, &InspectorTarget, Option<&Children>), With<Inspector>>,
+    inspectors: Query<(Entity, &InspectorTarget, Option<&Children>), With<Inspector>>,
     entity_query: Query<(&Archetype, EntityRef), Without<EditorEntity>>,
     selection: Res<Selection>,
     names: Query<&Name>,
@@ -493,60 +499,77 @@ pub(crate) fn on_inspector_dirty(
     materials: Res<Assets<StandardMaterial>>,
     ast: Res<jackdaw_jsn::SceneJsnAst>,
 ) {
-    let (inspector_entity, target, children) = inspector.into_inner();
-    let source_entity = target.0;
+    // Multi-instance: rebuild every Inspector tab in lockstep. Each
+    // inspector entity carries its own `InspectorTarget`; the dirty
+    // signal originates from `InspectorDirty` on the source entity
+    // and applies to every inspector watching that source.
+    let mut clear_dirty_for: Option<Entity> = None;
+    for (inspector_entity, target, children) in &inspectors {
+        let source_entity = target.0;
+        if clear_dirty_for.is_none() {
+            clear_dirty_for = Some(source_entity);
+        }
 
-    // Collect the old display children, then queue a world-exclusive
-    // closure that despawns them synchronously and strips
-    // `InspectorDirty` from the source. Doing this in a single
-    // queued closure (rather than piecemeal `commands.despawn`
-    // calls) guarantees the cascade completes as one atomic unit
-    // inside `Commands` flush; no lazy `setup_button` /
-    // `setup_combobox` spawns from a previous rebuild can slip in
-    // between entity despawns and leave orphaned UI children (the
-    // source of the "Inherited" floating label + `ChildOf(...)
-    // relates to an entity that does not exist` warnings).
-    let old_children: Vec<Entity> = children
-        .map(|c| displays.iter_many(c.collection()).collect())
-        .unwrap_or_default();
-    commands.queue(move |world: &mut World| {
-        for child in old_children {
-            if let Ok(ec) = world.get_entity_mut(child) {
-                ec.despawn();
+        // Collect the old display children, then queue a
+        // world-exclusive closure that despawns them synchronously.
+        // Doing this in a single queued closure (rather than piecemeal
+        // `commands.despawn` calls) guarantees the cascade completes
+        // as one atomic unit inside `Commands` flush; no lazy
+        // `setup_button` / `setup_combobox` spawns from a previous
+        // rebuild can slip in between entity despawns and leave
+        // orphaned UI children (the source of "Inherited" floating
+        // labels + `ChildOf(...) relates to an entity that does not
+        // exist` warnings).
+        let old_children: Vec<Entity> = children
+            .map(|c| displays.iter_many(c.collection()).collect())
+            .unwrap_or_default();
+        commands.queue(move |world: &mut World| {
+            for child in old_children {
+                if let Ok(ec) = world.get_entity_mut(child) {
+                    ec.despawn();
+                }
             }
-        }
-        if let Ok(mut ec) = world.get_entity_mut(source_entity) {
-            ec.remove::<InspectorDirty>();
-        }
-    });
+        });
 
-    // Rebuild
-    let Ok((archetype, entity_ref)) = entity_query.get(source_entity) else {
-        return;
-    };
-    let sel_count = selection.entities.len();
+        // Rebuild this inspector's contents.
+        let Ok((archetype, entity_ref)) = entity_query.get(source_entity) else {
+            continue;
+        };
+        let sel_count = selection.entities.len();
 
-    let jsn_type_paths: HashSet<String> = ast
-        .node_for_entity(source_entity)
-        .map(|node| node.components.keys().cloned().collect())
-        .unwrap_or_default();
+        let jsn_type_paths: HashSet<String> = ast
+            .node_for_entity(source_entity)
+            .map(|node| node.components.keys().cloned().collect())
+            .unwrap_or_default();
 
-    build_inspector_displays(
-        &mut commands,
-        components,
-        &type_registry,
-        source_entity,
-        archetype,
-        entity_ref,
-        inspector_entity,
-        sel_count,
-        &names,
-        &icon_font,
-        &editor_font,
-        false,
-        &materials,
-        &jsn_type_paths,
-    );
+        build_inspector_displays(
+            &mut commands,
+            components,
+            &type_registry,
+            source_entity,
+            archetype,
+            entity_ref,
+            inspector_entity,
+            sel_count,
+            &names,
+            &icon_font,
+            &editor_font,
+            false,
+            &materials,
+            &jsn_type_paths,
+        );
+    }
+
+    // Strip `InspectorDirty` from the source entity once after the
+    // rebuild fans out. All inspectors watching the same source share
+    // a single dirty signal.
+    if let Some(source_entity) = clear_dirty_for {
+        commands.queue(move |world: &mut World| {
+            if let Ok(mut ec) = world.get_entity_mut(source_entity) {
+                ec.remove::<InspectorDirty>();
+            }
+        });
+    }
 }
 
 /// Inputs to [`spawn_component_display`]. Bundled into a single
