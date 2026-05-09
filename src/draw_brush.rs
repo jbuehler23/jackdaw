@@ -24,9 +24,9 @@ use bevy::{
 };
 use bevy_enhanced_input::prelude::Press;
 use jackdaw_geometry::{
-    brush_planes_to_world, brushes_intersect, clean_degenerate_faces, compute_brush_geometry,
-    compute_face_tangent_axes, compute_face_uvs, intersect_brushes, subtract_brush,
-    triangulate_face,
+    brush_planes_to_world, brushes_intersect, clean_degenerate_faces,
+    compute_brush_geometry_from_planes, compute_face_tangent_axes, compute_face_uvs,
+    intersect_brushes, subtract_brush, triangulate_face,
 };
 use jackdaw_jsn::{Brush, BrushFaceData, BrushGroup, BrushPlane};
 
@@ -1119,7 +1119,7 @@ fn draw_brush_preview(
     if let Some(target) = active.append_target
         && let Ok((brush, brush_tf)) = brushes.get(target)
     {
-        let (verts, polys) = compute_brush_geometry(&brush.faces);
+        let (verts, polys) = compute_brush_geometry_from_planes(&brush.faces);
         for polygon in &polys {
             for i in 0..polygon.len() {
                 let a = brush_tf.transform_point(verts[polygon[i]]);
@@ -1392,7 +1392,7 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
         let inv_rotation = rotation.inverse();
 
         // Get existing brush vertices in local space, then convert drawn verts to local space
-        let existing_verts = compute_brush_geometry(&old_brush.faces).0;
+        let existing_verts = compute_brush_geometry_from_planes(&old_brush.faces).0;
         let existing_count = existing_verts.len();
 
         let mut all_local_verts: Vec<Vec3> = existing_verts;
@@ -1418,7 +1418,7 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
         }
 
         // Build new face data, matching old faces where possible for texture preservation
-        let old_face_polygons = compute_brush_geometry(&old_brush.faces).1;
+        let old_face_polygons = compute_brush_geometry_from_planes(&old_brush.faces).1;
         let last_mat = world
             .resource::<crate::brush::LastUsedMaterial>()
             .material
@@ -1507,7 +1507,7 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
             new_faces.push(face_data);
         }
 
-        let new_brush = Brush { faces: new_faces };
+        let new_brush = Brush { faces: new_faces, ..default() };
 
         // Apply (ECS + AST). Undo is handled by the enclosing
         // `viewport.draw_brush_modal` operator's snapshot diff; no
@@ -1835,7 +1835,7 @@ fn manage_draw_preview_mesh(
     };
 
     // Compute mesh geometry from planes
-    let (verts, face_polys) = compute_brush_geometry(&cutter_planes);
+    let (verts, face_polys) = compute_brush_geometry_from_planes(&cutter_planes);
     if verts.len() < 4 {
         for entity in preview_query.iter() {
             commands.entity(entity).despawn();
@@ -1983,7 +1983,7 @@ fn manage_draw_preview_mesh(
                 if fragment_faces.len() < 4 {
                     continue;
                 }
-                let (frag_verts, frag_polys) = compute_brush_geometry(&fragment_faces);
+                let (frag_verts, frag_polys) = compute_brush_geometry_from_planes(&fragment_faces);
                 if frag_verts.len() < 4 {
                     continue;
                 }
@@ -2241,7 +2241,7 @@ fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
             let mut fragment_data: Vec<(Brush, Transform)> = Vec::new();
             for fragment_faces in &raw_fragments {
                 // Compute vertices to find centroid (world space)
-                let (world_verts, _) = compute_brush_geometry(fragment_faces);
+                let (world_verts, _) = compute_brush_geometry_from_planes(fragment_faces);
                 if world_verts.len() < 4 {
                     continue;
                 }
@@ -2275,7 +2275,7 @@ fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
                 }
 
                 fragment_data.push((
-                    Brush { faces: clean },
+                    Brush { faces: clean, ..default() },
                     Transform::from_translation(centroid),
                 ));
             }
@@ -2526,7 +2526,7 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
         let inv_rotation = rotation.inverse();
 
         // Gather all vertices in primary's local space
-        let existing_verts = compute_brush_geometry(&old_primary_brush.faces).0;
+        let existing_verts = compute_brush_geometry_from_planes(&old_primary_brush.faces).0;
         let existing_count = existing_verts.len();
         let mut all_local_verts: Vec<Vec3> = existing_verts;
 
@@ -2538,7 +2538,7 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
             let Some(other_gtf) = world.get::<GlobalTransform>(other) else {
                 continue;
             };
-            let (other_verts, _) = compute_brush_geometry(&other_brush.faces);
+            let (other_verts, _) = compute_brush_geometry_from_planes(&other_brush.faces);
             for v in &other_verts {
                 let world_pos = other_gtf.transform_point(*v);
                 all_local_verts.push(inv_rotation * (world_pos - translation));
@@ -2561,7 +2561,7 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
         }
 
         // Build new face data, matching old primary faces where possible
-        let old_face_polygons = compute_brush_geometry(&old_primary_brush.faces).1;
+        let old_face_polygons = compute_brush_geometry_from_planes(&old_primary_brush.faces).1;
         let last_mat = world
             .resource::<crate::brush::LastUsedMaterial>()
             .material
@@ -2647,7 +2647,7 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
             new_faces.push(face_data);
         }
 
-        let new_brush = Brush { faces: new_faces };
+        let new_brush = Brush { faces: new_faces, ..default() };
 
         // Snapshot others before despawning (for undo)
         let mut undo_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
@@ -2782,7 +2782,7 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
         // Convert world-space fragments to local-space brushes
         let mut fragment_data: Vec<(Brush, Transform)> = Vec::new();
         for fragment_faces in &current_fragments {
-            let (world_verts, _) = compute_brush_geometry(fragment_faces);
+            let (world_verts, _) = compute_brush_geometry_from_planes(fragment_faces);
             if world_verts.len() < 4 {
                 continue;
             }
@@ -2805,7 +2805,7 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
             }
 
             fragment_data.push((
-                Brush { faces: clean },
+                Brush { faces: clean, ..default() },
                 Transform::from_translation(centroid),
             ));
         }
@@ -2988,7 +2988,7 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
     }
 
     // Compute centroid for the result
-    let (world_verts, _) = compute_brush_geometry(&intersection_faces);
+    let (world_verts, _) = compute_brush_geometry_from_planes(&intersection_faces);
     if world_verts.len() < 4 {
         return;
     }
@@ -3036,7 +3036,7 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
     }
 
     // Spawn the intersection brush
-    let new_brush = Brush { faces: clean };
+    let new_brush = Brush { faces: clean, ..default() };
     let frag_sid = world.resource_mut::<StableIdCounter>().next();
     let brush_data = BrushData {
         stable_id: frag_sid,
@@ -3406,13 +3406,13 @@ pub(crate) fn extend_face_to_brush_impl(
     }
 
     // Compute geometry from combined face set
-    let (verts, _) = compute_brush_geometry(&world_faces);
+    let (verts, _) = compute_brush_geometry_from_planes(&world_faces);
     if verts.len() < 4 {
         return;
     }
 
     // No-op check: compare with original geometry
-    let (old_verts, _) = compute_brush_geometry(&brush_planes_to_world(
+    let (old_verts, _) = compute_brush_geometry_from_planes(&brush_planes_to_world(
         &old_brush.faces,
         rotation,
         translation,
@@ -3447,7 +3447,7 @@ pub(crate) fn extend_face_to_brush_impl(
         return;
     }
     // Apply via undo-able SetBrush command (ECS + AST)
-    let new_brush = Brush { faces: local_clean };
+    let new_brush = Brush { faces: local_clean, ..default() };
     crate::brush::sync_brush_to_ast(world, primary, &new_brush);
     if let Some(mut brush) = world.get_mut::<Brush>(primary) {
         *brush = new_brush.clone();

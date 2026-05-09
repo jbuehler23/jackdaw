@@ -12,7 +12,8 @@ use crate::default_style;
 use crate::draw_brush::DrawBrushState;
 use crate::selection::Selected;
 use jackdaw_geometry::{
-    compute_brush_geometry, compute_face_tangent_axes, compute_face_uvs, triangulate_face,
+    compute_brush_geometry_from_planes, compute_face_tangent_axes, compute_face_uvs,
+    triangulate_face,
 };
 
 pub(super) struct MeshPlugin;
@@ -87,7 +88,7 @@ pub fn regenerate_brush_meshes(
             Option<&super::BrushPreview>,
             Has<Selected>,
         ),
-        Changed<super::Brush>,
+        Or<(Changed<super::Brush>, Changed<crate::brush::BrushBMesh>)>,
     >,
     mesh3d_query: Query<(), With<Mesh3d>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -95,6 +96,7 @@ pub fn regenerate_brush_meshes(
     parents: Query<&ChildOf>,
     selected_query: Query<(), With<Selected>>,
     group_edit: Res<crate::viewport_select::GroupEditState>,
+    bmesh_q: Query<&crate::brush::BrushBMesh>,
 ) {
     for (entity, brush, children, preview, is_selected) in &changed_brushes {
         let in_active_group = group_edit
@@ -116,7 +118,16 @@ pub fn regenerate_brush_meshes(
             }
         }
 
-        let (vertices, face_polygons) = compute_brush_geometry(&brush.faces);
+        let (vertices, face_polygons) = if let Ok(bmesh_component) = bmesh_q.get(entity) {
+            let topology = bmesh_component.mesh.flatten_to_topology();
+            let verts: Vec<Vec3> = topology.vertices.iter().map(|v| v.position).collect();
+            let polys: Vec<Vec<usize>> = (0..topology.polygons.len())
+                .map(|i| topology.face_ring(i).map(|v| v as usize).collect())
+                .collect();
+            (verts, polys)
+        } else {
+            compute_brush_geometry_from_planes(&brush.faces)
+        };
 
         let mut face_entities = Vec::with_capacity(brush.faces.len());
 

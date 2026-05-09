@@ -8,7 +8,8 @@ use bevy::{
 
 use crate::types::Brush;
 use jackdaw_geometry::{
-    compute_brush_geometry, compute_face_tangent_axes, compute_face_uvs, triangulate_face,
+    compute_brush_geometry_from_planes, compute_face_tangent_axes, compute_face_uvs,
+    triangulate_face,
 };
 
 pub(super) struct MeshRebuildPlugin;
@@ -34,7 +35,7 @@ pub fn rebuild_brush_meshes(
         return;
     };
 
-    let (vertices, face_polygons) = compute_brush_geometry(&brush.faces);
+    let (vertices, face_polygons) = compute_brush_geometry_from_planes(&brush.faces);
     let mut all_positions: Vec<[f32; 3]> = Vec::new();
     let mut all_normals: Vec<[f32; 3]> = Vec::new();
     let mut all_uvs: Vec<[f32; 2]> = Vec::new();

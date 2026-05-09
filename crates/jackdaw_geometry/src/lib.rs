@@ -1,5 +1,18 @@
 use bevy::prelude::*;
 
+pub mod topology;
+pub use topology::{
+    AttributeData, AttributeStack, BrushTopology, EdgeFlag, MeshEdge, MeshLoop, MeshPoly, MeshVert,
+};
+
+pub mod bmesh;
+
+pub mod newell;
+pub use newell::newell_normal;
+
+pub mod triangulate;
+pub use triangulate::{triangulate_polygon, triangulate_face_polygon};
+
 pub const EPSILON: f32 = 1e-4;
 
 #[derive(Clone, Debug, Reflect, Default)]
@@ -67,9 +80,9 @@ pub fn point_inside_all_planes(point: Vec3, faces: &[BrushFaceData]) -> bool {
     true
 }
 
-/// Compute brush geometry from face planes.
-/// Returns (unique vertices, per-face polygon vertex indices).
-pub fn compute_brush_geometry(faces: &[BrushFaceData]) -> (Vec<Vec3>, Vec<Vec<usize>>) {
+/// Deprecated. Used only by the legacy-scene migration in jackdaw_jsn::migration. Will be removed once migration usage drops.
+#[doc(hidden)]
+pub fn compute_brush_geometry_from_planes(faces: &[BrushFaceData]) -> (Vec<Vec3>, Vec<Vec<usize>>) {
     let n = faces.len();
     let mut vertices: Vec<Vec3> = Vec::new();
 
@@ -232,8 +245,8 @@ pub fn brush_planes_to_world(
 /// This avoids the numerical issues of the previous approach which
 /// computed geometry of the combined face set and broke for thin volumes.
 pub fn brushes_intersect(a_faces: &[BrushFaceData], b_faces: &[BrushFaceData]) -> bool {
-    let (a_verts, _) = compute_brush_geometry(a_faces);
-    let (b_verts, _) = compute_brush_geometry(b_faces);
+    let (a_verts, _) = compute_brush_geometry_from_planes(a_faces);
+    let (b_verts, _) = compute_brush_geometry_from_planes(b_faces);
     if a_verts.len() < 4 || b_verts.len() < 4 {
         return false;
     }
@@ -289,7 +302,7 @@ pub fn subtract_brush(
             };
             new_face.ensure_uv_axes();
             outside_faces.push(new_face);
-            let (outside_verts, _) = compute_brush_geometry(&outside_faces);
+            let (outside_verts, _) = compute_brush_geometry_from_planes(&outside_faces);
             if outside_verts.len() >= 4 {
                 result_fragments.push(outside_faces);
             }
@@ -309,7 +322,7 @@ pub fn subtract_brush(
             };
             new_face.ensure_uv_axes();
             inside_faces.push(new_face);
-            let (inside_verts, _) = compute_brush_geometry(&inside_faces);
+            let (inside_verts, _) = compute_brush_geometry_from_planes(&inside_faces);
             if inside_verts.len() >= 4 {
                 next_remaining.push(inside_faces);
             }
@@ -326,7 +339,7 @@ pub fn subtract_brush(
 ///
 /// Collects all face planes from every input brush into one combined set.
 /// Because the intersection of convex half-spaces is itself convex, running
-/// `compute_brush_geometry` on the merged planes directly yields the result.
+/// `compute_brush_geometry_from_planes` on the merged planes directly yields the result.
 /// Returns `None` if the intersection is empty (fewer than 4 vertices).
 pub fn intersect_brushes(brush_face_sets: &[&[BrushFaceData]]) -> Option<Vec<BrushFaceData>> {
     let mut combined: Vec<BrushFaceData> = Vec::new();
@@ -334,7 +347,7 @@ pub fn intersect_brushes(brush_face_sets: &[&[BrushFaceData]]) -> Option<Vec<Bru
         combined.extend(faces.iter().cloned());
     }
 
-    let (verts, _) = compute_brush_geometry(&combined);
+    let (verts, _) = compute_brush_geometry_from_planes(&combined);
     if verts.len() < 4 {
         return None;
     }
@@ -344,7 +357,7 @@ pub fn intersect_brushes(brush_face_sets: &[&[BrushFaceData]]) -> Option<Vec<Bru
 
 /// Remove faces that produce no vertices (degenerate) from a face set.
 pub fn clean_degenerate_faces(faces: &[BrushFaceData]) -> Vec<BrushFaceData> {
-    let (_, polys) = compute_brush_geometry(faces);
+    let (_, polys) = compute_brush_geometry_from_planes(faces);
     faces
         .iter()
         .enumerate()

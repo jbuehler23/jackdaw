@@ -1,9 +1,11 @@
 mod csg;
+pub mod edit_mode_systems;
 mod geometry;
 mod gizmo_overlay;
 mod hull;
 pub(crate) mod interaction;
 pub(crate) mod mesh;
+pub mod topology_migration;
 
 use bevy::prelude::*;
 
@@ -12,12 +14,13 @@ use crate::commands::EditorCommand;
 pub use self::csg::{
     brush_planes_to_world, brushes_intersect, clean_degenerate_faces, subtract_brush,
 };
-pub use self::geometry::{compute_brush_geometry, compute_face_tangent_axes};
+pub use self::geometry::{compute_brush_geometry_from_planes, compute_face_tangent_axes};
 pub use self::hull::HullFace;
 pub(crate) use self::hull::{merge_hull_triangles, rebuild_brush_from_vertices};
 pub(crate) use self::interaction::{
     BrushDragState, ClipMode, ClipState, EdgeDragState, VertexDragState,
 };
+pub use edit_mode_systems::BrushBMesh;
 pub use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
 
 /// Cached computed geometry (NOT serialized, rebuilt from Brush).
@@ -250,6 +253,16 @@ impl Plugin for BrushPlugin {
             .add_systems(
                 Update,
                 sync_changed_brushes_to_ast.run_if(in_state(crate::AppState::Editor)),
+            )
+            .add_systems(
+                Update,
+                edit_mode_systems::sync_brush_bmesh_on_edit_mode
+                    .run_if(in_state(crate::AppState::Editor)),
+            )
+            .add_systems(
+                Update,
+                topology_migration::migrate_legacy_brush_topology
+                    .run_if(in_state(crate::AppState::Editor)),
             );
     }
 }

@@ -10,8 +10,8 @@ use bevy::prelude::*;
 // Re-export core types for consumer convenience
 pub use editor_meta::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 pub use types::{
-    Brush, BrushFaceData, BrushGroup, BrushPlane, CustomProperties, GltfSource, JsnPrefab,
-    JsnPrefabBaseline, NavmeshRegion, PropertyValue, Terrain,
+    Brush, BrushFaceData, BrushGroup, BrushPlane, BrushTopology, CustomProperties, GltfSource,
+    JsnPrefab, JsnPrefabBaseline, NavmeshRegion, PropertyValue, Terrain,
 };
 
 // Re-export geometry crate
@@ -38,10 +38,18 @@ impl Default for JsnPlugin {
 
 impl Plugin for JsnPlugin {
     fn build(&self, app: &mut App) {
+        use jackdaw_geometry::{AttributeData, AttributeStack, MeshEdge, MeshLoop, MeshPoly, MeshVert};
         app.register_type::<Brush>()
             .register_type::<BrushGroup>()
             .register_type::<BrushFaceData>()
             .register_type::<BrushPlane>()
+            .register_type::<BrushTopology>()
+            .register_type::<MeshVert>()
+            .register_type::<MeshEdge>()
+            .register_type::<MeshPoly>()
+            .register_type::<MeshLoop>()
+            .register_type::<AttributeStack>()
+            .register_type::<AttributeData>()
             .register_type::<CustomProperties>()
             .register_type::<PropertyValue>()
             .register_type::<GltfSource>()

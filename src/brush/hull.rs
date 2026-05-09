@@ -215,5 +215,5 @@ pub(crate) fn rebuild_brush_from_vertices(
         old_to_new[old_idx] = new_idx;
     }
 
-    Some((Brush { faces }, old_to_new))
+    Some((Brush { faces, ..default() }, old_to_new))
 }
