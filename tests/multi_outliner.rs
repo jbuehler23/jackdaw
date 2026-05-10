@@ -21,7 +21,11 @@ mod util;
 /// "Outliner panel content" entity.
 fn spawn_outliner_container(world: &mut World) -> Entity {
     world
-        .spawn((HierarchyTreeContainer, Node::default(), Visibility::Inherited))
+        .spawn((
+            HierarchyTreeContainer,
+            Node::default(),
+            Visibility::Inherited,
+        ))
         .id()
 }
 
@@ -33,9 +37,7 @@ fn add_root_entity_spawns_one_row_per_container() {
     let outliner_a = spawn_outliner_container(world);
     let outliner_b = spawn_outliner_container(world);
 
-    let entity = world
-        .spawn((Name::new("Brush"), Transform::default()))
-        .id();
+    let entity = world.spawn((Name::new("Brush"), Transform::default())).id();
 
     // Flush the queued `commands` from the `On<Add, ...>` observers.
     app.update();
@@ -85,9 +87,7 @@ fn reparent_scene_entity_moves_row_in_every_outliner() {
     let parent = world
         .spawn((Name::new("Parent"), Transform::default()))
         .id();
-    let child = world
-        .spawn((Name::new("Child"), Transform::default()))
-        .id();
+    let child = world.spawn((Name::new("Child"), Transform::default())).id();
     app.update();
 
     // Sanity: both containers initially see both as roots.
@@ -105,7 +105,10 @@ fn reparent_scene_entity_moves_row_in_every_outliner() {
     // not-yet-expanded subtree. (`spawn_single_tree_row` defaults
     // `TreeChildrenPopulated(false)`.)
     {
-        let mut q = world.query::<(&TreeNode, &mut jackdaw_widgets::tree_view::TreeChildrenPopulated)>();
+        let mut q = world.query::<(
+            &TreeNode,
+            &mut jackdaw_widgets::tree_view::TreeChildrenPopulated,
+        )>();
         for (tree_node, mut populated) in q.iter_mut(world) {
             if tree_node.0 == parent {
                 populated.0 = true;
@@ -156,9 +159,7 @@ fn despawn_scene_entity_drops_row_in_every_outliner() {
     let outliner_a = spawn_outliner_container(world);
     let outliner_b = spawn_outliner_container(world);
 
-    let entity = world
-        .spawn((Name::new("Brush"), Transform::default()))
-        .id();
+    let entity = world.spawn((Name::new("Brush"), Transform::default())).id();
     app.update();
 
     let world = app.world_mut();

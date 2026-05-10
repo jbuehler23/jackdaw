@@ -38,7 +38,7 @@ impl ViewportRemap {
 /// and by modal operators that captured a viewport at start.
 ///
 /// The camera renders to an off-screen image whose logical size may differ
-/// from the UI node's logical size (they diverge on HiDPI / fractional
+/// from the UI node's logical size (they diverge on `HiDPI` / fractional
 /// scaling displays). This remaps UI-logical space into camera viewport
 /// space so `camera.viewport_to_world()` / `camera.world_to_viewport()`
 /// produce correct results.

@@ -398,7 +398,7 @@ pub fn project_files_panel_content() -> impl Bundle {
     )
 }
 
-/// Bundle the editor toolbar and the SceneViewport node together so
+/// Bundle the editor toolbar and the `SceneViewport` node together so
 /// `setup_viewport` can mount the whole thing inside the dock tree's
 /// "center" leaf in one go. Public to the crate because it's spawned
 /// by the viewport plugin, not by `editor_layout` directly.

@@ -429,7 +429,7 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
 
 /// Walk the descendants of `root` looking for the first entity that
 /// has component `T`. Used by [`build_viewport_panel`] to locate the
-/// SceneViewport node spawned inside the panel content bundle.
+/// `SceneViewport` node spawned inside the panel content bundle.
 fn find_descendant_with<T: Component>(world: &mut World, root: Entity) -> Option<Entity> {
     let mut stack = vec![root];
     let mut q_t = world.query_filtered::<Entity, With<T>>();
@@ -628,7 +628,7 @@ fn update_active_viewport(
         fly_state.0 = false;
     }
 
-    let cursor = windows.single().ok().and_then(|w| w.cursor_position());
+    let cursor = windows.single().ok().and_then(Window::cursor_position);
 
     // Find the viewport under the cursor (if any). Multi-viewport
     // setups iterate every SceneViewport panel; first hit wins.

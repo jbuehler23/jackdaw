@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::area::DockAreaStyle;
 
-/// Synthetic-area-id prefix produced by [`fresh_area_id`] for leaves
+/// Synthetic-area-id prefix produced by `fresh_area_id` for leaves
 /// born from runtime splits.
 pub const SYNTHETIC_AREA_ID_PREFIX: &str = "split.";
 
@@ -129,7 +129,7 @@ impl DockLeaf {
     }
 
     /// Seed the leaf with one tab per window id. The tabs carry
-    /// [`TabId::PENDING`] until the leaf is inserted into a
+    /// `TabId::PENDING` until the leaf is inserted into a
     /// [`DockTree`], which rewrites them to fresh ids. Direct callers
     /// that already have a tree should use [`DockTree::add_tab`]
     /// instead.
