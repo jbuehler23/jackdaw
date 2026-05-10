@@ -37,10 +37,14 @@ pub(super) fn spawn_brush_display(
     brush: &crate::brush::Brush,
     materials: &Assets<StandardMaterial>,
 ) {
-    let (vertices, face_polygons) = crate::brush::compute_brush_geometry_from_planes(&brush.faces);
-    let face_count = brush.faces.len();
-    let vertex_count = vertices.len();
-    let edge_count = {
+    let (face_count, vertex_count, edge_count) = if !brush.topology.polygons.is_empty() {
+        (
+            brush.topology.polygons.len(),
+            brush.topology.vertices.len(),
+            brush.topology.edges.len(),
+        )
+    } else {
+        let (vertices, face_polygons) = crate::brush::compute_brush_geometry_from_planes(&brush.faces);
         let mut edges = std::collections::HashSet::new();
         for polygon in &face_polygons {
             for i in 0..polygon.len() {
@@ -50,7 +54,7 @@ pub(super) fn spawn_brush_display(
                 edges.insert(edge);
             }
         }
-        edges.len()
+        (brush.faces.len(), vertices.len(), edges.len())
     };
 
     let info = format!("{face_count} faces, {vertex_count} vertices, {edge_count} edges");

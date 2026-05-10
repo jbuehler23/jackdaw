@@ -6,6 +6,7 @@ mod hull;
 pub(crate) mod interaction;
 pub(crate) mod mesh;
 pub mod topology_migration;
+pub mod topology_ops;
 
 use bevy::prelude::*;
 

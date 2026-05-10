@@ -9,6 +9,7 @@
 pub mod cycles;
 pub mod flatten;
 pub mod lift;
+pub mod ops;
 pub mod select;
 pub mod types;
 pub mod validate;
