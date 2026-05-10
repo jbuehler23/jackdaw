@@ -206,6 +206,12 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::brush::topology_ops::dissolve_faces::add_to_extension(ctx);
         crate::brush::topology_ops::dissolve_verts::add_to_extension(ctx);
         crate::brush::topology_ops::edge_slide::add_to_extension(ctx);
+        crate::brush::topology_ops::select_invert::add_to_extension(ctx);
+        crate::brush::topology_ops::select_less::add_to_extension(ctx);
+        crate::brush::topology_ops::select_linked::add_to_extension(ctx);
+        crate::brush::topology_ops::select_loop::add_to_extension(ctx);
+        crate::brush::topology_ops::select_more::add_to_extension(ctx);
+        crate::brush::topology_ops::select_ring::add_to_extension(ctx);
         crate::brush::topology_ops::extrude::add_to_extension(ctx);
         crate::brush::topology_ops::inset::add_to_extension(ctx);
         crate::brush::topology_ops::loop_cut::add_to_extension(ctx);
@@ -214,6 +220,12 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::brush::topology_ops::subdivide::add_to_extension(ctx);
         crate::brush::topology_ops::vertex_slide::add_to_extension(ctx);
         crate::brush::topology_ops::weld_selected::add_to_extension(ctx);
+        crate::brush::topology_ops::uv_reset_axes::add_to_extension(ctx);
+        crate::brush::topology_ops::uv_world_aligned::add_to_extension(ctx);
+        crate::brush::topology_ops::uv_rotate_90::add_to_extension(ctx);
+        crate::brush::topology_ops::uv_fit_to_face::add_to_extension(ctx);
+        crate::brush::topology_ops::uv_texel_density::add_to_extension(ctx);
+        crate::brush::topology_ops::uv_align_to_edge::add_to_extension(ctx);
         crate::gizmos::add_to_extension(ctx);
         crate::terrain::sculpt::add_to_extension(ctx);
         crate::navmesh::ops::add_to_extension(ctx);

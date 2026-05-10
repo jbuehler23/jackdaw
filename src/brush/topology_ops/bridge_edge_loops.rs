@@ -4,11 +4,11 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::bmesh::{BMesh, EdgeKey, VertKey};
-use jackdaw_geometry::bmesh::ops::bridge_edge_loops::bridge_edge_loops;
+use jackdaw_geometry::editmesh::{EditMesh, EdgeKey, VertKey};
+use jackdaw_geometry::editmesh::ops::bridge_edge_loops::bridge_edge_loops;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushBMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Connect two selected edge loops with a quad strip. The selection must
@@ -25,7 +25,7 @@ pub(crate) fn brush_bridge_edge_loops(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushBMesh>,
+    mut bmesh_q: Query<&mut BrushEditMesh>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
@@ -37,7 +37,7 @@ pub(crate) fn brush_bridge_edge_loops(
     let Ok(brush_before) = brushes.get(brush_entity).cloned() else { return OperatorResult::Cancelled; };
     let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else { return OperatorResult::Cancelled; };
 
-    // Map cache edge pairs (a, b) -> BMesh EdgeKeys via vert_keys.
+    // Map cache edge pairs (a, b) -> EditMesh EdgeKeys via vert_keys.
     let mut bmesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
     for &(a, b) in &selection.edges {
         let Some(&va) = bmesh_component.vert_keys.get(a) else { continue };
@@ -95,8 +95,8 @@ pub(crate) fn brush_bridge_edge_loops(
     }
     brush.topology = new_topology;
 
-    // Re-lift BMesh.
-    let new_bmesh = BMesh::lift_from_topology(&brush.topology);
+    // Re-lift EditMesh.
+    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -117,14 +117,14 @@ pub(crate) fn brush_bridge_edge_loops(
     OperatorResult::Finished
 }
 
-fn find_edge_between(bmesh: &BMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
+fn find_edge_between(bmesh: &EditMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
     bmesh.edges.iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
         .map(|(k, _)| k)
 }
 
 /// Partition the given edges into connected components based on shared vertices.
-fn partition_edges_by_connectivity(bmesh: &BMesh, edges: &[EdgeKey]) -> Vec<Vec<EdgeKey>> {
+fn partition_edges_by_connectivity(bmesh: &EditMesh, edges: &[EdgeKey]) -> Vec<Vec<EdgeKey>> {
     let edge_set: HashSet<EdgeKey> = edges.iter().copied().collect();
     let mut vert_to_edges: HashMap<VertKey, Vec<EdgeKey>> = HashMap::new();
     for &e in edges {

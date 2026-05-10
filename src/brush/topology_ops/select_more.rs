@@ -1,0 +1,146 @@
+//! `brush.select.more` operator. Extend the selection to its neighbors.
+//! Vertex mode: add verts sharing an edge with selected. Edge mode: add edges
+//! sharing a vert with selected. Face mode: add faces sharing an edge with selected.
+
+use std::collections::HashSet;
+
+use bevy::prelude::*;
+use jackdaw_api::prelude::*;
+use jackdaw_geometry::editmesh::cycles::{disk_walk, radial_walk};
+use jackdaw_geometry::editmesh::VertKey;
+
+use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode};
+
+/// Extend the selection to its immediate neighbors based on the current edit mode.
+#[operator(
+    id = "brush.select.more",
+    label = "Select More",
+    is_available = can_run_select_more,
+    allows_undo = false
+)]
+pub(crate) fn brush_select_more(
+    _: In<OperatorParameters>,
+    edit_mode: Res<EditMode>,
+    mut selection: ResMut<BrushSelection>,
+    bmesh_q: Query<&BrushEditMesh>,
+) -> OperatorResult {
+    let Some(brush_entity) = selection.entity else {
+        return OperatorResult::Cancelled;
+    };
+    let Ok(bmesh_component) = bmesh_q.get(brush_entity) else {
+        return OperatorResult::Cancelled;
+    };
+    let mesh = &bmesh_component.mesh;
+
+    match *edit_mode {
+        EditMode::BrushEdit(BrushEditMode::Vertex) => {
+            // For each selected vert (cache idx), find the corresponding VertKey, walk its
+            // disk, for each incident edge add the OTHER endpoint's cache idx.
+            let mut new_set: HashSet<usize> = selection.vertices.iter().copied().collect();
+            let current: Vec<usize> = selection.vertices.clone();
+            for vi in current {
+                let Some(&vk) = bmesh_component.vert_keys.get(vi) else {
+                    continue;
+                };
+                for ek in disk_walk(mesh, vk).collect::<Vec<_>>() {
+                    let edge = &mesh.edges[ek];
+                    let other = if edge.v[0] == vk { edge.v[1] } else { edge.v[0] };
+                    if let Some(other_idx) =
+                        bmesh_component.vert_keys.iter().position(|&k| k == other)
+                    {
+                        new_set.insert(other_idx);
+                    }
+                }
+            }
+            selection.vertices = new_set.into_iter().collect();
+            selection.vertices.sort();
+            OperatorResult::Finished
+        }
+        EditMode::BrushEdit(BrushEditMode::Edge) => {
+            // For each selected edge, find its two endpoint VertKeys, walk each's disk; add all
+            // resulting edges to the selection.
+            let mut new_set: HashSet<(usize, usize)> = selection.edges.iter().copied().collect();
+            let current: Vec<(usize, usize)> = selection.edges.clone();
+            // Build VertKey -> idx lookup once.
+            let mut key_to_idx: std::collections::HashMap<VertKey, usize> =
+                std::collections::HashMap::new();
+            for (i, &k) in bmesh_component.vert_keys.iter().enumerate() {
+                key_to_idx.insert(k, i);
+            }
+            for (a, b) in current {
+                let Some(&va) = bmesh_component.vert_keys.get(a) else {
+                    continue;
+                };
+                let Some(&vb) = bmesh_component.vert_keys.get(b) else {
+                    continue;
+                };
+                for vk in [va, vb] {
+                    for ek in disk_walk(mesh, vk).collect::<Vec<_>>() {
+                        let edge = &mesh.edges[ek];
+                        let Some(&i0) = key_to_idx.get(&edge.v[0]) else {
+                            continue;
+                        };
+                        let Some(&i1) = key_to_idx.get(&edge.v[1]) else {
+                            continue;
+                        };
+                        let pair = if i0 < i1 { (i0, i1) } else { (i1, i0) };
+                        new_set.insert(pair);
+                    }
+                }
+            }
+            selection.edges = new_set.into_iter().collect();
+            OperatorResult::Finished
+        }
+        EditMode::BrushEdit(BrushEditMode::Face) => {
+            // For each selected face, walk its loops; for each edge, walk radial; add neighbor
+            // faces.
+            let mut new_set: HashSet<usize> = selection.faces.iter().copied().collect();
+            let current: Vec<usize> = selection.faces.clone();
+            for fi in current {
+                let Some(&fk) = bmesh_component.face_keys.get(fi) else {
+                    continue;
+                };
+                let face_data = &mesh.faces[fk];
+                let mut cur = face_data.loop_first;
+                for _ in 0..face_data.loop_count {
+                    let edge = mesh.loops[cur].edge;
+                    for radial_lp in radial_walk(mesh, edge).collect::<Vec<_>>() {
+                        let neighbor = mesh.loops[radial_lp].face;
+                        if let Some(neighbor_idx) =
+                            bmesh_component.face_keys.iter().position(|&k| k == neighbor)
+                        {
+                            new_set.insert(neighbor_idx);
+                        }
+                    }
+                    cur = mesh.loops[cur].next;
+                }
+            }
+            selection.faces = new_set.into_iter().collect();
+            selection.faces.sort();
+            OperatorResult::Finished
+        }
+        _ => OperatorResult::Cancelled,
+    }
+}
+
+pub(crate) fn can_run_select_more(
+    edit_mode: Res<EditMode>,
+    selection: Res<BrushSelection>,
+) -> bool {
+    if !matches!(*edit_mode, EditMode::BrushEdit(_)) {
+        return false;
+    }
+    if selection.entity.is_none() {
+        return false;
+    }
+    match *edit_mode {
+        EditMode::BrushEdit(BrushEditMode::Vertex) => !selection.vertices.is_empty(),
+        EditMode::BrushEdit(BrushEditMode::Edge) => !selection.edges.is_empty(),
+        EditMode::BrushEdit(BrushEditMode::Face) => !selection.faces.is_empty(),
+        _ => false,
+    }
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<BrushSelectMoreOp>();
+}

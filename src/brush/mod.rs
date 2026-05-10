@@ -21,7 +21,7 @@ pub(crate) use self::hull::{merge_hull_triangles, rebuild_brush_from_vertices};
 pub(crate) use self::interaction::{
     BrushDragState, ClipMode, ClipState, EdgeDragState, VertexDragState,
 };
-pub use edit_mode_systems::BrushBMesh;
+pub use edit_mode_systems::BrushEditMesh;
 pub use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
 
 /// Cached computed geometry (NOT serialized, rebuilt from Brush).

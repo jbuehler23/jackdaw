@@ -12,8 +12,7 @@ use crate::default_style;
 use crate::draw_brush::DrawBrushState;
 use crate::selection::Selected;
 use jackdaw_geometry::{
-    compute_brush_geometry_from_planes, compute_face_tangent_axes, compute_face_uvs,
-    triangulate_face,
+    compute_brush_geometry_from_planes, compute_face_tangent_axes, triangulate_face,
 };
 
 pub(super) struct MeshPlugin;
@@ -88,7 +87,7 @@ pub fn regenerate_brush_meshes(
             Option<&super::BrushPreview>,
             Has<Selected>,
         ),
-        Or<(Changed<super::Brush>, Changed<crate::brush::BrushBMesh>)>,
+        Or<(Changed<super::Brush>, Changed<crate::brush::BrushEditMesh>)>,
     >,
     mesh3d_query: Query<(), With<Mesh3d>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -96,7 +95,7 @@ pub fn regenerate_brush_meshes(
     parents: Query<&ChildOf>,
     selected_query: Query<(), With<Selected>>,
     group_edit: Res<crate::viewport_select::GroupEditState>,
-    bmesh_q: Query<&crate::brush::BrushBMesh>,
+    bmesh_q: Query<&crate::brush::BrushEditMesh>,
 ) {
     for (entity, brush, children, preview, is_selected) in &changed_brushes {
         let in_active_group = group_edit
@@ -138,40 +137,73 @@ pub fn regenerate_brush_meshes(
                 continue;
             }
 
-            // Build per-face mesh with local vertex positions
-            let positions: Vec<[f32; 3]> =
-                indices.iter().map(|&vi| vertices[vi].to_array()).collect();
-            let normals: Vec<[f32; 3]> = vec![face_data.plane.normal.to_array(); indices.len()];
+            // Build per-triangle (flat-shaded) mesh so non-planar faces render correctly.
+            // Each triangle in the fan gets its own computed normal; vertex positions are
+            // duplicated (3 per tri) so every vertex can carry an independent normal.
             let (u_axis, v_axis) =
                 if face_data.uv_u_axis != Vec3::ZERO && face_data.uv_v_axis != Vec3::ZERO {
                     (face_data.uv_u_axis, face_data.uv_v_axis)
                 } else {
                     compute_face_tangent_axes(face_data.plane.normal)
                 };
-            let uvs = compute_face_uvs(
-                &vertices,
-                indices,
-                u_axis,
-                v_axis,
-                face_data.uv_offset,
-                face_data.uv_scale,
-                face_data.uv_rotation,
-            );
-            let w = face_data.plane.normal.dot(u_axis.cross(v_axis)).signum();
-            let tangent = [u_axis.x, u_axis.y, u_axis.z, w];
-            let tangents: Vec<[f32; 4]> = vec![tangent; indices.len()];
 
-            // Fan triangulate: local indices (0..positions.len())
+            // Fan triangulate: local indices (0..face vertex count)
             let local_tris = triangulate_face(&(0..indices.len()).collect::<Vec<_>>());
-            let flat_indices: Vec<u32> =
-                local_tris.iter().flat_map(|t| t.iter().copied()).collect();
+
+            let mut positions: Vec<[f32; 3]> = Vec::with_capacity(local_tris.len() * 3);
+            let mut normals: Vec<[f32; 3]> = Vec::with_capacity(local_tris.len() * 3);
+            let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(local_tris.len() * 3);
+            let mut tangents: Vec<[f32; 4]> = Vec::with_capacity(local_tris.len() * 3);
+            let mut tri_indices: Vec<u32> = Vec::with_capacity(local_tris.len() * 3);
+
+            let cos_r = face_data.uv_rotation.cos();
+            let sin_r = face_data.uv_rotation.sin();
+
+            for tri in &local_tris {
+                let p_a = vertices[indices[tri[0] as usize]];
+                let p_b = vertices[indices[tri[1] as usize]];
+                let p_c = vertices[indices[tri[2] as usize]];
+
+                // Compute this triangle's actual normal for flat shading.
+                let cross = (p_b - p_a).cross(p_c - p_a);
+                let tri_normal = if cross.length_squared() > 1e-10 {
+                    cross.normalize()
+                } else {
+                    face_data.plane.normal
+                };
+                let tri_normal_arr = tri_normal.to_array();
+
+                // Tangent sign uses the face u/v axes (UV continuity is per-face).
+                let w = tri_normal.dot(u_axis.cross(v_axis)).signum();
+                let tangent = [u_axis.x, u_axis.y, u_axis.z, w];
+
+                let base = tri_indices.len() as u32;
+                for &vert_pos in &[p_a, p_b, p_c] {
+                    positions.push(vert_pos.to_array());
+                    normals.push(tri_normal_arr);
+
+                    // UV math matches compute_face_uvs exactly:
+                    // project → rotate → scale → offset.
+                    let u = vert_pos.dot(u_axis);
+                    let v = vert_pos.dot(v_axis);
+                    let ru = u * cos_r - v * sin_r;
+                    let rv = u * sin_r + v * cos_r;
+                    let su = ru / face_data.uv_scale.x.max(0.001) + face_data.uv_offset.x;
+                    let sv = rv / face_data.uv_scale.y.max(0.001) + face_data.uv_offset.y;
+                    uvs.push([su, sv]);
+                    tangents.push(tangent);
+                }
+                tri_indices.push(base);
+                tri_indices.push(base + 1);
+                tri_indices.push(base + 2);
+            }
 
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
             mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, tangents);
-            mesh.insert_indices(Indices::U32(flat_indices));
+            mesh.insert_indices(Indices::U32(tri_indices));
 
             let mesh_handle = meshes.add(mesh);
 

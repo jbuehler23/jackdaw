@@ -1,0 +1,592 @@
+{
+  "jsn": {
+    "format_version": [
+      3,
+      0,
+      0
+    ],
+    "editor_version": "0.3.0",
+    "bevy_version": "0.18"
+  },
+  "metadata": {
+    "name": "Untitled",
+    "description": "",
+    "author": "",
+    "created": "2026-04-11T11:47:07Z",
+    "modified": "2026-04-11T11:47:07Z"
+  },
+  "assets": {},
+  "editor": null,
+  "scene": [
+    {
+      "components": {
+        "jackdaw_jsn::types::Brush": {
+          "faces": [
+            {
+              "material": null,
+              "plane": {
+                "distance": 2.25,
+                "normal": [
+                  1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": null,
+              "plane": {
+                "distance": 2.25,
+                "normal": [
+                  -1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": null,
+              "plane": {
+                "distance": 2.5,
+                "normal": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": null,
+              "plane": {
+                "distance": 2.5,
+                "normal": [
+                  0.0,
+                  -1.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": null,
+              "plane": {
+                "distance": 4.5,
+                "normal": [
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": null,
+              "plane": {
+                "distance": 4.5,
+                "normal": [
+                  0.0,
+                  0.0,
+                  -1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                -0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                -0.0
+              ]
+            }
+          ]
+        },
+        "bevy_ecs::name::Name": "Brush",
+        "bevy_camera::visibility::Visibility": "Inherited",
+        "bevy_transform::components::transform::Transform": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            10.75,
+            2.5,
+            -26.75
+          ]
+        }
+      }
+    },
+    {
+      "parent": 7,
+      "components": {
+        "jackdaw_animation::clip::AnimationTrack": {
+          "component_type_path": "bevy_transform::components::transform::Transform",
+          "field_path": "translation",
+          "interpolation": "Linear"
+        },
+        "bevy_ecs::name::Name": "Brush / translation"
+      }
+    },
+    {
+      "parent": 1,
+      "components": {
+        "jackdaw_animation::clip::Vec3Keyframe": {
+          "time": 0.0,
+          "value": [
+            0.25,
+            0.75,
+            -0.5
+          ]
+        }
+      }
+    },
+    {
+      "parent": 10,
+      "components": {
+        "jackdaw_animation::clip::Vec3Keyframe": {
+          "time": 2.0,
+          "value": [
+            10.75,
+            2.5,
+            -26.75
+          ]
+        }
+      }
+    },
+    {
+      "parent": 10,
+      "components": {
+        "jackdaw_animation::clip::Vec3Keyframe": {
+          "time": 0.0,
+          "value": [
+            8.0,
+            2.5,
+            -3.5
+          ]
+        }
+      }
+    },
+    {
+      "components": {
+        "bevy_camera::visibility::Visibility": "Inherited",
+        "bevy_light::directional_light::DirectionalLight": {
+          "affects_lightmapped_mesh_diffuse": true,
+          "color": {
+            "LinearRgba": {
+              "alpha": 1.0,
+              "blue": 1.0,
+              "green": 1.0,
+              "red": 1.0
+            }
+          },
+          "illuminance": 10000.0,
+          "shadow_depth_bias": 0.019999999552965164,
+          "shadow_normal_bias": 1.7999999523162842,
+          "shadows_enabled": true
+        },
+        "bevy_transform::components::transform::Transform": {
+          "rotation": [
+            -0.38165590167045593,
+            0.1829865723848343,
+            -0.07736548036336899,
+            0.9027010798454285
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            10.0,
+            20.0,
+            10.0
+          ]
+        },
+        "bevy_light::cascade::CascadeShadowConfig": {
+          "bounds": [
+            10.0,
+            24.662120819091797,
+            60.822021484375,
+            149.99998474121094
+          ],
+          "minimum_distance": 0.10000000149011612,
+          "overlap_proportion": 0.20000000298023224
+        },
+        "bevy_ecs::name::Name": "Sun"
+      }
+    },
+    {
+      "parent": 1,
+      "components": {
+        "jackdaw_animation::clip::Vec3Keyframe": {
+          "time": 1.0050138235092163,
+          "value": [
+            -8.75,
+            0.75,
+            -18.5
+          ]
+        }
+      }
+    },
+    {
+      "parent": 11,
+      "components": {
+        "bevy_ecs::name::Name": "Brush Clip",
+        "jackdaw_animation::clip::Clip": {
+          "duration": 2.0
+        }
+      }
+    },
+    {
+      "parent": 1,
+      "components": {
+        "jackdaw_animation::clip::Vec3Keyframe": {
+          "time": 0.4960051476955414,
+          "value": [
+            5.75,
+            0.75,
+            -10.75
+          ]
+        }
+      }
+    },
+    {
+      "parent": 0,
+      "components": {
+        "jackdaw_animation::clip::Clip": {
+          "duration": 2.0
+        },
+        "bevy_ecs::name::Name": "Brush Clip"
+      }
+    },
+    {
+      "parent": 9,
+      "components": {
+        "bevy_ecs::name::Name": "Brush / translation",
+        "jackdaw_animation::clip::AnimationTrack": {
+          "component_type_path": "bevy_transform::components::transform::Transform",
+          "field_path": "translation",
+          "interpolation": "Linear"
+        }
+      }
+    },
+    {
+      "components": {
+        "bevy_transform::components::transform::Transform": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -8.75,
+            0.75,
+            -18.5
+          ]
+        },
+        "bevy_ecs::name::Name": "Brush",
+        "jackdaw_jsn::types::Brush": {
+          "faces": [
+            {
+              "material": null,
+              "plane": {
+                "distance": 2.5,
+                "normal": [
+                  1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": null,
+              "plane": {
+                "distance": 2.5,
+                "normal": [
+                  -1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": null,
+              "plane": {
+                "distance": 0.75,
+                "normal": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": null,
+              "plane": {
+                "distance": 0.75,
+                "normal": [
+                  0.0,
+                  -1.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": null,
+              "plane": {
+                "distance": 3.0,
+                "normal": [
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": null,
+              "plane": {
+                "distance": 3.0,
+                "normal": [
+                  0.0,
+                  0.0,
+                  -1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                -0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                -0.0
+              ]
+            }
+          ]
+        },
+        "bevy_camera::visibility::Visibility": "Inherited"
+      }
+    }
+  ]
+}

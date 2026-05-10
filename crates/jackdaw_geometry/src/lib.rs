@@ -5,7 +5,7 @@ pub use topology::{
     AttributeData, AttributeStack, BrushTopology, EdgeFlag, MeshEdge, MeshLoop, MeshPoly, MeshVert,
 };
 
-pub mod bmesh;
+pub mod editmesh;
 
 pub mod newell;
 pub use newell::newell_normal;

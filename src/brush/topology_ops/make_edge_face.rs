@@ -2,11 +2,11 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::bmesh::VertKey;
-use jackdaw_geometry::bmesh::ops::contextual_create::contextual_create;
+use jackdaw_geometry::editmesh::VertKey;
+use jackdaw_geometry::editmesh::ops::contextual_create::contextual_create;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushBMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Fill the current vertex selection with a new edge or face. Two verts -> edge.
@@ -23,7 +23,7 @@ pub(crate) fn brush_make_edge_face(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushBMesh>,
+    mut bmesh_q: Query<&mut BrushEditMesh>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
@@ -41,7 +41,7 @@ pub(crate) fn brush_make_edge_face(
         return OperatorResult::Cancelled;
     };
 
-    // Map cache vertex indices to BMesh VertKeys via vert_keys parallel array.
+    // Map cache vertex indices to EditMesh VertKeys via vert_keys parallel array.
     let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
@@ -73,7 +73,7 @@ pub(crate) fn brush_make_edge_face(
         bmesh_component.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten BMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
+    // Flatten EditMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
     let new_topology = bmesh_component.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
@@ -103,8 +103,8 @@ pub(crate) fn brush_make_edge_face(
     }
     brush.topology = new_topology;
 
-    // Re-lift BMesh from new topology so vert_keys / face_keys are consistent.
-    let new_bmesh = jackdaw_geometry::bmesh::BMesh::lift_from_topology(&brush.topology);
+    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = jackdaw_geometry::editmesh::EditMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {

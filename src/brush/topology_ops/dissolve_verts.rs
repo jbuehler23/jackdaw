@@ -2,11 +2,11 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::bmesh::{BMesh, VertKey};
-use jackdaw_geometry::bmesh::ops::dissolve_verts::dissolve_verts;
+use jackdaw_geometry::editmesh::{EditMesh, VertKey};
+use jackdaw_geometry::editmesh::ops::dissolve_verts::dissolve_verts;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushBMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Remove the selected verts and merge incident faces. MVP: only valence-2 verts are
@@ -22,7 +22,7 @@ pub(crate) fn brush_dissolve_verts(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushBMesh>,
+    mut bmesh_q: Query<&mut BrushEditMesh>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
@@ -40,7 +40,7 @@ pub(crate) fn brush_dissolve_verts(
         return OperatorResult::Cancelled;
     };
 
-    // Map cache vertex indices to BMesh VertKeys via vert_keys parallel array.
+    // Map cache vertex indices to EditMesh VertKeys via vert_keys parallel array.
     let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
@@ -74,24 +74,37 @@ pub(crate) fn brush_dissolve_verts(
         bmesh_component.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten BMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
+    // Flatten EditMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
     let new_topology = bmesh_component.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
 
-    // Dissolve_verts may remove faces. Truncate brush.faces if the topology
-    // now has fewer faces than before.
-    if brush.faces.len() > new_topology.polygons.len() {
-        brush.faces.truncate(new_topology.polygons.len());
-    }
+    // Collect the EditMesh's material_idxes sorted in ascending order: this matches
+    // the ordering that flatten_to_topology uses for new_topology.polygons.
+    let mut sorted_mat_idxes: Vec<u32> = bmesh_component
+        .mesh
+        .faces
+        .values()
+        .map(|f| f.material_idx)
+        .collect();
+    sorted_mat_idxes.sort_unstable();
 
-    // Ensure we have enough face data entries for any newly created faces.
-    let new_face_count = new_topology.polygons.len();
-    while brush.faces.len() < new_face_count {
-        let template = brush.faces.last().cloned().unwrap_or_default();
-        brush.faces.push(template);
+    // Rebuild brush.faces parallel to new_topology.polygons.  For each slot,
+    // look up the old BrushFaceData by the face's material_idx.  If the index
+    // is out of range (e.g. the merged face inherited a large material_idx),
+    // fall back to the last entry.
+    let old_faces = brush.faces.clone();
+    let mut new_faces: Vec<jackdaw_jsn::BrushFaceData> =
+        Vec::with_capacity(sorted_mat_idxes.len());
+    for &mat_idx in &sorted_mat_idxes {
+        let old = old_faces
+            .get(mat_idx as usize)
+            .cloned()
+            .unwrap_or_else(|| old_faces.last().cloned().unwrap_or_default());
+        new_faces.push(old);
     }
+    brush.faces = new_faces;
 
     // Update plane data per face from new topology.
     let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
@@ -108,8 +121,8 @@ pub(crate) fn brush_dissolve_verts(
     }
     brush.topology = new_topology;
 
-    // Re-lift BMesh from new topology so vert_keys / face_keys are consistent.
-    let new_bmesh = BMesh::lift_from_topology(&brush.topology);
+    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {

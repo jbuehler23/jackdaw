@@ -174,7 +174,7 @@ pub fn brush_face_drag(
     mut history: ResMut<CommandHistory>,
     mut commands: Commands,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
-    mut bmesh_q: Query<&mut crate::brush::BrushBMesh>,
+    mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
 ) -> OperatorResult {
     let Ok(window) = input.primary_window.single() else {
         return OperatorResult::Cancelled;
@@ -392,7 +392,7 @@ pub fn brush_face_drag(
                 let drag_amount =
                     snap_translate(projected * cam_dist * 0.003, &input.snap_settings, ctrl);
                 if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-                    // BMesh path: translate each selected face's ring vertices along the face normal.
+                    // EditMesh path: translate each selected face's ring vertices along the face normal.
                     let face_keys = bmesh_component.face_keys.clone();
                     let start_positions: Vec<bevy::math::Vec3> =
                         if !start.topology.vertices.is_empty() {
@@ -401,7 +401,7 @@ pub fn brush_face_drag(
                             bmesh_component.mesh.verts.values().map(|v| v.co).collect()
                         };
                     use std::collections::HashSet;
-                    let mut translated: HashSet<jackdaw_geometry::bmesh::VertKey> =
+                    let mut translated: HashSet<jackdaw_geometry::editmesh::VertKey> =
                         HashSet::new();
                     for &face_idx in &brush_selection.faces {
                         if face_idx >= face_keys.len() {
@@ -415,7 +415,7 @@ pub fn brush_face_drag(
                         };
                         let face = &bmesh_component.mesh.faces[fk];
                         let mut cur = face.loop_first;
-                        let mut ring_keys: Vec<jackdaw_geometry::bmesh::VertKey> =
+                        let mut ring_keys: Vec<jackdaw_geometry::editmesh::VertKey> =
                             Vec::with_capacity(face.loop_count as usize);
                         for _ in 0..face.loop_count {
                             ring_keys.push(bmesh_component.mesh.loops[cur].vert);
@@ -516,7 +516,7 @@ fn cancel_face_drag(
     mut brush_selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut drag_state: ResMut<BrushDragState>,
-    mut bmesh_q: Query<&mut crate::brush::BrushBMesh>,
+    mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
 ) {
     if drag_state.extrude_mode == FaceExtrudeMode::Merge
         && let Some(brush_entity) = brush_selection.entity
@@ -524,12 +524,12 @@ fn cancel_face_drag(
         && let Ok(mut brush) = brushes.get_mut(brush_entity)
     {
         *brush = start.clone();
-        // If BMesh was active, re-lift from the restored topology.
+        // If EditMesh was active, re-lift from the restored topology.
         if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
             let bmesh =
-                jackdaw_geometry::bmesh::BMesh::lift_from_topology(&start.topology);
+                jackdaw_geometry::editmesh::EditMesh::lift_from_topology(&start.topology);
             let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-            let mut face_keys: Vec<jackdaw_geometry::bmesh::FaceKey> =
+            let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
                 vec![Default::default(); bmesh.faces.len()];
             for (k, f) in bmesh.faces.iter() {
                 let slot = f.material_idx as usize;
@@ -702,7 +702,7 @@ pub fn brush_vertex_drag(
     mut drag_state: ResMut<VertexDragState>,
     mut history: ResMut<CommandHistory>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
-    mut bmesh_q: Query<&mut crate::brush::BrushBMesh>,
+    mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
 ) -> OperatorResult {
     let Some(brush_entity) = brush_selection.entity else {
         return OperatorResult::Cancelled;
@@ -909,7 +909,7 @@ pub fn brush_vertex_drag(
         };
 
         if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-            // BMesh path: mutate vertex positions directly. Concave drags work.
+            // EditMesh path: mutate vertex positions directly. Concave drags work.
             let vert_keys = bmesh_component.vert_keys.clone();
             for (sel_idx, &vert_idx) in brush_selection.vertices.iter().enumerate() {
                 if sel_idx < drag_state.start_vertex_positions.len()
@@ -937,7 +937,7 @@ pub fn brush_vertex_drag(
                 let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
                 bmesh_component.mesh.faces[fk].normal_cache = new_normal;
             }
-            // Sync the brush.faces[i].plane and flatten BMesh into brush.topology.
+            // Sync the brush.faces[i].plane and flatten EditMesh into brush.topology.
             let new_topology = bmesh_component.mesh.flatten_to_topology();
             let positions: Vec<Vec3> =
                 new_topology.vertices.iter().map(|v| v.position).collect();
@@ -954,7 +954,7 @@ pub fn brush_vertex_drag(
             }
             brush.topology = new_topology;
         } else {
-            // Legacy plane / Quickhull path. Used when BMesh isn't present (e.g. Clip mode).
+            // Legacy plane / Quickhull path. Used when EditMesh isn't present (e.g. Clip mode).
             let mut new_verts = drag_state.start_all_vertices.clone();
             for (sel_idx, &vert_idx) in brush_selection.vertices.iter().enumerate() {
                 if sel_idx < drag_state.start_vertex_positions.len()
@@ -980,7 +980,7 @@ pub fn brush_vertex_drag(
 fn cancel_vertex_drag(
     brush_selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut crate::brush::BrushBMesh>,
+    mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
     mut drag_state: ResMut<VertexDragState>,
 ) {
     if let Some(brush_entity) = brush_selection.entity
@@ -988,12 +988,12 @@ fn cancel_vertex_drag(
         && let Ok(mut brush) = brushes.get_mut(brush_entity)
     {
         *brush = start.clone();
-        // If BMesh was active, re-lift from the restored topology.
+        // If EditMesh was active, re-lift from the restored topology.
         if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
             let bmesh =
-                jackdaw_geometry::bmesh::BMesh::lift_from_topology(&start.topology);
+                jackdaw_geometry::editmesh::EditMesh::lift_from_topology(&start.topology);
             let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-            let mut face_keys: Vec<jackdaw_geometry::bmesh::FaceKey> =
+            let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
                 vec![Default::default(); bmesh.faces.len()];
             for (k, f) in bmesh.faces.iter() {
                 let slot = f.material_idx as usize;
@@ -1083,7 +1083,7 @@ pub fn brush_edge_drag(
     mut drag_state: ResMut<EdgeDragState>,
     mut history: ResMut<CommandHistory>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
-    mut bmesh_q: Query<&mut crate::brush::BrushBMesh>,
+    mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
 ) -> OperatorResult {
     let Some(brush_entity) = brush_selection.entity else {
         return OperatorResult::Cancelled;
@@ -1268,7 +1268,7 @@ pub fn brush_edge_drag(
                 let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
                 bmesh_component.mesh.faces[fk].normal_cache = new_normal;
             }
-            // Sync brush.faces[].plane and brush.topology from BMesh.
+            // Sync brush.faces[].plane and brush.topology from EditMesh.
             let new_topology = bmesh_component.mesh.flatten_to_topology();
             let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
             for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
@@ -1307,7 +1307,7 @@ pub fn brush_edge_drag(
 fn cancel_edge_drag(
     brush_selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut crate::brush::BrushBMesh>,
+    mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
     mut drag_state: ResMut<EdgeDragState>,
 ) {
     if let Some(brush_entity) = brush_selection.entity
@@ -1315,12 +1315,12 @@ fn cancel_edge_drag(
         && let Ok(mut brush) = brushes.get_mut(brush_entity)
     {
         *brush = start.clone();
-        // If BMesh was active, re-lift from the restored topology.
+        // If EditMesh was active, re-lift from the restored topology.
         if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
             let bmesh =
-                jackdaw_geometry::bmesh::BMesh::lift_from_topology(&start.topology);
+                jackdaw_geometry::editmesh::EditMesh::lift_from_topology(&start.topology);
             let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-            let mut face_keys: Vec<jackdaw_geometry::bmesh::FaceKey> =
+            let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
                 vec![Default::default(); bmesh.faces.len()];
             for (k, f) in bmesh.faces.iter() {
                 let slot = f.material_idx as usize;

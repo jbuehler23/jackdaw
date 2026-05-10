@@ -2,11 +2,11 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::bmesh::BMesh;
-use jackdaw_geometry::bmesh::ops::remove_doubles::remove_doubles;
+use jackdaw_geometry::editmesh::EditMesh;
+use jackdaw_geometry::editmesh::ops::remove_doubles::remove_doubles;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushBMesh, EditMode, SetBrush};
+use crate::brush::{BrushEditMesh, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 const DEFAULT_MERGE_DISTANCE: f32 = 0.0001;
@@ -25,7 +25,7 @@ pub(crate) fn brush_merge_by_distance(
     edit_mode: Res<EditMode>,
     selection: Res<crate::brush::BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushBMesh>,
+    mut bmesh_q: Query<&mut BrushEditMesh>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     // Check that we're in any brush edit mode.
@@ -43,7 +43,7 @@ pub(crate) fn brush_merge_by_distance(
         return OperatorResult::Cancelled;
     };
 
-    // Get mutable BMesh and run remove_doubles.
+    // Get mutable EditMesh and run remove_doubles.
     let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
@@ -68,7 +68,7 @@ pub(crate) fn brush_merge_by_distance(
         bmesh_component.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten BMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
+    // Flatten EditMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
     let new_topology = bmesh_component.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
@@ -102,8 +102,8 @@ pub(crate) fn brush_merge_by_distance(
     }
     brush.topology = new_topology;
 
-    // Re-lift BMesh from new topology so vert_keys / face_keys are consistent.
-    let new_bmesh = BMesh::lift_from_topology(&brush.topology);
+    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {

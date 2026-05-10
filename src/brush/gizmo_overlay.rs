@@ -93,7 +93,7 @@ pub(super) fn draw_brush_edit_gizmos(
             } else {
                 default_style::EDIT_AVAILABLE_COLOR
             };
-            if selected || mode == BrushEditMode::Edge {
+            if mode == BrushEditMode::Edge {
                 gizmos.line(wa, wb, color);
             }
         }
@@ -107,7 +107,7 @@ pub(super) fn draw_brush_edit_gizmos(
             } else {
                 default_style::EDIT_AVAILABLE_COLOR
             };
-            if selected || mode == BrushEditMode::Vertex {
+            if mode == BrushEditMode::Vertex {
                 gizmos.sphere(
                     Isometry3d::from_translation(world_pos),
                     default_style::EDIT_VERTEX_RADIUS,
