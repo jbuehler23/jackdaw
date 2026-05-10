@@ -60,14 +60,6 @@ fn add_root_entity_spawns_one_row_per_container() {
         .filter(|(_, tree_node)| tree_node.0 == entity)
         .map(|(e, t)| (e, t.0))
         .collect();
-    eprintln!("TreeNode rows for source {entity}: {rows:#?}");
-    eprintln!("outliner_a={outliner_a} outliner_b={outliner_b}");
-    let idx = world.resource::<TreeIndex>();
-    eprintln!(
-        "index: a -> {:?}, b -> {:?}",
-        idx.get(outliner_a, entity),
-        idx.get(outliner_b, entity),
-    );
     assert_eq!(
         rows.len(),
         2,
