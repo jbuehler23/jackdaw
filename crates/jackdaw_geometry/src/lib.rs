@@ -13,6 +13,9 @@ pub use newell::newell_normal;
 pub mod triangulate;
 pub use triangulate::{triangulate_polygon, triangulate_face_polygon};
 
+pub mod topology_convexity;
+pub use topology_convexity::is_convex_topology;
+
 pub const EPSILON: f32 = 1e-4;
 
 #[derive(Clone, Debug, Reflect, Default)]

@@ -28,4 +28,5 @@ pub mod uv_reset_axes;
 pub mod uv_rotate_90;
 pub mod uv_texel_density;
 pub mod uv_world_aligned;
+pub mod reconvexify;
 pub mod weld_selected;

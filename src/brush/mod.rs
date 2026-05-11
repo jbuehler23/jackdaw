@@ -5,6 +5,7 @@ mod gizmo_overlay;
 mod hull;
 pub(crate) mod interaction;
 pub(crate) mod mesh;
+pub mod preview;
 pub mod topology_migration;
 pub mod topology_ops;
 
@@ -23,6 +24,7 @@ pub(crate) use self::interaction::{
 };
 pub use edit_mode_systems::BrushEditMesh;
 pub use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
+pub use preview::{ActivePreview, PreviewMesh, PreviewState};
 
 /// Cached computed geometry (NOT serialized, rebuilt from Brush).
 #[derive(Component)]
@@ -219,6 +221,7 @@ impl Plugin for BrushPlugin {
             .init_resource::<ClipState>()
             .init_resource::<LastUsedMaterial>()
             .add_plugins(mesh::MeshPlugin)
+            .add_plugins(preview::PreviewPlugin)
             .add_systems(
                 OnEnter(crate::AppState::Editor),
                 mesh::setup_default_materials,

@@ -226,6 +226,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::brush::topology_ops::uv_fit_to_face::add_to_extension(ctx);
         crate::brush::topology_ops::uv_texel_density::add_to_extension(ctx);
         crate::brush::topology_ops::uv_align_to_edge::add_to_extension(ctx);
+        crate::brush::topology_ops::reconvexify::add_to_extension(ctx);
         crate::gizmos::add_to_extension(ctx);
         crate::terrain::sculpt::add_to_extension(ctx);
         crate::navmesh::ops::add_to_extension(ctx);

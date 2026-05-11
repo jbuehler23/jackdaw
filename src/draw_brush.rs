@@ -26,7 +26,7 @@ use bevy_enhanced_input::prelude::Press;
 use jackdaw_geometry::{
     brush_planes_to_world, brushes_intersect, clean_degenerate_faces,
     compute_brush_geometry_from_planes, compute_face_tangent_axes, compute_face_uvs,
-    intersect_brushes, subtract_brush, triangulate_face,
+    intersect_brushes, is_convex_topology, subtract_brush, triangulate_face,
 };
 use jackdaw_jsn::{Brush, BrushFaceData, BrushGroup, BrushPlane};
 
@@ -2507,6 +2507,16 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
         return;
     }
 
+    // Early-out: ensure all selected brushes are convex; Join on non-convex is not yet supported.
+    for &entity in &selected_brushes {
+        if let Ok(brush) = brush_query.get(world, entity) {
+            if !is_convex_topology(&brush.topology) {
+                warn!("Join (Convex Merge) requires convex brushes. Non-convex brushes need mesh-CSG support.");
+                return;
+            }
+        }
+    }
+
     let primary_entity = selected_brushes[0];
     let others: Vec<Entity> = selected_brushes[1..].to_vec();
 
@@ -2722,6 +2732,21 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
 
     if cutters.is_empty() || targets.is_empty() {
         return;
+    }
+
+    // Early-out: ensure all selected brushes (cutters) are convex; CSG Subtract on non-convex is not yet supported.
+    for (_, brush, _) in &cutters {
+        if !is_convex_topology(&brush.topology) {
+            warn!("CSG Subtract requires convex brushes. Non-convex brushes need mesh-CSG support.");
+            return;
+        }
+    }
+    // Also ensure all targets are convex
+    for (_, brush, _) in &targets {
+        if !is_convex_topology(&brush.topology) {
+            warn!("CSG Subtract requires convex brushes. Non-convex brushes need mesh-CSG support.");
+            return;
+        }
     }
 
     // Transform cutter faces to world space
@@ -2965,6 +2990,14 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
 
     if selected_brushes.len() < 2 {
         return;
+    }
+
+    // Early-out: ensure all selected brushes are convex; CSG Intersect on non-convex is not yet supported.
+    for (_, brush, _) in &selected_brushes {
+        if !is_convex_topology(&brush.topology) {
+            warn!("CSG Intersect requires convex brushes. Non-convex brushes need mesh-CSG support.");
+            return;
+        }
     }
 
     // Transform all faces to world space

@@ -29,6 +29,8 @@ use std::collections::HashSet;
 
 use bevy_monitors::prelude::{Addition, Monitor, NotifyAdded};
 
+use jackdaw_avian_integration::AvianCollider;
+use jackdaw_geometry::is_convex_topology;
 use jackdaw_runtime::EditorCategory;
 
 use super::{
@@ -386,6 +388,28 @@ pub(crate) fn build_inspector_displays(
             if type_id == TypeId::of::<crate::brush::Brush>() {
                 if let Some(brush) = reflected.downcast_ref::<crate::brush::Brush>() {
                     brush_display::spawn_brush_display(commands, body_entity, brush, materials);
+                    // When this brush is non-convex and has a physics collider, the bridge
+                    // forces TriMesh regardless of the user's AvianCollider setting. Show a
+                    // read-only note so the change is visible in the inspector.
+                    if entity_ref.contains::<AvianCollider>() {
+                        if let Some(brush) = entity_ref.get::<crate::brush::Brush>() {
+                            if !is_convex_topology(&brush.topology) {
+                                commands.spawn((
+                                    Text::new("Status: non-convex (collider forced to TriMesh)"),
+                                    TextFont {
+                                        font_size: tokens::FONT_SM,
+                                        ..Default::default()
+                                    },
+                                    TextColor(tokens::TEXT_DISABLED),
+                                    Node {
+                                        margin: UiRect::top(Val::Px(tokens::SPACING_XS)),
+                                        ..Default::default()
+                                    },
+                                    ChildOf(body_entity),
+                                ));
+                            }
+                        }
+                    }
                 }
                 continue;
             }

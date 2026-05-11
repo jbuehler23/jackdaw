@@ -19,7 +19,7 @@ use crate::core_extension::CoreExtensionInputContext;
 use crate::draw_brush::{CreateBrushCommand, brush_data_from_entity};
 use crate::viewport::{MainViewportCamera, SceneViewport};
 use crate::viewport_util::window_to_viewport_cursor;
-use jackdaw_geometry::{EPSILON, compute_face_tangent_axes, point_inside_all_planes};
+use jackdaw_geometry::{EPSILON, compute_face_tangent_axes, is_convex_topology, point_inside_all_planes};
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ClipPlacePointOp>()
@@ -279,6 +279,16 @@ pub(crate) fn clip_apply(
     let Ok(brush_global) = brush_transforms.get(brush_entity) else {
         return OperatorResult::Cancelled;
     };
+
+    // Gate on convexity. The plane-push approach only works correctly for convex brushes;
+    // concave inputs need an EditMesh-based bisect_plane implementation, which is deferred
+    // to a follow-up PR. Refuse with a warning for now (consistent with CSG ops gating).
+    //
+    // TODO(follow-up): implement EditMesh bisect_plane for concave support (issue #26 / mesh-CSG).
+    if !is_convex_topology(&brush.topology) {
+        warn!("Clip tool requires a convex brush. Run 'Reconvexify' first, or wait for mesh-CSG support.");
+        return OperatorResult::Cancelled;
+    }
 
     let clip_face = clip_face_from_plane(&plane);
     let flipped_face = clip_face_from_plane(&BrushPlane {
