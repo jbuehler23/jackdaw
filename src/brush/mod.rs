@@ -25,6 +25,7 @@ pub(crate) use self::interaction::{
 pub use edit_mode_systems::BrushEditMesh;
 pub use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
 pub use preview::{ActivePreview, PreviewMesh, PreviewState};
+pub use topology_ops::edge_bevel::EdgeBevelModalState;
 pub use topology_ops::edge_slide_modal::{EdgeSlideModalState, EdgeSlidePreviewLines};
 pub use topology_ops::extrude::{ExtrudeModalState, ExtrudePreviewLines};
 pub use topology_ops::inset::{InsetModalState, InsetPreviewLines};
@@ -234,6 +235,7 @@ impl Plugin for BrushPlugin {
             .init_resource::<EdgeSlidePreviewLines>()
             .init_resource::<VertexSlideModalState>()
             .init_resource::<VertexSlidePreviewLines>()
+            .init_resource::<EdgeBevelModalState>()
             .init_resource::<LastUsedMaterial>()
             .add_plugins(mesh::MeshPlugin)
             .add_plugins(preview::PreviewPlugin)

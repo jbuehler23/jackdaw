@@ -8,6 +8,7 @@ pub mod connect_verts;
 pub mod dissolve_edges;
 pub mod dissolve_faces;
 pub mod dissolve_verts;
+pub mod edge_bevel;
 pub mod edge_slide;
 pub mod edge_slide_modal;
 pub mod extrude;

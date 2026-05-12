@@ -205,6 +205,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::brush::topology_ops::dissolve_edges::add_to_extension(ctx);
         crate::brush::topology_ops::dissolve_faces::add_to_extension(ctx);
         crate::brush::topology_ops::dissolve_verts::add_to_extension(ctx);
+        crate::brush::topology_ops::edge_bevel::add_to_extension(ctx);
         crate::brush::topology_ops::edge_slide::add_to_extension(ctx);
         crate::brush::topology_ops::edge_slide_modal::add_to_extension(ctx);
         crate::brush::topology_ops::select_invert::add_to_extension(ctx);

@@ -247,7 +247,11 @@ pub(crate) fn brush_edge_slide_modal(
         let world_disp = factor.abs() * world_len;
         let snapped_world = (world_disp / inc).round() * inc;
         let snapped_factor = (snapped_world / world_len).clamp(0.0, 1.0);
-        if factor < 0.0 { -snapped_factor } else { snapped_factor }
+        if factor < 0.0 {
+            -snapped_factor
+        } else {
+            snapped_factor
+        }
     } else {
         factor
     };

@@ -7,6 +7,7 @@ pub mod contextual_create;
 pub mod dissolve_edges;
 pub mod dissolve_faces;
 pub mod dissolve_verts;
+pub mod edge_bevel;
 pub mod edge_create;
 pub mod edge_slide;
 pub mod edge_split;
