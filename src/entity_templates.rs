@@ -273,7 +273,7 @@ fn spawn_jsn_entities(
         .collect();
     for (entity, gltf_path, scene_index) in gltf_entities {
         let asset_server = world.resource::<AssetServer>();
-        let asset_path: AssetPath<'static> = gltf_path.into();
+        let asset_path: AssetPath<'static> = crate::entity_ops::to_asset_path(&gltf_path).into();
         let scene = asset_server.load(GltfAssetLabel::Scene(scene_index).from_asset(asset_path));
         world.entity_mut(entity).insert(SceneRoot(scene));
     }

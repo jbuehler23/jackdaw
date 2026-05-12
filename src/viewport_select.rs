@@ -5,8 +5,8 @@ use crate::{
     brush_drag_ops::cursor_over_brush_face,
     gizmos::handle_gizmo_hover,
     selection::Selection,
-    viewport::{InteractionGuards, MainViewportCamera, SceneViewport, ViewportCursor},
-    viewport_util::window_to_viewport_cursor,
+    viewport::{InteractionGuards, SceneViewport, ViewportCursor},
+    viewport_util::window_to_viewport_cursor_for,
 };
 use bevy::input_focus::InputFocus;
 use bevy::ui::ui_transform::UiGlobalTransform;
@@ -86,6 +86,13 @@ pub struct BoxSelectState {
     pub active: bool,
     pub start: Vec2,
     pub current: Vec2,
+    /// Camera entity of the viewport the drag started in. Captured at
+    /// modal start so the operator keeps querying the same viewport
+    /// across frames even if the cursor wanders into a different one
+    /// (multi-viewport setups).
+    pub camera: Option<Entity>,
+    /// `SceneViewport` UI-node entity of the same viewport.
+    pub viewport: Option<Entity>,
     /// Cursor position recorded at LMB-down before we know whether the
     /// gesture is a click or a box-select drag. Cleared when promoted
     /// to active or when LMB releases without crossing the threshold.
@@ -180,8 +187,9 @@ pub(crate) fn handle_viewport_click(
         return;
     };
 
-    // Check if cursor is within viewport
-    let Ok((vp_computed, vp_tf)) = vp.viewport.single() else {
+    // Bail when the cursor isn't over any viewport. Multi-viewport
+    // routing: the active viewport is whichever one the cursor is in.
+    let Some((vp_computed, vp_tf)) = vp.viewport() else {
         return;
     };
     let scale = vp_computed.inverse_scale_factor();
@@ -189,18 +197,11 @@ pub(crate) fn handle_viewport_click(
     let vp_size = vp_computed.size() * scale;
     let vp_top_left = vp_pos - vp_size / 2.0;
     let local_cursor = cursor_pos - vp_top_left;
-    if local_cursor.x < 0.0
-        || local_cursor.y < 0.0
-        || local_cursor.x > vp_size.x
-        || local_cursor.y > vp_size.y
-    {
-        return;
-    }
 
     // Clear input focus so keyboard shortcuts (G/R/S) work after viewport click
     input_focus.0 = None;
 
-    let Ok((camera, cam_tf)) = vp.camera.single() else {
+    let Some((camera, cam_tf)) = vp.camera() else {
         return;
     };
 
@@ -333,7 +334,6 @@ fn box_select_pending_trigger(
     vp: ViewportCursor,
     guards: InteractionGuards,
     mut box_state: ResMut<BoxSelectState>,
-    camera: Option<Single<(&Camera, &GlobalTransform), With<MainViewportCamera>>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     selection: Res<Selection>,
     brushes: Query<(), With<Brush>>,
@@ -344,6 +344,13 @@ fn box_select_pending_trigger(
         || box_state.pending.is_some()
         || !mouse.just_pressed(MouseButton::Left)
         || guards.gizmo_drag.active
+        // The gizmo invoke-trigger queues the drag operator via
+        // `commands.queue`, so `gizmo_drag.active` doesn't flip until
+        // after this Update frame ends. Without checking the hover
+        // state here the press both arms a pending box-select and
+        // starts the gizmo drag, so the marquee draws while the user
+        // is dragging the gizmo.
+        || guards.gizmo_hover.hovered_axis.is_some()
         || matches!(*guards.edit_mode, crate::brush::EditMode::BrushEdit(_))
         || guards.draw_state.active.is_some()
         || guards.modal.active.is_some()
@@ -357,25 +364,34 @@ fn box_select_pending_trigger(
         return;
     };
 
+    // Bail when the cursor isn't over a viewport panel. Without this
+    // any LMB press anywhere in the editor (toolbar, panel header,
+    // tab being dragged) records a pending box-select and the
+    // overlay then renders across the whole window during the drag.
+    let Some((camera, cam_tf)) = vp.camera() else {
+        return;
+    };
+    let Some(viewport_entity) = vp.viewport_entity() else {
+        return;
+    };
+
     // Yield to face-drag when the cursor is over a face of the
-    // selected brush.
+    // selected brush. Routes through `vp` so we hit-test against the
+    // viewport the cursor is actually over, not a hard-coded main
+    // camera (multi-viewport setups can have several scene cameras).
     if let Some(brush_entity) = selection.primary().filter(|&e| brushes.contains(e))
-        && let Some(camera_single) = camera
+        && let Some(viewport_cursor) =
+            window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, &viewport_query)
+        && cursor_over_brush_face(
+            brush_entity,
+            viewport_cursor,
+            camera,
+            cam_tf,
+            &face_entities,
+            &brush_caches,
+        )
     {
-        let (camera, cam_tf) = *camera_single;
-        if let Some(viewport_cursor) =
-            window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
-            && cursor_over_brush_face(
-                brush_entity,
-                viewport_cursor,
-                camera,
-                cam_tf,
-                &face_entities,
-                &brush_caches,
-            )
-        {
-            return;
-        }
+        return;
     }
 
     box_state.pending = Some(cursor_pos);
@@ -388,6 +404,7 @@ fn box_select_pending_trigger(
 fn box_select_promote_pending(
     mouse: Res<ButtonInput<MouseButton>>,
     vp: ViewportCursor,
+    guards: InteractionGuards,
     mut box_state: ResMut<BoxSelectState>,
     mut commands: Commands,
 ) {
@@ -395,6 +412,20 @@ fn box_select_promote_pending(
         return;
     };
     if !mouse.pressed(MouseButton::Left) {
+        box_state.pending = None;
+        return;
+    }
+    // A modal that started in the same frame as the press (gizmo
+    // drag, viewport drag, transform shortcut, draw brush) won't have
+    // shown up in the trigger system's guard check, but it has by
+    // now. Drop the pending press so we don't dispatch a competing
+    // box-select on top of the active gesture.
+    if guards.gizmo_drag.active
+        || guards.viewport_drag.active.is_some()
+        || guards.modal.active.is_some()
+        || guards.draw_state.active.is_some()
+        || matches!(*guards.edit_mode, crate::brush::EditMode::BrushEdit(_))
+    {
         box_state.pending = None;
         return;
     }
@@ -442,6 +473,11 @@ pub fn box_select(
         // `box_select_pending_trigger` so the rectangle anchors at
         // the original click rather than where the threshold tripped.
         box_state.activate(cursor_pos);
+        // Capture the viewport that owns this drag so subsequent
+        // frames keep referring to it even if the cursor wanders
+        // into a different viewport mid-drag.
+        box_state.camera = vp.camera_entity();
+        box_state.viewport = vp.viewport_entity();
         return OperatorResult::Running;
     }
 
@@ -451,10 +487,16 @@ pub fn box_select(
     }
     box_state.active = false;
 
-    let Ok((camera, cam_tf)) = vp.camera.single() else {
+    let Some(camera_entity) = box_state.camera else {
         return OperatorResult::Finished;
     };
-    let Ok((vp_computed, vp_tf)) = vp.viewport.single() else {
+    let Some(viewport_entity) = box_state.viewport else {
+        return OperatorResult::Finished;
+    };
+    let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
+        return OperatorResult::Finished;
+    };
+    let Some((vp_computed, vp_tf)) = vp.viewport_for(viewport_entity) else {
         return OperatorResult::Finished;
     };
     let map = crate::viewport_util::ViewportRemap::new(camera, vp_computed, vp_tf);

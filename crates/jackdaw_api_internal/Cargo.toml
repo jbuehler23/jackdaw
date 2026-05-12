@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_api_internal"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "Internal implementation crate for jackdaw_api. Depend on jackdaw_api instead."
 license = "MIT OR Apache-2.0"

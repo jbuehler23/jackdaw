@@ -443,6 +443,7 @@ impl Plugin for ExtensionPlugin {
         if self.enable_builtin_extensiosn {
             app.add_plugins(core_extension::plugin)
                 .register_extension::<builtin_extensions::CoreWindowsExtension>()
+                .register_extension::<builtin_extensions::ViewportExtension>()
                 .register_extension::<builtin_extensions::AssetBrowserExtension>()
                 .register_extension::<builtin_extensions::TimelineExtension>()
                 .register_extension::<builtin_extensions::TerminalExtension>()
@@ -1165,16 +1166,13 @@ fn has_selected_keyframes(
 fn timeline_with_clip(
     input_focus: Res<bevy::input_focus::InputFocus>,
     active: ActiveModalQuery,
-    docks: Query<&jackdaw_panels::ActiveDockWindow>,
+    tree: Res<jackdaw_panels::tree::DockTree>,
     selected_clip: Res<jackdaw_animation::SelectedClip>,
 ) -> bool {
     if input_focus.0.is_some() || active.is_modal_running() {
         return false;
     }
-    if !docks
-        .iter()
-        .any(|d| d.0.as_deref() == Some("jackdaw.timeline"))
-    {
+    if !crate::transform_ops::active_tab_kind_present(&tree, "jackdaw.timeline") {
         return false;
     }
     selected_clip.0.is_some()
@@ -1183,17 +1181,14 @@ fn timeline_with_clip(
 fn timeline_paste_available(
     input_focus: Res<bevy::input_focus::InputFocus>,
     active: ActiveModalQuery,
-    docks: Query<&jackdaw_panels::ActiveDockWindow>,
+    tree: Res<jackdaw_panels::tree::DockTree>,
     selected_clip: Res<jackdaw_animation::SelectedClip>,
     clipboard: Res<jackdaw_animation::KeyframeClipboard>,
 ) -> bool {
     if input_focus.0.is_some() || active.is_modal_running() {
         return false;
     }
-    if !docks
-        .iter()
-        .any(|d| d.0.as_deref() == Some("jackdaw.timeline"))
-    {
+    if !crate::transform_ops::active_tab_kind_present(&tree, "jackdaw.timeline") {
         return false;
     }
     selected_clip.0.is_some() && !clipboard.entries.is_empty()
@@ -1939,7 +1934,8 @@ fn discover_gltf_clips(
             continue;
         }
 
-        let handle: Handle<bevy::gltf::Gltf> = asset_server.load(&source.path);
+        let asset_path = crate::entity_ops::to_asset_path(&source.path);
+        let handle: Handle<bevy::gltf::Gltf> = asset_server.load(asset_path);
         let Some(gltf) = gltfs.get(&handle) else {
             continue;
         };
@@ -2023,6 +2019,7 @@ fn populate_menu(
     let mut window_entries: Vec<(String, String)> = Vec::new();
     let area_order = [
         DefaultArea::Left.anchor_id(),
+        DefaultArea::Center.anchor_id(),
         DefaultArea::BottomDock.anchor_id(),
         DefaultArea::RightSidebar.anchor_id(),
         "zz_extensions".to_string(),
@@ -2123,6 +2120,9 @@ fn populate_menu(
                 op_entry::<view_ops::ViewToggleAlignmentGuidesOp>("Toggle Alignment Guides"),
                 op_entry::<view_ops::ViewToggleColliderGizmosOp>("Toggle Collider Gizmos"),
                 op_entry::<view_ops::ViewToggleHierarchyArrowsOp>("Toggle Hierarchy Arrows"),
+                op_entry::<view_ops::ViewTogglePerspOrthoOp>("Toggle Perspective / Orthographic"),
+                op_entry::<view_ops::ViewFrameSelectedOp>("Frame Selected"),
+                op_entry::<view_ops::ViewFrameAllOp>("Frame All"),
             ],
         ),
         (TopLevelMenu::Add, add_menu),
@@ -2493,6 +2493,24 @@ fn register_workspaces(mut registry: ResMut<jackdaw_panels::WorkspaceRegistry>) 
     });
 
     registry.register(jackdaw_panels::WorkspaceDescriptor {
+        id: "level_design".into(),
+        name: "Level Design".into(),
+        icon: Some(String::from(Icon::Box.unicode())),
+        accent_color: Color::srgba(0.55, 0.85, 0.45, 0.8),
+        layout: jackdaw_panels::LayoutState::default(),
+        tree: build_level_design_tree(),
+    });
+
+    registry.register(jackdaw_panels::WorkspaceDescriptor {
+        id: "animation".into(),
+        name: "Animation".into(),
+        icon: Some(String::from(Icon::Film.unicode())),
+        accent_color: Color::srgba(0.85, 0.55, 0.85, 0.8),
+        layout: jackdaw_panels::LayoutState::default(),
+        tree: build_animation_tree(),
+    });
+
+    registry.register(jackdaw_panels::WorkspaceDescriptor {
         id: "debug".into(),
         name: "Schedule Explorer".into(),
         icon: Some(String::from(Icon::CalendarSearch.unicode())),
@@ -2502,16 +2520,190 @@ fn register_workspaces(mut registry: ResMut<jackdaw_panels::WorkspaceRegistry>) 
     });
 }
 
+/// Quad-view workspace: one perspective viewport + three orthographic
+/// viewports (the user toggles each to top / front / right via Numpad
+/// 7 / 1 / 3 once activated). Inspector on the right, hierarchy +
+/// project files on the left, asset/timeline/terminal on the bottom.
+fn build_level_design_tree() -> jackdaw_panels::tree::DockTree {
+    use jackdaw_panels::DockAreaStyle;
+    use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
+
+    let mut tree = DockTree::default();
+
+    let left = tree.insert(DockNode::Leaf(
+        DockLeaf::new("left", DockAreaStyle::TabBar)
+            .with_windows(vec!["jackdaw.hierarchy".into(), "jackdaw.import".into()])
+            .persistent(),
+    ));
+    let project_files = tree.insert(DockNode::Leaf(
+        DockLeaf::new("split.jackdaw.project_files.preset", DockAreaStyle::TabBar)
+            .with_windows(vec!["jackdaw.project_files".into()]),
+    ));
+    let left_split = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Vertical,
+        fraction: 0.75,
+        a: left,
+        b: project_files,
+    }));
+
+    // Quad-view: 4 viewport panels in a 2x2 grid. Each gets its own
+    // jackdaw.viewport panel (and thus its own camera + render
+    // target). The user adjusts each to top/front/right via Numpad
+    // shortcuts after activation.
+    let vp_persp = tree.insert(DockNode::Leaf(
+        DockLeaf::new("center", DockAreaStyle::TabBar)
+            .with_windows(vec!["jackdaw.viewport".into()])
+            .persistent(),
+    ));
+    let vp_top = tree.insert(DockNode::Leaf(
+        DockLeaf::new("split.jackdaw.viewport.qv_top", DockAreaStyle::TabBar)
+            .with_windows(vec!["jackdaw.viewport".into()]),
+    ));
+    let vp_front = tree.insert(DockNode::Leaf(
+        DockLeaf::new("split.jackdaw.viewport.qv_front", DockAreaStyle::TabBar)
+            .with_windows(vec!["jackdaw.viewport".into()]),
+    ));
+    let vp_right = tree.insert(DockNode::Leaf(
+        DockLeaf::new("split.jackdaw.viewport.qv_right", DockAreaStyle::TabBar)
+            .with_windows(vec!["jackdaw.viewport".into()]),
+    ));
+    let top_row = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Horizontal,
+        fraction: 0.5,
+        a: vp_persp,
+        b: vp_top,
+    }));
+    let bot_row = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Horizontal,
+        fraction: 0.5,
+        a: vp_front,
+        b: vp_right,
+    }));
+    let quad = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Vertical,
+        fraction: 0.5,
+        a: top_row,
+        b: bot_row,
+    }));
+
+    let bottom = tree.insert(DockNode::Leaf(
+        DockLeaf::new("bottom_dock", DockAreaStyle::IconSidebar)
+            .with_windows(vec![
+                "jackdaw.assets".into(),
+                "jackdaw.timeline".into(),
+                "jackdaw.terminal".into(),
+            ])
+            .persistent(),
+    ));
+    let center_over_bottom = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Vertical,
+        fraction: 0.75,
+        a: quad,
+        b: bottom,
+    }));
+
+    let right = tree.insert(DockNode::Leaf(
+        DockLeaf::new("right_sidebar", DockAreaStyle::TabBar)
+            .with_windows(vec![
+                "jackdaw.inspector.components".into(),
+                "jackdaw.inspector.materials".into(),
+                "jackdaw.inspector.resources".into(),
+                "jackdaw.inspector.systems".into(),
+            ])
+            .persistent(),
+    ));
+    let center_and_right = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Horizontal,
+        fraction: 0.85,
+        a: center_over_bottom,
+        b: right,
+    }));
+    let root = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Horizontal,
+        fraction: 0.15,
+        a: left_split,
+        b: center_and_right,
+    }));
+    tree.root = Some(root);
+    tree
+}
+
+/// Stacked viewports for animation work: top viewport renders the
+/// camera POV, bottom viewport is the scene/bone manipulation view.
+/// Timeline + asset browser docked at the bottom; hierarchy on the
+/// left, inspector on the right.
+fn build_animation_tree() -> jackdaw_panels::tree::DockTree {
+    use jackdaw_panels::DockAreaStyle;
+    use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
+
+    let mut tree = DockTree::default();
+
+    let left = tree.insert(DockNode::Leaf(
+        DockLeaf::new("left", DockAreaStyle::TabBar)
+            .with_windows(vec!["jackdaw.hierarchy".into()])
+            .persistent(),
+    ));
+
+    let vp_top = tree.insert(DockNode::Leaf(
+        DockLeaf::new("center", DockAreaStyle::TabBar)
+            .with_windows(vec!["jackdaw.viewport".into()])
+            .persistent(),
+    ));
+    let vp_bot = tree.insert(DockNode::Leaf(
+        DockLeaf::new("split.jackdaw.viewport.anim_scene", DockAreaStyle::TabBar)
+            .with_windows(vec!["jackdaw.viewport".into()]),
+    ));
+    let viewports = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Vertical,
+        fraction: 0.5,
+        a: vp_top,
+        b: vp_bot,
+    }));
+
+    let bottom = tree.insert(DockNode::Leaf(
+        DockLeaf::new("bottom_dock", DockAreaStyle::IconSidebar)
+            .with_windows(vec!["jackdaw.timeline".into(), "jackdaw.assets".into()])
+            .persistent(),
+    ));
+    let center_over_bottom = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Vertical,
+        fraction: 0.7,
+        a: viewports,
+        b: bottom,
+    }));
+
+    let right = tree.insert(DockNode::Leaf(
+        DockLeaf::new("right_sidebar", DockAreaStyle::TabBar)
+            .with_windows(vec!["jackdaw.inspector.components".into()])
+            .persistent(),
+    ));
+    let center_and_right = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Horizontal,
+        fraction: 0.85,
+        a: center_over_bottom,
+        b: right,
+    }));
+    let root = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Horizontal,
+        fraction: 0.15,
+        a: left,
+        b: center_and_right,
+    }));
+    tree.root = Some(root);
+    tree
+}
+
 fn on_workspace_changed(
     trigger: On<jackdaw_panels::WorkspaceChanged>,
     mut active: ResMut<layout::ActiveDocument>,
 ) {
     let event = trigger.event();
-    match event.new.as_str() {
-        "layout" => active.kind = layout::TabKind::Scene,
-        "debug" => active.kind = layout::TabKind::ScheduleExplorer,
-        _ => {}
-    }
+    active.kind = match event.new.as_str() {
+        "debug" => layout::TabKind::ScheduleExplorer,
+        // "layout", "level_design", "animation", and any future
+        // user-created workspace default to the Scene document.
+        _ => layout::TabKind::Scene,
+    };
 }
 
 #[derive(Resource, Default)]
@@ -2596,9 +2788,20 @@ fn init_layout(world: &mut World) {
         }
     }
 
-    if !loaded_tree {
-        jackdaw_panels::reconcile::seed_anchors(world);
-        apply_default_splits(world);
+    // If the loaded tree has no root, the project file is from before
+    // the flat-tree migration (it stored a per-anchor map that no
+    // longer deserializes meaningfully). Rebuild defaults; the user
+    // gets the canonical layout back and can re-customize. This also
+    // covers the "no project file" first-run path.
+    if !loaded_tree
+        || world
+            .resource::<jackdaw_panels::tree::DockTree>()
+            .root
+            .is_none()
+    {
+        *world.resource_mut::<jackdaw_panels::tree::DockTree>() =
+            jackdaw_panels::tree::DockTree::default();
+        build_default_tree(world);
     }
 
     jackdaw_panels::reconcile::reconcile(world);
@@ -2609,13 +2812,51 @@ fn init_layout(world: &mut World) {
     sync_active_workspace_from_live_tree(world);
 }
 
-/// Open `window_id` in its registered `default_area` anchor. If the
+/// Open `window_id` in its registered `default_area` leaf. If the
 /// window already lives in a different leaf, move it there (no dupes).
 /// If it isn't in the tree at all, push it onto the target leaf and
-/// activate. Pushing populates the target leaf, which un-hides the
-/// anchor automatically via the reconciler's collapse logic.
+/// activate. Pushing populates the target leaf, which restores its
+/// visibility automatically.
+/// Pick the leaf with the largest relative area, excluding icon
+/// sidebars (which are too narrow to host most windows). Walks the
+/// split tree from the root and accumulates each split's `fraction`
+/// (or `1.0 - fraction` on the secondary side) so the result reflects
+/// the leaf's current proportional size in the workspace, not just
+/// its position in storage.
+fn largest_visible_leaf(
+    tree: &jackdaw_panels::tree::DockTree,
+) -> Option<jackdaw_panels::tree::NodeId> {
+    use jackdaw_panels::DockAreaStyle;
+    use jackdaw_panels::tree::{DockNode, NodeId};
+
+    fn walk(
+        tree: &jackdaw_panels::tree::DockTree,
+        node: NodeId,
+        area: f32,
+        out: &mut Vec<(NodeId, f32, DockAreaStyle)>,
+    ) {
+        match tree.get(node) {
+            Some(DockNode::Leaf(l)) => out.push((node, area, l.style.clone())),
+            Some(DockNode::Split(s)) => {
+                walk(tree, s.a, area * s.fraction, out);
+                walk(tree, s.b, area * (1.0 - s.fraction), out);
+            }
+            None => {}
+        }
+    }
+
+    let root = tree.root?;
+    let mut leaves = Vec::new();
+    walk(tree, root, 1.0, &mut leaves);
+    leaves
+        .into_iter()
+        .filter(|(_, _, style)| !matches!(style, DockAreaStyle::IconSidebar))
+        .max_by(|(_, a, _), (_, b, _)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(id, _, _)| id)
+}
+
 fn open_window_in_default_area(world: &mut World, window_id: &str) {
-    use jackdaw_panels::tree::{DockNode, DockTree};
+    use jackdaw_panels::tree::DockTree;
 
     let Some(default_area) = world
         .resource::<jackdaw_panels::WindowRegistry>()
@@ -2627,62 +2868,72 @@ fn open_window_in_default_area(world: &mut World, window_id: &str) {
 
     let target_leaf = {
         let tree = world.resource::<DockTree>();
-        // If window has a default_area, place it there. Otherwise (extension
-        // windows have no default), fall back to the first available anchor
-        // so the user can reposition it from there.
-        let root = if default_area.is_empty() {
-            tree.iter_anchors().next().map(|(_, id)| id)
+        // First choice: the window's canonical area. Second choice:
+        // the largest non-IconSidebar leaf, computed by walking the
+        // split tree and accumulating fractions. The previous fallback
+        // (`tree.leaves().next()`) returned an arbitrary leaf because
+        // the underlying storage is a HashMap; a Window-menu open of
+        // "Viewport" could silently land in a thin sidebar tab where
+        // the user didn't see it.
+        let canonical = if default_area.is_empty() {
+            None
         } else {
-            tree.anchor(&default_area)
+            tree.find_by_area_id(&default_area)
         };
-        let Some(root) = root else {
-            return;
-        };
-        tree.leaves_under(root).first().map(|(id, _)| *id)
+        canonical.or_else(|| {
+            let pick = largest_visible_leaf(tree);
+            if pick.is_none() {
+                warn!(
+                    "open_window_in_default_area({window_id}): no leaf matched \
+                     `{default_area}` and no visible leaf available as fallback",
+                );
+            } else if !default_area.is_empty() {
+                warn!(
+                    "open_window_in_default_area({window_id}): canonical area \
+                     `{default_area}` not found; placing in largest visible leaf",
+                );
+            }
+            pick
+        })
     };
     let Some(target_leaf) = target_leaf else {
         return;
     };
 
-    let already_in_target = world
+    let target_is_empty = world
         .resource::<DockTree>()
         .get(target_leaf)
         .and_then(|n| n.as_leaf())
-        .map(|l| l.windows.iter().any(|w| w == window_id))
+        .map(|l| l.windows.is_empty())
         .unwrap_or(false);
 
-    let lives_elsewhere =
-        !already_in_target && world.resource::<DockTree>().find_leaf(window_id).is_some();
-
     let mut tree = world.resource_mut::<DockTree>();
-    if lives_elsewhere {
-        tree.move_window(window_id, target_leaf);
-    } else if let Some(DockNode::Leaf(leaf)) = tree.get_mut(target_leaf) {
-        // Normalize: a leaf that was left over from a collapsed split
-        // still carries a synthetic `area_id` ("split.<window>.<id>")
-        // from when it was created. Now that the user is populating it
-        // afresh via this anchor, rewrite the area_id back to the
-        // canonical anchor name so downstream lookups (capture_layout,
-        // save/load diagnostics, etc.) see a consistent id.
-        if leaf.windows.is_empty() && leaf.area_id != default_area {
-            leaf.area_id = default_area.clone();
-        }
-        if !leaf.windows.iter().any(|w| w == window_id) {
-            leaf.windows.push(window_id.to_string());
-        }
-        leaf.active = Some(window_id.to_string());
+
+    // Normalize: a leaf left over from a collapsed split still
+    // carries a synthetic `area_id` ("split.<window>.<id>"). If the
+    // user is repopulating the canonical area, restore the canonical
+    // id so downstream lookups (save/load diagnostics,
+    // `find_by_area_id`) see a consistent value.
+    if target_is_empty
+        && let Some(leaf) = tree.get_mut(target_leaf).and_then(|n| n.as_leaf_mut())
+        && leaf.area_id != default_area
+    {
+        leaf.area_id = default_area.clone();
     }
+
+    // Each Window-menu click yields a fresh tab. The reconciler picks
+    // up the new entry on next tick and rebuilds the panel UI.
+    let _ = tree.add_tab(target_leaf, window_id);
 }
 
-/// Reset the active workspace to the default seed: clear the live tree,
-/// re-seed anchors from the registry, restore the default left split,
-/// and reconcile in a single pass. Same path `init_layout` takes for a
+/// Reset the active workspace to the default seed: clear the live
+/// tree, build the canonical layout from registered windows, and
+/// reconcile in a single pass. Same path `init_layout` takes for a
 /// fresh editor launch.
 fn reset_layout(world: &mut World) {
     *world.resource_mut::<jackdaw_panels::tree::DockTree>() =
         jackdaw_panels::tree::DockTree::default();
-    jackdaw_panels::reconcile::seed_anchors(world);
-    apply_default_splits(world);
+    build_default_tree(world);
     jackdaw_panels::reconcile::reconcile(world);
     sync_active_workspace_from_live_tree(world);
 }
@@ -2701,41 +2952,107 @@ fn sync_active_workspace_from_live_tree(world: &mut World) {
     }
 }
 
-/// First-run / reset layout: the `left` anchor is seeded as a single
-/// leaf with all left-area windows. Split it so Project Files lives in
-/// its own bottom pane (matching the original hardcoded layout).
-fn apply_default_splits(world: &mut World) {
-    use jackdaw_panels::tree::{DockNode, DockTree, Edge};
+/// First-run / reset layout: build the canonical flat dock tree.
+///
+/// Shape (mirrors what the old hardcoded outer layout produced, just
+/// expressed as nested splits inside one tree):
+///
+/// ```text
+/// root: H-split 0.15
+///   |- left            (gets vertically split below if project_files exists)
+///   `- H-split 0.85
+///       |- V-split 0.8
+///       |   |- center        (viewport host, headless)
+///       |   `- bottom_dock   (asset / texture / material browsers)
+///       `- right_sidebar     (inspector + friends)
+/// ```
+///
+/// Each canonical leaf is populated from `WindowRegistry::by_area`
+/// based on the windows registered with that `default_area`. The
+/// `center` leaf is empty in Phase 1 (the hardcoded `SceneViewport`
+/// is parented into it by `setup_viewport`); Phase 2 will register a
+/// viewport panel into it.
+///
+/// Project Files is split off the bottom of the `left` leaf via the
+/// runtime split API so the resulting bottom-left leaf gets a
+/// non-persistent synthetic id and collapses naturally back into the
+/// rest of the left sidebar if the user closes it.
+fn build_default_tree(world: &mut World) {
+    use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, Edge, SplitAxis};
+    use jackdaw_panels::{DockAreaStyle, WindowRegistry};
 
-    let Some(left_root) = world
-        .resource::<DockTree>()
-        .anchor(&DefaultArea::Left.anchor_id())
-    else {
-        return;
+    let windows_for = |area: &str, world: &World| -> Vec<String> {
+        world
+            .resource::<WindowRegistry>()
+            .by_area(area)
+            .iter()
+            .map(|d| d.id.clone())
+            .collect()
     };
-    let already_split = !matches!(
-        world.resource::<DockTree>().get(left_root),
-        Some(DockNode::Leaf(_))
-    );
-    if already_split {
-        return;
-    }
-    let has_project_files = world
-        .resource::<DockTree>()
-        .get(left_root)
-        .and_then(|n| n.as_leaf())
-        .map(|l| l.windows.iter().any(|w| w == "jackdaw.project_files"))
-        .unwrap_or(false);
-    if !has_project_files {
-        return;
-    }
+
+    let left_windows = windows_for("left", world);
+    let center_windows = windows_for("center", world);
+    let bottom_windows = windows_for("bottom_dock", world);
+    let right_windows = windows_for("right_sidebar", world);
 
     let mut tree = world.resource_mut::<DockTree>();
-    tree.remove_window("jackdaw.project_files");
-    if let Some(new_leaf) = tree.split(left_root, Edge::Bottom, "jackdaw.project_files".to_string())
-        && let Some(split_id) = tree.parent_of(new_leaf)
-    {
-        tree.set_fraction(split_id, 0.75);
+
+    let left = tree.insert(DockNode::Leaf(
+        DockLeaf::new("left", DockAreaStyle::TabBar)
+            .with_windows(left_windows.clone())
+            .persistent(),
+    ));
+    // Center hosts viewport panels. Style is TabBar so when the user
+    // adds a second viewport (or any other panel) into the center
+    // leaf they get a tab strip to switch between them.
+    let center = tree.insert(DockNode::Leaf(
+        DockLeaf::new("center", DockAreaStyle::TabBar)
+            .with_windows(center_windows)
+            .persistent(),
+    ));
+    let bottom = tree.insert(DockNode::Leaf(
+        DockLeaf::new("bottom_dock", DockAreaStyle::IconSidebar)
+            .with_windows(bottom_windows)
+            .persistent(),
+    ));
+    let right = tree.insert(DockNode::Leaf(
+        DockLeaf::new("right_sidebar", DockAreaStyle::TabBar)
+            .with_windows(right_windows)
+            .persistent(),
+    ));
+
+    let center_over_bottom = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Vertical,
+        fraction: 0.8,
+        a: center,
+        b: bottom,
+    }));
+    let center_and_right = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Horizontal,
+        fraction: 0.85,
+        a: center_over_bottom,
+        b: right,
+    }));
+    let root = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Horizontal,
+        fraction: 0.15,
+        a: left,
+        b: center_and_right,
+    }));
+    tree.root = Some(root);
+
+    // Split project_files off the bottom of the left leaf so it lives
+    // in its own pane (matching the original hardcoded layout). The
+    // new leaf gets a synthetic area_id, so closing project_files
+    // collapses it back into the rest of the left sidebar.
+    if left_windows.iter().any(|w| w == "jackdaw.project_files") {
+        tree.remove_window_kind("jackdaw.project_files");
+        if let Some((new_leaf, _)) =
+            tree.split(left, Edge::Bottom, "jackdaw.project_files".to_string())
+            && let Some(split_id) = tree.parent_of(new_leaf)
+        {
+            tree.set_fraction(split_id, 0.75);
+        }
     }
 }
 

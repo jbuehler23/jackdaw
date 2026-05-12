@@ -4,7 +4,7 @@ use lucide_icons::Icon;
 
 use crate::area::{DockTab, DockTabBar};
 use crate::reconcile::LeafBinding;
-use crate::tree::DockTree;
+use crate::tree::{DockTree, TabId};
 
 #[derive(Component)]
 pub struct DockTabAddButton {
@@ -26,8 +26,12 @@ impl Plugin for DockTabPlugin {
     }
 }
 
-pub fn spawn_tab_bar_world(world: &mut World, area_entity: Entity, tabs: &[(String, String)]) {
-    let first_id = tabs.first().map(|(id, _)| id.clone());
+pub fn spawn_tab_bar_world(
+    world: &mut World,
+    area_entity: Entity,
+    tabs: &[(TabId, String, String)],
+) {
+    let first_tab = tabs.first().map(|(id, _, _)| *id);
 
     let tab_bar = world
         .spawn((
@@ -77,9 +81,9 @@ pub fn spawn_tab_bar_world(world: &mut World, area_entity: Entity, tabs: &[(Stri
         ))
         .id();
 
-    for (window_id, label) in tabs {
-        let is_active = Some(window_id) == first_id.as_ref();
-        spawn_tab(world, tab_row, window_id, label, is_active);
+    for (tab_id, window_id, label) in tabs {
+        let is_active = Some(*tab_id) == first_tab;
+        spawn_tab(world, tab_row, *tab_id, window_id, label, is_active);
     }
 
     let icon_font = world.get_resource::<IconFont>().map(|f| f.0.clone());
@@ -147,14 +151,22 @@ pub fn spawn_tab_bar_world(world: &mut World, area_entity: Entity, tabs: &[(Stri
 pub fn spawn_tab_in_world(
     world: &mut World,
     tab_row: Entity,
+    tab_id: TabId,
     window_id: &str,
     label: &str,
     is_active: bool,
 ) {
-    spawn_tab(world, tab_row, window_id, label, is_active);
+    spawn_tab(world, tab_row, tab_id, window_id, label, is_active);
 }
 
-fn spawn_tab(world: &mut World, tab_row: Entity, window_id: &str, label: &str, is_active: bool) {
+fn spawn_tab(
+    world: &mut World,
+    tab_row: Entity,
+    tab_id: TabId,
+    window_id: &str,
+    label: &str,
+    is_active: bool,
+) {
     let tab_bg = if is_active {
         tokens::TAB_ACTIVE_BG
     } else {
@@ -176,6 +188,7 @@ fn spawn_tab(world: &mut World, tab_row: Entity, window_id: &str, label: &str, i
         .spawn((
             DockTab {
                 window_id: window_id.to_string(),
+                tab_id,
             },
             Interaction::default(),
             Node {
@@ -216,6 +229,7 @@ fn spawn_tab(world: &mut World, tab_row: Entity, window_id: &str, label: &str, i
         world.spawn((
             crate::area::DockTabCloseButton {
                 window_id: window_id.to_string(),
+                tab_id,
             },
             Interaction::default(),
             Node {
@@ -267,7 +281,7 @@ fn handle_dock_tab_clicks(
             continue;
         };
 
-        tree.set_active(binding.0, &tab.window_id);
+        tree.set_active(binding.0, tab.tab_id);
     }
 }
 
@@ -298,5 +312,5 @@ fn on_close_button_click(
     let Ok(close_btn) = close_buttons.get(entity) else {
         return;
     };
-    tree.remove_window(&close_btn.window_id);
+    tree.remove_tab(close_btn.tab_id);
 }

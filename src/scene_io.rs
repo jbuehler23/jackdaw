@@ -522,10 +522,14 @@ impl<'a> ReflectDeserializerProcessor for JsnDeserializerProcessor<'a> {
                 return Ok(Ok(Box::new(handle.clone()).into_partial_reflect()));
             }
 
-            // External asset path
+            // External asset path. Resolve to a filesystem path
+            // first (in case it was scene-relative), then strip
+            // the assets-dir prefix so AssetServer treats it as
+            // an approved path.
             let stem_pos = relative_path.find('#').unwrap_or(relative_path.len());
             let stem = self.relative_path_to_asset_path(&relative_path[0..stem_pos]);
-            let mut asset_path = stem.to_string_lossy().into_owned();
+            let stem_fs = stem.to_string_lossy().into_owned();
+            let mut asset_path = crate::entity_ops::to_asset_path(&stem_fs);
             asset_path.push_str(&relative_path[stem_pos..]);
 
             let handle = self.asset_server.load_untyped(asset_path);
@@ -1332,24 +1336,28 @@ pub fn load_inline_assets(
                 PathBuf::from(rel_path)
             };
             let path_str = abs_path.to_string_lossy().into_owned();
+            // AssetServer is rooted at the project's `assets/`;
+            // strip the prefix so the load stays inside Bevy's
+            // approved-path set (no `UnapprovedPathMode::Allow`).
+            let asset_path = crate::entity_ops::to_asset_path(&path_str);
 
             let handle = if type_path == "bevy_image::image::Image" {
                 if linear_image_names.contains(name) {
                     asset_server
                         .load_with_settings::<Image, ImageLoaderSettings>(
-                            &path_str,
+                            &asset_path,
                             |s: &mut ImageLoaderSettings| s.is_srgb = false,
                         )
                         .untyped()
                 } else {
-                    asset_server.load::<Image>(&path_str).untyped()
+                    asset_server.load::<Image>(&asset_path).untyped()
                 }
             } else {
                 warn!(
                     "External asset entry '{name}' has unknown type '{type_path}'  -- loading untyped"
                 );
                 asset_server
-                    .load::<bevy::asset::LoadedUntypedAsset>(&path_str)
+                    .load::<bevy::asset::LoadedUntypedAsset>(&asset_path)
                     .untyped()
             };
             local_assets.insert(name.clone(), handle);
@@ -1478,7 +1486,7 @@ pub fn load_scene_from_jsn(
         .collect();
     for (entity, gltf_path, scene_index) in gltf_entities {
         let asset_server = world.resource::<AssetServer>();
-        let asset_path: AssetPath<'static> = gltf_path.into();
+        let asset_path: AssetPath<'static> = crate::entity_ops::to_asset_path(&gltf_path).into();
         let scene = asset_server.load(GltfAssetLabel::Scene(scene_index).from_asset(asset_path));
         world.entity_mut(entity).insert(SceneRoot(scene));
     }

@@ -83,6 +83,39 @@ impl JackdawExtension for CoreWindowsExtension {
     }
 }
 
+/// 3D viewport, registered as a regular dock panel so multiple
+/// instances (quad-view, stacked viewports for animation work, etc.)
+/// can coexist in the dock tree.
+#[derive(Default)]
+pub struct ViewportExtension;
+
+impl JackdawExtension for ViewportExtension {
+    fn id(&self) -> String {
+        "jackdaw.viewport_panel".to_string()
+    }
+
+    fn label(&self) -> String {
+        "Viewport".to_string()
+    }
+
+    fn kind(&self) -> ExtensionKind {
+        ExtensionKind::Builtin
+    }
+
+    fn register(&self, ctx: &mut ExtensionContext) {
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.viewport")
+                .with_name("Viewport")
+                .with_default_area(DefaultArea::Center)
+                .with_priority(0)
+                .with_build(|window| {
+                    let parent = window.target_entity();
+                    crate::viewport::build_viewport_panel(window.world_mut(), parent);
+                }),
+        );
+    }
+}
+
 /// Assets window in the bottom dock.
 #[derive(Default)]
 pub struct AssetBrowserExtension;

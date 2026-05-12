@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_sdk"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "Single proxy dylib shipped with jackdaw. Extensions link against this via `cargo rustc --extern bevy=libjackdaw_sdk.so --extern jackdaw_api=libjackdaw_sdk.so` so they share one compilation of bevy + jackdaw types with the editor."
 license = "MIT OR Apache-2.0"

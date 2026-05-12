@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use bevy::reflect::serde::{ReflectDeserializerProcessor, TypedReflectDeserializer};
 use bevy::reflect::{TypeRegistration, TypeRegistry};
 use jackdaw_jsn::JsnPlugin;
-use jackdaw_jsn::format::{JsnAssets, JsnScene, JsnSceneV2};
+use jackdaw_jsn::format::{JsnAssets, JsnCatalog, JsnScene, JsnSceneV2};
 use serde::Deserializer;
 use serde::de::{DeserializeSeed, Visitor};
 
@@ -23,8 +23,8 @@ pub use jackdaw_jsn::{
 
 pub mod prelude {
     pub use crate::{
-        EditorCategory, EditorDescription, EditorHidden, JackdawPlugin, JackdawSceneRoot,
-        SkipSerialization,
+        EditorCategory, EditorDescription, EditorHidden, JackdawCatalog, JackdawCatalogPath,
+        JackdawPlugin, JackdawSceneRoot, SkipSerialization,
     };
 }
 
@@ -39,14 +39,51 @@ impl Plugin for JackdawPlugin {
         app.add_plugins(JsnPlugin::default());
 
         app.init_asset::<JackdawScene>()
-            .init_asset_loader::<JackdawSceneLoader>();
+            .init_asset_loader::<JackdawSceneLoader>()
+            .init_resource::<JackdawCatalog>();
 
+        app.add_systems(Startup, load_project_catalog);
         app.add_systems(
             Update,
             (clear_modified_scene_roots, spawn_loaded_scenes).chain(),
         );
     }
 }
+
+/// Project-wide asset catalog. Maps `@Name` references found in
+/// scene files to loaded `UntypedHandle`s.
+///
+/// Populated at startup from `.jsn/catalog.jsn` next to the Bevy
+/// asset root (mirrors `FileAssetReader::get_base_path()`). To
+/// load from a different location, insert a [`JackdawCatalogPath`]
+/// resource before [`JackdawPlugin`] is built.
+#[derive(Resource, Default)]
+pub struct JackdawCatalog {
+    handles: HashMap<String, UntypedHandle>,
+}
+
+impl JackdawCatalog {
+    /// Look up a catalog handle by its `@Name` reference.
+    pub fn get(&self, name: &str) -> Option<&UntypedHandle> {
+        self.handles.get(name)
+    }
+
+    /// Number of catalog entries (each `@Name`).
+    pub fn len(&self) -> usize {
+        self.handles.len()
+    }
+
+    /// True when no catalog has been loaded.
+    pub fn is_empty(&self) -> bool {
+        self.handles.is_empty()
+    }
+}
+
+/// Optional override for catalog discovery. Insert this resource
+/// before [`JackdawPlugin`] to point the loader at an explicit
+/// `catalog.jsn` path instead of running the default discovery.
+#[derive(Resource, Clone, Debug)]
+pub struct JackdawCatalogPath(pub PathBuf);
 
 #[derive(Asset, TypePath)]
 pub struct JackdawScene {
@@ -191,8 +228,16 @@ fn spawn_loaded_scenes(
         let jsn = scene.jsn.clone();
         let parent_path = scene.parent_path.clone();
 
-        let local_assets = load_inline_assets(world, &jsn.assets, &parent_path);
-        spawn_scene_entities(world, root_entity, &jsn.scene, &parent_path, &local_assets);
+        let catalog_assets = world.resource::<JackdawCatalog>().handles.clone();
+        let local_assets = load_inline_assets(world, &jsn.assets, &parent_path, &catalog_assets);
+        spawn_scene_entities(
+            world,
+            root_entity,
+            &jsn.scene,
+            &parent_path,
+            &local_assets,
+            &catalog_assets,
+        );
 
         world.entity_mut(root_entity).insert(SceneSpawned);
     }
@@ -210,6 +255,7 @@ fn spawn_scene_entities(
     entities: &[jackdaw_jsn::format::JsnEntity],
     parent_path: &Path,
     local_assets: &HashMap<String, UntypedHandle>,
+    catalog_assets: &HashMap<String, UntypedHandle>,
 ) {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let asset_server = world.resource::<AssetServer>().clone();
@@ -253,6 +299,7 @@ fn spawn_scene_entities(
                 asset_server: &asset_server,
                 parent_path,
                 local_assets,
+                catalog_assets,
                 entity_map: &spawned,
             };
             let deserializer = TypedReflectDeserializer::with_processor(
@@ -388,6 +435,7 @@ fn load_inline_assets(
     world: &mut World,
     assets: &JsnAssets,
     parent_path: &Path,
+    catalog_assets: &HashMap<String, UntypedHandle>,
 ) -> HashMap<String, UntypedHandle> {
     let mut local_assets: HashMap<String, UntypedHandle> = HashMap::new();
     let linear_image_names = collect_linear_image_names(assets);
@@ -401,9 +449,13 @@ fn load_inline_assets(
                 continue;
             };
             if rel_path.starts_with('@') {
-                warn!(
-                    "Catalog asset '{rel_path}' referenced by '{name}' is not supported at runtime"
-                );
+                if let Some(handle) = catalog_assets.get(rel_path) {
+                    local_assets.insert(name.clone(), handle.clone());
+                } else {
+                    warn!(
+                        "Catalog asset '{rel_path}' referenced by '{name}' not found in project catalog"
+                    );
+                }
                 continue;
             }
 
@@ -451,6 +503,7 @@ fn load_inline_assets(
                 asset_server: &asset_server,
                 parent_path,
                 local_assets: &local_assets,
+                catalog_assets,
                 entity_map: &[],
             };
             let deserializer = TypedReflectDeserializer::with_processor(
@@ -469,6 +522,85 @@ fn load_inline_assets(
     }
 
     local_assets
+}
+
+/// Startup system: discover the project catalog and populate
+/// [`JackdawCatalog`]. Honours [`JackdawCatalogPath`] if present;
+/// otherwise mirrors Bevy's `FileAssetReader::get_base_path()` to
+/// look for `.jsn/catalog.jsn` at the asset-root sibling.
+fn load_project_catalog(world: &mut World) {
+    let Some(catalog_path) = world
+        .get_resource::<JackdawCatalogPath>()
+        .map(|p| p.0.clone())
+        .or_else(discover_catalog_path)
+    else {
+        return;
+    };
+
+    if !catalog_path.is_file() {
+        info!(
+            "No catalog at {}, skipping catalog load",
+            catalog_path.display()
+        );
+        return;
+    }
+
+    let bytes = match std::fs::read(&catalog_path) {
+        Ok(b) => b,
+        Err(err) => {
+            warn!("Failed to read catalog {}: {err}", catalog_path.display());
+            return;
+        }
+    };
+    let jsn_catalog: JsnCatalog = match serde_json::from_slice(&bytes) {
+        Ok(c) => c,
+        Err(err) => {
+            warn!("Failed to parse catalog {}: {err}", catalog_path.display());
+            return;
+        }
+    };
+
+    apply_catalog(world, &jsn_catalog);
+    let count = world.resource::<JackdawCatalog>().handles.len();
+    info!(
+        "Loaded project catalog with {count} entries from {}",
+        catalog_path.display()
+    );
+}
+
+/// Loads a `JsnCatalog`'s assets into the world and stores the
+/// `@Name` handles in [`JackdawCatalog`]. Texture paths inside the
+/// catalog are treated as asset-server-relative (same convention
+/// as a scene file at the asset root).
+fn apply_catalog(world: &mut World, jsn: &JsnCatalog) {
+    // Catalog materials reference their own inline `#Name` images
+    // only; no nested `@Name` lookups, so an empty external map
+    // is correct here.
+    let no_external = HashMap::new();
+    let loaded = load_inline_assets(world, &jsn.assets, Path::new(""), &no_external);
+    let handles: HashMap<String, UntypedHandle> = loaded
+        .into_iter()
+        .filter(|(name, _)| name.starts_with('@'))
+        .collect();
+    world.resource_mut::<JackdawCatalog>().handles = handles;
+}
+
+/// Mirrors `bevy::asset::io::file::FileAssetReader::get_base_path`
+/// and returns the candidate catalog path. Falls back through
+/// `BEVY_ASSET_ROOT`, `CARGO_MANIFEST_DIR`, and the executable's
+/// directory. The catalog itself lives at `<base>/.jsn/catalog.jsn`,
+/// sibling to the `assets/` folder Bevy reads from.
+fn discover_catalog_path() -> Option<PathBuf> {
+    let base = if let Ok(p) = std::env::var("BEVY_ASSET_ROOT") {
+        PathBuf::from(p)
+    } else if let Ok(p) = std::env::var("CARGO_MANIFEST_DIR") {
+        PathBuf::from(p)
+    } else {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(ToOwned::to_owned))?
+    };
+    Some(base.join(".jsn").join("catalog.jsn"))
 }
 
 fn collect_linear_image_names(assets: &JsnAssets) -> HashSet<String> {
@@ -497,6 +629,7 @@ struct RuntimeDeserializerProcessor<'a> {
     asset_server: &'a AssetServer,
     parent_path: &'a Path,
     local_assets: &'a HashMap<String, UntypedHandle>,
+    catalog_assets: &'a HashMap<String, UntypedHandle>,
     entity_map: &'a [Entity],
 }
 
@@ -533,7 +666,10 @@ impl ReflectDeserializerProcessor for RuntimeDeserializerProcessor<'_> {
             }
 
             if path_str.starts_with('@') {
-                warn!("Catalog asset '{path_str}' is not supported at runtime -- using default");
+                if let Some(handle) = self.catalog_assets.get(&path_str) {
+                    return Ok(Ok(Box::new(handle.clone()).into_partial_reflect()));
+                }
+                warn!("Catalog asset '{path_str}' not found in project catalog -- using default");
                 if let Some(rd) = registration.data::<ReflectDefault>() {
                     return Ok(Ok(rd.default().into_partial_reflect()));
                 }

@@ -863,7 +863,12 @@ fn hide_all_entities(world: &mut World, scene_entities: &mut SystemState<SceneEn
 ///
 /// Bevy's default asset source reads from `<base>/assets/` where `<base>` is
 /// `BEVY_ASSET_ROOT`, `CARGO_MANIFEST_DIR`, or the executable's parent directory.
-fn to_asset_path(path: &str) -> String {
+///
+/// Strips the assets-dir prefix when the input is absolute so the load goes
+/// through Bevy's approved-path machinery (no `UnapprovedPathMode::Allow`
+/// needed). Returns the original path on a miss and warns; callers should not
+/// rely on the fallback ever loading successfully under `Forbid`.
+pub fn to_asset_path(path: &str) -> String {
     let path = Path::new(path);
     if let Some(assets_dir) = get_assets_base_dir()
         && let Ok(relative) = path.strip_prefix(&assets_dir)

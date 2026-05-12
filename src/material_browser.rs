@@ -311,7 +311,13 @@ fn detect_and_create_materials(
         let mut occlusion_texture = None;
         let mut depth_map = None;
 
-        for (tag, asset_path) in slots {
+        for (tag, fs_path) in slots {
+            // `scan_dir_recursive` produces absolute filesystem
+            // paths. Keep `fs_path` for direct disk reads (e.g.
+            // `is_16bit_png`) and derive `asset_path` (relative
+            // to the project's `assets/` root) for AssetServer
+            // loads, staying inside Bevy's approved-path set.
+            let asset_path = crate::entity_ops::to_asset_path(fs_path);
             let tag_lower = tag.to_lowercase();
             match tag_lower.as_str() {
                 "diffuse" | "diff" | "albedo" | "base" | "col" | "color" | "basecolor" | "b" => {
@@ -360,7 +366,7 @@ fn detect_and_create_materials(
                 "displacement" | "displace" | "disp" | "dsp" | "height" | "heightmap"
                     // Skip 16-bit integer PNGs. Bevy decodes them as R16Uint which
                     // is incompatible with StandardMaterial's float-filterable depth_map slot.
-                    if !is_16bit_png(Path::new(asset_path)) => {
+                    if !is_16bit_png(Path::new(fs_path)) => {
                         depth_map = Some(
                             asset_server.load_with_settings::<Image, ImageLoaderSettings>(
                                 asset_path.clone(),
@@ -1290,7 +1296,8 @@ fn poll_texture_slot_pick(world: &mut World) {
         return;
     }
 
-    let asset_path = path.to_string_lossy().replace('\\', "/");
+    let fs_path = path.to_string_lossy().replace('\\', "/");
+    let asset_path = crate::entity_ops::to_asset_path(&fs_path);
     let asset_server = world.resource::<AssetServer>().clone();
     let image_handle = if slot.is_srgb() {
         asset_server.load::<Image>(asset_path)

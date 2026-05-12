@@ -3,17 +3,23 @@ use std::f32::consts::FRAC_PI_2;
 use crate::brush::{self, BrushMeshCache};
 use crate::entity_ops::EmptyEntity;
 use crate::selection::Selected;
-use crate::viewport::SceneViewport;
+use crate::viewport::{AxisIndicator, SceneViewport};
 use crate::{JackdawDrawSystems, default_style};
 use avian3d::parry::transformation::convex_hull;
 use bevy::prelude::*;
+use bevy::ui::widget::ViewportNode;
 use jackdaw_jsn::BrushGroup;
 
 #[derive(Component)]
 struct AxisLabel;
 
-#[derive(Resource)]
-struct AxisLabelEntities([Entity; 3]);
+/// Per-viewport storage for the X/Y/Z axis labels. One of these
+/// components is attached to every `SceneViewport` entity so labels
+/// stay scoped to the panel they belong to.
+#[derive(Component)]
+struct ViewportAxisLabels {
+    labels: [Entity; 3],
+}
 
 pub struct ViewportOverlaysPlugin;
 
@@ -21,8 +27,8 @@ impl Plugin for ViewportOverlaysPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OverlaySettings>()
             .add_systems(
-                OnEnter(crate::AppState::Editor),
-                spawn_axis_labels.after(crate::viewport::setup_viewport),
+                Update,
+                ensure_axis_labels.run_if(in_state(crate::AppState::Editor)),
             )
             .add_systems(
                 PostUpdate,
@@ -468,101 +474,140 @@ fn draw_empty_entity_marker(
     }
 }
 
-fn spawn_axis_labels(mut commands: Commands, viewport_entity: Single<Entity, With<SceneViewport>>) {
-    let labels = [
-        ("X", default_style::AXIS_X_BRIGHT),
-        ("Y", default_style::AXIS_Y_BRIGHT),
-        ("Z", default_style::AXIS_Z_BRIGHT),
-    ];
-    let mut entities = [Entity::PLACEHOLDER; 3];
-    for (i, (letter, color)) in labels.iter().enumerate() {
-        entities[i] = commands
-            .spawn((
-                AxisLabel,
-                crate::EditorEntity,
-                crate::NonSerializable,
-                Text::new(*letter),
-                TextFont {
-                    font_size: 14.0,
-                    ..default()
-                },
-                TextColor(*color),
-                Node {
-                    position_type: PositionType::Absolute,
-                    ..default()
-                },
-            ))
-            .id();
-        commands.entity(*viewport_entity).add_child(entities[i]);
+/// Each `SceneViewport` gets its own X/Y/Z axis label trio parented
+/// to the viewport's UI node. Runs each frame so freshly-spawned
+/// viewport panels (quad-view, drag-drop, workspace switch) pick up
+/// labels without a startup-only initialiser.
+fn ensure_axis_labels(
+    mut commands: Commands,
+    viewports: Query<Entity, (With<SceneViewport>, Without<ViewportAxisLabels>)>,
+) {
+    for viewport_entity in &viewports {
+        let labels = [
+            ("X", default_style::AXIS_X_BRIGHT),
+            ("Y", default_style::AXIS_Y_BRIGHT),
+            ("Z", default_style::AXIS_Z_BRIGHT),
+        ];
+        let mut entities = [Entity::PLACEHOLDER; 3];
+        for (i, (letter, color)) in labels.iter().enumerate() {
+            entities[i] = commands
+                .spawn((
+                    AxisLabel,
+                    crate::EditorEntity,
+                    crate::NonSerializable,
+                    Text::new(*letter),
+                    TextFont {
+                        font_size: 14.0,
+                        ..default()
+                    },
+                    TextColor(*color),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        ..default()
+                    },
+                    ChildOf(viewport_entity),
+                ))
+                .id();
+        }
+        commands
+            .entity(viewport_entity)
+            .insert(ViewportAxisLabels { labels: entities });
     }
-    commands.insert_resource(AxisLabelEntities(entities));
 }
 
-/// Draw a small coordinate indicator showing camera orientation.
+/// Position each viewport's axis indicator in front of its own camera
+/// and update the matching label positions.
+///
+/// The indicator itself is a retained [`bevy::gizmos::retained::Gizmo`]
+/// entity carrying the viewport's private `RenderLayers`, spawned in
+/// `viewport::build_viewport_panel`. Per-camera `RenderLayers` gating
+/// is what keeps each indicator scoped to one viewport: an immediate
+/// `Gizmos` line at a world-space position would otherwise leak into
+/// every camera that has the same point in its frustum, which is what
+/// produced ghost indicators in adjacent panels with overlapping
+/// world-space positions.
+///
+/// We write both `Transform` and `GlobalTransform` so the render
+/// extraction (which reads `GlobalTransform`) sees the updated pose
+/// the same frame, regardless of where the system slots relative to
+/// `TransformSystems::Propagate`.
 fn draw_coordinate_indicator(
-    mut gizmos: Gizmos,
     settings: Res<OverlaySettings>,
-    camera_query: Query<
+    cameras: Query<
         (&Camera, &GlobalTransform, &Projection),
-        With<crate::viewport::MainViewportCamera>,
+        (
+            With<crate::viewport::MainViewportCamera>,
+            Without<AxisIndicator>,
+        ),
     >,
-    label_entities: Option<Res<AxisLabelEntities>>,
+    viewports: Query<(&ComputedNode, &ViewportNode, &ViewportAxisLabels), With<SceneViewport>>,
     mut label_query: Query<(&mut Node, &mut Visibility), With<AxisLabel>>,
-    viewport_node: Query<&ComputedNode, With<SceneViewport>>,
+    mut indicators: Query<
+        (
+            &AxisIndicator,
+            &mut Transform,
+            &mut GlobalTransform,
+            &mut Visibility,
+        ),
+        (
+            Without<AxisLabel>,
+            Without<crate::viewport::MainViewportCamera>,
+        ),
+    >,
 ) {
     if !settings.show_coordinate_indicator {
-        // Hide labels when indicator is off
         for (_, mut vis) in &mut label_query {
+            *vis = Visibility::Hidden;
+        }
+        for (_, _, _, mut vis) in &mut indicators {
             *vis = Visibility::Hidden;
         }
         return;
     }
 
-    let Ok((camera, cam_tf, projection)) = camera_query.single() else {
-        return;
-    };
-    let Projection::Perspective(proj) = projection else {
-        return;
-    };
+    // Place each indicator entity in front of its camera and resize
+    // it for the camera's fov so it occupies a stable on-screen
+    // fraction; labels follow at the projected tip positions.
+    for (computed, viewport_node, axis_labels) in &viewports {
+        let Ok((camera, cam_tf, projection)) = cameras.get(viewport_node.camera) else {
+            continue;
+        };
+        let Projection::Perspective(proj) = projection else {
+            continue;
+        };
 
-    // Compute visible extents at a fixed depth to place indicator at a consistent screen position
-    let depth = 0.5;
-    let half_height = depth * (proj.fov / 2.0).tan();
-    let half_width = half_height * proj.aspect_ratio;
+        let depth = 0.5;
+        let half_height = depth * (proj.fov / 2.0).tan();
+        let half_width = half_height * proj.aspect_ratio;
+        let ndc_x = -0.85;
+        let ndc_y = -0.80;
 
-    // NDC coordinates: bottom-left with padding
-    let ndc_x = -0.85;
-    let ndc_y = -0.80;
+        let indicator_pos = cam_tf.translation()
+            + cam_tf.forward().as_vec3() * depth
+            + cam_tf.right().as_vec3() * (ndc_x * half_width)
+            + cam_tf.up().as_vec3() * (ndc_y * half_height);
+        let size = half_height * 0.07;
+        let pose = Transform {
+            translation: indicator_pos,
+            rotation: Quat::IDENTITY,
+            scale: Vec3::splat(size),
+        };
 
-    let indicator_pos = cam_tf.translation()
-        + cam_tf.forward().as_vec3() * depth
-        + cam_tf.right().as_vec3() * (ndc_x * half_width)
-        + cam_tf.up().as_vec3() * (ndc_y * half_height);
+        for (link, mut tf, mut gtf, mut vis) in &mut indicators {
+            if link.camera != viewport_node.camera {
+                continue;
+            }
+            *tf = pose;
+            *gtf = GlobalTransform::from(pose);
+            *vis = Visibility::Inherited;
+        }
 
-    // Scale axis length proportionally to visible area for consistent apparent size
-    let size = half_height * 0.07;
-
-    let axes = [Vec3::X, Vec3::Y, Vec3::Z];
-    let axis_colors = [
-        default_style::AXIS_X,
-        default_style::AXIS_Y,
-        default_style::AXIS_Z,
-    ];
-
-    for (axis, color) in axes.iter().zip(axis_colors.iter()) {
-        gizmos.line(indicator_pos, indicator_pos + *axis * size, *color);
-    }
-
-    // Update axis label positions. Project world positions to UI overlay coordinates.
-    if let Some(label_entities) = label_entities {
-        let vp_node_size = viewport_node
-            .single()
-            .map(ComputedNode::size)
-            .unwrap_or(Vec2::ONE);
+        let axes = [Vec3::X, Vec3::Y, Vec3::Z];
+        let vp_node_size = computed.size();
         let render_target_size = camera.logical_viewport_size().unwrap_or(vp_node_size);
 
-        for (i, entity) in label_entities.0.iter().enumerate() {
-            if let Ok((mut node, mut vis)) = label_query.get_mut(*entity) {
+        for (i, label_entity) in axis_labels.labels.iter().enumerate() {
+            if let Ok((mut node, mut vis)) = label_query.get_mut(*label_entity) {
                 let tip_pos = indicator_pos + axes[i] * size * 1.35;
                 if let Ok(vp_coords) = camera.world_to_viewport(cam_tf, tip_pos) {
                     let ui_pos = vp_coords * vp_node_size / render_target_size;

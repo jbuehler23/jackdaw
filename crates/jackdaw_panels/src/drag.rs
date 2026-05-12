@@ -2,11 +2,11 @@ use bevy::prelude::*;
 use bevy::ui::UiGlobalTransform;
 use jackdaw_feathers::tokens;
 
-use crate::area::{DefaultArea, DockArea, DockTab, ToAnchorId as _};
+use crate::area::{DockArea, DockTab};
 use crate::reconcile::NodeBinding;
 use crate::sidebar::DockSidebarIcon;
 use crate::tabs::{DockTabGrip, DockTabRow};
-use crate::tree::{DockTree, Edge as TreeEdge};
+use crate::tree::{DockTree, Edge as TreeEdge, TabId};
 
 const DRAG_THRESHOLD: f32 = 5.0;
 
@@ -16,12 +16,14 @@ pub enum DockDragState {
     Idle,
     PendingDrag {
         source_tab: Entity,
+        tab_id: TabId,
         window_id: String,
         window_name: String,
         start_pos: Vec2,
     },
     Dragging {
         source_tab: Entity,
+        tab_id: TabId,
         window_id: String,
         window_name: String,
         source_area: Entity,
@@ -35,20 +37,8 @@ pub enum DockDragState {
 #[derive(Clone, Debug)]
 pub enum DropTarget {
     Panel(Entity),
-    TabRow {
-        bar: Entity,
-        index: usize,
-    },
-    AreaEdge {
-        area: Entity,
-        edge: DropEdge,
-    },
-    /// Dropped on the editor viewport's edge. Routes to the anchor
-    /// associated with that edge (see [`DefaultArea`].
-    ViewportEdge {
-        anchor_id: String,
-        edge: DropEdge,
-    },
+    TabRow { bar: Entity, index: usize },
+    AreaEdge { area: Entity, edge: DropEdge },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,12 +54,6 @@ pub struct DragGhost;
 
 #[derive(Component)]
 pub struct DropOverlay;
-
-/// Marks the editor viewport entity as a drop target. The viewport is
-/// not an `AnchorHost`; dropping on its edge re-populates one of the
-/// side anchors (see [`DefaultArea`]) instead.
-#[derive(Component)]
-pub struct ViewportDropTarget;
 
 pub struct DockDragPlugin;
 
@@ -109,6 +93,7 @@ fn on_tab_drag_start(
 
     *drag_state = DockDragState::PendingDrag {
         source_tab: entity,
+        tab_id: tab.tab_id,
         window_id: tab.window_id.clone(),
         window_name: display_name,
         start_pos: Vec2::new(
@@ -134,6 +119,7 @@ fn on_sidebar_icon_drag_start(
 
     *drag_state = DockDragState::PendingDrag {
         source_tab: entity,
+        tab_id: icon.tab_id,
         window_id: icon.window_id.clone(),
         window_name: display_name,
         start_pos: Vec2::new(
@@ -148,6 +134,8 @@ fn on_grip_drag_start(
     grips: Query<(), With<DockTabGrip>>,
     dock_areas: Query<&crate::ActiveDockWindow, With<DockArea>>,
     parent_query: Query<&ChildOf>,
+    tree: Res<DockTree>,
+    bindings: Query<&crate::reconcile::LeafBinding>,
     mut drag_state: ResMut<DockDragState>,
     registry: Res<crate::WindowRegistry>,
 ) {
@@ -156,11 +144,16 @@ fn on_grip_drag_start(
         return;
     }
 
+    // Walk to the dock area, grab the active tab id, then look up the
+    // matching window kind in the leaf so the ghost gets a meaningful
+    // label.
     let mut current = entity;
-    let mut active_window_id = None;
+    let mut active: Option<(TabId, Entity)> = None;
     loop {
-        if let Ok(active) = dock_areas.get(current) {
-            active_window_id = active.0.clone();
+        if let Ok(adw) = dock_areas.get(current)
+            && let Some(tab_id) = adw.0
+        {
+            active = Some((tab_id, current));
             break;
         }
         let Ok(parent) = parent_query.get(current) else {
@@ -169,10 +162,20 @@ fn on_grip_drag_start(
         current = parent.parent();
     }
 
-    let Some(window_id) = active_window_id else {
+    let Some((tab_id, area_entity)) = active else {
+        return;
+    };
+    let Ok(binding) = bindings.get(area_entity) else {
+        return;
+    };
+    let Some(leaf) = tree.get(binding.0).and_then(|n| n.as_leaf()) else {
+        return;
+    };
+    let Some(entry) = leaf.windows.iter().find(|t| t.id == tab_id) else {
         return;
     };
 
+    let window_id = entry.window_id.clone();
     let window_name = registry
         .get(&window_id)
         .map(|d| d.name.clone())
@@ -180,6 +183,7 @@ fn on_grip_drag_start(
 
     *drag_state = DockDragState::PendingDrag {
         source_tab: entity,
+        tab_id,
         window_id,
         window_name,
         start_pos: Vec2::new(
@@ -205,7 +209,6 @@ fn on_drag_move(
         ),
         With<DockTabRow>,
     >,
-    viewports: Query<(&ComputedNode, &UiGlobalTransform), With<ViewportDropTarget>>,
     node_query: Query<(&ComputedNode, &UiGlobalTransform)>,
     parent_query: Query<&ChildOf>,
 ) {
@@ -218,6 +221,7 @@ fn on_drag_move(
     match &*drag_state {
         DockDragState::PendingDrag {
             source_tab,
+            tab_id,
             window_id,
             window_name,
             start_pos,
@@ -227,6 +231,7 @@ fn on_drag_move(
             }
 
             let source_tab = *source_tab;
+            let tab_id = *tab_id;
             let window_id = window_id.clone();
             let window_name = window_name.clone();
 
@@ -260,6 +265,7 @@ fn on_drag_move(
 
             *drag_state = DockDragState::Dragging {
                 source_tab,
+                tab_id,
                 window_id,
                 window_name,
                 source_area: source_area.unwrap_or(Entity::PLACEHOLDER),
@@ -442,60 +448,6 @@ fn on_drag_move(
                 }
             }
 
-            // Fall through to viewport hit-test when the cursor isn't
-            // over any DockArea. Lets a tab drop on the viewport's edge
-            // re-populate a collapsed side panel.
-            if new_target.is_none() {
-                for (computed, ui_transform) in &viewports {
-                    let viewport_rect = logical_rect(computed, ui_transform);
-                    if !viewport_rect.contains(cursor) {
-                        continue;
-                    }
-
-                    let Some(edge) = cursor_edge(viewport_rect, cursor) else {
-                        break;
-                    };
-                    if edge == DropEdge::Top {
-                        // No top anchor above the viewport.
-                        break;
-                    }
-                    let anchor_id = match edge {
-                        DropEdge::Left => DefaultArea::Left,
-                        DropEdge::Right => DefaultArea::RightSidebar,
-                        DropEdge::Bottom => DefaultArea::BottomDock,
-                        DropEdge::Top => unreachable!(),
-                    }
-                    .anchor_id();
-
-                    new_target = Some(DropTarget::ViewportEdge {
-                        anchor_id: anchor_id.to_string(),
-                        edge,
-                    });
-
-                    let overlay_rect = edge_overlay_rect(viewport_rect, edge);
-                    let overlay = commands
-                        .spawn((
-                            DropOverlay,
-                            Node {
-                                position_type: PositionType::Absolute,
-                                left: Val::Px(overlay_rect.min.x),
-                                top: Val::Px(overlay_rect.min.y),
-                                width: Val::Px(overlay_rect.size().x),
-                                height: Val::Px(overlay_rect.size().y),
-                                border: UiRect::all(Val::Px(2.0)),
-                                border_radius: BorderRadius::all(Val::Px(4.0)),
-                                ..default()
-                            },
-                            BackgroundColor(Color::srgba(0.126, 0.431, 0.784, 0.25)),
-                            BorderColor::all(tokens::ACCENT_BLUE),
-                            GlobalZIndex(150),
-                        ))
-                        .id();
-                    new_overlay = Some(overlay);
-                    break;
-                }
-            }
-
             if let DockDragState::Dragging {
                 drop_target,
                 overlay_entity,
@@ -525,7 +477,7 @@ fn on_drag_end(
             ghost_entity,
             overlay_entity,
             drop_target,
-            window_id,
+            tab_id,
             source_area,
             ..
         } => {
@@ -538,28 +490,19 @@ fn on_drag_end(
                 match target {
                     DropTarget::Panel(target_area) => {
                         if target_area != source_area {
-                            let wid = window_id.clone();
                             commands.queue(move |world: &mut World| {
-                                drop_on_area(world, &wid, target_area);
+                                drop_on_area(world, tab_id, target_area);
                             });
                         }
                     }
                     DropTarget::AreaEdge { area, edge } => {
-                        let wid = window_id.clone();
                         commands.queue(move |world: &mut World| {
-                            drop_on_edge(world, &wid, area, edge);
-                        });
-                    }
-                    DropTarget::ViewportEdge { anchor_id, edge } => {
-                        let wid = window_id.clone();
-                        commands.queue(move |world: &mut World| {
-                            drop_on_viewport_edge(world, &wid, &anchor_id, edge);
+                            drop_on_edge(world, tab_id, area, edge);
                         });
                     }
                     DropTarget::TabRow { bar, index } => {
-                        let wid = window_id.clone();
                         commands.queue(move |world: &mut World| {
-                            drop_on_tab_row(world, &wid, bar, index);
+                            drop_on_tab_row(world, tab_id, bar, index);
                         });
                     }
                 }
@@ -596,19 +539,19 @@ fn cancel_drag_on_escape(
     *drag_state = DockDragState::Idle;
 }
 
-/// Move `window_id` into the leaf bound to `target_area`.
-fn drop_on_area(world: &mut World, window_id: &str, target_area: Entity) {
+/// Move the dragged tab into the leaf bound to `target_area`.
+fn drop_on_area(world: &mut World, tab: TabId, target_area: Entity) {
     let Some(binding) = world.entity(target_area).get::<NodeBinding>().copied() else {
         return;
     };
-    world
-        .resource_mut::<DockTree>()
-        .move_window(window_id, binding.0);
+    world.resource_mut::<DockTree>().move_tab(tab, binding.0);
 }
 
-/// Split the leaf bound to `target_area` along `edge` and place
-/// `window_id` into the new sibling.
-fn drop_on_edge(world: &mut World, window_id: &str, target_area: Entity, edge: DropEdge) {
+/// Split the leaf bound to `target_area` along `edge` and reseat the
+/// dragged tab into the new sibling. The tab keeps its window kind
+/// but receives a fresh [`TabId`] (we remove + split rather than
+/// move, since `tree.split` builds the leaf from a window id).
+fn drop_on_edge(world: &mut World, tab: TabId, target_area: Entity, edge: DropEdge) {
     let Some(binding) = world.entity(target_area).get::<NodeBinding>().copied() else {
         return;
     };
@@ -619,48 +562,22 @@ fn drop_on_edge(world: &mut World, window_id: &str, target_area: Entity, edge: D
         DropEdge::Right => TreeEdge::Right,
     };
     let mut tree = world.resource_mut::<DockTree>();
-    tree.remove_window(window_id);
-    tree.split(binding.0, tree_edge, window_id.to_string());
-}
-
-/// Drop `window_id` onto the viewport's `edge`, routing into the anchor
-/// that owns that edge (e.g. `Right` → `right_sidebar`). If the anchor's
-/// first leaf is empty (collapsed panel), the window is added to it so
-/// the reconciler un-hides the host next tick. Otherwise the leaf is
-/// split at `edge` to create a sibling leaf holding the window.
-fn drop_on_viewport_edge(world: &mut World, window_id: &str, anchor_id: &str, edge: DropEdge) {
-    let mut tree = world.resource_mut::<DockTree>();
-    let Some(root) = tree.anchor(anchor_id) else {
+    let Some(window_id) = tree.find_leaf_for_tab(tab).and_then(|leaf_id| {
+        tree.get(leaf_id)
+            .and_then(|n| n.as_leaf())
+            .and_then(|l| l.windows.iter().find(|t| t.id == tab))
+            .map(|t| t.window_id.clone())
+    }) else {
         return;
     };
-    let Some((leaf_id, leaf_is_empty)) = tree
-        .leaves_under(root)
-        .first()
-        .map(|(id, leaf)| (*id, leaf.windows.is_empty()))
-    else {
-        return;
-    };
-
-    tree.remove_window(window_id);
-
-    if leaf_is_empty {
-        if let Some(crate::tree::DockNode::Leaf(l)) = tree.get_mut(leaf_id) {
-            l.windows.push(window_id.to_string());
-            l.active = Some(window_id.to_string());
-        }
-    } else {
-        let tree_edge = match edge {
-            DropEdge::Top => TreeEdge::Top,
-            DropEdge::Bottom => TreeEdge::Bottom,
-            DropEdge::Left => TreeEdge::Left,
-            DropEdge::Right => TreeEdge::Right,
-        };
-        tree.split(leaf_id, tree_edge, window_id.to_string());
-    }
+    tree.remove_tab(tab);
+    tree.split(binding.0, tree_edge, window_id);
 }
 
-/// Drop `window_id` onto the leaf bound to the `tab_row`'s area at index `index`
-fn drop_on_tab_row(world: &mut World, window_id: &str, tab_row: Entity, index: usize) {
+/// Drop the dragged tab onto the leaf bound to `tab_row` at slot
+/// `index`. Reordering within the source leaf is allowed (drag a tab
+/// to reorder it).
+fn drop_on_tab_row(world: &mut World, tab: TabId, tab_row: Entity, index: usize) {
     let mut parent_query = world.query::<&ChildOf>();
     let parent_query = parent_query.query(world);
 
@@ -678,7 +595,7 @@ fn drop_on_tab_row(world: &mut World, window_id: &str, tab_row: Entity, index: u
     };
 
     let mut tree = world.resource_mut::<DockTree>();
-    tree.insert_window(window_id, binding.0, true, Some(index));
+    tree.insert_tab(tab, binding.0, true, Some(index));
 }
 
 fn find_parent_area(
@@ -703,8 +620,9 @@ fn cursor_edge(rect: Rect, cursor: Vec2) -> Option<DropEdge> {
     let frac_x = rel.x / rect.size().x;
     let frac_y = rel.y / rect.size().y;
 
-    // The center region is a no-op.
-    // the outer n% of the rect's volume are the drop edges.
+    // The center region is a no-op. The outer n% on each side are the
+    // drop edges. All four edges are equal: dropping on the top of any
+    // panel splits it vertically with the dragged window above.
     const EDGE_PERCENT: f32 = 0.25;
 
     if frac_x < -EDGE_PERCENT {
@@ -714,7 +632,6 @@ fn cursor_edge(rect: Rect, cursor: Vec2) -> Option<DropEdge> {
     } else if frac_y > EDGE_PERCENT {
         Some(DropEdge::Bottom)
     } else if frac_y < -EDGE_PERCENT {
-        // Top is the lowest priority since the viewport is allowed to skip it
         Some(DropEdge::Top)
     } else {
         None

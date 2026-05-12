@@ -4,15 +4,19 @@ use bevy::prelude::*;
 #[derive(Component)]
 pub struct TreeView;
 
-/// Links a tree row UI entity to the source entity it represents
+/// Links a tree row UI entity to the source entity it represents.
+///
+/// Multiple `TreeNode`s may point at the same source (one per
+/// container in a multi-instance Outliner setup), so the inverse
+/// `TreeNodeSource` holds a `Vec<Entity>`.
 #[derive(Component)]
 #[relationship(relationship_target = TreeNodeSource)]
 pub struct TreeNode(pub Entity);
 
-/// Inverse relationship: source entity -> tree row
-#[derive(Component)]
+/// Inverse relationship: source entity → every tree row referencing it.
+#[derive(Component, Default)]
 #[relationship_target(relationship = TreeNode)]
-pub struct TreeNodeSource(Entity);
+pub struct TreeNodeSource(Vec<Entity>);
 
 /// Marker for expand/collapse toggle button
 #[derive(Component)]
@@ -76,40 +80,91 @@ pub struct TreeRowVisibilityToggled {
 #[derive(Component)]
 pub struct TreeRowInlineRename;
 
-/// Maps source (scene) entities to their corresponding tree row UI entities.
-/// Maintained automatically by systems that react to `TreeNode` additions/removals.
+/// Maps source (scene) entities to their tree row UI entities, keyed
+/// by the tree's container so multiple containers (e.g. two open
+/// Outliner tabs) each track their own copy of the same source.
+///
+/// Maintained automatically by [`maintain_tree_index`], which walks
+/// each new `TreeNode` up to its `TreeRoot` (matched by the marker
+/// component the consumer adds to the container) and inserts an
+/// entry under that container's key.
 #[derive(Resource, Default)]
 pub struct TreeIndex {
-    /// source entity → tree row entity
-    map: HashMap<Entity, Entity>,
+    /// `(container, source)` → tree row entity. The container is the
+    /// host entity carrying [`TreeRoot`]; the source is the scene
+    /// entity the row represents.
+    map: HashMap<(Entity, Entity), Entity>,
 }
 
 impl TreeIndex {
-    /// Get the tree row entity for a given source entity.
-    pub fn get(&self, source: Entity) -> Option<Entity> {
-        self.map.get(&source).copied()
+    /// Tree row entity for `source` in `container`, if one exists.
+    pub fn get(&self, container: Entity, source: Entity) -> Option<Entity> {
+        self.map.get(&(container, source)).copied()
     }
 
-    /// Insert a mapping from source entity to tree row entity.
-    pub fn insert(&mut self, source: Entity, tree_row: Entity) {
-        self.map.insert(source, tree_row);
+    /// Insert / overwrite the mapping for the `(container, source)` pair.
+    pub fn insert(&mut self, container: Entity, source: Entity, tree_row: Entity) {
+        self.map.insert((container, source), tree_row);
     }
 
-    /// Remove the mapping for a source entity.
-    pub fn remove(&mut self, source: Entity) {
-        self.map.remove(&source);
+    /// Drop the mapping for the `(container, source)` pair.
+    pub fn remove(&mut self, container: Entity, source: Entity) {
+        self.map.remove(&(container, source));
     }
 
-    /// Check if a source entity has a tree row.
-    pub fn contains(&self, source: Entity) -> bool {
-        self.map.contains_key(&source)
+    /// Drop every mapping for `source` across every container. Used
+    /// when a scene entity goes away and its rows in every panel
+    /// should be forgotten.
+    pub fn remove_source(&mut self, source: Entity) {
+        self.map.retain(|(_, s), _| *s != source);
     }
 
-    /// Remove all mappings.
+    /// True if `source` has a row in `container`.
+    pub fn contains(&self, container: Entity, source: Entity) -> bool {
+        self.map.contains_key(&(container, source))
+    }
+
+    /// True if `source` has a row in any container.
+    pub fn contains_anywhere(&self, source: Entity) -> bool {
+        self.map.keys().any(|(_, s)| *s == source)
+    }
+
+    /// Iterate every row entity for `source` across all containers.
+    pub fn rows_for_source(&self, source: Entity) -> impl Iterator<Item = (Entity, Entity)> + '_ {
+        self.map
+            .iter()
+            .filter(move |((_, s), _)| *s == source)
+            .map(|((c, _), row)| (*c, *row))
+    }
+
+    /// Iterate every row entity for `container`.
+    pub fn rows_in(&self, container: Entity) -> impl Iterator<Item = (Entity, Entity)> + '_ {
+        self.map
+            .iter()
+            .filter(move |((c, _), _)| *c == container)
+            .map(|((_, s), row)| (*s, *row))
+    }
+
+    /// Drop every mapping for `container`. Used when a panel hosting
+    /// a tree is torn down.
+    pub fn clear_container(&mut self, container: Entity) {
+        self.map.retain(|(c, _), _| *c != container);
+    }
+
+    /// Drop every mapping. Used when the host app fully resets state.
     pub fn clear(&mut self) {
         self.map.clear();
     }
 }
+
+/// Marker the consumer adds to the entity that hosts a tree (every
+/// `Outliner` panel content entity, in jackdaw's case). The widget
+/// crate uses it during ancestor walks in [`maintain_tree_index`] to
+/// find which container a freshly-spawned `TreeNode` belongs to;
+/// `TreeIndex` is keyed by `(container, source)` so multiple
+/// containers can mirror the same source set without colliding.
+#[derive(Component, Default)]
+pub struct TreeRoot;
 
 use std::collections::HashMap;
 
@@ -177,25 +232,45 @@ impl Plugin for TreeViewPlugin {
 }
 
 /// Keep `TreeIndex` in sync with `TreeNode` additions and removals.
+///
+/// On a freshly-added node, walks up the parent chain until it hits
+/// an entity carrying [`TreeRoot`] and registers `(root, source) →
+/// row`. Multiple roots in the same world (e.g. two Outliner tabs)
+/// each maintain their own independent mapping.
 pub fn maintain_tree_index(
     mut index: ResMut<TreeIndex>,
     added: Query<(Entity, &TreeNode), Added<TreeNode>>,
+    parents: Query<&ChildOf>,
+    roots: Query<(), With<TreeRoot>>,
     mut removed: RemovedComponents<TreeNode>,
 ) {
     for (tree_row, tree_node) in &added {
-        index.insert(tree_node.0, tree_row);
+        let mut current = tree_row;
+        let container = loop {
+            if roots.get(current).is_ok() {
+                break Some(current);
+            }
+            match parents.get(current) {
+                Ok(parent) => current = parent.parent(),
+                Err(_) => break None,
+            }
+        };
+        if let Some(container) = container {
+            index.insert(container, tree_node.0, tree_row);
+        }
     }
 
     for removed_entity in removed.read() {
-        // Scan the map to find which source entity maps to this removed tree row.
-        // This is O(n) but only runs on removal frames, not every frame.
-        let source = index
+        // Scan the map to find which (container, source) maps to this
+        // removed tree row. Quadratic in worst case; only runs on
+        // removal frames, not every frame.
+        let key = index
             .map
             .iter()
             .find(|(_, tree_row)| **tree_row == removed_entity)
-            .map(|(source, _)| *source);
-        if let Some(source) = source {
-            index.remove(source);
+            .map(|(k, _)| *k);
+        if let Some((container, source)) = key {
+            index.remove(container, source);
         }
     }
 }

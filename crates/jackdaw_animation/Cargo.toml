@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_animation"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "Animation authoring and playback for the Jackdaw editor; thin UI over Bevy's AnimationClip / AnimationGraph / AnimationPlayer."
 license = "MIT OR Apache-2.0"

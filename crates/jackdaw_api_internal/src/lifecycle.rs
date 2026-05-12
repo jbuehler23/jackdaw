@@ -522,9 +522,9 @@ pub(crate) fn cleanup_window_on_remove(
     };
     info!("Unregistering window: {}", w.id);
     registry.unregister(&w.id);
-    dock_tree.remove_window(&w.id);
+    dock_tree.remove_window_kind(&w.id);
     for workspace in workspaces.workspaces.iter_mut() {
-        workspace.tree.remove_window(&w.id);
+        workspace.tree.remove_window_kind(&w.id);
     }
 }
 

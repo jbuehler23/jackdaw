@@ -322,15 +322,11 @@ pub fn handle_workspace_tab_clicks(
 
 /// Click `+` to create a new workspace. Copies the current `DockTree`
 /// (so the new workspace starts visually identical to the current one)
-/// and switches to it. Also resets the outer three-column `Panel.ratio`
-/// values (left/right/bottom anchor hosts) to `1.0` so the new
-/// workspace starts with default proportions instead of inheriting
-/// whatever the user had dragged them to in the current workspace.
+/// and switches to it.
 pub fn handle_add_workspace_clicks(
     button_query: Query<&Interaction, (Changed<Interaction>, With<AddWorkspaceButton>)>,
     mut registry: ResMut<WorkspaceRegistry>,
     tree: Res<DockTree>,
-    mut anchor_panels: Query<&mut crate::split::Panel, With<crate::reconcile::AnchorHost>>,
     mut commands: Commands,
 ) {
     for interaction in button_query.iter() {
@@ -357,17 +353,6 @@ pub fn handle_add_workspace_clicks(
             layout: crate::layout::LayoutState::default(),
             tree: tree.clone(),
         });
-
-        // Reset outer anchor host Panel ratios to 1.0 (the editor's
-        // original `panel(1)` for left/right/bottom). `recalculate_group`
-        // picks up Changed<Panel> next frame and redistributes widths
-        // against the un-changed center (which stays at its `panel(4)`
-        // baseline). Skip unchanged panels so we don't spam change ticks.
-        for mut panel in &mut anchor_panels {
-            if panel.ratio != 1.0 {
-                panel.ratio = 1.0;
-            }
-        }
 
         let old = registry.active.clone();
         commands.trigger(WorkspaceChanged { old, new: new_id });
@@ -593,8 +578,12 @@ pub fn on_workspace_changed_swap_tree(
         ws.tree = tree.clone();
     }
 
+    // If the incoming workspace has a populated tree, switch to it.
+    // Otherwise inherit the current tree so the new workspace at least
+    // has a valid layout to start with (caller will reseed defaults if
+    // the workspace was registered with an empty tree).
     let target_tree = match registry.get(&event.new) {
-        Some(ws) if !ws.tree.anchors.is_empty() => ws.tree.clone(),
+        Some(ws) if ws.tree.root.is_some() => ws.tree.clone(),
         Some(_) => tree.clone(),
         None => return,
     };

@@ -1,7 +1,6 @@
 use bevy::{
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
     prelude::*,
-    ui::UiGlobalTransform,
 };
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::tokens;
@@ -9,7 +8,6 @@ use jackdaw_feathers::tokens;
 use crate::{
     JackdawDrawSystems, default_style,
     viewport::{MainViewportCamera, SceneViewport},
-    viewport_util::window_to_viewport_cursor,
 };
 
 // ── Plugin ──
@@ -22,10 +20,6 @@ impl Plugin for MeasureToolPlugin {
             .init_resource::<MeasureLabelEntities>()
             .init_gizmo_group::<MeasureToolGizmoGroup>()
             .add_systems(Startup, configure_measure_tool_gizmos)
-            .add_systems(
-                OnEnter(crate::AppState::Editor),
-                spawn_measure_label.after(crate::viewport::setup_viewport),
-            )
             .add_systems(
                 PostUpdate,
                 (draw_measure_line, update_measure_labels)
@@ -52,6 +46,11 @@ pub struct MeasureToolState {
     has_start: bool,
     start_point: Vec3,
     end_point: Vec3,
+    /// Multi-viewport: viewport this measurement is anchored to.
+    /// Captured on the first invoke so the label and confirm clicks
+    /// stay bound to it even if the cursor wanders to another panel.
+    camera: Option<Entity>,
+    viewport: Option<Entity>,
 }
 
 #[derive(Resource, Default)]
@@ -98,22 +97,34 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 pub(crate) fn measure_distance(
     _: In<OperatorParameters>,
     mut state: ResMut<MeasureToolState>,
-    window: Option<Single<&Window>>,
-    camera: Option<Single<(&Camera, &GlobalTransform), With<MainViewportCamera>>>,
-    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    vp: crate::viewport::ViewportCursor,
     mut ray_cast: MeshRayCast,
 ) -> OperatorResult {
     // Outside `AppState::Editor` (e.g. headless tests, project-select
     // screen) the window or main viewport camera don't exist yet.
-    // Cancel rather than panic on `Single`'s unwrap.
-    let (Some(window), Some(camera)) = (window, camera) else {
+    let Ok(window) = vp.windows.single() else {
         return OperatorResult::Cancelled;
     };
-    let (camera, cam_tf) = *camera;
+    // Capture the viewport the modal was started on; subsequent
+    // frames stick to it even if the cursor strays elsewhere.
+    let camera_entity = state.camera.or_else(|| vp.camera_entity());
+    let viewport_entity = state.viewport.or_else(|| vp.viewport_entity());
+    let (Some(camera_entity), Some(viewport_entity)) = (camera_entity, viewport_entity) else {
+        return OperatorResult::Cancelled;
+    };
+    if state.camera.is_none() {
+        state.camera = Some(camera_entity);
+    }
+    if state.viewport.is_none() {
+        state.viewport = Some(viewport_entity);
+    }
+    let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
+        return OperatorResult::Cancelled;
+    };
 
     // Try to get a world-space point under the cursor.
     let current_point = window.cursor_position().and_then(|cursor_pos| {
-        let vp_cursor = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)?;
+        let vp_cursor = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)?;
         let ray = camera.viewport_to_world(cam_tf, vp_cursor).ok()?;
         Some(
             raycast_closest_point(ray, &mut ray_cast)
@@ -137,6 +148,8 @@ pub(crate) fn measure_distance(
         // Confirm triggered finish; clean up and exit modal.
         state.initialized = false;
         state.has_start = false;
+        state.camera = None;
+        state.viewport = None;
         return OperatorResult::Finished;
     }
 
@@ -152,6 +165,8 @@ fn cancel_measure_distance(mut state: ResMut<MeasureToolState>) {
     state.active = false;
     state.initialized = false;
     state.has_start = false;
+    state.camera = None;
+    state.viewport = None;
 }
 
 fn measure_tool_active(state: Res<MeasureToolState>) -> bool {
@@ -242,11 +257,18 @@ fn draw_measure_line(mut gizmos: Gizmos<MeasureToolGizmoGroup>, state: Res<Measu
     }
 }
 
-fn spawn_measure_label(
-    mut commands: Commands,
-    viewport_entity: Single<Entity, With<SceneViewport>>,
-    mut label_entities: ResMut<MeasureLabelEntities>,
-) {
+fn ensure_measure_label(
+    commands: &mut Commands,
+    label_entities: &mut MeasureLabelEntities,
+    label_alive: impl Fn(Entity) -> bool,
+    parent: Entity,
+) -> Entity {
+    if let Some(existing) = label_entities.label
+        && label_alive(existing)
+    {
+        commands.entity(existing).insert(ChildOf(parent));
+        return existing;
+    }
     let entity = commands
         .spawn((
             MeasureLabel,
@@ -263,37 +285,59 @@ fn spawn_measure_label(
                 ..default()
             },
             Visibility::Hidden,
+            ChildOf(parent),
         ))
         .id();
-    commands.entity(*viewport_entity).add_child(entity);
     label_entities.label = Some(entity);
+    entity
 }
 
 fn update_measure_labels(
+    mut commands: Commands,
     state: Res<MeasureToolState>,
-    label_entities: Res<MeasureLabelEntities>,
-    camera: Single<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_node: Option<Single<&ComputedNode, With<SceneViewport>>>,
+    mut label_entities: ResMut<MeasureLabelEntities>,
+    cameras: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    viewports: Query<&ComputedNode, With<SceneViewport>>,
     mut label_query: Query<(&mut Text, &mut Node, &mut Visibility), With<MeasureLabel>>,
 ) {
-    let Some(entity) = label_entities.label else {
-        return;
-    };
-
-    let Ok((mut text_comp, mut node, mut vis)) = label_query.get_mut(entity) else {
-        return;
-    };
-
     if !state.active || !state.has_start {
-        *vis = Visibility::Hidden;
+        if let Some(entity) = label_entities.label
+            && let Ok((_, _, mut vis)) = label_query.get_mut(entity)
+        {
+            *vis = Visibility::Hidden;
+        }
         return;
     }
 
-    let (camera, cam_tf) = *camera;
-    let (vp_node_size, scale) = match &viewport_node {
-        Some(node) => (node.size(), node.inverse_scale_factor()),
-        None => (Vec2::ONE, 1.0),
+    let Some(camera_entity) = state.camera else {
+        return;
     };
+    let Some(viewport_entity) = state.viewport else {
+        return;
+    };
+    let Ok((camera, cam_tf)) = cameras.get(camera_entity) else {
+        return;
+    };
+    let Ok(viewport_node) = viewports.get(viewport_entity) else {
+        return;
+    };
+
+    let entity = {
+        let alive_check = |e: Entity| label_query.contains(e);
+        ensure_measure_label(
+            &mut commands,
+            &mut label_entities,
+            alive_check,
+            viewport_entity,
+        )
+    };
+    let Ok((mut text_comp, mut node, mut vis)) = label_query.get_mut(entity) else {
+        // Freshly spawned label is not yet in the query; show it next frame.
+        return;
+    };
+
+    let vp_node_size = viewport_node.size();
+    let scale = viewport_node.inverse_scale_factor();
     let render_target_size = camera
         .logical_viewport_size()
         .unwrap_or(vp_node_size * scale);

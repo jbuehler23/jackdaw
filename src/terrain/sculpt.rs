@@ -1,7 +1,6 @@
 use bevy::{
     input::mouse::{MouseScrollUnit, MouseWheel},
     prelude::*,
-    ui::UiGlobalTransform,
 };
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
@@ -12,7 +11,6 @@ use super::{
 use crate::commands::{CommandHistory, EditorCommand};
 use crate::default_style;
 use crate::selection::Selection;
-use crate::viewport::{MainViewportCamera, SceneViewport};
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
@@ -81,34 +79,20 @@ fn sync_terrain_heights_to_ast(world: &mut World, entity: Entity) {
 /// Raycast the cursor against the selected terrain's XZ plane and
 /// return the (entity, grid coordinate) that the brush should target.
 fn terrain_brush_hit(
-    windows: &Query<&Window>,
-    camera_query: &Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    vp: &crate::viewport::ViewportCursor,
     terrain_query: &Query<(Entity, &jackdaw_jsn::Terrain, &GlobalTransform)>,
     selection: &Selection,
 ) -> Option<(Entity, Vec2)> {
     let selected = selection.primary()?;
     let (terrain_entity, terrain, terrain_tf) = terrain_query.get(selected).ok()?;
 
-    let window = windows.single().ok()?;
+    let window = vp.windows.single().ok()?;
     let cursor_pos = window.cursor_position()?;
 
-    let (vp_computed, vp_tf) = viewport_query.single().ok()?;
-    let scale = vp_computed.inverse_scale_factor();
-    let vp_size = vp_computed.size() * scale;
-    let vp_top_left = vp_tf.translation * scale - vp_size / 2.0;
-    let local_cursor = cursor_pos - vp_top_left;
-    if local_cursor.x < 0.0
-        || local_cursor.y < 0.0
-        || local_cursor.x > vp_size.x
-        || local_cursor.y > vp_size.y
-    {
-        return None;
-    }
-
-    let (camera, cam_tf) = camera_query.single().ok()?;
-    let target_size = camera.logical_viewport_size().unwrap_or(vp_size);
-    let local_cursor = local_cursor * target_size / vp_size;
+    let camera_entity = vp.camera_entity()?;
+    let viewport_entity = vp.viewport_entity()?;
+    let (camera, cam_tf) = vp.camera_for(camera_entity)?;
+    let local_cursor = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)?;
     let ray = camera.viewport_to_world(cam_tf, local_cursor).ok()?;
 
     let terrain_origin = terrain_tf.translation();
@@ -143,9 +127,7 @@ fn terrain_brush_hit(
 /// the cursor even when no stroke is in progress.
 fn update_terrain_brush_position(
     edit_mode: Res<TerrainEditMode>,
-    windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    vp: crate::viewport::ViewportCursor,
     terrain_query: Query<(Entity, &jackdaw_jsn::Terrain, &GlobalTransform)>,
     selection: Res<Selection>,
     mut sculpt_state: ResMut<TerrainSculptState>,
@@ -157,13 +139,7 @@ fn update_terrain_brush_position(
         }
         return;
     }
-    match terrain_brush_hit(
-        &windows,
-        &camera_query,
-        &viewport_query,
-        &terrain_query,
-        &selection,
-    ) {
+    match terrain_brush_hit(&vp, &terrain_query, &selection) {
         Some((entity, grid)) => {
             sculpt_state.target = Some(entity);
             sculpt_state.brush_position = Some(grid);

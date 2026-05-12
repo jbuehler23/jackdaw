@@ -1,5 +1,5 @@
 use bevy::{
-    asset::{AssetPlugin, UnapprovedPathMode},
+    asset::AssetPlugin,
     ecs::error::ErrorContext,
     image::{ImageAddressMode, ImagePlugin, ImageSamplerDescriptor},
     prelude::*,
@@ -71,7 +71,6 @@ fn main() -> AppExit {
             DefaultPlugins
                 .set(AssetPlugin {
                     file_path: project_root.join("assets").to_string_lossy().to_string(),
-                    unapproved_path_mode: UnapprovedPathMode::Allow,
                     ..default()
                 })
                 .set(ImagePlugin {

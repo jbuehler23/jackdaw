@@ -681,8 +681,9 @@ fn unhighlight_on_out(out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>
 }
 
 fn load_thumbnail(path: &Path, asset_server: &AssetServer) -> Option<Handle<Image>> {
-    let abs = path.to_string_lossy().replace('\\', "/");
-    Some(asset_server.load(abs))
+    let fs_path = path.to_string_lossy().replace('\\', "/");
+    let asset_path = crate::entity_ops::to_asset_path(&fs_path);
+    Some(asset_server.load(asset_path))
 }
 
 /// Removes `ImageNode` from entities whose loaded image uses an incompatible
@@ -793,7 +794,8 @@ pub fn apply_texture(
     let material = if let Some(handle) = try_find_registry_material(&path, &registry) {
         handle
     } else {
-        let image: Handle<Image> = asset_server.load(path.clone());
+        let asset_path = crate::entity_ops::to_asset_path(&path);
+        let image: Handle<Image> = asset_server.load(asset_path);
         materials.add(StandardMaterial {
             base_color_texture: Some(image),
             ..default()

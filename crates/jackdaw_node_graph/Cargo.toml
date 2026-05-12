@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_node_graph"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "Generic node-graph editor widget for the Jackdaw editor"
 license = "MIT OR Apache-2.0"

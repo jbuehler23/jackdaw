@@ -2,9 +2,7 @@ use bevy::{input_focus::InputFocus, prelude::*};
 
 use crate::default_style;
 use crate::{
-    selection::Selection,
-    viewport::{MainViewportCamera, SceneViewport},
-    viewport_util::{point_in_polygon_2d, window_to_viewport_cursor},
+    selection::Selection, viewport::MainViewportCamera, viewport_util::point_in_polygon_2d,
 };
 
 use super::{BrushEditMode, BrushMeshCache, BrushSelection, EditMode};
@@ -67,6 +65,11 @@ pub(crate) struct BrushDragState {
     pub extend_face_normal: Vec3,
     /// Current extrude depth during extend drag.
     pub extend_depth: f32,
+    /// Multi-viewport: camera + UI-node entities captured at drag
+    /// start so the drag stays bound to its origin viewport even if
+    /// the cursor wanders into another panel.
+    pub(crate) drag_camera: Option<Entity>,
+    pub(crate) drag_viewport: Option<Entity>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -92,6 +95,9 @@ pub(crate) struct VertexDragState {
     pub(crate) start_face_polygons: Vec<Vec<usize>>,
     /// New vertex position for Shift+drag split (edge midpoint or face center).
     pub(crate) split_vertex: Option<Vec3>,
+    /// Multi-viewport: see [`BrushDragState::drag_camera`].
+    pub(crate) drag_camera: Option<Entity>,
+    pub(crate) drag_viewport: Option<Entity>,
 }
 
 /// Compute a local-space offset for brush vertex/edge drag based on mouse movement.
@@ -149,6 +155,9 @@ pub(crate) struct EdgeDragState {
     pub(crate) start_all_vertices: Vec<Vec3>,
     /// Per-face polygon indices at drag start (for hull rebuild).
     pub(crate) start_face_polygons: Vec<Vec<usize>>,
+    /// Multi-viewport: see [`BrushDragState::drag_camera`].
+    pub(crate) drag_camera: Option<Entity>,
+    pub(crate) drag_viewport: Option<Entity>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -172,7 +181,8 @@ pub(crate) struct ClipState {
 /// `brush.clip.*` operators in [`crate::clip_ops`].
 pub(super) fn handle_clip_mode(
     edit_mode: Res<EditMode>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    camera_query: Query<(Entity, &Camera, &GlobalTransform), With<MainViewportCamera>>,
+    active: Res<crate::viewport::ActiveViewport>,
     brush_selection: Res<BrushSelection>,
     brushes: Query<&Brush>,
     brush_transforms: Query<&GlobalTransform>,
@@ -193,7 +203,15 @@ pub(super) fn handle_clip_mode(
     let Ok(brush_global) = brush_transforms.get(brush_entity) else {
         return;
     };
-    let Ok((_, cam_tf)) = camera_query.single() else {
+    // Multi-viewport: use the hovered viewport's camera for clip-plane
+    // orientation; fall back to any camera so the preview keeps working
+    // when no viewport is focused.
+    let cam_tf = active
+        .camera
+        .and_then(|e| camera_query.get(e).ok())
+        .or_else(|| camera_query.iter().next())
+        .map(|(_, _, tf)| tf);
+    let Some(cam_tf) = cam_tf else {
         return;
     };
 
@@ -358,9 +376,7 @@ fn pick_face_under_cursor(
 pub(super) fn brush_face_hover(
     edit_mode: Res<EditMode>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    vp: crate::viewport::ViewportCursor,
     face_entities: Query<(Entity, &super::BrushFaceEntity, &GlobalTransform)>,
     brush_selection: Res<BrushSelection>,
     brush_caches: Query<&BrushMeshCache>,
@@ -395,7 +411,7 @@ pub(super) fn brush_face_hover(
         super::HoverIntent::PushPull
     };
 
-    let Ok(window) = windows.single() else {
+    let Ok(window) = vp.windows.single() else {
         hover.entity = None;
         hover.face_index = None;
         return;
@@ -405,13 +421,22 @@ pub(super) fn brush_face_hover(
         hover.face_index = None;
         return;
     };
-    let Ok((camera, cam_tf)) = camera_query.single() else {
+    let Some(camera_entity) = vp.camera_entity() else {
         hover.entity = None;
         hover.face_index = None;
         return;
     };
-    let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
-    else {
+    let Some(viewport_entity) = vp.viewport_entity() else {
+        hover.entity = None;
+        hover.face_index = None;
+        return;
+    };
+    let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
+        hover.entity = None;
+        hover.face_index = None;
+        return;
+    };
+    let Some(viewport_cursor) = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos) else {
         hover.entity = None;
         hover.face_index = None;
         return;

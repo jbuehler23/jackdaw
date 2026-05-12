@@ -21,8 +21,11 @@ impl Plugin for MeshRebuildPlugin {
     }
 }
 
-/// Simplified runtime mesh rebuild for consumers (no editor material palette,
-/// no `BrushFaceEntity`, no texture cache, just a single mesh child per brush).
+/// Runtime brush rebuild. Builds one mesh + child entity per face so each
+/// face can carry its own `StandardMaterial` (from `BrushFaceData.material`,
+/// typically a catalog `@Name` reference). Faces with an unset handle fall
+/// back to the embedded grid texture so brushes still render before any
+/// material is assigned.
 pub fn rebuild_brush_meshes(
     insert: On<Insert, Brush>,
     mut commands: Commands,
@@ -36,11 +39,7 @@ pub fn rebuild_brush_meshes(
     };
 
     let (vertices, face_polygons) = compute_brush_geometry_from_planes(&brush.faces);
-    let mut all_positions: Vec<[f32; 3]> = Vec::new();
-    let mut all_normals: Vec<[f32; 3]> = Vec::new();
-    let mut all_uvs: Vec<[f32; 2]> = Vec::new();
-    let mut all_tangents: Vec<[f32; 4]> = Vec::new();
-    let mut all_indices: Vec<u32> = Vec::new();
+    let mut fallback_material: Option<Handle<StandardMaterial>> = None;
 
     for (face_idx, face_data) in brush.faces.iter().enumerate() {
         let indices = &face_polygons[face_idx];
@@ -48,14 +47,8 @@ pub fn rebuild_brush_meshes(
             continue;
         }
 
-        let base_vertex = all_positions.len() as u32;
-
-        // Per-face vertices (duplicated for flat normals)
-        for &vi in indices {
-            all_positions.push(vertices[vi].to_array());
-            all_normals.push(face_data.plane.normal.to_array());
-        }
-
+        let positions: Vec<[f32; 3]> = indices.iter().map(|&vi| vertices[vi].to_array()).collect();
+        let normals: Vec<[f32; 3]> = vec![face_data.plane.normal.to_array(); indices.len()];
         let (u_axis, v_axis) =
             if face_data.uv_u_axis != Vec3::ZERO && face_data.uv_v_axis != Vec3::ZERO {
                 (face_data.uv_u_axis, face_data.uv_v_axis)
@@ -71,63 +64,55 @@ pub fn rebuild_brush_meshes(
             face_data.uv_scale,
             face_data.uv_rotation,
         );
-        all_uvs.extend_from_slice(&uvs);
         let w = face_data.plane.normal.dot(u_axis.cross(v_axis)).signum();
         let tangent = [u_axis.x, u_axis.y, u_axis.z, w];
-        all_tangents.extend(std::iter::repeat_n(tangent, indices.len()));
+        let tangents: Vec<[f32; 4]> = vec![tangent; indices.len()];
 
-        // Fan triangulate with local indices
-        let local_indices: Vec<usize> = (0..indices.len()).collect();
-        let tris = triangulate_face(&local_indices);
-        for tri in &tris {
-            all_indices.push(base_vertex + tri[0]);
-            all_indices.push(base_vertex + tri[1]);
-            all_indices.push(base_vertex + tri[2]);
-        }
-    }
+        let local_tris = triangulate_face(&(0..indices.len()).collect::<Vec<_>>());
+        let flat_indices: Vec<u32> = local_tris.iter().flat_map(|t| t.iter().copied()).collect();
 
-    if all_positions.is_empty() {
-        return;
-    }
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, tangents);
+        mesh.insert_indices(Indices::U32(flat_indices));
+        let mesh_handle = meshes.add(mesh);
 
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, all_positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, all_normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, all_uvs);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, all_tangents);
-    mesh.insert_indices(Indices::U32(all_indices));
+        let material = if face_data.material != Handle::default() {
+            face_data.material.clone()
+        } else {
+            fallback_material
+                .get_or_insert_with(|| {
+                    let grid = load_embedded_asset!(
+                        &*assets,
+                        "../assets/jd_grid.png",
+                        |settings: &mut ImageLoaderSettings| {
+                            let sampler = settings.sampler.get_or_init_descriptor();
+                            sampler.mag_filter = ImageFilterMode::Nearest;
+                            sampler.min_filter = ImageFilterMode::Nearest;
+                            sampler.mipmap_filter = ImageFilterMode::Nearest;
+                            sampler.address_mode_u = ImageAddressMode::Repeat;
+                            sampler.address_mode_v = ImageAddressMode::Repeat;
+                            sampler.address_mode_w = ImageAddressMode::Repeat;
+                        }
+                    );
+                    materials.add(StandardMaterial {
+                        base_color: Color::WHITE,
+                        base_color_texture: Some(grid),
+                        alpha_mode: AlphaMode::Opaque,
+                        uv_transform: Affine2::from_scale(Vec2::splat(2.0)),
+                        ..default()
+                    })
+                })
+                .clone()
+        };
 
-    let mesh_handle = meshes.add(mesh);
-
-    let grid_handle = load_embedded_asset!(
-        &*assets,
-        "../assets/jd_grid.png",
-        |settings: &mut ImageLoaderSettings| {
-            let sampler = settings.sampler.get_or_init_descriptor();
-            sampler.mag_filter = ImageFilterMode::Nearest;
-            sampler.min_filter = ImageFilterMode::Nearest;
-            sampler.mipmap_filter = ImageFilterMode::Nearest;
-            sampler.address_mode_u = ImageAddressMode::Repeat;
-            sampler.address_mode_v = ImageAddressMode::Repeat;
-            sampler.address_mode_w = ImageAddressMode::Repeat;
-        }
-    );
-
-    let material = materials.add(StandardMaterial {
-        base_color: Color::WHITE,
-        base_color_texture: Some(grid_handle),
-        alpha_mode: AlphaMode::Opaque,
-        uv_transform: Affine2::from_scale(Vec2::splat(2.0)),
-        ..default()
-    });
-
-    let child = commands
-        .spawn((
+        commands.spawn((
             Mesh3d(mesh_handle),
             MeshMaterial3d(material),
             Transform::default(),
             ChildOf(entity),
-        ))
-        .id();
-    let _ = child;
+        ));
+    }
 }

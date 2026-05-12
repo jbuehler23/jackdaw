@@ -9,10 +9,7 @@
 //! inline in the operator body. Escape goes through the global
 //! `modal.cancel` chain.
 
-use bevy::{
-    ecs::system::SystemParam, prelude::*, ui::ui_transform::UiGlobalTransform,
-    window::PrimaryWindow,
-};
+use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_jsn::Brush;
@@ -30,27 +27,11 @@ use crate::keybind_focus::KeybindFocus;
 use crate::modal_transform::ModalTransformState;
 use crate::selection::{Selected, Selection};
 use crate::snapping::SnapSettings;
-use crate::viewport::{MainViewportCamera, SceneViewport};
-use crate::viewport_util::window_to_viewport_cursor;
+use crate::viewport::ViewportCursor;
 use crate::viewport_util::{point_in_polygon_2d, point_to_segment_dist};
 
 /// Minimum extrude depth before commit pushes a new brush.
 const MIN_EXTRUDE_DEPTH: f32 = 0.01;
-
-/// Bundled read-only inputs for `brush_face_drag`, kept here to stay under Bevy's
-/// system-parameter limit (17 params max for a plain fn system).
-#[derive(SystemParam)]
-struct FaceDragInput<'w, 's> {
-    primary_window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
-    camera_query:
-        Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<MainViewportCamera>>,
-    viewport_query:
-        Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<SceneViewport>>,
-    face_entities: Query<'w, 's, (Entity, &'static BrushFaceEntity, &'static GlobalTransform)>,
-    brush_caches: Query<'w, 's, &'static BrushMeshCache>,
-    selection: Res<'w, Selection>,
-    snap_settings: Res<'w, SnapSettings>,
-}
 
 /// Pixels the cursor must travel after a press to promote pending → active.
 const DRAG_THRESHOLD: f32 = 5.0;
@@ -172,7 +153,11 @@ pub fn brush_face_drag(
     mut edit_mode: ResMut<EditMode>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    input: FaceDragInput,
+    vp: ViewportCursor,
+    face_entities: Query<(Entity, &BrushFaceEntity, &GlobalTransform)>,
+    brush_caches: Query<&BrushMeshCache>,
+    selection: Res<Selection>,
+    snap_settings: Res<SnapSettings>,
     mut brush_selection: ResMut<BrushSelection>,
     mut brushes: Query<(&mut Brush, &GlobalTransform)>,
     mut drag_state: ResMut<BrushDragState>,
@@ -181,18 +166,40 @@ pub fn brush_face_drag(
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
 ) -> OperatorResult {
-    let Ok(window) = input.primary_window.single() else {
+    let Ok(window) = vp.windows.single() else {
         return OperatorResult::Cancelled;
     };
     let Some(cursor_pos) = window.cursor_position() else {
         return OperatorResult::Cancelled;
     };
-    let Ok((camera, cam_tf)) = input.camera_query.single() else {
+    // First invoke uses the hovered viewport; subsequent invokes use
+    // the captured one so the drag stays bound to its origin panel.
+    let (camera_entity, viewport_entity) = if modal.is_none() {
+        let Some(camera_entity) = vp.camera_entity() else {
+            return OperatorResult::Cancelled;
+        };
+        let Some(viewport_entity) = vp.viewport_entity() else {
+            return OperatorResult::Cancelled;
+        };
+        (camera_entity, viewport_entity)
+    } else {
+        match (drag_state.drag_camera, drag_state.drag_viewport) {
+            (Some(c), Some(v)) => (c, v),
+            _ => {
+                let Some(c) = vp.camera_entity() else {
+                    return OperatorResult::Cancelled;
+                };
+                let Some(v) = vp.viewport_entity() else {
+                    return OperatorResult::Cancelled;
+                };
+                (c, v)
+            }
+        }
+    };
+    let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
         return OperatorResult::Cancelled;
     };
-    let Some(viewport_cursor) =
-        window_to_viewport_cursor(cursor_pos, camera, &input.viewport_query)
-    else {
+    let Some(viewport_cursor) = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos) else {
         return OperatorResult::Cancelled;
     };
 
@@ -206,18 +213,18 @@ pub fn brush_face_drag(
         let brush_entity = if in_face_edit {
             brush_selection.entity
         } else {
-            input.selection.primary().filter(|&e| brushes.contains(e))
+            selection.primary().filter(|&e| brushes.contains(e))
         };
         let Some(brush_entity) = brush_entity else {
             return OperatorResult::Cancelled;
         };
-        let Ok(cache) = input.brush_caches.get(brush_entity) else {
+        let Ok(cache) = brush_caches.get(brush_entity) else {
             return OperatorResult::Cancelled;
         };
 
         let mut best_face = None;
         let mut best_depth = f32::MAX;
-        for (_, face_ent, face_global) in &input.face_entities {
+        for (_, face_ent, face_global) in &face_entities {
             if face_ent.brush_entity != brush_entity {
                 continue;
             }
@@ -289,6 +296,8 @@ pub fn brush_face_drag(
         drag_state.pending = Some(PendingSubDrag {
             click_pos: cursor_pos,
         });
+        drag_state.drag_camera = Some(camera_entity);
+        drag_state.drag_viewport = Some(viewport_entity);
         return OperatorResult::Running;
     }
 
@@ -357,7 +366,7 @@ pub fn brush_face_drag(
                 let (_, brush_rot, _) = brush_global.to_scale_rotation_translation();
                 drag_state.extend_face_normal =
                     (brush_rot * drag_state.drag_face_normal).normalize();
-                if let Ok(cache) = input.brush_caches.get(brush_entity)
+                if let Ok(cache) = brush_caches.get(brush_entity)
                     && let Some(&face_idx) = brush_selection.faces.first()
                 {
                     drag_state.extend_face_polygon = cache.face_polygons[face_idx]
@@ -396,7 +405,7 @@ pub fn brush_face_drag(
                 let projected = mouse_delta.dot(screen_dir);
                 let cam_dist = (cam_tf.translation() - brush_pos).length();
                 let drag_amount =
-                    snap_translate(projected * cam_dist * 0.003, &input.snap_settings, ctrl);
+                    snap_translate(projected * cam_dist * 0.003, &snap_settings, ctrl);
                 if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
                     // EditMesh path: translate each selected face's ring vertices along the face normal.
                     let face_keys = bmesh_component.face_keys.clone();
@@ -506,7 +515,7 @@ pub fn brush_face_drag(
                 let projected = mouse_delta.dot(screen_dir);
                 let cam_dist = (cam_tf.translation() - face_centroid).length();
                 drag_state.extend_depth =
-                    snap_translate(projected * cam_dist * 0.003, &input.snap_settings, ctrl);
+                    snap_translate(projected * cam_dist * 0.003, &snap_settings, ctrl);
             }
         }
     }
@@ -559,6 +568,8 @@ fn clear_face_drag_state(drag_state: &mut BrushDragState) {
     drag_state.extend_depth = 0.0;
     drag_state.start_brush = None;
     drag_state.quick_action = false;
+    drag_state.drag_camera = None;
+    drag_state.drag_viewport = None;
 }
 
 fn snap_translate(value: f32, snap: &SnapSettings, ctrl: bool) -> f32 {
@@ -694,9 +705,7 @@ pub fn brush_vertex_drag(
     mut edit_mode: ResMut<EditMode>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    vp: ViewportCursor,
     brush_transforms: Query<&GlobalTransform>,
     mut brush_selection: ResMut<BrushSelection>,
     brush_caches: Query<&BrushMeshCache>,
@@ -709,17 +718,38 @@ pub fn brush_vertex_drag(
     let Some(brush_entity) = brush_selection.entity else {
         return OperatorResult::Cancelled;
     };
-    let Ok(window) = primary_window.single() else {
+    let Ok(window) = vp.windows.single() else {
         return OperatorResult::Cancelled;
     };
     let Some(cursor_pos) = window.cursor_position() else {
         return OperatorResult::Cancelled;
     };
-    let Ok((camera, cam_tf)) = camera_query.single() else {
+    let (camera_entity, viewport_entity) = if modal.is_none() {
+        let Some(camera_entity) = vp.camera_entity() else {
+            return OperatorResult::Cancelled;
+        };
+        let Some(viewport_entity) = vp.viewport_entity() else {
+            return OperatorResult::Cancelled;
+        };
+        (camera_entity, viewport_entity)
+    } else {
+        match (drag_state.drag_camera, drag_state.drag_viewport) {
+            (Some(c), Some(v)) => (c, v),
+            _ => {
+                let Some(c) = vp.camera_entity() else {
+                    return OperatorResult::Cancelled;
+                };
+                let Some(v) = vp.viewport_entity() else {
+                    return OperatorResult::Cancelled;
+                };
+                (c, v)
+            }
+        }
+    };
+    let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
         return OperatorResult::Cancelled;
     };
-    let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
-    else {
+    let Some(viewport_cursor) = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos) else {
         return OperatorResult::Cancelled;
     };
     let Ok(brush_global) = brush_transforms.get(brush_entity) else {
@@ -826,6 +856,8 @@ pub fn brush_vertex_drag(
         drag_state.pending = Some(PendingSubDrag {
             click_pos: cursor_pos,
         });
+        drag_state.drag_camera = Some(camera_entity);
+        drag_state.drag_viewport = Some(viewport_entity);
         return OperatorResult::Running;
     }
 
@@ -1009,6 +1041,8 @@ fn clear_vertex_drag_state(drag_state: &mut VertexDragState) {
     drag_state.constraint = VertexDragConstraint::Free;
     drag_state.split_vertex = None;
     drag_state.start_brush = None;
+    drag_state.drag_camera = None;
+    drag_state.drag_viewport = None;
 }
 
 fn toggle_constraint(
@@ -1067,9 +1101,7 @@ pub fn brush_edge_drag(
     mut edit_mode: ResMut<EditMode>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    vp: ViewportCursor,
     brush_transforms: Query<&GlobalTransform>,
     mut brush_selection: ResMut<BrushSelection>,
     brush_caches: Query<&BrushMeshCache>,
@@ -1082,17 +1114,38 @@ pub fn brush_edge_drag(
     let Some(brush_entity) = brush_selection.entity else {
         return OperatorResult::Cancelled;
     };
-    let Ok(window) = primary_window.single() else {
+    let Ok(window) = vp.windows.single() else {
         return OperatorResult::Cancelled;
     };
     let Some(cursor_pos) = window.cursor_position() else {
         return OperatorResult::Cancelled;
     };
-    let Ok((camera, cam_tf)) = camera_query.single() else {
+    let (camera_entity, viewport_entity) = if modal.is_none() {
+        let Some(camera_entity) = vp.camera_entity() else {
+            return OperatorResult::Cancelled;
+        };
+        let Some(viewport_entity) = vp.viewport_entity() else {
+            return OperatorResult::Cancelled;
+        };
+        (camera_entity, viewport_entity)
+    } else {
+        match (drag_state.drag_camera, drag_state.drag_viewport) {
+            (Some(c), Some(v)) => (c, v),
+            _ => {
+                let Some(c) = vp.camera_entity() else {
+                    return OperatorResult::Cancelled;
+                };
+                let Some(v) = vp.viewport_entity() else {
+                    return OperatorResult::Cancelled;
+                };
+                (c, v)
+            }
+        }
+    };
+    let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
         return OperatorResult::Cancelled;
     };
-    let Some(viewport_cursor) = window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
-    else {
+    let Some(viewport_cursor) = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos) else {
         return OperatorResult::Cancelled;
     };
     let Ok(brush_global) = brush_transforms.get(brush_entity) else {
@@ -1158,6 +1211,8 @@ pub fn brush_edge_drag(
         drag_state.pending = Some(PendingSubDrag {
             click_pos: cursor_pos,
         });
+        drag_state.drag_camera = Some(camera_entity);
+        drag_state.drag_viewport = Some(viewport_entity);
         return OperatorResult::Running;
     }
 
@@ -1334,4 +1389,6 @@ fn clear_edge_drag_state(drag_state: &mut EdgeDragState) {
     drag_state.pending = None;
     drag_state.constraint = VertexDragConstraint::Free;
     drag_state.start_brush = None;
+    drag_state.drag_camera = None;
+    drag_state.drag_viewport = None;
 }

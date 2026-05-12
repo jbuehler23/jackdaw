@@ -7,7 +7,11 @@
 
 use std::path::PathBuf;
 
-use bevy::prelude::*;
+use bevy::{
+    asset::AssetPlugin,
+    image::{ImageAddressMode, ImagePlugin, ImageSamplerDescriptor},
+    prelude::*,
+};
 use jackdaw::prelude::*;
 use jackdaw::project_select::PendingAutoOpen;
 
@@ -24,9 +28,32 @@ fn main() -> AppExit {
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok());
 
+    // Mirror jackdaw's standalone `src/main.rs` AssetPlugin /
+    // ImagePlugin config: point the asset root at this project's
+    // `assets/`, and use the `Repeat` sampler so brush materials
+    // tile correctly by default.
+    let asset_root = project_root
+        .as_ref()
+        .map(|p| p.join("assets").to_string_lossy().to_string())
+        .unwrap_or_else(|| "assets".to_string());
+
     let mut app = App::new();
     app.set_error_handler(bevy::ecs::error::error)
-        .add_plugins(DefaultPlugins)
+        .add_plugins(
+            DefaultPlugins
+                .set(AssetPlugin {
+                    file_path: asset_root,
+                    ..default()
+                })
+                .set(ImagePlugin {
+                    default_sampler: ImageSamplerDescriptor {
+                        address_mode_u: ImageAddressMode::Repeat,
+                        address_mode_v: ImageAddressMode::Repeat,
+                        address_mode_w: ImageAddressMode::Repeat,
+                        ..ImageSamplerDescriptor::linear()
+                    },
+                }),
+        )
         // Ambient plugins. `jackdaw::prelude` re-exports both so
         // we don't need direct deps on avian3d /
         // bevy_enhanced_input.

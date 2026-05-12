@@ -137,11 +137,7 @@ fn bevel_every_cube_edge_is_a_parallelogram() {
     for edge_idx in 0..12 {
         let brush = Brush::cuboid(2.0, 2.0, 2.0);
         let mut bmesh = EditMesh::lift_from_topology(&brush.topology);
-        let edge = bmesh
-            .edges
-            .keys()
-            .nth(edge_idx)
-            .expect("cube has 12 edges");
+        let edge = bmesh.edges.keys().nth(edge_idx).expect("cube has 12 edges");
         let result = edge_bevel(&mut bmesh, &[edge], 0.25).expect("bevel");
         let chamfer = result.new_faces[0];
 

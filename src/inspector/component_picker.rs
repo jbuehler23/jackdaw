@@ -18,7 +18,7 @@ use bevy::reflect::{TypeInfo, attributes::CustomAttributes};
 use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden};
 
-use super::{AddComponentButton, ComponentPicker, Inspector};
+use super::{AddComponentButton, ComponentPicker};
 
 // `custom_attributes()` lives on the variant types
 // (`StructInfo`, `EnumInfo`, etc.), not on `TypeInfo` itself.
@@ -256,7 +256,6 @@ pub(crate) fn on_add_component_button_click(
     type_registry: Res<AppTypeRegistry>,
     components: &Components,
     entity_query: Query<&Archetype, (With<Selected>, Without<EditorEntity>)>,
-    _inspector: Single<Entity, With<Inspector>>,
     denylist: Res<PickerDenylist>,
 ) {
     if add_buttons.get(event.entity).is_err() {

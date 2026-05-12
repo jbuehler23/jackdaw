@@ -2,7 +2,10 @@
 //! launches without the editor; `cargo editor` runs the editor
 //! and game in one binary.
 
-use bevy::prelude::*;
+use bevy::{
+    image::{ImageAddressMode, ImagePlugin, ImageSamplerDescriptor},
+    prelude::*,
+};
 use jackdaw_runtime::prelude::*;
 
 fn main() -> AppExit {
@@ -15,7 +18,20 @@ fn main() -> AppExit {
         // Bevy's `file_watcher` cargo feature (Cargo.toml) drives
         // hot reload: on save, `JackdawPlugin` despawns the scene
         // entities and respawns from the new asset.
-        .add_plugins(DefaultPlugins)
+        //
+        // `ImagePlugin` swapped to a `Repeat` sampler so the
+        // tileable PBR materials authored in the editor render the
+        // same way at runtime. Bevy's default is `ClampToEdge`,
+        // which sends UV coordinates outside [0,1] to white edges
+        // (wrong for brick / wood / etc. brush materials).
+        .add_plugins(DefaultPlugins.set(ImagePlugin {
+            default_sampler: ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                address_mode_w: ImageAddressMode::Repeat,
+                ..ImageSamplerDescriptor::linear()
+            },
+        }))
         // Add ambient plugins (physics, input, audio) here next to
         // `DefaultPlugins`. Keeping them out of `MyGamePlugin`
         // avoids duplicate-plugin panics when the editor binary

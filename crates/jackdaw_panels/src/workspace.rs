@@ -124,24 +124,53 @@ impl WorkspacesPersist {
         }
     }
 
+    /// Merge persisted workspaces into the live registry. Built-in
+    /// workspaces registered at startup are preserved, with their
+    /// `tree` (and accent / icon / name overrides) updated from the
+    /// persist if a matching id is present. Workspaces only in the
+    /// persist (e.g. user-created ones via the `+` tab) are appended.
+    /// New built-in workspaces added in editor updates that the user
+    /// has never seen show up alongside their persisted ones rather
+    /// than being silently dropped.
     pub fn apply_to_registry(&self, registry: &mut WorkspaceRegistry) {
-        registry.workspaces = self
-            .workspaces
-            .iter()
-            .map(|d| WorkspaceDescriptor {
-                id: d.id.clone(),
-                name: d.name.clone(),
-                icon: d.icon.clone(),
-                accent_color: Color::srgba(
-                    d.accent_color[0],
-                    d.accent_color[1],
-                    d.accent_color[2],
-                    d.accent_color[3],
-                ),
-                layout: LayoutState::default(),
-                tree: d.tree.clone(),
-            })
-            .collect();
-        registry.active = self.active.clone();
+        // First, update existing built-in workspaces' tree / metadata
+        // from the persist where ids match.
+        for persist in &self.workspaces {
+            if let Some(existing) = registry.get_mut(&persist.id) {
+                existing.tree = persist.tree.clone();
+                existing.name = persist.name.clone();
+                existing.icon = persist.icon.clone();
+                existing.accent_color = Color::srgba(
+                    persist.accent_color[0],
+                    persist.accent_color[1],
+                    persist.accent_color[2],
+                    persist.accent_color[3],
+                );
+            }
+        }
+        // Then append any workspaces that exist only in the persist
+        // (user-created ones).
+        for persist in &self.workspaces {
+            if registry.get(&persist.id).is_none() {
+                registry.workspaces.push(WorkspaceDescriptor {
+                    id: persist.id.clone(),
+                    name: persist.name.clone(),
+                    icon: persist.icon.clone(),
+                    accent_color: Color::srgba(
+                        persist.accent_color[0],
+                        persist.accent_color[1],
+                        persist.accent_color[2],
+                        persist.accent_color[3],
+                    ),
+                    layout: LayoutState::default(),
+                    tree: persist.tree.clone(),
+                });
+            }
+        }
+        if let Some(active) = &self.active
+            && registry.get(active).is_some()
+        {
+            registry.active = Some(active.clone());
+        }
     }
 }

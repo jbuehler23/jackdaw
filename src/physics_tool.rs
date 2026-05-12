@@ -308,6 +308,7 @@ fn physics_tool_drag(
         (&ComputedNode, &UiGlobalTransform),
         With<crate::viewport::SceneViewport>,
     >,
+    active: Res<crate::viewport::ActiveViewport>,
     selection: Res<Selection>,
     parents: Query<&ChildOf>,
     mut tool_state: ResMut<PhysicsToolState>,
@@ -326,13 +327,31 @@ fn physics_tool_drag(
     let Some(cursor_pos) = window.cursor_position() else {
         return;
     };
-    let Ok((camera, cam_tf)) = camera_query.single() else {
+
+    // While dragging, route through the captured viewport so the drag
+    // stays bound to its origin panel; otherwise route through the
+    // hovered viewport so a fresh click starts a drag in the right one.
+    let (camera_entity, viewport_entity) = if let Some(drag) = &tool_state.drag {
+        (drag.camera, drag.viewport)
+    } else {
+        let Some(camera_entity) = active.camera else {
+            return;
+        };
+        let Some(viewport_entity) = active.ui_node else {
+            return;
+        };
+        (camera_entity, viewport_entity)
+    };
+    let Ok((camera, cam_tf)) = camera_query.get(camera_entity) else {
         return;
     };
 
-    let Some(viewport_cursor) =
-        crate::viewport_util::window_to_viewport_cursor(cursor_pos, camera, &viewport_query)
-    else {
+    let Some(viewport_cursor) = crate::viewport_util::window_to_viewport_cursor_for(
+        cursor_pos,
+        camera,
+        viewport_entity,
+        &viewport_query,
+    ) else {
         return;
     };
 
@@ -388,6 +407,8 @@ fn physics_tool_drag(
                 grab_offset,
                 drag_start_pos: entity_tf.translation,
                 start_positions,
+                camera: camera_entity,
+                viewport: viewport_entity,
             });
 
             // Activate simulation on first drag

@@ -1,6 +1,5 @@
 use bevy::{picking::hover::Hovered, prelude::*, ui_widgets::observe};
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::ToAnchorId as _;
 use jackdaw_feathers::{
     button::{self, ButtonOperatorCall, ButtonSize, ButtonVariant},
     icons::IconFont,
@@ -154,6 +153,12 @@ pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
                     },
                     children![
                     // Scene document (visible by default).
+                    //
+                    // The dock tree is materialised by `jackdaw_panels`'
+                    // reconciler under this single host. The default
+                    // tree (left | (center over bottom) | right) is
+                    // built in `init_layout` from registered windows;
+                    // the user can drag panels anywhere within it.
                     (
                         DocumentRoot(TabKind::Scene),
                         EditorEntity,
@@ -162,33 +167,19 @@ pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
                             flex_grow: 1.0,
                             min_height: px(0.0),
                             display: Display::Flex,
+                            flex_direction: FlexDirection::Row,
                             ..Default::default()
                         },
                         children![(
-                            // Three-column layout: left (hierarchy) | center (viewport+bottom) | right (inspector)
-                            // Must have its own Node with Row direction for horizontal split
+                            jackdaw_panels::reconcile::DockTreeHost::default(),
+                            EditorEntity,
                             Node {
                                 width: percent(100),
                                 height: percent(100),
                                 flex_direction: FlexDirection::Row,
+                                overflow: Overflow::clip(),
                                 ..Default::default()
                             },
-                            split_panel::panel_group(
-                                0.1,
-                                (
-                                    // Left column: single anchor host, pre-split by default
-                                    Spawn((split_panel::panel(1), left_dock_area())),
-                                    Spawn(split_panel::panel_handle()),
-                                    // Center column: viewport + bottom dock (ratio 4).
-                                    Spawn((
-                                        split_panel::panel(4),
-                                        center_column(),
-                                    )),
-                                    Spawn(split_panel::panel_handle()),
-                                    // Right column: inspector (~310px default, ratio 1)
-                                    Spawn((split_panel::panel(1), right_dock_area())),
-                                ),
-                            ),
                         )],
                     ),
                     // Schedule Explorer document (hidden by default).
@@ -363,33 +354,6 @@ fn pie_transport_button(
     )
 }
 
-/// Left column: a single anchor host the user can split like the right
-/// sidebar. The default layout pre-splits it vertically (Scene Tree +
-/// Import on top, Project Files on bottom) on first launch via
-/// `apply_default_splits` in the editor crate.
-fn left_dock_area() -> impl Bundle {
-    (
-        jackdaw_panels::reconcile::AnchorHost {
-            anchor_id: DefaultArea::Left.anchor_id(),
-            default_style: jackdaw_panels::DockAreaStyle::TabBar,
-        },
-        jackdaw_panels::DockArea {
-            id: DefaultArea::Left.anchor_id(),
-            style: jackdaw_panels::DockAreaStyle::TabBar,
-        },
-        EditorEntity,
-        Node {
-            width: percent(100),
-            height: percent(100),
-            flex_direction: FlexDirection::Column,
-            overflow: Overflow::clip(),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_LG)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::PANEL_BG),
-    )
-}
-
 /// Project Files panel. File tree browser.
 pub fn project_files_panel_content() -> impl Bundle {
     (
@@ -434,35 +398,15 @@ pub fn project_files_panel_content() -> impl Bundle {
     )
 }
 
-/// Build the center column: a vertical split with the 3D viewport on
-/// top and the tabbable bottom-panels area (Assets / Timeline / ...)
-/// underneath. The timeline is a regular tab in the bottom panel, so
-/// animating no longer requires switching into an "Animation View".
-fn center_column() -> impl Bundle {
+/// Bundle the editor toolbar and the `SceneViewport` node together so
+/// `setup_viewport` can mount the whole thing inside the dock tree's
+/// "center" leaf in one go. Public to the crate because it's spawned
+/// by the viewport plugin, not by `editor_layout` directly.
+pub(crate) fn viewport_with_toolbar() -> impl Bundle {
     (
         EditorEntity,
         Node {
             width: percent(100),
-            height: percent(100),
-            flex_direction: FlexDirection::Column,
-            ..Default::default()
-        },
-        split_panel::panel_group(
-            0.15,
-            (
-                Spawn((split_panel::panel(4), viewport_with_toolbar())),
-                Spawn(split_panel::panel_handle()),
-                Spawn((split_panel::panel(1), bottom_dock_area())),
-            ),
-        ),
-    )
-}
-
-fn viewport_with_toolbar() -> impl Bundle {
-    (
-        EditorEntity,
-        jackdaw_panels::drag::ViewportDropTarget,
-        Node {
             height: percent(100),
             flex_direction: FlexDirection::Column,
             overflow: Overflow::clip(),
@@ -865,28 +809,6 @@ pub fn update_tab_strip_highlights(
     }
 }
 
-fn bottom_dock_area() -> impl Bundle {
-    (
-        jackdaw_panels::reconcile::AnchorHost {
-            anchor_id: DefaultArea::BottomDock.anchor_id(),
-            default_style: jackdaw_panels::DockAreaStyle::IconSidebar,
-        },
-        jackdaw_panels::DockArea {
-            id: DefaultArea::BottomDock.anchor_id(),
-            style: jackdaw_panels::DockAreaStyle::IconSidebar,
-        },
-        EditorEntity,
-        Node {
-            width: percent(100),
-            height: percent(100),
-            flex_direction: FlexDirection::Row,
-            overflow: Overflow::clip(),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::PANEL_BG),
-    )
-}
-
 /// Custom status bar that wraps the feathers status bar sections and adds
 /// a connection indicator on the far right.
 fn editor_status_bar() -> impl Bundle {
@@ -945,29 +867,6 @@ fn editor_status_bar() -> impl Bundle {
                 ],
             )
         ],
-    )
-}
-
-fn right_dock_area() -> impl Bundle {
-    (
-        jackdaw_panels::reconcile::AnchorHost {
-            anchor_id: DefaultArea::RightSidebar.anchor_id(),
-            default_style: jackdaw_panels::DockAreaStyle::TabBar,
-        },
-        jackdaw_panels::DockArea {
-            id: DefaultArea::RightSidebar.anchor_id(),
-            style: jackdaw_panels::DockAreaStyle::TabBar,
-        },
-        EditorEntity,
-        Node {
-            width: percent(100),
-            height: percent(100),
-            flex_direction: FlexDirection::Column,
-            overflow: Overflow::clip(),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_LG)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::PANEL_BG),
     )
 }
 
