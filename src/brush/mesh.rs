@@ -118,10 +118,23 @@ pub fn regenerate_brush_meshes(
         }
 
         let (vertices, face_polygons) = if let Ok(bmesh_component) = bmesh_q.get(entity) {
+            // In Vertex/Edge/Face edit mode the EditMesh holds the live
+            // post-op topology; flatten it so previews track in-flight edits.
             let topology = bmesh_component.mesh.flatten_to_topology();
             let verts: Vec<Vec3> = topology.vertices.iter().map(|v| v.position).collect();
             let polys: Vec<Vec<usize>> = (0..topology.polygons.len())
                 .map(|i| topology.face_ring(i).map(|v| v as usize).collect())
+                .collect();
+            (verts, polys)
+        } else if !brush.topology.polygons.is_empty() {
+            // Out of edit mode (or for legacy brushes that were migrated
+            // already): read straight from `brush.topology`. The
+            // plane-intersection path below only handles convex brushes
+            // and silently distorts non-convex / chamfered faces, so we
+            // prefer the authored ring whenever it exists.
+            let verts: Vec<Vec3> = brush.topology.vertices.iter().map(|v| v.position).collect();
+            let polys: Vec<Vec<usize>> = (0..brush.topology.polygons.len())
+                .map(|i| brush.topology.face_ring(i).map(|v| v as usize).collect())
                 .collect();
             (verts, polys)
         } else {

@@ -177,6 +177,76 @@ fn bevel_every_cube_edge_is_a_parallelogram() {
     }
 }
 
+/// Beveling an edge adjacent to an existing chamfer still produces a clean
+/// parallelogram. With the in-face-perpendicular offset (face_normal x walk_dir)
+/// the chamfer's rails in each adjacent face are perpendicular to the selected
+/// edge and parallel to it as vectors, regardless of whether the adjacent face
+/// is axis-aligned or a slanted chamfer.
+#[test]
+fn bevel_adjacent_to_existing_chamfer_is_still_a_parallelogram() {
+    let brush = Brush::cuboid(2.0, 2.0, 2.0);
+    let mut bmesh = EditMesh::lift_from_topology(&brush.topology);
+
+    // First bevel: pick any edge.
+    let first_edge = bmesh.edges.keys().next().expect("cube has edges");
+    let first_verts = bmesh.edges[first_edge].v;
+    let _r1 = edge_bevel(&mut bmesh, &[first_edge], 0.2).expect("first bevel");
+
+    // Second bevel: find an edge that still exists and shares an endpoint with
+    // one of the first edge's endpoints (so it walks into the new chamfer's
+    // rebuilt face geometry).
+    let touching: Option<jackdaw_geometry::editmesh::EdgeKey> = bmesh
+        .edges
+        .iter()
+        .find(|(_, e)| {
+            (e.v[0] == first_verts[0]
+                || e.v[1] == first_verts[0]
+                || e.v[0] == first_verts[1]
+                || e.v[1] == first_verts[1])
+                && e.v != first_verts
+                && e.v != [first_verts[1], first_verts[0]]
+        })
+        .map(|(k, _)| k);
+    // first_verts may have been removed by the first bevel (degree-3 cube
+    // corners get torn down). In that case we just pick another fresh edge
+    // adjacent to the new chamfer to demonstrate the same point.
+    let second_edge = touching.unwrap_or_else(|| {
+        bmesh
+            .edges
+            .keys()
+            .nth(3)
+            .expect("plenty of edges remain after first bevel")
+    });
+
+    let r2 = edge_bevel(&mut bmesh, &[second_edge], 0.2).expect("second bevel");
+    assert_eq!(r2.new_faces.len(), 1, "second bevel adds one chamfer");
+
+    let chamfer = r2.new_faces[0];
+    let face = &bmesh.faces[chamfer];
+    let mut ring: Vec<Vec3> = Vec::new();
+    let mut cur = face.loop_first;
+    for _ in 0..face.loop_count {
+        ring.push(bmesh.verts[bmesh.loops[cur].vert].co);
+        cur = bmesh.loops[cur].next;
+    }
+    assert_eq!(ring.len(), 4, "chamfer should still be a quad");
+
+    let e_ab = ring[1] - ring[0];
+    let e_bc = ring[2] - ring[1];
+    let e_cd = ring[3] - ring[2];
+    let e_da = ring[0] - ring[3];
+    let p1 = (e_ab + e_cd).length();
+    let p2 = (e_bc + e_da).length();
+    assert!(
+        p1 < 1e-4,
+        "chained-bevel chamfer: opposite edges (a-b vs c-d) must cancel: |sum| = {p1}, e_ab={e_ab:?}, e_cd={e_cd:?}"
+    );
+    assert!(
+        p2 < 1e-4,
+        "chained-bevel chamfer: opposite edges (b-c vs d-a) must cancel: |sum| = {p2}, e_bc={e_bc:?}, e_da={e_da:?}"
+    );
+}
+
 #[test]
 fn bevel_preserves_face_count_plus_new_chamfer() {
     // Verify that beveling N edges adds exactly N chamfer faces (no more, no

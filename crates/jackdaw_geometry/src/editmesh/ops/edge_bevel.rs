@@ -119,32 +119,40 @@ fn bevel_one_edge(
 
     // 2. Find each face's loop at v0 and at v1 (could be the radial loop itself
     //    or its `next`, depending on which way `edge_key` walks in that face).
+    // We only need the loops at v0 in each face: the in-face perpendicular
+    // computed below is valid for both endpoints of the selected edge in that
+    // face (the walk direction on `edge_key` is fixed per face, so the perp is
+    // fixed too).
     let l_a_v0 = loop_at_vert(bmesh, l_a, v0);
-    let l_a_v1 = loop_at_vert(bmesh, l_a, v1);
     let l_b_v0 = loop_at_vert(bmesh, l_b, v0);
-    let l_b_v1 = loop_at_vert(bmesh, l_b, v1);
 
-    // 3. For each (face, endpoint), get the parallel edge at that endpoint and
-    //    the "other" vert of that parallel edge (the inward neighbor).
-    let (_e_a_par_v0, p_a_v0) = parallel_edge_at(bmesh, l_a_v0, edge_key);
-    let (_e_b_par_v0, p_b_v0) = parallel_edge_at(bmesh, l_b_v0, edge_key);
-    let (_e_a_par_v1, p_a_v1) = parallel_edge_at(bmesh, l_a_v1, edge_key);
-    let (_e_b_par_v1, p_b_v1) = parallel_edge_at(bmesh, l_b_v1, edge_key);
-
-    // 4. Compute the 4 offset positions.
+    // 3. Compute the in-face perpendicular at the selected edge for each
+    //    adjacent face. This is "perpendicular to the selected edge, in the
+    //    face's plane, pointing into the face from the edge". Both endpoints
+    //    of the selected edge use the SAME perpendicular within a given face,
+    //    so the new chamfer's rail in that face is parallel to the original
+    //    edge. For axis-aligned cube faces this matches "walk the parallel
+    //    edge"; for chamfer-adjacent faces it produces a clean parallelogram
+    //    even when the adjacent face is slanted (chained bevels).
     let v0_pos = bmesh.verts[v0].co;
     let v1_pos = bmesh.verts[v1].co;
-    let dir_a_v0 = (bmesh.verts[p_a_v0].co - v0_pos).normalize_or_zero();
-    let dir_b_v0 = (bmesh.verts[p_b_v0].co - v0_pos).normalize_or_zero();
-    let dir_a_v1 = (bmesh.verts[p_a_v1].co - v1_pos).normalize_or_zero();
-    let dir_b_v1 = (bmesh.verts[p_b_v1].co - v1_pos).normalize_or_zero();
-    if dir_a_v0.length_squared() < 1e-12
-        || dir_b_v0.length_squared() < 1e-12
-        || dir_a_v1.length_squared() < 1e-12
-        || dir_b_v1.length_squared() < 1e-12
-    {
+    let walk_a = walk_dir_along_edge_in_face(bmesh, l_a_v0, v0_pos, v1_pos, edge_key);
+    let walk_b = walk_dir_along_edge_in_face(bmesh, l_b_v0, v0_pos, v1_pos, edge_key);
+    let perp_a = bmesh.faces[face_a]
+        .normal_cache
+        .cross(walk_a)
+        .normalize_or_zero();
+    let perp_b = bmesh.faces[face_b]
+        .normal_cache
+        .cross(walk_b)
+        .normalize_or_zero();
+    if perp_a.length_squared() < 1e-12 || perp_b.length_squared() < 1e-12 {
         return;
     }
+    let dir_a_v0 = perp_a;
+    let dir_a_v1 = perp_a;
+    let dir_b_v0 = perp_b;
+    let dir_b_v1 = perp_b;
 
     // 5. Allocate the 4 offset verts.
     let v0_a = bmesh.add_vert(v0_pos + dir_a_v0 * width);
@@ -267,6 +275,32 @@ fn bevel_one_edge(
     }
 }
 
+/// Walk direction along the beveled edge `e` in the face containing `lp_at_v0`.
+/// Returns a vector pointing along `e` in the order the face's loop traverses
+/// it, i.e. v0 -> v1 if the loop continues from v0 along e, or v1 -> v0 if
+/// the loop arrived at v0 via e. The returned vector is NOT normalized.
+///
+/// Used to compute the in-face perpendicular at the selected edge via
+/// `face_normal x walk_dir`, which gives a direction perpendicular to `e`,
+/// lying in the face plane, pointing into the face from the edge (assuming
+/// CCW winding viewed from the face normal).
+fn walk_dir_along_edge_in_face(
+    bmesh: &EditMesh,
+    lp_at_v0: LoopKey,
+    v0_pos: bevy::math::Vec3,
+    v1_pos: bevy::math::Vec3,
+    e: EdgeKey,
+) -> bevy::math::Vec3 {
+    if bmesh.loops[lp_at_v0].edge == e {
+        // The face's walk leaves v0 along e, heading toward v1.
+        v1_pos - v0_pos
+    } else {
+        // The face's walk arrived at v0 via e from v1, so the walk direction
+        // along e (in the face's winding order) is v1 -> v0.
+        v0_pos - v1_pos
+    }
+}
+
 /// Given a loop on the beveled edge, return the loop in the same face whose
 /// `.vert` equals `target`. The radial loop either already starts at `target`,
 /// or its `.next` does.
@@ -276,27 +310,6 @@ fn loop_at_vert(bmesh: &EditMesh, loop_on_e: LoopKey, target: VertKey) -> LoopKe
     } else {
         debug_assert_eq!(bmesh.loops[bmesh.loops[loop_on_e].next].vert, target);
         bmesh.loops[loop_on_e].next
-    }
-}
-
-/// Given the loop at vert `v` in some face whose ring also contains edge `e`,
-/// return the OTHER edge at `v` in that face (the parallel edge to `e` at `v`)
-/// along with the other endpoint of that parallel edge.
-///
-/// The loop at `v` has two adjacent edges in the face's ring: `lp.prev.edge`
-/// (the incoming one, walking prev_vert -> v) and `lp.edge` (the outgoing one,
-/// walking v -> next_vert). Exactly one of those is `e`; the other is the
-/// parallel edge.
-fn parallel_edge_at(bmesh: &EditMesh, loop_at_v: LoopKey, e: EdgeKey) -> (EdgeKey, VertKey) {
-    let lp = &bmesh.loops[loop_at_v];
-    if lp.edge == e {
-        // e walks outward from v; the parallel edge is the incoming one.
-        let prev = lp.prev;
-        (bmesh.loops[prev].edge, bmesh.loops[prev].vert)
-    } else {
-        // e is incoming (lp.prev.edge == e); the parallel edge is lp.edge.
-        let nxt = lp.next;
-        (lp.edge, bmesh.loops[nxt].vert)
     }
 }
 

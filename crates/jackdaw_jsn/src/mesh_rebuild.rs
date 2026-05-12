@@ -26,6 +26,12 @@ impl Plugin for MeshRebuildPlugin {
 /// typically a catalog `@Name` reference). Faces with an unset handle fall
 /// back to the embedded grid texture so brushes still render before any
 /// material is assigned.
+///
+/// Prefers `brush.topology` for face vertex positions (so concave / beveled
+/// brushes render with the exact rings authored by edit-mesh ops). Falls
+/// back to plane intersection only for legacy brushes whose `.jsn` files
+/// pre-date the topology field — that path is convex-only and silently
+/// distorts non-convex faces.
 pub fn rebuild_brush_meshes(
     insert: On<Insert, Brush>,
     mut commands: Commands,
@@ -38,7 +44,15 @@ pub fn rebuild_brush_meshes(
         return;
     };
 
-    let (vertices, face_polygons) = compute_brush_geometry_from_planes(&brush.faces);
+    let (vertices, face_polygons) = if !brush.topology.polygons.is_empty() {
+        let verts: Vec<Vec3> = brush.topology.vertices.iter().map(|v| v.position).collect();
+        let polys: Vec<Vec<usize>> = (0..brush.topology.polygons.len())
+            .map(|i| brush.topology.face_ring(i).map(|v| v as usize).collect())
+            .collect();
+        (verts, polys)
+    } else {
+        compute_brush_geometry_from_planes(&brush.faces)
+    };
     let mut fallback_material: Option<Handle<StandardMaterial>> = None;
 
     for (face_idx, face_data) in brush.faces.iter().enumerate() {
