@@ -236,6 +236,7 @@ pub(crate) fn brush_edge_slide_modal(
         (0.0, 0.0)
     };
 
+    // Snap respects the global translate_snap toggle; Ctrl flips it.
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     modal_state.current_factor = if snap_settings.translate_active(ctrl)
         && snap_settings.translate_increment > 0.0

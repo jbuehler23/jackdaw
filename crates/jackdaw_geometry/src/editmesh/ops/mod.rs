@@ -18,4 +18,5 @@ pub mod inset_face;
 pub mod loop_cut;
 pub mod remove_doubles;
 pub mod subdivide;
+pub mod vertex_bevel;
 pub mod vertex_slide;

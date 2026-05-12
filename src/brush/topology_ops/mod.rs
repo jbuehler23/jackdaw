@@ -30,6 +30,7 @@ pub mod uv_reset_axes;
 pub mod uv_rotate_90;
 pub mod uv_texel_density;
 pub mod uv_world_aligned;
+pub mod vertex_bevel;
 pub mod vertex_slide;
 pub mod vertex_slide_modal;
 pub mod weld_selected;

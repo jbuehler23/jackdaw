@@ -189,6 +189,7 @@ pub(crate) fn brush_loop_cut(
     } else {
         0.5
     };
+    // Snap respects the global translate_snap toggle; Ctrl flips it.
     modal_state.current_t = if snap_settings.translate_active(ctrl) {
         snap_to_fractions(raw_t)
     } else {

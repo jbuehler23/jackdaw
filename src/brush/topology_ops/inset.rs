@@ -211,14 +211,14 @@ pub(crate) fn brush_inset(
     // Clamp to maximum valid inset to prevent inner ring inversion.
     let clamped_amount = raw_amount.min(modal_state.max_inset);
 
+    // Snap respects the global translate_snap toggle; Ctrl flips the current
+    // snap state (anti-modifier).
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    modal_state.current_amount = if snap_settings.translate_active(ctrl) {
+    modal_state.current_amount = if snap_settings.translate_active(ctrl)
+        && snap_settings.translate_increment > 0.0
+    {
         let inc = snap_settings.translate_increment;
-        if inc > 0.0 {
-            (clamped_amount / inc).round() * inc
-        } else {
-            clamped_amount
-        }
+        (clamped_amount / inc).round() * inc
     } else {
         clamped_amount
     };

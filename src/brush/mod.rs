@@ -30,6 +30,7 @@ pub use topology_ops::edge_slide_modal::{EdgeSlideModalState, EdgeSlidePreviewLi
 pub use topology_ops::extrude::{ExtrudeModalState, ExtrudePreviewLines};
 pub use topology_ops::inset::{InsetModalState, InsetPreviewLines};
 pub use topology_ops::loop_cut::{LoopCutModalState, LoopCutPreviewLines};
+pub use topology_ops::vertex_bevel::VertexBevelModalState;
 pub use topology_ops::vertex_slide_modal::{VertexSlideModalState, VertexSlidePreviewLines};
 
 /// Cached computed geometry (NOT serialized, rebuilt from Brush).
@@ -236,6 +237,7 @@ impl Plugin for BrushPlugin {
             .init_resource::<VertexSlideModalState>()
             .init_resource::<VertexSlidePreviewLines>()
             .init_resource::<EdgeBevelModalState>()
+            .init_resource::<VertexBevelModalState>()
             .init_resource::<LastUsedMaterial>()
             .add_plugins(mesh::MeshPlugin)
             .add_plugins(preview::PreviewPlugin)

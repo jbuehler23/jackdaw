@@ -336,14 +336,14 @@ pub(crate) fn brush_extrude(
     let cursor_delta = cursor_pos - modal_state.start_cursor;
     let raw_amount = cursor_delta.dot(modal_state.screen_normal_dir) * EXTRUDE_SENSITIVITY;
 
+    // Snap respects the global translate_snap toggle; Ctrl flips the current
+    // snap state (anti-modifier).
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    modal_state.current_amount = if snap_settings.translate_active(ctrl) {
+    modal_state.current_amount = if snap_settings.translate_active(ctrl)
+        && snap_settings.translate_increment > 0.0
+    {
         let inc = snap_settings.translate_increment;
-        if inc > 0.0 {
-            (raw_amount / inc).round() * inc
-        } else {
-            raw_amount
-        }
+        (raw_amount / inc).round() * inc
     } else {
         raw_amount
     };
