@@ -561,13 +561,7 @@ fn rewrite_jackdaw_dep_for_dev_checkout(project_path: &Path, linkage: TemplateLi
     }
 }
 
-/// Pure text rewrite for [`rewrite_jackdaw_dep_for_dev_checkout`].
-/// Returns `Some(new_contents)` if a `jackdaw = { ... }` line was
-/// rewritten, `None` if no such line was present (dylib template).
-///
-/// The path is emitted as a TOML literal string (single-quoted) so
-/// Windows paths like `C:\Code\jackdaw` don't get parsed as escape
-/// sequences. See `render_cargo_config` for the same trick.
+/// Single-quoted so Windows backslashes don't get parsed as TOML escapes.
 fn rewrite_jackdaw_dep_line(contents: &str, checkout: &Path) -> Option<String> {
     if !contents.contains("jackdaw = {") && !contents.contains("jackdaw=") {
         return None;
@@ -755,10 +749,6 @@ mod tests {
         assert!(body.contains("JACKDAW_SDK_DEPS = '/p'"));
     }
 
-    /// Regression test for issue #235: a Windows checkout path
-    /// like `C:\Code\jackdaw` must not be written into a TOML
-    /// basic string (double-quoted) because `\C` is an invalid
-    /// TOML escape. Use a literal string (single-quoted) instead.
     #[test]
     fn rewrite_jackdaw_dep_line_handles_windows_backslashes() {
         let template = "[package]\n\
