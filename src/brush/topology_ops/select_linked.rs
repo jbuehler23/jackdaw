@@ -6,8 +6,8 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::select::linked_walk::linked_walk;
 use jackdaw_geometry::editmesh::FaceKey;
+use jackdaw_geometry::editmesh::select::linked_walk::linked_walk;
 
 use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode};
 

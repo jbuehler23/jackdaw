@@ -56,8 +56,7 @@ pub fn sync_brush_bmesh_on_edit_mode(
                 if !brush.topology.polygons.is_empty() {
                     let bmesh = EditMesh::lift_from_topology(&brush.topology);
                     let vert_keys: Vec<VertKey> = bmesh.verts.keys().collect();
-                    let mut face_keys: Vec<FaceKey> =
-                        vec![FaceKey::default(); bmesh.faces.len()];
+                    let mut face_keys: Vec<FaceKey> = vec![FaceKey::default(); bmesh.faces.len()];
                     for (k, f) in bmesh.faces.iter() {
                         let slot = f.material_idx as usize;
                         if slot < face_keys.len() {

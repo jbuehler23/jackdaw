@@ -19,7 +19,9 @@ use crate::core_extension::CoreExtensionInputContext;
 use crate::draw_brush::{CreateBrushCommand, brush_data_from_entity};
 use crate::viewport::{MainViewportCamera, SceneViewport};
 use crate::viewport_util::window_to_viewport_cursor;
-use jackdaw_geometry::{EPSILON, compute_face_tangent_axes, is_convex_topology, point_inside_all_planes};
+use jackdaw_geometry::{
+    EPSILON, compute_face_tangent_axes, is_convex_topology, point_inside_all_planes,
+};
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ClipPlacePointOp>()
@@ -286,7 +288,9 @@ pub(crate) fn clip_apply(
     //
     // TODO(follow-up): implement EditMesh bisect_plane for concave support (issue #26 / mesh-CSG).
     if !is_convex_topology(&brush.topology) {
-        warn!("Clip tool requires a convex brush. Run 'Reconvexify' first, or wait for mesh-CSG support.");
+        warn!(
+            "Clip tool requires a convex brush. Run 'Reconvexify' first, or wait for mesh-CSG support."
+        );
         return OperatorResult::Cancelled;
     }
 

@@ -23,11 +23,7 @@ use crate::compute_face_tangent_axes;
 ///
 /// Vector of triangles, each triangle is `[idx_a, idx_b, idx_c]` where each
 /// index refers back to the original `ring` array.
-pub fn triangulate_polygon(
-    vertices: &[Vec3],
-    ring: &[u32],
-    normal: Vec3,
-) -> Vec<[u32; 3]> {
+pub fn triangulate_polygon(vertices: &[Vec3], ring: &[u32], normal: Vec3) -> Vec<[u32; 3]> {
     let n = ring.len();
     if n < 3 {
         return Vec::new();
@@ -56,11 +52,7 @@ pub fn triangulate_polygon(
     // Convert earcut indices back to ring indices
     let mut out = Vec::with_capacity(triangles.len() / 3);
     for chunk in triangles.chunks_exact(3) {
-        out.push([
-            ring[chunk[0]],
-            ring[chunk[1]],
-            ring[chunk[2]],
-        ]);
+        out.push([ring[chunk[0]], ring[chunk[1]], ring[chunk[2]]]);
     }
     out
 }

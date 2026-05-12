@@ -144,7 +144,8 @@ pub fn subdivide(
                         Ok(new_edge) => {
                             new_edges_out.push(new_edge);
                             let after_faces: HashSet<_> = bmesh.faces.keys().collect();
-                            let added: Vec<_> = after_faces.difference(&before_faces).copied().collect();
+                            let added: Vec<_> =
+                                after_faces.difference(&before_faces).copied().collect();
                             // After first cut, the face is gone; next iteration looks for
                             // a face containing the second pair among newly added faces.
                             if let Some(&f) = added.first() {
@@ -181,7 +182,8 @@ pub fn subdivide(
                         Ok(new_edge) => {
                             new_edges_out.push(new_edge);
                             let after_faces: HashSet<_> = bmesh.faces.keys().collect();
-                            let added: Vec<_> = after_faces.difference(&before_faces).copied().collect();
+                            let added: Vec<_> =
+                                after_faces.difference(&before_faces).copied().collect();
                             if let Some(&f) = added.first() {
                                 current_face = f;
                             }
@@ -194,7 +196,11 @@ pub fn subdivide(
         }
     }
 
-    Ok(SubdivideResult { new_verts: new_verts_out, new_edges: new_edges_out, new_faces: new_faces_out })
+    Ok(SubdivideResult {
+        new_verts: new_verts_out,
+        new_edges: new_edges_out,
+        new_faces: new_faces_out,
+    })
 }
 
 /// For a face with one newly inserted midpoint vert, find the vert on the opposite
@@ -220,7 +226,11 @@ fn find_opposite_ring_vert(bmesh: &EditMesh, face: FaceKey, vert: VertKey) -> Op
 /// pairs that are at ring distance 4 from each other (true opposites on the
 /// expanded ring). Falls back to any two non-adjacent pairs if geometry is
 /// irregular.
-fn find_opposite_pairs(bmesh: &EditMesh, face: FaceKey, midpoints: &[VertKey]) -> Vec<(VertKey, VertKey)> {
+fn find_opposite_pairs(
+    bmesh: &EditMesh,
+    face: FaceKey,
+    midpoints: &[VertKey],
+) -> Vec<(VertKey, VertKey)> {
     let f = &bmesh.faces[face];
     let mut ring_verts: Vec<VertKey> = Vec::with_capacity(f.loop_count as usize);
     let mut cur = f.loop_first;

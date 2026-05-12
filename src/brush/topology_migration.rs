@@ -41,7 +41,10 @@ fn derive_topology_from_planes(brush: &Brush) -> BrushTopology {
     }
 
     // Vertices.
-    let vertices: Vec<MeshVert> = positions.iter().map(|&p| MeshVert { position: p }).collect();
+    let vertices: Vec<MeshVert> = positions
+        .iter()
+        .map(|&p| MeshVert { position: p })
+        .collect();
 
     // Build canonical (v0 <= v1) edge set and an edge-index lookup.
     let mut edge_map: HashMap<(u32, u32), u32> = HashMap::new();
@@ -52,7 +55,10 @@ fn derive_topology_from_planes(brush: &Brush) -> BrushTopology {
             idx
         } else {
             let idx = edges.len() as u32;
-            edges.push(MeshEdge { v: [lo, hi], flags: EdgeFlag::empty() });
+            edges.push(MeshEdge {
+                v: [lo, hi],
+                flags: EdgeFlag::empty(),
+            });
             edge_map.insert((lo, hi), idx);
             idx
         }
@@ -64,7 +70,10 @@ fn derive_topology_from_planes(brush: &Brush) -> BrushTopology {
     for ring in &face_polygons {
         if ring.len() < 3 {
             // Degenerate face; skip but keep parallel-array invariant by emitting an empty poly.
-            polygons.push(MeshPoly { loop_start: loops.len() as u32, loop_total: 0 });
+            polygons.push(MeshPoly {
+                loop_start: loops.len() as u32,
+                loop_total: 0,
+            });
             continue;
         }
         let loop_start = loops.len() as u32;
@@ -72,9 +81,15 @@ fn derive_topology_from_planes(brush: &Brush) -> BrushTopology {
             let v_cur = ring[i] as u32;
             let v_next = ring[(i + 1) % ring.len()] as u32;
             let edge_idx = canonicalize(v_cur, v_next);
-            loops.push(MeshLoop { vert: v_cur, edge: edge_idx });
+            loops.push(MeshLoop {
+                vert: v_cur,
+                edge: edge_idx,
+            });
         }
-        polygons.push(MeshPoly { loop_start, loop_total: ring.len() as u32 });
+        polygons.push(MeshPoly {
+            loop_start,
+            loop_total: ring.len() as u32,
+        });
     }
 
     BrushTopology {

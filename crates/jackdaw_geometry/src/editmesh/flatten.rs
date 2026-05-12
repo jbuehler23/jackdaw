@@ -4,9 +4,9 @@
 
 use std::collections::HashMap;
 
-use crate::topology::{BrushTopology, MeshVert, MeshEdge, MeshPoly, MeshLoop};
-use crate::editmesh::types::*;
 use crate::EdgeFlag as TopologyEdgeFlag;
+use crate::editmesh::types::*;
+use crate::topology::{BrushTopology, MeshEdge, MeshLoop, MeshPoly, MeshVert};
 
 impl EditMesh {
     pub fn flatten_to_topology(&self) -> BrushTopology {
@@ -49,7 +49,10 @@ impl EditMesh {
                 });
                 lk = lp.next;
             }
-            polygons.push(MeshPoly { loop_start, loop_total: face.loop_count });
+            polygons.push(MeshPoly {
+                loop_start,
+                loop_total: face.loop_count,
+            });
         }
 
         BrushTopology {

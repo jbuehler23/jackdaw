@@ -21,10 +21,12 @@ pub fn contextual_create(
 ) -> Result<ContextualResult, ContextualError> {
     match verts.len() {
         0 | 1 => Err(ContextualError::TooFewVerts),
-        2 => Ok(ContextualResult::Edge(create_edge(bmesh, verts[0], verts[1]))),
+        2 => Ok(ContextualResult::Edge(create_edge(
+            bmesh, verts[0], verts[1],
+        ))),
         _ => {
-            let face = create_face_from_verts(bmesh, verts)
-                .map_err(|_| ContextualError::TooFewVerts)?;
+            let face =
+                create_face_from_verts(bmesh, verts).map_err(|_| ContextualError::TooFewVerts)?;
             Ok(ContextualResult::Face(face))
         }
     }

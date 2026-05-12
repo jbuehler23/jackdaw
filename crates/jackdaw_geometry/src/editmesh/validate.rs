@@ -8,10 +8,24 @@ use crate::editmesh::types::*;
 #[derive(Debug)]
 pub enum ValidationError {
     VertWithEdgesHasNoneEdgePtr(VertKey),
-    EdgeNotInDiskCycle { edge: EdgeKey, vert: VertKey },
-    LoopNotInRadialCycle { loop_key: LoopKey, edge: EdgeKey },
-    FaceLoopCountMismatch { face: FaceKey, expected: u32, walked: u32 },
-    LoopFaceMismatch { loop_key: LoopKey, expected_face: FaceKey, actual_face: FaceKey },
+    EdgeNotInDiskCycle {
+        edge: EdgeKey,
+        vert: VertKey,
+    },
+    LoopNotInRadialCycle {
+        loop_key: LoopKey,
+        edge: EdgeKey,
+    },
+    FaceLoopCountMismatch {
+        face: FaceKey,
+        expected: u32,
+        walked: u32,
+    },
+    LoopFaceMismatch {
+        loop_key: LoopKey,
+        expected_face: FaceKey,
+        actual_face: FaceKey,
+    },
 }
 
 impl EditMesh {
@@ -36,7 +50,10 @@ impl EditMesh {
                     }
                 }
                 if !found {
-                    return Err(ValidationError::EdgeNotInDiskCycle { edge: ek, vert: v_key });
+                    return Err(ValidationError::EdgeNotInDiskCycle {
+                        edge: ek,
+                        vert: v_key,
+                    });
                 }
             }
         }
@@ -51,7 +68,10 @@ impl EditMesh {
                 }
             }
             if !found {
-                return Err(ValidationError::LoopNotInRadialCycle { loop_key: lk, edge: lp.edge });
+                return Err(ValidationError::LoopNotInRadialCycle {
+                    loop_key: lk,
+                    edge: lp.edge,
+                });
             }
         }
 

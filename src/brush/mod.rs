@@ -25,8 +25,11 @@ pub(crate) use self::interaction::{
 pub use edit_mode_systems::BrushEditMesh;
 pub use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
 pub use preview::{ActivePreview, PreviewMesh, PreviewState};
+pub use topology_ops::edge_slide_modal::{EdgeSlideModalState, EdgeSlidePreviewLines};
+pub use topology_ops::extrude::{ExtrudeModalState, ExtrudePreviewLines};
 pub use topology_ops::inset::{InsetModalState, InsetPreviewLines};
 pub use topology_ops::loop_cut::{LoopCutModalState, LoopCutPreviewLines};
+pub use topology_ops::vertex_slide_modal::{VertexSlideModalState, VertexSlidePreviewLines};
 
 /// Cached computed geometry (NOT serialized, rebuilt from Brush).
 #[derive(Component)]
@@ -225,6 +228,12 @@ impl Plugin for BrushPlugin {
             .init_resource::<InsetPreviewLines>()
             .init_resource::<LoopCutModalState>()
             .init_resource::<LoopCutPreviewLines>()
+            .init_resource::<ExtrudeModalState>()
+            .init_resource::<ExtrudePreviewLines>()
+            .init_resource::<EdgeSlideModalState>()
+            .init_resource::<EdgeSlidePreviewLines>()
+            .init_resource::<VertexSlideModalState>()
+            .init_resource::<VertexSlidePreviewLines>()
             .init_resource::<LastUsedMaterial>()
             .add_plugins(mesh::MeshPlugin)
             .add_plugins(preview::PreviewPlugin)
@@ -257,6 +266,9 @@ impl Plugin for BrushPlugin {
                     gizmo_overlay::draw_brush_edit_gizmos,
                     gizmo_overlay::draw_loop_cut_preview,
                     gizmo_overlay::draw_inset_preview,
+                    gizmo_overlay::draw_extrude_preview,
+                    gizmo_overlay::draw_edge_slide_preview,
+                    gizmo_overlay::draw_vertex_slide_preview,
                 )
                     .chain()
                     .after(crate::EditorInteractionSystems)

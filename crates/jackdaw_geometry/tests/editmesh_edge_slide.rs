@@ -1,6 +1,6 @@
 use bevy::math::Vec3;
-use jackdaw_geometry::editmesh::{EditMesh, ops::edge_slide::edge_slide};
 use jackdaw_geometry::editmesh::ops::loop_cut::loop_cut;
+use jackdaw_geometry::editmesh::{EditMesh, ops::edge_slide::edge_slide};
 use jackdaw_jsn::Brush;
 
 #[test]
@@ -8,11 +8,13 @@ fn slide_loop_cut_edge_at_t_pos_1_moves_endpoint_toward_top() {
     let brush = Brush::cuboid(1.0, 1.0, 1.0);
     let mut bmesh = EditMesh::lift_from_topology(&brush.topology);
     // Loop-cut a vertical strip of the cube.
-    let any_vertical_edge = bmesh.edges.iter()
+    let any_vertical_edge = bmesh
+        .edges
+        .iter()
         .find(|(_, e)| {
             let p0 = bmesh.verts[e.v[0]].co;
             let p1 = bmesh.verts[e.v[1]].co;
-            (p1 - p0).z.abs() > 0.5  // vertical edge
+            (p1 - p0).z.abs() > 0.5 // vertical edge
         })
         .map(|(k, _)| k)
         .expect("vertical edge");
@@ -29,7 +31,10 @@ fn slide_loop_cut_edge_at_t_pos_1_moves_endpoint_toward_top() {
         endpoint_zs_before.push(bmesh.verts[e.v[1]].co.z);
     }
     let initial_avg_z = endpoint_zs_before.iter().sum::<f32>() / endpoint_zs_before.len() as f32;
-    assert!(initial_avg_z.abs() < 0.1, "before slide: average z is near 0, got {initial_avg_z}");
+    assert!(
+        initial_avg_z.abs() < 0.1,
+        "before slide: average z is near 0, got {initial_avg_z}"
+    );
 
     // Slide at t = 0.5 (toward top of cube).
     edge_slide(&mut bmesh, &new_loop_edges, 0.5).expect("slide");
@@ -44,8 +49,10 @@ fn slide_loop_cut_edge_at_t_pos_1_moves_endpoint_toward_top() {
     // The slide should move the endpoints toward one of the cube's caps (positive or
     // negative z; both are valid since slide direction depends on internal orientation).
     // We just check that the average changed significantly.
-    assert!((final_avg_z - initial_avg_z).abs() > 0.2,
-            "slide should move endpoints; before {initial_avg_z}, after {final_avg_z}");
+    assert!(
+        (final_avg_z - initial_avg_z).abs() > 0.2,
+        "slide should move endpoints; before {initial_avg_z}, after {final_avg_z}"
+    );
     bmesh.validate().expect("valid after slide");
 }
 

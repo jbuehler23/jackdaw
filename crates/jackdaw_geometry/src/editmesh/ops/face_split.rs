@@ -37,7 +37,11 @@ pub fn split_face(
         return Err(FaceSplitError::BadVerts);
     }
 
-    let face_data = bmesh.faces.get(face).cloned().ok_or(FaceSplitError::FaceNotFound)?;
+    let face_data = bmesh
+        .faces
+        .get(face)
+        .cloned()
+        .ok_or(FaceSplitError::FaceNotFound)?;
 
     // Walk the ring once and collect all loop keys in order.
     let mut ring_loops: Vec<LoopKey> = Vec::with_capacity(face_data.loop_count as usize);
@@ -148,8 +152,16 @@ pub fn split_face(
     // changing since the internal links are untouched).
     for i in 0..forward_loops.len() {
         let cur = forward_loops[i];
-        let nxt = if i + 1 < forward_loops.len() { forward_loops[i + 1] } else { bridge_orig };
-        let prv = if i > 0 { forward_loops[i - 1] } else { bridge_orig };
+        let nxt = if i + 1 < forward_loops.len() {
+            forward_loops[i + 1]
+        } else {
+            bridge_orig
+        };
+        let prv = if i > 0 {
+            forward_loops[i - 1]
+        } else {
+            bridge_orig
+        };
         bmesh.loops[cur].next = nxt;
         bmesh.loops[cur].prev = prv;
     }
@@ -168,8 +180,16 @@ pub fn split_face(
 
     for i in 0..backward_loops.len() {
         let cur = backward_loops[i];
-        let nxt = if i + 1 < backward_loops.len() { backward_loops[i + 1] } else { bridge_new };
-        let prv = if i > 0 { backward_loops[i - 1] } else { bridge_new };
+        let nxt = if i + 1 < backward_loops.len() {
+            backward_loops[i + 1]
+        } else {
+            bridge_new
+        };
+        let prv = if i > 0 {
+            backward_loops[i - 1]
+        } else {
+            bridge_new
+        };
         bmesh.loops[cur].next = nxt;
         bmesh.loops[cur].prev = prv;
     }

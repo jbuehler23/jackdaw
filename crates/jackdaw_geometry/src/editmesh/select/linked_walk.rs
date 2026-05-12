@@ -7,7 +7,11 @@ use std::collections::{HashSet, VecDeque};
 use crate::editmesh::cycles::radial_walk;
 use crate::editmesh::types::*;
 
-pub fn linked_walk(bmesh: &EditMesh, start_face: FaceKey, respect_sharp_seam: bool) -> Vec<FaceKey> {
+pub fn linked_walk(
+    bmesh: &EditMesh,
+    start_face: FaceKey,
+    respect_sharp_seam: bool,
+) -> Vec<FaceKey> {
     if !bmesh.faces.contains_key(start_face) {
         return Vec::new();
     }

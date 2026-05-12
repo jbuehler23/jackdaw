@@ -39,8 +39,7 @@ pub fn bridge_edge_loops(
     for i in 0..n {
         let i_next = (i + 1) % n;
         let quad = [ring_a[i], ring_a[i_next], ring_b[i_next], ring_b[i]];
-        let face = create_face_from_verts(bmesh, &quad)
-            .map_err(|_| BridgeError::FaceCreate)?;
+        let face = create_face_from_verts(bmesh, &quad).map_err(|_| BridgeError::FaceCreate)?;
         new_faces.push(face);
     }
     let new_edges: Vec<EdgeKey> = bmesh
@@ -48,7 +47,10 @@ pub fn bridge_edge_loops(
         .keys()
         .filter(|k| !edges_before.contains(k))
         .collect();
-    Ok(BridgeResult { new_faces, new_edges })
+    Ok(BridgeResult {
+        new_faces,
+        new_edges,
+    })
 }
 
 /// Given a list of edges, walk them to produce an ordered ring of vertex keys.
@@ -82,7 +84,11 @@ fn walk_edges_to_ring(bmesh: &EditMesh, edges: &[EdgeKey]) -> Result<Vec<VertKey
             .ok_or(BridgeError::NotAClosedLoop)?;
         visited_edges.insert(next_edge);
         let edge = &bmesh.edges[next_edge];
-        let other = if edge.v[0] == cur_vert { edge.v[1] } else { edge.v[0] };
+        let other = if edge.v[0] == cur_vert {
+            edge.v[1]
+        } else {
+            edge.v[0]
+        };
         if other == start_vert {
             break;
         }

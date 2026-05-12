@@ -11,7 +11,7 @@
 use bevy::math::Vec3;
 use bevy::prelude::*;
 
-use jackdaw_geometry::{triangulate_polygon, BrushTopology};
+use jackdaw_geometry::{BrushTopology, triangulate_polygon};
 
 #[derive(Resource, Default)]
 pub struct ActivePreview {
@@ -121,9 +121,9 @@ fn update_preview_mesh(
     let mesh_handle = meshes.add(mesh);
 
     let color = match preview.state {
-        PreviewState::Valid => Color::srgba(0.3, 0.85, 1.0, 0.4),   // cyan
+        PreviewState::Valid => Color::srgba(0.3, 0.85, 1.0, 0.4), // cyan
         PreviewState::Warning => Color::srgba(1.0, 0.75, 0.2, 0.4), // amber
-        PreviewState::Invalid => Color::srgba(1.0, 0.3, 0.3, 0.4),  // red
+        PreviewState::Invalid => Color::srgba(1.0, 0.3, 0.3, 0.4), // red
     };
     let material = materials.add(StandardMaterial {
         base_color: color,

@@ -44,7 +44,8 @@ pub(super) fn spawn_brush_display(
             brush.topology.edges.len(),
         )
     } else {
-        let (vertices, face_polygons) = crate::brush::compute_brush_geometry_from_planes(&brush.faces);
+        let (vertices, face_polygons) =
+            crate::brush::compute_brush_geometry_from_planes(&brush.faces);
         let mut edges = std::collections::HashSet::new();
         for polygon in &face_polygons {
             for i in 0..polygon.len() {

@@ -26,8 +26,16 @@ pub struct InsetResult {
     pub inner_face: FaceKey,
 }
 
-pub fn inset_face(bmesh: &mut EditMesh, face: FaceKey, amount: f32) -> Result<InsetResult, InsetError> {
-    let face_data = bmesh.faces.get(face).cloned().ok_or(InsetError::FaceNotFound)?;
+pub fn inset_face(
+    bmesh: &mut EditMesh,
+    face: FaceKey,
+    amount: f32,
+) -> Result<InsetResult, InsetError> {
+    let face_data = bmesh
+        .faces
+        .get(face)
+        .cloned()
+        .ok_or(InsetError::FaceNotFound)?;
     let n = face_data.loop_count as usize;
     if n < 3 {
         return Err(InsetError::Degenerate);
@@ -226,5 +234,9 @@ pub fn inset_face(bmesh: &mut EditMesh, face: FaceKey, amount: f32) -> Result<In
     let inner_pos: Vec<Vec3> = new_verts.iter().map(|&k| bmesh.verts[k].co).collect();
     bmesh.faces[face].normal_cache = newell_normal(&inner_pos);
 
-    Ok(InsetResult { new_verts, side_faces, inner_face: face })
+    Ok(InsetResult {
+        new_verts,
+        side_faces,
+        inner_face: face,
+    })
 }

@@ -73,7 +73,11 @@ pub fn loop_cut(
         let v0_pos = bmesh.verts[bmesh.edges[edge].v[0]].co;
         let v1_pos = bmesh.verts[bmesh.edges[edge].v[1]].co;
         let dir = (v1_pos - v0_pos).normalize_or_zero();
-        let oriented_t = if dir.dot(slide_axis) >= 0.0 { t } else { 1.0 - t };
+        let oriented_t = if dir.dot(slide_axis) >= 0.0 {
+            t
+        } else {
+            1.0 - t
+        };
         let v_new = split_edge(bmesh, edge, oriented_t).map_err(LoopCutError::EdgeSplit)?;
         edge_to_new_vert.insert(edge, v_new);
         new_verts.push(v_new);
@@ -93,7 +97,11 @@ pub fn loop_cut(
         new_loop_edges.push(new_edge);
     }
 
-    Ok(LoopCutResult { new_verts, new_loop_edges, new_faces: new_faces_out })
+    Ok(LoopCutResult {
+        new_verts,
+        new_loop_edges,
+        new_faces: new_faces_out,
+    })
 }
 
 /// One quad face in the ring: the face and the two edges the cut crosses on it.
@@ -146,7 +154,11 @@ fn walk_loop_cut_ring(bmesh: &EditMesh, start_edge: EdgeKey) -> Vec<FaceHop> {
             let exit_loop_key = bmesh.loops[next1].next; // loop at C
             let exit_edge = bmesh.loops[exit_loop_key].edge;
 
-            hops.push(FaceHop { face, entry_edge, exit_edge });
+            hops.push(FaceHop {
+                face,
+                entry_edge,
+                exit_edge,
+            });
 
             // Boundary check: exit_edge has only one radial loop (itself).
             let radial_other = bmesh.loops[exit_loop_key].radial_next;

@@ -60,16 +60,14 @@ pub(crate) fn brush_uv_align_to_edge(
                 break;
             }
         }
-        let (a_idx, b_idx) =
-            target_edge.unwrap_or_else(|| (ring[0] as usize, ring[1] as usize));
+        let (a_idx, b_idx) = target_edge.unwrap_or_else(|| (ring[0] as usize, ring[1] as usize));
 
         let a_pos = brush.topology.vertices[a_idx].position;
         let b_pos = brush.topology.vertices[b_idx].position;
         let edge_dir = b_pos - a_pos;
 
         // Project onto face plane, then normalize.
-        let edge_dir_planar =
-            (edge_dir - normal * edge_dir.dot(normal)).normalize_or_zero();
+        let edge_dir_planar = (edge_dir - normal * edge_dir.dot(normal)).normalize_or_zero();
         if edge_dir_planar.length_squared() > 0.5 {
             let face = &mut brush.faces[face_idx];
             face.uv_u_axis = edge_dir_planar;

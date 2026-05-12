@@ -8,8 +8,16 @@ fn loop_walk_around_cube_returns_4_edges() {
     let any_edge = bmesh.edges.keys().next().unwrap();
     let result = loop_walk(&bmesh, any_edge);
     // A cube edge belongs to a closed parallel-edge ring of 4 edges.
-    assert_eq!(result.len(), 4, "loop walk on cube should produce 4 edges, got {}", result.len());
-    assert!(result.contains(&any_edge), "result should include start edge");
+    assert_eq!(
+        result.len(),
+        4,
+        "loop walk on cube should produce 4 edges, got {}",
+        result.len()
+    );
+    assert!(
+        result.contains(&any_edge),
+        "result should include start edge"
+    );
 }
 
 #[test]
@@ -25,6 +33,14 @@ fn loop_walk_after_loop_cut_new_loop_edge_is_in_6_edge_ring() {
     // The ring interleaves 2 new loop edges with 4 old (split) edges, because
     // the new edges sit at the "seam" of each split face and their parallel-edge
     // ring crosses 2 faces per hop rather than 1.
-    assert_eq!(result.len(), 6, "loop walk on new loop edge should produce 6 edges, got {}", result.len());
-    assert!(result.contains(&new_loop_edge), "result should include start edge");
+    assert_eq!(
+        result.len(),
+        6,
+        "loop walk on new loop edge should produce 6 edges, got {}",
+        result.len()
+    );
+    assert!(
+        result.contains(&new_loop_edge),
+        "result should include start edge"
+    );
 }

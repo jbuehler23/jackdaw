@@ -5,8 +5,8 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::cycles::{disk_walk, radial_walk};
 use jackdaw_geometry::editmesh::VertKey;
+use jackdaw_geometry::editmesh::cycles::{disk_walk, radial_walk};
 
 use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode};
 
@@ -46,7 +46,11 @@ pub(crate) fn brush_select_less(
                     let mut all_inside = true;
                     for ek in disk_walk(mesh, vk).collect::<Vec<_>>() {
                         let edge = &mesh.edges[ek];
-                        let other = if edge.v[0] == vk { edge.v[1] } else { edge.v[0] };
+                        let other = if edge.v[0] == vk {
+                            edge.v[1]
+                        } else {
+                            edge.v[0]
+                        };
                         if let Some(other_idx) =
                             bmesh_component.vert_keys.iter().position(|&k| k == other)
                         {
@@ -119,8 +123,10 @@ pub(crate) fn brush_select_less(
                         let edge = mesh.loops[cur].edge;
                         for radial_lp in radial_walk(mesh, edge).collect::<Vec<_>>() {
                             let neighbor = mesh.loops[radial_lp].face;
-                            if let Some(neighbor_idx) =
-                                bmesh_component.face_keys.iter().position(|&k| k == neighbor)
+                            if let Some(neighbor_idx) = bmesh_component
+                                .face_keys
+                                .iter()
+                                .position(|&k| k == neighbor)
                             {
                                 if !current.contains(&neighbor_idx) {
                                     all_inside = false;

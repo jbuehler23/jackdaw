@@ -46,7 +46,9 @@ pub fn dissolve_verts(
             removed += 1;
         }
     }
-    Ok(DissolveVertsResult { removed_verts: removed })
+    Ok(DissolveVertsResult {
+        removed_verts: removed,
+    })
 }
 
 fn dissolve_one_vert(bmesh: &mut EditMesh, v: VertKey) -> bool {
@@ -88,9 +90,9 @@ fn dissolve_one_vert(bmesh: &mut EditMesh, v: VertKey) -> bool {
 fn dissolve_valence_n(bmesh: &mut EditMesh, v: VertKey) -> bool {
     // Handle wire (no incident faces) case first.
     let initial_edges: Vec<EdgeKey> = disk_walk(bmesh, v).collect();
-    let has_faces = initial_edges.iter().any(|&e| {
-        radial_walk(bmesh, e).next().is_some()
-    });
+    let has_faces = initial_edges
+        .iter()
+        .any(|&e| radial_walk(bmesh, e).next().is_some());
     if !has_faces {
         for e in initial_edges {
             disk_remove_edge(bmesh, e);
@@ -118,7 +120,9 @@ fn dissolve_valence_n(bmesh: &mut EditMesh, v: VertKey) -> bool {
         let mut coplanar_safe_edge: Option<EdgeKey> = None;
         for e in disk_walk(bmesh, v).collect::<Vec<_>>() {
             let radial_loops: Vec<_> = radial_walk(bmesh, e).collect();
-            if radial_loops.len() != 2 { continue; }
+            if radial_loops.len() != 2 {
+                continue;
+            }
             let f0 = bmesh.loops[radial_loops[0]].face;
             let f1 = bmesh.loops[radial_loops[1]].face;
             if f0 == f1 || !cluster_faces.contains(&f0) || !cluster_faces.contains(&f1) {
@@ -232,15 +236,25 @@ fn dissolve_valence_2(bmesh: &mut EditMesh, v: VertKey, e1: EdgeKey, e2: EdgeKey
 
     let edge1 = bmesh.edges[e1].clone();
     let edge2 = bmesh.edges[e2].clone();
-    let a = if edge1.v[0] == v { edge1.v[1] } else { edge1.v[0] };
-    let b = if edge2.v[0] == v { edge2.v[1] } else { edge2.v[0] };
+    let a = if edge1.v[0] == v {
+        edge1.v[1]
+    } else {
+        edge1.v[0]
+    };
+    let b = if edge2.v[0] == v {
+        edge2.v[1]
+    } else {
+        edge2.v[0]
+    };
     if a == b {
         // Degenerate: both edges connect to the same vert.
         return false;
     }
 
     // Check whether v has any incident faces.
-    let has_faces = [e1, e2].iter().any(|&e| radial_walk(bmesh, e).next().is_some());
+    let has_faces = [e1, e2]
+        .iter()
+        .any(|&e| radial_walk(bmesh, e).next().is_some());
     if !has_faces {
         // Wire vert with no incident faces: just remove both edges and the vert.
         disk_remove_edge(bmesh, e1);
@@ -355,12 +369,11 @@ fn dissolve_valence_n_fallback(
     let expected_normal = expected_normal.normalize_or_zero();
 
     // Compute the proposed ring's Newell normal and centroid.
-    let ring_positions: Vec<bevy::math::Vec3> = outer_ring.iter()
-        .map(|&k| bmesh.verts[k].co)
-        .collect();
+    let ring_positions: Vec<bevy::math::Vec3> =
+        outer_ring.iter().map(|&k| bmesh.verts[k].co).collect();
     let ring_normal = crate::newell_normal(&ring_positions);
-    let ring_centroid: bevy::math::Vec3 = ring_positions.iter().copied().sum::<bevy::math::Vec3>()
-        / ring_positions.len() as f32;
+    let ring_centroid: bevy::math::Vec3 =
+        ring_positions.iter().copied().sum::<bevy::math::Vec3>() / ring_positions.len() as f32;
 
     // Determine whether to reverse the ring's winding.
     let should_reverse = if expected_normal.length_squared() > 0.5 {

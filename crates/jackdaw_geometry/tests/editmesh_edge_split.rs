@@ -16,12 +16,18 @@ fn split_edge_of_cube_adds_one_vert_one_edge_one_loop_per_adjacent_face() {
     assert_eq!(bmesh.edge_count(), initial_edges + 1, "+1 edge");
     assert_eq!(bmesh.face_count(), initial_faces, "no new faces");
     // 2 incident faces, each gains one loop.
-    assert_eq!(bmesh.loop_count(), initial_loops + 2, "+2 loops (one per adjacent face)");
+    assert_eq!(
+        bmesh.loop_count(),
+        initial_loops + 2,
+        "+2 loops (one per adjacent face)"
+    );
     bmesh.validate().expect("valid after split");
     // The new vert is at midpoint.
     let new_pos = bmesh.verts[new_vert].co;
-    assert!(new_pos.length() > 0.0 && new_pos.length() < 2.0,
-            "new vert at midpoint should be inside cube envelope, got {new_pos}");
+    assert!(
+        new_pos.length() > 0.0 && new_pos.length() < 2.0,
+        "new vert at midpoint should be inside cube envelope, got {new_pos}"
+    );
 }
 
 #[test]
@@ -47,7 +53,7 @@ fn split_edge_then_validate_round_trip_preserves_topology_via_flatten() {
     bmesh.validate().expect("post-split valid");
     let topology = bmesh.flatten_to_topology();
     assert_eq!(topology.vertices.len(), 9);
-    assert_eq!(topology.edges.len(),    13);
+    assert_eq!(topology.edges.len(), 13);
     assert_eq!(topology.polygons.len(), 6);
-    assert_eq!(topology.loops.len(),    26);
+    assert_eq!(topology.loops.len(), 26);
 }

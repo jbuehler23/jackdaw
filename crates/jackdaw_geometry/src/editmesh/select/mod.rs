@@ -16,7 +16,10 @@ pub struct SelectionDelta<K> {
     pub remove: Vec<K>,
 }
 
-pub fn apply_vert_delta(bmesh: &mut EditMesh, delta: &SelectionDelta<VertKey>) -> SelectionDelta<VertKey> {
+pub fn apply_vert_delta(
+    bmesh: &mut EditMesh,
+    delta: &SelectionDelta<VertKey>,
+) -> SelectionDelta<VertKey> {
     let mut inverse = SelectionDelta::<VertKey>::default();
     for &k in &delta.add {
         if let Some(v) = bmesh.verts.get_mut(k) {
@@ -37,7 +40,10 @@ pub fn apply_vert_delta(bmesh: &mut EditMesh, delta: &SelectionDelta<VertKey>) -
     inverse
 }
 
-pub fn apply_edge_delta(bmesh: &mut EditMesh, delta: &SelectionDelta<EdgeKey>) -> SelectionDelta<EdgeKey> {
+pub fn apply_edge_delta(
+    bmesh: &mut EditMesh,
+    delta: &SelectionDelta<EdgeKey>,
+) -> SelectionDelta<EdgeKey> {
     let mut inverse = SelectionDelta::<EdgeKey>::default();
     for &k in &delta.add {
         if let Some(e) = bmesh.edges.get_mut(k) {
@@ -58,7 +64,10 @@ pub fn apply_edge_delta(bmesh: &mut EditMesh, delta: &SelectionDelta<EdgeKey>) -
     inverse
 }
 
-pub fn apply_face_delta(bmesh: &mut EditMesh, delta: &SelectionDelta<FaceKey>) -> SelectionDelta<FaceKey> {
+pub fn apply_face_delta(
+    bmesh: &mut EditMesh,
+    delta: &SelectionDelta<FaceKey>,
+) -> SelectionDelta<FaceKey> {
     let mut inverse = SelectionDelta::<FaceKey>::default();
     for &k in &delta.add {
         if let Some(f) = bmesh.faces.get_mut(k) {
@@ -81,10 +90,12 @@ pub fn apply_face_delta(bmesh: &mut EditMesh, delta: &SelectionDelta<FaceKey>) -
 
 /// Promote vertex selection to edge selection: an edge becomes selected iff both endpoints are.
 pub fn flush_vert_to_edge(bmesh: &mut EditMesh) {
-    let to_select: Vec<EdgeKey> = bmesh.edges.iter()
+    let to_select: Vec<EdgeKey> = bmesh
+        .edges
+        .iter()
         .filter(|(_, e)| {
-            bmesh.verts[e.v[0]].flag.contains(VertFlag::SELECT) &&
-            bmesh.verts[e.v[1]].flag.contains(VertFlag::SELECT)
+            bmesh.verts[e.v[0]].flag.contains(VertFlag::SELECT)
+                && bmesh.verts[e.v[1]].flag.contains(VertFlag::SELECT)
         })
         .map(|(k, _)| k)
         .collect();
@@ -95,7 +106,9 @@ pub fn flush_vert_to_edge(bmesh: &mut EditMesh) {
 
 /// Promote edge selection to face selection: a face becomes selected iff all its boundary edges are.
 pub fn flush_edge_to_face(bmesh: &mut EditMesh) {
-    let to_select: Vec<FaceKey> = bmesh.faces.iter()
+    let to_select: Vec<FaceKey> = bmesh
+        .faces
+        .iter()
         .filter(|(_, face)| {
             let mut cur = face.loop_first;
             for _ in 0..face.loop_count {

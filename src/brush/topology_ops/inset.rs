@@ -10,8 +10,8 @@ use bevy::window::PrimaryWindow;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
-use jackdaw_geometry::editmesh::{EditMesh, FaceKey};
 use jackdaw_geometry::editmesh::ops::inset_face::inset_face;
+use jackdaw_geometry::editmesh::{EditMesh, FaceKey};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
@@ -316,9 +316,8 @@ pub(crate) fn brush_inset(
         for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
             if face_idx < new_topology.polygons.len() {
                 let normal = new_topology.face_normal_with(&positions, face_idx);
-                let v0_idx =
-                    new_topology.loops[new_topology.polygons[face_idx].loop_start as usize].vert
-                        as usize;
+                let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
+                    .vert as usize;
                 let distance = positions[v0_idx].dot(normal);
                 face_data.plane.normal = normal;
                 face_data.plane.distance = distance;
@@ -462,18 +461,15 @@ fn update_preview_lines(
             // L3 is the spoke connecting new[i] → old[i].
             let l0 = side.loop_first;
             let l3 = speculative.loops[l0].prev;
-            let old_v = brush_xform
-                .transform_point(speculative.verts[speculative.loops[l0].vert].co);
-            let new_v = brush_xform
-                .transform_point(speculative.verts[speculative.loops[l3].vert].co);
+            let old_v =
+                brush_xform.transform_point(speculative.verts[speculative.loops[l0].vert].co);
+            let new_v =
+                brush_xform.transform_point(speculative.verts[speculative.loops[l3].vert].co);
             preview_lines.lines.push((old_v, new_v));
         }
     }
 }
 
-pub(crate) fn can_run_inset(
-    edit_mode: Res<EditMode>,
-    selection: Res<BrushSelection>,
-) -> bool {
+pub(crate) fn can_run_inset(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
     *edit_mode == EditMode::BrushEdit(BrushEditMode::Face) && !selection.faces.is_empty()
 }

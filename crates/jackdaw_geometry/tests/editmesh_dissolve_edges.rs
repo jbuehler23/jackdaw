@@ -1,5 +1,5 @@
-use jackdaw_geometry::editmesh::{EditMesh, ops::dissolve_edges::dissolve_edges};
 use jackdaw_geometry::editmesh::ops::loop_cut::loop_cut;
+use jackdaw_geometry::editmesh::{EditMesh, ops::dissolve_edges::dissolve_edges};
 use jackdaw_jsn::Brush;
 
 #[test]

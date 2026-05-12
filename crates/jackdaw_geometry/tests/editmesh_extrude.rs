@@ -24,7 +24,9 @@ fn extrude_top_face_by_1_unit_makes_cube_taller_by_1() {
     let brush = Brush::cuboid(1.0, 1.0, 1.0);
     let mut bmesh = EditMesh::lift_from_topology(&brush.topology);
     // Find the +Z face.
-    let top_face = bmesh.faces.iter()
+    let top_face = bmesh
+        .faces
+        .iter()
         .find(|(_, f)| f.normal_cache.distance(Vec3::Z) < 1e-3)
         .map(|(k, _)| k)
         .expect("top face exists");
@@ -32,6 +34,9 @@ fn extrude_top_face_by_1_unit_makes_cube_taller_by_1() {
     // The 4 new verts should be at z = 2 (was at 1, extruded by 1).
     for vk in &result.new_verts {
         let pos = bmesh.verts[*vk].co;
-        assert!((pos.z - 2.0).abs() < 1e-4, "extruded vert z should be 2.0, got {pos}");
+        assert!(
+            (pos.z - 2.0).abs() < 1e-4,
+            "extruded vert z should be 2.0, got {pos}"
+        );
     }
 }

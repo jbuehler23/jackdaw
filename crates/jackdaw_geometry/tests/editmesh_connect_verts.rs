@@ -36,24 +36,29 @@ fn connect_verts_in_different_faces_splits_each_face() {
     let ring1: Vec<_> = {
         let f = &bmesh.faces[face1];
         let mut cur = f.loop_first;
-        (0..f.loop_count).map(|_| {
-            let v = bmesh.loops[cur].vert;
-            cur = bmesh.loops[cur].next;
-            v
-        }).collect()
+        (0..f.loop_count)
+            .map(|_| {
+                let v = bmesh.loops[cur].vert;
+                cur = bmesh.loops[cur].next;
+                v
+            })
+            .collect()
     };
     let ring2: Vec<_> = {
         let f = &bmesh.faces[face2];
         let mut cur = f.loop_first;
-        (0..f.loop_count).map(|_| {
-            let v = bmesh.loops[cur].vert;
-            cur = bmesh.loops[cur].next;
-            v
-        }).collect()
+        (0..f.loop_count)
+            .map(|_| {
+                let v = bmesh.loops[cur].vert;
+                cur = bmesh.loops[cur].next;
+                v
+            })
+            .collect()
     };
     let initial_faces = bmesh.face_count();
     // Pass diagonal verts of two different faces (4 total).
-    let result = connect_verts(&mut bmesh, &[ring1[0], ring1[2], ring2[0], ring2[2]]).expect("connect");
+    let result =
+        connect_verts(&mut bmesh, &[ring1[0], ring1[2], ring2[0], ring2[2]]).expect("connect");
     bmesh.validate().expect("valid");
     // Each face should split, so face count goes up by at least 1 (more if both faces had
     // diagonal verts that don't conflict).

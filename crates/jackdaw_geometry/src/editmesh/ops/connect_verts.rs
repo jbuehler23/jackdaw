@@ -83,11 +83,8 @@ pub fn connect_verts(
                     if face_count_after > face_count_before {
                         // The new face(s) are the ones whose keys weren't in the
                         // pre-split snapshot. Accumulate them for the caller.
-                        let pre_keys: HashSet<FaceKey> = bmesh
-                            .faces
-                            .keys()
-                            .take(face_count_before)
-                            .collect();
+                        let pre_keys: HashSet<FaceKey> =
+                            bmesh.faces.keys().take(face_count_before).collect();
                         for (fk, _) in bmesh.faces.iter() {
                             if !pre_keys.contains(&fk) {
                                 new_faces_out.push(fk);

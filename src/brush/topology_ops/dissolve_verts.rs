@@ -2,8 +2,8 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::{EditMesh, VertKey};
 use jackdaw_geometry::editmesh::ops::dissolve_verts::dissolve_verts;
+use jackdaw_geometry::editmesh::{EditMesh, VertKey};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
@@ -95,8 +95,7 @@ pub(crate) fn brush_dissolve_verts(
     // is out of range (e.g. the merged face inherited a large material_idx),
     // fall back to the last entry.
     let old_faces = brush.faces.clone();
-    let mut new_faces: Vec<jackdaw_jsn::BrushFaceData> =
-        Vec::with_capacity(sorted_mat_idxes.len());
+    let mut new_faces: Vec<jackdaw_jsn::BrushFaceData> = Vec::with_capacity(sorted_mat_idxes.len());
     for &mat_idx in &sorted_mat_idxes {
         let old = old_faces
             .get(mat_idx as usize)
@@ -111,9 +110,8 @@ pub(crate) fn brush_dissolve_verts(
     for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
         if face_idx < new_topology.polygons.len() {
             let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx =
-                new_topology.loops[new_topology.polygons[face_idx].loop_start as usize].vert
-                    as usize;
+            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
+                .vert as usize;
             let distance = positions[v0_idx].dot(normal);
             face_data.plane.normal = normal;
             face_data.plane.distance = distance;

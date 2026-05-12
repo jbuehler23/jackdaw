@@ -1,6 +1,6 @@
 use bevy::math::Vec3;
 use bitflags::bitflags;
-use slotmap::{new_key_type, SlotMap};
+use slotmap::{SlotMap, new_key_type};
 
 new_key_type! {
     pub struct VertKey;

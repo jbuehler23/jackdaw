@@ -12,8 +12,8 @@ use bevy::reflect::Reflect;
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 
-use crate::newell::newell_normal;
 use crate::BrushPlane;
+use crate::newell::newell_normal;
 
 #[derive(Reflect, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BrushTopology {
@@ -107,13 +107,17 @@ impl BrushTopology {
 
     pub fn edge_id(&self, v0: u32, v1: u32) -> Option<u32> {
         let (a, b) = if v0 <= v1 { (v0, v1) } else { (v1, v0) };
-        self.edges.iter().position(|e| e.v == [a, b]).map(|i| i as u32)
+        self.edges
+            .iter()
+            .position(|e| e.v == [a, b])
+            .map(|i| i as u32)
     }
 
     /// Compute normal of `face_idx` from its ring + a positions slice.
     /// Use this when you have a separately-cached positions slice.
     pub fn face_normal_with(&self, positions: &[Vec3], face_idx: usize) -> Vec3 {
-        let ring: Vec<Vec3> = self.face_ring(face_idx)
+        let ring: Vec<Vec3> = self
+            .face_ring(face_idx)
             .map(|i| positions[i as usize])
             .collect();
         newell_normal(&ring)
@@ -131,7 +135,11 @@ impl BrushTopology {
             sum += positions[vi as usize];
             count += 1;
         }
-        if count == 0 { Vec3::ZERO } else { sum / count as f32 }
+        if count == 0 {
+            Vec3::ZERO
+        } else {
+            sum / count as f32
+        }
     }
 
     pub fn face_centroid(&self, face_idx: usize) -> Vec3 {

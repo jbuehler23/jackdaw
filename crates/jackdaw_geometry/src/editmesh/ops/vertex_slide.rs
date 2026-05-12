@@ -16,12 +16,18 @@ pub struct SlideResult {
     pub moved_verts: Vec<VertKey>,
 }
 
-pub fn vertex_slide(bmesh: &mut EditMesh, verts: &[VertKey], t: f32) -> Result<SlideResult, SlideError> {
+pub fn vertex_slide(
+    bmesh: &mut EditMesh,
+    verts: &[VertKey],
+    t: f32,
+) -> Result<SlideResult, SlideError> {
     if verts.is_empty() {
         return Err(SlideError::EmptyInput);
     }
     if t == 0.0 {
-        return Ok(SlideResult { moved_verts: Vec::new() });
+        return Ok(SlideResult {
+            moved_verts: Vec::new(),
+        });
     }
 
     // Snapshot start positions and target positions FIRST (before mutating). If we mutate
@@ -29,8 +35,12 @@ pub fn vertex_slide(bmesh: &mut EditMesh, verts: &[VertKey], t: f32) -> Result<S
     // remaining slides.
     let mut moves: Vec<(VertKey, bevy::math::Vec3)> = Vec::with_capacity(verts.len());
     for &v in verts {
-        let Some(vert) = bmesh.verts.get(v) else { continue };
-        let Some(first_edge) = vert.edge else { continue };
+        let Some(vert) = bmesh.verts.get(v) else {
+            continue;
+        };
+        let Some(first_edge) = vert.edge else {
+            continue;
+        };
         let edge = &bmesh.edges[first_edge];
         let other_vert_key = if edge.v[0] == v { edge.v[1] } else { edge.v[0] };
         let v_start = vert.co;

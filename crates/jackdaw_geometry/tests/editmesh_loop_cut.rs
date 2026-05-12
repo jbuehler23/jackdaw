@@ -1,6 +1,6 @@
+use bevy::math::Vec3;
 use jackdaw_geometry::editmesh::{EditMesh, ops::loop_cut::loop_cut};
 use jackdaw_jsn::Brush;
-use bevy::math::Vec3;
 
 #[test]
 fn loop_cut_around_cube_at_t_0_5_adds_4_verts_and_4_loop_edges() {
@@ -16,11 +16,27 @@ fn loop_cut_around_cube_at_t_0_5_adds_4_verts_and_4_loop_edges() {
     //   - 4 faces crossed -> 4 new faces (each quad becomes 2 quads).
     //   - 4 new "loop" edges (one per face split).
     // Total edges added: 4 (from edge splits) + 4 (from face splits) = 8.
-    assert_eq!(bmesh.vert_count(), initial_verts + 4, "+4 verts (one per crossed edge midpoint)");
-    assert_eq!(bmesh.face_count(), initial_faces + 4, "+4 faces (one per crossed quad becoming 2 quads)");
-    assert_eq!(bmesh.edge_count(), initial_edges + 8, "+8 edges (4 from edge splits + 4 from face splits)");
+    assert_eq!(
+        bmesh.vert_count(),
+        initial_verts + 4,
+        "+4 verts (one per crossed edge midpoint)"
+    );
+    assert_eq!(
+        bmesh.face_count(),
+        initial_faces + 4,
+        "+4 faces (one per crossed quad becoming 2 quads)"
+    );
+    assert_eq!(
+        bmesh.edge_count(),
+        initial_edges + 8,
+        "+8 edges (4 from edge splits + 4 from face splits)"
+    );
     bmesh.validate().expect("valid after loop cut");
-    assert_eq!(result.new_loop_edges.len(), 4, "result reports 4 loop edges");
+    assert_eq!(
+        result.new_loop_edges.len(),
+        4,
+        "result reports 4 loop edges"
+    );
     assert_eq!(result.new_verts.len(), 4);
     assert_eq!(result.new_faces.len(), 4);
 }
@@ -34,12 +50,21 @@ fn loop_cut_at_t_0_25_places_loop_offset_from_midpoint() {
     // All 4 new verts should sit at t=0.25 along their respective ring edges.
     // Just check they exist and are distinct.
     assert_eq!(result.new_verts.len(), 4);
-    let positions: Vec<_> = result.new_verts.iter().map(|&k| bmesh.verts[k].co).collect();
+    let positions: Vec<_> = result
+        .new_verts
+        .iter()
+        .map(|&k| bmesh.verts[k].co)
+        .collect();
     let mut unique = positions.clone();
-    unique.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap()
-        .then(a.y.partial_cmp(&b.y).unwrap())
-        .then(a.z.partial_cmp(&b.z).unwrap()));
-    unique.dedup_by(|a, b| (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6 && (a.z - b.z).abs() < 1e-6);
+    unique.sort_by(|a, b| {
+        a.x.partial_cmp(&b.x)
+            .unwrap()
+            .then(a.y.partial_cmp(&b.y).unwrap())
+            .then(a.z.partial_cmp(&b.z).unwrap())
+    });
+    unique.dedup_by(|a, b| {
+        (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6 && (a.z - b.z).abs() < 1e-6
+    });
     assert_eq!(unique.len(), 4, "4 distinct positions");
 }
 
@@ -78,10 +103,14 @@ fn loop_cut_at_t_0_3_all_new_verts_lie_on_left_third_plane() {
     let brush = Brush::cuboid(1.0, 1.0, 1.0);
     let mut bmesh = EditMesh::lift_from_topology(&brush.topology);
     // Pick the edge with the lowest slotmap key for a deterministic test.
-    let any_edge = bmesh.edges.keys().min_by_key(|k| {
-        use slotmap::Key;
-        k.data().as_ffi()
-    }).unwrap();
+    let any_edge = bmesh
+        .edges
+        .keys()
+        .min_by_key(|k| {
+            use slotmap::Key;
+            k.data().as_ffi()
+        })
+        .unwrap();
     let cut = loop_cut(&mut bmesh, any_edge, 0.3).expect("cut");
     let new_verts = cut.new_verts;
     let positions: Vec<Vec3> = new_verts.iter().map(|&k| bmesh.verts[k].co).collect();

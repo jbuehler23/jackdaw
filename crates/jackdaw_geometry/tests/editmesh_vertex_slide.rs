@@ -19,8 +19,10 @@ fn vertex_slide_at_t_0_5_moves_vert_halfway_to_neighbor() {
 
     vertex_slide(&mut bmesh, &[v], 0.5).expect("slide");
     let v_new = bmesh.verts[v].co;
-    assert!((v_new - expected).length() < 1e-4,
-            "vert should be at midpoint between start and neighbor: expected {expected}, got {v_new}");
+    assert!(
+        (v_new - expected).length() < 1e-4,
+        "vert should be at midpoint between start and neighbor: expected {expected}, got {v_new}"
+    );
     bmesh.validate().expect("valid after slide");
 }
 

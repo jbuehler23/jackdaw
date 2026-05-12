@@ -3,7 +3,9 @@
 //! (new_vert, v[1]), and splits each incident loop into two. Disk + radial
 //! cycles maintained.
 
-use crate::editmesh::cycles::{disk_insert_edge, disk_remove_edge, radial_insert_loop, radial_remove_loop};
+use crate::editmesh::cycles::{
+    disk_insert_edge, disk_remove_edge, radial_insert_loop, radial_remove_loop,
+};
 use crate::editmesh::types::*;
 
 #[derive(Debug)]

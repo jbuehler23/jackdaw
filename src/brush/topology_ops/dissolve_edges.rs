@@ -2,8 +2,8 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::{EditMesh, EdgeKey, VertKey};
 use jackdaw_geometry::editmesh::ops::dissolve_edges::dissolve_edges;
+use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, VertKey};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
@@ -104,9 +104,8 @@ pub(crate) fn brush_dissolve_edges(
     for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
         if face_idx < new_topology.polygons.len() {
             let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx =
-                new_topology.loops[new_topology.polygons[face_idx].loop_start as usize].vert
-                    as usize;
+            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
+                .vert as usize;
             let distance = positions[v0_idx].dot(normal);
             face_data.plane.normal = normal;
             face_data.plane.distance = distance;

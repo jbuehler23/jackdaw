@@ -1,4 +1,4 @@
-use jackdaw_geometry::editmesh::{ops::subdivide::subdivide, EditMesh};
+use jackdaw_geometry::editmesh::{EditMesh, ops::subdivide::subdivide};
 use jackdaw_jsn::Brush;
 
 #[test]
@@ -17,7 +17,10 @@ fn subdivide_all_edges_of_cube_makes_more_faces() {
     // may differ. Assert at least some subdivision happened.
     //
     // MVP: full 2x2 subdivision (4 quads per face) deferred until bm_face_poke lands.
-    assert!(bmesh.face_count() > initial_faces, "at least some faces subdivided");
+    assert!(
+        bmesh.face_count() > initial_faces,
+        "at least some faces subdivided"
+    );
     bmesh.validate().expect("valid after subdivide");
     assert_eq!(result.new_verts.len(), 12);
 }

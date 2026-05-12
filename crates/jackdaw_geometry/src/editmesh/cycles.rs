@@ -65,7 +65,13 @@ pub fn disk_remove_edge(bmesh: &mut EditMesh, e: EdgeKey) {
 /// Walk the disk cycle around `v`, yielding each incident edge once.
 pub fn disk_walk(bmesh: &EditMesh, v: VertKey) -> impl Iterator<Item = EdgeKey> + '_ {
     let first = bmesh.verts[v].edge;
-    DiskWalk { bmesh, v, first, current: first, done: false }
+    DiskWalk {
+        bmesh,
+        v,
+        first,
+        current: first,
+        done: false,
+    }
 }
 
 struct DiskWalk<'a> {
@@ -131,7 +137,12 @@ pub fn radial_remove_loop(bmesh: &mut EditMesh, lp: LoopKey) {
 /// Walk the radial cycle of `e`, yielding each incident loop once.
 pub fn radial_walk(bmesh: &EditMesh, e: EdgeKey) -> impl Iterator<Item = LoopKey> + '_ {
     let first = bmesh.edges[e].loop_first;
-    RadialWalk { bmesh, first, current: first, done: false }
+    RadialWalk {
+        bmesh,
+        first,
+        current: first,
+        done: false,
+    }
 }
 
 struct RadialWalk<'a> {

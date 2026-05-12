@@ -1,7 +1,7 @@
+use bevy::math::Vec3;
 use jackdaw_geometry::{
     AttributeStack, BrushTopology, EdgeFlag, MeshEdge, MeshLoop, MeshPoly, MeshVert,
 };
-use bevy::math::Vec3;
 
 /// Build a unit cube topology manually.
 ///
@@ -20,14 +20,30 @@ fn test_cube_topology() -> BrushTopology {
     // 6: ( 0.5,  0.5,  0.5)
     // 7: (-0.5,  0.5,  0.5)
     let vertices = vec![
-        MeshVert { position: Vec3::new(-0.5, -0.5, -0.5) }, // 0
-        MeshVert { position: Vec3::new( 0.5, -0.5, -0.5) }, // 1
-        MeshVert { position: Vec3::new( 0.5,  0.5, -0.5) }, // 2
-        MeshVert { position: Vec3::new(-0.5,  0.5, -0.5) }, // 3
-        MeshVert { position: Vec3::new(-0.5, -0.5,  0.5) }, // 4
-        MeshVert { position: Vec3::new( 0.5, -0.5,  0.5) }, // 5
-        MeshVert { position: Vec3::new( 0.5,  0.5,  0.5) }, // 6
-        MeshVert { position: Vec3::new(-0.5,  0.5,  0.5) }, // 7
+        MeshVert {
+            position: Vec3::new(-0.5, -0.5, -0.5),
+        }, // 0
+        MeshVert {
+            position: Vec3::new(0.5, -0.5, -0.5),
+        }, // 1
+        MeshVert {
+            position: Vec3::new(0.5, 0.5, -0.5),
+        }, // 2
+        MeshVert {
+            position: Vec3::new(-0.5, 0.5, -0.5),
+        }, // 3
+        MeshVert {
+            position: Vec3::new(-0.5, -0.5, 0.5),
+        }, // 4
+        MeshVert {
+            position: Vec3::new(0.5, -0.5, 0.5),
+        }, // 5
+        MeshVert {
+            position: Vec3::new(0.5, 0.5, 0.5),
+        }, // 6
+        MeshVert {
+            position: Vec3::new(-0.5, 0.5, 0.5),
+        }, // 7
     ];
 
     // 12 edges in canonical order (lower index first).
@@ -35,18 +51,54 @@ fn test_cube_topology() -> BrushTopology {
     // Top face ring: 4-5, 5-6, 6-7, 4-7
     // Vertical: 0-4, 1-5, 2-6, 3-7
     let edges = vec![
-        MeshEdge { v: [0, 1], flags: EdgeFlag::empty() }, //  0
-        MeshEdge { v: [1, 2], flags: EdgeFlag::empty() }, //  1
-        MeshEdge { v: [2, 3], flags: EdgeFlag::empty() }, //  2
-        MeshEdge { v: [0, 3], flags: EdgeFlag::empty() }, //  3
-        MeshEdge { v: [4, 5], flags: EdgeFlag::empty() }, //  4
-        MeshEdge { v: [5, 6], flags: EdgeFlag::empty() }, //  5
-        MeshEdge { v: [6, 7], flags: EdgeFlag::empty() }, //  6
-        MeshEdge { v: [4, 7], flags: EdgeFlag::empty() }, //  7
-        MeshEdge { v: [0, 4], flags: EdgeFlag::empty() }, //  8
-        MeshEdge { v: [1, 5], flags: EdgeFlag::empty() }, //  9
-        MeshEdge { v: [2, 6], flags: EdgeFlag::empty() }, // 10
-        MeshEdge { v: [3, 7], flags: EdgeFlag::empty() }, // 11
+        MeshEdge {
+            v: [0, 1],
+            flags: EdgeFlag::empty(),
+        }, //  0
+        MeshEdge {
+            v: [1, 2],
+            flags: EdgeFlag::empty(),
+        }, //  1
+        MeshEdge {
+            v: [2, 3],
+            flags: EdgeFlag::empty(),
+        }, //  2
+        MeshEdge {
+            v: [0, 3],
+            flags: EdgeFlag::empty(),
+        }, //  3
+        MeshEdge {
+            v: [4, 5],
+            flags: EdgeFlag::empty(),
+        }, //  4
+        MeshEdge {
+            v: [5, 6],
+            flags: EdgeFlag::empty(),
+        }, //  5
+        MeshEdge {
+            v: [6, 7],
+            flags: EdgeFlag::empty(),
+        }, //  6
+        MeshEdge {
+            v: [4, 7],
+            flags: EdgeFlag::empty(),
+        }, //  7
+        MeshEdge {
+            v: [0, 4],
+            flags: EdgeFlag::empty(),
+        }, //  8
+        MeshEdge {
+            v: [1, 5],
+            flags: EdgeFlag::empty(),
+        }, //  9
+        MeshEdge {
+            v: [2, 6],
+            flags: EdgeFlag::empty(),
+        }, // 10
+        MeshEdge {
+            v: [3, 7],
+            flags: EdgeFlag::empty(),
+        }, // 11
     ];
 
     // 6 faces, 4 loops each = 24 loops total.
@@ -59,12 +111,30 @@ fn test_cube_topology() -> BrushTopology {
     // Face 4: left   (-X), normal = (-1,0,  0). Viewed from -X: CCW is 0,4,7,3
     // Face 5: right  (+X), normal = (+1,0,  0). Viewed from +X: CCW is 1,2,6,5
     let polygons = vec![
-        MeshPoly { loop_start: 0,  loop_total: 4 }, // bottom
-        MeshPoly { loop_start: 4,  loop_total: 4 }, // top
-        MeshPoly { loop_start: 8,  loop_total: 4 }, // front
-        MeshPoly { loop_start: 12, loop_total: 4 }, // back
-        MeshPoly { loop_start: 16, loop_total: 4 }, // left
-        MeshPoly { loop_start: 20, loop_total: 4 }, // right
+        MeshPoly {
+            loop_start: 0,
+            loop_total: 4,
+        }, // bottom
+        MeshPoly {
+            loop_start: 4,
+            loop_total: 4,
+        }, // top
+        MeshPoly {
+            loop_start: 8,
+            loop_total: 4,
+        }, // front
+        MeshPoly {
+            loop_start: 12,
+            loop_total: 4,
+        }, // back
+        MeshPoly {
+            loop_start: 16,
+            loop_total: 4,
+        }, // left
+        MeshPoly {
+            loop_start: 20,
+            loop_total: 4,
+        }, // right
     ];
 
     // Face 0 bottom: verts 0,3,2,1 edges 3,2,1,0
@@ -75,35 +145,35 @@ fn test_cube_topology() -> BrushTopology {
     // Face 5 right:  verts 1,2,6,5 edges 1,10,5,9
     let loops = vec![
         // Face 0 bottom
-        MeshLoop { vert: 0, edge: 3  },
-        MeshLoop { vert: 3, edge: 2  },
-        MeshLoop { vert: 2, edge: 1  },
-        MeshLoop { vert: 1, edge: 0  },
+        MeshLoop { vert: 0, edge: 3 },
+        MeshLoop { vert: 3, edge: 2 },
+        MeshLoop { vert: 2, edge: 1 },
+        MeshLoop { vert: 1, edge: 0 },
         // Face 1 top
-        MeshLoop { vert: 4, edge: 4  },
-        MeshLoop { vert: 5, edge: 5  },
-        MeshLoop { vert: 6, edge: 6  },
-        MeshLoop { vert: 7, edge: 7  },
+        MeshLoop { vert: 4, edge: 4 },
+        MeshLoop { vert: 5, edge: 5 },
+        MeshLoop { vert: 6, edge: 6 },
+        MeshLoop { vert: 7, edge: 7 },
         // Face 2 front
-        MeshLoop { vert: 0, edge: 0  },
-        MeshLoop { vert: 1, edge: 9  },
-        MeshLoop { vert: 5, edge: 4  },
-        MeshLoop { vert: 4, edge: 8  },
+        MeshLoop { vert: 0, edge: 0 },
+        MeshLoop { vert: 1, edge: 9 },
+        MeshLoop { vert: 5, edge: 4 },
+        MeshLoop { vert: 4, edge: 8 },
         // Face 3 back
         MeshLoop { vert: 3, edge: 11 },
-        MeshLoop { vert: 7, edge: 6  },
+        MeshLoop { vert: 7, edge: 6 },
         MeshLoop { vert: 6, edge: 10 },
-        MeshLoop { vert: 2, edge: 2  },
+        MeshLoop { vert: 2, edge: 2 },
         // Face 4 left
-        MeshLoop { vert: 0, edge: 8  },
-        MeshLoop { vert: 4, edge: 7  },
+        MeshLoop { vert: 0, edge: 8 },
+        MeshLoop { vert: 4, edge: 7 },
         MeshLoop { vert: 7, edge: 11 },
-        MeshLoop { vert: 3, edge: 3  },
+        MeshLoop { vert: 3, edge: 3 },
         // Face 5 right
-        MeshLoop { vert: 1, edge: 1  },
+        MeshLoop { vert: 1, edge: 1 },
         MeshLoop { vert: 2, edge: 10 },
-        MeshLoop { vert: 6, edge: 5  },
-        MeshLoop { vert: 5, edge: 9  },
+        MeshLoop { vert: 6, edge: 5 },
+        MeshLoop { vert: 5, edge: 9 },
     ];
 
     BrushTopology {
@@ -126,7 +196,10 @@ fn cube_counts() {
 
 #[test]
 fn edge_flag_default_is_empty() {
-    assert!(EdgeFlag::default().is_empty(), "default EdgeFlag must be empty");
+    assert!(
+        EdgeFlag::default().is_empty(),
+        "default EdgeFlag must be empty"
+    );
 }
 
 #[test]

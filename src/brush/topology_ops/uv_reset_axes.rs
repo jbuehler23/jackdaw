@@ -60,10 +60,7 @@ pub(crate) fn brush_uv_reset_axes(
     OperatorResult::Finished
 }
 
-pub(crate) fn can_run_uv_face_op(
-    edit_mode: Res<EditMode>,
-    selection: Res<BrushSelection>,
-) -> bool {
+pub(crate) fn can_run_uv_face_op(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
     *edit_mode == EditMode::BrushEdit(BrushEditMode::Face) && !selection.faces.is_empty()
 }
 

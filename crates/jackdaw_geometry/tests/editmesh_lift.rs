@@ -22,12 +22,24 @@ fn cuboid_lift_each_face_has_axis_aligned_normal_cache() {
     let mut found_pos_y = false;
     let mut found_neg_y = false;
     for (_, face) in bmesh.faces.iter() {
-        if face.normal_cache.distance(bevy::math::Vec3::Z) < 1e-3 { found_pos_z = true; }
-        if face.normal_cache.distance(bevy::math::Vec3::NEG_Z) < 1e-3 { found_neg_z = true; }
-        if face.normal_cache.distance(bevy::math::Vec3::X) < 1e-3 { found_pos_x = true; }
-        if face.normal_cache.distance(bevy::math::Vec3::NEG_X) < 1e-3 { found_neg_x = true; }
-        if face.normal_cache.distance(bevy::math::Vec3::Y) < 1e-3 { found_pos_y = true; }
-        if face.normal_cache.distance(bevy::math::Vec3::NEG_Y) < 1e-3 { found_neg_y = true; }
+        if face.normal_cache.distance(bevy::math::Vec3::Z) < 1e-3 {
+            found_pos_z = true;
+        }
+        if face.normal_cache.distance(bevy::math::Vec3::NEG_Z) < 1e-3 {
+            found_neg_z = true;
+        }
+        if face.normal_cache.distance(bevy::math::Vec3::X) < 1e-3 {
+            found_pos_x = true;
+        }
+        if face.normal_cache.distance(bevy::math::Vec3::NEG_X) < 1e-3 {
+            found_neg_x = true;
+        }
+        if face.normal_cache.distance(bevy::math::Vec3::Y) < 1e-3 {
+            found_pos_y = true;
+        }
+        if face.normal_cache.distance(bevy::math::Vec3::NEG_Y) < 1e-3 {
+            found_neg_y = true;
+        }
     }
     assert!(found_pos_z && found_neg_z && found_pos_x && found_neg_x && found_pos_y && found_neg_y);
 }

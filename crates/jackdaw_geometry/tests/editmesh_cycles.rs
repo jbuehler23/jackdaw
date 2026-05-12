@@ -1,6 +1,6 @@
 use bevy::math::Vec3;
 use jackdaw_geometry::editmesh::{
-    EditMesh, EditEdge, EdgeFlag, EdgeKey,
+    EdgeFlag, EdgeKey, EditEdge, EditMesh,
     cycles::{disk_insert_edge, disk_walk},
 };
 

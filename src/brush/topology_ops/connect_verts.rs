@@ -2,8 +2,8 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::{EditMesh, VertKey};
 use jackdaw_geometry::editmesh::ops::connect_verts::connect_verts;
+use jackdaw_geometry::editmesh::{EditMesh, VertKey};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
@@ -20,7 +20,7 @@ use crate::commands::CommandHistory;
 pub(crate) fn brush_connect_verts(
     _: In<OperatorParameters>,
     edit_mode: Res<EditMode>,
-    selection: Res<BrushSelection>,
+    mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut bmesh_q: Query<&mut BrushEditMesh>,
     mut history: ResMut<CommandHistory>,
@@ -55,7 +55,39 @@ pub(crate) fn brush_connect_verts(
     }
 
     // Run connect_verts on the selected vertices.
-    let _ = connect_verts(&mut bmesh_component.mesh, &vert_keys);
+    let connect_result = connect_verts(&mut bmesh_component.mesh, &vert_keys);
+
+    // Capture the topology vertex index pair for each new edge so we can write
+    // them into `BrushSelection.edges` after the flatten/re-lift roundtrip.
+    // Topology vertex order matches EditMesh slotmap iteration order (see
+    // `flatten_to_topology`); connect_verts never removes verts.
+    let new_edge_pairs: Vec<(usize, usize)> = match connect_result {
+        Ok(ref r) => {
+            let mut vk_to_topo: std::collections::HashMap<VertKey, usize> =
+                std::collections::HashMap::with_capacity(bmesh_component.mesh.verts.len());
+            for (i, (k, _)) in bmesh_component.mesh.verts.iter().enumerate() {
+                vk_to_topo.insert(k, i);
+            }
+            let mut out: Vec<(usize, usize)> = Vec::with_capacity(r.new_edges.len());
+            for ek in &r.new_edges {
+                let Some(edge) = bmesh_component.mesh.edges.get(*ek) else {
+                    continue;
+                };
+                let Some(&a) = vk_to_topo.get(&edge.v[0]) else {
+                    continue;
+                };
+                let Some(&b) = vk_to_topo.get(&edge.v[1]) else {
+                    continue;
+                };
+                let pair = if a < b { (a, b) } else { (b, a) };
+                if !out.contains(&pair) {
+                    out.push(pair);
+                }
+            }
+            out
+        }
+        Err(_) => Vec::new(),
+    };
 
     // Re-cache all face normals.
     let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
@@ -92,9 +124,8 @@ pub(crate) fn brush_connect_verts(
     for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
         if face_idx < new_topology.polygons.len() {
             let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx =
-                new_topology.loops[new_topology.polygons[face_idx].loop_start as usize].vert
-                    as usize;
+            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
+                .vert as usize;
             let distance = positions[v0_idx].dot(normal);
             face_data.plane.normal = normal;
             face_data.plane.distance = distance;
@@ -123,6 +154,18 @@ pub(crate) fn brush_connect_verts(
         new: brush.clone(),
         label: "Connect Vertex Path".to_string(),
     }));
+
+    // Chain selection: write the newly created connecting edges into
+    // `BrushSelection.edges` so the user can immediately act on them
+    // (e.g. switch to Edge mode and loop-cut / slide).
+    let vert_count = brush.topology.vertices.len();
+    let inbounds: Vec<(usize, usize)> = new_edge_pairs
+        .into_iter()
+        .filter(|(a, b)| *a < vert_count && *b < vert_count)
+        .collect();
+    if !inbounds.is_empty() {
+        selection.edges = inbounds;
+    }
 
     OperatorResult::Finished
 }

@@ -1507,7 +1507,10 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
             new_faces.push(face_data);
         }
 
-        let new_brush = Brush { faces: new_faces, ..default() };
+        let new_brush = Brush {
+            faces: new_faces,
+            ..default()
+        };
 
         // Apply (ECS + AST). Undo is handled by the enclosing
         // `viewport.draw_brush_modal` operator's snapshot diff; no
@@ -2275,7 +2278,10 @@ fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
                 }
 
                 fragment_data.push((
-                    Brush { faces: clean, ..default() },
+                    Brush {
+                        faces: clean,
+                        ..default()
+                    },
                     Transform::from_translation(centroid),
                 ));
             }
@@ -2511,7 +2517,9 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
     for &entity in &selected_brushes {
         if let Ok(brush) = brush_query.get(world, entity) {
             if !is_convex_topology(&brush.topology) {
-                warn!("Join (Convex Merge) requires convex brushes. Non-convex brushes need mesh-CSG support.");
+                warn!(
+                    "Join (Convex Merge) requires convex brushes. Non-convex brushes need mesh-CSG support."
+                );
                 return;
             }
         }
@@ -2657,7 +2665,10 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
             new_faces.push(face_data);
         }
 
-        let new_brush = Brush { faces: new_faces, ..default() };
+        let new_brush = Brush {
+            faces: new_faces,
+            ..default()
+        };
 
         // Snapshot others before despawning (for undo)
         let mut undo_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
@@ -2737,14 +2748,18 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
     // Early-out: ensure all selected brushes (cutters) are convex; CSG Subtract on non-convex is not yet supported.
     for (_, brush, _) in &cutters {
         if !is_convex_topology(&brush.topology) {
-            warn!("CSG Subtract requires convex brushes. Non-convex brushes need mesh-CSG support.");
+            warn!(
+                "CSG Subtract requires convex brushes. Non-convex brushes need mesh-CSG support."
+            );
             return;
         }
     }
     // Also ensure all targets are convex
     for (_, brush, _) in &targets {
         if !is_convex_topology(&brush.topology) {
-            warn!("CSG Subtract requires convex brushes. Non-convex brushes need mesh-CSG support.");
+            warn!(
+                "CSG Subtract requires convex brushes. Non-convex brushes need mesh-CSG support."
+            );
             return;
         }
     }
@@ -2830,7 +2845,10 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
             }
 
             fragment_data.push((
-                Brush { faces: clean, ..default() },
+                Brush {
+                    faces: clean,
+                    ..default()
+                },
                 Transform::from_translation(centroid),
             ));
         }
@@ -2995,7 +3013,9 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
     // Early-out: ensure all selected brushes are convex; CSG Intersect on non-convex is not yet supported.
     for (_, brush, _) in &selected_brushes {
         if !is_convex_topology(&brush.topology) {
-            warn!("CSG Intersect requires convex brushes. Non-convex brushes need mesh-CSG support.");
+            warn!(
+                "CSG Intersect requires convex brushes. Non-convex brushes need mesh-CSG support."
+            );
             return;
         }
     }
@@ -3069,7 +3089,10 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
     }
 
     // Spawn the intersection brush
-    let new_brush = Brush { faces: clean, ..default() };
+    let new_brush = Brush {
+        faces: clean,
+        ..default()
+    };
     let frag_sid = world.resource_mut::<StableIdCounter>().next();
     let brush_data = BrushData {
         stable_id: frag_sid,
@@ -3480,7 +3503,10 @@ pub(crate) fn extend_face_to_brush_impl(
         return;
     }
     // Apply via undo-able SetBrush command (ECS + AST)
-    let new_brush = Brush { faces: local_clean, ..default() };
+    let new_brush = Brush {
+        faces: local_clean,
+        ..default()
+    };
     crate::brush::sync_brush_to_ast(world, primary, &new_brush);
     if let Some(mut brush) = world.get_mut::<Brush>(primary) {
         *brush = new_brush.clone();

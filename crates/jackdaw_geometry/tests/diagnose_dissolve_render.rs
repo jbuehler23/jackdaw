@@ -1,10 +1,17 @@
 use bevy::math::Vec3;
-use jackdaw_geometry::editmesh::{EditMesh, ops::{subdivide::subdivide, dissolve_verts::dissolve_verts}};
+use jackdaw_geometry::editmesh::{
+    EditMesh,
+    ops::{dissolve_verts::dissolve_verts, subdivide::subdivide},
+};
 use jackdaw_jsn::Brush;
 
 fn fan_triangulate(n: usize) -> Vec<[u32; 3]> {
-    if n < 3 { return Vec::new(); }
-    (1..n - 1).map(|i| [0u32, i as u32, (i + 1) as u32]).collect()
+    if n < 3 {
+        return Vec::new();
+    }
+    (1..n - 1)
+        .map(|i| [0u32, i as u32, (i + 1) as u32])
+        .collect()
 }
 
 #[test]
@@ -22,15 +29,26 @@ fn diagnose_post_fix_render_state() {
     bmesh.validate().expect("valid");
 
     println!("\n=== POST-DISSOLVE EditMesh STATE ===");
-    println!("verts: {}, edges: {}, loops: {}, faces: {}",
-        bmesh.vert_count(), bmesh.edge_count(), bmesh.loop_count(), bmesh.face_count());
+    println!(
+        "verts: {}, edges: {}, loops: {}, faces: {}",
+        bmesh.vert_count(),
+        bmesh.edge_count(),
+        bmesh.loop_count(),
+        bmesh.face_count()
+    );
     let mut mat_idxs: Vec<u32> = bmesh.faces.values().map(|f| f.material_idx).collect();
     mat_idxs.sort();
     println!("material_idxes (sorted): {:?}", mat_idxs);
     let unique: std::collections::HashSet<u32> = mat_idxs.iter().copied().collect();
-    println!("UNIQUE material_idxes (count): {} (should match face count)", unique.len());
-    assert_eq!(unique.len(), bmesh.face_count(),
-        "material_idx should be unique now per the fix");
+    println!(
+        "UNIQUE material_idxes (count): {} (should match face count)",
+        unique.len()
+    );
+    assert_eq!(
+        unique.len(),
+        bmesh.face_count(),
+        "material_idx should be unique now per the fix"
+    );
 
     println!("\nFaces:");
     for (k, f) in bmesh.faces.iter() {
@@ -42,7 +60,10 @@ fn diagnose_post_fix_render_state() {
             cur = bmesh.loops[cur].next;
         }
         let _ = k; // suppress unused warning
-        println!("  face material_idx={}, loop_count={}, normal_cache={}", f.material_idx, f.loop_count, f.normal_cache);
+        println!(
+            "  face material_idx={}, loop_count={}, normal_cache={}",
+            f.material_idx, f.loop_count, f.normal_cache
+        );
         for (i, p) in ring_pos.iter().enumerate() {
             println!("    ring[{}]: {:?}", i, p);
         }
@@ -60,11 +81,19 @@ fn diagnose_post_fix_render_state() {
     for (i, poly) in topology.polygons.iter().enumerate() {
         let normal = topology.face_normal_with(&positions, i);
         let ring_indices: Vec<u32> = topology.face_ring(i).collect();
-        let ring_pos: Vec<Vec3> = ring_indices.iter().map(|&vi| positions[vi as usize]).collect();
+        let ring_pos: Vec<Vec3> = ring_indices
+            .iter()
+            .map(|&vi| positions[vi as usize])
+            .collect();
         let tris = fan_triangulate(ring_indices.len());
         let _ = poly; // suppress unused warning
-        println!("polygon[{}]: normal={}, ring_len={}, tris={}",
-            i, normal, ring_indices.len(), tris.len());
+        println!(
+            "polygon[{}]: normal={}, ring_len={}, tris={}",
+            i,
+            normal,
+            ring_indices.len(),
+            tris.len()
+        );
         let convex = is_convex_ring(&ring_pos, normal);
         println!("  CONVEX: {}", convex);
         if !convex {
@@ -86,7 +115,9 @@ fn diagnose_post_fix_render_state() {
 
 fn is_convex_ring(ring: &[Vec3], normal: Vec3) -> bool {
     let n = ring.len();
-    if n < 4 { return true; }
+    if n < 4 {
+        return true;
+    }
     for i in 0..n {
         let a = ring[i];
         let b = ring[(i + 1) % n];

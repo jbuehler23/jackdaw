@@ -1,9 +1,12 @@
-//! Slide selected edges along their parallel-edge directions in adjacent quad
-//! faces. Pure transform: no topology change, just vertex position updates.
+//! Slide selected edges along the parallel-edge direction of ONE adjacent
+//! quad face. The sign of `t` picks which side of the edge to slide toward:
+//! `t > 0` uses the first face in the radial cycle, `t < 0` uses the second
+//! (when present). `|t|` scales the slide from 0 to the parallel edge's length.
 //!
-//! For each endpoint of a selected edge, gather all "slide-along" directions
-//! from adjacent quad faces, average them, and translate the vertex by
-//! `t * slide_length * average_dir`.
+//! Picking a single face per edge (rather than averaging across both adjacent
+//! faces) keeps the edge parallel to its original orientation. Averaging
+//! across two perpendicular faces (e.g. a cube's top edge between top + front
+//! faces) produced a diagonal slide, which is wrong.
 
 use std::collections::{HashMap, HashSet};
 
@@ -21,100 +24,91 @@ pub struct SlideResult {
     pub moved_verts: Vec<VertKey>,
 }
 
-pub fn edge_slide(bmesh: &mut EditMesh, edges: &[EdgeKey], t: f32) -> Result<SlideResult, SlideError> {
+pub fn edge_slide(
+    bmesh: &mut EditMesh,
+    edges: &[EdgeKey],
+    t: f32,
+) -> Result<SlideResult, SlideError> {
     if edges.is_empty() {
         return Err(SlideError::EmptyInput);
     }
     if t == 0.0 {
-        return Ok(SlideResult { moved_verts: Vec::new() });
+        return Ok(SlideResult {
+            moved_verts: Vec::new(),
+        });
     }
 
-    // For each affected vertex, gather per-face slide-along directions. Each
-    // direction is stored as the raw displacement vector (from v toward the
-    // slide-along neighbor). We collect all contributions, then resolve them
-    // into a single offset per vertex before applying.
-    //
-    // When two adjacent faces give opposite directions (the common case for a
-    // ring-cut between two quads), a naive average cancels to zero. We detect
-    // this by checking whether the sum's magnitude is much smaller than the
-    // average individual magnitude; if so, we use the first direction seen as
-    // the canonical slide direction.
-    let mut vert_dirs: HashMap<VertKey, Vec<Vec3>> = HashMap::new();
     let edge_set: HashSet<EdgeKey> = edges.iter().copied().collect();
 
+    // Accumulate per-vert displacement contributions. For a single-edge slide
+    // each vert gets one contribution; for a ring slide adjacent ring-edges
+    // share a vert and contribute one direction each (averaged below).
+    //
+    // Ring-consistency note: when sliding a closed loop, the chosen face for
+    // each edge (radial[0] vs radial[1]) should be consistent across the
+    // ring. Today we pick by sign(t) for each edge independently; if
+    // radial walk order varies around the ring, contributions can disagree
+    // and the average will skew. That's acceptable for the MVP single-edge
+    // case and the loop-cut ring test (which only verifies movement, not
+    // direction); a future fix would propagate a face-side hint across
+    // ring-adjacent edges.
+    let mut vert_dirs: HashMap<VertKey, Vec<Vec3>> = HashMap::new();
+
     for &edge in edges {
-        // For each loop on this edge in each face:
-        for lp_key in radial_walk(bmesh, edge).collect::<Vec<_>>() {
-            let face = bmesh.loops[lp_key].face;
-            // Only quads contribute slide directions in this MVP.
-            if bmesh.faces[face].loop_count != 4 {
-                continue;
-            }
-            // The loop walks v_start -> v_end. v_start = lp_key.vert.
-            let v_start = bmesh.loops[lp_key].vert;
-            let v_end = bmesh.loops[bmesh.loops[lp_key].next].vert;
+        let quad_loops: Vec<LoopKey> = radial_walk(bmesh, edge)
+            .filter(|&lp| bmesh.faces[bmesh.loops[lp].face].loop_count == 4)
+            .collect();
+        if quad_loops.is_empty() {
+            continue;
+        }
+        let chosen = if t >= 0.0 || quad_loops.len() < 2 {
+            quad_loops[0]
+        } else {
+            quad_loops[1]
+        };
 
-            // Slide-along edge for v_start: the edge incident to v_start in
-            // this face that is NOT `edge`. That is lp_key.prev.edge.
-            let prev_loop = bmesh.loops[lp_key].prev;
-            let slide_edge_for_start = bmesh.loops[prev_loop].edge;
-            // Skip if the slide-along edge is also selected (would compound badly).
-            if !edge_set.contains(&slide_edge_for_start) {
-                let other_vert_for_start = {
-                    let e = &bmesh.edges[slide_edge_for_start];
-                    if e.v[0] == v_start { e.v[1] } else { e.v[0] }
-                };
-                let dir = bmesh.verts[other_vert_for_start].co - bmesh.verts[v_start].co;
-                vert_dirs.entry(v_start).or_default().push(dir);
-            }
+        let v_start = bmesh.loops[chosen].vert;
+        let v_end = bmesh.loops[bmesh.loops[chosen].next].vert;
 
-            // Slide-along edge for v_end: lp_key.next.edge.
-            let next_loop = bmesh.loops[lp_key].next;
-            let slide_edge_for_end = bmesh.loops[next_loop].edge;
-            if !edge_set.contains(&slide_edge_for_end) {
-                let other_vert_for_end = {
-                    let e = &bmesh.edges[slide_edge_for_end];
-                    if e.v[0] == v_end { e.v[1] } else { e.v[0] }
-                };
-                let dir = bmesh.verts[other_vert_for_end].co - bmesh.verts[v_end].co;
-                vert_dirs.entry(v_end).or_default().push(dir);
-            }
+        // Slide-along edge for v_start: the edge incident to v_start in this
+        // face that isn't `edge`. That's lp.prev.edge.
+        let prev_loop = bmesh.loops[chosen].prev;
+        let slide_edge_for_start = bmesh.loops[prev_loop].edge;
+        if !edge_set.contains(&slide_edge_for_start) {
+            let other = {
+                let e = &bmesh.edges[slide_edge_for_start];
+                if e.v[0] == v_start { e.v[1] } else { e.v[0] }
+            };
+            let dir = bmesh.verts[other].co - bmesh.verts[v_start].co;
+            vert_dirs.entry(v_start).or_default().push(dir);
+        }
+
+        // Slide-along edge for v_end: lp.next.edge.
+        let next_loop = bmesh.loops[chosen].next;
+        let slide_edge_for_end = bmesh.loops[next_loop].edge;
+        if !edge_set.contains(&slide_edge_for_end) {
+            let other = {
+                let e = &bmesh.edges[slide_edge_for_end];
+                if e.v[0] == v_end { e.v[1] } else { e.v[0] }
+            };
+            let dir = bmesh.verts[other].co - bmesh.verts[v_end].co;
+            vert_dirs.entry(v_end).or_default().push(dir);
         }
     }
 
-    // Resolve each vertex's collected directions into a single offset.
-    //
-    // Strategy: sum all directions. If the sum's length is at least 10% of
-    // the average individual length, use the sum (divided by count) as the
-    // average. Otherwise the directions cancel (opposite faces case); use the
-    // first direction seen as the canonical slide.
-    let mut vert_offset: HashMap<VertKey, Vec3> = HashMap::new();
+    // Apply averaged offset per vert, scaled by |t|. Sign is already baked
+    // into the chosen face above.
+    let abs_t = t.abs();
+    let mut moved: Vec<VertKey> = Vec::new();
     for (vk, dirs) in &vert_dirs {
         if dirs.is_empty() {
             continue;
         }
-        let sum: Vec3 = dirs.iter().copied().sum();
-        let avg_individual_len: f32 = dirs.iter().map(|d| d.length()).sum::<f32>() / dirs.len() as f32;
-        let offset = if avg_individual_len < 1e-7 {
-            Vec3::ZERO
-        } else if sum.length() >= 0.1 * avg_individual_len {
-            // Directions mostly agree: use the averaged sum.
-            sum / dirs.len() as f32
-        } else {
-            // Directions cancel (e.g., opposite faces). Use the first direction
-            // seen as the canonical slide side.
-            dirs[0]
-        };
-        vert_offset.insert(*vk, offset);
-    }
-
-    // Apply offsets scaled by t.
-    let mut moved: Vec<VertKey> = Vec::new();
-    for (vk, offset) in vert_offset.iter() {
-        if offset.length_squared() < 1e-14 {
+        let avg: Vec3 = dirs.iter().copied().sum::<Vec3>() / dirs.len() as f32;
+        if avg.length_squared() < 1e-14 {
             continue;
         }
-        bmesh.verts[*vk].co += *offset * t;
+        bmesh.verts[*vk].co += avg * abs_t;
         moved.push(*vk);
     }
 

@@ -13,22 +13,28 @@ impl EditMesh {
         let mut bmesh = EditMesh::default();
 
         // 1) Verts: build a topology-vert-index -> VertKey table.
-        let vert_keys: Vec<VertKey> = t.vertices.iter()
+        let vert_keys: Vec<VertKey> = t
+            .vertices
+            .iter()
             .map(|v| bmesh.add_vert(v.position))
             .collect();
 
         // 2) Edges: build a topology-edge-index -> EdgeKey table.
-        let edge_keys: Vec<EdgeKey> = t.edges.iter().map(|e| {
-            let key = bmesh.edges.insert(EditEdge {
-                v: [vert_keys[e.v[0] as usize], vert_keys[e.v[1] as usize]],
-                flag: EdgeFlag::from_bits_truncate(e.flags.bits()),
-                loop_first: None,
-                disk_next: [EdgeKey::default(); 2],
-                disk_prev: [EdgeKey::default(); 2],
-            });
-            disk_insert_edge(&mut bmesh, key);
-            key
-        }).collect();
+        let edge_keys: Vec<EdgeKey> = t
+            .edges
+            .iter()
+            .map(|e| {
+                let key = bmesh.edges.insert(EditEdge {
+                    v: [vert_keys[e.v[0] as usize], vert_keys[e.v[1] as usize]],
+                    flag: EdgeFlag::from_bits_truncate(e.flags.bits()),
+                    loop_first: None,
+                    disk_next: [EdgeKey::default(); 2],
+                    disk_prev: [EdgeKey::default(); 2],
+                });
+                disk_insert_edge(&mut bmesh, key);
+                key
+            })
+            .collect();
 
         // 3) Polygons -> faces + loops + radial cycles.
         for (face_idx, poly) in t.polygons.iter().enumerate() {
@@ -44,17 +50,20 @@ impl EditMesh {
                 normal_cache: bevy::math::Vec3::ZERO,
             });
 
-            let loop_keys: Vec<LoopKey> = face_loops_topology.iter().map(|l| {
-                bmesh.loops.insert(EditLoop {
-                    vert: vert_keys[l.vert as usize],
-                    edge: edge_keys[l.edge as usize],
-                    face: face_key,
-                    next: LoopKey::default(),
-                    prev: LoopKey::default(),
-                    radial_next: LoopKey::default(),
-                    radial_prev: LoopKey::default(),
+            let loop_keys: Vec<LoopKey> = face_loops_topology
+                .iter()
+                .map(|l| {
+                    bmesh.loops.insert(EditLoop {
+                        vert: vert_keys[l.vert as usize],
+                        edge: edge_keys[l.edge as usize],
+                        face: face_key,
+                        next: LoopKey::default(),
+                        prev: LoopKey::default(),
+                        radial_next: LoopKey::default(),
+                        radial_prev: LoopKey::default(),
+                    })
                 })
-            }).collect();
+                .collect();
 
             // Wire next / prev around the face ring.
             for i in 0..total {
@@ -74,9 +83,9 @@ impl EditMesh {
             bmesh.faces[face_key].loop_first = loop_keys[0];
 
             // Cache normal (Newell over ring).
-            let positions: Vec<bevy::math::Vec3> = (0..total).map(|i| {
-                t.vertices[face_loops_topology[i].vert as usize].position
-            }).collect();
+            let positions: Vec<bevy::math::Vec3> = (0..total)
+                .map(|i| t.vertices[face_loops_topology[i].vert as usize].position)
+                .collect();
             bmesh.faces[face_key].normal_cache = newell_normal(&positions);
         }
 

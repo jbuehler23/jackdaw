@@ -26,7 +26,9 @@ pub fn dissolve_faces(
             removed += 1;
         }
     }
-    Ok(DissolveFacesResult { removed_faces: removed })
+    Ok(DissolveFacesResult {
+        removed_faces: removed,
+    })
 }
 
 fn dissolve_one_face(bmesh: &mut EditMesh, face: FaceKey) -> bool {

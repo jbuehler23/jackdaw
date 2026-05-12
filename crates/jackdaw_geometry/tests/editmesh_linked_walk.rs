@@ -1,4 +1,4 @@
-use jackdaw_geometry::editmesh::{EditMesh, EdgeFlag, select::linked_walk::linked_walk};
+use jackdaw_geometry::editmesh::{EdgeFlag, EditMesh, select::linked_walk::linked_walk};
 use jackdaw_jsn::Brush;
 
 #[test]
@@ -28,7 +28,12 @@ fn linked_walk_with_sharp_blockers_isolates_face() {
     }
     // Walk from isolated_face with blockers ON: should only return isolated_face.
     let result = linked_walk(&bmesh, isolated_face, true);
-    assert_eq!(result.len(), 1, "isolated face surrounded by SHARP edges should be alone, got {} faces", result.len());
+    assert_eq!(
+        result.len(),
+        1,
+        "isolated face surrounded by SHARP edges should be alone, got {} faces",
+        result.len()
+    );
     // Walk from isolated_face with blockers OFF: should return all 6.
     let result_no_blockers = linked_walk(&bmesh, isolated_face, false);
     assert_eq!(result_no_blockers.len(), 6);

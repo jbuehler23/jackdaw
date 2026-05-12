@@ -2,10 +2,18 @@ use jackdaw_geometry::editmesh::{EditMesh, ops::face_split::split_face};
 use jackdaw_jsn::Brush;
 
 fn first_face_with_count_4(bmesh: &EditMesh) -> jackdaw_geometry::editmesh::FaceKey {
-    bmesh.faces.iter().find(|(_, f)| f.loop_count == 4).map(|(k, _)| k).unwrap()
+    bmesh
+        .faces
+        .iter()
+        .find(|(_, f)| f.loop_count == 4)
+        .map(|(k, _)| k)
+        .unwrap()
 }
 
-fn ring_verts(bmesh: &EditMesh, face: jackdaw_geometry::editmesh::FaceKey) -> Vec<jackdaw_geometry::editmesh::VertKey> {
+fn ring_verts(
+    bmesh: &EditMesh,
+    face: jackdaw_geometry::editmesh::FaceKey,
+) -> Vec<jackdaw_geometry::editmesh::VertKey> {
     let mut out = Vec::new();
     let f = &bmesh.faces[face];
     let mut cur = f.loop_first;
@@ -32,9 +40,14 @@ fn split_quad_face_along_diagonal_makes_two_tris() {
     // Both faces should have loop_count == 3 (tris).
     let mut tri_count = 0;
     for (_, f) in bmesh.faces.iter() {
-        if f.loop_count == 3 { tri_count += 1; }
+        if f.loop_count == 3 {
+            tri_count += 1;
+        }
     }
-    assert!(tri_count >= 2, "at least 2 tris exist after splitting a quad along its diagonal");
+    assert!(
+        tri_count >= 2,
+        "at least 2 tris exist after splitting a quad along its diagonal"
+    );
 }
 
 #[test]
@@ -45,7 +58,10 @@ fn split_with_adjacent_verts_errors() {
     let ring = ring_verts(&bmesh, face);
     // ring[0] and ring[1] are adjacent — already connected by an edge.
     let result = split_face(&mut bmesh, face, ring[0], ring[1]);
-    assert!(result.is_err(), "splitting between adjacent verts should error");
+    assert!(
+        result.is_err(),
+        "splitting between adjacent verts should error"
+    );
 }
 
 #[test]

@@ -6,8 +6,8 @@ use bevy::window::PrimaryWindow;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
-use jackdaw_geometry::editmesh::{EditMesh, EdgeKey, VertKey};
 use jackdaw_geometry::editmesh::ops::loop_cut::loop_cut;
+use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, VertKey};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
@@ -72,7 +72,7 @@ pub struct LoopCutModalState {
 pub(crate) fn brush_loop_cut(
     _: In<OperatorParameters>,
     edit_mode: Res<EditMode>,
-    selection: Res<BrushSelection>,
+    mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut bmesh_q: Query<&mut BrushEditMesh>,
     brush_transforms: Query<&GlobalTransform>,
@@ -162,11 +162,7 @@ pub(crate) fn brush_loop_cut(
         modal_state.start_v1_window = v1_window;
 
         // Draw the initial preview lines at t=0.5.
-        update_preview_lines(
-            &modal_state,
-            &brush_transforms,
-            &mut preview_lines,
-        );
+        update_preview_lines(&modal_state, &brush_transforms, &mut preview_lines);
 
         return OperatorResult::Running;
     }
@@ -231,10 +227,37 @@ pub(crate) fn brush_loop_cut(
 
         // Run the EditMesh op at the chosen t.
         let result = loop_cut(&mut bmesh_component.mesh, edge_key, t);
-        let Ok(_loop_cut_result) = result else {
+        let Ok(loop_cut_result) = result else {
             clear_modal(&mut modal_state, &mut preview_lines);
             return OperatorResult::Cancelled;
         };
+
+        // Resolve the topology vertex index for each EdgeKey in the new loop
+        // ring so we can write the result into `BrushSelection.edges` after the
+        // flatten/re-lift roundtrip. Topology vertex order matches EditMesh
+        // slotmap iteration order (see `flatten_to_topology`), and loop_cut
+        // never removes verts, so the slotmap position taken now is the same
+        // index the post-flatten topology will use.
+        let mut new_loop_edge_pairs: Vec<(usize, usize)> =
+            Vec::with_capacity(loop_cut_result.new_loop_edges.len());
+        {
+            let mut vk_to_topo: std::collections::HashMap<VertKey, usize> =
+                std::collections::HashMap::with_capacity(bmesh_component.mesh.verts.len());
+            for (i, (k, _)) in bmesh_component.mesh.verts.iter().enumerate() {
+                vk_to_topo.insert(k, i);
+            }
+            for ek in &loop_cut_result.new_loop_edges {
+                let edge = &bmesh_component.mesh.edges[*ek];
+                let Some(&a) = vk_to_topo.get(&edge.v[0]) else {
+                    continue;
+                };
+                let Some(&b) = vk_to_topo.get(&edge.v[1]) else {
+                    continue;
+                };
+                let pair = if a < b { (a, b) } else { (b, a) };
+                new_loop_edge_pairs.push(pair);
+            }
+        }
 
         // Re-cache all face normals.
         let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
@@ -270,8 +293,7 @@ pub(crate) fn brush_loop_cut(
         for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
             if face_idx < new_topology.polygons.len() {
                 let normal = new_topology.face_normal_with(&positions, face_idx);
-                let v0_idx = new_topology.loops
-                    [new_topology.polygons[face_idx].loop_start as usize]
+                let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
                     .vert as usize;
                 let distance = positions[v0_idx].dot(normal);
                 face_data.plane.normal = normal;
@@ -301,6 +323,18 @@ pub(crate) fn brush_loop_cut(
             new: brush.clone(),
             label: "Loop Cut".to_string(),
         }));
+
+        // Chain selection: write the newly created loop ring edges into
+        // `BrushSelection.edges` so a follow-up gesture (loop cut again,
+        // edge slide, etc.) can operate on the new ring immediately.
+        let vert_count = brush.topology.vertices.len();
+        let inbounds: Vec<(usize, usize)> = new_loop_edge_pairs
+            .into_iter()
+            .filter(|(a, b)| *a < vert_count && *b < vert_count)
+            .collect();
+        if !inbounds.is_empty() {
+            selection.edges = inbounds;
+        }
 
         clear_modal(&mut modal_state, &mut preview_lines);
         return OperatorResult::Finished;
@@ -443,9 +477,6 @@ fn snap_to_fractions(t: f32) -> f32 {
     best
 }
 
-pub(crate) fn can_run_loop_cut(
-    edit_mode: Res<EditMode>,
-    selection: Res<BrushSelection>,
-) -> bool {
+pub(crate) fn can_run_loop_cut(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
     *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge) && !selection.edges.is_empty()
 }

@@ -1,8 +1,12 @@
 use bevy::math::Vec3;
-use jackdaw_geometry::editmesh::{ops::edge_create::create_edge, EditMesh};
 use jackdaw_geometry::editmesh::ops::bridge_edge_loops::bridge_edge_loops;
+use jackdaw_geometry::editmesh::{EditMesh, ops::edge_create::create_edge};
 
-fn build_two_squares_no_bridge() -> (EditMesh, Vec<jackdaw_geometry::editmesh::EdgeKey>, Vec<jackdaw_geometry::editmesh::EdgeKey>) {
+fn build_two_squares_no_bridge() -> (
+    EditMesh,
+    Vec<jackdaw_geometry::editmesh::EdgeKey>,
+    Vec<jackdaw_geometry::editmesh::EdgeKey>,
+) {
     let mut bmesh = EditMesh::default();
     // Bottom square at z=0.
     let b0 = bmesh.add_vert(Vec3::new(0.0, 0.0, 0.0));

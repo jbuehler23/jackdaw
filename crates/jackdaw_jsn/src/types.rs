@@ -73,14 +73,30 @@ impl Brush {
         //
         // Vertices (see doc comment for layout):
         let vertices = vec![
-            MeshVert { position: Vec3::new(-hx, -hy, -hz) }, // 0
-            MeshVert { position: Vec3::new( hx, -hy, -hz) }, // 1
-            MeshVert { position: Vec3::new( hx,  hy, -hz) }, // 2
-            MeshVert { position: Vec3::new(-hx,  hy, -hz) }, // 3
-            MeshVert { position: Vec3::new(-hx, -hy,  hz) }, // 4
-            MeshVert { position: Vec3::new( hx, -hy,  hz) }, // 5
-            MeshVert { position: Vec3::new( hx,  hy,  hz) }, // 6
-            MeshVert { position: Vec3::new(-hx,  hy,  hz) }, // 7
+            MeshVert {
+                position: Vec3::new(-hx, -hy, -hz),
+            }, // 0
+            MeshVert {
+                position: Vec3::new(hx, -hy, -hz),
+            }, // 1
+            MeshVert {
+                position: Vec3::new(hx, hy, -hz),
+            }, // 2
+            MeshVert {
+                position: Vec3::new(-hx, hy, -hz),
+            }, // 3
+            MeshVert {
+                position: Vec3::new(-hx, -hy, hz),
+            }, // 4
+            MeshVert {
+                position: Vec3::new(hx, -hy, hz),
+            }, // 5
+            MeshVert {
+                position: Vec3::new(hx, hy, hz),
+            }, // 6
+            MeshVert {
+                position: Vec3::new(-hx, hy, hz),
+            }, // 7
         ];
 
         // Edges (canonical v[0] < v[1]):
@@ -88,18 +104,54 @@ impl Brush {
         //   top ring:    4:(4,5) 5:(5,6) 6:(6,7) 7:(4,7)
         //   verticals:   8:(0,4) 9:(1,5) 10:(2,6) 11:(3,7)
         let edges = vec![
-            MeshEdge { v: [0, 1], ..default() }, //  0
-            MeshEdge { v: [1, 2], ..default() }, //  1
-            MeshEdge { v: [2, 3], ..default() }, //  2
-            MeshEdge { v: [0, 3], ..default() }, //  3
-            MeshEdge { v: [4, 5], ..default() }, //  4
-            MeshEdge { v: [5, 6], ..default() }, //  5
-            MeshEdge { v: [6, 7], ..default() }, //  6
-            MeshEdge { v: [4, 7], ..default() }, //  7
-            MeshEdge { v: [0, 4], ..default() }, //  8
-            MeshEdge { v: [1, 5], ..default() }, //  9
-            MeshEdge { v: [2, 6], ..default() }, // 10
-            MeshEdge { v: [3, 7], ..default() }, // 11
+            MeshEdge {
+                v: [0, 1],
+                ..default()
+            }, //  0
+            MeshEdge {
+                v: [1, 2],
+                ..default()
+            }, //  1
+            MeshEdge {
+                v: [2, 3],
+                ..default()
+            }, //  2
+            MeshEdge {
+                v: [0, 3],
+                ..default()
+            }, //  3
+            MeshEdge {
+                v: [4, 5],
+                ..default()
+            }, //  4
+            MeshEdge {
+                v: [5, 6],
+                ..default()
+            }, //  5
+            MeshEdge {
+                v: [6, 7],
+                ..default()
+            }, //  6
+            MeshEdge {
+                v: [4, 7],
+                ..default()
+            }, //  7
+            MeshEdge {
+                v: [0, 4],
+                ..default()
+            }, //  8
+            MeshEdge {
+                v: [1, 5],
+                ..default()
+            }, //  9
+            MeshEdge {
+                v: [2, 6],
+                ..default()
+            }, // 10
+            MeshEdge {
+                v: [3, 7],
+                ..default()
+            }, // 11
         ];
 
         // Loops: each face has 4 loops (CCW from outside).
@@ -113,17 +165,35 @@ impl Brush {
         //   Face 5 (-Z): verts 0,3,2,1 — edges 3,2,1,0
         let loop_data: &[(u32, u32)] = &[
             // Face 0 (+X)
-            (1, 1), (2, 10), (6, 5), (5, 9),
+            (1, 1),
+            (2, 10),
+            (6, 5),
+            (5, 9),
             // Face 1 (-X)
-            (0, 8), (4, 7), (7, 11), (3, 3),
+            (0, 8),
+            (4, 7),
+            (7, 11),
+            (3, 3),
             // Face 2 (+Y)
-            (2, 2), (3, 11), (7, 6), (6, 10),
+            (2, 2),
+            (3, 11),
+            (7, 6),
+            (6, 10),
             // Face 3 (-Y)
-            (0, 0), (1, 9), (5, 4), (4, 8),
+            (0, 0),
+            (1, 9),
+            (5, 4),
+            (4, 8),
             // Face 4 (+Z)
-            (4, 4), (5, 5), (6, 6), (7, 7),
+            (4, 4),
+            (5, 5),
+            (6, 6),
+            (7, 7),
             // Face 5 (-Z)
-            (0, 3), (3, 2), (2, 1), (1, 0),
+            (0, 3),
+            (3, 2),
+            (2, 1),
+            (1, 0),
         ];
         let loops: Vec<MeshLoop> = loop_data
             .iter()
@@ -132,10 +202,19 @@ impl Brush {
 
         // Polygons: each face has loop_start and loop_total = 4.
         let polygons: Vec<MeshPoly> = (0..6u32)
-            .map(|i| MeshPoly { loop_start: i * 4, loop_total: 4 })
+            .map(|i| MeshPoly {
+                loop_start: i * 4,
+                loop_total: 4,
+            })
             .collect();
 
-        let topology = BrushTopology { vertices, edges, polygons, loops, ..default() };
+        let topology = BrushTopology {
+            vertices,
+            edges,
+            polygons,
+            loops,
+            ..default()
+        };
 
         Self { faces, topology }
     }
@@ -234,10 +313,14 @@ impl Brush {
         // Top ring:  indices n..2n
         let mut topo_verts: Vec<MeshVert> = Vec::with_capacity(2 * n);
         for i in 0..n {
-            topo_verts.push(MeshVert { position: vertices[i] - normal * half_depth });
+            topo_verts.push(MeshVert {
+                position: vertices[i] - normal * half_depth,
+            });
         }
         for i in 0..n {
-            topo_verts.push(MeshVert { position: vertices[i] + normal * half_depth });
+            topo_verts.push(MeshVert {
+                position: vertices[i] + normal * half_depth,
+            });
         }
 
         // Edges:
@@ -249,16 +332,25 @@ impl Brush {
             let a = i as u32;
             let b = ((i + 1) % n) as u32;
             let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-            topo_edges.push(MeshEdge { v: [lo, hi], ..default() });
+            topo_edges.push(MeshEdge {
+                v: [lo, hi],
+                ..default()
+            });
         }
         for i in 0..n {
             let a = (n + i) as u32;
             let b = (n + (i + 1) % n) as u32;
             let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-            topo_edges.push(MeshEdge { v: [lo, hi], ..default() });
+            topo_edges.push(MeshEdge {
+                v: [lo, hi],
+                ..default()
+            });
         }
         for i in 0..n {
-            topo_edges.push(MeshEdge { v: [i as u32, (n + i) as u32], ..default() });
+            topo_edges.push(MeshEdge {
+                v: [i as u32, (n + i) as u32],
+                ..default()
+            });
         }
 
         // Loops and polygons (face order: top cap, bottom cap, then sides).
@@ -277,7 +369,10 @@ impl Brush {
                 let edge = (n + i) as u32; // top ring edge i
                 topo_loops.push(MeshLoop { vert, edge });
             }
-            topo_polys.push(MeshPoly { loop_start, loop_total: n as u32 });
+            topo_polys.push(MeshPoly {
+                loop_start,
+                loop_total: n as u32,
+            });
         }
 
         // Face 1 — bottom cap: base ring CW when looking along +normal = CCW from below (-normal).
@@ -289,7 +384,10 @@ impl Brush {
                 let edge = i as u32; // base ring edge i
                 topo_loops.push(MeshLoop { vert, edge });
             }
-            topo_polys.push(MeshPoly { loop_start, loop_total: n as u32 });
+            topo_polys.push(MeshPoly {
+                loop_start,
+                loop_total: n as u32,
+            });
         }
 
         // Side faces: one quad per valid edge index.
@@ -300,14 +398,29 @@ impl Brush {
             let j = (i + 1) % n;
             let loop_start = topo_loops.len() as u32;
             // base[i] → edge: base ring edge i
-            topo_loops.push(MeshLoop { vert: i as u32, edge: i as u32 });
+            topo_loops.push(MeshLoop {
+                vert: i as u32,
+                edge: i as u32,
+            });
             // base[j] → edge: vertical j
-            topo_loops.push(MeshLoop { vert: j as u32, edge: (2 * n + j) as u32 });
+            topo_loops.push(MeshLoop {
+                vert: j as u32,
+                edge: (2 * n + j) as u32,
+            });
             // top[j] → edge: top ring edge j (reversed direction, but we store the edge index)
-            topo_loops.push(MeshLoop { vert: (n + j) as u32, edge: (n + j) as u32 });
+            topo_loops.push(MeshLoop {
+                vert: (n + j) as u32,
+                edge: (n + j) as u32,
+            });
             // top[i] → edge: vertical i
-            topo_loops.push(MeshLoop { vert: (n + i) as u32, edge: (2 * n + i) as u32 });
-            topo_polys.push(MeshPoly { loop_start, loop_total: 4 });
+            topo_loops.push(MeshLoop {
+                vert: (n + i) as u32,
+                edge: (2 * n + i) as u32,
+            });
+            topo_polys.push(MeshPoly {
+                loop_start,
+                loop_total: 4,
+            });
         }
 
         let topology = BrushTopology {

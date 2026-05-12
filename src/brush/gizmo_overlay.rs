@@ -3,7 +3,10 @@ use bevy::prelude::*;
 use super::interaction::{
     BrushDragState, EdgeDragState, FaceExtrudeMode, VertexDragConstraint, VertexDragState,
 };
-use super::{BrushEditMode, BrushMeshCache, BrushSelection, EditMode, InsetPreviewLines, LoopCutPreviewLines};
+use super::{
+    BrushEditMode, BrushMeshCache, BrushSelection, EdgeSlidePreviewLines, EditMode,
+    ExtrudePreviewLines, InsetPreviewLines, LoopCutPreviewLines, VertexSlidePreviewLines,
+};
 use crate::default_style;
 use crate::face_grid::BrushOutlineSelectedGizmoGroup;
 use jackdaw_jsn::Brush;
@@ -203,6 +206,39 @@ pub(super) fn draw_loop_cut_preview(
 /// Draw cyan line segments for the inset preview, sourced from `InsetPreviewLines`.
 pub(super) fn draw_inset_preview(
     preview_lines: Res<InsetPreviewLines>,
+    mut gizmos: Gizmos<BrushOutlineSelectedGizmoGroup>,
+) {
+    for &(a, b) in &preview_lines.lines {
+        gizmos.line(a, b, Color::srgb(0.3, 0.85, 1.0));
+    }
+}
+
+/// Draw cyan line segments for the modal extrude preview, sourced from
+/// `ExtrudePreviewLines`.
+pub(super) fn draw_extrude_preview(
+    preview_lines: Res<ExtrudePreviewLines>,
+    mut gizmos: Gizmos<BrushOutlineSelectedGizmoGroup>,
+) {
+    for &(a, b) in &preview_lines.lines {
+        gizmos.line(a, b, Color::srgb(0.3, 0.85, 1.0));
+    }
+}
+
+/// Draw cyan line segments for the modal edge slide preview, sourced from
+/// `EdgeSlidePreviewLines`.
+pub(super) fn draw_edge_slide_preview(
+    preview_lines: Res<EdgeSlidePreviewLines>,
+    mut gizmos: Gizmos<BrushOutlineSelectedGizmoGroup>,
+) {
+    for &(a, b) in &preview_lines.lines {
+        gizmos.line(a, b, Color::srgb(0.3, 0.85, 1.0));
+    }
+}
+
+/// Draw cyan line segments for the modal vertex slide preview, sourced from
+/// `VertexSlidePreviewLines`.
+pub(super) fn draw_vertex_slide_preview(
+    preview_lines: Res<VertexSlidePreviewLines>,
     mut gizmos: Gizmos<BrushOutlineSelectedGizmoGroup>,
 ) {
     for &(a, b) in &preview_lines.lines {

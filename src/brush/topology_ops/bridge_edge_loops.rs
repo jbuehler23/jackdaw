@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::{EditMesh, EdgeKey, VertKey};
 use jackdaw_geometry::editmesh::ops::bridge_edge_loops::bridge_edge_loops;
+use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, VertKey};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
@@ -23,7 +23,7 @@ use crate::commands::CommandHistory;
 pub(crate) fn brush_bridge_edge_loops(
     _: In<OperatorParameters>,
     edit_mode: Res<EditMode>,
-    selection: Res<BrushSelection>,
+    mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut bmesh_q: Query<&mut BrushEditMesh>,
     mut history: ResMut<CommandHistory>,
@@ -31,22 +31,36 @@ pub(crate) fn brush_bridge_edge_loops(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
         return OperatorResult::Cancelled;
     }
-    let Some(brush_entity) = selection.entity else { return OperatorResult::Cancelled; };
-    if selection.edges.len() < 2 { return OperatorResult::Cancelled; }
+    let Some(brush_entity) = selection.entity else {
+        return OperatorResult::Cancelled;
+    };
+    if selection.edges.len() < 2 {
+        return OperatorResult::Cancelled;
+    }
 
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else { return OperatorResult::Cancelled; };
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else { return OperatorResult::Cancelled; };
+    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
+        return OperatorResult::Cancelled;
+    };
+    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+        return OperatorResult::Cancelled;
+    };
 
     // Map cache edge pairs (a, b) -> EditMesh EdgeKeys via vert_keys.
     let mut bmesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
     for &(a, b) in &selection.edges {
-        let Some(&va) = bmesh_component.vert_keys.get(a) else { continue };
-        let Some(&vb) = bmesh_component.vert_keys.get(b) else { continue };
+        let Some(&va) = bmesh_component.vert_keys.get(a) else {
+            continue;
+        };
+        let Some(&vb) = bmesh_component.vert_keys.get(b) else {
+            continue;
+        };
         if let Some(ek) = find_edge_between(&bmesh_component.mesh, va, vb) {
             bmesh_edges.push(ek);
         }
     }
-    if bmesh_edges.len() < 2 { return OperatorResult::Cancelled; }
+    if bmesh_edges.len() < 2 {
+        return OperatorResult::Cancelled;
+    }
 
     // Partition into connected components (BFS over edge adjacency through verts).
     let components = partition_edges_by_connectivity(&bmesh_component.mesh, &bmesh_edges);
@@ -56,9 +70,21 @@ pub(crate) fn brush_bridge_edge_loops(
     let edges_a = &components[0];
     let edges_b = &components[1];
 
-    let Ok(_result) = bridge_edge_loops(&mut bmesh_component.mesh, edges_a, edges_b) else {
+    let Ok(result) = bridge_edge_loops(&mut bmesh_component.mesh, edges_a, edges_b) else {
         return OperatorResult::Cancelled;
     };
+
+    // Snapshot the material_idx of each newly created face so we can resolve
+    // post-flatten topology face indices. `flatten_to_topology` stable-sorts by
+    // `material_idx`, and `create_face_from_verts` assigns `max_existing + 1`
+    // each call (so every bridge face has a distinct, monotonically increasing
+    // material_idx with no ties). The post-flatten topology index for a face
+    // with material_idx M is therefore `count(faces with material_idx < M)`.
+    let new_face_material_idxs: Vec<u32> = result
+        .new_faces
+        .iter()
+        .filter_map(|fk| bmesh_component.mesh.faces.get(*fk).map(|f| f.material_idx))
+        .collect();
 
     // Re-cache normals (mirror inset/extrude pattern).
     let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
@@ -77,7 +103,9 @@ pub(crate) fn brush_bridge_edge_loops(
 
     // Flatten + sync planes + grow brush.faces.
     let new_topology = bmesh_component.mesh.flatten_to_topology();
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else { return OperatorResult::Cancelled; };
+    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+        return OperatorResult::Cancelled;
+    };
     let new_face_count = new_topology.polygons.len();
     while brush.faces.len() < new_face_count {
         let template = brush.faces.last().cloned().unwrap_or_default();
@@ -87,7 +115,8 @@ pub(crate) fn brush_bridge_edge_loops(
     for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
         if face_idx < new_topology.polygons.len() {
             let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize].vert as usize;
+            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
+                .vert as usize;
             let distance = positions[v0_idx].dot(normal);
             face_data.plane.normal = normal;
             face_data.plane.distance = distance;
@@ -114,11 +143,33 @@ pub(crate) fn brush_bridge_edge_loops(
         new: brush.clone(),
         label: "Bridge Edge Loops".to_string(),
     }));
+
+    // Resolve the post-flatten topology face index for each new bridge face by
+    // counting faces with strictly smaller material_idx in the post-op mesh
+    // (mirrors the inset chaining logic; see commentary there).
+    let face_count = brush.faces.len();
+    let new_face_indices: Vec<usize> = new_face_material_idxs
+        .into_iter()
+        .map(|mtx| {
+            bmesh_component
+                .mesh
+                .faces
+                .values()
+                .filter(|f| f.material_idx < mtx)
+                .count()
+        })
+        .filter(|&i| i < face_count)
+        .collect();
+    if !new_face_indices.is_empty() {
+        selection.faces = new_face_indices;
+    }
     OperatorResult::Finished
 }
 
 fn find_edge_between(bmesh: &EditMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    bmesh.edges.iter()
+    bmesh
+        .edges
+        .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
         .map(|(k, _)| k)
 }
@@ -135,13 +186,19 @@ fn partition_edges_by_connectivity(bmesh: &EditMesh, edges: &[EdgeKey]) -> Vec<V
     let mut visited: HashSet<EdgeKey> = HashSet::new();
     let mut components: Vec<Vec<EdgeKey>> = Vec::new();
     for &start_edge in edges {
-        if visited.contains(&start_edge) { continue; }
+        if visited.contains(&start_edge) {
+            continue;
+        }
         // BFS from this edge.
         let mut stack: Vec<EdgeKey> = vec![start_edge];
         let mut component: Vec<EdgeKey> = Vec::new();
         while let Some(e) = stack.pop() {
-            if !visited.insert(e) { continue; }
-            if !edge_set.contains(&e) { continue; }
+            if !visited.insert(e) {
+                continue;
+            }
+            if !edge_set.contains(&e) {
+                continue;
+            }
             component.push(e);
             let edge = &bmesh.edges[e];
             for &v in &edge.v {
@@ -159,10 +216,7 @@ fn partition_edges_by_connectivity(bmesh: &EditMesh, edges: &[EdgeKey]) -> Vec<V
     components
 }
 
-pub(crate) fn can_run_bridge(
-    edit_mode: Res<EditMode>,
-    selection: Res<BrushSelection>,
-) -> bool {
+pub(crate) fn can_run_bridge(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
     *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge) && selection.edges.len() >= 2
 }
 

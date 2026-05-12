@@ -2,8 +2,8 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::{EditMesh, EdgeKey, VertKey};
 use jackdaw_geometry::editmesh::ops::edge_slide::edge_slide;
+use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, VertKey};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
@@ -64,7 +64,9 @@ pub(crate) fn brush_edge_slide(
     }
 
     // Run the EditMesh op.
-    let Ok(_edge_slide_result) = edge_slide(&mut bmesh_component.mesh, &bmesh_edges, DEFAULT_SLIDE_T) else {
+    let Ok(_edge_slide_result) =
+        edge_slide(&mut bmesh_component.mesh, &bmesh_edges, DEFAULT_SLIDE_T)
+    else {
         return OperatorResult::Cancelled;
     };
 
@@ -95,9 +97,8 @@ pub(crate) fn brush_edge_slide(
     for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
         if face_idx < new_topology.polygons.len() {
             let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx =
-                new_topology.loops[new_topology.polygons[face_idx].loop_start as usize].vert
-                    as usize;
+            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
+                .vert as usize;
             let distance = positions[v0_idx].dot(normal);
             face_data.plane.normal = normal;
             face_data.plane.distance = distance;
@@ -138,10 +139,7 @@ fn find_edge_between(bmesh: &EditMesh, va: VertKey, vb: VertKey) -> Option<EdgeK
         .map(|(k, _)| k)
 }
 
-pub(crate) fn can_run_edge_slide(
-    edit_mode: Res<EditMode>,
-    selection: Res<BrushSelection>,
-) -> bool {
+pub(crate) fn can_run_edge_slide(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
     *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge) && !selection.edges.is_empty()
 }
 

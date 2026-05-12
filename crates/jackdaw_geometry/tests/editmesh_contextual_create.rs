@@ -1,7 +1,7 @@
 use bevy::math::Vec3;
 use jackdaw_geometry::editmesh::{
-    ops::contextual_create::{contextual_create, ContextualResult},
     EditMesh,
+    ops::contextual_create::{ContextualResult, contextual_create},
 };
 
 #[test]

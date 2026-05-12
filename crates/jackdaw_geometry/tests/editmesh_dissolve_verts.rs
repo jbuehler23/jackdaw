@@ -1,8 +1,8 @@
-use jackdaw_geometry::editmesh::{EditMesh, ops::dissolve_verts::dissolve_verts};
+use jackdaw_geometry::editmesh::cycles::{disk_walk, radial_walk};
 use jackdaw_geometry::editmesh::ops::edge_split::split_edge;
 use jackdaw_geometry::editmesh::ops::face_create::create_face_from_verts;
 use jackdaw_geometry::editmesh::ops::subdivide::subdivide;
-use jackdaw_geometry::editmesh::cycles::{disk_walk, radial_walk};
+use jackdaw_geometry::editmesh::{EditMesh, ops::dissolve_verts::dissolve_verts};
 use jackdaw_jsn::Brush;
 
 #[test]
@@ -25,7 +25,9 @@ fn dissolve_midpoint_vert_from_edge_split_restores_original_edge() {
     bmesh.validate().expect("valid before split");
 
     // Find the shared edge (v0, v1).
-    let shared_edge = bmesh.edges.iter()
+    let shared_edge = bmesh
+        .edges
+        .iter()
         .find(|(_, e)| (e.v[0] == v0 && e.v[1] == v1) || (e.v[0] == v1 && e.v[1] == v0))
         .map(|(k, _)| k)
         .expect("shared edge");
@@ -72,8 +74,8 @@ fn dissolve_corner_produces_outward_facing_merged_face() {
     let mut bmesh = EditMesh::lift_from_topology(&brush.topology);
     let v = bmesh.verts.keys().next().unwrap();
     // Snapshot the corner's expected outward direction = average of 3 incident face normals.
-    use std::collections::HashSet;
     use jackdaw_geometry::editmesh::FaceKey;
+    use std::collections::HashSet;
     let mut incident_faces: HashSet<FaceKey> = HashSet::new();
     for e in disk_walk(&bmesh, v).collect::<Vec<_>>() {
         for lp in radial_walk(&bmesh, e).collect::<Vec<_>>() {
@@ -81,7 +83,9 @@ fn dissolve_corner_produces_outward_facing_merged_face() {
         }
     }
     let mut expected = bevy::math::Vec3::ZERO;
-    for f in &incident_faces { expected += bmesh.faces[*f].normal_cache; }
+    for f in &incident_faces {
+        expected += bmesh.faces[*f].normal_cache;
+    }
     let expected = expected.normalize_or_zero();
 
     // Snapshot all existing face keys before dissolve so we can find the new merged face.
@@ -90,7 +94,9 @@ fn dissolve_corner_produces_outward_facing_merged_face() {
     dissolve_verts(&mut bmesh, &[v]).expect("dissolve");
 
     // The merged face is the one that didn't exist before the dissolve.
-    let new_face = bmesh.faces.keys()
+    let new_face = bmesh
+        .faces
+        .keys()
         .find(|k| !faces_before.contains(k))
         .expect("a new merged face should have been created");
     let new_normal = bmesh.faces[new_face].normal_cache;

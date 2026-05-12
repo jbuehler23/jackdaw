@@ -3,11 +3,22 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::editmesh::VertKey;
-use jackdaw_geometry::editmesh::ops::contextual_create::contextual_create;
+use jackdaw_geometry::editmesh::ops::contextual_create::{ContextualResult, contextual_create};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
+
+/// Captured selection target for the F-key contextual_create result. Held
+/// across the flatten/re-lift roundtrip so the post-commit selection update
+/// can map back to a topology index (or vertex index pair).
+enum ChainTarget {
+    /// Topology vertex index pair (a < b) for the newly created edge.
+    Edge((usize, usize)),
+    /// `material_idx` of the newly created face; resolved to a topology face
+    /// index via `count(faces with material_idx < this)` (mirrors inset logic).
+    Face(u32),
+}
 
 /// Fill the current vertex selection with a new edge or face. Two verts -> edge.
 /// Three or more -> face whose ring is the selected verts in selection order.
@@ -21,7 +32,7 @@ use crate::commands::CommandHistory;
 pub(crate) fn brush_make_edge_face(
     _: In<OperatorParameters>,
     edit_mode: Res<EditMode>,
-    selection: Res<BrushSelection>,
+    mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut bmesh_q: Query<&mut BrushEditMesh>,
     mut history: ResMut<CommandHistory>,
@@ -56,7 +67,42 @@ pub(crate) fn brush_make_edge_face(
     }
 
     // Run contextual_create on the selected vertices.
-    let _ = contextual_create(&mut bmesh_component.mesh, &vert_keys);
+    let create_result = contextual_create(&mut bmesh_component.mesh, &vert_keys);
+
+    // Capture either the new edge's (v0, v1) topology index pair or the new
+    // face's `material_idx` so we can resolve the post-flatten selection
+    // targets. Topology vertex order matches EditMesh slotmap iteration order
+    // (see `flatten_to_topology`); `contextual_create` never removes verts.
+    let chain_target: Option<ChainTarget> = match &create_result {
+        Ok(ContextualResult::Edge(ek)) => {
+            if let Some(edge) = bmesh_component.mesh.edges.get(*ek) {
+                let mut a_idx: Option<usize> = None;
+                let mut b_idx: Option<usize> = None;
+                for (i, (k, _)) in bmesh_component.mesh.verts.iter().enumerate() {
+                    if k == edge.v[0] {
+                        a_idx = Some(i);
+                    }
+                    if k == edge.v[1] {
+                        b_idx = Some(i);
+                    }
+                }
+                if let (Some(a), Some(b)) = (a_idx, b_idx) {
+                    let pair = if a < b { (a, b) } else { (b, a) };
+                    Some(ChainTarget::Edge(pair))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        Ok(ContextualResult::Face(fk)) => bmesh_component
+            .mesh
+            .faces
+            .get(*fk)
+            .map(|f| ChainTarget::Face(f.material_idx)),
+        Err(_) => None,
+    };
 
     // Re-cache all face normals.
     let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
@@ -93,9 +139,8 @@ pub(crate) fn brush_make_edge_face(
     for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
         if face_idx < new_topology.polygons.len() {
             let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx =
-                new_topology.loops[new_topology.polygons[face_idx].loop_start as usize].vert
-                    as usize;
+            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
+                .vert as usize;
             let distance = positions[v0_idx].dot(normal);
             face_data.plane.normal = normal;
             face_data.plane.distance = distance;
@@ -124,6 +169,29 @@ pub(crate) fn brush_make_edge_face(
         new: brush.clone(),
         label: "Make Edge / Face".to_string(),
     }));
+
+    // Chain selection: write the new edge or face into `BrushSelection` so the
+    // user can immediately act on it (e.g. toggle to Edge / Face mode and drag).
+    match chain_target {
+        Some(ChainTarget::Edge((a, b))) => {
+            let vert_count = brush.topology.vertices.len();
+            if a < vert_count && b < vert_count {
+                selection.edges = vec![(a, b)];
+            }
+        }
+        Some(ChainTarget::Face(mtx)) => {
+            let face_idx = bmesh_component
+                .mesh
+                .faces
+                .values()
+                .filter(|f| f.material_idx < mtx)
+                .count();
+            if face_idx < brush.faces.len() {
+                selection.faces = vec![face_idx];
+            }
+        }
+        None => {}
+    }
 
     OperatorResult::Finished
 }

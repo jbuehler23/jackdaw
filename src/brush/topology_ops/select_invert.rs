@@ -61,7 +61,10 @@ pub(crate) fn brush_select_invert(
             }
             let current: std::collections::HashSet<(usize, usize)> =
                 selection.edges.iter().copied().collect();
-            selection.edges = all_edges.into_iter().filter(|p| !current.contains(p)).collect();
+            selection.edges = all_edges
+                .into_iter()
+                .filter(|p| !current.contains(p))
+                .collect();
             OperatorResult::Finished
         }
         EditMode::BrushEdit(BrushEditMode::Face) => {

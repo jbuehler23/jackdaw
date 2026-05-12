@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::editmesh::select::loop_walk::loop_walk;
-use jackdaw_geometry::editmesh::{EditMesh, EdgeKey, VertKey};
+use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, VertKey};
 
 use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode};
 

@@ -28,7 +28,11 @@ pub fn extrude_face_region(
     face: FaceKey,
     depth: f32,
 ) -> Result<ExtrudeResult, ExtrudeError> {
-    let face_data = bmesh.faces.get(face).cloned().ok_or(ExtrudeError::FaceNotFound)?;
+    let face_data = bmesh
+        .faces
+        .get(face)
+        .cloned()
+        .ok_or(ExtrudeError::FaceNotFound)?;
     let n = face_data.loop_count as usize;
     if n < 3 {
         return Err(ExtrudeError::Degenerate);
@@ -212,5 +216,9 @@ pub fn extrude_face_region(
     let top_pos: Vec<Vec3> = new_verts.iter().map(|&k| bmesh.verts[k].co).collect();
     bmesh.faces[face].normal_cache = newell_normal(&top_pos);
 
-    Ok(ExtrudeResult { new_verts, side_faces, top_face: face })
+    Ok(ExtrudeResult {
+        new_verts,
+        side_faces,
+        top_face: face,
+    })
 }

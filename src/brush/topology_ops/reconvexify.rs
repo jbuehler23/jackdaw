@@ -7,15 +7,15 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
+use jackdaw_geometry::editmesh::EditMesh;
 use jackdaw_geometry::{
     compute_brush_geometry_from_planes,
     topology::{BrushTopology, EdgeFlag, MeshEdge, MeshLoop, MeshPoly, MeshVert},
 };
-use jackdaw_geometry::editmesh::EditMesh;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMesh, BrushSelection, SetBrush};
 use crate::brush::hull::rebuild_brush_from_vertices;
+use crate::brush::{BrushEditMesh, BrushSelection, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Snap the selected brush back to the convex hull of its current vertices.
@@ -45,7 +45,12 @@ pub(crate) fn brush_reconvexify(
     // Collect current vertex positions from the brush's topology if available;
     // fall back to deriving them from the plane representation for legacy brushes.
     let current_positions: Vec<Vec3> = if !brush_before.topology.vertices.is_empty() {
-        brush_before.topology.vertices.iter().map(|v| v.position).collect()
+        brush_before
+            .topology
+            .vertices
+            .iter()
+            .map(|v| v.position)
+            .collect()
     } else {
         let (verts, _) = compute_brush_geometry_from_planes(&brush_before.faces);
         verts
@@ -57,7 +62,13 @@ pub(crate) fn brush_reconvexify(
     // Build old face_polygons (parallel to faces) for UV-preservation lookup.
     let old_face_polygons: Vec<Vec<usize>> = if !brush_before.topology.polygons.is_empty() {
         (0..brush_before.topology.polygons.len())
-            .map(|i| brush_before.topology.face_ring(i).map(|v| v as usize).collect())
+            .map(|i| {
+                brush_before
+                    .topology
+                    .face_ring(i)
+                    .map(|v| v as usize)
+                    .collect()
+            })
             .collect()
     } else {
         let (_, polys) = compute_brush_geometry_from_planes(&brush_before.faces);
@@ -118,7 +129,10 @@ fn build_topology_from_face_polygons(
     positions: Vec<Vec3>,
     face_polygons: Vec<Vec<usize>>,
 ) -> BrushTopology {
-    let vertices: Vec<MeshVert> = positions.into_iter().map(|p| MeshVert { position: p }).collect();
+    let vertices: Vec<MeshVert> = positions
+        .into_iter()
+        .map(|p| MeshVert { position: p })
+        .collect();
 
     let mut edge_map: HashMap<(u32, u32), u32> = HashMap::new();
     let mut edges: Vec<MeshEdge> = Vec::new();
@@ -128,7 +142,10 @@ fn build_topology_from_face_polygons(
             idx
         } else {
             let idx = edges.len() as u32;
-            edges.push(MeshEdge { v: [lo, hi], flags: EdgeFlag::empty() });
+            edges.push(MeshEdge {
+                v: [lo, hi],
+                flags: EdgeFlag::empty(),
+            });
             edge_map.insert((lo, hi), idx);
             idx
         }
@@ -138,7 +155,10 @@ fn build_topology_from_face_polygons(
     let mut loops: Vec<MeshLoop> = Vec::new();
     for ring in &face_polygons {
         if ring.len() < 3 {
-            polygons.push(MeshPoly { loop_start: loops.len() as u32, loop_total: 0 });
+            polygons.push(MeshPoly {
+                loop_start: loops.len() as u32,
+                loop_total: 0,
+            });
             continue;
         }
         let loop_start = loops.len() as u32;
@@ -146,18 +166,27 @@ fn build_topology_from_face_polygons(
             let v_cur = ring[i] as u32;
             let v_next = ring[(i + 1) % ring.len()] as u32;
             let edge_idx = canonicalize(v_cur, v_next);
-            loops.push(MeshLoop { vert: v_cur, edge: edge_idx });
+            loops.push(MeshLoop {
+                vert: v_cur,
+                edge: edge_idx,
+            });
         }
-        polygons.push(MeshPoly { loop_start, loop_total: ring.len() as u32 });
+        polygons.push(MeshPoly {
+            loop_start,
+            loop_total: ring.len() as u32,
+        });
     }
 
-    BrushTopology { vertices, edges, polygons, loops, attributes: Default::default() }
+    BrushTopology {
+        vertices,
+        edges,
+        polygons,
+        loops,
+        attributes: Default::default(),
+    }
 }
 
-pub(crate) fn can_run_reconvexify(
-    selection: Res<BrushSelection>,
-    brushes: Query<&Brush>,
-) -> bool {
+pub(crate) fn can_run_reconvexify(selection: Res<BrushSelection>, brushes: Query<&Brush>) -> bool {
     let Some(brush_entity) = selection.entity else {
         return false;
     };

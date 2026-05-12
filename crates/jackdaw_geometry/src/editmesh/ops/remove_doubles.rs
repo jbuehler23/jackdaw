@@ -27,13 +27,16 @@ pub fn remove_doubles(bmesh: &mut EditMesh, distance: f32) -> Result<MergeResult
         return Err(MergeError::InvalidDistance);
     }
     if distance == 0.0 || bmesh.vert_count() < 2 {
-        return Ok(MergeResult { merged_verts: 0, removed_edges: 0, removed_faces: 0 });
+        return Ok(MergeResult {
+            merged_verts: 0,
+            removed_edges: 0,
+            removed_faces: 0,
+        });
     }
 
     // Step 1: Collect vertices in a stable sorted order (by slotmap key FFI value).
-    let mut keyed: Vec<(VertKey, bevy::math::Vec3)> = bmesh.verts.iter()
-        .map(|(k, v)| (k, v.co))
-        .collect();
+    let mut keyed: Vec<(VertKey, bevy::math::Vec3)> =
+        bmesh.verts.iter().map(|(k, v)| (k, v.co)).collect();
     keyed.sort_by_key(|(k, _)| {
         use slotmap::Key;
         k.data().as_ffi()
@@ -71,7 +74,11 @@ pub fn remove_doubles(bmesh: &mut EditMesh, distance: f32) -> Result<MergeResult
 
     let merged_count = vert_remap.iter().filter(|(k, v)| **k != **v).count();
     if merged_count == 0 {
-        return Ok(MergeResult { merged_verts: 0, removed_edges: 0, removed_faces: 0 });
+        return Ok(MergeResult {
+            merged_verts: 0,
+            removed_edges: 0,
+            removed_faces: 0,
+        });
     }
 
     // Step 4: Flatten current EditMesh to topology.
@@ -96,7 +103,9 @@ pub fn remove_doubles(bmesh: &mut EditMesh, distance: f32) -> Result<MergeResult
         if canonical == original_key && !canonical_to_new_idx.contains_key(&canonical) {
             let new_idx = new_vertices.len() as u32;
             canonical_to_new_idx.insert(canonical, new_idx);
-            new_vertices.push(MeshVert { position: bmesh.verts[canonical].co });
+            new_vertices.push(MeshVert {
+                position: bmesh.verts[canonical].co,
+            });
         }
     }
     // Any canonical key not yet inserted (could happen if slotmap iter order places
@@ -108,7 +117,9 @@ pub fn remove_doubles(bmesh: &mut EditMesh, distance: f32) -> Result<MergeResult
         if !canonical_to_new_idx.contains_key(&canonical) {
             let new_idx = new_vertices.len() as u32;
             canonical_to_new_idx.insert(canonical, new_idx);
-            new_vertices.push(MeshVert { position: bmesh.verts[canonical].co });
+            new_vertices.push(MeshVert {
+                position: bmesh.verts[canonical].co,
+            });
         }
     }
 
@@ -130,7 +141,11 @@ pub fn remove_doubles(bmesh: &mut EditMesh, distance: f32) -> Result<MergeResult
             // Degenerate edge; skip. old_edge_to_new_edge has no entry.
             continue;
         }
-        let pair = if v0_new < v1_new { (v0_new, v1_new) } else { (v1_new, v0_new) };
+        let pair = if v0_new < v1_new {
+            (v0_new, v1_new)
+        } else {
+            (v1_new, v0_new)
+        };
         let new_e_idx = if let Some(&existing) = edge_lookup.get(&pair) {
             existing
         } else {

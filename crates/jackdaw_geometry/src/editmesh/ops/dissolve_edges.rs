@@ -28,7 +28,10 @@ pub fn dissolve_edges(
             removed_faces += 1;
         }
     }
-    Ok(DissolveEdgesResult { removed_edges, removed_faces })
+    Ok(DissolveEdgesResult {
+        removed_edges,
+        removed_faces,
+    })
 }
 
 fn dissolve_one_edge(bmesh: &mut EditMesh, edge: EdgeKey) -> bool {

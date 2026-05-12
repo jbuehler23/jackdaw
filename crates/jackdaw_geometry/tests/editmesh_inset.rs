@@ -11,7 +11,11 @@ fn inset_one_quad_face_of_cube_adds_4_verts_8_edges_4_faces() {
     let face = bmesh.faces.keys().next().unwrap();
     let result = inset_face(&mut bmesh, face, 0.2).expect("inset");
     assert_eq!(bmesh.vert_count(), initial_verts + 4, "+4 inner-ring verts");
-    assert_eq!(bmesh.edge_count(), initial_edges + 8, "+8 edges (4 inner + 4 wall)");
+    assert_eq!(
+        bmesh.edge_count(),
+        initial_edges + 8,
+        "+8 edges (4 inner + 4 wall)"
+    );
     assert_eq!(bmesh.face_count(), initial_faces + 4, "+4 side-quad faces");
     bmesh.validate().expect("valid after inset");
     assert_eq!(result.new_verts.len(), 4);
@@ -37,8 +41,10 @@ fn inset_inner_face_normal_matches_original_face_normal() {
         }
         jackdaw_geometry::newell_normal(&ring_positions)
     };
-    assert!(new_normal.distance(original_normal) < 1e-3,
-            "inner face normal {new_normal} should match original {original_normal}");
+    assert!(
+        new_normal.distance(original_normal) < 1e-3,
+        "inner face normal {new_normal} should match original {original_normal}"
+    );
 }
 
 #[test]
