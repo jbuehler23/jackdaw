@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use super::interaction::{
     BrushDragState, EdgeDragState, FaceExtrudeMode, VertexDragConstraint, VertexDragState,
 };
-use super::{BrushEditMode, BrushMeshCache, BrushSelection, EditMode};
+use super::{BrushEditMode, BrushMeshCache, BrushSelection, EditMode, InsetPreviewLines, LoopCutPreviewLines};
 use crate::default_style;
 use crate::face_grid::BrushOutlineSelectedGizmoGroup;
 use jackdaw_jsn::Brush;
@@ -187,5 +187,25 @@ pub(super) fn draw_brush_edit_gizmos(
             center + world_axis * 50.0,
             color,
         );
+    }
+}
+
+/// Draw cyan line segments for the loop cut preview, sourced from `LoopCutPreviewLines`.
+pub(super) fn draw_loop_cut_preview(
+    preview_lines: Res<LoopCutPreviewLines>,
+    mut gizmos: Gizmos<BrushOutlineSelectedGizmoGroup>,
+) {
+    for &(a, b) in &preview_lines.lines {
+        gizmos.line(a, b, Color::srgb(0.3, 0.85, 1.0));
+    }
+}
+
+/// Draw cyan line segments for the inset preview, sourced from `InsetPreviewLines`.
+pub(super) fn draw_inset_preview(
+    preview_lines: Res<InsetPreviewLines>,
+    mut gizmos: Gizmos<BrushOutlineSelectedGizmoGroup>,
+) {
+    for &(a, b) in &preview_lines.lines {
+        gizmos.line(a, b, Color::srgb(0.3, 0.85, 1.0));
     }
 }

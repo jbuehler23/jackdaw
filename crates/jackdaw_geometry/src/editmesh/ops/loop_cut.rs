@@ -41,18 +41,40 @@ pub fn loop_cut(
         return Err(LoopCutError::StartFaceNotQuad);
     }
 
-    // Phase 2: split each unique edge at parameter t. Save the edge -> new_vert map.
-    // Collect all edge keys that the cut crosses (entry and exit of every face).
-    let mut edges_to_split: Vec<EdgeKey> = walk
-        .iter()
-        .flat_map(|hop| [hop.entry_edge, hop.exit_edge])
-        .collect();
-    edges_to_split.sort_by_key(|e| e.data().as_ffi());
-    edges_to_split.dedup();
+    // Phase 2: split each unique edge, oriented relative to the slide axis.
+    //
+    // The slide axis is the canonical direction of the start edge in world space.
+    // For every other crossed edge, we check whether its canonical direction aligns
+    // with the slide axis (dot > 0) or is reversed (dot < 0).  This ensures that
+    // t=0.3 means "30% of the way along the slide axis" uniformly for every edge in
+    // the ring, producing a planar cut regardless of how the mesh's loop winding
+    // alternates around the ring.
+    let start_v0 = bmesh.verts[bmesh.edges[start_edge].v[0]].co;
+    let start_v1 = bmesh.verts[bmesh.edges[start_edge].v[1]].co;
+    let slide_axis = (start_v1 - start_v0).normalize_or_zero();
+
+    // Collect unique edges from the walk (first occurrence wins for determinism).
+    let mut seen_edges: HashSet<EdgeKey> = HashSet::new();
+    let mut edges_to_cut: Vec<EdgeKey> = Vec::new();
+    for hop in &walk {
+        if seen_edges.insert(hop.entry_edge) {
+            edges_to_cut.push(hop.entry_edge);
+        }
+        if seen_edges.insert(hop.exit_edge) {
+            edges_to_cut.push(hop.exit_edge);
+        }
+    }
+    // Sort for stable ordering across runs.
+    edges_to_cut.sort_by_key(|e| e.data().as_ffi());
+
     let mut edge_to_new_vert: HashMap<EdgeKey, VertKey> = HashMap::new();
     let mut new_verts: Vec<VertKey> = Vec::new();
-    for &edge in &edges_to_split {
-        let v_new = split_edge(bmesh, edge, t).map_err(LoopCutError::EdgeSplit)?;
+    for &edge in &edges_to_cut {
+        let v0_pos = bmesh.verts[bmesh.edges[edge].v[0]].co;
+        let v1_pos = bmesh.verts[bmesh.edges[edge].v[1]].co;
+        let dir = (v1_pos - v0_pos).normalize_or_zero();
+        let oriented_t = if dir.dot(slide_axis) >= 0.0 { t } else { 1.0 - t };
+        let v_new = split_edge(bmesh, edge, oriented_t).map_err(LoopCutError::EdgeSplit)?;
         edge_to_new_vert.insert(edge, v_new);
         new_verts.push(v_new);
     }

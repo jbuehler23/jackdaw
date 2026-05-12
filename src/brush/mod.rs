@@ -25,6 +25,8 @@ pub(crate) use self::interaction::{
 pub use edit_mode_systems::BrushEditMesh;
 pub use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
 pub use preview::{ActivePreview, PreviewMesh, PreviewState};
+pub use topology_ops::inset::{InsetModalState, InsetPreviewLines};
+pub use topology_ops::loop_cut::{LoopCutModalState, LoopCutPreviewLines};
 
 /// Cached computed geometry (NOT serialized, rebuilt from Brush).
 #[derive(Component)]
@@ -219,6 +221,10 @@ impl Plugin for BrushPlugin {
             .init_resource::<VertexDragState>()
             .init_resource::<EdgeDragState>()
             .init_resource::<ClipState>()
+            .init_resource::<InsetModalState>()
+            .init_resource::<InsetPreviewLines>()
+            .init_resource::<LoopCutModalState>()
+            .init_resource::<LoopCutPreviewLines>()
             .init_resource::<LastUsedMaterial>()
             .add_plugins(mesh::MeshPlugin)
             .add_plugins(preview::PreviewPlugin)
@@ -249,6 +255,8 @@ impl Plugin for BrushPlugin {
                     ApplyDeferred,
                     mesh::ensure_brush_face_materials,
                     gizmo_overlay::draw_brush_edit_gizmos,
+                    gizmo_overlay::draw_loop_cut_preview,
+                    gizmo_overlay::draw_inset_preview,
                 )
                     .chain()
                     .after(crate::EditorInteractionSystems)
