@@ -72,7 +72,8 @@ fn on_menu_bar_item_click(
     // Open dropdown
     state.open_menu = Some(entity);
 
-    let (_, _, pos) = global_tf.to_scale_angle_translation();
+    let (_, _, mut pos) = global_tf.to_scale_angle_translation();
+    pos *= computed.inverse_scale_factor();
     let size = computed.size() * computed.inverse_scale_factor();
     let x = pos.x - size.x / 2.0;
     let y = pos.y + size.y / 2.0;
