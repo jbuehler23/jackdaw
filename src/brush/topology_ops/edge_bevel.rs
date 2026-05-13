@@ -171,14 +171,13 @@ pub(crate) fn brush_edge_bevel(
     // Snap respects the global translate_snap toggle; Ctrl flips the current
     // snap state (anti-modifier).
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    modal_state.current_width = if snap_settings.translate_active(ctrl)
-        && snap_settings.translate_increment > 0.0
-    {
-        let inc = snap_settings.translate_increment;
-        (clamped_width / inc).round() * inc
-    } else {
-        clamped_width
-    };
+    modal_state.current_width =
+        if snap_settings.translate_active(ctrl) && snap_settings.translate_increment > 0.0 {
+            let inc = snap_settings.translate_increment;
+            (clamped_width / inc).round() * inc
+        } else {
+            clamped_width
+        };
 
     // Apply the bevel to the live brush mesh so the user sees it as a real
     // mesh edit. The op result is discarded; the chamfer is visible through

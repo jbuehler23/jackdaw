@@ -209,6 +209,7 @@ fn update_status_right(
             BrushEditMode::Vertex => "Vertex",
             BrushEditMode::Edge => "Edge",
             BrushEditMode::Clip => "Clip",
+            BrushEditMode::Knife => "Knife",
         };
         text.0 = format!("Edit: {sub_str}");
         return;

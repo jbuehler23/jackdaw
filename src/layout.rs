@@ -14,7 +14,8 @@ use crate::{
     brush::{BrushEditMode, EditMode},
     draw_brush::ActivateDrawBrushModalOp,
     edit_mode_ops::{
-        EditModeClipOp, EditModeEdgeOp, EditModeFaceOp, EditModeObjectOp, EditModeVertexOp,
+        EditModeClipOp, EditModeEdgeOp, EditModeFaceOp, EditModeKnifeOp, EditModeObjectOp,
+        EditModeVertexOp,
     },
     gizmo_ops::{GizmoModeRotateOp, GizmoModeScaleOp, GizmoModeTranslateOp, GizmoSpaceToggleOp},
     gizmos::{GizmoMode, GizmoSpace},
@@ -719,6 +720,8 @@ pub fn update_toolbar_button_variants(
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
         } else if call.id == EditModeClipOp::ID {
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Clip)
+        } else if call.id == EditModeKnifeOp::ID {
+            *edit_mode == EditMode::BrushEdit(BrushEditMode::Knife)
         } else if call.id == PhysicsActivateOp::ID {
             *edit_mode == EditMode::Physics
         } else {

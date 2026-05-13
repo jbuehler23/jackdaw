@@ -4,7 +4,8 @@
 //!   depth, available via menu / command palette.
 //! - `brush.mesh.extrude` (modal, bound to `E`): Blender-style modal where the
 //!   cursor's projected motion along the face normal drives a signed extrusion
-//!   amount. Cyan preview lines show the proposed top ring + wall edges.
+//!   amount. The brush mesh is mutated each frame so the user sees the live
+//!   extrusion as a real mesh edit.
 //!
 //! Both share the same EditMesh op (`extrude_face_region`) and the same
 //! chained selection behavior: post-commit, `BrushSelection.faces` is updated
@@ -34,19 +35,14 @@ const DEFAULT_EXTRUDE_DEPTH: f32 = 0.5;
 /// normal corresponds to 1 world-unit of extrusion. Tune as needed.
 const EXTRUDE_SENSITIVITY: f32 = 0.01;
 
-/// World-space line segments for the modal extrude preview gizmo.
-/// Each element is a (start, end) pair drawn as a cyan line each frame.
-#[derive(Resource, Default)]
-pub struct ExtrudePreviewLines {
-    pub lines: Vec<(Vec3, Vec3)>,
-}
-
 /// Modal state for the `brush.mesh.extrude` operator.
 #[derive(Resource, Default)]
 pub struct ExtrudeModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// EditMesh FaceKeys of the faces being extruded.
+    /// EditMesh FaceKeys of the faces being extruded. Resolved against
+    /// `start_editmesh`; we re-resolve them from `start_editmesh` each frame
+    /// because the live mesh is reset to the snapshot before running the op.
     pub face_keys: Vec<FaceKey>,
     /// Window-space cursor position at the moment the modal started.
     pub start_cursor: Vec2,
@@ -227,8 +223,10 @@ pub(crate) fn can_run_extrude_region(
 
 /// Extrude each selected face along its normal by a signed amount controlled
 /// by cursor motion projected onto the screen-space face normal. Positive
-/// values push outward; negative values pull inward. Ctrl snaps to the
-/// translate grid increment. LMB commits; Esc / RMB cancels.
+/// values push outward; negative values pull inward. The live brush mesh is
+/// updated each frame so the extrusion is visible as a real mesh edit. Ctrl
+/// snaps to the translate grid increment. LMB commits; Esc / RMB cancels and
+/// reverts.
 ///
 /// Requires Face mode with at least one face selected.
 #[operator(
@@ -248,7 +246,6 @@ pub(crate) fn brush_extrude(
     brush_transforms: Query<&GlobalTransform>,
     mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<ExtrudeModalState>,
-    mut preview_lines: ResMut<ExtrudePreviewLines>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
@@ -319,16 +316,18 @@ pub(crate) fn brush_extrude(
         modal_state.start_brush = Some(brush_before);
         modal_state.start_editmesh = Some(mesh_snapshot);
 
-        update_extrude_preview_lines(&modal_state, &brush_transforms, &mut preview_lines);
         return OperatorResult::Running;
     }
 
-    // --- Subsequent invokes: cancel, update amount, preview, or commit ---
+    // --- Subsequent invokes: cancel, update amount, mutate preview, or commit ---
 
     let escape = keyboard.just_pressed(KeyCode::Escape);
     let rmb = mouse.just_pressed(MouseButton::Right);
     if escape || rmb {
-        clear_modal(&mut modal_state, &mut preview_lines);
+        // Live brush has been mutated each frame, so restore from the snapshot
+        // before clearing modal state.
+        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+        *modal_state = ExtrudeModalState::default();
         return OperatorResult::Cancelled;
     }
 
@@ -339,252 +338,267 @@ pub(crate) fn brush_extrude(
     // Snap respects the global translate_snap toggle; Ctrl flips the current
     // snap state (anti-modifier).
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    modal_state.current_amount = if snap_settings.translate_active(ctrl)
-        && snap_settings.translate_increment > 0.0
-    {
-        let inc = snap_settings.translate_increment;
-        (raw_amount / inc).round() * inc
-    } else {
-        raw_amount
-    };
+    modal_state.current_amount =
+        if snap_settings.translate_active(ctrl) && snap_settings.translate_increment > 0.0 {
+            let inc = snap_settings.translate_increment;
+            (raw_amount / inc).round() * inc
+        } else {
+            raw_amount
+        };
 
-    update_extrude_preview_lines(&modal_state, &brush_transforms, &mut preview_lines);
+    // Apply the extrude to the live brush mesh so the user sees it as a real
+    // mesh edit. The op result is discarded; the extrusion is visible through
+    // the regular brush mesh pipeline picking up `Changed<Brush>`. The returned
+    // indices identify the post-flatten top-face slots so the commit path can
+    // chain selection without recomputing them.
+    let top_face_indices = apply_live_extrude(&mut modal_state, &mut brushes, &mut bmesh_q);
 
     // Commit on LMB.
     if mouse.just_pressed(MouseButton::Left) {
         let Some(brush_entity) = modal_state.brush_entity else {
-            clear_modal(&mut modal_state, &mut preview_lines);
+            *modal_state = ExtrudeModalState::default();
             return OperatorResult::Cancelled;
         };
-        let Some(ref start_brush) = modal_state.start_brush else {
-            clear_modal(&mut modal_state, &mut preview_lines);
+        let Some(start_brush) = modal_state.start_brush.clone() else {
+            *modal_state = ExtrudeModalState::default();
             return OperatorResult::Cancelled;
         };
-        let brush_before = start_brush.clone();
-        let amount = modal_state.current_amount;
-        let face_keys = modal_state.face_keys.clone();
 
         // Degenerate zero-amount commit: treat as no-op cancel so we don't
-        // record a useless undo entry or split the face ring trivially.
-        if amount.abs() < 1e-4 {
-            clear_modal(&mut modal_state, &mut preview_lines);
+        // record a useless undo entry. The live brush should already be back
+        // to the snapshot (apply_live_extrude resets when amount is sub-threshold).
+        if modal_state.current_amount.abs() < 1e-4 {
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+            *modal_state = ExtrudeModalState::default();
             return OperatorResult::Cancelled;
         }
 
-        let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
-            clear_modal(&mut modal_state, &mut preview_lines);
-            return OperatorResult::Cancelled;
-        };
-
-        // Restore to snapshot before committing so we start from clean state.
-        if let Some(ref snap) = modal_state.start_editmesh {
-            bmesh_component.mesh = snap.clone();
-        }
-
-        // Run extrude on each selected face; capture each successful op's
-        // top-face `material_idx` for the post-flatten selection update.
-        // `extrude_face_region` reuses the input face as the new top cap
-        // (i.e. `result.top_face == fk`), preserving its `material_idx`.
-        // The N side quads it adds inherit the same `material_idx`. Among
-        // ties on a given M the original (now top) face sits first in
-        // slotmap iteration order, so the top face lands at the topology
-        // index equal to `count(faces with material_idx < M)` after flatten.
-        let mut top_material_idxs: Vec<u32> = Vec::with_capacity(face_keys.len());
-        for fk in face_keys {
-            if let Ok(result) = extrude_face_region(&mut bmesh_component.mesh, fk, amount) {
-                let mtx = bmesh_component.mesh.faces[result.top_face].material_idx;
-                top_material_idxs.push(mtx);
-            }
-        }
-
-        // Re-cache all face normals.
-        let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
-        for fk in face_keys_all {
-            let face = &bmesh_component.mesh.faces[fk];
-            let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
-            let mut cur = face.loop_first;
-            for _ in 0..face.loop_count {
-                let lp = &bmesh_component.mesh.loops[cur];
-                ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
-                cur = lp.next;
-            }
-            let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-            bmesh_component.mesh.faces[fk].normal_cache = new_normal;
-        }
-
-        // Flatten EditMesh -> topology, sync Brush.
-        let new_topology = bmesh_component.mesh.flatten_to_topology();
-        let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-            clear_modal(&mut modal_state, &mut preview_lines);
+        let Ok(brush) = brushes.get(brush_entity).cloned() else {
+            *modal_state = ExtrudeModalState::default();
             return OperatorResult::Cancelled;
         };
-
-        let new_face_count = new_topology.polygons.len();
-        while brush.faces.len() < new_face_count {
-            let template = brush.faces.last().cloned().unwrap_or_default();
-            brush.faces.push(template);
-        }
-
-        let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
-        for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
-            if face_idx < new_topology.polygons.len() {
-                let normal = new_topology.face_normal_with(&positions, face_idx);
-                let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
-                    .vert as usize;
-                let distance = positions[v0_idx].dot(normal);
-                face_data.plane.normal = normal;
-                face_data.plane.distance = distance;
-            }
-        }
-        brush.topology = new_topology;
-
-        // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
-        let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
-        let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
-        let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
-        for (k, f) in new_bmesh.faces.iter() {
-            let slot = f.material_idx as usize;
-            if slot < new_face_keys.len() {
-                new_face_keys[slot] = k;
-            }
-        }
-        bmesh_component.mesh = new_bmesh;
-        bmesh_component.vert_keys = new_vert_keys;
-        bmesh_component.face_keys = new_face_keys;
-
-        history.push_executed(Box::new(SetBrush {
-            entity: brush_entity,
-            old: brush_before,
-            new: brush.clone(),
-            label: "Extrude".to_string(),
-        }));
 
         // Chain selection: write the new top face indices into
         // `BrushSelection.faces` so a follow-up gesture (drag-along-normal,
-        // inset, extrude again) can act on them immediately.
+        // inset, extrude again) can act on them immediately. Filter out
+        // indices that landed past the brush face array; defensive clamp.
         let face_count = brush.faces.len();
-        let new_top_indices: Vec<usize> = top_material_idxs
+        let new_top_indices: Vec<usize> = top_face_indices
             .into_iter()
-            .map(|mtx| {
-                bmesh_component
-                    .mesh
-                    .faces
-                    .values()
-                    .filter(|f| f.material_idx < mtx)
-                    .count()
-            })
             .filter(|&i| i < face_count)
             .collect();
         if !new_top_indices.is_empty() {
             selection.faces = new_top_indices;
         }
 
-        clear_modal(&mut modal_state, &mut preview_lines);
+        history.push_executed(Box::new(SetBrush {
+            entity: brush_entity,
+            old: start_brush,
+            new: brush,
+            label: "Extrude".to_string(),
+        }));
+
+        *modal_state = ExtrudeModalState::default();
         return OperatorResult::Finished;
     }
 
     OperatorResult::Running
 }
 
-/// Cancel handler: restore the brush to its pre-modal state and clear preview.
+/// Cancel handler: restore the brush to its pre-modal state. Called when the
+/// modal lifecycle is force-cancelled from outside the operator.
 fn cancel_extrude(
     mut modal_state: ResMut<ExtrudeModalState>,
-    mut preview_lines: ResMut<ExtrudePreviewLines>,
     mut brushes: Query<&mut Brush>,
     mut bmesh_q: Query<&mut BrushEditMesh>,
 ) {
-    if let Some(brush_entity) = modal_state.brush_entity
-        && let Some(ref start_brush) = modal_state.start_brush
-        && let Ok(mut brush) = brushes.get_mut(brush_entity)
-    {
-        *brush = start_brush.clone();
-        if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-            let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
-            let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-            let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-                vec![Default::default(); bmesh.faces.len()];
-            for (k, f) in bmesh.faces.iter() {
-                let slot = f.material_idx as usize;
-                if slot < face_keys.len() {
-                    face_keys[slot] = k;
-                }
-            }
-            bmesh_component.mesh = bmesh;
-            bmesh_component.vert_keys = vert_keys;
-            bmesh_component.face_keys = face_keys;
-        }
-    }
-    clear_modal(&mut modal_state, &mut preview_lines);
-}
-
-fn clear_modal(modal_state: &mut ExtrudeModalState, preview_lines: &mut ExtrudePreviewLines) {
+    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
     *modal_state = ExtrudeModalState::default();
-    preview_lines.lines.clear();
 }
 
-/// Speculatively run `extrude_face_region` on each face at `current_amount`
-/// and collect line segments for the cyan preview gizmo. Drawn segments:
-/// the new top ring (closed loop per face) plus the wall edges connecting
-/// each old ring vert to its new top vert.
-fn update_extrude_preview_lines(
+/// Reset the live brush + EditMesh to the snapshot captured at modal start.
+fn restore_brush_from_snapshot(
     modal_state: &ExtrudeModalState,
-    brush_transforms: &Query<&GlobalTransform>,
-    preview_lines: &mut ExtrudePreviewLines,
+    brushes: &mut Query<&mut Brush>,
+    bmesh_q: &mut Query<&mut BrushEditMesh>,
 ) {
-    preview_lines.lines.clear();
-
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
     };
-    let Some(ref start_mesh) = modal_state.start_editmesh else {
+    let Some(ref start_brush) = modal_state.start_brush else {
         return;
     };
-    let Ok(brush_xform) = brush_transforms.get(brush_entity) else {
+    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return;
     };
-
-    let mut speculative = start_mesh.clone();
-    for &fk in &modal_state.face_keys {
-        let Ok(result) = extrude_face_region(&mut speculative, fk, modal_state.current_amount)
-        else {
-            continue;
-        };
-
-        // Top ring: walk the loops of the (re-keyed) top face. The op
-        // rewrites `face`'s ring to the new top ring, so reading
-        // `result.top_face`'s loops gives the new closed loop.
-        let top_face_data = &speculative.faces[result.top_face];
-        let n = top_face_data.loop_count as usize;
-        let mut top_verts: Vec<Vec3> = Vec::with_capacity(n);
-        {
-            let mut cur = top_face_data.loop_first;
-            for _ in 0..n {
-                let lp = &speculative.loops[cur];
-                top_verts.push(brush_xform.transform_point(speculative.verts[lp.vert].co));
-                cur = lp.next;
+    *brush = start_brush.clone();
+    if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
+        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
+            vec![Default::default(); bmesh.faces.len()];
+        for (k, f) in bmesh.faces.iter() {
+            let slot = f.material_idx as usize;
+            if slot < face_keys.len() {
+                face_keys[slot] = k;
             }
         }
-        for i in 0..n {
-            preview_lines
-                .lines
-                .push((top_verts[i], top_verts[(i + 1) % n]));
-        }
+        bmesh_component.mesh = bmesh;
+        bmesh_component.vert_keys = vert_keys;
+        bmesh_component.face_keys = face_keys;
+    }
+}
 
-        // Wall edges: each side quad's `L3` loop walks `new[i] -> old[i]`,
-        // i.e. the wall edge between the new top vert and the corresponding
-        // old ring vert. See `extrude_face_region.rs` step 6 for the loop
-        // wiring (L0..L3 = old[i], old[i+1], new[i+1], new[i]).
-        for &sf in &result.side_faces {
-            let side = &speculative.faces[sf];
-            let l0 = side.loop_first;
-            let l3 = speculative.loops[l0].prev;
-            let old_v =
-                brush_xform.transform_point(speculative.verts[speculative.loops[l0].vert].co);
-            let new_v =
-                brush_xform.transform_point(speculative.verts[speculative.loops[l3].vert].co);
-            preview_lines.lines.push((old_v, new_v));
+/// Re-run `extrude_face_region` against the snapshot at the current amount and
+/// write the resulting topology back into the live `Brush` + `BrushEditMesh`.
+/// Returns the post-flatten face indices of the new top faces (one per
+/// successful extrusion), in the same order as `modal_state.face_keys`. The
+/// commit path uses these for chained selection.
+fn apply_live_extrude(
+    modal_state: &mut ExtrudeModalState,
+    brushes: &mut Query<&mut Brush>,
+    bmesh_q: &mut Query<&mut BrushEditMesh>,
+) -> Vec<usize> {
+    let Some(brush_entity) = modal_state.brush_entity else {
+        return Vec::new();
+    };
+    let Some(ref start_mesh) = modal_state.start_editmesh else {
+        return Vec::new();
+    };
+    let Some(ref start_brush) = modal_state.start_brush else {
+        return Vec::new();
+    };
+    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+        return Vec::new();
+    };
+
+    // Sub-threshold amounts: snap the live mesh back to the start state.
+    if modal_state.current_amount.abs() < 1e-4 {
+        let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+            return Vec::new();
+        };
+        *brush = start_brush.clone();
+        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
+            vec![Default::default(); bmesh.faces.len()];
+        for (k, f) in bmesh.faces.iter() {
+            let slot = f.material_idx as usize;
+            if slot < face_keys.len() {
+                face_keys[slot] = k;
+            }
+        }
+        bmesh_component.mesh = bmesh;
+        bmesh_component.vert_keys = vert_keys;
+        bmesh_component.face_keys = face_keys;
+        return Vec::new();
+    }
+
+    // Always start the per-frame op from the clean snapshot.
+    bmesh_component.mesh = start_mesh.clone();
+
+    // Run extrude on each selected face; capture each successful op's
+    // top-face `material_idx` for the chained-selection index math.
+    // `extrude_face_region` reuses the input face as the new top cap (i.e.
+    // `result.top_face == fk`), preserving its `material_idx`. The N side
+    // quads it adds inherit the same `material_idx`. Among ties on a given M
+    // the original (now top) face sits first in slotmap iteration order, so
+    // the top face lands at the topology index equal to
+    // `count(faces with material_idx < M)` after flatten.
+    let mut top_material_idxs: Vec<u32> = Vec::with_capacity(modal_state.face_keys.len());
+    for &fk in &modal_state.face_keys {
+        if let Ok(result) =
+            extrude_face_region(&mut bmesh_component.mesh, fk, modal_state.current_amount)
+        {
+            let mtx = bmesh_component.mesh.faces[result.top_face].material_idx;
+            top_material_idxs.push(mtx);
         }
     }
+
+    // Resolve post-flatten top-face indices BEFORE flatten/re-lift, while
+    // the bmesh still holds the original material_idx values.
+    let top_face_indices: Vec<usize> = top_material_idxs
+        .iter()
+        .map(|&mtx| {
+            bmesh_component
+                .mesh
+                .faces
+                .values()
+                .filter(|f| f.material_idx < mtx)
+                .count()
+        })
+        .collect();
+
+    // Re-cache all face normals; extrude reshapes the top + side faces.
+    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    for fk in face_keys_all {
+        let face = &bmesh_component.mesh.faces[fk];
+        let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
+        let mut cur = face.loop_first;
+        for _ in 0..face.loop_count {
+            let lp = &bmesh_component.mesh.loops[cur];
+            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            cur = lp.next;
+        }
+        let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
+        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+    }
+
+    // Flatten EditMesh -> topology, sync Brush.
+    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+        return top_face_indices;
+    };
+
+    // Grow brush.faces to cover the new side faces. Seed each new slot from
+    // the start brush's last face (for material + uv_scale / rotation), then
+    // zero out the `uv_u_axis` / `uv_v_axis` so `ensure_uv_axes` derives proper
+    // tangents from the side face's own plane normal.
+    let new_face_count = new_topology.polygons.len();
+    let original_face_count = start_brush.faces.len();
+    while brush.faces.len() < new_face_count {
+        let mut template = start_brush
+            .faces
+            .last()
+            .cloned()
+            .or_else(|| brush.faces.last().cloned())
+            .unwrap_or_default();
+        template.uv_u_axis = Vec3::ZERO;
+        template.uv_v_axis = Vec3::ZERO;
+        brush.faces.push(template);
+    }
+
+    let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
+    for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
+        if face_idx < new_topology.polygons.len() {
+            let normal = new_topology.face_normal_with(&positions, face_idx);
+            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
+                .vert as usize;
+            let distance = positions[v0_idx].dot(normal);
+            face_data.plane.normal = normal;
+            face_data.plane.distance = distance;
+            if face_idx >= original_face_count {
+                face_data.ensure_uv_axes();
+            }
+        }
+    }
+    brush.topology = new_topology;
+
+    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
+    let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
+    for (k, f) in new_bmesh.faces.iter() {
+        let slot = f.material_idx as usize;
+        if slot < new_face_keys.len() {
+            new_face_keys[slot] = k;
+        }
+    }
+    bmesh_component.mesh = new_bmesh;
+    bmesh_component.vert_keys = new_vert_keys;
+    bmesh_component.face_keys = new_face_keys;
+
+    top_face_indices
 }
 
 /// Project a representative face's world-space centroid and `centroid + normal`

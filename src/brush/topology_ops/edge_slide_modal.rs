@@ -3,8 +3,9 @@
 //! Press `Shift+E` in Edge mode with at least one edge selected. Cursor motion
 //! projected onto the screen-space slide direction drives a signed factor in
 //! `[-1, +1]`: 0 = no slide, +1 = collapse toward one neighbor loop, -1 = the
-//! other. Cyan preview lines show the proposed slid edge positions. Ctrl snaps
-//! to 0.25 increments. LMB commits; Esc / RMB cancels.
+//! other. The brush mesh is mutated each frame so the user sees the live slid
+//! edge positions as a real mesh edit. Ctrl snaps to 0.25 increments. LMB
+//! commits; Esc / RMB cancels and restores the pre-modal mesh.
 //!
 //! Coexists with the non-modal `brush.mesh.edge_slide` operator (which slides
 //! by a fixed amount) -- this is a separate entry point.
@@ -27,13 +28,6 @@ use crate::snapping::SnapSettings;
 use crate::viewport::{MainViewportCamera, SceneViewport};
 use crate::viewport_util::ViewportRemap;
 
-/// World-space line segments for the modal edge slide preview gizmo.
-/// Each element is a (start, end) pair drawn as a cyan line each frame.
-#[derive(Resource, Default)]
-pub struct EdgeSlidePreviewLines {
-    pub lines: Vec<(Vec3, Vec3)>,
-}
-
 /// Per-side projection info for cursor-tracks-edge mapping. Sides correspond
 /// to the edge's two adjacent quad faces; `pos` is the face whose direction
 /// the underlying op uses for positive `t`, `neg` is the other face.
@@ -55,7 +49,9 @@ pub struct SlideSideInfo {
 pub struct EdgeSlideModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// EditMesh EdgeKeys of the edges being slid.
+    /// EditMesh EdgeKeys of the edges being slid. Resolved against
+    /// `start_editmesh`; we re-resolve them from `start_editmesh` each frame
+    /// because the live mesh is reset to the snapshot before running the op.
     pub edge_keys: Vec<EdgeKey>,
     /// Window-space cursor position at the moment the modal started.
     pub start_cursor: Vec2,
@@ -89,7 +85,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// Slide each selected edge along its parallel-edge direction in adjacent quad
 /// faces, controlled by cursor motion projected onto the screen-space slide
 /// direction. Factor is normalized to `[-1, +1]`; Ctrl snaps to 0.25 increments.
-/// LMB commits; Esc / RMB cancels.
+/// The live brush mesh is updated each frame so the slide is visible as a real
+/// mesh edit. LMB commits; Esc / RMB cancels and reverts.
 ///
 /// Requires Edge mode with at least one edge selected.
 #[operator(
@@ -109,7 +106,6 @@ pub(crate) fn brush_edge_slide_modal(
     brush_transforms: Query<&GlobalTransform>,
     mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<EdgeSlideModalState>,
-    mut preview_lines: ResMut<EdgeSlidePreviewLines>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
@@ -188,16 +184,18 @@ pub(crate) fn brush_edge_slide_modal(
         modal_state.start_brush = Some(brush_before);
         modal_state.start_editmesh = Some(mesh_snapshot);
 
-        update_preview_lines(&modal_state, &brush_transforms, &mut preview_lines);
         return OperatorResult::Running;
     }
 
-    // --- Subsequent invokes: cancel, update factor, preview, or commit ---
+    // --- Subsequent invokes: cancel, update factor, mutate preview, or commit ---
 
     let escape = keyboard.just_pressed(KeyCode::Escape);
     let rmb = mouse.just_pressed(MouseButton::Right);
     if escape || rmb {
-        clear_modal(&mut modal_state, &mut preview_lines);
+        // Live brush has been mutated each frame, so restore from the snapshot
+        // before clearing modal state.
+        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+        *modal_state = EdgeSlideModalState::default();
         return OperatorResult::Cancelled;
     }
 
@@ -257,101 +255,40 @@ pub(crate) fn brush_edge_slide_modal(
         factor
     };
 
-    update_preview_lines(&modal_state, &brush_transforms, &mut preview_lines);
+    // Apply the slide to the live brush mesh so the user sees it as a real
+    // mesh edit. The op result is discarded; the slid edges are visible
+    // through the regular brush mesh pipeline picking up `Changed<Brush>`.
+    apply_live_edge_slide(&mut modal_state, &mut brushes, &mut bmesh_q);
 
     // Commit on LMB.
     if mouse.just_pressed(MouseButton::Left) {
         let Some(brush_entity) = modal_state.brush_entity else {
-            clear_modal(&mut modal_state, &mut preview_lines);
+            *modal_state = EdgeSlideModalState::default();
             return OperatorResult::Cancelled;
         };
-        let Some(ref start_brush) = modal_state.start_brush else {
-            clear_modal(&mut modal_state, &mut preview_lines);
+        let Some(start_brush) = modal_state.start_brush.clone() else {
+            *modal_state = EdgeSlideModalState::default();
             return OperatorResult::Cancelled;
         };
-        let brush_before = start_brush.clone();
-        let factor = modal_state.current_factor;
-        let edge_keys = modal_state.edge_keys.clone();
 
         // Degenerate zero-factor commit: treat as no-op cancel so we don't
-        // record a useless undo entry.
-        if factor.abs() < 1e-4 {
-            clear_modal(&mut modal_state, &mut preview_lines);
+        // record a useless undo entry. The live brush should already be back
+        // to the snapshot (apply_live_edge_slide resets when factor is sub-threshold).
+        if modal_state.current_factor.abs() < 1e-4 {
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+            *modal_state = EdgeSlideModalState::default();
             return OperatorResult::Cancelled;
         }
 
-        let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
-            clear_modal(&mut modal_state, &mut preview_lines);
-            return OperatorResult::Cancelled;
-        };
-
-        // Restore to snapshot before committing so we start from clean state.
-        if let Some(ref snap) = modal_state.start_editmesh {
-            bmesh_component.mesh = snap.clone();
-        }
-
-        // Run edge_slide on the full edge set in one call. The op is a pure
-        // transform: it moves vertex positions, never adding or removing
-        // edges/faces, so edge identity (and the cache pair (a, b)) survives.
-        if edge_slide(&mut bmesh_component.mesh, &edge_keys, factor).is_err() {
-            clear_modal(&mut modal_state, &mut preview_lines);
-            return OperatorResult::Cancelled;
-        }
-
-        // Re-cache all face normals (slid verts can rotate face planes).
-        let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
-        for fk in face_keys_all {
-            let face = &bmesh_component.mesh.faces[fk];
-            let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
-            let mut cur = face.loop_first;
-            for _ in 0..face.loop_count {
-                let lp = &bmesh_component.mesh.loops[cur];
-                ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
-                cur = lp.next;
-            }
-            let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-            bmesh_component.mesh.faces[fk].normal_cache = new_normal;
-        }
-
-        // Flatten EditMesh -> topology, sync Brush.
-        let new_topology = bmesh_component.mesh.flatten_to_topology();
-        let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-            clear_modal(&mut modal_state, &mut preview_lines);
+        let Ok(brush) = brushes.get(brush_entity).cloned() else {
+            *modal_state = EdgeSlideModalState::default();
             return OperatorResult::Cancelled;
         };
-
-        // Edge slide does not add new faces; no need to grow brush.faces.
-        let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
-        for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
-            if face_idx < new_topology.polygons.len() {
-                let normal = new_topology.face_normal_with(&positions, face_idx);
-                let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
-                    .vert as usize;
-                let distance = positions[v0_idx].dot(normal);
-                face_data.plane.normal = normal;
-                face_data.plane.distance = distance;
-            }
-        }
-        brush.topology = new_topology;
-
-        // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
-        let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
-        let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
-        let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
-        for (k, f) in new_bmesh.faces.iter() {
-            let slot = f.material_idx as usize;
-            if slot < new_face_keys.len() {
-                new_face_keys[slot] = k;
-            }
-        }
-        bmesh_component.mesh = new_bmesh;
-        bmesh_component.vert_keys = new_vert_keys;
-        bmesh_component.face_keys = new_face_keys;
 
         history.push_executed(Box::new(SetBrush {
             entity: brush_entity,
-            old: brush_before,
-            new: brush.clone(),
+            old: start_brush,
+            new: brush,
             label: "Edge Slide".to_string(),
         }));
 
@@ -360,72 +297,106 @@ pub(crate) fn brush_edge_slide_modal(
         // flatten/re-lift since slotmap iteration order is stable when no
         // verts are added or removed.
 
-        clear_modal(&mut modal_state, &mut preview_lines);
+        *modal_state = EdgeSlideModalState::default();
         return OperatorResult::Finished;
     }
 
     OperatorResult::Running
 }
 
-/// Cancel handler: restore the brush to its pre-modal state and clear preview.
+/// Cancel handler: restore the brush to its pre-modal state. Called when the
+/// modal lifecycle is force-cancelled from outside the operator.
 fn cancel_edge_slide(
     mut modal_state: ResMut<EdgeSlideModalState>,
-    mut preview_lines: ResMut<EdgeSlidePreviewLines>,
     mut brushes: Query<&mut Brush>,
     mut bmesh_q: Query<&mut BrushEditMesh>,
 ) {
-    if let Some(brush_entity) = modal_state.brush_entity
-        && let Some(ref start_brush) = modal_state.start_brush
-        && let Ok(mut brush) = brushes.get_mut(brush_entity)
-    {
-        *brush = start_brush.clone();
-        if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-            let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
-            let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-            let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-                vec![Default::default(); bmesh.faces.len()];
-            for (k, f) in bmesh.faces.iter() {
-                let slot = f.material_idx as usize;
-                if slot < face_keys.len() {
-                    face_keys[slot] = k;
-                }
-            }
-            bmesh_component.mesh = bmesh;
-            bmesh_component.vert_keys = vert_keys;
-            bmesh_component.face_keys = face_keys;
-        }
-    }
-    clear_modal(&mut modal_state, &mut preview_lines);
-}
-
-fn clear_modal(modal_state: &mut EdgeSlideModalState, preview_lines: &mut EdgeSlidePreviewLines) {
+    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
     *modal_state = EdgeSlideModalState::default();
-    preview_lines.lines.clear();
 }
 
-/// Speculatively run `edge_slide` on a clone of the start EditMesh at
-/// `current_factor` and collect line segments for the cyan preview gizmo.
-/// Drawn segments: each slid edge in its preview position.
-fn update_preview_lines(
+/// Reset the live brush + EditMesh to the snapshot captured at modal start.
+fn restore_brush_from_snapshot(
     modal_state: &EdgeSlideModalState,
-    brush_transforms: &Query<&GlobalTransform>,
-    preview_lines: &mut EdgeSlidePreviewLines,
+    brushes: &mut Query<&mut Brush>,
+    bmesh_q: &mut Query<&mut BrushEditMesh>,
 ) {
-    preview_lines.lines.clear();
+    let Some(brush_entity) = modal_state.brush_entity else {
+        return;
+    };
+    let Some(ref start_brush) = modal_state.start_brush else {
+        return;
+    };
+    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+        return;
+    };
+    *brush = start_brush.clone();
+    if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
+        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
+            vec![Default::default(); bmesh.faces.len()];
+        for (k, f) in bmesh.faces.iter() {
+            let slot = f.material_idx as usize;
+            if slot < face_keys.len() {
+                face_keys[slot] = k;
+            }
+        }
+        bmesh_component.mesh = bmesh;
+        bmesh_component.vert_keys = vert_keys;
+        bmesh_component.face_keys = face_keys;
+    }
+}
 
+/// Re-run `edge_slide` against the snapshot at the current factor and write
+/// the resulting topology back into the live `Brush` + `BrushEditMesh`. Slide
+/// is a pure vertex transform: it never adds or removes faces, so no face
+/// growth or chained selection bookkeeping is needed.
+fn apply_live_edge_slide(
+    modal_state: &mut EdgeSlideModalState,
+    brushes: &mut Query<&mut Brush>,
+    bmesh_q: &mut Query<&mut BrushEditMesh>,
+) {
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
     };
     let Some(ref start_mesh) = modal_state.start_editmesh else {
         return;
     };
-    let Ok(brush_xform) = brush_transforms.get(brush_entity) else {
+    let Some(ref start_brush) = modal_state.start_brush else {
+        return;
+    };
+    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
         return;
     };
 
-    let mut speculative = start_mesh.clone();
+    // Sub-threshold factors: snap the live mesh back to the start state.
+    if modal_state.current_factor.abs() < 1e-4 {
+        let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+            return;
+        };
+        *brush = start_brush.clone();
+        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
+            vec![Default::default(); bmesh.faces.len()];
+        for (k, f) in bmesh.faces.iter() {
+            let slot = f.material_idx as usize;
+            if slot < face_keys.len() {
+                face_keys[slot] = k;
+            }
+        }
+        bmesh_component.mesh = bmesh;
+        bmesh_component.vert_keys = vert_keys;
+        bmesh_component.face_keys = face_keys;
+        return;
+    }
+
+    // Always start the per-frame op from the clean snapshot.
+    bmesh_component.mesh = start_mesh.clone();
+
     if edge_slide(
-        &mut speculative,
+        &mut bmesh_component.mesh,
         &modal_state.edge_keys,
         modal_state.current_factor,
     )
@@ -434,12 +405,54 @@ fn update_preview_lines(
         return;
     }
 
-    for &ek in &modal_state.edge_keys {
-        let edge = &speculative.edges[ek];
-        let p0 = brush_xform.transform_point(speculative.verts[edge.v[0]].co);
-        let p1 = brush_xform.transform_point(speculative.verts[edge.v[1]].co);
-        preview_lines.lines.push((p0, p1));
+    // Re-cache all face normals (slid verts can rotate face planes).
+    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    for fk in face_keys_all {
+        let face = &bmesh_component.mesh.faces[fk];
+        let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
+        let mut cur = face.loop_first;
+        for _ in 0..face.loop_count {
+            let lp = &bmesh_component.mesh.loops[cur];
+            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            cur = lp.next;
+        }
+        let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
+        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
     }
+
+    // Flatten EditMesh -> topology, sync Brush.
+    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+        return;
+    };
+
+    // Edge slide does not add new faces; no need to grow brush.faces.
+    let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
+    for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
+        if face_idx < new_topology.polygons.len() {
+            let normal = new_topology.face_normal_with(&positions, face_idx);
+            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
+                .vert as usize;
+            let distance = positions[v0_idx].dot(normal);
+            face_data.plane.normal = normal;
+            face_data.plane.distance = distance;
+        }
+    }
+    brush.topology = new_topology;
+
+    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
+    let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
+    for (k, f) in new_bmesh.faces.iter() {
+        let slot = f.material_idx as usize;
+        if slot < new_face_keys.len() {
+            new_face_keys[slot] = k;
+        }
+    }
+    bmesh_component.mesh = new_bmesh;
+    bmesh_component.vert_keys = new_vert_keys;
+    bmesh_component.face_keys = new_face_keys;
 }
 
 /// Compute cursor-tracks-edge projection info for both adjacent quad faces of

@@ -4,8 +4,9 @@
 //! motion picks both the target incident edge (whichever screen-space
 //! direction from the vertex outward best aligns with the cursor delta) and
 //! the slide factor in `[0, 1]`: 0 = no slide, 1 = collapsed onto the chosen
-//! neighbor. A cyan preview line goes from the original vertex position to
-//! the speculative slid position. LMB commits; Esc / RMB cancels.
+//! neighbor. The brush mesh is mutated each frame so the user sees the live
+//! slid vertex position as a real mesh edit. LMB commits; Esc / RMB cancels
+//! and restores the pre-modal mesh.
 //!
 //! Coexists with the non-modal `brush.mesh.vertex_slide` operator (which
 //! slides by a fixed amount along the first disk-cycle edge) -- this is a
@@ -34,24 +35,17 @@ use crate::viewport_util::ViewportRemap;
 /// switching when the user has barely moved the cursor.
 const VERTEX_SLIDE_DEADZONE: f32 = 2.0;
 
-/// World-space line segments for the modal vertex slide preview gizmo.
-/// Each element is a (start, end) pair drawn as a cyan line each frame.
-#[derive(Resource, Default)]
-pub struct VertexSlidePreviewLines {
-    pub lines: Vec<(Vec3, Vec3)>,
-}
-
 /// One incident edge and its screen-space direction from the slid vertex.
 #[derive(Clone, Copy)]
 struct CandidateEdge {
     edge_key: EdgeKey,
-    other_vert: VertKey,
-    /// Unit-length screen-space direction from the slid vertex toward
-    /// `other_vert`, in window pixels. `None` if both endpoints projected
-    /// to the same point (degenerate / behind-camera edge).
+    /// Unit-length screen-space direction from the slid vertex toward the
+    /// edge's other endpoint, in window pixels. `None` if both endpoints
+    /// projected to the same point (degenerate / behind-camera edge).
     screen_dir: Option<Vec2>,
     /// Length of the (non-normalized) screen vector from the slid vertex
-    /// to `other_vert`. Used to map projection distance to a [0, 1] factor.
+    /// to the other endpoint. Used to map projection distance to a [0, 1]
+    /// factor.
     screen_len: f32,
     /// World-space length of the candidate edge. Used to convert factor into
     /// a world distance for grid snapping.
@@ -63,7 +57,9 @@ struct CandidateEdge {
 pub struct VertexSlideModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// EditMesh VertKey of the vertex being slid.
+    /// EditMesh VertKey of the vertex being slid. Resolved against
+    /// `start_editmesh`; we re-resolve it from `start_editmesh` each frame
+    /// because the live mesh is reset to the snapshot before running the op.
     pub vert_key: Option<VertKey>,
     /// Window-space cursor position at the moment the modal started.
     pub start_cursor: Vec2,
@@ -97,7 +93,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
 /// Slide the selected vertex along whichever incident edge the cursor is
 /// pointing toward, by a factor in `[0, 1]` derived from cursor distance.
-/// LMB commits; Esc / RMB cancels.
+/// The live brush mesh is updated each frame so the slide is visible as a
+/// real mesh edit. LMB commits; Esc / RMB cancels and reverts.
 ///
 /// Requires Vertex mode with exactly one vertex selected.
 #[operator(
@@ -117,7 +114,6 @@ pub(crate) fn brush_vertex_slide_modal(
     brush_transforms: Query<&GlobalTransform>,
     mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<VertexSlideModalState>,
-    mut preview_lines: ResMut<VertexSlidePreviewLines>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
@@ -185,16 +181,18 @@ pub(crate) fn brush_vertex_slide_modal(
         modal_state.start_brush = Some(brush_before);
         modal_state.start_editmesh = Some(mesh_snapshot);
 
-        update_preview_lines(&modal_state, &brush_transforms, &mut preview_lines);
         return OperatorResult::Running;
     }
 
-    // --- Subsequent invokes: cancel, update factor, preview, or commit ---
+    // --- Subsequent invokes: cancel, update factor, mutate preview, or commit ---
 
     let escape = keyboard.just_pressed(KeyCode::Escape);
     let rmb = mouse.just_pressed(MouseButton::Right);
     if escape || rmb {
-        clear_modal(&mut modal_state, &mut preview_lines);
+        // Live brush has been mutated each frame, so restore from the snapshot
+        // before clearing modal state.
+        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+        *modal_state = VertexSlideModalState::default();
         return OperatorResult::Cancelled;
     }
 
@@ -260,117 +258,46 @@ pub(crate) fn brush_vertex_slide_modal(
         }
     }
 
-    update_preview_lines(&modal_state, &brush_transforms, &mut preview_lines);
+    // Apply the slide to the live brush mesh so the user sees it as a real
+    // mesh edit. The op result is discarded; the slid vertex is visible
+    // through the regular brush mesh pipeline picking up `Changed<Brush>`.
+    apply_live_vertex_slide(&mut modal_state, &mut brushes, &mut bmesh_q);
 
     // Commit on LMB.
     if mouse.just_pressed(MouseButton::Left) {
         let Some(brush_entity) = modal_state.brush_entity else {
-            clear_modal(&mut modal_state, &mut preview_lines);
+            *modal_state = VertexSlideModalState::default();
             return OperatorResult::Cancelled;
         };
-        let Some(ref start_brush) = modal_state.start_brush else {
-            clear_modal(&mut modal_state, &mut preview_lines);
+        let Some(start_brush) = modal_state.start_brush.clone() else {
+            *modal_state = VertexSlideModalState::default();
             return OperatorResult::Cancelled;
         };
-        let brush_before = start_brush.clone();
-        let factor = modal_state.current_factor;
-        let Some(vert_key) = modal_state.vert_key else {
-            clear_modal(&mut modal_state, &mut preview_lines);
-            return OperatorResult::Cancelled;
-        };
-        let Some(chosen_idx) = modal_state.chosen_idx else {
+        if modal_state.chosen_idx.is_none() {
             // No chosen edge: treat as no-op cancel.
-            clear_modal(&mut modal_state, &mut preview_lines);
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+            *modal_state = VertexSlideModalState::default();
             return OperatorResult::Cancelled;
-        };
-        let chosen_edge = modal_state.candidates[chosen_idx].edge_key;
+        }
 
         // Degenerate zero-factor commit: treat as no-op cancel so we don't
-        // record a useless undo entry.
-        if factor.abs() < 1e-4 {
-            clear_modal(&mut modal_state, &mut preview_lines);
+        // record a useless undo entry. The live brush should already be back
+        // to the snapshot (apply_live_vertex_slide resets when factor is sub-threshold).
+        if modal_state.current_factor.abs() < 1e-4 {
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+            *modal_state = VertexSlideModalState::default();
             return OperatorResult::Cancelled;
         }
 
-        let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
-            clear_modal(&mut modal_state, &mut preview_lines);
-            return OperatorResult::Cancelled;
-        };
-
-        // Restore to snapshot before committing so we start from clean state.
-        if let Some(ref snap) = modal_state.start_editmesh {
-            bmesh_component.mesh = snap.clone();
-        }
-
-        // Steer the `vertex_slide` op toward our chosen edge. The op reads
-        // `verts[v].edge` to pick the slide target; the disk cycle's
-        // doubly-linked structure (via `disk_next` / `disk_prev` on edges)
-        // is independent of this anchor, so retargeting it does not break
-        // any invariants. We have to do this after restoring the snapshot
-        // since `verts[v].edge` is part of the EditMesh state.
-        if let Some(vert) = bmesh_component.mesh.verts.get_mut(vert_key) {
-            vert.edge = Some(chosen_edge);
-        }
-
-        if vertex_slide(&mut bmesh_component.mesh, &[vert_key], factor).is_err() {
-            clear_modal(&mut modal_state, &mut preview_lines);
-            return OperatorResult::Cancelled;
-        }
-
-        // Re-cache all face normals (slid vert can rotate face planes).
-        let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
-        for fk in face_keys_all {
-            let face = &bmesh_component.mesh.faces[fk];
-            let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
-            let mut cur = face.loop_first;
-            for _ in 0..face.loop_count {
-                let lp = &bmesh_component.mesh.loops[cur];
-                ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
-                cur = lp.next;
-            }
-            let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-            bmesh_component.mesh.faces[fk].normal_cache = new_normal;
-        }
-
-        // Flatten EditMesh -> topology, sync Brush.
-        let new_topology = bmesh_component.mesh.flatten_to_topology();
-        let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-            clear_modal(&mut modal_state, &mut preview_lines);
+        let Ok(brush) = brushes.get(brush_entity).cloned() else {
+            *modal_state = VertexSlideModalState::default();
             return OperatorResult::Cancelled;
         };
-
-        // Vertex slide does not add new faces; no need to grow brush.faces.
-        let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
-        for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
-            if face_idx < new_topology.polygons.len() {
-                let normal = new_topology.face_normal_with(&positions, face_idx);
-                let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
-                    .vert as usize;
-                let distance = positions[v0_idx].dot(normal);
-                face_data.plane.normal = normal;
-                face_data.plane.distance = distance;
-            }
-        }
-        brush.topology = new_topology;
-
-        // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
-        let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
-        let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
-        let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
-        for (k, f) in new_bmesh.faces.iter() {
-            let slot = f.material_idx as usize;
-            if slot < new_face_keys.len() {
-                new_face_keys[slot] = k;
-            }
-        }
-        bmesh_component.mesh = new_bmesh;
-        bmesh_component.vert_keys = new_vert_keys;
-        bmesh_component.face_keys = new_face_keys;
 
         history.push_executed(Box::new(SetBrush {
             entity: brush_entity,
-            old: brush_before,
-            new: brush.clone(),
+            old: start_brush,
+            new: brush,
             label: "Vertex Slide".to_string(),
         }));
 
@@ -378,92 +305,180 @@ pub(crate) fn brush_vertex_slide_modal(
         // vertex identity (no add/remove), and slotmap iteration order is
         // stable when no verts are added or removed.
 
-        clear_modal(&mut modal_state, &mut preview_lines);
+        *modal_state = VertexSlideModalState::default();
         return OperatorResult::Finished;
     }
 
     OperatorResult::Running
 }
 
-/// Cancel handler: restore the brush to its pre-modal state and clear preview.
+/// Cancel handler: restore the brush to its pre-modal state. Called when the
+/// modal lifecycle is force-cancelled from outside the operator.
 fn cancel_vertex_slide(
     mut modal_state: ResMut<VertexSlideModalState>,
-    mut preview_lines: ResMut<VertexSlidePreviewLines>,
     mut brushes: Query<&mut Brush>,
     mut bmesh_q: Query<&mut BrushEditMesh>,
 ) {
-    if let Some(brush_entity) = modal_state.brush_entity
-        && let Some(ref start_brush) = modal_state.start_brush
-        && let Ok(mut brush) = brushes.get_mut(brush_entity)
-    {
-        *brush = start_brush.clone();
-        if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-            let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
-            let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-            let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-                vec![Default::default(); bmesh.faces.len()];
-            for (k, f) in bmesh.faces.iter() {
-                let slot = f.material_idx as usize;
-                if slot < face_keys.len() {
-                    face_keys[slot] = k;
-                }
-            }
-            bmesh_component.mesh = bmesh;
-            bmesh_component.vert_keys = vert_keys;
-            bmesh_component.face_keys = face_keys;
-        }
-    }
-    clear_modal(&mut modal_state, &mut preview_lines);
-}
-
-fn clear_modal(
-    modal_state: &mut VertexSlideModalState,
-    preview_lines: &mut VertexSlidePreviewLines,
-) {
+    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
     *modal_state = VertexSlideModalState::default();
-    preview_lines.lines.clear();
 }
 
-/// Compute the cyan preview line: from the original vertex position to the
-/// speculative slid position based on the currently chosen edge + factor.
-/// Empty if no candidate is chosen yet (cursor still in deadzone).
-fn update_preview_lines(
+/// Reset the live brush + EditMesh to the snapshot captured at modal start.
+fn restore_brush_from_snapshot(
     modal_state: &VertexSlideModalState,
-    brush_transforms: &Query<&GlobalTransform>,
-    preview_lines: &mut VertexSlidePreviewLines,
+    brushes: &mut Query<&mut Brush>,
+    bmesh_q: &mut Query<&mut BrushEditMesh>,
 ) {
-    preview_lines.lines.clear();
+    let Some(brush_entity) = modal_state.brush_entity else {
+        return;
+    };
+    let Some(ref start_brush) = modal_state.start_brush else {
+        return;
+    };
+    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+        return;
+    };
+    *brush = start_brush.clone();
+    if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
+        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
+            vec![Default::default(); bmesh.faces.len()];
+        for (k, f) in bmesh.faces.iter() {
+            let slot = f.material_idx as usize;
+            if slot < face_keys.len() {
+                face_keys[slot] = k;
+            }
+        }
+        bmesh_component.mesh = bmesh;
+        bmesh_component.vert_keys = vert_keys;
+        bmesh_component.face_keys = face_keys;
+    }
+}
 
+/// Re-run `vertex_slide` against the snapshot at the current factor and write
+/// the resulting topology back into the live `Brush` + `BrushEditMesh`. Slide
+/// is a pure vertex transform: it never adds or removes faces, so no face
+/// growth or chained selection bookkeeping is needed.
+fn apply_live_vertex_slide(
+    modal_state: &mut VertexSlideModalState,
+    brushes: &mut Query<&mut Brush>,
+    bmesh_q: &mut Query<&mut BrushEditMesh>,
+) {
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
     };
     let Some(ref start_mesh) = modal_state.start_editmesh else {
         return;
     };
+    let Some(ref start_brush) = modal_state.start_brush else {
+        return;
+    };
     let Some(vert_key) = modal_state.vert_key else {
         return;
     };
-    let Some(chosen_idx) = modal_state.chosen_idx else {
-        return;
-    };
-    let Ok(brush_xform) = brush_transforms.get(brush_entity) else {
-        return;
-    };
-    let Some(start_vert) = start_mesh.verts.get(vert_key) else {
-        return;
-    };
-    let Some(cand) = modal_state.candidates.get(chosen_idx) else {
-        return;
-    };
-    let Some(target_vert) = start_mesh.verts.get(cand.other_vert) else {
+    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
         return;
     };
 
-    let from_local = start_vert.co;
-    let to_local = from_local.lerp(target_vert.co, modal_state.current_factor);
-    let from_world = brush_xform.transform_point(from_local);
-    let to_world = brush_xform.transform_point(to_local);
-    preview_lines.lines.push((from_world, to_world));
+    // No chosen edge OR sub-threshold factor: snap the live mesh back to the
+    // start state. The user is still hovering inside the deadzone or has not
+    // yet pointed at a candidate edge, so there is no slide to preview.
+    if modal_state.chosen_idx.is_none() || modal_state.current_factor.abs() < 1e-4 {
+        let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+            return;
+        };
+        *brush = start_brush.clone();
+        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
+            vec![Default::default(); bmesh.faces.len()];
+        for (k, f) in bmesh.faces.iter() {
+            let slot = f.material_idx as usize;
+            if slot < face_keys.len() {
+                face_keys[slot] = k;
+            }
+        }
+        bmesh_component.mesh = bmesh;
+        bmesh_component.vert_keys = vert_keys;
+        bmesh_component.face_keys = face_keys;
+        return;
+    }
+
+    let chosen_idx = modal_state.chosen_idx.unwrap();
+    let chosen_edge = modal_state.candidates[chosen_idx].edge_key;
+
+    // Always start the per-frame op from the clean snapshot.
+    bmesh_component.mesh = start_mesh.clone();
+
+    // Steer the `vertex_slide` op toward our chosen edge. The op reads
+    // `verts[v].edge` to pick the slide target; the disk cycle's
+    // doubly-linked structure (via `disk_next` / `disk_prev` on edges) is
+    // independent of this anchor, so retargeting it does not break any
+    // invariants. We have to do this after restoring the snapshot since
+    // `verts[v].edge` is part of the EditMesh state.
+    if let Some(vert) = bmesh_component.mesh.verts.get_mut(vert_key) {
+        vert.edge = Some(chosen_edge);
+    }
+
+    if vertex_slide(
+        &mut bmesh_component.mesh,
+        &[vert_key],
+        modal_state.current_factor,
+    )
+    .is_err()
+    {
+        return;
+    }
+
+    // Re-cache all face normals (slid vert can rotate face planes).
+    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    for fk in face_keys_all {
+        let face = &bmesh_component.mesh.faces[fk];
+        let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
+        let mut cur = face.loop_first;
+        for _ in 0..face.loop_count {
+            let lp = &bmesh_component.mesh.loops[cur];
+            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            cur = lp.next;
+        }
+        let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
+        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+    }
+
+    // Flatten EditMesh -> topology, sync Brush.
+    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+        return;
+    };
+
+    // Vertex slide does not add new faces; no need to grow brush.faces.
+    let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
+    for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
+        if face_idx < new_topology.polygons.len() {
+            let normal = new_topology.face_normal_with(&positions, face_idx);
+            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
+                .vert as usize;
+            let distance = positions[v0_idx].dot(normal);
+            face_data.plane.normal = normal;
+            face_data.plane.distance = distance;
+        }
+    }
+    brush.topology = new_topology;
+
+    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
+    let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
+    for (k, f) in new_bmesh.faces.iter() {
+        let slot = f.material_idx as usize;
+        if slot < new_face_keys.len() {
+            new_face_keys[slot] = k;
+        }
+    }
+    bmesh_component.mesh = new_bmesh;
+    bmesh_component.vert_keys = new_vert_keys;
+    bmesh_component.face_keys = new_face_keys;
 }
 
 /// Enumerate incident edges of `vert_key` and project each neighbor into
@@ -512,7 +527,6 @@ fn collect_candidate_edges(
         let Ok(other_rt) = camera.world_to_viewport(cam_tf, other_world) else {
             out.push(CandidateEdge {
                 edge_key,
-                other_vert,
                 screen_dir: None,
                 screen_len: 0.0,
                 world_len,
@@ -535,7 +549,6 @@ fn collect_candidate_edges(
         };
         out.push(CandidateEdge {
             edge_key,
-            other_vert,
             screen_dir: dir,
             screen_len,
             world_len,

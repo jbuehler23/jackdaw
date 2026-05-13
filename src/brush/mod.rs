@@ -4,6 +4,7 @@ mod geometry;
 mod gizmo_overlay;
 mod hull;
 pub(crate) mod interaction;
+pub(crate) mod knife_mode;
 pub(crate) mod mesh;
 pub mod preview;
 pub mod topology_migration;
@@ -24,14 +25,15 @@ pub(crate) use self::interaction::{
 };
 pub use edit_mode_systems::BrushEditMesh;
 pub use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
+pub use knife_mode::{KnifeMode, KnifePathPoint, KnifeSnapKind, KnifeSnapTarget};
 pub use preview::{ActivePreview, PreviewMesh, PreviewState};
 pub use topology_ops::edge_bevel::EdgeBevelModalState;
-pub use topology_ops::edge_slide_modal::{EdgeSlideModalState, EdgeSlidePreviewLines};
-pub use topology_ops::extrude::{ExtrudeModalState, ExtrudePreviewLines};
-pub use topology_ops::inset::{InsetModalState, InsetPreviewLines};
+pub use topology_ops::edge_slide_modal::EdgeSlideModalState;
+pub use topology_ops::extrude::ExtrudeModalState;
+pub use topology_ops::inset::InsetModalState;
 pub use topology_ops::loop_cut::{LoopCutModalState, LoopCutPreviewLines};
 pub use topology_ops::vertex_bevel::VertexBevelModalState;
-pub use topology_ops::vertex_slide_modal::{VertexSlideModalState, VertexSlidePreviewLines};
+pub use topology_ops::vertex_slide_modal::VertexSlideModalState;
 
 /// Cached computed geometry (NOT serialized, rebuilt from Brush).
 #[derive(Component)]
@@ -73,6 +75,7 @@ pub enum BrushEditMode {
     Vertex,
     Edge,
     Clip,
+    Knife,
 }
 
 /// Tracks selected sub-elements within brush edit mode.
@@ -227,17 +230,14 @@ impl Plugin for BrushPlugin {
             .init_resource::<EdgeDragState>()
             .init_resource::<ClipState>()
             .init_resource::<InsetModalState>()
-            .init_resource::<InsetPreviewLines>()
             .init_resource::<LoopCutModalState>()
             .init_resource::<LoopCutPreviewLines>()
             .init_resource::<ExtrudeModalState>()
-            .init_resource::<ExtrudePreviewLines>()
             .init_resource::<EdgeSlideModalState>()
-            .init_resource::<EdgeSlidePreviewLines>()
             .init_resource::<VertexSlideModalState>()
-            .init_resource::<VertexSlidePreviewLines>()
             .init_resource::<EdgeBevelModalState>()
             .init_resource::<VertexBevelModalState>()
+            .init_resource::<KnifeMode>()
             .init_resource::<LastUsedMaterial>()
             .add_plugins(mesh::MeshPlugin)
             .add_plugins(preview::PreviewPlugin)
@@ -255,6 +255,7 @@ impl Plugin for BrushPlugin {
                     crate::brush_drag_ops::edge_drag_invoke_trigger,
                     crate::clip_ops::place_point_invoke_trigger,
                     interaction::handle_clip_mode,
+                    knife_mode::handle_knife_mode,
                 )
                     .chain()
                     .in_set(crate::EditorInteractionSystems),
@@ -269,10 +270,7 @@ impl Plugin for BrushPlugin {
                     mesh::ensure_brush_face_materials,
                     gizmo_overlay::draw_brush_edit_gizmos,
                     gizmo_overlay::draw_loop_cut_preview,
-                    gizmo_overlay::draw_inset_preview,
-                    gizmo_overlay::draw_extrude_preview,
-                    gizmo_overlay::draw_edge_slide_preview,
-                    gizmo_overlay::draw_vertex_slide_preview,
+                    knife_mode::draw_knife_overlay,
                 )
                     .chain()
                     .after(crate::EditorInteractionSystems)

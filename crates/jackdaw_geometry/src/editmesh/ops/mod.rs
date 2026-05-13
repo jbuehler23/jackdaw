@@ -13,6 +13,7 @@ pub mod edge_slide;
 pub mod edge_split;
 pub mod extrude_face_region;
 pub mod face_create;
+pub mod face_poke;
 pub mod face_split;
 pub mod inset_face;
 pub mod loop_cut;

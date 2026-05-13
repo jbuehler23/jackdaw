@@ -1,9 +1,10 @@
 //! Edit-mode lifecycle: lift `BrushTopology` to `EditMesh` on enter, flatten back
 //! and remove on exit.
 //!
-//! `BrushEditMesh` is the in-memory edit-time mesh. Only present on the entity
-//! while that brush is in vertex / edge / face mode. Clip mode does not lift
-//! a EditMesh (it operates on the plane representation directly until A.4.x).
+//! `BrushEditMesh` is the in-memory edit-time mesh. Present on the entity
+//! while that brush is in Vertex / Edge / Face / Knife mode. Clip mode does
+//! not lift an EditMesh (it operates on the plane representation directly
+//! until A.4.x).
 
 use bevy::prelude::*;
 use jackdaw_geometry::editmesh::{EditMesh, FaceKey, VertKey};
@@ -38,7 +39,8 @@ pub fn sync_brush_bmesh_on_edit_mode(
     let target_entity: Option<Entity> = match *edit_mode {
         EditMode::BrushEdit(BrushEditMode::Vertex)
         | EditMode::BrushEdit(BrushEditMode::Edge)
-        | EditMode::BrushEdit(BrushEditMode::Face) => selection.entity,
+        | EditMode::BrushEdit(BrushEditMode::Face)
+        | EditMode::BrushEdit(BrushEditMode::Knife) => selection.entity,
         _ => None,
     };
 

@@ -164,7 +164,7 @@ pub(crate) fn brush_delete_element(
             }));
             brush_selection.faces.clear();
         }
-        BrushEditMode::Clip => return OperatorResult::Cancelled,
+        BrushEditMode::Clip | BrushEditMode::Knife => return OperatorResult::Cancelled,
     }
     OperatorResult::Finished
 }
@@ -326,7 +326,7 @@ fn nudge_brush_element(
                 .collect();
             "Nudge brush face"
         }
-        BrushEditMode::Clip => unreachable!(),
+        BrushEditMode::Clip | BrushEditMode::Knife => unreachable!(),
     };
     history.push_executed(Box::new(SetBrush {
         entity: brush_entity,
