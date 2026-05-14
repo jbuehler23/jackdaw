@@ -8,37 +8,59 @@
 //! small tolerance. Priority order (highest first):
 //!
 //! - **Path-point snap**: any point already placed in the current path
-//!   (large hollow red circle). Lets the user close loops.
-//! - **Vertex snap**: filled red dot.
-//! - **Edge midpoint snap** (Shift held): hollow red square.
-//! - **Edge point snap**: small red diamond on the edge.
-//! - **Face interior snap**: small filled red square. The cursor is
-//!   over a face but not near any vert or edge; commit will `face_poke`
-//!   a center vert at this position before bisecting.
+//!   (large hollow red circle, outlined in white). Lets the user close
+//!   loops.
+//! - **Vertex snap**: solid filled red dot.
+//! - **Edge midpoint snap** (Shift held): hollow red diamond.
+//! - **Grid point snap** (translate snap active): red plus / cross.
+//! - **Edge point snap**: small filled red square.
+//! - **Face interior snap**: red X / cross. The cursor is over a face
+//!   but not near any vert or edge; commit will add a Steiner point at
+//!   this position and retriangulate the face.
+//!
+//! Vert and edge snap candidates are filtered by camera depth (clip-space
+//! z): the candidate with the smallest depth wins, with screen distance
+//! as the tiebreaker. This prevents the cursor from snapping to verts /
+//! edges that live on a back-facing face occluded by the front face the
+//! user is actually pointing at.
 //!
 //! LMB click commits the current snap target into the path. Enter
 //! bisects each adjacent pair of points as a single `SetBrush` undo
 //! entry. Esc or RMB cancels the in-progress path.
 //!
-//! Commit handling per segment:
+//! Commit handling: the path is applied to the EditMesh using
+//! **topology mutations only** (no CDT). The pipeline mirrors how
+//! Blender's knife tool works.
 //!
-//! - Same face: `split_edge` each endpoint that landed on an edge,
-//!   `face_poke` each endpoint that landed in the face interior, then
-//!   `split_face` connects the two resulting verts with a chord.
-//! - Adjacent faces (one shared edge): split the shared edge at the
-//!   3D segment-edge intersection, bisect each face with the
-//!   intermediate vert.
-//! - Non-adjacent faces or faces sharing more than one edge: warn and
-//!   skip.
+//! Phase 1: walk every path point in order, resolving each to a live
+//! `VertKey` in the post-mutation mesh:
+//!
+//! - Vertex snap: position-lookup against the live mesh.
+//! - Edge snap (`EdgePoint`, `EdgeMidpoint`): find a live edge whose
+//!   endpoints flank the click position, then `split_edge` it. This
+//!   handles the case where an earlier mutation has already split the
+//!   original edge into two sub-edges; the search picks the live
+//!   sub-edge that contains the click.
+//! - Interior / Grid snap: pick the live face containing the click
+//!   (point-in-polygon in the face plane) and `face_poke` it. Subsequent
+//!   path points on the same original face look up which fan tri is
+//!   alive now and route through it.
+//! - Path-point reclick: inherits the resolved VertKey from its source.
+//!
+//! Phase 2: for each consecutive pair, perform a chord:
+//!
+//! - Both verts on the same live face's ring: `split_face`.
+//! - Different live faces: cross-face routing. Find a face adjacent to
+//!   `va` whose boundary the segment crosses, `split_edge` at the
+//!   crossing, then recurse with the intermediate as the new `va`.
+//!
+//! If a segment can't be resolved cleanly (no path, adjacent verts that
+//! can't chord, or already-collapsed pair), it's logged and skipped but
+//! the commit continues. Catastrophic failures (rare) restore from the
+//! pre-commit snapshot.
 //!
 //! Cut-through (Blender-style: project the cut through the whole brush
 //! so the back face is cut simultaneously) is filed as task #97.
-//!
-//! Known limitation: if two consecutive path points both snap to
-//! interior points of the *same* original edge, the second segment's
-//! lookup will fail (the original edge no longer exists after the
-//! first segment's `split_edge`) and the segment is skipped. Most
-//! useful paths don't hit this case.
 
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
@@ -46,7 +68,7 @@ use bevy::window::PrimaryWindow;
 use jackdaw_geometry::editmesh::ops::edge_split::split_edge;
 use jackdaw_geometry::editmesh::ops::face_poke::face_poke;
 use jackdaw_geometry::editmesh::ops::face_split::split_face;
-use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, FaceKey, VertKey};
+use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, FaceKey, LoopKey, VertKey};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{
@@ -68,6 +90,16 @@ const KNIFE_SNAP_PIXELS: f32 = 12.0;
 /// color in `default_style`).
 const KNIFE_COLOR: Color = Color::srgb(1.0, 0.2, 0.2);
 
+/// White outline used to make the PathPoint marker pop against the
+/// red wireframe and red preview line.
+const KNIFE_PATH_POINT_OUTLINE: Color = Color::srgb(1.0, 1.0, 1.0);
+
+/// Camera-depth tie tolerance for snap candidate ordering. Two candidates
+/// whose `clip_z` differ by less than this are treated as equally deep
+/// and the screen-distance tiebreaker wins. Set small enough that the
+/// front face wins decisively over a back face on a normal-sized brush.
+const DEPTH_TIE_EPSILON: f32 = 1e-4;
+
 /// Kind of snap target chosen for the current cursor position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KnifeSnapKind {
@@ -75,6 +107,8 @@ pub enum KnifeSnapKind {
     Vertex,
     /// Snapped to an edge midpoint (Shift held + within edge tolerance).
     EdgeMidpoint,
+    /// Snapped to a grid point on the face plane (translate snap active).
+    GridPoint,
     /// Snapped to the closest point on an edge.
     EdgePoint,
     /// Cursor is inside a face but not near any vert or edge. Commit
@@ -186,6 +220,7 @@ pub(super) fn handle_knife_mode(
     mut bmesh_q: Query<&mut BrushEditMesh>,
     mut history: ResMut<CommandHistory>,
     mut knife: ResMut<KnifeMode>,
+    snap_settings: Res<crate::snapping::SnapSettings>,
     keybind_focus: crate::keybind_focus::KeybindFocus,
 ) {
     // Bail (and clear any stale state) when the user is not in Knife mode.
@@ -254,10 +289,21 @@ pub(super) fn handle_knife_mode(
         return;
     };
 
-    // Resolve snap. Path-point snap is the highest priority; it
-    // overrides face / vert / edge snap so the user can close loops
-    // even when an existing path point sits on top of a vert.
+    // Resolve snap. Priority order (highest first):
+    //   1. Existing vert within tolerance.
+    //   2. Path-point reuse (re-click on an existing path point).
+    //   3. Edge midpoint (Shift held).
+    //   4. Grid point on the face plane (when translate snap is active).
+    //   5. Edge point.
+    //   6. Face interior.
+    //
+    // Vert and edge snaps are scanned across ALL face edges (deduplicated
+    // by canonical vert pair) so the snap dot stays put when the cursor
+    // crosses the boundary between two faces in screen space; relying
+    // solely on `pick_face_under_cursor` for the snap face was the cause
+    // of the "snap dot disappears near edges" bug.
     let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let path_snap = compute_path_point_snap(
         viewport_cursor,
         &knife.path,
@@ -268,8 +314,37 @@ pub(super) fn handle_knife_mode(
     );
 
     let hover_face = pick_face_under_cursor(viewport_cursor, cache, brush_global, camera, cam_tf);
-    let geometry_snap = hover_face.and_then(|face_idx| {
-        compute_face_snap(
+
+    let vert_snap = compute_vert_snap_all(
+        viewport_cursor,
+        cache,
+        brush_global,
+        camera,
+        cam_tf,
+        viewport_entity,
+        &viewport_query,
+        hover_face,
+    );
+
+    let (edge_mid_snap, edge_point_snap) = compute_edge_snap_all(
+        viewport_cursor,
+        cache,
+        brush_global,
+        camera,
+        cam_tf,
+        viewport_entity,
+        &viewport_query,
+        hover_face,
+        shift,
+    );
+
+    // Grid snap: only when a face is under the cursor (we need a plane
+    // to project the cursor onto, and a face to attach the snap to).
+    let grid_snap = if snap_settings.translate_active(ctrl)
+        && snap_settings.translate_increment > 0.0
+        && let Some(face_idx) = hover_face
+    {
+        compute_grid_snap(
             face_idx,
             viewport_cursor,
             cache,
@@ -278,16 +353,16 @@ pub(super) fn handle_knife_mode(
             cam_tf,
             viewport_entity,
             &viewport_query,
-            shift,
+            snap_settings.translate_increment,
         )
-    });
+    } else {
+        None
+    };
 
     // Fall back to face-interior snap when nothing else stuck but the
     // cursor is over a face. We project a ray through the cursor onto
     // the face plane to get a stable world-space point.
-    let interior_snap = if geometry_snap.is_none()
-        && let Some(face_idx) = hover_face
-    {
+    let interior_snap = if let Some(face_idx) = hover_face {
         compute_face_interior_snap(
             face_idx,
             viewport_cursor,
@@ -300,7 +375,12 @@ pub(super) fn handle_knife_mode(
         None
     };
 
-    knife.hover_snap = path_snap.or(geometry_snap).or(interior_snap);
+    knife.hover_snap = vert_snap
+        .or(path_snap)
+        .or(edge_mid_snap)
+        .or(grid_snap)
+        .or(edge_point_snap)
+        .or(interior_snap);
 
     if typing {
         return;
@@ -344,9 +424,10 @@ pub(super) fn handle_knife_mode(
     }
 }
 
-/// Per-frame gizmo overlay: red dots / squares / diamonds for the
-/// current snap target, red line segments connecting the path, and a
-/// preview segment from the last clicked point to the cursor.
+/// Per-frame gizmo overlay: a per-kind glyph (dot, diamond, plus,
+/// filled square, X, or white-outlined circle) for the current snap
+/// target, red line segments connecting the path, and a preview segment
+/// from the last clicked point to the cursor.
 pub(super) fn draw_knife_overlay(
     edit_mode: Res<EditMode>,
     knife: Res<KnifeMode>,
@@ -377,11 +458,14 @@ pub(super) fn draw_knife_overlay(
         );
     }
 
-    // Live snap indicator at the cursor.
+    // Live snap indicator at the cursor. Each kind gets a distinct
+    // glyph so the user can tell at a glance what the click will lock
+    // onto: vert / edge midpoint / edge / grid / face interior / path
+    // point.
     if let Some(snap) = knife.hover_snap.as_ref() {
         match snap.kind {
             KnifeSnapKind::Vertex => {
-                // Filled red dot.
+                // Solid red circle: filled sphere reads as a dot.
                 gizmos.sphere(
                     Isometry3d::from_translation(snap.world_pos),
                     default_style::EDIT_VERTEX_RADIUS * 1.2,
@@ -389,51 +473,62 @@ pub(super) fn draw_knife_overlay(
                 );
             }
             KnifeSnapKind::EdgeMidpoint => {
-                // Hollow red square.
-                draw_square(&mut gizmos, snap.world_pos, KNIFE_COLOR);
-            }
-            KnifeSnapKind::EdgePoint => {
-                // Small red diamond on the edge.
+                // Hollow red diamond.
                 draw_diamond(&mut gizmos, snap.world_pos, KNIFE_COLOR);
             }
-            KnifeSnapKind::FaceInterior => {
-                // Small filled red square at the interior snap target.
-                // Visually distinct from `EdgeMidpoint`'s hollow square:
-                // a tighter filled marker built from a 4-line cross
-                // plus an outline.
+            KnifeSnapKind::GridPoint => {
+                // Red plus / cross: distinguishes grid snap from
+                // edge and vert markers.
+                draw_plus(&mut gizmos, snap.world_pos, KNIFE_COLOR);
+            }
+            KnifeSnapKind::EdgePoint => {
+                // Small filled red square on the edge.
                 draw_filled_square(&mut gizmos, snap.world_pos, KNIFE_COLOR);
             }
+            KnifeSnapKind::FaceInterior => {
+                // Red X / cross: visually distinct from `GridPoint`'s
+                // axis-aligned plus.
+                draw_x(&mut gizmos, snap.world_pos, KNIFE_COLOR);
+            }
             KnifeSnapKind::PathPoint => {
-                // Large hollow red sphere outline reads as a circle from
-                // any camera angle (gizmos.sphere is wireframe), which
-                // makes it distinct from the filled vert dot.
+                // Hollow red circle outlined in white: the white ring
+                // makes the path-point marker pop against red path
+                // lines so the user can tell they're snapping back to
+                // an already-placed point.
                 let r = default_style::EDIT_VERTEX_RADIUS * 1.8;
+                let outer = r * 1.25;
+                gizmos.sphere(
+                    Isometry3d::from_translation(snap.world_pos),
+                    outer,
+                    KNIFE_PATH_POINT_OUTLINE,
+                );
                 gizmos.sphere(Isometry3d::from_translation(snap.world_pos), r, KNIFE_COLOR);
             }
         }
     }
 }
 
-fn draw_square(gizmos: &mut Gizmos<BrushOutlineSelectedGizmoGroup>, center: Vec3, color: Color) {
+/// Red X / cross used for the face-interior snap indicator. Two
+/// diagonal line segments centered on `center`. Visually distinct from
+/// `draw_plus`, which is axis-aligned.
+fn draw_x(gizmos: &mut Gizmos<BrushOutlineSelectedGizmoGroup>, center: Vec3, color: Color) {
     let size = default_style::EDIT_VERTEX_RADIUS * 1.6;
-    // Camera-facing not strictly needed: gizmos always render at the
-    // requested world location, and the user reads the indicator as a
-    // small marker. A tilted screen-space square would need the
-    // camera transform; for MVP the axis-aligned square reads well
-    // enough.
     let h = size * 0.5;
-    let p0 = center + Vec3::new(-h, -h, 0.0);
-    let p1 = center + Vec3::new(h, -h, 0.0);
-    let p2 = center + Vec3::new(h, h, 0.0);
-    let p3 = center + Vec3::new(-h, h, 0.0);
-    gizmos.line(p0, p1, color);
-    gizmos.line(p1, p2, color);
-    gizmos.line(p2, p3, color);
-    gizmos.line(p3, p0, color);
+    gizmos.line(
+        center + Vec3::new(-h, -h, 0.0),
+        center + Vec3::new(h, h, 0.0),
+        color,
+    );
+    gizmos.line(
+        center + Vec3::new(-h, h, 0.0),
+        center + Vec3::new(h, -h, 0.0),
+        color,
+    );
 }
 
 /// Filled-looking square: outline plus two diagonal cross-lines. Slightly
-/// smaller than `draw_square` so the two glyphs read as distinct.
+/// smaller than the edge-midpoint diamond so the two glyphs read as
+/// distinct.
 fn draw_filled_square(
     gizmos: &mut Gizmos<BrushOutlineSelectedGizmoGroup>,
     center: Vec3,
@@ -464,6 +559,23 @@ fn draw_diamond(gizmos: &mut Gizmos<BrushOutlineSelectedGizmoGroup>, center: Vec
     gizmos.line(p1, p2, color);
     gizmos.line(p2, p3, color);
     gizmos.line(p3, p0, color);
+}
+
+/// Red plus / cross used for grid-snap indicators. Two perpendicular
+/// line segments centered on `center`, axis-aligned in world space.
+fn draw_plus(gizmos: &mut Gizmos<BrushOutlineSelectedGizmoGroup>, center: Vec3, color: Color) {
+    let size = default_style::EDIT_VERTEX_RADIUS * 1.6;
+    let h = size * 0.5;
+    gizmos.line(
+        center + Vec3::new(-h, 0.0, 0.0),
+        center + Vec3::new(h, 0.0, 0.0),
+        color,
+    );
+    gizmos.line(
+        center + Vec3::new(0.0, -h, 0.0),
+        center + Vec3::new(0.0, h, 0.0),
+        color,
+    );
 }
 
 /// Convert a window cursor position to camera-target viewport space,
@@ -523,15 +635,260 @@ fn pick_face_under_cursor(
     best_face
 }
 
-/// Compute the highest-priority snap target on `face_idx` for the
-/// current cursor position. Priority order:
+/// Scan every face polygon's verts. Returns the closest vert within
+/// `KNIFE_SNAP_PIXELS` of the cursor, deduplicated by vert index so a
+/// shared vert isn't double-counted across faces.
 ///
-/// 1. Nearest existing vert (within tolerance) -- always wins.
-/// 2. Nearest edge midpoint (Shift held + within tolerance).
-/// 3. Nearest point on an edge (within tolerance).
+/// Candidates are ordered by camera-space depth (smallest `clip_z` first,
+/// i.e. closest to camera), with screen distance as the tiebreaker. This
+/// prevents the snap from latching onto a back-face vert that projects
+/// near the cursor but is occluded by the front face. The
+/// `world_to_viewport_with_depth` call returns a `Vec3` whose z is the
+/// world-space distance from the camera near plane along the view axis.
 ///
-/// Returns `None` if no candidate is within tolerance.
-fn compute_face_snap(
+/// The returned snap's `face_idx` prefers `hover_face` when that face
+/// uses the vert; otherwise it falls back to whichever face the vert
+/// was first found on. Picking a face the cursor is actually over keeps
+/// the commit pipeline's per-face grouping consistent with what the
+/// user sees.
+fn compute_vert_snap_all(
+    viewport_cursor: Vec2,
+    cache: &BrushMeshCache,
+    brush_global: &GlobalTransform,
+    camera: &Camera,
+    cam_tf: &GlobalTransform,
+    viewport_entity: Entity,
+    viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    hover_face: Option<usize>,
+) -> Option<KnifeSnapTarget> {
+    let tolerance =
+        window_pixels_to_target_pixels(KNIFE_SNAP_PIXELS, camera, viewport_entity, viewport_query);
+
+    // best: (vert_idx, clip_z, screen_dist, face_idx)
+    let mut best: Option<(usize, f32, f32, usize)> = None;
+    let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    for (face_idx, polygon) in cache.face_polygons.iter().enumerate() {
+        for &vi in polygon {
+            if !seen.insert(vi) {
+                continue;
+            }
+            let local = cache.vertices[vi];
+            let world = brush_global.transform_point(local);
+            let Ok(screen_with_depth) = camera.world_to_viewport_with_depth(cam_tf, world) else {
+                continue;
+            };
+            let screen = screen_with_depth.truncate();
+            let clip_z = screen_with_depth.z;
+            let dist = (screen - viewport_cursor).length();
+            if dist > tolerance {
+                continue;
+            }
+            let assigned_face = match hover_face {
+                Some(hf) if cache.face_polygons[hf].contains(&vi) => hf,
+                _ => face_idx,
+            };
+            // Ordering: prefer smaller clip_z (closer to camera); on ties
+            // (within DEPTH_EPS), prefer smaller screen distance.
+            let take = match best {
+                None => true,
+                Some((_, prev_z, prev_dist, _)) => {
+                    if (clip_z - prev_z).abs() <= DEPTH_TIE_EPSILON {
+                        dist < prev_dist
+                    } else {
+                        clip_z < prev_z
+                    }
+                }
+            };
+            if take {
+                best = Some((vi, clip_z, dist, assigned_face));
+            }
+        }
+    }
+    let (vi, _, _, face_idx) = best?;
+    let local = cache.vertices[vi];
+    let world = brush_global.transform_point(local);
+    Some(KnifeSnapTarget {
+        world_pos: world,
+        local_pos: local,
+        kind: KnifeSnapKind::Vertex,
+        face_idx,
+        edge_pair: None,
+        vert_idx: Some(vi),
+        path_point_idx: None,
+    })
+}
+
+/// Scan every face polygon's edges (deduplicated by canonical
+/// `(min, max)` pair). Returns the best edge-midpoint snap (only when
+/// `shift` is held) and the best edge-point snap. Edges shared between
+/// faces are processed exactly once, so the snap target stays put when
+/// the cursor crosses a face boundary in screen space.
+///
+/// Candidates are ordered by camera-space depth at the snap point
+/// (smallest `clip_z` first, i.e. closest to camera), with screen
+/// distance as the tiebreaker. Without the depth check, an edge on the
+/// back of the brush whose projection falls within tolerance of the
+/// cursor could outrank a closer edge on the front face the user is
+/// pointing at, and the commit would attribute the click to a back face.
+///
+/// The returned snap's `face_idx` prefers `hover_face` when that face
+/// uses the edge; otherwise the first face the edge was found on.
+fn compute_edge_snap_all(
+    viewport_cursor: Vec2,
+    cache: &BrushMeshCache,
+    brush_global: &GlobalTransform,
+    camera: &Camera,
+    cam_tf: &GlobalTransform,
+    viewport_entity: Entity,
+    viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    hover_face: Option<usize>,
+    shift: bool,
+) -> (Option<KnifeSnapTarget>, Option<KnifeSnapTarget>) {
+    let tolerance =
+        window_pixels_to_target_pixels(KNIFE_SNAP_PIXELS, camera, viewport_entity, viewport_query);
+
+    // Best edge-point: (a_vi, b_vi, t, clip_z, dist, face_idx)
+    let mut best_edge_point: Option<(usize, usize, f32, f32, f32, usize)> = None;
+    // Best edge-midpoint: (a_vi, b_vi, clip_z, dist, face_idx)
+    let mut best_midpoint: Option<(usize, usize, f32, f32, usize)> = None;
+    let mut seen: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+
+    for (face_idx, polygon) in cache.face_polygons.iter().enumerate() {
+        let n = polygon.len();
+        if n < 2 {
+            continue;
+        }
+        for i in 0..n {
+            let a_vi = polygon[i];
+            let b_vi = polygon[(i + 1) % n];
+            let canon = canonical_edge(a_vi, b_vi);
+            if !seen.insert(canon) {
+                continue;
+            }
+            let a_local = cache.vertices[a_vi];
+            let b_local = cache.vertices[b_vi];
+            let a_world = brush_global.transform_point(a_local);
+            let b_world = brush_global.transform_point(b_local);
+            let Ok(a_screen3) = camera.world_to_viewport_with_depth(cam_tf, a_world) else {
+                continue;
+            };
+            let Ok(b_screen3) = camera.world_to_viewport_with_depth(cam_tf, b_world) else {
+                continue;
+            };
+            let a_screen = a_screen3.truncate();
+            let b_screen = b_screen3.truncate();
+
+            let ab = b_screen - a_screen;
+            let len_sq = ab.length_squared();
+            let t = if len_sq > 1e-6 {
+                ((viewport_cursor - a_screen).dot(ab) / len_sq).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let closest_screen = a_screen + ab * t;
+            let dist = (closest_screen - viewport_cursor).length();
+            // Linearly interpolate clip-space depth between the two edge
+            // endpoints. This is approximate (true projection isn't
+            // linear in screen space) but good enough to discriminate
+            // front-face from back-face edges on a typical brush.
+            let snap_clip_z = a_screen3.z + (b_screen3.z - a_screen3.z) * t;
+            // Pick the face_idx attached to this edge snap: prefer
+            // `hover_face` if it owns the edge so cross-face cuts get
+            // the right side.
+            let assigned_face = match hover_face {
+                Some(hf) if face_polygon_has_edge(&cache.face_polygons[hf], a_vi, b_vi) => hf,
+                _ => face_idx,
+            };
+            // Note: `dist <= tolerance` is a NON-STRICT compare so a
+            // cursor sitting exactly on the edge in screen space
+            // (distance == 0) still snaps; never reject zero-distance
+            // matches.
+            if dist <= tolerance {
+                let take = match best_edge_point {
+                    None => true,
+                    Some((_, _, _, prev_z, prev_dist, _)) => {
+                        if (snap_clip_z - prev_z).abs() <= DEPTH_TIE_EPSILON {
+                            dist < prev_dist
+                        } else {
+                            snap_clip_z < prev_z
+                        }
+                    }
+                };
+                if take {
+                    best_edge_point = Some((a_vi, b_vi, t, snap_clip_z, dist, assigned_face));
+                }
+            }
+
+            if shift {
+                let mid_screen = a_screen.lerp(b_screen, 0.5);
+                let mid_dist = (mid_screen - viewport_cursor).length();
+                let mid_clip_z = (a_screen3.z + b_screen3.z) * 0.5;
+                if mid_dist <= tolerance {
+                    let take = match best_midpoint {
+                        None => true,
+                        Some((_, _, prev_z, prev_dist, _)) => {
+                            if (mid_clip_z - prev_z).abs() <= DEPTH_TIE_EPSILON {
+                                mid_dist < prev_dist
+                            } else {
+                                mid_clip_z < prev_z
+                            }
+                        }
+                    };
+                    if take {
+                        best_midpoint = Some((a_vi, b_vi, mid_clip_z, mid_dist, assigned_face));
+                    }
+                }
+            }
+        }
+    }
+
+    let midpoint_snap = best_midpoint.map(|(a_vi, b_vi, _, _, face_idx)| {
+        let a_local = cache.vertices[a_vi];
+        let b_local = cache.vertices[b_vi];
+        let mid_local = a_local.lerp(b_local, 0.5);
+        let mid_world = brush_global.transform_point(mid_local);
+        KnifeSnapTarget {
+            world_pos: mid_world,
+            local_pos: mid_local,
+            kind: KnifeSnapKind::EdgeMidpoint,
+            face_idx,
+            edge_pair: Some(canonical_edge(a_vi, b_vi)),
+            vert_idx: None,
+            path_point_idx: None,
+        }
+    });
+
+    let point_snap = best_edge_point.map(|(a_vi, b_vi, t, _, _, face_idx)| {
+        let a_local = cache.vertices[a_vi];
+        let b_local = cache.vertices[b_vi];
+        let snap_local = a_local.lerp(b_local, t);
+        let snap_world = brush_global.transform_point(snap_local);
+        KnifeSnapTarget {
+            world_pos: snap_world,
+            local_pos: snap_local,
+            kind: KnifeSnapKind::EdgePoint,
+            face_idx,
+            edge_pair: Some(canonical_edge(a_vi, b_vi)),
+            vert_idx: None,
+            path_point_idx: None,
+        }
+    });
+
+    (midpoint_snap, point_snap)
+}
+
+/// Compute a grid-point snap on `face_idx`'s plane. Projects the
+/// cursor onto the face plane, then rounds the projected point's
+/// brush-local coordinates to the nearest multiple of `grid_size` along
+/// the two axes most-aligned with the face plane.
+///
+/// Returns `None` if:
+///   - The ray-cursor projection misses (parallel ray, hit behind cam),
+///   - The rounded point is too far from the cursor in screen space
+///     (outside `KNIFE_SNAP_PIXELS`),
+///   - The rounded point lies outside the face's screen polygon.
+fn compute_grid_snap(
     face_idx: usize,
     viewport_cursor: Vec2,
     cache: &BrushMeshCache,
@@ -540,136 +897,110 @@ fn compute_face_snap(
     cam_tf: &GlobalTransform,
     viewport_entity: Entity,
     viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
-    shift: bool,
+    grid_size: f32,
 ) -> Option<KnifeSnapTarget> {
+    if grid_size <= 0.0 {
+        return None;
+    }
     let polygon = cache.face_polygons.get(face_idx)?;
     if polygon.len() < 3 {
         return None;
     }
+    let ring_local: Vec<Vec3> = polygon.iter().map(|&vi| cache.vertices[vi]).collect();
+    let local_normal = jackdaw_geometry::newell_normal(&ring_local);
+    if local_normal.length_squared() < 1e-12 {
+        return None;
+    }
 
+    // World hit on the face plane via the cursor ray.
+    let (_, brush_rot, _) = brush_global.to_scale_rotation_translation();
+    let world_normal = (brush_rot * local_normal).normalize_or_zero();
+    if world_normal == Vec3::ZERO {
+        return None;
+    }
+    let centroid_local: Vec3 = ring_local.iter().copied().sum::<Vec3>() / ring_local.len() as f32;
+    let centroid_world = brush_global.transform_point(centroid_local);
+    let ray = camera.viewport_to_world(cam_tf, viewport_cursor).ok()?;
+    let denom = world_normal.dot(*ray.direction);
+    if denom.abs() < 1e-6 {
+        return None;
+    }
+    let t = (centroid_world - ray.origin).dot(world_normal) / denom;
+    if t < 0.0 {
+        return None;
+    }
+    let hit_world = ray.origin + *ray.direction * t;
+
+    // Snap the WORLD position to the grid: the grid lives in world
+    // space (it's a global setting; the visible InfiniteGrid is in
+    // world coords), so we round world.xyz to multiples of grid_size,
+    // then project the rounded point back to the face plane so the
+    // result is exactly on the plane.
+    let snap_world_raw = Vec3::new(
+        (hit_world.x / grid_size).round() * grid_size,
+        (hit_world.y / grid_size).round() * grid_size,
+        (hit_world.z / grid_size).round() * grid_size,
+    );
+    // Project onto plane: snap_world_raw + n * (centroid - snap_world_raw) dot n
+    let to_centroid = centroid_world - snap_world_raw;
+    let along = to_centroid.dot(world_normal);
+    let snap_world = snap_world_raw + world_normal * along;
+
+    // Tolerance check: rounded grid point must be within snap range in
+    // screen space, otherwise the user is clearly aiming somewhere else.
     let tolerance =
         window_pixels_to_target_pixels(KNIFE_SNAP_PIXELS, camera, viewport_entity, viewport_query);
+    let Ok(snap_screen) = camera.world_to_viewport(cam_tf, snap_world) else {
+        return None;
+    };
+    let dist = (snap_screen - viewport_cursor).length();
+    if dist > tolerance {
+        return None;
+    }
 
+    // Reject grid points that land outside the face screen polygon.
+    // Otherwise the snap dot could appear off-face when the cursor is
+    // near a face edge.
+    let screen_verts: Vec<Vec2> = polygon
+        .iter()
+        .filter_map(|&vi| {
+            let world = brush_global.transform_point(cache.vertices[vi]);
+            camera.world_to_viewport(cam_tf, world).ok()
+        })
+        .collect();
+    if screen_verts.len() != polygon.len() || !point_in_polygon_2d(snap_screen, &screen_verts) {
+        return None;
+    }
+
+    // Brush-local snap position.
+    let affine = brush_global.affine();
+    let inv = affine.inverse();
+    let local_pos = inv.transform_point3(snap_world);
+
+    Some(KnifeSnapTarget {
+        world_pos: snap_world,
+        local_pos,
+        kind: KnifeSnapKind::GridPoint,
+        face_idx,
+        edge_pair: None,
+        vert_idx: None,
+        path_point_idx: None,
+    })
+}
+
+/// Returns `true` if the polygon (vert indices into `cache.vertices`)
+/// contains the edge `(a_vi, b_vi)` as a consecutive pair (either
+/// orientation).
+fn face_polygon_has_edge(polygon: &[usize], a_vi: usize, b_vi: usize) -> bool {
     let n = polygon.len();
-
-    // Pass 1: vert snap. If any vert of the face's ring is within
-    // tolerance, prefer the closest one (verts beat all edge snaps).
-    let mut best_vert: Option<(usize, f32)> = None;
     for i in 0..n {
-        let vi = polygon[i];
-        let local = cache.vertices[vi];
-        let world = brush_global.transform_point(local);
-        let Ok(screen) = camera.world_to_viewport(cam_tf, world) else {
-            continue;
-        };
-        let dist = (screen - viewport_cursor).length();
-        if dist <= tolerance {
-            match best_vert {
-                Some((_, prev)) if prev <= dist => {}
-                _ => best_vert = Some((vi, dist)),
-            }
+        let p = polygon[i];
+        let q = polygon[(i + 1) % n];
+        if (p == a_vi && q == b_vi) || (p == b_vi && q == a_vi) {
+            return true;
         }
     }
-    if let Some((vi, _)) = best_vert {
-        let local = cache.vertices[vi];
-        let world = brush_global.transform_point(local);
-        return Some(KnifeSnapTarget {
-            world_pos: world,
-            local_pos: local,
-            kind: KnifeSnapKind::Vertex,
-            face_idx,
-            edge_pair: None,
-            vert_idx: Some(vi),
-            path_point_idx: None,
-        });
-    }
-
-    // Pass 2: edge snap. Walk every edge once; for each, find the
-    // closest point on the segment and (when Shift is held) the
-    // midpoint distance. Keep the best across all edges.
-    let mut best_edge_point: Option<(usize, f32, f32)> = None; // (edge_i, t, dist)
-    let mut best_midpoint: Option<(usize, f32)> = None; // (edge_i, dist)
-    for i in 0..n {
-        let a_vi = polygon[i];
-        let b_vi = polygon[(i + 1) % n];
-        let a_local = cache.vertices[a_vi];
-        let b_local = cache.vertices[b_vi];
-        let a_world = brush_global.transform_point(a_local);
-        let b_world = brush_global.transform_point(b_local);
-        let Ok(a_screen) = camera.world_to_viewport(cam_tf, a_world) else {
-            continue;
-        };
-        let Ok(b_screen) = camera.world_to_viewport(cam_tf, b_world) else {
-            continue;
-        };
-
-        let ab = b_screen - a_screen;
-        let len_sq = ab.length_squared();
-        let t = if len_sq > 1e-6 {
-            ((viewport_cursor - a_screen).dot(ab) / len_sq).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let closest_screen = a_screen + ab * t;
-        let dist = (closest_screen - viewport_cursor).length();
-        if dist <= tolerance {
-            match best_edge_point {
-                Some((_, _, prev)) if prev <= dist => {}
-                _ => best_edge_point = Some((i, t, dist)),
-            }
-        }
-
-        if shift {
-            let mid_screen = a_screen.lerp(b_screen, 0.5);
-            let mid_dist = (mid_screen - viewport_cursor).length();
-            if mid_dist <= tolerance {
-                match best_midpoint {
-                    Some((_, prev)) if prev <= mid_dist => {}
-                    _ => best_midpoint = Some((i, mid_dist)),
-                }
-            }
-        }
-    }
-
-    // Midpoint wins over edge-point snap when both exist (per spec):
-    // Shift "promotes" the edge snap to its midpoint.
-    if let Some((edge_i, _)) = best_midpoint {
-        let a_vi = polygon[edge_i];
-        let b_vi = polygon[(edge_i + 1) % n];
-        let a_local = cache.vertices[a_vi];
-        let b_local = cache.vertices[b_vi];
-        let mid_local = a_local.lerp(b_local, 0.5);
-        let mid_world = brush_global.transform_point(mid_local);
-        return Some(KnifeSnapTarget {
-            world_pos: mid_world,
-            local_pos: mid_local,
-            kind: KnifeSnapKind::EdgeMidpoint,
-            face_idx,
-            edge_pair: Some(canonical_edge(a_vi, b_vi)),
-            vert_idx: None,
-            path_point_idx: None,
-        });
-    }
-
-    if let Some((edge_i, t, _)) = best_edge_point {
-        let a_vi = polygon[edge_i];
-        let b_vi = polygon[(edge_i + 1) % n];
-        let a_local = cache.vertices[a_vi];
-        let b_local = cache.vertices[b_vi];
-        let snap_local = a_local.lerp(b_local, t);
-        let snap_world = brush_global.transform_point(snap_local);
-        return Some(KnifeSnapTarget {
-            world_pos: snap_world,
-            local_pos: snap_local,
-            kind: KnifeSnapKind::EdgePoint,
-            face_idx,
-            edge_pair: Some(canonical_edge(a_vi, b_vi)),
-            vert_idx: None,
-            path_point_idx: None,
-        });
-    }
-
-    None
+    false
 }
 
 /// Build a `FaceInterior` snap target at the ray-cursor projection
@@ -792,26 +1123,27 @@ fn canonical_edge(a: usize, b: usize) -> (usize, usize) {
     if a <= b { (a, b) } else { (b, a) }
 }
 
-/// Run the queued path as a sequence of face bisections, all wrapped
-/// in a single `SetBrush` undo entry.
+/// Run the queued path as a single knife commit, using only topology
+/// mutations on the `EditMesh` (no CDT). Wraps the whole thing in a
+/// single `SetBrush` undo entry.
 ///
-/// Per-point pre-processing:
-///   - `FaceInterior` points trigger `face_poke` to insert a center
-///     vert on the active face. After a poke, the original face is
-///     replaced by N fan triangles; subsequent path points that still
-///     reference the now-gone face are relocated to whichever fan
-///     triangle now contains them via point-in-triangle on local
-///     coordinates.
-///   - `PathPoint` re-clicks reuse the original point's resolved vert
-///     without re-running geometry ops.
+/// Pipeline:
 ///
-/// Per-segment handling:
-///   - Same face: bisect with a chord between the two resolved verts
-///     (`split_face`).
-///   - Adjacent faces sharing exactly one edge: split that edge at the
-///     3D segment-edge intersection, bisect each face with the
-///     intermediate vert.
-///   - Otherwise: warn + skip.
+/// 1. **Snapshot** `start_brush` and the current `EditMesh` so we can
+///    roll back atomically if anything panics or fails catastrophically.
+/// 2. **Phase 1: resolve each path point to a live `VertKey`**.
+///    Vertex snaps lookup by position; edge snaps `split_edge` the live
+///    sub-edge containing the click; interior snaps `face_poke` the live
+///    face the click lies in. Path-point reclicks inherit the prior
+///    resolved vert.
+/// 3. **Phase 2: chord each consecutive pair**. If both verts share a
+///    live face's ring, `split_face` directly. Otherwise route across
+///    one or more adjacent faces via intermediate `split_edge` /
+///    `split_face` calls.
+/// 4. **Phase 3: flatten + sync `Brush`**. Sub-faces inherit the parent
+///    face's `material_idx`, so per-slot `BrushFaceData` (UV axes,
+///    material handle, etc.) is copied from `start_brush` keyed by
+///    `material_idx`.
 fn commit_path(
     brush_entity: Entity,
     knife: &mut KnifeMode,
@@ -827,187 +1159,155 @@ fn commit_path(
         knife.path.clear();
         return;
     };
+    // Snapshot the live EditMesh so a Phase 1 / Phase 2 catastrophe
+    // (panic-equivalent return path) restores the mesh exactly.
+    let start_editmesh = bmesh_component.mesh.clone();
+    let start_vert_keys = bmesh_component.vert_keys.clone();
+    let start_face_keys = bmesh_component.face_keys.clone();
 
-    // Clone the path out of the resource so we can mutate
-    // `bmesh_component` inside the loop without aliasing through
-    // `knife.path`. We may also relocate `face_idx` for subsequent
-    // points after a `face_poke`, hence the `mut`.
-    let mut path: Vec<KnifePathPoint> = knife.path.clone();
-
-    // Resolve each path point to a `VertKey` in advance. This is the
-    // single place where `face_poke` runs and where `PathPoint`
-    // re-clicks pull the original resolution. Each resolved entry is
-    // indexed by the path-point's original position, so segments can
-    // look up both endpoints directly.
-    let mut resolved: Vec<Option<VertKey>> = vec![None; path.len()];
-    for i in 0..path.len() {
-        // Replay `PathPoint` references first: if this entry was a
-        // re-click on an earlier point, just reuse that point's vert.
-        if let Some(source) = path[i].source_path_idx
-            && source < i
-            && let Some(vk) = resolved[source]
+    // --- Phase 1: resolve each path point to a live VertKey. ------------
+    //
+    // Walk the user's path in order. For each click, depending on the
+    // snap kind, perform exactly one topology mutation (or none if the
+    // click resolved to an existing vert) and record the resulting
+    // VertKey. PathPoint reclicks inherit the prior resolved vert.
+    let path_points: Vec<KnifePathPoint> = knife.path.clone();
+    if path_points.len() < 2 {
+        knife.path.clear();
+        return;
+    }
+    let mut path_verts: Vec<VertKey> = Vec::with_capacity(path_points.len());
+    let mut phase1_failed = false;
+    for (i, point) in path_points.iter().enumerate() {
+        // PathPoint reclicks: inherit the resolved VertKey from the
+        // source click. This is "no new geometry" by construction.
+        if let Some(src_idx) = point.source_path_idx
+            && src_idx < i
+            && let Some(&v) = path_verts.get(src_idx)
         {
-            resolved[i] = Some(vk);
-            // Snap face_idx to the source's current (possibly
-            // relocated) face so cross-face logic agrees.
-            path[i].face_idx = path[source].face_idx;
+            path_verts.push(v);
             continue;
         }
-
-        match path[i].kind {
-            KnifeSnapKind::FaceInterior => {
-                let face_idx = path[i].face_idx;
-                let Some(face_key) =
-                    find_face_by_material_idx(&bmesh_component.mesh, face_idx as u32)
-                else {
-                    warn!(
-                        "Knife: face-interior point {} skipped: face {} missing in EditMesh",
-                        i, face_idx
-                    );
-                    continue;
-                };
-                // Project the click onto the live face plane to keep
-                // `face_poke`'s plane check happy after earlier mutations.
-                let local_pos = {
-                    let face = &bmesh_component.mesh.faces[face_key];
-                    let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
-                    let mut cur = face.loop_first;
-                    for _ in 0..face.loop_count {
-                        ring_positions.push(
-                            bmesh_component.mesh.verts[bmesh_component.mesh.loops[cur].vert].co,
-                        );
-                        cur = bmesh_component.mesh.loops[cur].next;
-                    }
-                    project_onto_face_plane(path[i].local_pos, &ring_positions, face.normal_cache)
-                };
-                match face_poke(&mut bmesh_component.mesh, face_key, local_pos) {
-                    Ok(result) => {
-                        resolved[i] = Some(result.center_vert);
-                        // Relocate every later path point still
-                        // referencing the now-gone original face into
-                        // the appropriate fan triangle.
-                        relocate_path_points_after_poke(
-                            &mut path,
-                            i,
-                            face_idx,
-                            &bmesh_component.mesh,
-                            &result.new_faces,
-                        );
-                    }
-                    Err(err) => {
-                        warn!("Knife: face_poke for path point {} failed: {:?}", i, err);
-                    }
-                }
-            }
-            KnifeSnapKind::Vertex | KnifeSnapKind::EdgeMidpoint | KnifeSnapKind::EdgePoint => {
-                match resolve_endpoint(&mut bmesh_component.mesh, &path[i], &start_brush) {
-                    Ok(v) => resolved[i] = Some(v),
-                    Err(reason) => {
-                        warn!("Knife: path point {} resolve failed: {}", i, reason);
-                    }
-                }
-            }
-            KnifeSnapKind::PathPoint => {
-                // Reached only when `source_path_idx` is missing or
-                // out-of-range. Fall through to the geometry kinds we
-                // had snap data for (PathPoint copies edge_pair /
-                // vert_idx from the source so this still resolves).
-                if path[i].vert_idx.is_some() || path[i].edge_pair.is_some() {
-                    match resolve_endpoint(&mut bmesh_component.mesh, &path[i], &start_brush) {
-                        Ok(v) => resolved[i] = Some(v),
-                        Err(reason) => {
-                            warn!("Knife: path point {} resolve failed: {}", i, reason);
-                        }
-                    }
-                } else {
-                    warn!(
-                        "Knife: dangling PathPoint at {} has no resolvable source",
-                        i
-                    );
-                }
+        match resolve_path_point(&mut bmesh_component.mesh, point, &start_brush) {
+            Ok(v) => path_verts.push(v),
+            Err(reason) => {
+                warn!(
+                    "Knife: path point {} resolve failed ({}); aborting commit",
+                    i, reason
+                );
+                phase1_failed = true;
+                break;
             }
         }
     }
 
-    let mut any_applied = false;
-    for (segment_idx, pair) in path.windows(2).enumerate() {
-        let idx0 = segment_idx;
-        let idx1 = segment_idx + 1;
-        let Some(v0) = resolved[idx0] else { continue };
-        let Some(v1) = resolved[idx1] else { continue };
-        if v0 == v1 {
-            // Reuse / self-loop. No geometry to create.
-            continue;
-        }
-        let p0 = &pair[0];
-        let p1 = &pair[1];
-
-        if p0.face_idx == p1.face_idx {
-            match bisect_same_face_with_verts(&mut bmesh_component.mesh, v0, v1, p0.face_idx) {
-                Ok(_) => any_applied = true,
-                Err(reason) => warn!("Knife: segment {} skipped: {}", segment_idx, reason),
-            }
-        } else {
-            // Cross-face: try shared-edge handling.
-            match bisect_cross_face(
-                &mut bmesh_component.mesh,
-                p0.face_idx,
-                p1.face_idx,
-                p0.world_pos,
-                p1.world_pos,
-                p0.local_pos,
-                p1.local_pos,
-                v0,
-                v1,
-            ) {
-                Ok(_) => any_applied = true,
-                Err(reason) => warn!(
-                    "Knife: cross-face segment {} ({} -> {}) skipped: {}",
-                    segment_idx, p0.face_idx, p1.face_idx, reason
-                ),
-            }
-        }
-    }
-
-    if !any_applied {
+    if phase1_failed {
+        // Restore the snapshot and bail out without pushing to history.
+        bmesh_component.mesh = start_editmesh;
+        bmesh_component.vert_keys = start_vert_keys;
+        bmesh_component.face_keys = start_face_keys;
         knife.path.clear();
         return;
     }
 
-    // Re-cache normals on every face (split_face changes ring shape).
-    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
-    for fk in face_keys_all {
-        let face = &bmesh_component.mesh.faces[fk];
-        let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
-        let mut cur = face.loop_first;
-        for _ in 0..face.loop_count {
-            let lp = &bmesh_component.mesh.loops[cur];
-            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
-            cur = lp.next;
+    // --- Phase 2: chord each consecutive pair. --------------------------
+    //
+    // For each `(path_verts[i], path_verts[i+1])`:
+    //   - Same live face containing both: `split_face`.
+    //   - Otherwise: cross-face routing via `split_edge` then `split_face`,
+    //     recursing until both endpoints share a face.
+    //
+    // A segment that can't be resolved (no path, adjacent verts that
+    // would yield a degenerate face, or collapsed endpoints) is logged
+    // and skipped but doesn't abort the commit.
+    let mut applied_segments = 0usize;
+    for i in 0..path_verts.len().saturating_sub(1) {
+        let va = path_verts[i];
+        let vb = path_verts[i + 1];
+        if va == vb {
+            debug!(
+                "Knife: segment {} -> {} collapsed (same vert); skipping",
+                i,
+                i + 1
+            );
+            continue;
         }
-        let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+        match chord_between_verts(&mut bmesh_component.mesh, va, vb) {
+            Ok(applied) => {
+                if applied {
+                    applied_segments += 1;
+                } else {
+                    debug!(
+                        "Knife: segment {} -> {} no-op (chord already exists)",
+                        i,
+                        i + 1
+                    );
+                }
+            }
+            Err(reason) => warn!(
+                "Knife: segment {} -> {} chord failed: {}; skipping",
+                i,
+                i + 1,
+                reason
+            ),
+        }
     }
 
-    // Flatten + sync brush.
+    // Phase 1 may have applied mutations (edge splits, face pokes) even
+    // if every segment in Phase 2 was a no-op. We still want to commit
+    // those if any path point actually introduced new geometry.
+    // Detect "did anything change" by comparing mesh sizes; if not,
+    // restore and bail.
+    let mesh_unchanged = bmesh_component.mesh.vert_count() == start_editmesh.vert_count()
+        && bmesh_component.mesh.edge_count() == start_editmesh.edge_count()
+        && bmesh_component.mesh.face_count() == start_editmesh.face_count();
+    if mesh_unchanged && applied_segments == 0 {
+        debug!("Knife: commit applied no changes; restoring snapshot");
+        bmesh_component.mesh = start_editmesh;
+        bmesh_component.vert_keys = start_vert_keys;
+        bmesh_component.face_keys = start_face_keys;
+        knife.path.clear();
+        return;
+    }
+
+    // --- Phase 3: flatten + sync brush. ---------------------------------
+    //
+    // Every sub-face produced by `split_edge` / `split_face` / `face_poke`
+    // inherits its parent's `material_idx`. `flatten_to_topology` sorts
+    // faces by `material_idx`, so sub-faces appear contiguously at the
+    // original slot. Rebuild `brush.faces` per output polygon, copying
+    // from `start_brush.faces[material_idx]`. UV axes copy verbatim:
+    // sub-faces are coplanar with their parent, so the parent's tangent
+    // basis is correct for every sub-face.
+    let mut slot_to_src_material: Vec<u32> = bmesh_component
+        .mesh
+        .faces
+        .iter()
+        .map(|(_, f)| f.material_idx)
+        .collect();
+    slot_to_src_material.sort();
+
     let new_topology = bmesh_component.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+        // Restore the snapshot if we somehow lost the Brush component
+        // (effectively impossible during normal commit; defensive).
         knife.path.clear();
         return;
     };
 
-    // Extend brush.faces for newly split faces. Use the first cut's
-    // face as a template fallback (mirrors the modal version).
-    let template_idx = knife.path.first().map(|p| p.face_idx).unwrap_or(0);
-    while brush.faces.len() < new_topology.polygons.len() {
-        let template = start_brush
+    let mut new_faces: Vec<jackdaw_geometry::BrushFaceData> =
+        Vec::with_capacity(new_topology.polygons.len());
+    for &src_material in &slot_to_src_material {
+        let src_idx = src_material as usize;
+        let src = start_brush
             .faces
-            .get(template_idx)
+            .get(src_idx)
             .cloned()
-            .or_else(|| brush.faces.last().cloned())
+            .or_else(|| start_brush.faces.last().cloned())
             .unwrap_or_default();
-        brush.faces.push(template);
+        new_faces.push(src);
     }
+    brush.faces = new_faces;
 
     let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
     for (idx, face_data) in brush.faces.iter_mut().enumerate() {
@@ -1047,280 +1347,210 @@ fn commit_path(
     knife.path.clear();
 }
 
-/// Bisect `face_idx` with a chord between two already-resolved verts on
-/// its ring. Caller must have run any `face_poke` / `split_edge` pre-ops
-/// so both `v0` and `v1` exist on the live face ring.
-fn bisect_same_face_with_verts(
+/// Plane / position tolerance used when matching a click position
+/// against live mesh elements. Brush-local coordinates are typically
+/// in the [0, 1024] range for level geometry, and edge / poke positions
+/// from the snap pipeline land within a fraction of a world unit of the
+/// true edge/face, so 1e-4 is a safe match radius.
+const KNIFE_POSITION_EPSILON: f32 = 1e-4;
+
+/// Phase 1 entry point: resolve a single path point to a live `VertKey`
+/// in `bmesh`. May mutate the mesh (split_edge / face_poke).
+fn resolve_path_point(
     bmesh: &mut EditMesh,
-    v0: VertKey,
-    v1: VertKey,
-    face_idx: usize,
-) -> Result<(), &'static str> {
-    if v0 == v1 {
-        return Err("endpoints resolved to the same vert");
-    }
-    // Find the face that actually contains both verts. After a
-    // `face_poke`, the original `material_idx`-stable face may have
-    // become several fan triangles; we search for the one whose ring
-    // contains both endpoints. Falls back to the original
-    // material_idx lookup if the search comes up empty.
-    let face_key = face_containing_verts(bmesh, v0, v1)
-        .or_else(|| find_face_by_material_idx(bmesh, face_idx as u32))
-        .ok_or("face missing in EditMesh")?;
-    if !face_ring_contains(bmesh, face_key, v0) || !face_ring_contains(bmesh, face_key, v1) {
-        return Err("verts not both on face ring");
-    }
-    split_face(bmesh, face_key, v0, v1).map_err(|_| "split_face failed")?;
-    Ok(())
-}
-
-/// Cross-face segment: the two endpoints sit on different faces. Find
-/// the single shared edge between those faces, split it at the 3D
-/// intersection of the segment with the shared edge, then bisect each
-/// face with the new intermediate vert.
-#[allow(clippy::too_many_arguments)]
-fn bisect_cross_face(
-    bmesh: &mut EditMesh,
-    face_idx_0: usize,
-    face_idx_1: usize,
-    p0_world: Vec3,
-    p1_world: Vec3,
-    p0_local: Vec3,
-    p1_local: Vec3,
-    v0: VertKey,
-    v1: VertKey,
-) -> Result<(), &'static str> {
-    // The endpoints will be on faces tied to `face_idx_0` and
-    // `face_idx_1` either by `material_idx` (no earlier pokes) or by
-    // ring membership (poked face was split into fan triangles).
-    let face_a = face_containing_vert(bmesh, v0)
-        .or_else(|| find_face_by_material_idx(bmesh, face_idx_0 as u32))
-        .ok_or("face A missing in EditMesh")?;
-    let face_b = face_containing_vert(bmesh, v1)
-        .or_else(|| find_face_by_material_idx(bmesh, face_idx_1 as u32))
-        .ok_or("face B missing in EditMesh")?;
-    if face_a == face_b {
-        return Err("both endpoints on the same face after relocation");
-    }
-
-    let shared = shared_edges(bmesh, face_a, face_b);
-    if shared.is_empty() {
-        return Err("no shared edge");
-    }
-    if shared.len() > 1 {
-        return Err("multiple shared edges; not supported");
-    }
-    let shared_edge = shared[0];
-
-    // Compute the parametric position on the shared edge closest to
-    // the 3D line through (p0, p1). We use brush-local coordinates
-    // throughout: the edge verts already store local positions in
-    // `bmesh`, and `p*_local` came from the original click ray cast.
-    // World-space `p*_world` is kept as a fallback for diagnostics but
-    // the actual line-line solve runs in local space because that's
-    // where `split_edge` will place the new vert.
-    let ev0 = bmesh.edges[shared_edge].v[0];
-    let ev1 = bmesh.edges[shared_edge].v[1];
-    let edge_a = bmesh.verts[ev0].co;
-    let edge_b = bmesh.verts[ev1].co;
-
-    let t = line_segment_crossing_param(p0_local, p1_local, edge_a, edge_b)
-        .ok_or("segment-edge intersection degenerate")?;
-    let _ = p0_world;
-    let _ = p1_world;
-
-    let split_t = t.clamp(0.001, 0.999);
-    let inter_vert = split_edge(bmesh, shared_edge, split_t).map_err(|_| "split_edge failed")?;
-
-    // Both halves of the cross-face cut bisect their respective face
-    // with the new intermediate vert. Either face may have lost its
-    // material_idx-stable identity to an earlier `face_poke`; locate
-    // them by ring membership of the relevant endpoint.
-    let face_a_now = face_containing_verts(bmesh, v0, inter_vert)
-        .ok_or("face A no longer contains v0 + intermediate")?;
-    split_face(bmesh, face_a_now, v0, inter_vert).map_err(|_| "split_face A failed")?;
-
-    let face_b_now = face_containing_verts(bmesh, v1, inter_vert)
-        .ok_or("face B no longer contains v1 + intermediate")?;
-    split_face(bmesh, face_b_now, v1, inter_vert).map_err(|_| "split_face B failed")?;
-
-    Ok(())
-}
-
-/// 3D line intersection projected onto whichever plane keeps the math
-/// well-conditioned. Returns the parameter `t` along the edge
-/// `(edge_a, edge_b)` at which the segment `(p0, p1)` crosses it.
-///
-/// Algorithm: build an orthonormal basis at the edge midpoint with the
-/// edge direction as one axis and the projection of `(p1 - p0)` onto
-/// the plane perpendicular to the edge as the other. Project all four
-/// points into that 2D basis, then run standard 2D line-line
-/// intersection.
-fn line_segment_crossing_param(p0: Vec3, p1: Vec3, edge_a: Vec3, edge_b: Vec3) -> Option<f32> {
-    let edge_dir = edge_b - edge_a;
-    let edge_len = edge_dir.length();
-    if edge_len < 1e-6 {
-        return None;
-    }
-    let u = edge_dir / edge_len;
-    let seg_dir = p1 - p0;
-    if seg_dir.length_squared() < 1e-12 {
-        return None;
-    }
-    // Pick the second basis axis as the seg-dir component perpendicular
-    // to the edge. If the segment is exactly parallel to the edge, the
-    // crossing is degenerate (or coincident); bail.
-    let seg_perp = seg_dir - u * seg_dir.dot(u);
-    if seg_perp.length_squared() < 1e-12 {
-        return None;
-    }
-    let v = seg_perp.normalize();
-    let origin = edge_a;
-    let to2 = |p: Vec3| -> Vec2 {
-        let d = p - origin;
-        Vec2::new(d.dot(u), d.dot(v))
-    };
-    let a2 = to2(edge_a);
-    let b2 = to2(edge_b);
-    let p02 = to2(p0);
-    let p12 = to2(p1);
-    // Solve `a2 + t * (b2 - a2) == p02 + s * (p12 - p02)`.
-    let r = b2 - a2;
-    let s = p12 - p02;
-    let denom = r.x * s.y - r.y * s.x;
-    if denom.abs() < 1e-9 {
-        return None;
-    }
-    let q = p02 - a2;
-    let t = (q.x * s.y - q.y * s.x) / denom;
-    Some(t)
-}
-
-/// Project `point` onto the plane defined by `ring` + `normal`. The
-/// face plane anchor is the ring centroid (matching `face_poke`'s
-/// `PointNotInFacePlane` check).
-fn project_onto_face_plane(point: Vec3, ring: &[Vec3], normal: Vec3) -> Vec3 {
-    if ring.is_empty() || normal == Vec3::ZERO {
-        return point;
-    }
-    let centroid: Vec3 = ring.iter().copied().sum::<Vec3>() / ring.len() as f32;
-    let n = normal.normalize_or_zero();
-    if n == Vec3::ZERO {
-        return point;
-    }
-    let signed = n.dot(point - centroid);
-    point - n * signed
-}
-
-/// Walk every face in the mesh and return one whose ring contains
-/// both `va` and `vb`. Used for resolving the live face after earlier
-/// `face_poke` / `split_face` ops have churned `material_idx`-stable
-/// identities.
-fn face_containing_verts(bmesh: &EditMesh, va: VertKey, vb: VertKey) -> Option<FaceKey> {
-    bmesh
-        .faces
-        .iter()
-        .find(|(k, _)| face_ring_contains(bmesh, *k, va) && face_ring_contains(bmesh, *k, vb))
-        .map(|(k, _)| k)
-}
-
-/// Walk every face in the mesh and return one whose ring contains
-/// `va`. Returns the first match; for the knife pipeline that's the
-/// face the segment originated from (re-resolved post-poke).
-fn face_containing_vert(bmesh: &EditMesh, va: VertKey) -> Option<FaceKey> {
-    bmesh
-        .faces
-        .iter()
-        .find(|(k, _)| face_ring_contains(bmesh, *k, va))
-        .map(|(k, _)| k)
-}
-
-fn face_ring_contains(bmesh: &EditMesh, face: FaceKey, target: VertKey) -> bool {
-    let f = &bmesh.faces[face];
-    let mut cur = f.loop_first;
-    for _ in 0..f.loop_count {
-        if bmesh.loops[cur].vert == target {
-            return true;
+    point: &KnifePathPoint,
+    start_brush: &Brush,
+) -> Result<VertKey, &'static str> {
+    match point.kind {
+        KnifeSnapKind::Vertex => resolve_vertex_snap(bmesh, point, start_brush),
+        KnifeSnapKind::EdgePoint | KnifeSnapKind::EdgeMidpoint => {
+            resolve_edge_snap(bmesh, point, start_brush)
         }
-        cur = bmesh.loops[cur].next;
-    }
-    false
-}
-
-/// Return every edge shared between `face_a` and `face_b`. For two
-/// adjacent faces of a closed brush this is exactly one edge; if the
-/// faces aren't adjacent the result is empty.
-fn shared_edges(bmesh: &EditMesh, face_a: FaceKey, face_b: FaceKey) -> Vec<EdgeKey> {
-    let edges_a = face_edges(bmesh, face_a);
-    let edges_b = face_edges(bmesh, face_b);
-    edges_a
-        .into_iter()
-        .filter(|e| edges_b.contains(e))
-        .collect()
-}
-
-fn face_edges(bmesh: &EditMesh, face: FaceKey) -> Vec<EdgeKey> {
-    let f = &bmesh.faces[face];
-    let mut edges = Vec::with_capacity(f.loop_count as usize);
-    let mut cur = f.loop_first;
-    for _ in 0..f.loop_count {
-        edges.push(bmesh.loops[cur].edge);
-        cur = bmesh.loops[cur].next;
-    }
-    edges
-}
-
-/// After a `face_poke` on `original_face_idx`, the original face
-/// disappears and its fan triangles take its place. Path points that
-/// still reference `original_face_idx` need to be relocated to
-/// whichever fan triangle now contains them. We use the path point's
-/// `local_pos` projected onto the new triangle's plane for a 2D
-/// point-in-triangle test.
-///
-/// The relocated entry keeps its kind (face_interior / edge / vert)
-/// and its snap metadata; only `face_idx` changes, and only when the
-/// point sat on the same `material_idx` as the poked face.
-fn relocate_path_points_after_poke(
-    path: &mut [KnifePathPoint],
-    started_at: usize,
-    original_face_idx: usize,
-    bmesh: &EditMesh,
-    new_faces: &[FaceKey],
-) {
-    if new_faces.is_empty() {
-        return;
-    }
-    // Collect ring positions + material_idx for each candidate face so
-    // we can walk through them once per relocation.
-    let mut candidates: Vec<(u32, Vec<Vec3>, Vec3)> = Vec::with_capacity(new_faces.len());
-    for &fk in new_faces {
-        let face = &bmesh.faces[fk];
-        let mut ring = Vec::with_capacity(face.loop_count as usize);
-        let mut cur = face.loop_first;
-        for _ in 0..face.loop_count {
-            ring.push(bmesh.verts[bmesh.loops[cur].vert].co);
-            cur = bmesh.loops[cur].next;
+        KnifeSnapKind::FaceInterior | KnifeSnapKind::GridPoint => {
+            resolve_interior_snap(bmesh, point)
         }
-        candidates.push((face.material_idx, ring, face.normal_cache));
-    }
-
-    for entry in path.iter_mut().skip(started_at + 1) {
-        if entry.face_idx != original_face_idx {
-            continue;
-        }
-        for (mat_idx, ring, normal) in &candidates {
-            if point_in_face_triangle(entry.local_pos, ring, *normal) {
-                entry.face_idx = *mat_idx as usize;
-                break;
+        KnifeSnapKind::PathPoint => {
+            // PathPoint reclicks with no resolvable source (e.g., snap
+            // metadata was incomplete) fall through to the underlying
+            // kind based on whatever snap data was copied.
+            if point.vert_idx.is_some() {
+                resolve_vertex_snap(bmesh, point, start_brush)
+            } else if point.edge_pair.is_some() {
+                resolve_edge_snap(bmesh, point, start_brush)
+            } else {
+                resolve_interior_snap(bmesh, point)
             }
         }
     }
 }
 
-/// Project `point` onto the face plane and run point-in-polygon in 2D
-/// local coords. Robust to convex / concave; we only call this for fan
-/// triangles (3 verts) so the polygon check is trivially valid.
-fn point_in_face_triangle(point: Vec3, ring: &[Vec3], normal: Vec3) -> bool {
+/// Vertex snap: look up the live VertKey by position against the live
+/// mesh. The recorded `vert_idx` is the index in `start_brush.topology`
+/// at modal-start time; we map that to a 3D position and find any vert
+/// matching it within KNIFE_POSITION_EPSILON.
+fn resolve_vertex_snap(
+    bmesh: &EditMesh,
+    point: &KnifePathPoint,
+    start_brush: &Brush,
+) -> Result<VertKey, &'static str> {
+    let vi = point.vert_idx.ok_or("vertex snap missing vert_idx")?;
+    let target = start_brush
+        .topology
+        .vertices
+        .get(vi)
+        .map(|v| v.position)
+        .ok_or("vertex snap vert_idx out of range")?;
+    find_vert_by_position(bmesh, target).ok_or("vertex snap vert not found in live mesh")
+}
+
+/// Edge snap: find a live edge whose endpoints flank the click position
+/// (within KNIFE_POSITION_EPSILON in 3D), then `split_edge` it. This
+/// finds the right sub-edge even after earlier mutations split the
+/// original edge into pieces.
+fn resolve_edge_snap(
+    bmesh: &mut EditMesh,
+    point: &KnifePathPoint,
+    _start_brush: &Brush,
+) -> Result<VertKey, &'static str> {
+    let click = point.local_pos;
+    let Some((ek, t)) = find_live_edge_for_position(bmesh, click) else {
+        // Fallback: if a sibling vert already exists at this position
+        // from an earlier mutation (e.g., this same click position was
+        // reached by an earlier face_poke / split_edge), return that
+        // vert directly. This handles the "two consecutive edge clicks
+        // on the same original edge" case where the second click sits
+        // exactly on the new vert introduced by the first.
+        return find_vert_by_position(bmesh, click)
+            .ok_or("edge snap: no live edge or vert contains click position");
+    };
+    split_edge(bmesh, ek, t).map_err(|_| "split_edge failed")
+}
+
+/// Interior snap: find the live face whose ring contains the click
+/// position (point-in-polygon in the face's plane), then `face_poke`.
+/// After earlier mutations the click may lie inside a sub-face (fan
+/// tri or split-face child); the search walks every face and returns
+/// the one matching.
+fn resolve_interior_snap(
+    bmesh: &mut EditMesh,
+    point: &KnifePathPoint,
+) -> Result<VertKey, &'static str> {
+    let click = point.local_pos;
+    // First: maybe the click coincides with a live vert already (the
+    // user clicked exactly on a newly-introduced center vert from a
+    // prior poke). Reuse it without creating new geometry.
+    if let Some(v) = find_vert_by_position(bmesh, click) {
+        return Ok(v);
+    }
+    let face_key = find_live_face_containing_point(bmesh, click)
+        .ok_or("interior snap: no live face contains click position")?;
+    // Project the click onto the face plane for robust face_poke; the
+    // op enforces a plane-distance tolerance and rejects out-of-plane
+    // points.
+    let projected = project_point_onto_face(bmesh, face_key, click);
+    let result = face_poke(bmesh, face_key, projected).map_err(|_| "face_poke failed")?;
+    Ok(result.center_vert)
+}
+
+/// Walk every edge in `bmesh`. Return any edge whose segment passes
+/// within `KNIFE_POSITION_EPSILON` of `click`, plus the parameter `t`
+/// along that edge at the closest point. We strongly prefer interior
+/// hits (0 < t < 1) over endpoint hits: an endpoint hit means the
+/// click coincides with a vert, which the caller handles separately.
+fn find_live_edge_for_position(bmesh: &EditMesh, click: Vec3) -> Option<(EdgeKey, f32)> {
+    let mut best: Option<(EdgeKey, f32, f32)> = None; // (edge, t, dist)
+    for (k, e) in bmesh.edges.iter() {
+        let p0 = bmesh.verts[e.v[0]].co;
+        let p1 = bmesh.verts[e.v[1]].co;
+        let dir = p1 - p0;
+        let len_sq = dir.length_squared();
+        if len_sq < 1e-12 {
+            continue;
+        }
+        let t = ((click - p0).dot(dir) / len_sq).clamp(0.0, 1.0);
+        let closest = p0 + dir * t;
+        let dist = (closest - click).length();
+        if dist > KNIFE_POSITION_EPSILON {
+            continue;
+        }
+        // Reject hits at endpoints (within a small tolerance in t):
+        // those mean the click coincides with a vert, which the caller
+        // resolves via vert reuse rather than split_edge.
+        if t < 1e-4 || t > 1.0 - 1e-4 {
+            continue;
+        }
+        match best {
+            Some((_, _, prev_dist)) if prev_dist <= dist => {}
+            _ => best = Some((k, t, dist)),
+        }
+    }
+    best.map(|(k, t, _)| (k, t))
+}
+
+/// Walk every face in `bmesh`. Return any face whose 2D ring (projected
+/// onto its newell plane) contains `click` AND whose plane is within
+/// `KNIFE_POSITION_EPSILON * 100` of `click`. We use a looser plane
+/// tolerance here (1e-2) because subsequent `face_poke` projects the
+/// click back onto the plane anyway.
+fn find_live_face_containing_point(bmesh: &EditMesh, click: Vec3) -> Option<FaceKey> {
+    for (k, face) in bmesh.faces.iter() {
+        let ring_positions = face_ring_positions(bmesh, k);
+        if ring_positions.len() < 3 {
+            continue;
+        }
+        // Distance to face plane.
+        let n = face.normal_cache;
+        if n.length_squared() < 1e-12 {
+            continue;
+        }
+        let centroid: Vec3 =
+            ring_positions.iter().copied().sum::<Vec3>() / ring_positions.len() as f32;
+        let plane_dist = n.dot(click - centroid).abs();
+        if plane_dist > 1e-2 {
+            continue;
+        }
+        if point_in_polygon_3d(click, &ring_positions, n) {
+            return Some(k);
+        }
+    }
+    None
+}
+
+/// Project `click` onto `face`'s plane (the face's normal_cache + a
+/// ring-centroid anchor). Used to keep `face_poke`'s plane-tolerance
+/// check happy.
+fn project_point_onto_face(bmesh: &EditMesh, face: FaceKey, click: Vec3) -> Vec3 {
+    let ring = face_ring_positions(bmesh, face);
+    if ring.is_empty() {
+        return click;
+    }
+    let centroid: Vec3 = ring.iter().copied().sum::<Vec3>() / ring.len() as f32;
+    let n = bmesh.faces[face].normal_cache;
+    if n.length_squared() < 1e-12 {
+        return click;
+    }
+    let signed = n.dot(click - centroid);
+    click - n * signed
+}
+
+/// Return the world (brush-local) ring positions of `face` in loop
+/// order.
+fn face_ring_positions(bmesh: &EditMesh, face: FaceKey) -> Vec<Vec3> {
+    let f = &bmesh.faces[face];
+    let mut out = Vec::with_capacity(f.loop_count as usize);
+    let mut cur = f.loop_first;
+    for _ in 0..f.loop_count {
+        out.push(bmesh.verts[bmesh.loops[cur].vert].co);
+        cur = bmesh.loops[cur].next;
+    }
+    out
+}
+
+/// 3D point-in-polygon: project the polygon and the test point onto
+/// the plane spanned by the polygon (using `normal` as the plane
+/// normal), then run a 2D ray-cast. Returns true when `point` is
+/// inside the projected polygon.
+fn point_in_polygon_3d(point: Vec3, ring: &[Vec3], normal: Vec3) -> bool {
     if ring.len() < 3 {
         return false;
     }
@@ -1328,81 +1558,298 @@ fn point_in_face_triangle(point: Vec3, ring: &[Vec3], normal: Vec3) -> bool {
     if n == Vec3::ZERO {
         return false;
     }
-    // Build a 2D basis on the face plane.
-    let (u_axis, v_axis) = jackdaw_geometry::compute_face_tangent_axes(n);
+    // Build a 2D basis perpendicular to `n`.
+    let u_seed = if n.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+    let u = (u_seed - n * u_seed.dot(n)).normalize_or_zero();
+    if u == Vec3::ZERO {
+        return false;
+    }
+    let v = n.cross(u);
     let origin = ring[0];
-    let to2 = |p: Vec3| -> Vec2 {
+    let to_2d = |p: Vec3| -> Vec2 {
         let d = p - origin;
-        Vec2::new(d.dot(u_axis), d.dot(v_axis))
+        Vec2::new(d.dot(u), d.dot(v))
     };
-    let poly: Vec<Vec2> = ring.iter().map(|&r| to2(r)).collect();
-    crate::viewport_util::point_in_polygon_2d(to2(point), &poly)
+    let ring_2d: Vec<Vec2> = ring.iter().map(|&p| to_2d(p)).collect();
+    let point_2d = to_2d(point);
+    // Standard ray-cast.
+    let n2d = ring_2d.len();
+    let mut inside = false;
+    let mut j = n2d - 1;
+    for i in 0..n2d {
+        let pi = ring_2d[i];
+        let pj = ring_2d[j];
+        if ((pi.y > point_2d.y) != (pj.y > point_2d.y))
+            && (point_2d.x < (pj.x - pi.x) * (point_2d.y - pi.y) / (pj.y - pi.y) + pi.x)
+        {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
 }
 
-/// Resolve a path point to a `VertKey` in `bmesh`, edge-splitting if
-/// necessary. Position-matches the snapshot brush vert against the
-/// live EditMesh because edge splits / face splits preserve existing
-/// vert positions.
-fn resolve_endpoint(
+/// Phase 2 entry point: insert a chord from `va` to `vb`. If the two
+/// verts share a live face's ring, `split_face` directly. Otherwise
+/// recursively split across one or more adjacent faces.
+///
+/// Returns `Ok(true)` if at least one `split_face` mutation was applied,
+/// `Ok(false)` if the chord was a no-op (e.g., the two verts are
+/// already connected by a single edge or have collapsed to the same
+/// face boundary). `Err` for unrecoverable cases.
+fn chord_between_verts(
     bmesh: &mut EditMesh,
-    point: &KnifePathPoint,
-    start_brush: &Brush,
-) -> Result<VertKey, &'static str> {
-    if let Some(vi) = point.vert_idx {
-        let target = start_brush
-            .topology
-            .vertices
-            .get(vi)
-            .map(|v| v.position)
-            .ok_or("vert index out of range")?;
-        return find_vert_by_position(bmesh, target).ok_or("vert not found in EditMesh");
+    va: VertKey,
+    vb: VertKey,
+) -> Result<bool, &'static str> {
+    chord_between_verts_recursive(bmesh, va, vb, 0)
+}
+
+/// Recursion depth limit: cuts that cross more than this many faces
+/// are extremely unlikely on real geometry and indicate a runaway loop.
+const KNIFE_CROSS_FACE_MAX_DEPTH: u32 = 16;
+
+fn chord_between_verts_recursive(
+    bmesh: &mut EditMesh,
+    va: VertKey,
+    vb: VertKey,
+    depth: u32,
+) -> Result<bool, &'static str> {
+    if depth >= KNIFE_CROSS_FACE_MAX_DEPTH {
+        return Err("cross-face routing exceeded depth limit");
+    }
+    if va == vb {
+        return Ok(false);
+    }
+    // Same face containing both verts: direct split_face.
+    if let Some(face) = find_face_containing_both_verts(bmesh, va, vb) {
+        // If `va` and `vb` are adjacent in the face's ring, a chord
+        // would yield a degenerate face. The path already follows the
+        // existing edge between them; nothing to do.
+        if are_ring_neighbors(bmesh, face, va, vb) {
+            return Ok(false);
+        }
+        split_face(bmesh, face, va, vb).map_err(|_| "split_face failed")?;
+        return Ok(true);
     }
 
-    let (a_vi, b_vi) = point.edge_pair.ok_or("path point has no edge or vert")?;
-    let a_pos = start_brush
-        .topology
-        .vertices
-        .get(a_vi)
-        .map(|v| v.position)
-        .ok_or("edge a vert index out of range")?;
-    let b_pos = start_brush
-        .topology
-        .vertices
-        .get(b_vi)
-        .map(|v| v.position)
-        .ok_or("edge b vert index out of range")?;
-    let va = find_vert_by_position(bmesh, a_pos).ok_or("edge a vert missing in EditMesh")?;
-    let vb = find_vert_by_position(bmesh, b_pos).ok_or("edge b vert missing in EditMesh")?;
-    let ek = find_edge_between(bmesh, va, vb).ok_or("edge missing in EditMesh")?;
+    // Cross-face: find a face adjacent to `va` whose boundary the
+    // segment (va_pos -> vb_pos) crosses. Split that boundary edge,
+    // and recurse with the intermediate vert as the new `va`.
+    let va_pos = bmesh.verts[va].co;
+    let vb_pos = bmesh.verts[vb].co;
 
-    let v0 = bmesh.edges[ek].v[0];
-    let v1 = bmesh.edges[ek].v[1];
-    let p0 = bmesh.verts[v0].co;
-    let p1 = bmesh.verts[v1].co;
-    let dir = p1 - p0;
-    let len_sq = dir.length_squared();
-    let t = if len_sq > 1e-6 {
-        ((point.local_pos - p0).dot(dir) / len_sq).clamp(0.0, 1.0)
-    } else {
-        0.5
+    let Some((boundary_face, crossing_edge, t)) =
+        find_outgoing_face_and_edge(bmesh, va, va_pos, vb_pos)
+    else {
+        return Err("no outgoing face/edge for cross-face chord");
     };
 
-    split_edge(bmesh, ek, t).map_err(|_| "split_edge failed")
+    // Split the boundary edge at the crossing.
+    let inter = split_edge(bmesh, crossing_edge, t).map_err(|_| "split_edge failed")?;
+
+    // Chord va -> inter inside `boundary_face`. The face was just split
+    // by split_edge such that its ring includes the new vert; if va is
+    // also on that face's ring (it must be by construction), we can
+    // split_face directly UNLESS va and inter are adjacent (the chord
+    // would be degenerate, which means va is actually the endpoint of
+    // the crossing edge we just split, in which case the chord is just
+    // the edge itself and there's nothing to split).
+    let live_face = find_face_containing_both_verts(bmesh, va, inter);
+    let mut any = false;
+    if let Some(face) = live_face {
+        if !are_ring_neighbors(bmesh, face, va, inter) {
+            split_face(bmesh, face, va, inter).map_err(|_| "split_face failed (cross-face leg)")?;
+            any = true;
+        }
+        let _ = boundary_face; // captured for diagnostics only
+    } else {
+        // va isn't on the same face as `inter` post-split. This can
+        // happen when `va` was at a fan vertex from a prior face_poke
+        // and `boundary_face` was actually a different face. Recurse
+        // from `va` toward `inter` so the next pass finds a route.
+        let sub = chord_between_verts_recursive(bmesh, va, inter, depth + 1)?;
+        if sub {
+            any = true;
+        }
+    }
+
+    // Recurse for the second leg: inter -> vb.
+    let sub = chord_between_verts_recursive(bmesh, inter, vb, depth + 1)?;
+    Ok(any || sub)
 }
 
-fn find_edge_between(bmesh: &EditMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    bmesh
-        .edges
-        .iter()
-        .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
-        .map(|(k, _)| k)
+/// Walk every face. Return any whose ring contains both `va` and `vb`.
+/// Deterministic for a given mesh state.
+fn find_face_containing_both_verts(bmesh: &EditMesh, va: VertKey, vb: VertKey) -> Option<FaceKey> {
+    for (k, f) in bmesh.faces.iter() {
+        let mut has_a = false;
+        let mut has_b = false;
+        let mut cur = f.loop_first;
+        for _ in 0..f.loop_count {
+            let v = bmesh.loops[cur].vert;
+            if v == va {
+                has_a = true;
+            }
+            if v == vb {
+                has_b = true;
+            }
+            cur = bmesh.loops[cur].next;
+        }
+        if has_a && has_b {
+            return Some(k);
+        }
+    }
+    None
 }
 
-/// Find the vert with the smallest squared distance to `target`. The
-/// modal version of knife required exact-match (epsilon 1e-6), and
-/// every snap on the live brush is a snapshot of an exact topology
-/// vert position, so that tolerance still holds.
+/// Returns true if `va` and `vb` are consecutive in `face`'s ring
+/// (either direction). split_face errors on adjacent verts; this is
+/// the gate before we try.
+fn are_ring_neighbors(bmesh: &EditMesh, face: FaceKey, va: VertKey, vb: VertKey) -> bool {
+    let f = &bmesh.faces[face];
+    let n = f.loop_count as usize;
+    if n < 2 {
+        return false;
+    }
+    let mut cur = f.loop_first;
+    let mut ring: Vec<VertKey> = Vec::with_capacity(n);
+    for _ in 0..n {
+        ring.push(bmesh.loops[cur].vert);
+        cur = bmesh.loops[cur].next;
+    }
+    for i in 0..n {
+        let p = ring[i];
+        let q = ring[(i + 1) % n];
+        if (p == va && q == vb) || (p == vb && q == va) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Find an outgoing face for the cross-face chord. Walks every face
+/// incident to `va` (faces whose ring contains `va`); for each, finds
+/// any edge OF THE FACE that the segment `va_pos -> vb_pos` crosses in
+/// the face's plane, excluding edges containing `va` itself. Returns
+/// `(face, edge, t)` where `t` is the parameter along the edge.
+///
+/// Multi-face traversal: the recursion in `chord_between_verts_recursive`
+/// keeps calling this with progressively-updated endpoints, so a single
+/// call only finds the FIRST face boundary crossing; subsequent recursive
+/// calls find later crossings until both endpoints land on the same face.
+fn find_outgoing_face_and_edge(
+    bmesh: &EditMesh,
+    va: VertKey,
+    va_pos: Vec3,
+    vb_pos: Vec3,
+) -> Option<(FaceKey, EdgeKey, f32)> {
+    let mut best: Option<(FaceKey, EdgeKey, f32, f32)> = None; // face, edge, t, segment_t
+    for (face_key, f) in bmesh.faces.iter() {
+        // face must contain `va`
+        let mut ring: Vec<(LoopKey, VertKey)> = Vec::with_capacity(f.loop_count as usize);
+        let mut cur = f.loop_first;
+        for _ in 0..f.loop_count {
+            ring.push((cur, bmesh.loops[cur].vert));
+            cur = bmesh.loops[cur].next;
+        }
+        if !ring.iter().any(|&(_, v)| v == va) {
+            continue;
+        }
+        // Walk each ring edge; skip edges touching va.
+        for i in 0..ring.len() {
+            let (lp, _) = ring[i];
+            let edge_key = bmesh.loops[lp].edge;
+            let e = &bmesh.edges[edge_key];
+            if e.v[0] == va || e.v[1] == va {
+                continue;
+            }
+            let e0 = bmesh.verts[e.v[0]].co;
+            let e1 = bmesh.verts[e.v[1]].co;
+            // Compute the 2D crossing of (va_pos -> vb_pos) with the
+            // edge, in the face's plane.
+            let n = f.normal_cache;
+            let Some((edge_t, seg_t)) =
+                segment_edge_intersection_in_plane(va_pos, vb_pos, e0, e1, n)
+            else {
+                continue;
+            };
+            // Both parameters must be strictly within (0, 1): the
+            // segment must cross the edge interior, not just an
+            // endpoint.
+            if edge_t <= 1e-4 || edge_t >= 1.0 - 1e-4 {
+                continue;
+            }
+            if seg_t <= 1e-4 || seg_t >= 1.0 + 1e-4 {
+                // seg_t == 1 means the segment ends exactly at the
+                // crossing; that's fine for terminal segments, accept.
+                if seg_t < 1e-4 {
+                    continue;
+                }
+            }
+            // Prefer the smallest `seg_t` (first crossing along the
+            // segment) so multi-face routing makes progress.
+            let take = match best {
+                None => true,
+                Some((_, _, _, prev_seg)) => seg_t < prev_seg,
+            };
+            if take {
+                best = Some((face_key, edge_key, edge_t, seg_t));
+            }
+        }
+    }
+    best.map(|(f, e, t, _)| (f, e, t))
+}
+
+/// Compute the intersection of two segments projected onto the plane
+/// with normal `n`. Returns `(t_along_edge, t_along_segment)` where
+/// both are in `[0, 1]` for interior crossings.
+fn segment_edge_intersection_in_plane(
+    p0: Vec3,
+    p1: Vec3,
+    e0: Vec3,
+    e1: Vec3,
+    n: Vec3,
+) -> Option<(f32, f32)> {
+    let n_norm = n.normalize_or_zero();
+    if n_norm == Vec3::ZERO {
+        return None;
+    }
+    let u_seed = if n_norm.x.abs() < 0.9 {
+        Vec3::X
+    } else {
+        Vec3::Y
+    };
+    let u = (u_seed - n_norm * u_seed.dot(n_norm)).normalize_or_zero();
+    if u == Vec3::ZERO {
+        return None;
+    }
+    let v = n_norm.cross(u);
+    let origin = e0;
+    let to2 = |p: Vec3| -> Vec2 {
+        let d = p - origin;
+        Vec2::new(d.dot(u), d.dot(v))
+    };
+    let p0_2 = to2(p0);
+    let p1_2 = to2(p1);
+    let e0_2 = to2(e0);
+    let e1_2 = to2(e1);
+    let r = e1_2 - e0_2;
+    let s = p1_2 - p0_2;
+    let denom = r.x * s.y - r.y * s.x;
+    if denom.abs() < 1e-9 {
+        return None;
+    }
+    let q = p0_2 - e0_2;
+    let t_edge = (q.x * s.y - q.y * s.x) / denom;
+    let t_seg = (q.x * r.y - q.y * r.x) / denom;
+    Some((t_edge, t_seg))
+}
+
+/// Find the vert with the smallest squared distance to `target`, but
+/// only return it when within `KNIFE_POSITION_EPSILON`.
 fn find_vert_by_position(bmesh: &EditMesh, target: Vec3) -> Option<VertKey> {
+    let eps_sq = KNIFE_POSITION_EPSILON * KNIFE_POSITION_EPSILON;
     let mut best: Option<(VertKey, f32)> = None;
     for (k, v) in bmesh.verts.iter() {
         let d = (v.co - target).length_squared();
@@ -1412,13 +1859,5 @@ fn find_vert_by_position(bmesh: &EditMesh, target: Vec3) -> Option<VertKey> {
         }
     }
     let (k, d) = best?;
-    if d <= 1e-6 { Some(k) } else { None }
-}
-
-fn find_face_by_material_idx(bmesh: &EditMesh, idx: u32) -> Option<FaceKey> {
-    bmesh
-        .faces
-        .iter()
-        .find(|(_, f)| f.material_idx == idx)
-        .map(|(k, _)| k)
+    if d <= eps_sq { Some(k) } else { None }
 }
