@@ -3,7 +3,7 @@ use winit::window::Icon;
 
 const WINDOW_ICON_PNG: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/assets/jackdaw_icon.png"
+    "/assets/jackdaw_icon_small.png"
 ));
 
 #[derive(Resource)]

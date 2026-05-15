@@ -20,6 +20,7 @@ include = [
     "examples/extension/*.rs",
     "assets/environment_maps/**/*",
     "assets/jackdaw_icon.png",
+    "assets/jackdaw_icon_small.png",
     "assets/textures/jd_grid.png",
     "Cargo.toml",
     "Cargo.lock",
