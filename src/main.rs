@@ -7,7 +7,7 @@ use bevy::{
 use jackdaw::prelude::*;
 
 #[cfg(not(target_arch = "wasm32"))]
-mod editor_window_icon;
+mod window_icon;
 
 fn main() -> AppExit {
     // Install a SIGINT/SIGTERM handler before anything else gets a
@@ -101,7 +101,7 @@ fn main() -> AppExit {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    editor_window_icon::install(&mut app);
+    window_icon::install(&mut app);
 
     app.run()
 }
