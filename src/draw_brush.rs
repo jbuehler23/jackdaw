@@ -485,6 +485,10 @@ const EXTRUDE_DEPTH_SENSITIVITY: f32 = 0.003;
 const MIN_FOOTPRINT_SIZE: f32 = 0.01;
 const MIN_EXTRUDE_DEPTH: f32 = 0.01;
 const MIN_FRAGMENT_SIZE: f32 = 0.005;
+/// Punch-through depth used by box-cut subtract: large enough to traverse any
+/// reasonably-sized target so the user never needs to drag for depth.
+/// Matches Blender's BoxCutter default behavior.
+const PUNCH_THROUGH_DEPTH: f32 = 1000.0;
 
 /// Stable identifier that survives the snapshot round-trip (undo
 /// respawns fresh entity ids; selection is restored by matching
@@ -1884,11 +1888,22 @@ fn manage_draw_preview_mesh(
     }
     *cached_preview_key = Some(current_key);
 
-    // Build volume planes based on draw type
-    let cutter_planes = if !active.polygon_vertices.is_empty() {
-        build_cutter_planes_polygon(active)
+    // Build volume planes based on draw type. For Cut mode, force a punch-
+    // through depth so the preview matches the actual subtract op (which
+    // always extends the cutter through any target).
+    let cutter_active_storage;
+    let cutter_active = if active.mode == DrawMode::Cut {
+        let mut a = active.clone();
+        a.depth = -PUNCH_THROUGH_DEPTH;
+        cutter_active_storage = a;
+        &cutter_active_storage
     } else {
-        build_cutter_planes(active)
+        active
+    };
+    let cutter_planes = if !cutter_active.polygon_vertices.is_empty() {
+        build_cutter_planes_polygon(cutter_active)
+    } else {
+        build_cutter_planes(cutter_active)
     };
 
     // Compute mesh geometry from planes
@@ -2305,10 +2320,18 @@ pub(crate) fn brush_parent_group(world: &World, entity: Entity) -> Option<(Entit
 /// Perform CSG subtraction: subtract the drawn cuboid from all intersecting brushes.
 /// Routes through the mesh-CSG kernel so concave targets are handled correctly.
 fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
-    let cutter_planes = if active.polygon_vertices.is_empty() {
-        build_cutter_planes(active)
+    // Box-cut always punches through: extend the cutter far into the brush
+    // along the inward normal so it traverses any reasonably-sized target.
+    // The face plane the user clicked is the cutter's near cap; the far cap
+    // is `PUNCH_THROUGH_DEPTH` behind it (into the brush). The user's drag
+    // for depth is ignored here, matching BoxCutter's default behavior.
+    let mut punch_active = active.clone();
+    punch_active.depth = -PUNCH_THROUGH_DEPTH;
+
+    let cutter_planes = if punch_active.polygon_vertices.is_empty() {
+        build_cutter_planes(&punch_active)
     } else {
-        build_cutter_planes_polygon(active)
+        build_cutter_planes_polygon(&punch_active)
     };
     let cutter_topology = compute_brush_topology(&cutter_planes);
 
