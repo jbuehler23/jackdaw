@@ -37,7 +37,7 @@ fn load_icon_png() -> Option<Icon> {
             return None;
         }
     };
-    return Some(icon);
+    Some(icon)
 }
 
 fn apply_window_icon_on_window_created(
