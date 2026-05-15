@@ -19,7 +19,7 @@ include = [
     "src/**/*.rs",
     "examples/extension/*.rs",
     "assets/environment_maps/**/*",
-    "assets/bevy_icon.png",
+    "assets/jackdaw_icon.png",
     "assets/textures/jd_grid.png",
     "Cargo.toml",
     "Cargo.lock",

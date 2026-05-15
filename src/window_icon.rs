@@ -1,8 +1,10 @@
 use bevy::{ecs::system::NonSendMarker, prelude::*, window::WindowCreated, winit::WINIT_WINDOWS};
 use winit::window::Icon;
 
-const WINDOW_ICON_PNG: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/bevy_icon.png"));
+const WINDOW_ICON_PNG: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/jackdaw_icon.png"
+));
 
 #[derive(Resource)]
 struct WindowIconResource(Option<Icon>);
