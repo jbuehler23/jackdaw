@@ -8,6 +8,7 @@ const WINDOW_ICON_PNG: &[u8] =
 struct WindowIconResource(Option<Icon>);
 
 /// Adds a bevy icon to the winit window.
+/// Note that this only works on Windows and x11 due to limitations of winit.
 pub(crate) fn install(app: &mut App) {
     app.insert_resource(WindowIconResource(load_icon_png()));
     app.add_systems(PostUpdate, apply_window_icon_on_window_created);
@@ -58,6 +59,7 @@ fn apply_window_icon_on_window_created(
                 );
                 return;
             };
+            // This only works on Windows and x11.
             backend_window.set_window_icon(Some(icon.clone()));
         });
     }
