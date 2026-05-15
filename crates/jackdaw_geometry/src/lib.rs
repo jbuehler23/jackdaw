@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bevy::prelude::*;
 
 pub mod topology;
@@ -11,7 +13,7 @@ pub mod newell;
 pub use newell::newell_normal;
 
 pub mod triangulate;
-pub use triangulate::{triangulate_face_polygon, triangulate_polygon};
+pub use triangulate::{triangulate_face_polygon, triangulate_polygon, triangulate_polygon_with_holes};
 
 pub mod topology_convexity;
 pub use topology_convexity::is_convex_topology;
@@ -129,6 +131,97 @@ pub fn compute_brush_geometry_from_planes(faces: &[BrushFaceData]) -> (Vec<Vec3>
     }
 
     (vertices, face_polygons)
+}
+
+/// Build a `BrushTopology` from face plane data by intersecting half-spaces.
+///
+/// This is the canonical "planes -> topology" derivation used by primitive
+/// constructors that don't know their explicit topology up front (e.g.
+/// `Brush::sphere`), by CSG fragment construction, and by the editor's
+/// load-time migration system for legacy `.jsn` brushes whose `topology`
+/// field is empty.
+///
+/// The output is guaranteed to satisfy:
+/// - `vertices` is deduplicated and inside all half-spaces.
+/// - `edges` are canonical (v0 <= v1) and deduplicated.
+/// - `polygons.len() == faces.len()` even for degenerate faces (those get
+///   `loop_total = 0`), so the parallel-array invariant between `faces`
+///   and `polygons` is preserved.
+///
+/// Returns an empty topology if the plane set has fewer than 4 vertices
+/// (i.e. the half-space intersection is unbounded or empty).
+pub fn compute_brush_topology(faces: &[BrushFaceData]) -> BrushTopology {
+    let (positions, face_polygons) = compute_brush_geometry_from_planes(faces);
+    if positions.is_empty() || face_polygons.is_empty() {
+        return BrushTopology::default();
+    }
+    build_topology_from_face_polygons(positions, face_polygons)
+}
+
+/// Build a `BrushTopology` directly from a positions array and per-face
+/// polygon rings (vertex-index lists, CCW). Lower-level helper for callers
+/// that already have positions / rings derived by some other means.
+pub fn build_topology_from_face_polygons(
+    positions: Vec<Vec3>,
+    face_polygons: Vec<Vec<usize>>,
+) -> BrushTopology {
+    let vertices: Vec<MeshVert> = positions
+        .into_iter()
+        .map(|p| MeshVert { position: p })
+        .collect();
+
+    let mut edge_map: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut edges: Vec<MeshEdge> = Vec::new();
+    let mut canonicalize = |a: u32, b: u32| -> u32 {
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        if let Some(&idx) = edge_map.get(&(lo, hi)) {
+            idx
+        } else {
+            let idx = edges.len() as u32;
+            edges.push(MeshEdge {
+                v: [lo, hi],
+                flags: EdgeFlag::empty(),
+            });
+            edge_map.insert((lo, hi), idx);
+            idx
+        }
+    };
+
+    let mut polygons: Vec<MeshPoly> = Vec::with_capacity(face_polygons.len());
+    let mut loops: Vec<MeshLoop> = Vec::new();
+    for ring in &face_polygons {
+        if ring.len() < 3 {
+            // Degenerate face: emit an empty poly to preserve the parallel-array
+            // invariant with `faces`.
+            polygons.push(MeshPoly {
+                loop_start: loops.len() as u32,
+                loop_total: 0,
+            });
+            continue;
+        }
+        let loop_start = loops.len() as u32;
+        for i in 0..ring.len() {
+            let v_cur = ring[i] as u32;
+            let v_next = ring[(i + 1) % ring.len()] as u32;
+            let edge_idx = canonicalize(v_cur, v_next);
+            loops.push(MeshLoop {
+                vert: v_cur,
+                edge: edge_idx,
+            });
+        }
+        polygons.push(MeshPoly {
+            loop_start,
+            loop_total: ring.len() as u32,
+        });
+    }
+
+    BrushTopology {
+        vertices,
+        edges,
+        polygons,
+        loops,
+        attributes: Default::default(),
+    }
 }
 
 /// Sort face vertex indices by winding order around the face normal.

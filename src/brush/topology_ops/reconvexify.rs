@@ -3,15 +3,10 @@
 //! produced an unwanted result, or as a prerequisite for CSG (which only
 //! supports convex inputs in this PR).
 
-use std::collections::HashMap;
-
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::editmesh::EditMesh;
-use jackdaw_geometry::{
-    compute_brush_geometry_from_planes,
-    topology::{BrushTopology, EdgeFlag, MeshEdge, MeshLoop, MeshPoly, MeshVert},
-};
+use jackdaw_geometry::{compute_brush_geometry_from_planes, compute_brush_topology};
 use jackdaw_jsn::Brush;
 
 use crate::brush::hull::rebuild_brush_from_vertices;
@@ -44,6 +39,8 @@ pub(crate) fn brush_reconvexify(
 
     // Collect current vertex positions from the brush's topology if available;
     // fall back to deriving them from the plane representation for legacy brushes.
+    // CONVEX_DEAD: Phase 1 guarantees topology populated; the plane-intersection
+    // fallback is unreachable in practice but kept as a safety net.
     let current_positions: Vec<Vec3> = if !brush_before.topology.vertices.is_empty() {
         brush_before
             .topology
@@ -60,6 +57,8 @@ pub(crate) fn brush_reconvexify(
     }
 
     // Build old face_polygons (parallel to faces) for UV-preservation lookup.
+    // CONVEX_DEAD: Phase 1 guarantees topology populated; the plane-intersection
+    // fallback is unreachable in practice but kept as a safety net.
     let old_face_polygons: Vec<Vec<usize>> = if !brush_before.topology.polygons.is_empty() {
         (0..brush_before.topology.polygons.len())
             .map(|i| {
@@ -87,8 +86,7 @@ pub(crate) fn brush_reconvexify(
     };
 
     // Populate topology on the new brush by deriving it from its hull planes.
-    let (hull_verts, hull_face_polygons) = compute_brush_geometry_from_planes(&new_brush.faces);
-    new_brush.topology = build_topology_from_face_polygons(hull_verts, hull_face_polygons);
+    new_brush.topology = compute_brush_topology(&new_brush.faces);
 
     // Apply the new brush.
     let Ok(mut brush_mut) = brushes.get_mut(brush_entity) else {
@@ -121,69 +119,6 @@ pub(crate) fn brush_reconvexify(
     }));
 
     OperatorResult::Finished
-}
-
-/// Build a `BrushTopology` from positions and face polygon rings. Mirrors the
-/// logic in `topology_migration::derive_topology_from_planes`.
-fn build_topology_from_face_polygons(
-    positions: Vec<Vec3>,
-    face_polygons: Vec<Vec<usize>>,
-) -> BrushTopology {
-    let vertices: Vec<MeshVert> = positions
-        .into_iter()
-        .map(|p| MeshVert { position: p })
-        .collect();
-
-    let mut edge_map: HashMap<(u32, u32), u32> = HashMap::new();
-    let mut edges: Vec<MeshEdge> = Vec::new();
-    let mut canonicalize = |a: u32, b: u32| -> u32 {
-        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-        if let Some(&idx) = edge_map.get(&(lo, hi)) {
-            idx
-        } else {
-            let idx = edges.len() as u32;
-            edges.push(MeshEdge {
-                v: [lo, hi],
-                flags: EdgeFlag::empty(),
-            });
-            edge_map.insert((lo, hi), idx);
-            idx
-        }
-    };
-
-    let mut polygons: Vec<MeshPoly> = Vec::with_capacity(face_polygons.len());
-    let mut loops: Vec<MeshLoop> = Vec::new();
-    for ring in &face_polygons {
-        if ring.len() < 3 {
-            polygons.push(MeshPoly {
-                loop_start: loops.len() as u32,
-                loop_total: 0,
-            });
-            continue;
-        }
-        let loop_start = loops.len() as u32;
-        for i in 0..ring.len() {
-            let v_cur = ring[i] as u32;
-            let v_next = ring[(i + 1) % ring.len()] as u32;
-            let edge_idx = canonicalize(v_cur, v_next);
-            loops.push(MeshLoop {
-                vert: v_cur,
-                edge: edge_idx,
-            });
-        }
-        polygons.push(MeshPoly {
-            loop_start,
-            loop_total: ring.len() as u32,
-        });
-    }
-
-    BrushTopology {
-        vertices,
-        edges,
-        polygons,
-        loops,
-        attributes: Default::default(),
-    }
 }
 
 pub(crate) fn can_run_reconvexify(selection: Res<BrushSelection>, brushes: Query<&Brush>) -> bool {

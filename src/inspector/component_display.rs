@@ -396,6 +396,7 @@ pub(crate) fn build_inspector_displays(
                     // When this brush is non-convex and has a physics collider, the bridge
                     // forces TriMesh regardless of the user's AvianCollider setting. Show a
                     // read-only note so the change is visible in the inspector.
+                    // CONVEX_FUNCTIONAL: different behavior is intentional (mirrors collider-type choice in physics_brush_bridge)
                     if entity_ref.contains::<AvianCollider>() {
                         if let Some(brush) = entity_ref.get::<crate::brush::Brush>() {
                             if !is_convex_topology(&brush.topology) {

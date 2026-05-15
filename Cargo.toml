@@ -68,6 +68,7 @@ members = [
 bevy.workspace = true
 jackdaw_jsn.workspace = true
 jackdaw_geometry.workspace = true
+jackdaw_csg.workspace = true
 bevy_monitors.workspace = true
 bevy_infinite_grid.workspace = true
 jackdaw_camera.workspace = true
@@ -132,6 +133,7 @@ bevy_simple_subsecond_system = { version = "0.2", optional = true }
 bevy = { version = "0.18", features = ["experimental_bevy_feathers", "serialize", "debug", "bevy_remote", "file_watcher", "reflect_documentation"] }
 jackdaw_jsn = { version = "0.4.1", path = "crates/jackdaw_jsn" }
 jackdaw_geometry = { version = "0.4.1", path = "crates/jackdaw_geometry" }
+jackdaw_csg = { version = "0.4.1", path = "crates/jackdaw_csg" }
 bevy_monitors = "0.2"
 bevy_infinite_grid = "0.18"
 jackdaw_camera = { version = "0.4.1", path = "crates/jackdaw_camera" }

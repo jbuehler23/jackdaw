@@ -37,6 +37,9 @@ pub(super) fn spawn_brush_display(
     brush: &crate::brush::Brush,
     materials: &Assets<StandardMaterial>,
 ) {
+    // CONVEX_DEAD: Phase 1 guarantees topology populated; the plane-intersection
+    // fallback below is unreachable in practice but kept for the degenerate
+    // empty-brush case (no faces).
     let (face_count, vertex_count, edge_count) = if !brush.topology.polygons.is_empty() {
         (
             brush.topology.polygons.len(),
@@ -85,6 +88,9 @@ pub(super) fn spawn_brush_display(
         ChildOf(parent),
     ));
 
+    // CONVEX_DEAD: Phase 1 guarantees topology populated; this "Empty (legacy)"
+    // status row is no longer reachable in practice. Kept as a fallback while
+    // we still ship the topology_migration safety net.
     if brush.topology.polygons.is_empty() {
         commands.spawn((
             Text::new("Empty (legacy brush; will populate after migration)"),

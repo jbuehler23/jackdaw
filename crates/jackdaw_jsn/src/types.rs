@@ -7,7 +7,9 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 // Re-export geometry types so consumers see them from jackdaw_jsn
-pub use jackdaw_geometry::{BrushFaceData, BrushPlane, BrushTopology, compute_face_tangent_axes};
+pub use jackdaw_geometry::{
+    BrushFaceData, BrushPlane, BrushTopology, compute_brush_topology, compute_face_tangent_axes,
+};
 
 /// Groups multiple convex brush fragments produced by CSG subtraction.
 /// Fragments become children of the group entity.
@@ -477,7 +479,7 @@ impl Brush {
             [9, 8, 1],
         ];
 
-        let faces = tris
+        let faces: Vec<BrushFaceData> = tris
             .iter()
             .map(|&[a, b, c]| {
                 let normal = (verts[b] - verts[a]).cross(verts[c] - verts[a]).normalize();
@@ -499,7 +501,8 @@ impl Brush {
             })
             .collect();
 
-        Self { faces, ..default() }
+        let topology = compute_brush_topology(&faces);
+        Self { faces, topology }
     }
 }
 

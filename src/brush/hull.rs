@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use avian3d::parry::transformation::convex_hull;
 use bevy::prelude::*;
 
-use jackdaw_geometry::{EPSILON, sort_face_vertices_by_winding};
+use jackdaw_geometry::{EPSILON, compute_brush_topology, sort_face_vertices_by_winding};
 use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
 
 pub struct HullFace {
@@ -215,5 +215,6 @@ pub(crate) fn rebuild_brush_from_vertices(
         old_to_new[old_idx] = new_idx;
     }
 
-    Some((Brush { faces, ..default() }, old_to_new))
+    let topology = compute_brush_topology(&faces);
+    Some((Brush { faces, topology }, old_to_new))
 }

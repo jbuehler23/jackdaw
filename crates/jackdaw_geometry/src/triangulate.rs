@@ -65,3 +65,65 @@ pub fn triangulate_face_polygon(positions: &[Vec3], normal: Vec3) -> Vec<[u32; 3
     let ring: Vec<u32> = (0..positions.len() as u32).collect();
     triangulate_polygon(positions, &ring, normal)
 }
+
+/// Triangulate a polygon with one or more interior holes.
+///
+/// `outer` and each entry in `holes` reference vertices in `positions` by
+/// index. All rings should be wound CCW relative to `normal` on input; the
+/// holes are reversed internally before being passed to earcut (which
+/// expects outer CCW, holes CW).
+///
+/// Returns triangles indexed into `positions`. An empty return indicates
+/// degenerate input or an earcut failure (caller should treat the face as
+/// dropped).
+pub fn triangulate_polygon_with_holes(
+    positions: &[Vec3],
+    outer: &[u32],
+    holes: &[Vec<u32>],
+    normal: Vec3,
+) -> Vec<[u32; 3]> {
+    if outer.len() < 3 {
+        return Vec::new();
+    }
+    let (u_axis, v_axis) = compute_face_tangent_axes(normal);
+
+    let total_count: usize = outer.len() + holes.iter().map(|h| h.len()).sum::<usize>();
+    let mut flat: Vec<f64> = Vec::with_capacity(total_count * 2);
+    let mut all_indices: Vec<u32> = Vec::with_capacity(total_count);
+    let mut hole_starts: Vec<usize> = Vec::with_capacity(holes.len());
+
+    for &vi in outer {
+        let p = positions[vi as usize];
+        flat.push(p.dot(u_axis) as f64);
+        flat.push(p.dot(v_axis) as f64);
+        all_indices.push(vi);
+    }
+    for hole in holes {
+        if hole.len() < 3 {
+            continue;
+        }
+        hole_starts.push(all_indices.len());
+        // earcut expects holes wound opposite to the outer ring.
+        for &vi in hole.iter().rev() {
+            let p = positions[vi as usize];
+            flat.push(p.dot(u_axis) as f64);
+            flat.push(p.dot(v_axis) as f64);
+            all_indices.push(vi);
+        }
+    }
+
+    let triangles = match earcutr::earcut(&flat, &hole_starts, 2) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut out = Vec::with_capacity(triangles.len() / 3);
+    for chunk in triangles.chunks_exact(3) {
+        out.push([
+            all_indices[chunk[0]],
+            all_indices[chunk[1]],
+            all_indices[chunk[2]],
+        ]);
+    }
+    out
+}

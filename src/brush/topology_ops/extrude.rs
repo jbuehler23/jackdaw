@@ -44,6 +44,12 @@ pub struct ExtrudeModalState {
     /// `start_editmesh`; we re-resolve them from `start_editmesh` each frame
     /// because the live mesh is reset to the snapshot before running the op.
     pub face_keys: Vec<FaceKey>,
+    /// Brush face indices of the faces being extruded, captured at modal
+    /// entry. Used by the live-preview path to clone the correct template
+    /// (preserving the parent face's UV scale/rotation/offset) when growing
+    /// brush.faces for new wall faces, rather than picking up some unrelated
+    /// face's UV settings via `start_brush.faces.last()`.
+    pub face_indices: Vec<usize>,
     /// Window-space cursor position at the moment the modal started.
     pub start_cursor: Vec2,
     /// Unit-length screen-space direction corresponding to "+1 unit along the
@@ -310,6 +316,7 @@ pub(crate) fn brush_extrude(
         modal_state.active = true;
         modal_state.brush_entity = Some(brush_entity);
         modal_state.face_keys = face_keys;
+        modal_state.face_indices = selection.faces.clone();
         modal_state.start_cursor = cursor_pos;
         modal_state.screen_normal_dir = screen_normal_dir;
         modal_state.current_amount = 0.0;
@@ -551,16 +558,22 @@ fn apply_live_extrude(
     };
 
     // Grow brush.faces to cover the new side faces. Seed each new slot from
-    // the start brush's last face (for material + uv_scale / rotation), then
-    // zero out the `uv_u_axis` / `uv_v_axis` so `ensure_uv_axes` derives proper
-    // tangents from the side face's own plane normal.
+    // the face being extruded (so material + uv_scale + uv_rotation +
+    // uv_offset inherit from the parent face), then zero out
+    // `uv_u_axis` / `uv_v_axis` so `ensure_uv_axes` derives proper tangents
+    // from each wall face's own plane normal. Picking the parent face as
+    // template (rather than `start_brush.faces.last()`) keeps the extrude's
+    // checker tiling continuous with the original face on the wall sides.
     let new_face_count = new_topology.polygons.len();
     let original_face_count = start_brush.faces.len();
+    let extrude_template = modal_state
+        .face_indices
+        .first()
+        .and_then(|&idx| start_brush.faces.get(idx).cloned())
+        .or_else(|| start_brush.faces.last().cloned());
     while brush.faces.len() < new_face_count {
-        let mut template = start_brush
-            .faces
-            .last()
-            .cloned()
+        let mut template = extrude_template
+            .clone()
             .or_else(|| brush.faces.last().cloned())
             .unwrap_or_default();
         template.uv_u_axis = Vec3::ZERO;

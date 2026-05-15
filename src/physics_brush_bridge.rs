@@ -64,6 +64,7 @@ fn sync_editor_collider_config(
 ) {
     for (entity, config, brush_cache, mesh3d) in &changed {
         let constructor = if let Ok(brush) = brushes.get(entity) {
+            // CONVEX_FUNCTIONAL: different behavior is intentional (collider type)
             if !is_convex_topology(&brush.topology) {
                 // Force TriMesh for non-convex brushes; ConvexHull/AABB would mis-simulate.
                 ColliderConstructor::TrimeshFromMesh

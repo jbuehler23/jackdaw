@@ -2725,6 +2725,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmake"
+version = "0.1.58"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "codespan-reporting"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4562,6 +4571,7 @@ dependencies = [
  "jackdaw_avian_integration",
  "jackdaw_camera",
  "jackdaw_commands",
+ "jackdaw_csg",
  "jackdaw_feathers",
  "jackdaw_geometry",
  "jackdaw_jsn",
@@ -4657,6 +4667,16 @@ version = "0.4.1"
 dependencies = [
  "bevy",
  "serde",
+]
+
+[[package]]
+name = "jackdaw_csg"
+version = "0.4.1"
+dependencies = [
+ "bevy",
+ "jackdaw_geometry",
+ "jackdaw_jsn",
+ "manifold-csg",
 ]
 
 [[package]]
@@ -5085,6 +5105,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62bb907fe88d54d8d9ce32a3cceab4218ed2f6b7d35617cafe9adf84e43919cb"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "manifold-csg"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf7d61a2fed9e32a65e9f987505c01e7e1b1b34d32b3f75df3ecff77c246b78a"
+dependencies = [
+ "log",
+ "manifold-csg-sys",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "manifold-csg-sys"
+version = "3.4.107"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7ba98ad842ca99ec2752d2e556f43ce69aa3f8000bd55b188053b383f9cb095"
+dependencies = [
+ "cmake",
 ]
 
 [[package]]

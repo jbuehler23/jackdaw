@@ -1,6 +1,7 @@
 //! EditMesh topology operations. Each op mutates a `EditMesh` in place and
 //! preserves the half-edge invariants (disk + radial cycles, manifold faces).
 
+pub mod bisect_plane;
 pub mod bridge_edge_loops;
 pub mod connect_verts;
 pub mod contextual_create;

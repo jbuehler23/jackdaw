@@ -12,7 +12,7 @@ use crate::default_style;
 use crate::draw_brush::DrawBrushState;
 use crate::selection::Selected;
 use jackdaw_geometry::{
-    compute_brush_geometry_from_planes, compute_face_tangent_axes, triangulate_face,
+    compute_brush_geometry_from_planes, compute_face_tangent_axes, triangulate_polygon,
 };
 
 pub(super) struct MeshPlugin;
@@ -132,6 +132,9 @@ pub fn regenerate_brush_meshes(
             // plane-intersection path below only handles convex brushes
             // and silently distorts non-convex / chamfered faces, so we
             // prefer the authored ring whenever it exists.
+            // CONVEX_DEAD: Phase 1 guarantees topology populated; the
+            // plane-intersection fallback below is no longer reachable in
+            // practice but kept as a safety net for malformed/empty brushes.
             let verts: Vec<Vec3> = brush.topology.vertices.iter().map(|v| v.position).collect();
             let polys: Vec<Vec<usize>> = (0..brush.topology.polygons.len())
                 .map(|i| brush.topology.face_ring(i).map(|v| v as usize).collect())
@@ -160,22 +163,26 @@ pub fn regenerate_brush_meshes(
                     compute_face_tangent_axes(face_data.plane.normal)
                 };
 
-            // Fan triangulate: local indices (0..face vertex count)
-            let local_tris = triangulate_face(&(0..indices.len()).collect::<Vec<_>>());
+            // Concave / annulus-aware triangulation via earcut. Fan
+            // triangulation would silently mis-triangulate concave faces
+            // and fill keyhole-bridged holes with bogus geometry.
+            let ring_u32: Vec<u32> = indices.iter().map(|&i| i as u32).collect();
+            let tris =
+                triangulate_polygon(&vertices, &ring_u32, face_data.plane.normal);
 
-            let mut positions: Vec<[f32; 3]> = Vec::with_capacity(local_tris.len() * 3);
-            let mut normals: Vec<[f32; 3]> = Vec::with_capacity(local_tris.len() * 3);
-            let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(local_tris.len() * 3);
-            let mut tangents: Vec<[f32; 4]> = Vec::with_capacity(local_tris.len() * 3);
-            let mut tri_indices: Vec<u32> = Vec::with_capacity(local_tris.len() * 3);
+            let mut positions: Vec<[f32; 3]> = Vec::with_capacity(tris.len() * 3);
+            let mut normals: Vec<[f32; 3]> = Vec::with_capacity(tris.len() * 3);
+            let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(tris.len() * 3);
+            let mut tangents: Vec<[f32; 4]> = Vec::with_capacity(tris.len() * 3);
+            let mut tri_indices: Vec<u32> = Vec::with_capacity(tris.len() * 3);
 
             let cos_r = face_data.uv_rotation.cos();
             let sin_r = face_data.uv_rotation.sin();
 
-            for tri in &local_tris {
-                let p_a = vertices[indices[tri[0] as usize]];
-                let p_b = vertices[indices[tri[1] as usize]];
-                let p_c = vertices[indices[tri[2] as usize]];
+            for tri in &tris {
+                let p_a = vertices[tri[0] as usize];
+                let p_b = vertices[tri[1] as usize];
+                let p_c = vertices[tri[2] as usize];
 
                 // Compute this triangle's actual normal for flat shading.
                 let cross = (p_b - p_a).cross(p_c - p_a);

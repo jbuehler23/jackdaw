@@ -34,6 +34,12 @@ pub struct InsetModalState {
     /// `start_editmesh`; we re-resolve them from `start_editmesh` each frame
     /// because the live mesh is reset to the snapshot before running the op.
     pub face_keys: Vec<FaceKey>,
+    /// Brush face indices of the faces being inset, captured at modal entry.
+    /// Used by the live-preview path to clone the correct template (preserving
+    /// the original face's UV scale/rotation/offset) when growing brush.faces
+    /// for the new spoke faces, rather than picking up some unrelated face's
+    /// UV settings via `start_brush.faces.last()`.
+    pub face_indices: Vec<usize>,
     /// Window-space cursor position at the moment the modal started.
     pub start_cursor: Vec2,
     /// Current inset amount in world-space units.
@@ -179,6 +185,7 @@ pub(crate) fn brush_inset(
         modal_state.active = true;
         modal_state.brush_entity = Some(brush_entity);
         modal_state.face_keys = face_keys;
+        modal_state.face_indices = selection.faces.clone();
         modal_state.start_cursor = cursor_pos;
         modal_state.current_amount = 0.0;
         modal_state.start_brush = Some(brush_before);
@@ -426,16 +433,22 @@ fn apply_live_inset(
     };
 
     // Grow brush.faces to cover the new spoke faces. Seed each new slot from
-    // the start brush's last face (for material + uv_scale / rotation), then
-    // zero out the `uv_u_axis` / `uv_v_axis` so `ensure_uv_axes` below derives
-    // proper tangents from the spoke face's own plane normal.
+    // the face being inset (so material + uv_scale + uv_rotation + uv_offset
+    // inherit from the parent face), then zero out the `uv_u_axis` /
+    // `uv_v_axis` so `ensure_uv_axes` below derives proper tangents from each
+    // spoke face's own plane normal. Picking the parent face as the template
+    // rather than `start_brush.faces.last()` keeps the inset's checker
+    // tiling continuous with the original face on the spoke walls.
     let new_face_count = new_topology.polygons.len();
     let original_face_count = start_brush.faces.len();
+    let inset_template = modal_state
+        .face_indices
+        .first()
+        .and_then(|&idx| start_brush.faces.get(idx).cloned())
+        .or_else(|| start_brush.faces.last().cloned());
     while brush.faces.len() < new_face_count {
-        let mut template = start_brush
-            .faces
-            .last()
-            .cloned()
+        let mut template = inset_template
+            .clone()
             .or_else(|| brush.faces.last().cloned())
             .unwrap_or_default();
         template.uv_u_axis = Vec3::ZERO;
