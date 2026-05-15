@@ -30,7 +30,7 @@
 //!
 //! Commit handling: the path is applied to the EditMesh using
 //! **topology mutations only** (no CDT). The pipeline mirrors how
-//! Blender's knife tool works.
+//! the knife tool routes a multi-segment cut across faces.
 //!
 //! Phase 1: walk every path point in order, resolving each to a live
 //! `VertKey` in the post-mutation mesh:
@@ -59,7 +59,7 @@
 //! the commit continues. Catastrophic failures (rare) restore from the
 //! pre-commit snapshot.
 //!
-//! Cut-through (Blender-style: project the cut through the whole brush
+//! Cut-through (project the cut through the whole brush
 //! so the back face is cut simultaneously) is filed as task #97.
 
 use bevy::prelude::*;
@@ -187,6 +187,16 @@ pub struct KnifeMode {
     /// by `handle_knife_mode`. `None` when off-brush, off-face, or
     /// outside the snap tolerance.
     pub hover_snap: Option<KnifeSnapTarget>,
+    /// World-space points where the current path's segments cross
+    /// existing mesh edges. Predicted every frame from the path + live
+    /// cursor; rendered as small markers so the user can see, before
+    /// committing, which existing edges the cut will split. Mirrors
+    /// live edge-crossing preview dots during drag.
+    pub preview_intersections: Vec<Vec3>,
+    /// Points popped off `path` by in-modal Ctrl+Z, kept so Ctrl+Shift+Z
+    /// can re-add them. Cleared when a new point is placed (a fresh
+    /// branch invalidates the redo trail) or when the modal exits.
+    pub undone_path: Vec<KnifePathPoint>,
 }
 
 impl KnifeMode {
@@ -194,6 +204,30 @@ impl KnifeMode {
         self.brush_entity = None;
         self.path.clear();
         self.hover_snap = None;
+        self.preview_intersections.clear();
+        self.undone_path.clear();
+    }
+
+    /// Pop the most recently placed path point onto the redo stack.
+    /// Returns true if a point was popped.
+    pub fn undo_point(&mut self) -> bool {
+        if let Some(p) = self.path.pop() {
+            self.undone_path.push(p);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Re-add the most recently undone path point. Returns true if a
+    /// point was re-added.
+    pub fn redo_point(&mut self) -> bool {
+        if let Some(p) = self.undone_path.pop() {
+            self.path.push(p);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -382,6 +416,17 @@ pub(super) fn handle_knife_mode(
         .or(edge_point_snap)
         .or(interior_snap);
 
+    // Predict where the current path will introduce new verts on
+    // existing mesh edges so the user sees crossings before committing.
+    knife.preview_intersections = compute_path_edge_intersections(
+        &knife.path,
+        knife.hover_snap.as_ref(),
+        cache,
+        brush_global,
+        camera,
+        cam_tf,
+    );
+
     if typing {
         return;
     }
@@ -415,12 +460,15 @@ pub(super) fn handle_knife_mode(
     }
 
     // Place a new path point on LMB. Snap target is required: if the
-    // cursor isn't near a vert / edge, the click is ignored.
+    // cursor isn't near a vert / edge, the click is ignored. Placing a
+    // new point starts a fresh history branch, so any pending redo
+    // points are discarded.
     if mouse.just_pressed(MouseButton::Left)
         && let Some(snap) = knife.hover_snap.clone()
     {
         let new_point = KnifePathPoint::from(&snap);
         knife.path.push(new_point);
+        knife.undone_path.clear();
     }
 }
 
@@ -456,6 +504,13 @@ pub(super) fn draw_knife_overlay(
             default_style::EDIT_VERTEX_RADIUS,
             KNIFE_COLOR,
         );
+    }
+
+    // Preview verts at predicted edge crossings. Slightly smaller and hollow so they read as "will be
+    // created" rather than "already placed".
+    for &crossing in &knife.preview_intersections {
+        let r = default_style::EDIT_VERTEX_RADIUS * 0.7;
+        gizmos.sphere(Isometry3d::from_translation(crossing), r, KNIFE_COLOR);
     }
 
     // Live snap indicator at the cursor. Each kind gets a distinct
@@ -594,6 +649,128 @@ fn cursor_in_viewport(
     } else {
         None
     }
+}
+
+/// Maximum 3D distance (squared, world units) between a cut-path point
+/// and a brush edge at the same screen-space intersection for the
+/// crossing to be considered a real 3D hit. Smaller values reject more
+/// false positives (e.g. a top-face cut that visually crosses a side-
+/// face edge in projection); too small and legitimate cross-face cuts
+/// get dropped. 0.05^2 ~= 5 cm^2 works well at typical level scale.
+const PREVIEW_INTERSECT_TOL_SQ: f32 = 0.05 * 0.05;
+
+/// Predict where the in-progress knife path (path points + live cursor)
+/// will introduce new verts on the brush's existing edges. Used purely
+/// for preview drawing: every consecutive pair of path points (plus the
+/// last-to-cursor segment) is intersected against each unique mesh edge
+/// in screen space; for hits, the 3D crossing point on the mesh edge is
+/// returned. /// user can see, before committing, which existing edges the cut will
+/// split.
+///
+/// Screen-space intersection (not full 3D) keeps this cheap: the brush's
+/// face_polygons + vertex cache is already in screen-projection range,
+/// and the resulting 3D point is computed from the *edge* parameter (so
+/// the dot sits on the actual mesh edge, not floating in space).
+fn compute_path_edge_intersections(
+    path: &[KnifePathPoint],
+    cursor_snap: Option<&KnifeSnapTarget>,
+    cache: &BrushMeshCache,
+    brush_global: &GlobalTransform,
+    camera: &Camera,
+    cam_tf: &GlobalTransform,
+) -> Vec<Vec3> {
+    let mut out: Vec<Vec3> = Vec::new();
+    if path.is_empty() {
+        return out;
+    }
+    let mut world_pts: Vec<Vec3> = path.iter().map(|p| p.world_pos).collect();
+    if let Some(snap) = cursor_snap {
+        if path.last().map(|p| p.world_pos) != Some(snap.world_pos) {
+            world_pts.push(snap.world_pos);
+        }
+    }
+    if world_pts.len() < 2 {
+        return out;
+    }
+
+    let screen_pts: Vec<Vec2> = world_pts
+        .iter()
+        .filter_map(|&p| camera.world_to_viewport(cam_tf, p).ok())
+        .collect();
+    if screen_pts.len() != world_pts.len() {
+        return out;
+    }
+
+    let mut seen_edges: std::collections::HashSet<(usize, usize)> = Default::default();
+    for polygon in &cache.face_polygons {
+        if polygon.len() < 3 {
+            continue;
+        }
+        for i in 0..polygon.len() {
+            let a = polygon[i];
+            let b = polygon[(i + 1) % polygon.len()];
+            let key = if a < b { (a, b) } else { (b, a) };
+            if !seen_edges.insert(key) {
+                continue;
+            }
+            let world_a = brush_global.transform_point(cache.vertices[a]);
+            let world_b = brush_global.transform_point(cache.vertices[b]);
+            let Ok(screen_a) = camera.world_to_viewport(cam_tf, world_a) else {
+                continue;
+            };
+            let Ok(screen_b) = camera.world_to_viewport(cam_tf, world_b) else {
+                continue;
+            };
+
+            for j in 0..screen_pts.len() - 1 {
+                let seg_a = screen_pts[j];
+                let seg_b = screen_pts[j + 1];
+                if let Some((t_seg, t_edge)) =
+                    segment_intersect_2d(seg_a, seg_b, screen_a, screen_b)
+                {
+                    // Depth-filter: a screen-space intersection only
+                    // corresponds to a real 3D crossing if the 3D points
+                    // along the two segments are coincident at the
+                    // intersection parameter. For a cut on the top face
+                    // that *appears* to cross a side-face edge in
+                    // projection, the 3D points are far apart (one on
+                    // top, one on the side); skip those.
+                    let p_cut = world_pts[j].lerp(world_pts[j + 1], t_seg);
+                    let p_edge = world_a.lerp(world_b, t_edge);
+                    if p_cut.distance_squared(p_edge) > PREVIEW_INTERSECT_TOL_SQ {
+                        continue;
+                    }
+                    let crossing = p_edge;
+                    let on_endpoint = world_pts.iter().any(|p| {
+                        p.distance_squared(crossing) < 1e-8
+                    });
+                    if !on_endpoint {
+                        out.push(crossing);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 2D segment-segment intersection. Returns `(t1, t2)` where both
+/// parameters are in `[0, 1]`, or `None` if the segments do not cross.
+fn segment_intersect_2d(p1: Vec2, p2: Vec2, p3: Vec2, p4: Vec2) -> Option<(f32, f32)> {
+    let d1 = p2 - p1;
+    let d2 = p4 - p3;
+    let denom = d1.x * d2.y - d1.y * d2.x;
+    if denom.abs() < 1e-6 {
+        return None;
+    }
+    let dx = p3.x - p1.x;
+    let dy = p3.y - p1.y;
+    let t1 = (dx * d2.y - dy * d2.x) / denom;
+    let t2 = (dx * d1.y - dy * d1.x) / denom;
+    if !(0.0..=1.0).contains(&t1) || !(0.0..=1.0).contains(&t2) {
+        return None;
+    }
+    Some((t1, t2))
 }
 
 /// Pick the closest face of `cache` under the cursor in screen space.

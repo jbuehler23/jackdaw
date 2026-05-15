@@ -74,7 +74,7 @@ pub fn sync_brush_bmesh_on_edit_mode(
                         face_keys,
                     });
                 }
-                // If topology is empty (legacy unmigrated brush), don't lift —
+                // If topology is empty (legacy unmigrated brush), don't lift - 
                 // wait for A.17.1 migration to populate topology first. Edit mode
                 // can still partially work via the legacy plane path, but EditMesh-driven
                 // ops won't be available until migration.

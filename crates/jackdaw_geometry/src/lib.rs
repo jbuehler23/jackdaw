@@ -427,7 +427,7 @@ pub fn subtract_brush(
         remaining = next_remaining;
     }
 
-    // remaining = pieces fully inside the cutter → discard
+    // remaining = pieces fully inside the cutter -> discard
     result_fragments
 }
 

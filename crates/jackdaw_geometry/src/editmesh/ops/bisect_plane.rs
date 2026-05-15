@@ -6,9 +6,7 @@
 //! optionally drops one side and/or builds a closing "cap" face on the
 //! exposed boundary.
 //!
-//! Inspired by Blender's `bmesh_bisect_plane` (algorithmic reference);
-//! implementation original.
-//!
+//! //!
 //! For most inputs (manifold closed mesh, plane that doesn't pass exactly
 //! through a vertex) the output is a single closed mesh per side with one
 //! new cap polygon along the cut plane. Edge cases (plane exactly through a

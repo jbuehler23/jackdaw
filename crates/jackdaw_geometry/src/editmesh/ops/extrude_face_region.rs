@@ -2,8 +2,7 @@
 //! connect old ring -> new ring with N side quads. The original face's ring is rewritten to
 //! the new (top) ring; N new side-quad faces are added below.
 //!
-//! Inspired by Blender's BMO_OP_extrude_face_region (algorithmic reference); implementation
-//! original. Single-face MVP -- multi-face region merging deferred.
+//! Single-face MVP -- multi-face region merging deferred.
 
 use bevy::math::Vec3;
 

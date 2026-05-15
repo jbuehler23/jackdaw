@@ -58,7 +58,7 @@ pub(super) fn setup_default_materials(
         }
     );
 
-    // Tile the 2×2 checker at 0.25 world-unit spacing (matching default grid)
+    // Tile the 2x2 checker at 0.25 world-unit spacing (matching default grid)
     let uv_tile = Affine2::from_scale(Vec2::splat(2.0));
 
     palette.default_material = materials.add(StandardMaterial {
@@ -203,7 +203,7 @@ pub fn regenerate_brush_meshes(
                     normals.push(tri_normal_arr);
 
                     // UV math matches compute_face_uvs exactly:
-                    // project → rotate → scale → offset.
+                    // project -> rotate -> scale -> offset.
                     let u = vert_pos.dot(u_axis);
                     let v = vert_pos.dot(v_axis);
                     let ru = u * cos_r - v * sin_r;

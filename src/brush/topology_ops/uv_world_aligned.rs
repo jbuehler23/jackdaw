@@ -9,7 +9,7 @@ use crate::commands::CommandHistory;
 
 /// Snap U and V axes to the closest world-axis pair for the face's normal.
 /// Useful for Hammer / Quake-style brushwork where adjacent brushes with the
-/// same texture continue seamlessly.
+/// same texture tile continuously across edges.
 #[operator(
     id = "brush.face.uv.world_aligned",
     label = "World-Align UVs",
@@ -46,21 +46,21 @@ pub(crate) fn brush_uv_world_aligned(
         let n = brush.topology.face_normal(face_idx);
         let abs = n.abs();
         let (u, v) = if abs.x >= abs.y && abs.x >= abs.z {
-            // Normal mostly along X: U = ±Y, V = Z
+            // Normal mostly along X: U = +/-Y, V = Z
             if n.x >= 0.0 {
                 (Vec3::Y, Vec3::Z)
             } else {
                 (Vec3::NEG_Y, Vec3::Z)
             }
         } else if abs.y >= abs.x && abs.y >= abs.z {
-            // Normal mostly along Y: U = ±X (negated for consistent winding), V = Z
+            // Normal mostly along Y: U = +/-X (negated for consistent winding), V = Z
             if n.y >= 0.0 {
                 (Vec3::NEG_X, Vec3::Z)
             } else {
                 (Vec3::X, Vec3::Z)
             }
         } else {
-            // Normal mostly along Z: U = X, V = ±Y
+            // Normal mostly along Z: U = X, V = +/-Y
             if n.z >= 0.0 {
                 (Vec3::X, Vec3::Y)
             } else {

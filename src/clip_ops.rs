@@ -228,7 +228,7 @@ pub(crate) fn clip_place_point(
 #[operator(
     id = "brush.clip.cycle_mode",
     label = "Cycle Clip Mode",
-    description = "Cycle `ClipState.mode` through KeepFront → KeepBack → Split. \
+    description = "Cycle `ClipState.mode` through KeepFront -> KeepBack -> Split. \
                    Availability (`can_apply_or_cycle`) requires clip mode and a \
                    computed preview plane.",
     is_available = can_apply_or_cycle,

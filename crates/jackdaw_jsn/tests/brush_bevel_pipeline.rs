@@ -1,4 +1,4 @@
-//! End-to-end pipeline checks for `edge_bevel` ↔ `Brush::topology`.
+//! End-to-end pipeline checks for `edge_bevel` <-> `Brush::topology`.
 //!
 //! `bevel_cube_chamfer_is_a_parallelogram` (in `jackdaw_geometry`) already
 //! verifies that the underlying `edge_bevel` op produces a parallelogram
@@ -128,7 +128,7 @@ fn jsn_runtime_mesh_rebuild_uses_topology_for_chamfer() {
     // `Insert<Brush>` and builds the rendered geometry from
     // `brush.topology` when present (falling back to plane intersection
     // only for legacy brushes). Verify the chamfer face's rendered ring
-    // matches the topology ring exactly — including vertex ordering — so
+    // matches the topology ring exactly - including vertex ordering - so
     // the rendered triangles cover the same parallelogram the topology
     // describes.
     let brush_seed = Brush::cuboid(2.0, 2.0, 2.0);

@@ -10,7 +10,7 @@ use crate::commands::CommandHistory;
 /// Rotate the U and V axes 90 degrees counter-clockwise on each selected face.
 #[operator(
     id = "brush.face.uv.rotate_90",
-    label = "Rotate UV 90°",
+    label = "Rotate UV 90 deg",
     is_available = can_run_uv_rotate_90,
     allows_undo = true
 )]
@@ -50,7 +50,7 @@ pub(crate) fn brush_uv_rotate_90(
         entity: brush_entity,
         old: brush_before,
         new: brush.clone(),
-        label: "Rotate UV 90°".to_string(),
+        label: "Rotate UV 90 deg".to_string(),
     }));
     OperatorResult::Finished
 }

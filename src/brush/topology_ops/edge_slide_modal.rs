@@ -1,4 +1,4 @@
-//! `brush.mesh.edge_slide_modal` operator -- Blender-style modal edge slide.
+//! `brush.mesh.edge_slide_modal` operator: modal edge slide.
 //!
 //! Press `Shift+E` in Edge mode with at least one edge selected. Cursor motion
 //! projected onto the screen-space slide direction drives a signed factor in

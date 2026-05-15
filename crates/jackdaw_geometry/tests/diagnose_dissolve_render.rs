@@ -97,7 +97,7 @@ fn diagnose_post_fix_render_state() {
         let convex = is_convex_ring(&ring_pos, normal);
         println!("  CONVEX: {}", convex);
         if !convex {
-            println!("  !! NON-CONVEX FACE — fan triangulation may produce invalid tris");
+            println!("  !! NON-CONVEX FACE - fan triangulation may produce invalid tris");
         }
 
         // Compute area of each fan tri to detect zero-area / degenerate.

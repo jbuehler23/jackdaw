@@ -1,4 +1,4 @@
-//! Slide selected vertices along their first incident edge by parameter `t ∈ [0, 1]`.
+//! Slide selected vertices along their first incident edge by parameter `t in [0, 1]`.
 //! Pure transform: no topology change.
 //!
 //! MVP: each vert slides toward the FIRST edge in its disk cycle. A modal

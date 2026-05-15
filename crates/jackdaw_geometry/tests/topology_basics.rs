@@ -107,7 +107,7 @@ fn test_cube_topology() -> BrushTopology {
     // Face 0: bottom (-Z), normal = (0, 0, -1). Viewed from -Z: CCW is 0,3,2,1
     // Face 1: top    (+Z), normal = (0, 0, +1). Viewed from +Z: CCW is 4,5,6,7
     // Face 2: front  (-Y), normal = (0,-1,  0). Viewed from -Y: CCW is 0,1,5,4
-    // Face 3: back   (+Y), normal = (0,+1,  0). Viewed from +Y: CCW is 2,3,7,6 (no — 3,2,6,7)
+    // Face 3: back   (+Y), normal = (0,+1,  0). Viewed from +Y: CCW is 2,3,7,6 (no - 3,2,6,7)
     // Face 4: left   (-X), normal = (-1,0,  0). Viewed from -X: CCW is 0,4,7,3
     // Face 5: right  (+X), normal = (+1,0,  0). Viewed from +X: CCW is 1,2,6,5
     let polygons = vec![

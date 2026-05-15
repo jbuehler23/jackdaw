@@ -115,7 +115,7 @@ pub fn split_face(
     // Create the two bridge loops for the new edge.
     //
     // bridge_orig: on the original face, closes the forward ring back to lp_va.
-    //   vert = vb  (the loop "starts at vb"), edge = new_edge (goes vb → va)
+    //   vert = vb  (the loop "starts at vb"), edge = new_edge (goes vb -> va)
     let bridge_orig = bmesh.loops.insert(EditLoop {
         vert: vb,
         edge: new_edge,
@@ -127,7 +127,7 @@ pub fn split_face(
     });
 
     // bridge_new: on the new face, closes the backward ring back to lp_vb.
-    //   vert = va  (the loop "starts at va"), edge = new_edge (goes va → vb)
+    //   vert = va  (the loop "starts at va"), edge = new_edge (goes va -> vb)
     let bridge_new = bmesh.loops.insert(EditLoop {
         vert: va,
         edge: new_edge,
@@ -148,7 +148,7 @@ pub fn split_face(
     let last_fwd = *forward_loops.last().unwrap();
 
     // Wire internal forward chain (already linked from the original ring, just
-    // re-confirm prev pointers are consistent — only the boundary seams need
+    // re-confirm prev pointers are consistent - only the boundary seams need
     // changing since the internal links are untouched).
     for i in 0..forward_loops.len() {
         let cur = forward_loops[i];

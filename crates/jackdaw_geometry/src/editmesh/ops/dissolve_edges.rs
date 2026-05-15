@@ -42,7 +42,7 @@ fn dissolve_one_edge(bmesh: &mut EditMesh, edge: EdgeKey) -> bool {
     // Find the two incident loops via radial cycle.
     let incident_loops: Vec<LoopKey> = radial_walk(bmesh, edge).collect();
     if incident_loops.len() != 2 {
-        // boundary (len == 1) or non-manifold (len > 2) — skip.
+        // boundary (len == 1) or non-manifold (len > 2) - skip.
         return false;
     }
 
@@ -51,7 +51,7 @@ fn dissolve_one_edge(bmesh: &mut EditMesh, edge: EdgeKey) -> bool {
     let f_a = bmesh.loops[lp_a].face;
     let f_b = bmesh.loops[lp_b].face;
     if f_a == f_b {
-        // Both loops in same face — degenerate, skip.
+        // Both loops in same face - degenerate, skip.
         return false;
     }
 

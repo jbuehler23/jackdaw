@@ -36,9 +36,9 @@ impl Brush {
     ///   4: (-x, -y, +z)   5: (+x, -y, +z)   6: (+x, +y, +z)   7: (-x, +y, +z)
     ///
     /// Edge layout (canonical v[0] < v[1], indices 0-11):
-    ///   0:(0,1) 1:(1,2) 2:(2,3) 3:(0,3)        — bottom ring
-    ///   4:(4,5) 5:(5,6) 6:(6,7) 7:(4,7)        — top ring
-    ///   8:(0,4) 9:(1,5) 10:(2,6) 11:(3,7)      — verticals
+    ///   0:(0,1) 1:(1,2) 2:(2,3) 3:(0,3) - bottom ring
+    ///   4:(4,5) 5:(5,6) 6:(6,7) 7:(4,7) - top ring
+    ///   8:(0,4) 9:(1,5) 10:(2,6) 11:(3,7) - verticals
     ///
     /// Face order matches the existing plane order: +X, -X, +Y, -Y, +Z, -Z.
     pub fn cuboid(half_x: f32, half_y: f32, half_z: f32) -> Self {
@@ -157,14 +157,14 @@ impl Brush {
         ];
 
         // Loops: each face has 4 loops (CCW from outside).
-        // Loop layout — (vert, edge) pairs per face ring:
+        // Loop layout - (vert, edge) pairs per face ring:
         //
-        //   Face 0 (+X): verts 1,2,6,5 — edges 1,10,5,9
-        //   Face 1 (-X): verts 0,4,7,3 — edges 8,7,11,3
-        //   Face 2 (+Y): verts 2,3,7,6 — edges 2,11,6,10
-        //   Face 3 (-Y): verts 0,1,5,4 — edges 0,9,4,8
-        //   Face 4 (+Z): verts 4,5,6,7 — edges 4,5,6,7
-        //   Face 5 (-Z): verts 0,3,2,1 — edges 3,2,1,0
+        //   Face 0 (+X): verts 1,2,6,5 - edges 1,10,5,9
+        //   Face 1 (-X): verts 0,4,7,3 - edges 8,7,11,3
+        //   Face 2 (+Y): verts 2,3,7,6 - edges 2,11,6,10
+        //   Face 3 (-Y): verts 0,1,5,4 - edges 0,9,4,8
+        //   Face 4 (+Z): verts 4,5,6,7 - edges 4,5,6,7
+        //   Face 5 (-Z): verts 0,3,2,1 - edges 3,2,1,0
         let loop_data: &[(u32, u32)] = &[
             // Face 0 (+X)
             (1, 1),
@@ -326,9 +326,9 @@ impl Brush {
         }
 
         // Edges:
-        //   base ring edges:    0..n    — edge i connects base[i] → base[(i+1)%n]
-        //   top ring edges:     n..2n   — edge n+i connects top[i] → top[(i+1)%n]
-        //   vertical edges:     2n..3n  — edge 2n+i connects base[i] → top[i]
+        //   base ring edges:    0..n - edge i connects base[i] -> base[(i+1)%n]
+        //   top ring edges:     n..2n - edge n+i connects top[i] -> top[(i+1)%n]
+        //   vertical edges:     2n..3n - edge 2n+i connects base[i] -> top[i]
         let mut topo_edges: Vec<MeshEdge> = Vec::with_capacity(3 * n);
         for i in 0..n {
             let a = i as u32;
@@ -362,7 +362,7 @@ impl Brush {
         let mut topo_loops: Vec<MeshLoop> = Vec::with_capacity(total_loops);
         let mut topo_polys: Vec<MeshPoly> = Vec::new();
 
-        // Face 0 — top cap: top ring CCW looking along +normal (from outside).
+        // Face 0 - top cap: top ring CCW looking along +normal (from outside).
         // Top ring verts: n, n+1, ..., n+(n-1). Edge for loop[i] is the top ring edge n+i.
         {
             let loop_start = topo_loops.len() as u32;
@@ -377,7 +377,7 @@ impl Brush {
             });
         }
 
-        // Face 1 — bottom cap: base ring CW when looking along +normal = CCW from below (-normal).
+        // Face 1 - bottom cap: base ring CW when looking along +normal = CCW from below (-normal).
         // Use reversed base ring: n-1, n-2, ..., 0.
         {
             let loop_start = topo_loops.len() as u32;
@@ -399,22 +399,22 @@ impl Brush {
         for &i in &valid_side_indices {
             let j = (i + 1) % n;
             let loop_start = topo_loops.len() as u32;
-            // base[i] → edge: base ring edge i
+            // base[i] -> edge: base ring edge i
             topo_loops.push(MeshLoop {
                 vert: i as u32,
                 edge: i as u32,
             });
-            // base[j] → edge: vertical j
+            // base[j] -> edge: vertical j
             topo_loops.push(MeshLoop {
                 vert: j as u32,
                 edge: (2 * n + j) as u32,
             });
-            // top[j] → edge: top ring edge j (reversed direction, but we store the edge index)
+            // top[j] -> edge: top ring edge j (reversed direction, but we store the edge index)
             topo_loops.push(MeshLoop {
                 vert: (n + j) as u32,
                 edge: (n + j) as u32,
             });
-            // top[i] → edge: vertical i
+            // top[i] -> edge: vertical i
             topo_loops.push(MeshLoop {
                 vert: (n + i) as u32,
                 edge: (2 * n + i) as u32,

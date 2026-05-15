@@ -487,7 +487,7 @@ const MIN_EXTRUDE_DEPTH: f32 = 0.01;
 const MIN_FRAGMENT_SIZE: f32 = 0.005;
 /// Punch-through depth used by box-cut subtract: large enough to traverse any
 /// reasonably-sized target so the user never needs to drag for depth.
-/// Matches Blender's BoxCutter default behavior.
+/// Matches BoxCutter-style default behavior.
 const PUNCH_THROUGH_DEPTH: f32 = 1000.0;
 
 /// Stable identifier that survives the snapshot round-trip (undo

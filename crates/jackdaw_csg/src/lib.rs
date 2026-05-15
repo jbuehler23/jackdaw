@@ -380,8 +380,7 @@ fn manifold_to_brush(
     // holes via point-in-polygon containment, then:
     //   - simple ring (no holes): emit as a single face;
     //   - annulus (outer + holes): triangulate via earcut-with-holes and
-    //     emit each triangle as its own simply-connected face (Blender-
-    //     faithful: every face has a single boundary cycle, so all editmesh
+    //     emit each triangle as its own simply-connected face (every face has a single boundary cycle, so all editmesh
     //     ops work without multi-cycle awareness).
     // Sub-faces of the same source coplanar group share material + UV via
     // `match_plane_to_slot`, so the visual is one continuous textured
@@ -494,7 +493,7 @@ fn manifold_to_brush(
                     &holes,
                     g.plane.normal,
                 );
-                // Greedy tris-to-quads merge: matches Blender's post-boolean
+                // Greedy tris-to-quads merge: matches the common post-boolean
                 // cleanup. Adjacent coplanar tri pairs combine into a convex
                 // quad when the merge is geometrically valid; otherwise the
                 // tri stays. For a rectangular frame around a rectangular
@@ -628,7 +627,7 @@ fn recover_polygon_boundaries(tris: &[(u32, u32, u32)]) -> Vec<Vec<u32>> {
 }
 
 /// 2D signed area of a 3D ring projected onto the (u_axis, v_axis) plane.
-/// Positive when the ring is wound CCW viewed from +N (with N = u × v).
+/// Positive when the ring is wound CCW viewed from +N (with N = u x v).
 fn ring_area_2d(ring: &[u32], positions: &[Vec3], u: Vec3, v: Vec3) -> f32 {
     if ring.len() < 3 {
         return 0.0;
@@ -673,8 +672,7 @@ fn point_in_ring_2d(p: Vec2, ring: &[u32], positions: &[Vec3], u: Vec3, v: Vec3)
 
 /// Greedy coplanar tris-to-quads merge. For each interior edge shared by
 /// two triangles, attempt to merge them into a convex quad. Triangles that
-/// can't be merged into a convex quad stay as triangles. Mirrors Blender's
-/// "Tris to Quads" cleanup after a boolean. Returns a mix of quads and
+/// can't be merged into a convex quad stay as triangles. Matches the common "Tris to Quads" cleanup after a boolean. Returns a mix of quads and
 /// triangles, each represented as a CCW vertex-index ring (indices into
 /// `positions`).
 fn merge_coplanar_tris_to_quads(
@@ -747,7 +745,7 @@ fn try_merge_tris_to_quad(
     let c = tri1.iter().copied().find(|&v| v != e_lo && v != e_hi)?;
     let d = tri2.iter().copied().find(|&v| v != e_lo && v != e_hi)?;
 
-    // Determine the direction of the shared edge in tri1 (lo→hi or hi→lo).
+    // Determine the direction of the shared edge in tri1 (lo->hi or hi->lo).
     // Tri1 is CCW, so its third vertex `c` lies to the left of the edge as
     // traversed in tri1's order. We use that direction to build the merged
     // quad in CCW order: [c, edge_start, d, edge_end].
@@ -1107,8 +1105,7 @@ mod tests {
         let b = CsgInput::new(&b_faces, &b_topo);
         let result = brush_boolean(&a, &b, BooleanOp::Difference).expect("subtract should succeed");
         // The cutter pokes a notch through the +X face. That face becomes
-        // an annulus (rectangle-with-rectangular-hole), which our Blender-
-        // faithful pipeline splits into simply-connected triangles, so the
+        // an annulus (rectangle-with-rectangular-hole), which our pipeline splits into simply-connected triangles, so the
         // total face count is higher than a pure n-gon scheme. The exact
         // count varies with manifold3d's triangulation; just bound it.
         assert!(

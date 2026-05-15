@@ -56,7 +56,7 @@ fn split_with_adjacent_verts_errors() {
     let mut bmesh = EditMesh::lift_from_topology(&brush.topology);
     let face = first_face_with_count_4(&bmesh);
     let ring = ring_verts(&bmesh, face);
-    // ring[0] and ring[1] are adjacent — already connected by an edge.
+    // ring[0] and ring[1] are adjacent - already connected by an edge.
     let result = split_face(&mut bmesh, face, ring[0], ring[1]);
     assert!(
         result.is_err(),

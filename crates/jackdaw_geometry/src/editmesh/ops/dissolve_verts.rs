@@ -10,7 +10,7 @@
 //!     merge the two incident edges into one (classic midpoint-dissolve). Faces
 //!     are preserved; each face just loses one loop entry.
 //!   - Valence >= 3 with incident faces: iteratively dissolve internal edges
-//!     (Blender-style) to preserve face structure, falling back to outer-ring
+//!     to preserve face structure, falling back to outer-ring
 //!     merge for all-boundary cases.
 //!
 //! If the outer ring cannot be walked coherently (non-manifold neighborhood),
@@ -71,11 +71,11 @@ fn dissolve_one_vert(bmesh: &mut EditMesh, v: VertKey) -> bool {
         return true;
     }
 
-    // Use the iterative Blender-style algorithm for valence >= 2.
+    // Use the iterative dissolve algorithm for valence >= 2.
     dissolve_valence_n(bmesh, v)
 }
 
-/// Iterative Blender-style dissolve for valence >= 2.
+/// Iterative dissolve for valence >= 2.
 ///
 /// Handles the wire case, then selectively dissolves "co-planar structural
 /// diagonal" edges (face_split diagonals whose two adjacent faces share the
@@ -110,7 +110,7 @@ fn dissolve_valence_n(bmesh: &mut EditMesh, v: VertKey) -> bool {
     // If no co-planar diagonals exist (all edges connect faces on distinct
     // planes, e.g. a cube corner), skip the loop entirely and use the
     // outer-ring fallback below.
-    let coplanar_threshold = 0.99f32; // cos(~8°) — faces must share same normal
+    let coplanar_threshold = 0.99f32; // cos(~8 deg) - faces must share same normal
     loop {
         let cluster_faces = faces_incident_to(bmesh, v);
         if cluster_faces.len() <= 1 {
@@ -132,7 +132,7 @@ fn dissolve_valence_n(bmesh: &mut EditMesh, v: VertKey) -> bool {
             let n0 = bmesh.faces[f0].normal_cache;
             let n1 = bmesh.faces[f1].normal_cache;
             if n0.dot(n1).abs() < coplanar_threshold {
-                continue; // different planes → not a face_split diagonal
+                continue; // different planes -> not a face_split diagonal
             }
             // Also check that merging them produces a topologically valid face.
             if would_merge_produce_valid_face(bmesh, e) {

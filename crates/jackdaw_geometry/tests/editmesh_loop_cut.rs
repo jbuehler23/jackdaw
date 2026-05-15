@@ -77,7 +77,7 @@ fn loop_cut_at_t_0_25_all_new_verts_lie_on_consistent_plane() {
     let new_verts = cut.new_verts;
     // Compute the 4 new vert positions.
     let positions: Vec<Vec3> = new_verts.iter().map(|&k| bmesh.verts[k].co).collect();
-    // For a uniform slide, all 4 positions should be coplanar — specifically all should have
+    // For a uniform slide, all 4 positions should be coplanar - specifically all should have
     // the same coordinate value along the slide direction.
     // Compute min/max along each axis.
     let (mut min, mut max) = (positions[0], positions[0]);

@@ -1,4 +1,4 @@
-//! `brush.mesh.inset` operator -- Blender-style modal inset.
+//! `brush.mesh.inset` operator: modal inset.
 //!
 //! Press `I` in Face mode. The inset amount is controlled by mouse displacement
 //! magnitude: drag any direction to grow the inset proportionally. The brush

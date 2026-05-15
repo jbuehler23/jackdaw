@@ -1,6 +1,4 @@
 //! Invariant checker for EditMesh. Used in tests; optional in production.
-//! Inspired by Blender's `BM_mesh_validate()` (algorithmic reference);
-//! implementation original.
 
 use crate::editmesh::cycles::{disk_walk, radial_walk};
 use crate::editmesh::types::*;

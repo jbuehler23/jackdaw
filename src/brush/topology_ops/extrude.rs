@@ -2,7 +2,7 @@
 //!
 //! - `brush.mesh.extrude_region` (non-modal): one-shot extrusion at a fixed
 //!   depth, available via menu / command palette.
-//! - `brush.mesh.extrude` (modal, bound to `E`): Blender-style modal where the
+//! - `brush.mesh.extrude` (modal, bound to `E`): modal where the
 //!   cursor's projected motion along the face normal drives a signed extrusion
 //!   amount. The brush mesh is mutated each frame so the user sees the live
 //!   extrusion as a real mesh edit.

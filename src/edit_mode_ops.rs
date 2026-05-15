@@ -138,7 +138,8 @@ fn can_change_edit_mode(
 #[operator(
     id = "edit_mode.object",
     label = "Object Mode",
-    is_available = can_change_edit_mode
+    is_available = can_change_edit_mode,
+    allows_undo = false,
 )]
 pub fn edit_mode_object(
     _: In<OperatorParameters>,
@@ -155,7 +156,8 @@ pub fn edit_mode_object(
 #[operator(
     id = "edit_mode.vertex",
     label = "Vertex Mode",
-    is_available = can_change_edit_mode
+    is_available = can_change_edit_mode,
+    allows_undo = false,
 )]
 pub(crate) fn edit_mode_vertex(
     _: In<OperatorParameters>,
@@ -178,7 +180,8 @@ pub(crate) fn edit_mode_vertex(
 #[operator(
     id = "edit_mode.edge",
     label = "Edge Mode",
-    is_available = can_change_edit_mode
+    is_available = can_change_edit_mode,
+    allows_undo = false,
 )]
 pub(crate) fn edit_mode_edge(
     _: In<OperatorParameters>,
@@ -201,7 +204,8 @@ pub(crate) fn edit_mode_edge(
 #[operator(
     id = "edit_mode.face",
     label = "Face Mode",
-    is_available = can_change_edit_mode
+    is_available = can_change_edit_mode,
+    allows_undo = false,
 )]
 pub(crate) fn edit_mode_face(
     _: In<OperatorParameters>,
@@ -224,7 +228,8 @@ pub(crate) fn edit_mode_face(
 #[operator(
     id = "edit_mode.clip",
     label = "Clip Mode",
-    is_available = can_change_edit_mode
+    is_available = can_change_edit_mode,
+    allows_undo = false,
 )]
 pub(crate) fn edit_mode_clip(
     _: In<OperatorParameters>,
@@ -250,7 +255,8 @@ pub(crate) fn edit_mode_clip(
     description = "Toggle the brush knife edit mode. Click to place path \
                    points, Enter to apply, Esc to discard the in-progress \
                    path.",
-    is_available = can_change_edit_mode
+    is_available = can_change_edit_mode,
+    allows_undo = false,
 )]
 pub(crate) fn edit_mode_knife(
     _: In<OperatorParameters>,

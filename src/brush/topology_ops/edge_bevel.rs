@@ -1,4 +1,4 @@
-//! `brush.mesh.edge_bevel` operator -- Blender-style modal edge bevel.
+//! `brush.mesh.edge_bevel` operator: modal edge bevel.
 //!
 //! Press `Ctrl+B` in Edge mode with at least one edge selected. Cursor
 //! displacement magnitude drives a positive bevel width; Ctrl snaps the world

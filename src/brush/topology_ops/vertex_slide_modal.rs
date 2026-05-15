@@ -1,4 +1,4 @@
-//! `brush.mesh.vertex_slide_modal` operator -- Blender-style modal vertex slide.
+//! `brush.mesh.vertex_slide_modal` operator: modal vertex slide.
 //!
 //! Press `Shift+V` in Vertex mode with exactly one vertex selected. Cursor
 //! motion picks both the target incident edge (whichever screen-space

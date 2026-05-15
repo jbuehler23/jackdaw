@@ -226,7 +226,7 @@ pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
 /// tabs sit right after the `Add` menu, matching the Figma mock), and
 /// the **right group** owns the Scene View combobox and the Play/Pause
 /// pill. A flex-grow spacer between them absorbs the slack, so resizing
-/// the dropdown label (e.g. `Scene View ▾` → `Animation View ▾`) can't
+/// the dropdown label (e.g. `Scene View v` -> `Animation View v`) can't
 /// shift the tabs.
 fn window_header(icon_font: Handle<Font>) -> impl Bundle {
     (
@@ -697,7 +697,7 @@ pub fn update_toolbar_button_variants(
     for (call, mut variant) in &mut buttons {
         // While any modal is running only the modal's own button
         // highlights. Gizmo / mode buttons go quiet so the user sees
-        // a single active tool at a time, matching how Blender
+        // a single active tool at a time, matching how mature 3D editors
         // surfaces the current mode. New extension modal operators
         // pick this up automatically through the fall-through arm.
         let active = if modal_running {

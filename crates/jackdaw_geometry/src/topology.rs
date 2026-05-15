@@ -1,7 +1,6 @@
 //! Polygon mesh storage. Layout follows the standard polygon-mesh shape used
 //! by mature 3D modelers: parallel arrays of verts / edges / polys / loops
-//! with per-element flags. Inspired by Blender's `Mesh` (architectural
-//! reference); implementation original.
+//! with per-element flags.
 
 use std::borrow::Cow;
 use std::collections::HashMap;

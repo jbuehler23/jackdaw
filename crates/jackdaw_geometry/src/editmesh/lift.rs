@@ -1,8 +1,5 @@
 //! Lift `BrushTopology` into in-memory `EditMesh`. Builds vert table, edge table
 //! (with disk cycles), and per-face loop rings (with radial cycles). Inspired
-//! by Blender's `BM_mesh_bm_from_me()` (algorithmic reference); implementation
-//! original.
-
 use crate::BrushTopology;
 use crate::editmesh::cycles::{disk_insert_edge, radial_insert_loop};
 use crate::editmesh::types::*;

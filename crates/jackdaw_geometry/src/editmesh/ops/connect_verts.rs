@@ -93,7 +93,7 @@ pub fn connect_verts(
                     }
                 }
                 Err(_) => {
-                    // Adjacent, degenerate, or bad-verts — skip silently.
+                    // Adjacent, degenerate, or bad-verts - skip silently.
                 }
             }
         }

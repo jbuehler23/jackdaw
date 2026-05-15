@@ -1,6 +1,5 @@
 //! Flatten `EditMesh` back to `BrushTopology`. Re-keys SlotMap keys to dense u32
-//! indices. Inspired by Blender's `BM_mesh_bm_to_me()` (algorithmic reference);
-//! implementation original.
+//! indices.
 
 use std::collections::HashMap;
 

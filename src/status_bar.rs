@@ -167,7 +167,7 @@ fn update_status_right(
             return;
         }
         BuildState::Ready { .. } => {
-            text.0 = "Project editor ready — Reload".to_string();
+            text.0 = "Project editor ready - Reload".to_string();
             color.0 = jackdaw_feathers::tokens::TEXT_ACCENT;
             return;
         }

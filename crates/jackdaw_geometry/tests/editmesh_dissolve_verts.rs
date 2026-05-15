@@ -16,7 +16,7 @@ fn dissolve_midpoint_vert_from_edge_split_restores_original_edge() {
     let v1 = bmesh.add_vert(Vec3::new(1.0, 0.0, 0.0));
     let v2 = bmesh.add_vert(Vec3::new(1.0, 1.0, 0.0));
     let v3 = bmesh.add_vert(Vec3::new(0.0, 1.0, 0.0));
-    // Quad B: (0,0,0)-(0,-1,0)-(-1,-1,0)-(0,0,0) — shares edge (v0,v1) with quad A
+    // Quad B: (0,0,0)-(0,-1,0)-(-1,-1,0)-(0,0,0) - shares edge (v0,v1) with quad A
     // Actually make it share the v0-v1 edge: B = (v1,v0, v4, v5)
     let v4 = bmesh.add_vert(Vec3::new(0.0, -1.0, 0.0));
     let v5 = bmesh.add_vert(Vec3::new(1.0, -1.0, 0.0));
@@ -109,7 +109,7 @@ fn dissolve_corner_produces_outward_facing_merged_face() {
 #[test]
 fn dissolve_subdivide_midpoint_restores_original_cube() {
     // Subdivide a single edge of a cube, then dissolve the inserted midpoint vert.
-    // The Blender-style algorithm should dissolve the internal "diagonal" edges
+    // The iterative algorithm should dissolve the internal "diagonal" edges
     // first (restoring the two original quads), then splice v out, giving back the
     // original cube topology exactly.
     let brush = Brush::cuboid(1.0, 1.0, 1.0);

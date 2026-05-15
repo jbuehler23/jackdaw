@@ -33,7 +33,7 @@ use crate::viewport_util::{point_in_polygon_2d, point_to_segment_dist};
 /// Minimum extrude depth before commit pushes a new brush.
 const MIN_EXTRUDE_DEPTH: f32 = 0.01;
 
-/// Pixels the cursor must travel after a press to promote pending → active.
+/// Pixels the cursor must travel after a press to promote pending -> active.
 const DRAG_THRESHOLD: f32 = 5.0;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -302,7 +302,7 @@ pub fn brush_face_drag(
     }
 
     // Subsequent invoke: handle right-click cancel, release commit,
-    // pending → active promotion, and per-frame drag math.
+    // pending -> active promotion, and per-frame drag math.
     if drag_state.active && mouse.just_pressed(MouseButton::Right) {
         return OperatorResult::Cancelled;
     }
@@ -572,6 +572,49 @@ fn clear_face_drag_state(drag_state: &mut BrushDragState) {
     drag_state.drag_viewport = None;
 }
 
+/// Snap a vertex/edge/face-drag's local-space offset so the dragged geometry
+/// lands on the world grid. Mirrors the snap convention used elsewhere:
+/// translate-snap is on/off via `SnapSettings`, with Ctrl flipping the
+/// state for the current gesture. For an unconstrained drag we snap the
+/// primary vertex's final world position on all three axes; for an axis-
+/// constrained drag we snap the scalar offset along the local constraint
+/// axis. Returns `local_offset` unchanged when snap is disabled.
+pub(crate) fn snap_drag_local_offset(
+    local_offset: Vec3,
+    primary_start_local: Vec3,
+    constraint: VertexDragConstraint,
+    brush_global: &GlobalTransform,
+    snap: &SnapSettings,
+    ctrl: bool,
+) -> Vec3 {
+    if !snap.translate_active(ctrl) || snap.translate_increment <= 0.0 {
+        return local_offset;
+    }
+    let inc = snap.translate_increment;
+    let snap_to = |v: f32| (v / inc).round() * inc;
+    match constraint {
+        VertexDragConstraint::Free => {
+            let world_end = brush_global.transform_point(primary_start_local + local_offset);
+            let snapped_world =
+                Vec3::new(snap_to(world_end.x), snap_to(world_end.y), snap_to(world_end.z));
+            let inv = brush_global.affine().inverse();
+            let snapped_local_end = inv.transform_point3(snapped_world);
+            snapped_local_end - primary_start_local
+        }
+        VertexDragConstraint::AxisX
+        | VertexDragConstraint::AxisY
+        | VertexDragConstraint::AxisZ => {
+            let axis_local = match constraint {
+                VertexDragConstraint::AxisX => Vec3::X,
+                VertexDragConstraint::AxisY => Vec3::Y,
+                VertexDragConstraint::AxisZ => Vec3::Z,
+                VertexDragConstraint::Free => unreachable!(),
+            };
+            axis_local * snap_to(local_offset.dot(axis_local))
+        }
+    }
+}
+
 fn snap_translate(value: f32, snap: &SnapSettings, ctrl: bool) -> f32 {
     if snap.translate_active(ctrl) && snap.translate_increment > 0.0 {
         (value / snap.translate_increment).round() * snap.translate_increment
@@ -714,6 +757,7 @@ pub fn brush_vertex_drag(
     mut history: ResMut<CommandHistory>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
+    snap_settings: Res<SnapSettings>,
 ) -> OperatorResult {
     let Some(brush_entity) = brush_selection.entity else {
         return OperatorResult::Cancelled;
@@ -941,6 +985,19 @@ pub fn brush_vertex_drag(
         ) else {
             return OperatorResult::Running;
         };
+        let primary_start = drag_state
+            .start_vertex_positions
+            .first()
+            .copied()
+            .unwrap_or(Vec3::ZERO);
+        let local_offset = snap_drag_local_offset(
+            local_offset,
+            primary_start,
+            drag_state.constraint,
+            brush_global,
+            &snap_settings,
+            ctrl,
+        );
 
         if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
             // EditMesh path: mutate vertex positions directly. Concave drags work.
@@ -1110,6 +1167,7 @@ pub fn brush_edge_drag(
     mut history: ResMut<CommandHistory>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
+    snap_settings: Res<SnapSettings>,
 ) -> OperatorResult {
     let Some(brush_entity) = brush_selection.entity else {
         return OperatorResult::Cancelled;
@@ -1293,6 +1351,19 @@ pub fn brush_edge_drag(
         ) else {
             return OperatorResult::Running;
         };
+        let primary_start = drag_state
+            .start_edge_vertices
+            .first()
+            .map(|&(_, p)| p)
+            .unwrap_or(Vec3::ZERO);
+        let local_offset = snap_drag_local_offset(
+            local_offset,
+            primary_start,
+            drag_state.constraint,
+            brush_global,
+            &snap_settings,
+            ctrl,
+        );
         if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
             let vert_keys = bmesh_component.vert_keys.clone();
             for &(vi, start_pos) in &drag_state.start_edge_vertices {

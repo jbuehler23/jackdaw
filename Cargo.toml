@@ -96,7 +96,7 @@ jackdaw_loader.workspace = true
 # pulls in `jackdaw_runtime` and never compiles the editor.
 jackdaw_runtime.workspace = true
 # Optional and activated only by the `dylib` feature. Nothing in
-# the editor's own Rust code imports `jackdaw_sdk` — it's a pure
+# the editor's own Rust code imports `jackdaw_sdk` - it's a pure
 # build artifact consumed at runtime by the extension build
 # pipeline (`SdkPaths::compute` / `ext_build`), which already
 # handles a missing SDK with a user-actionable error. Keeping it
@@ -212,7 +212,7 @@ bevy = { workspace = true, features = ["dynamic_linking"] }
 jackdaw_runtime.workspace = true
 # Pulled in so cargo builds the fixture cdylib as part of the
 # workspace test-target graph. `tests/dylib_loading.rs` dlopens the
-# resulting `.so` by path — it doesn't reference the rlib side.
+# resulting `.so` by path - it doesn't reference the rlib side.
 test_fixture_extension = { path = "tests/fixtures/test_fixture_extension" }
 
 [lints]

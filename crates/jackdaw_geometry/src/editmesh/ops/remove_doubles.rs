@@ -1,9 +1,9 @@
 //! Weld vertices within `distance` of each other. Implements the cleanup
-//! that Blender's "Merge by Distance" performs. Removes degenerate edges
+//! commonly called "Merge by Distance". Removes degenerate edges
 //! (both endpoints same) and degenerate faces (loop count < 3 after collapse).
 //!
 //! Uses the "rebuild via topology" approach: flatten -> remap -> clean -> lift.
-//! O(n²) pairwise distance check + union-find clustering. Brush sizes are
+//! O(n^2) pairwise distance check + union-find clustering. Brush sizes are
 //! small enough that this is fast enough for MVP.
 
 use std::collections::HashMap;

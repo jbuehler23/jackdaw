@@ -145,29 +145,50 @@ pub struct SetBrush {
 
 impl EditorCommand for SetBrush {
     fn execute(&mut self, world: &mut World) {
-        if let Some(mut brush) = world.get_mut::<Brush>(self.entity) {
-            *brush = self.new.clone();
-        }
-        sync_brush_to_ast(world, self.entity, &self.new);
-        // The Brush display has no reactive refresh; flag the
-        // inspector so it rebuilds against the new face data.
-        if let Ok(mut ec) = world.get_entity_mut(self.entity) {
-            ec.insert(crate::inspector::InspectorDirty);
-        }
+        apply_brush(world, self.entity, &self.new);
     }
 
     fn undo(&mut self, world: &mut World) {
-        if let Some(mut brush) = world.get_mut::<Brush>(self.entity) {
-            *brush = self.old.clone();
-        }
-        sync_brush_to_ast(world, self.entity, &self.old);
-        if let Ok(mut ec) = world.get_entity_mut(self.entity) {
-            ec.insert(crate::inspector::InspectorDirty);
-        }
+        apply_brush(world, self.entity, &self.old);
     }
 
     fn description(&self) -> &str {
         &self.label
+    }
+}
+
+/// Replace `entity`'s `Brush` with `target` and keep dependent components in
+/// sync. The renderer reads `BrushEditMesh` (the live half-edge mesh) while
+/// the user is in vertex / edge / face / knife mode, so reverting only the
+/// `Brush` component leaves the visible mesh stuck at its pre-revert state.
+/// We re-lift `BrushEditMesh` from `target.topology` here so undo / redo
+/// produce the expected visual result, and flag the inspector for rebuild.
+fn apply_brush(world: &mut World, entity: Entity, target: &Brush) {
+    if let Some(mut brush) = world.get_mut::<Brush>(entity) {
+        *brush = target.clone();
+    }
+    sync_brush_to_ast(world, entity, target);
+    if world.get::<BrushEditMesh>(entity).is_some() && !target.topology.polygons.is_empty() {
+        let bmesh = jackdaw_geometry::editmesh::EditMesh::lift_from_topology(&target.topology);
+        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
+        let mut face_keys: Vec<_> =
+            vec![jackdaw_geometry::editmesh::FaceKey::default(); bmesh.faces.len()];
+        for (k, f) in bmesh.faces.iter() {
+            let slot = f.material_idx as usize;
+            if slot < face_keys.len() {
+                face_keys[slot] = k;
+            }
+        }
+        if let Ok(mut ec) = world.get_entity_mut(entity) {
+            ec.insert(BrushEditMesh {
+                mesh: bmesh,
+                vert_keys,
+                face_keys,
+            });
+        }
+    }
+    if let Ok(mut ec) = world.get_entity_mut(entity) {
+        ec.insert(crate::inspector::InspectorDirty);
     }
 }
 

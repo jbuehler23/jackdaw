@@ -1,6 +1,6 @@
-//! Half-edge mesh edit layer. Inspired by Blender's BMesh design (architectural
-//! reference); implementation re-derived from standard half-edge mesh
-//! literature and original to this project.
+//! Half-edge mesh edit layer. Verts / edges / loops / polys with disk + radial cycles
+//! for O(1) adjacency. Lifted from `BrushTopology` on enter-edit-mode and flattened
+//! back on operator commit.
 //!
 //! `EditMesh` is in-memory only, lifted from `BrushTopology` on enter-edit-mode
 //! and flattened back to topology on operator commit. All topology operations

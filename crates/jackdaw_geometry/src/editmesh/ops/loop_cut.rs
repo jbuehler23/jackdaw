@@ -1,7 +1,6 @@
 //! Loop cut: walks the parallel-edge ring through quad faces and splits
 //! each crossed edge at parameter `t`, then splits each crossed quad face
-//! along the new vertices. Inspired by Blender's MESH_OT_loop_cut
-//! (algorithmic reference); implementation original.
+//! along the new vertices. Standard half-edge loop-cut algorithm.
 
 use std::collections::{HashMap, HashSet};
 
@@ -139,7 +138,7 @@ fn walk_loop_cut_ring(bmesh: &EditMesh, start_edge: EdgeKey) -> Vec<FaceHop> {
         loop {
             let face = bmesh.loops[entry_loop].face;
             if !visited_faces.insert(face) {
-                // Closed ring — we've come back around.
+                // Closed ring - we've come back around.
                 break;
             }
             // Stop if current face isn't a quad.
@@ -163,7 +162,7 @@ fn walk_loop_cut_ring(bmesh: &EditMesh, start_edge: EdgeKey) -> Vec<FaceHop> {
             // Boundary check: exit_edge has only one radial loop (itself).
             let radial_other = bmesh.loops[exit_loop_key].radial_next;
             if radial_other == exit_loop_key {
-                // Boundary edge — stop this direction.
+                // Boundary edge - stop this direction.
                 break;
             }
 

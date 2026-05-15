@@ -1,4 +1,4 @@
-//! `brush.mesh.vertex_bevel` operator -- Blender-style modal vertex bevel.
+//! `brush.mesh.vertex_bevel` operator: modal vertex bevel.
 //!
 //! Press `Ctrl+Shift+B` in Vertex mode with exactly one vertex selected.
 //! Cursor displacement magnitude drives a positive bevel width; Ctrl snaps

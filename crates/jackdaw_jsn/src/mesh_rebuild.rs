@@ -30,7 +30,7 @@ impl Plugin for MeshRebuildPlugin {
 /// Prefers `brush.topology` for face vertex positions (so concave / beveled
 /// brushes render with the exact rings authored by edit-mesh ops). Falls
 /// back to plane intersection only for legacy brushes whose `.jsn` files
-/// pre-date the topology field — that path is convex-only and silently
+/// pre-date the topology field - that path is convex-only and silently
 /// distorts non-convex faces.
 pub fn rebuild_brush_meshes(
     insert: On<Insert, Brush>,
