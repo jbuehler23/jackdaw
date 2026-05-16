@@ -316,7 +316,7 @@ enum DiamondState {
 }
 
 /// Per-frame highlight updater: walks each diamond button's source
-/// entity → `Clip` child → matching `AnimationTrack` → keyframes, and
+/// entity -> `Clip` child -> matching `AnimationTrack` -> keyframes, and
 /// paints the diamond icon with the right state color.
 ///
 /// Runs every frame. Cheap because there are only a handful of

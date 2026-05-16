@@ -465,7 +465,7 @@ fn run_cargo_with_progress(
     Ok(())
 }
 
-/// Parse a single line from `cargo --message-format=json-…`. On a
+/// Parse a single line from `cargo --message-format=json-...`. On a
 /// `compiler-artifact` record, bump `artifacts_done` + update
 /// `current_crate`. Errors are swallowed; cargo sometimes emits
 /// non-JSON prefix lines, which we ignore.

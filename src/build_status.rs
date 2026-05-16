@@ -39,7 +39,7 @@ pub struct BuildStatus {
 pub enum BuildState {
     #[default]
     Idle,
-    /// Cargo is running. `progress` is the same `Arc<Mutex<…>>`
+    /// Cargo is running. `progress` is the same `Arc<Mutex<...>>`
     /// the cargo reader threads write into; the status bar reads
     /// `current_crate` + `artifacts_done`/`total` to render the
     /// "Compiling X (12/47)" string.

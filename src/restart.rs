@@ -35,8 +35,8 @@ use bevy::log::{info, warn};
 /// Env var the parent process sets before respawning, signalling
 /// to the child "the game you're about to load was just rebuilt
 /// and installed; skip the initial-build step in the launcher and
-/// go straight to the editor." Prevents the scaffold → build →
-/// restart → auto-open → build → restart infinite loop.
+/// go straight to the editor." Prevents the scaffold -> build ->
+/// restart -> auto-open -> build -> restart infinite loop.
 pub const ENV_SKIP_INITIAL_BUILD: &str = "JACKDAW_SKIP_INITIAL_BUILD";
 
 /// Respawn the editor binary with the same argv and env. On Unix

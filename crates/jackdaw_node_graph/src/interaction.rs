@@ -8,10 +8,10 @@
 //!
 //! The gesture lifecycle for a node drag is:
 //!
-//! 1. `Pointer<DragStart>` → snapshot positions, transition to
+//! 1. `Pointer<DragStart>` -> snapshot positions, transition to
 //!    [`GraphGesture::MoveNodes`].
-//! 2. `Pointer<Drag>` → write live positions using `Drag::distance`.
-//! 3. `Pointer<DragEnd>` → compute `(old, new)` diffs, queue a
+//! 2. `Pointer<Drag>` -> write live positions using `Drag::distance`.
+//! 3. `Pointer<DragEnd>` -> compute `(old, new)` diffs, queue a
 //!    [`MoveGraphNodesCmd`] on `CommandHistory`, reset gesture to `Idle`.
 
 use bevy::ecs::relationship::Relationship;
@@ -135,7 +135,7 @@ pub fn on_node_drag(
         return;
     };
 
-    // Phase 2 supports one canvas at a time; pick whichever we find.
+    // Only one canvas is active at a time; pick whichever we find.
     let zoom = canvas_views.iter().next().map(|v| v.zoom).unwrap_or(1.0);
     let world_delta = event.distance / zoom.max(f32::EPSILON);
 
@@ -200,7 +200,7 @@ pub fn on_node_drag_end(
 }
 
 // ==========================================================================
-// Terminal drag → connection creation
+// Terminal drag -> connection creation
 // ==========================================================================
 
 /// Start a `ConnectDrag` from an output terminal.
@@ -229,8 +229,8 @@ pub fn on_terminal_drag_start(
         return;
     };
 
-    // Phase 2 only supports dragging out of an output (the common case).
-    // Dragging the endpoint of an existing connection is Phase 6 polish.
+    // Only dragging out of an output is supported (the common case).
+    // Dragging the endpoint of an existing connection is a follow-up.
     if view.direction != TerminalDirection::Output {
         return;
     }
@@ -354,9 +354,9 @@ pub fn on_terminal_click(mut event: On<Pointer<Click>>, terminals: Query<&GraphT
 
 /// Right click on a terminal removes every connection touching it.
 ///
-/// Simpler than hit-testing the wire's Bezier curve on the CPU; good enough
-/// for Phase 3. Each removal is pushed as an `EditorCommand` so undo/redo
-/// works automatically.
+/// Simpler than hit-testing the wire's Bezier curve on the CPU. Each
+/// removal is pushed as an `EditorCommand` so undo/redo works
+/// automatically.
 pub fn on_terminal_right_click(
     mut event: On<Pointer<Click>>,
     terminals: Query<&GraphTerminalView>,

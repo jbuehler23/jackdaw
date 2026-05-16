@@ -153,7 +153,7 @@ pub fn auto_bind_player(
     };
 
     // Blend graph passthrough: resolve the selected clip through its
-    // single `ClipRef → Output` edge so runtime binding happens
+    // single `ClipRef -> Output` edge so runtime binding happens
     // against the *referenced* clip's target instead of the blend
     // graph's own parent. The blend graph's `CompiledClip` already
     // points at the same handles as the referenced clip, so all we

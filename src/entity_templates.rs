@@ -49,7 +49,7 @@ pub fn save_entity_template(world: &mut World, name: &str) {
     let mut entities = Vec::new();
     collect_entity_ids(world, primary, &mut entities);
 
-    // Build entity → index map for parent references
+    // Build entity -> index map for parent references
     let index_map: HashMap<Entity, usize> =
         entities.iter().enumerate().map(|(i, &e)| (e, i)).collect();
 

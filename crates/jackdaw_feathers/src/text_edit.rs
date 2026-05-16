@@ -8,7 +8,7 @@ use bevy_ui_text_input::*;
 pub use bevy_ui_text_input::{TextInputBuffer, TextInputNode, TextInputQueue};
 
 use crate::cursor::{ActiveCursor, HoverCursor};
-use crate::icons::EditorFont;
+use crate::icons::{EditorFont, IconFont};
 use crate::tokens::{
     self, AXIS_LABEL_BG, BORDER_COLOR, ELEVATED_BG, PRIMARY_COLOR, SHADOW_COLOR_LIGHT,
     TEXT_BODY_COLOR, TEXT_MUTED_COLOR, TEXT_SIZE, TEXT_SIZE_SM,
@@ -83,6 +83,15 @@ pub enum TextEditPrefix {
         label: String,
         size: f32,
         /// Optional accent color shown as a 2px left border on the label.
+        color: Option<Color>,
+    },
+    /// Icon-font glyph rendered with the lucide icon font. Used by the
+    /// numeric drag-scrubber prefix.
+    Icon {
+        glyph: String,
+        size: f32,
+        /// Optional accent color shown as a 2px left border, same as
+        /// the `Label` variant.
         color: Option<Color>,
     },
 }
@@ -229,8 +238,8 @@ impl TextEditProps {
     pub fn numeric_f32(mut self) -> Self {
         self.variant = TextEditVariant::NumericF32;
         self.filter = Some(FilterType::Decimal);
-        self.prefix = Some(TextEditPrefix::Label {
-            label: "↔".to_string(),
+        self.prefix = Some(TextEditPrefix::Icon {
+            glyph: String::from(crate::icons::Icon::ChevronsLeftRight.unicode()),
             size: TEXT_SIZE,
             color: None,
         });
@@ -241,8 +250,8 @@ impl TextEditProps {
     pub fn numeric_i32(mut self) -> Self {
         self.variant = TextEditVariant::NumericI32;
         self.filter = Some(FilterType::Integer);
-        self.prefix = Some(TextEditPrefix::Label {
-            label: "↔".to_string(),
+        self.prefix = Some(TextEditPrefix::Icon {
+            glyph: String::from(crate::icons::Icon::ChevronsLeftRight.unicode()),
             size: TEXT_SIZE,
             color: None,
         });
@@ -260,8 +269,8 @@ impl TextEditProps {
     pub fn numeric_int(mut self) -> Self {
         self.variant = TextEditVariant::NumericI32;
         self.filter = Some(FilterType::Integer);
-        self.prefix = Some(TextEditPrefix::Label {
-            label: "↔".to_string(),
+        self.prefix = Some(TextEditPrefix::Icon {
+            glyph: String::from(crate::icons::Icon::ChevronsLeftRight.unicode()),
             size: TEXT_SIZE,
             color: None,
         });
@@ -323,10 +332,12 @@ pub fn text_edit(props: TextEditProps) -> impl Bundle {
 fn setup_text_edit_input(
     mut commands: Commands,
     editor_font: Res<EditorFont>,
+    icon_font: Option<Res<IconFont>>,
     mut configs: Query<(Entity, &mut TextEditConfig)>,
     mut focus: ResMut<InputFocus>,
 ) {
     let font = editor_font.0.clone();
+    let icon_font_handle = icon_font.map(|f| f.0.clone());
     let tabular_figures: FontFeatures = [FontFeatureTag::TABULAR_FIGURES].into();
 
     for (entity, mut config) in &mut configs {
@@ -491,6 +502,52 @@ fn setup_text_edit_input(
                                 Text::new(label),
                                 TextFont {
                                     font: font.clone(),
+                                    font_size: *size,
+                                    ..default()
+                                },
+                                TextColor(text_color),
+                                TextLayout::new_with_justify(Justify::Center),
+                            )],
+                        ))
+                        .id();
+                    if let Some(c) = color {
+                        commands
+                            .entity(prefix_id)
+                            .insert((BorderColor::all(*c), BackgroundColor(AXIS_LABEL_BG)));
+                    }
+                    prefix_id
+                }
+                TextEditPrefix::Icon { glyph, size, color } => {
+                    let has_color = color.is_some();
+                    let text_color = if has_color {
+                        crate::tokens::TEXT_PRIMARY
+                    } else {
+                        TEXT_BODY_COLOR.with_alpha(0.5).into()
+                    };
+                    let glyph_font = icon_font_handle.clone().unwrap_or_else(|| font.clone());
+
+                    let prefix_id = commands
+                        .spawn((
+                            Node {
+                                width: px(AFFIX_SIZE),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border: if has_color {
+                                    UiRect::left(px(2))
+                                } else {
+                                    UiRect::default()
+                                },
+                                border_radius: if has_color {
+                                    BorderRadius::left(px(2.5))
+                                } else {
+                                    BorderRadius::default()
+                                },
+                                ..default()
+                            },
+                            children![(
+                                Text::new(glyph),
+                                TextFont {
+                                    font: glyph_font,
                                     font_size: *size,
                                     ..default()
                                 },
@@ -978,7 +1035,7 @@ fn sync_text_edit_values(
         if !config.initialized {
             continue;
         }
-        // Find wrapper child → TextEditWrapper → inner entity → TextInputBuffer
+        // Find wrapper child -> TextEditWrapper -> inner entity -> TextInputBuffer
         for child in children.iter() {
             let Ok(wrapper) = wrappers.get(child) else {
                 continue;

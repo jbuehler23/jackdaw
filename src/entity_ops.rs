@@ -425,7 +425,7 @@ pub fn duplicate_selected(world: &mut World) {
     }
 }
 
-/// Snap a vector to the nearest cardinal world axis (±X, ±Y, ±Z).
+/// Snap a vector to the nearest cardinal world axis (+/-X, +/-Y, +/-Z).
 /// Returns a signed unit vector along the axis with the largest absolute component.
 fn snap_to_nearest_axis(v: Vec3) -> Vec3 {
     let abs = v.abs();
@@ -1093,7 +1093,7 @@ fn get_assets_base_dir() -> Option<std::path::PathBuf> {
     Some(base.join("assets"))
 }
 
-// ─────────────────────── Operators ────────────────────────────
+// ----------------------- Operators ----------------------------
 //
 // Entity-level operators (`entity.*`) and the `Add` menu
 // (`entity.add.*`). Keybind and menu dispatch both arrive here.
@@ -1199,7 +1199,7 @@ fn can_act_on_entities(
     matches!(*edit_mode, crate::brush::EditMode::Object)
 }
 
-// ── Entity lifecycle ────────────────────────────────────────────
+// -- Entity lifecycle --------------------------------------------
 
 #[operator(
     id = "entity.delete",
@@ -1301,7 +1301,7 @@ pub(crate) fn entity_unhide_all(
     OperatorResult::Finished
 }
 
-// ── Add menu ────────────────────────────────────────────────────
+// -- Add menu ----------------------------------------------------
 
 #[operator(id = "entity.add.cube", label = "Cube")]
 pub(crate) fn entity_add_cube(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {

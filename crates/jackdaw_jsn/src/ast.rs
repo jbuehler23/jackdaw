@@ -42,7 +42,7 @@ pub struct JsnEntityNode {
     /// - **Displayed** in the inspector (for debugging / advanced editing)
     /// - **NOT serialized** to the scene file (they're recreated at runtime)
     /// - **Promoted to authored** if the user explicitly edits one (removed from
-    ///   this set → persisted on next save)
+    ///   this set -> persisted on next save)
     ///
     /// Populated by `sync_required_to_ast` after `AddComponent`.
     pub derived_components: HashSet<String>,
@@ -53,7 +53,7 @@ pub struct JsnEntityNode {
 impl SceneJsnAst {
     /// Populate from a loaded `JsnScene` and the ECS entities that were spawned for it.
     ///
-    /// `entity_map` maps JSN entity index → spawned ECS entity.
+    /// `entity_map` maps JSN entity index -> spawned ECS entity.
     pub fn from_jsn_scene(scene: &JsnScene, entity_map: &[Entity]) -> Self {
         let mut ecs_to_jsn = HashMap::new();
         let nodes = scene
@@ -132,7 +132,7 @@ impl SceneJsnAst {
         self.assets = JsnAssets::default();
     }
 
-    // ── Entity lifecycle ─────────────────────────────────────────────
+    // -- Entity lifecycle ---------------------------------------------
 
     /// Create a new node for an ECS entity and register it in the AST.
     /// Returns the node index.
@@ -182,7 +182,7 @@ impl SceneJsnAst {
         self.ecs_to_jsn.contains_key(&entity)
     }
 
-    // ── Component field accessors ──────────────────────────────────────
+    // -- Component field accessors --------------------------------------
 
     /// Get a component's full JSON value by type path.
     pub fn get_component(&self, entity: Entity, type_path: &str) -> Option<&serde_json::Value> {
@@ -233,7 +233,7 @@ impl SceneJsnAst {
     }
 }
 
-// ── Type-aware JSON path navigation ────────────────────────────────────
+// -- Type-aware JSON path navigation ------------------------------------
 //
 // Mirrors BSN's BsnValue tree navigation. Uses the TypeRegistry to resolve
 // named fields to array indices when the JSON value is an array (e.g., Vec3

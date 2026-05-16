@@ -13,7 +13,7 @@ use bevy::prelude::*;
 /// The raw `add_child` call internally queues a command that takes
 /// `EntityWorldMut` of the parent; if that parent was despawned
 /// between the queue and the flush the command fails with
-/// `Entity despawned: … is invalid`, and the just-spawned `child`
+/// `Entity despawned: ... is invalid`, and the just-spawned `child`
 /// is left as an orphan with a `ChildOf(dead parent)` that Bevy
 /// strips with an additional `WARN` (manifesting as stray floating
 /// UI nodes like "Inherited" or "Component field" at the window
@@ -57,7 +57,7 @@ pub fn attach_children_or_despawn(commands: &mut Commands, parent: Entity, child
 /// wrapper might have been torn down by [`attach_or_despawn`]'s
 /// fallback despawn path before this command drains; the raw
 /// `commands.entity(entity).insert(bundle)` would otherwise log
-/// `Entity despawned: … is invalid`.
+/// `Entity despawned: ... is invalid`.
 pub fn insert_if_alive<B: Bundle>(commands: &mut Commands, entity: Entity, bundle: B) {
     commands.queue(move |world: &mut World| {
         if let Ok(mut ec) = world.get_entity_mut(entity) {

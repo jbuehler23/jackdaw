@@ -7,10 +7,10 @@
 //! translated into canvas-space and closes the popover. An outside click
 //! or pressing Escape also closes it.
 //!
-//! The popover is intentionally lightweight; no search input for Phase 3
-//! so we don't need the full `text_edit` stack. Phase 6 polish can add
-//! filtering and keyboard navigation to match Maya's quick-add UX more
-//! closely.
+//! The popover is intentionally lightweight; no search input, so we
+//! avoid pulling in the full `text_edit` stack. A follow-up can add
+//! filtering and keyboard navigation to match Maya's quick-add UX
+//! more closely.
 
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::pointer::PointerButton;

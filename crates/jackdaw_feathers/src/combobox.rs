@@ -207,7 +207,7 @@ fn setup_combobox(
         // combobox was cascade-despawned before the spawn + add_child
         // commands drained, the trigger ended up orphaned with a
         // `ChildOf` pointing at a dead parent, producing the
-        // `Entity despawned … is invalid` errors. Wrap the whole
+        // `Entity despawned ... is invalid` errors. Wrap the whole
         // setup in a queued closure that runs with `&mut World`, do
         // a single synchronous liveness check, and spawn the trigger
         // inside `with_children` so parent + child land atomically.

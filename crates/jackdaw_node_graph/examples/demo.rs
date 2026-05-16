@@ -194,7 +194,7 @@ fn populate_demo_node_bodies(
 /// Watch feathers `TextEditValue` changes on any `ConstantInputTarget`
 /// wrapper and push the parsed value into the bound `GraphNode` data
 /// entity's `ConstantValue`. This runs while the user types, while they
-/// drag-scrub the `↔` prefix, and when they commit via Enter/unfocus ;
+/// drag-scrub the `<->` prefix, and when they commit via Enter/unfocus ;
 /// all three paths update the value live.
 fn sync_constant_inputs(
     changed: Query<(&ConstantInputTarget, &TextEditValue), Changed<TextEditValue>>,

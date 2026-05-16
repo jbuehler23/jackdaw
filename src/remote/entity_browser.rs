@@ -43,13 +43,13 @@ pub(crate) struct RemoteSceneCache {
     pub(crate) entities: Vec<RemoteEntity>,
 }
 
-/// Maps remote entity bits → local proxy entity.
+/// Maps remote entity bits -> local proxy entity.
 #[derive(Resource, Default)]
 pub(crate) struct RemoteProxyIndex {
     pub(crate) map: HashMap<u64, Entity>,
 }
 
-/// Reverse lookup: proxy entity → tree row entity.
+/// Reverse lookup: proxy entity -> tree row entity.
 #[derive(Resource, Default)]
 pub(crate) struct RemoteTreeRowIndex {
     pub(crate) map: HashMap<Entity, Entity>,
@@ -79,7 +79,7 @@ impl Default for RemoteSnapshotPollTimer {
     }
 }
 
-// ─────────────────────────── Helpers ───────────────────────────
+// --------------------------- Helpers ---------------------------
 
 fn extract_name(entity: &RemoteEntity) -> Option<String> {
     entity
@@ -106,7 +106,7 @@ fn display_name_from_component(name: &RemoteEntityName, bits: u64) -> String {
         .unwrap_or_else(|| format!("Entity {:X}", bits))
 }
 
-// ─────────────────────────── UI Layout ───────────────────────────
+// --------------------------- UI Layout ---------------------------
 
 /// Build the remote debug workspace content.
 pub fn remote_debug_workspace_content() -> impl Bundle {
@@ -152,7 +152,7 @@ pub fn remote_debug_workspace_content() -> impl Bundle {
     )
 }
 
-// ─────────────────────────── Reactive Name Watcher ───────────────────────────
+// --------------------------- Reactive Name Watcher ---------------------------
 
 /// Spawn a watcher entity that notifies us when `RemoteEntityName` is mutated.
 pub fn setup_remote_name_watcher(mut commands: Commands) {
@@ -193,7 +193,7 @@ fn on_remote_name_mutated(
     }
 }
 
-// ─────────────────────────── Polling Systems ───────────────────────────
+// --------------------------- Polling Systems ---------------------------
 
 /// Tick the poll timer and fire a snapshot request when ready.
 pub fn snapshot_poll_timer(
@@ -249,7 +249,7 @@ pub fn poll_snapshot_task(mut commands: Commands, task: Option<ResMut<RemoteSnap
     }
 }
 
-// ─────────────────────────── Snapshot Application ───────────────────────────
+// --------------------------- Snapshot Application ---------------------------
 
 /// Apply a new scene snapshot using diff & patch.
 ///
@@ -269,7 +269,7 @@ fn apply_scene_snapshot(world: &mut World, entities: Vec<RemoteEntity>) {
         index.map.keys().copied().collect()
     };
 
-    // ── Removed: in current but not in new ──
+    // -- Removed: in current but not in new --
     let removed: Vec<u64> = current_bits.difference(&new_bits).copied().collect();
     for bits in &removed {
         let proxy_entity = {
@@ -321,7 +321,7 @@ fn apply_scene_snapshot(world: &mut World, entities: Vec<RemoteEntity>) {
         }
     }
 
-    // ── Compute new root set and compare with current root tree rows ──
+    // -- Compute new root set and compare with current root tree rows --
     let new_root_bits: Vec<u64> = {
         let mut roots: Vec<(u64, String)> = entities
             .iter()
@@ -457,7 +457,7 @@ fn apply_scene_snapshot(world: &mut World, entities: Vec<RemoteEntity>) {
         }
     }
 
-    // ── Handle expanded children whose child set changed ──
+    // -- Handle expanded children whose child set changed --
     update_expanded_children(world, &entities, &new_bits);
 
     // Update cache and status
@@ -617,7 +617,7 @@ fn spawn_remote_tree_row(
     tree_row_entity
 }
 
-// ─────────────────────────── Lazy Child Expansion ───────────────────────────
+// --------------------------- Lazy Child Expansion ---------------------------
 
 /// When a remote tree node is expanded, populate children from the cache.
 pub fn on_remote_tree_node_expanded(
@@ -721,7 +721,7 @@ pub fn on_remote_tree_node_expanded(
     });
 }
 
-// ─────────────────────────── Remote Selection ───────────────────────────
+// --------------------------- Remote Selection ---------------------------
 
 /// Handle tree row click for remote entity proxies.
 pub(crate) fn on_remote_tree_row_clicked(
@@ -772,7 +772,7 @@ pub(crate) fn on_remote_tree_row_clicked(
     }
 }
 
-// ─────────────────────────── Cleanup ───────────────────────────
+// --------------------------- Cleanup ---------------------------
 
 /// When connection is lost, clean up all remote proxy state.
 pub(crate) fn cleanup_remote_proxies(

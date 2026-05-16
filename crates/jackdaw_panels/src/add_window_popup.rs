@@ -212,7 +212,7 @@ fn add_window_to_area(world: &mut World, window_id: &str, area_entity: Entity) {
         return;
     };
 
-    // Walk: area → DockTabBar → DockTabRow.
+    // Walk: area -> DockTabBar -> DockTabRow.
     let tab_row = world
         .entity(area_entity)
         .get::<Children>()

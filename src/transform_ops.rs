@@ -1,4 +1,4 @@
-//! Transform-shortcut operators: reset, 90° rotate, and nudge.
+//! Transform-shortcut operators: reset, 90 deg rotate, and nudge.
 //!
 //! `reset_*` snap translation / rotation / scale on the selection back
 //! to defaults. `rotate_90_*` rotate the selection by a quarter-turn
@@ -189,7 +189,7 @@ pub(crate) fn active_tab_kind_present(
     })
 }
 
-// ── Reset ops ───────────────────────────────────────────────────
+// -- Reset ops ---------------------------------------------------
 
 #[operator(
     id = "transform.reset_position",
@@ -227,7 +227,7 @@ fn transform_reset_scale(_: In<OperatorParameters>, mut commands: Commands) -> O
     OperatorResult::Finished
 }
 
-// ── Rotate 90° ops ──────────────────────────────────────────────
+// -- Rotate 90 deg ops ----------------------------------------------
 
 #[derive(Clone, Copy)]
 enum CameraAxis {
@@ -258,7 +258,7 @@ fn rotate_by_camera_axis(world: &mut World, axis: CameraAxis, direction: f32) {
 
 #[operator(
     id = "transform.rotate_90_yaw_ccw",
-    label = "Rotate 90° Yaw CCW",
+    label = "Rotate 90 deg Yaw CCW",
     is_available = can_act_on_entities
 )]
 fn transform_rotate_90_yaw_ccw(
@@ -271,7 +271,7 @@ fn transform_rotate_90_yaw_ccw(
 
 #[operator(
     id = "transform.rotate_90_yaw_cw",
-    label = "Rotate 90° Yaw CW",
+    label = "Rotate 90 deg Yaw CW",
     is_available = can_act_on_entities
 )]
 fn transform_rotate_90_yaw_cw(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
@@ -281,7 +281,7 @@ fn transform_rotate_90_yaw_cw(_: In<OperatorParameters>, mut commands: Commands)
 
 #[operator(
     id = "transform.rotate_90_pitch_ccw",
-    label = "Rotate 90° Pitch CCW",
+    label = "Rotate 90 deg Pitch CCW",
     is_available = can_act_on_entities
 )]
 fn transform_rotate_90_pitch_ccw(
@@ -294,7 +294,7 @@ fn transform_rotate_90_pitch_ccw(
 
 #[operator(
     id = "transform.rotate_90_pitch_cw",
-    label = "Rotate 90° Pitch CW",
+    label = "Rotate 90 deg Pitch CW",
     is_available = can_act_on_entities
 )]
 fn transform_rotate_90_pitch_cw(
@@ -307,7 +307,7 @@ fn transform_rotate_90_pitch_cw(
 
 #[operator(
     id = "transform.rotate_90_roll_ccw",
-    label = "Rotate 90° Roll CCW",
+    label = "Rotate 90 deg Roll CCW",
     is_available = can_act_on_entities
 )]
 fn transform_rotate_90_roll_ccw(
@@ -320,7 +320,7 @@ fn transform_rotate_90_roll_ccw(
 
 #[operator(
     id = "transform.rotate_90_roll_cw",
-    label = "Rotate 90° Roll CW",
+    label = "Rotate 90 deg Roll CW",
     is_available = can_act_on_entities
 )]
 fn transform_rotate_90_roll_cw(
@@ -331,7 +331,7 @@ fn transform_rotate_90_roll_cw(
     OperatorResult::Finished
 }
 
-// ── Nudge ops ───────────────────────────────────────────────────
+// -- Nudge ops ---------------------------------------------------
 
 fn nudge_by_axis(world: &mut World, offset_direction: Vec3) {
     let grid_size = world
@@ -342,7 +342,7 @@ fn nudge_by_axis(world: &mut World, offset_direction: Vec3) {
 
 #[operator(
     id = "transform.nudge_x_neg",
-    label = "Nudge −X",
+    label = "Nudge -X",
     is_available = can_act_on_entities
 )]
 fn transform_nudge_x_neg(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
@@ -362,7 +362,7 @@ fn transform_nudge_x_pos(_: In<OperatorParameters>, mut commands: Commands) -> O
 
 #[operator(
     id = "transform.nudge_y_neg",
-    label = "Nudge −Y",
+    label = "Nudge -Y",
     is_available = can_act_on_entities
 )]
 fn transform_nudge_y_neg(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
@@ -382,7 +382,7 @@ fn transform_nudge_y_pos(_: In<OperatorParameters>, mut commands: Commands) -> O
 
 #[operator(
     id = "transform.nudge_z_neg",
-    label = "Nudge −Z",
+    label = "Nudge -Z",
     is_available = can_act_on_entities
 )]
 fn transform_nudge_z_neg(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {

@@ -43,8 +43,9 @@ impl EditorCommand for MoveGraphNodesCmd {
 
 /// Add a new graph node to a graph at a canvas-space position.
 ///
-/// Execute spawns the data entity with its `GraphNode` + `Terminal` children;
-/// undo despawns them. The sync system (Phase 2) spawns/despawns the UI.
+/// Execute spawns the data entity with its `GraphNode` + `Terminal`
+/// children; undo despawns them. The sync system then spawns or
+/// despawns the matching UI.
 pub struct AddGraphNodeCmd {
     pub graph: Entity,
     pub node_type: String,

@@ -239,7 +239,7 @@ pub struct RegisteredMenuEntry {
     pub operator_id: &'static str,
 }
 
-/// Reactive index from operator id → operator entity. Maintained by the
+/// Reactive index from operator id -> operator entity. Maintained by the
 /// `index_operator_on_add` / `deindex_operator_on_remove` observers.
 /// Lets the dispatcher resolve an id to a `SystemId` in O(1).
 #[derive(Resource, Default, Deref, DerefMut)]

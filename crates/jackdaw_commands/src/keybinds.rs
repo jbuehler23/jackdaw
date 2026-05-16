@@ -893,7 +893,7 @@ impl Default for KeybindRegistry {
         };
         let k = |key: KeyCode| -> Vec<Keybind> { vec![Keybind::key(key)] };
 
-        // ── File ──────────────────────────────────────────────────────
+        // -- File ------------------------------------------------------
         bindings.insert(A::Undo, b(K::KeyZ, true, false, false));
         bindings.insert(A::Redo, b(K::KeyZ, true, true, false));
         bindings.insert(A::Save, b(K::KeyS, true, false, false));
@@ -901,7 +901,7 @@ impl Default for KeybindRegistry {
         bindings.insert(A::Open, b(K::KeyO, true, false, false));
         bindings.insert(A::NewScene, b(K::KeyN, true, true, false));
 
-        // ── Entity operations ─────────────────────────────────────────
+        // -- Entity operations -----------------------------------------
         bindings.insert(A::Delete, k(K::Delete));
         bindings.insert(A::Duplicate, b(K::KeyD, true, false, false));
         bindings.insert(A::CopyComponents, b(K::KeyC, true, false, false));
@@ -913,7 +913,7 @@ impl Default for KeybindRegistry {
         bindings.insert(A::ResetRotation, b(K::KeyR, false, false, true));
         bindings.insert(A::ResetScale, b(K::KeyS, false, false, true));
 
-        // ── Rotations (Alt + Arrow / PageUp/Down) ────────────────────
+        // -- Rotations (Alt + Arrow / PageUp/Down) --------------------
         bindings.insert(A::Rotate90Left, b(K::ArrowLeft, false, false, true));
         bindings.insert(A::Rotate90Right, b(K::ArrowRight, false, false, true));
         bindings.insert(A::Rotate90Up, b(K::ArrowUp, false, false, true));
@@ -921,7 +921,7 @@ impl Default for KeybindRegistry {
         bindings.insert(A::Roll90Left, b(K::PageUp, false, false, true));
         bindings.insert(A::Roll90Right, b(K::PageDown, false, false, true));
 
-        // ── Nudge (Arrow keys / PageUp/Down) ─────────────────────────
+        // -- Nudge (Arrow keys / PageUp/Down) -------------------------
         bindings.insert(A::NudgeLeft, k(K::ArrowLeft));
         bindings.insert(A::NudgeRight, k(K::ArrowRight));
         bindings.insert(A::NudgeForward, k(K::ArrowUp));
@@ -929,30 +929,30 @@ impl Default for KeybindRegistry {
         bindings.insert(A::NudgeUp, k(K::PageUp));
         bindings.insert(A::NudgeDown, k(K::PageDown));
 
-        // ── Brush edit modes ──────────────────────────────────────────
+        // -- Brush edit modes ------------------------------------------
         bindings.insert(A::VertexMode, k(K::Digit1));
         bindings.insert(A::EdgeMode, k(K::Digit2));
         bindings.insert(A::FaceMode, k(K::Digit3));
         bindings.insert(A::ClipMode, k(K::Digit4));
         bindings.insert(A::ExitEditMode, k(K::Escape));
 
-        // ── Brush element deletion (Delete + Backspace) ───────────────
+        // -- Brush element deletion (Delete + Backspace) ---------------
         bindings.insert(
             A::DeleteBrushElement,
             vec![Keybind::key(K::Delete), Keybind::key(K::Backspace)],
         );
 
-        // ── Axis constraints ──────────────────────────────────────────
+        // -- Axis constraints ------------------------------------------
         bindings.insert(A::ConstrainX, k(K::KeyX));
         bindings.insert(A::ConstrainY, k(K::KeyY));
         bindings.insert(A::ConstrainZ, k(K::KeyZ));
 
-        // ── Clip mode ─────────────────────────────────────────────────
+        // -- Clip mode -------------------------------------------------
         bindings.insert(A::ClipCycleMode, k(K::Tab));
         bindings.insert(A::ClipApply, k(K::Enter));
         bindings.insert(A::ClipClear, k(K::Escape));
 
-        // ── Draw brush ────────────────────────────────────────────────
+        // -- Draw brush ------------------------------------------------
         bindings.insert(A::DrawCut, k(K::KeyC));
         bindings.insert(A::ToggleDrawMode, k(K::Tab));
         bindings.insert(A::AppendToBrush, b(K::KeyB, false, false, true));
@@ -960,29 +960,29 @@ impl Default for KeybindRegistry {
         bindings.insert(A::RemoveLastVertex, k(K::Backspace));
         bindings.insert(A::CancelDraw, k(K::Escape));
 
-        // ── CSG / Join ────────────────────────────────────────────────
+        // -- CSG / Join ------------------------------------------------
         bindings.insert(A::JoinBrushes, k(K::KeyJ));
         bindings.insert(A::CsgSubtract, b(K::KeyK, true, false, false));
         bindings.insert(A::CsgIntersect, b(K::KeyK, true, true, false));
         bindings.insert(A::ExtendFaceToBrush, b(K::KeyE, true, false, false));
 
-        // ── Gizmo ─────────────────────────────────────────────────────
+        // -- Gizmo -----------------------------------------------------
         bindings.insert(A::GizmoRotate, k(K::KeyR));
         bindings.insert(A::GizmoScale, k(K::KeyT));
         bindings.insert(A::GizmoTranslate, k(K::Escape));
         bindings.insert(A::ToggleGizmoSpace, k(K::KeyX));
 
-        // ── Viewport ──────────────────────────────────────────────────
+        // -- Viewport --------------------------------------------------
         bindings.insert(A::FocusSelected, k(K::KeyF));
 
-        // ── Grid ──────────────────────────────────────────────────────
+        // -- Grid ------------------------------------------------------
         bindings.insert(A::DecreaseGrid, k(K::BracketLeft));
         bindings.insert(A::IncreaseGrid, k(K::BracketRight));
 
-        // ── View modes ────────────────────────────────────────────────
+        // -- View modes ------------------------------------------------
         bindings.insert(A::ToggleWireframe, b(K::KeyW, true, true, false));
 
-        // ── Camera movement ───────────────────────────────────────────
+        // -- Camera movement -------------------------------------------
         bindings.insert(A::CameraForward, k(K::KeyW));
         bindings.insert(A::CameraBackward, k(K::KeyS));
         bindings.insert(A::CameraLeft, k(K::KeyA));
@@ -990,7 +990,7 @@ impl Default for KeybindRegistry {
         bindings.insert(A::CameraDown, k(K::KeyQ));
         bindings.insert(A::CameraUp, k(K::KeyE));
 
-        // ── Camera bookmarks (Ctrl+N to save, N to load) ─────────────
+        // -- Camera bookmarks (Ctrl+N to save, N to load) -------------
         bindings.insert(A::SaveBookmark1, b(K::Digit1, true, false, false));
         bindings.insert(A::SaveBookmark2, b(K::Digit2, true, false, false));
         bindings.insert(A::SaveBookmark3, b(K::Digit3, true, false, false));
@@ -1010,7 +1010,7 @@ impl Default for KeybindRegistry {
         bindings.insert(A::LoadBookmark8, k(K::Digit8));
         bindings.insert(A::LoadBookmark9, k(K::Digit9));
 
-        // ── Modal transform (disabled, keybinds ready) ────────────────
+        // -- Modal transform (disabled, keybinds ready) ----------------
         bindings.insert(A::ModalGrab, k(K::KeyG));
         bindings.insert(A::ModalRotate, k(K::KeyR));
         bindings.insert(A::ModalScale, k(K::KeyS));

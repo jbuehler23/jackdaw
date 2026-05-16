@@ -171,8 +171,7 @@ fn reconcile_leaf(world: &mut World, entity: Entity, node_id: NodeId, leaf: &Doc
     // the space. Persistent leaves (built-in dock regions like the
     // viewport center, right sidebar, etc.) stay visible even when
     // empty so they remain drop targets and so non-window content
-    // mounted inside them (the SceneViewport in Phase 1) keeps
-    // rendering.
+    // mounted inside them (today, the SceneViewport) keeps rendering.
     let visible = !leaf.windows.is_empty() || leaf.is_persistent();
     set_host_visible(world, entity, visible);
 }
@@ -396,7 +395,7 @@ fn set_host_visible(world: &mut World, entity: Entity, visible: bool) {
         Display::None
     };
 
-    // Find the adjacent PanelHandle sibling (index ±1 in the parent's
+    // Find the adjacent PanelHandle sibling (index +/-1 in the parent's
     // children) so we can hide/show it alongside the host.
     let adjacent_handle = {
         let parent = world.entity(entity).get::<ChildOf>().map(ChildOf::parent);

@@ -158,11 +158,10 @@ pub fn handle_canvas_pan_zoom(
         let new_zoom = (old_zoom * (1.0 + zoom_delta)).clamp(MIN_ZOOM, MAX_ZOOM);
         if (new_zoom - old_zoom).abs() > f32::EPSILON {
             view.zoom = new_zoom;
-            // TODO(phase 2): zoom-toward-cursor. We need the cursor's local
-            // coordinate in the viewport, which requires the
-            // ComputedNode::normalize_point pattern used by color_picker
-            // controls. For phase 1 we zoom around the origin; Phase 2's
-            // gesture rework adds the cursor anchor.
+            // TODO: zoom-toward-cursor. Needs the cursor's local
+            // coordinate in the viewport (the
+            // `ComputedNode::normalize_point` pattern from
+            // `color_picker`). Today we zoom around the origin.
         }
     }
 }

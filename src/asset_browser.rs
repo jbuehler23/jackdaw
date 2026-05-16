@@ -106,7 +106,7 @@ impl Plugin for AssetBrowserPlugin {
     }
 }
 
-// ── Texture info ────────────────────────────────────────────────────────────
+// -- Texture info ------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 pub struct TextureInfo {
@@ -117,7 +117,7 @@ pub struct TextureInfo {
     pub face_count: u32,
 }
 
-// ── Browser state ───────────────────────────────────────────────────────────
+// -- Browser state -----------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum BrowserViewMode {
@@ -164,7 +164,7 @@ pub struct DirEntry {
     pub texture_info: Option<TextureInfo>,
 }
 
-// ── Preview state ───────────────────────────────────────────────────────────
+// -- Preview state -----------------------------------------------------------
 
 #[derive(Resource, Default)]
 pub struct AssetPreviewState {
@@ -180,7 +180,7 @@ struct SelectAssetPreview {
     info: TextureInfo,
 }
 
-// ── Components ──────────────────────────────────────────────────────────────
+// -- Components --------------------------------------------------------------
 
 #[derive(Component)]
 pub struct AssetBrowserPanel;
@@ -200,7 +200,7 @@ struct PreviewPanelContainer;
 #[derive(Resource)]
 struct AssetBrowserFolderTask(Task<Option<rfd::FileHandle>>);
 
-// ── Helpers (absorbed from texture_browser) ─────────────────────────────────
+// -- Helpers (absorbed from texture_browser) ---------------------------------
 
 fn is_image_file_path(path: &Path) -> bool {
     let Some(ext) = path.extension() else {
@@ -232,7 +232,7 @@ fn read_ktx2_info(path: &Path) -> (u32, u32) {
     (layer_count, face_count)
 }
 
-// ── Systems ─────────────────────────────────────────────────────────────────
+// -- Systems -----------------------------------------------------------------
 
 fn setup_initial_directory(
     mut state: ResMut<AssetBrowserState>,
@@ -465,7 +465,7 @@ fn refresh_browser_on_change(
                 },
             );
 
-            // Click: 2D textures → apply directly; non-2D → select for preview
+            // Click: 2D textures -> apply directly; non-2D -> select for preview
             let tex_info_clone = tex_info.clone();
             let entry_path = entry.path.clone();
             let click_path = path_for_click.clone();
@@ -1239,7 +1239,7 @@ fn poll_asset_browser_folder(world: &mut World) {
     }
 }
 
-// ── Panel layout ────────────────────────────────────────────────────────────
+// -- Panel layout ------------------------------------------------------------
 
 pub fn asset_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
     let folder_icon_font = icon_font.clone();
@@ -1421,7 +1421,7 @@ fn check_watcher_events(
     }
 }
 
-// ── Operators ──────────────────────────────────────────────────────────────
+// -- Operators --------------------------------------------------------------
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<AssetCycleArrayLayerOp>()

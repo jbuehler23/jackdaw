@@ -466,7 +466,7 @@ impl<'a> ReflectSerializerProcessor for JsnSerializerProcessor<'a> {
             return Ok(Ok(serializer.serialize_str(s)?));
         }
 
-        // Handle<T> → path string or inline #Name
+        // Handle<T> -> path string or inline #Name
         if let Some(reflect_handle) = registry.get_type_data::<ReflectHandle>(type_id) {
             let untyped_handle = reflect_handle
                 .downcast_handle_untyped(value.as_any())
@@ -493,7 +493,7 @@ impl<'a> ReflectSerializerProcessor for JsnSerializerProcessor<'a> {
             return Ok(Ok(serializer.serialize_unit()?));
         }
 
-        // Entity → scene-local index
+        // Entity -> scene-local index
         if type_id == TypeId::of::<Entity>() {
             if let Some(entity) = value.as_any().downcast_ref::<Entity>()
                 && let Some(&idx) = self.entity_to_index.get(entity)
@@ -558,7 +558,7 @@ impl<'a> ReflectDeserializerProcessor for JsnDeserializerProcessor<'a> {
                 }
             };
 
-            // Null sentinel (from old files with "material": null) → default handle
+            // Null sentinel (from old files with "material": null) -> default handle
             if relative_path.is_empty()
                 && let Some(reflect_default) = registration.data::<ReflectDefault>()
             {
@@ -728,7 +728,7 @@ impl<'a> JsnDeserializerProcessor<'a> {
 
 /// Walk all scene entity components, find `Handle<T>` fields that have no asset path
 /// (runtime-created), serialize them into the generic assets table, and return a map
-/// of asset ID → inline name for the serializer processor.
+/// of asset ID -> inline name for the serializer processor.
 ///
 /// Assets already in the `AssetCatalog` are emitted as `@Name` references and excluded
 /// from the scene-local asset table.
@@ -1146,7 +1146,7 @@ fn build_scene_snapshot(
     inline_assets: &HashMap<UntypedAssetId, String>,
     entities: &[Entity],
 ) -> Vec<JsnEntity> {
-    // Build entity → index map for parent and entity-field references
+    // Build entity -> index map for parent and entity-field references
     let entity_to_index: HashMap<Entity, usize> =
         entities.iter().enumerate().map(|(i, &e)| (e, i)).collect();
 
@@ -1213,7 +1213,7 @@ fn build_scene_snapshot(
                     continue;
                 };
 
-                // Serialize with processor  -- handles Handle<T> → path and Entity → index
+                // Serialize with processor  -- handles Handle<T> -> path and Entity -> index
                 let serializer =
                     TypedReflectSerializer::with_processor(component, registry, &ser_processor);
                 if let Ok(value) = serde_json::to_value(&serializer) {
@@ -1344,7 +1344,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
 }
 
 /// Deserialize inline assets from the generic assets table.
-/// Returns a map of `#Name` / `@Name` → `UntypedHandle` for the deserializer processor.
+/// Returns a map of `#Name` / `@Name` -> `UntypedHandle` for the deserializer processor.
 /// Scan material definitions in `JsnAssets` to find image names used in non-color slots.
 /// These images must be loaded with `is_srgb = false` to avoid gamma decoding artifacts.
 fn collect_linear_image_names(assets: &JsnAssets) -> HashSet<String> {
@@ -1397,7 +1397,7 @@ pub fn load_inline_assets(
                 continue;
             };
 
-            // @Name reference → resolve from catalog
+            // @Name reference -> resolve from catalog
             if rel_path.starts_with('@') {
                 if let Some(handle) = catalog_handles.get(rel_path.as_str()) {
                     local_assets.insert(name.clone(), handle.clone());
@@ -1671,7 +1671,7 @@ fn cleanup_pending_new_scene(
 /// Type alias for the query that collects every "real scene" root.
 ///
 /// BEI action entities carry a `Name` (via `Action<A>`'s
-/// `#[require(Name::new(any::type_name::<A>()), ActionSettings, …)]`)
+/// `#[require(Name::new(any::type_name::<A>()), ActionSettings, ...)]`)
 /// but are editor infrastructure; filter them out via
 /// `Without<ActionSettings>` so they don't get serialized into
 /// undo snapshots and re-spawned as scene entities on undo.
@@ -1776,7 +1776,7 @@ pub(crate) fn clear_scene_entities(world: &mut World) {
 /// snapshot apply during undo/redo.
 ///
 /// `bevy_enhanced_input`'s `Action<A>` component auto-inserts a
-/// `Name` component (see its `#[require(Name::new(any::type_name::<A>()), …)]`),
+/// `Name` component (see its `#[require(Name::new(any::type_name::<A>()), ...)]`),
 /// so BEI action entities are otherwise indistinguishable from
 /// scene roots. They also carry the non-generic `ActionSettings`
 /// marker, so excluding those keeps every operator's input routing
@@ -1829,7 +1829,7 @@ pub(crate) fn despawn_scene_entities(world: &mut World) -> Result<(), BevyError>
 /// the resulting `local_assets` into `load_scene_from_jsn`, which
 /// wires runtime handles back up by `#Name`.
 ///
-/// Cost: O(scene entities × registered components) per snapshot.
+/// Cost: O(scene entities x registered components) per snapshot.
 /// Called once per history-creating operator dispatch, not per
 /// frame; acceptable for the current editor workload.
 pub fn build_snapshot_ast(world: &mut World) -> jackdaw_jsn::SceneJsnAst {
@@ -2087,7 +2087,7 @@ impl ReflectSerializerProcessor for AstSerializerProcessor {
         };
         let type_id = value.reflect_type_info().type_id();
 
-        // Handle<T> → null (default handles have no path)
+        // Handle<T> -> null (default handles have no path)
         if let Some(reflect_handle) = registry.get_type_data::<ReflectHandle>(type_id) {
             let untyped_handle = reflect_handle
                 .downcast_handle_untyped(value.as_any())
@@ -2101,7 +2101,7 @@ impl ReflectSerializerProcessor for AstSerializerProcessor {
             return Ok(Ok(serializer.serialize_unit()?));
         }
 
-        // Entity → null (no scene-local index at registration time)
+        // Entity -> null (no scene-local index at registration time)
         if type_id == TypeId::of::<Entity>() {
             return Ok(Ok(serializer.serialize_unit()?));
         }

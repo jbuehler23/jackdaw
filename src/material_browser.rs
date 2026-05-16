@@ -1643,7 +1643,7 @@ fn rescan_button(icon_font: Handle<Font>) -> impl Bundle {
     )
 }
 
-// ── Operators ──────────────────────────────────────────────────────────────
+// -- Operators --------------------------------------------------------------
 
 /// Resource set by the texture-slot button click before dispatching
 /// `material.browse_texture_slot` / `material.clear_texture_slot`. The

@@ -120,7 +120,7 @@ pub fn handle_sidebar_icon_clicks(
             continue;
         }
 
-        // Walk: icon → icon_group → sidebar → area
+        // Walk: icon -> icon_group -> sidebar -> area
         let icon_group = icon_parent.parent();
         let Ok(group_parent) = parent_query.get(icon_group) else {
             continue;

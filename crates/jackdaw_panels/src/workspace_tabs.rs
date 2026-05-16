@@ -312,7 +312,7 @@ pub fn handle_workspace_tab_clicks(
         let old = registry.active.clone();
         // The observer is the sole owner of `registry.active`; setting
         // it eagerly here would race with auto-save (save snapshots live
-        // → active and would corrupt the incoming workspace).
+        // -> active and would corrupt the incoming workspace).
         commands.trigger(WorkspaceChanged {
             old,
             new: new_id.clone(),
@@ -359,7 +359,7 @@ pub fn handle_add_workspace_clicks(
     }
 }
 
-/// Click X on a tab → delete that workspace. Last workspace can't be
+/// Click X on a tab -> delete that workspace. Last workspace can't be
 /// deleted. Active-deleted falls through to the first remaining via
 /// `WorkspaceChanged`.
 pub fn on_workspace_close_click(
@@ -396,7 +396,7 @@ pub fn on_workspace_close_click(
     }
 }
 
-/// Detect double-click on a workspace tab → start inline rename.
+/// Detect double-click on a workspace tab -> start inline rename.
 /// Tracks the previous click time per-entity in a `Local`-style
 /// `Resource` so we can measure the gap.
 pub fn detect_workspace_double_click(

@@ -51,8 +51,8 @@ pub struct GhostConnection;
 #[derive(Component, Debug, Clone, Copy)]
 pub struct PendingRemove;
 
-/// Anchor a UI node on top of a canvas terminal dot; helper return type
-/// used by Phase 6's connection-endpoint editing. Not used in Phase 1/2.
+/// Anchor a UI node on top of a canvas terminal dot. Reserved for
+/// connection-endpoint editing; not used by the current canvas code.
 #[derive(Debug, Clone, Copy)]
 pub struct TerminalAnchor {
     pub world_pos: Vec2,
@@ -132,7 +132,7 @@ pub fn update_connection_endpoints(
             continue;
         };
 
-        // Terminal centers → wire-local pixels (origin at viewport top-left).
+        // Terminal centers -> wire-local pixels (origin at viewport top-left).
         let source_local = source_screen - viewport_top_left;
         let target_local = target_screen - viewport_top_left;
 

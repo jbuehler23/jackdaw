@@ -1915,7 +1915,7 @@ pub(crate) fn refresh_inspector_fields(world: &mut World) {
     // Apply numeric updates: find inner EditorTextEdit entity and use set_text_input_value
     let input_focus = world.resource::<InputFocus>().0;
     for (outer_entity, value) in numeric_updates {
-        // Walk: outer (TextEditConfig) → children → wrapper (TextEditWrapper) → inner entity
+        // Walk: outer (TextEditConfig) -> children -> wrapper (TextEditWrapper) -> inner entity
         let Some((wrapper_entity, inner_entity)) = find_text_edit_entities(world, outer_entity)
         else {
             continue;

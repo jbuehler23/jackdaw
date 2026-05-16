@@ -181,7 +181,7 @@ fn handle_directory_expand(
 ) {
     let clicked = event.event_target();
 
-    // Walk up: click target → TreeRowContent → TreeNode
+    // Walk up: click target -> TreeRowContent -> TreeNode
     // Check if this is a toggle click
     let tree_node_entity = if let Ok(toggle_parent) = toggle_query.get(clicked) {
         // Clicked on the expand toggle itself
