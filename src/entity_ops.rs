@@ -652,10 +652,21 @@ fn copy_components(world: &mut World) {
         return;
     }
 
-    let jsn_text = match serde_json::to_string_pretty(&jsn_entities) {
+    // Build the payload: entities + a copy of the source scene's inline
+    // assets so cross-scene paste carries any referenced material defs.
+    let assets = world
+        .get_resource::<jackdaw_jsn::SceneJsnAst>()
+        .map(|ast| ast.assets.clone())
+        .unwrap_or_default();
+    let payload = jackdaw_jsn::format::ClipboardPayload {
+        entities: jsn_entities,
+        assets,
+    };
+
+    let jsn_text = match serde_json::to_string_pretty(&payload) {
         Ok(t) => t,
         Err(e) => {
-            warn!("Failed to serialize entities for clipboard: {e}");
+            warn!("Failed to serialize clipboard payload: {e}");
             return;
         }
     };
@@ -685,6 +696,132 @@ fn copy_components(world: &mut World) {
     }
 }
 
+/// Undo command for a paste operation. On undo, finds each pasted entity by its
+/// `BrushStableId` and despawns it. On redo, re-spawns from the original payload
+/// and restores the same stable IDs that were assigned at first paste.
+struct PasteEntitiesCommand {
+    /// Stable IDs assigned to the pasted entities at first paste.
+    spawned_stable_ids: Vec<crate::draw_brush::BrushStableId>,
+    /// Original payload, preserved so redo can re-spawn.
+    payload: jackdaw_jsn::format::ClipboardPayload,
+    /// Pre-remapped entity list (stable IDs already replaced with fresh ones).
+    remapped_entities: Vec<jackdaw_jsn::format::JsnEntity>,
+    label: String,
+    /// False on first push (paste already happened); true on subsequent executes (redo).
+    is_redo: bool,
+}
+
+impl crate::commands::EditorCommand for PasteEntitiesCommand {
+    fn execute(&mut self, world: &mut World) {
+        // First push: paste already happened in paste_components; nothing to do.
+        // Subsequent calls (redo): re-spawn from the remapped entity list.
+        if !self.is_redo {
+            self.is_redo = true;
+            return;
+        }
+
+        // Redo path: re-spawn the entities from the saved remapped list.
+        let local_assets = std::collections::HashMap::new();
+        let parent_path = std::path::Path::new(".");
+        let spawned = crate::scene_io::load_scene_from_jsn(
+            world,
+            &self.remapped_entities,
+            parent_path,
+            &local_assets,
+        );
+        crate::scene_io::register_entities_in_ast(world, &spawned);
+
+        // Merge assets from payload into destination scene on redo as well.
+        merge_payload_assets(world, &self.payload.assets);
+
+        // Re-select the redo-pasted entities.
+        for &entity in &world.resource::<Selection>().entities.clone() {
+            if let Ok(mut ec) = world.get_entity_mut(entity) {
+                ec.remove::<Selected>();
+            }
+        }
+        let mut selection = world.resource_mut::<Selection>();
+        selection.entities = spawned.clone();
+        for &entity in &spawned {
+            world.entity_mut(entity).insert(Selected);
+        }
+
+        info!("Redo: re-pasted {} entities", spawned.len());
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        // Find entities by stable ID and despawn them.
+        let id_to_entity: std::collections::HashMap<_, _> = world
+            .query::<(Entity, &crate::draw_brush::BrushStableId)>()
+            .iter(world)
+            .map(|(e, sid)| (*sid, e))
+            .collect();
+
+        let mut to_despawn: Vec<Entity> = Vec::new();
+        for sid in &self.spawned_stable_ids {
+            if let Some(&e) = id_to_entity.get(sid) {
+                to_despawn.push(e);
+            }
+        }
+
+        crate::commands::deselect_entities(world, &to_despawn);
+        for e in to_despawn {
+            world
+                .resource_mut::<jackdaw_jsn::SceneJsnAst>()
+                .remove_node(e);
+            if let Ok(ec) = world.get_entity_mut(e) {
+                ec.despawn();
+            }
+        }
+    }
+
+    fn description(&self) -> &str {
+        &self.label
+    }
+}
+
+/// Merge `src_assets` into the destination scene's `SceneJsnAst`, preferring
+/// existing entries (never clobber a definition that is already present).
+fn merge_payload_assets(world: &mut World, src_assets: &jackdaw_jsn::format::JsnAssets) {
+    if let Some(mut ast) = world.get_resource_mut::<jackdaw_jsn::SceneJsnAst>() {
+        // JsnAssets(HashMap<type_path, HashMap<name, value>>)
+        for (type_path, name_map) in &src_assets.0 {
+            let dest_type_map = ast.assets.0.entry(type_path.clone()).or_default();
+            for (name, def) in name_map {
+                if !dest_type_map.contains_key(name) {
+                    dest_type_map.insert(name.clone(), def.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Rewrite `BrushStableId` values in a list of `JsnEntity` component maps,
+/// replacing each with a fresh ID minted from `StableIdCounter`.
+/// Returns the list of newly-assigned stable IDs (one per entity that had one).
+fn remap_stable_ids(
+    world: &mut World,
+    entities: &mut Vec<jackdaw_jsn::format::JsnEntity>,
+) -> Vec<crate::draw_brush::BrushStableId> {
+    const STABLE_ID_KEY: &str = "jackdaw::draw_brush::BrushStableId";
+    let mut assigned = Vec::new();
+    for jsn in entities.iter_mut() {
+        if jsn.components.contains_key(STABLE_ID_KEY) {
+            let fresh = crate::draw_brush::mint_stable_id(world);
+            jsn.components.insert(
+                STABLE_ID_KEY.to_string(),
+                serde_json::Value::Number(serde_json::Number::from(
+                    // BrushStableId(u64) serializes as a plain u64 number.
+                    // Access inner value via the json number representation.
+                    fresh.0,
+                )),
+            );
+            assigned.push(fresh);
+        }
+    }
+    assigned
+}
+
 /// Paste entities from system clipboard JSN text.
 fn paste_components(world: &mut World) {
     let jsn_text = {
@@ -700,18 +837,57 @@ fn paste_components(world: &mut World) {
         return;
     }
 
-    let parsed: Vec<jackdaw_jsn::format::JsnEntity> = match serde_json::from_str(&jsn_text) {
-        Ok(entities) => entities,
+    let parsed_value = match serde_json::from_str::<serde_json::Value>(&jsn_text) {
+        Ok(v) => v,
         Err(e) => {
-            warn!("Clipboard text is not valid JSN: {e}");
+            warn!("Clipboard text is not valid JSON: {e}");
             return;
         }
+    };
+
+    let (mut parsed, payload_assets, full_payload) = if parsed_value.is_array() {
+        // Legacy shape: Vec<JsnEntity>
+        let entities: Vec<jackdaw_jsn::format::JsnEntity> =
+            match serde_json::from_value(parsed_value) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("Clipboard text is not valid JSN entity array: {e}");
+                    return;
+                }
+            };
+        let default_assets = jackdaw_jsn::format::JsnAssets::default();
+        let payload = jackdaw_jsn::format::ClipboardPayload {
+            entities: entities.clone(),
+            assets: default_assets.clone(),
+        };
+        (entities, default_assets, payload)
+    } else {
+        let payload: jackdaw_jsn::format::ClipboardPayload =
+            match serde_json::from_value(parsed_value) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!("Clipboard text is not a valid ClipboardPayload: {e}");
+                    return;
+                }
+            };
+        let assets = payload.assets.clone();
+        let entities = payload.entities.clone();
+        (entities, assets, payload)
     };
 
     if parsed.is_empty() {
         return;
     }
 
+    // Step 1: Assign fresh BrushStableIds to pasted entities, replacing
+    // the originals so the paste doesn't collide with the source entities.
+    let spawned_stable_ids = remap_stable_ids(world, &mut parsed);
+
+    // Step 2: Merge assets from the payload into the destination scene.
+    merge_payload_assets(world, &payload_assets);
+
+    // Step 3: Spawn the entities.
+    let remapped_entities = parsed.clone();
     let local_assets = std::collections::HashMap::new();
     let parent_path = std::path::Path::new(".");
     let spawned = crate::scene_io::load_scene_from_jsn(world, &parsed, parent_path, &local_assets);
@@ -731,6 +907,18 @@ fn paste_components(world: &mut World) {
     }
 
     info!("Pasted {} entities from JSN clipboard", spawned.len());
+
+    // Step 4: Push undo command so paste can be reverted (and redone).
+    let cmd = PasteEntitiesCommand {
+        spawned_stable_ids,
+        payload: full_payload,
+        remapped_entities,
+        label: "Paste entities".to_string(),
+        is_redo: false,
+    };
+    world
+        .resource_mut::<CommandHistory>()
+        .push_executed(Box::new(cmd));
 }
 
 fn hide_selected(world: &mut World) {
@@ -1242,4 +1430,74 @@ pub(crate) fn entity_add_prefab(
         crate::prefab_picker::open_prefab_picker(world);
     });
     OperatorResult::Finished
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies that `remap_stable_ids` replaces existing `BrushStableId` values in a
+    /// JSN entity list with fresh IDs from `StableIdCounter`, so pasted copies don't
+    /// share IDs with their originals.
+    #[test]
+    fn paste_assigns_fresh_stable_ids() {
+        let mut world = World::new();
+        crate::draw_brush::init_stable_id_counter(&mut world);
+
+        const STABLE_ID_KEY: &str = "jackdaw::draw_brush::BrushStableId";
+        let original_id: u64 = 7;
+
+        let mut entities = vec![jackdaw_jsn::format::JsnEntity {
+            parent: None,
+            components: {
+                let mut map = std::collections::HashMap::new();
+                map.insert(
+                    STABLE_ID_KEY.to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(original_id)),
+                );
+                map
+            },
+        }];
+
+        let assigned = remap_stable_ids(&mut world, &mut entities);
+
+        // One entity had a BrushStableId, so one fresh ID should have been minted.
+        assert_eq!(assigned.len(), 1);
+
+        // The freshly-assigned ID must differ from the original.
+        let fresh_id = assigned[0].0;
+        assert_ne!(fresh_id, original_id, "pasted entity should have a new stable ID");
+
+        // The entity component map should hold the new value.
+        let stored = entities[0].components[STABLE_ID_KEY]
+            .as_u64()
+            .expect("BrushStableId value should be a u64 number");
+        assert_eq!(stored, fresh_id);
+    }
+
+    /// Verifies that entities without a `BrushStableId` component are untouched
+    /// by `remap_stable_ids` and that no spurious IDs are returned.
+    #[test]
+    fn paste_does_not_add_stable_ids_to_non_brush_entities() {
+        let mut world = World::new();
+        crate::draw_brush::init_stable_id_counter(&mut world);
+
+        let mut entities = vec![jackdaw_jsn::format::JsnEntity {
+            parent: None,
+            components: {
+                let mut map = std::collections::HashMap::new();
+                map.insert(
+                    "bevy_ecs::name::Name".to_string(),
+                    serde_json::Value::String("Empty".to_string()),
+                );
+                map
+            },
+        }];
+
+        let assigned = remap_stable_ids(&mut world, &mut entities);
+
+        // No BrushStableId present: nothing should be assigned or added.
+        assert!(assigned.is_empty());
+        assert!(!entities[0].components.contains_key("jackdaw::draw_brush::BrushStableId"));
+    }
 }

@@ -190,26 +190,41 @@ pub fn save_scene_as(world: &mut World) {
     spawn_save_dialog(world);
 }
 
-fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
-    let scene_file_path = world.resource::<SceneFilePath>();
-    let parent_path: Cow<'_, Path> = match scene_file_path
-        .path
-        .as_ref()
-        .and_then(|p| Path::new(p).parent())
-    {
-        Some(parent_path) => Cow::Owned(parent_path.to_path_buf()),
-        None => Cow::Owned(env::current_dir()?),
+/// Build a `JsnScene` snapshot of the live world. Pure: does not touch
+/// disk. Used by both `save_scene_inner` (which writes the result to a
+/// file) and by the multi-scene tab swap (which keeps the `JsnScene`
+/// in memory for inactive tabs).
+pub fn serialize_world_to_jsn_scene(world: &mut World) -> JsnScene {
+    let parent_path: Cow<'_, Path> = {
+        let raw_path = world
+            .get_resource::<SceneFilePath>()
+            .and_then(|r| r.path.as_deref().and_then(|p| Path::new(p).parent().map(|p| p.to_path_buf())));
+        match raw_path {
+            Some(p) => Cow::Owned(p),
+            None => Cow::Owned(
+                env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            ),
+        }
     };
 
-    // Pre-compute entity lists while we have &mut World
-    let editor_set = world.run_system_cached(collect_editor_entities)?;
-    let scene_entities =
-        world.run_system_cached_with(collect_scene_entities_from_set, editor_set)?;
+    // Pre-compute entity lists while we have &mut World.
+    let editor_set = world
+        .run_system_cached(collect_editor_entities)
+        .unwrap_or_else(|e| {
+            warn!("serialize_world_to_jsn_scene: collect_editor_entities failed: {e}");
+            Default::default()
+        });
+    let scene_entities = world
+        .run_system_cached_with(collect_scene_entities_from_set, editor_set)
+        .unwrap_or_else(|e| {
+            warn!("serialize_world_to_jsn_scene: collect_scene_entities failed: {e}");
+            Default::default()
+        });
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry_guard = registry.read();
 
-    // Get catalog reverse lookup for emitting @Name references
+    // Get catalog reverse lookup for emitting @Name references.
     let catalog_id_to_name = world
         .get_resource::<crate::asset_catalog::AssetCatalog>()
         .map(|c| c.id_to_name.clone())
@@ -235,10 +250,12 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
 
     drop(registry_guard);
 
-    // Build metadata
+    // Build metadata.
     let now = chrono_now();
-    let scene_path_res = world.resource::<SceneFilePath>();
-    let mut metadata = scene_path_res.metadata.clone();
+    let mut metadata = world
+        .get_resource::<SceneFilePath>()
+        .map(|r| r.metadata.clone())
+        .unwrap_or_default();
     metadata.modified = now.clone();
     if metadata.created.is_empty() {
         metadata.created = now;
@@ -247,13 +264,28 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         metadata.name = "Untitled".to_string();
     }
 
-    let jsn = JsnScene {
-        jsn: JsnHeader::default(),
-        metadata: metadata.clone(),
-        assets,
-        editor: None,
-        scene: entities,
+    // Capture the current viewport camera framing so the next open
+    // lands the user back where they left off.
+    let camera_transform = {
+        let mut q = world
+            .query_filtered::<&Transform, With<crate::viewport::MainViewportCamera>>();
+        q.iter(world).next().copied()
     };
+    let editor_state = camera_transform.map(|t| jackdaw_jsn::format::JsnEditorState {
+        camera: Some(t.into()),
+    });
+
+    JsnScene {
+        jsn: JsnHeader::default(),
+        metadata,
+        assets,
+        editor: editor_state,
+        scene: entities,
+    }
+}
+
+fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
+    let jsn = serialize_world_to_jsn_scene(world);
 
     let json = serde_json::to_string_pretty(&jsn)?;
 
@@ -267,7 +299,7 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
 
     // Save metadata back
     let mut scene_path = world.resource_mut::<SceneFilePath>();
-    scene_path.metadata = metadata;
+    scene_path.metadata = jsn.metadata.clone();
 
     // Mark scene as clean
     let history_len = world
@@ -275,6 +307,17 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         .undo_stack
         .len();
     world.resource_mut::<SceneDirtyState>().undo_len_at_save = history_len;
+
+    // Clear the active scene tab's dirty flag and resync its history
+    // depth marker so `mark_active_dirty_on_history_growth` does not
+    // immediately re-dirty the tab on the next frame.
+    if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
+        let active = scenes.active;
+        if let Some(tab) = scenes.tabs.get_mut(active) {
+            tab.dirty = false;
+            tab.history_depth_at_last_check = history_len;
+        }
+    }
 
     // Write to disk on the IO task pool
     let path_clone = path.clone();
@@ -287,8 +330,16 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         })
         .detach();
 
-    // Sync AST from the serialized scene
-    let ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &scene_entities);
+    // Sync AST from the serialized scene. Re-collect the entity list so
+    // we can map scene indices back to live ECS entities (same logic as
+    // in serialize_world_to_jsn_scene; the collection is cheap).
+    let editor_set_for_ast = world
+        .run_system_cached(collect_editor_entities)
+        .unwrap_or_default();
+    let scene_entities_for_ast = world
+        .run_system_cached_with(collect_scene_entities_from_set, editor_set_for_ast)
+        .unwrap_or_default();
+    let ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &scene_entities_for_ast);
     *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast;
 
     // Save catalog alongside scene if dirty
@@ -1103,7 +1154,7 @@ fn build_scene_snapshot(
         TypeId::of::<Children>(),
     ]);
 
-    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
+    let ast = world.get_resource::<jackdaw_jsn::SceneJsnAst>();
 
     entities
         .iter()
@@ -1114,11 +1165,12 @@ fn build_scene_snapshot(
                 .get::<ChildOf>()
                 .and_then(|c| entity_to_index.get(&c.parent()).copied());
 
-            // Derived components for this entity  -- skip them during save
+            // Derived components for this entity  -- skip them during save.
+            // Falls back to an empty set when the AST resource is absent
+            // (e.g. in unit tests that do not load the full editor).
             let derived = ast
-                .node_for_entity(entity)
-                .map(|n| &n.derived_components)
-                .cloned()
+                .and_then(|a| a.node_for_entity(entity))
+                .map(|n| n.derived_components.clone())
                 .unwrap_or_default();
 
             // All components (including Name, Transform, Visibility) via reflection
@@ -1252,6 +1304,20 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
         // Populate the AST from the loaded scene
         let ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &spawned);
         *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast;
+
+        // Restore the saved camera framing if present.
+        if let Some(camera) = jsn
+            .editor
+            .as_ref()
+            .and_then(|e| e.camera.as_ref())
+        {
+            let restored: Transform = camera.clone().into();
+            let mut q = world
+                .query_filtered::<&mut Transform, With<crate::viewport::MainViewportCamera>>();
+            for mut tf in q.iter_mut(world) {
+                *tf = restored;
+            }
+        }
 
         info!("Scene loaded from {path}");
 

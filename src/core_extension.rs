@@ -186,6 +186,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::measure_tool::add_to_extension(ctx);
 
         crate::scene_ops::add_to_extension(ctx);
+        crate::scenes::operators::add_to_extension(ctx);
         crate::history_ops::add_to_extension(ctx);
         crate::app_ops::add_to_extension(ctx);
         crate::view_ops::add_to_extension(ctx);

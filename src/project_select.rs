@@ -816,12 +816,39 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
     let mut next_state = world.resource_mut::<NextState<AppState>>();
     next_state.set(AppState::Editor);
 
-    // Convention: auto-load `assets/scene.jsn` if present. The game
-    // template ships one so scaffolded projects open populated.
-    // Per-project last-opened-scene persistence is a follow-up.
-    let scene_path = root.join("assets").join("scene.jsn");
-    if scene_path.is_file() {
-        crate::scene_io::load_scene_from_file(world, &scene_path);
+    let last_open_tabs = world
+        .resource::<crate::project::ProjectRoot>()
+        .config
+        .project
+        .last_open_tabs
+        .clone();
+    let last_active = world
+        .resource::<crate::project::ProjectRoot>()
+        .config
+        .project
+        .last_active_tab;
+
+    if last_open_tabs.is_empty() {
+        // Legacy convention: auto-load assets/scene.jsn if present.
+        let scene_path = root.join("assets").join("scene.jsn");
+        if scene_path.is_file() {
+            crate::scene_io::load_scene_from_file(world, &scene_path);
+        }
+    } else {
+        for rel in &last_open_tabs {
+            let abs = root.join(rel);
+            if !abs.is_file() {
+                warn!("Persisted tab not found, skipping: {abs:?}");
+                continue;
+            }
+            crate::scenes::operators::scene_open_system(world, &abs);
+        }
+        // Clamp last_active to current tab count.
+        let tab_count = world.resource::<crate::scenes::Scenes>().tabs.len();
+        if tab_count > 0 {
+            let target = last_active.min(tab_count - 1);
+            crate::scenes::swap::swap_active_tab(world, target);
+        }
     }
 }
 

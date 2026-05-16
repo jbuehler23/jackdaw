@@ -716,6 +716,15 @@ fn handle_file_double_click(
         return;
     }
 
+    let path_lower = event.path.to_lowercase();
+    if path_lower.ends_with(".jsn") {
+        let path_owned = std::path::PathBuf::from(&event.path);
+        commands.queue(move |world: &mut World| {
+            crate::scenes::operators::scene_open_system(world, &path_owned);
+        });
+        return;
+    }
+
     if is_image_file(&event.path) {
         // Only apply 2D textures on double-click
         let p = Path::new(&event.path);

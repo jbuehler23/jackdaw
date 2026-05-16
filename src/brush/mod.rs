@@ -79,7 +79,7 @@ pub enum BrushEditMode {
 }
 
 /// Tracks selected sub-elements within brush edit mode.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct BrushSelection {
     pub entity: Option<Entity>,
     pub faces: Vec<usize>,

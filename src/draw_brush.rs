@@ -495,7 +495,7 @@ const PUNCH_THROUGH_DEPTH: f32 = 1000.0;
 /// on this).
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug, Reflect)]
 #[reflect(Component, @crate::EditorHidden)]
-pub struct BrushStableId(u64);
+pub struct BrushStableId(pub(crate) u64);
 
 #[derive(Resource, Default)]
 struct StableIdCounter(u64);
@@ -505,6 +505,20 @@ impl StableIdCounter {
         self.0 += 1;
         BrushStableId(self.0)
     }
+}
+
+/// Mint a fresh `BrushStableId` by advancing the global counter.
+/// Used by paste to assign new IDs to pasted brush entities so they don't
+/// collide with the originals they were copied from.
+pub(crate) fn mint_stable_id(world: &mut World) -> BrushStableId {
+    world.resource_mut::<StableIdCounter>().next()
+}
+
+/// Initialize the `StableIdCounter` resource on a world that doesn't have the
+/// full `DrawBrushPlugin` loaded. Useful for headless integration tests.
+#[cfg(test)]
+pub(crate) fn init_stable_id_counter(world: &mut World) {
+    world.init_resource::<StableIdCounter>();
 }
 
 /// Find the current Entity for a given stable ID, if it exists.

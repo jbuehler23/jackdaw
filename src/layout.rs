@@ -108,7 +108,10 @@ pub struct HierarchyFilter;
 #[derive(Component)]
 pub struct Toolbar;
 
-pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
+pub fn editor_layout(
+    icon_font: &IconFont,
+    editor_font: &jackdaw_feathers::icons::EditorFont,
+) -> impl Bundle {
     (
         EditorEntity,
         // Outer shell: dark background with padding (Figma: 10px padding, bg #171717)
@@ -137,8 +140,12 @@ pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
             BackgroundColor(tokens::WINDOW_BG),
             BorderColor::all(tokens::BORDER_SUBTLE),
             children![
-                // Integrated window header: menu bar + scene tabs + controls
-                window_header(icon_font.0.clone()),
+                // Integrated window header: menu bar + scene tabs +
+                // workspace dropdown + transport. Scene tabs live in
+                // the header alongside the menu (where workspace tabs
+                // used to sit); workspaces are exposed as a dropdown
+                // next to the Play pill.
+                window_header(icon_font.0.clone(), editor_font.0.clone()),
                 // Content container (flex grow). Holds both workspaces.
                 // Figma: Editor (Rows) has padding: 0px 4px
                 (
@@ -228,23 +235,23 @@ pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
 /// pill. A flex-grow spacer between them absorbs the slack, so resizing
 /// the dropdown label (e.g. `Scene View v` -> `Animation View v`) can't
 /// shift the tabs.
-fn window_header(icon_font: Handle<Font>) -> impl Bundle {
+fn window_header(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bundle {
     (
         EditorEntity,
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             width: percent(100),
-            height: px(34.0),
+            height: px(36.0),
             flex_shrink: 0.0,
             border_radius: BorderRadius::top(Val::Px(7.0)),
             ..Default::default()
         },
         BackgroundColor(tokens::WINDOW_BG),
         children![
-            // Left: menu bar + tab strip, sitting flush to the left
-            // edge. `column_gap` pushes the tabs slightly away from the
-            // last menu item ("Add").
+            // Left: menu bar + scene tab strip. The strip carries the
+            // scene tabs that drive what's being edited (formerly the
+            // workspace tab strip, which is now a dropdown on the right).
             (
                 EditorEntity,
                 Node {
@@ -257,8 +264,7 @@ fn window_header(icon_font: Handle<Font>) -> impl Bundle {
                 children![
                     menu_bar::menu_bar_shell(),
                     (
-                        jackdaw_panels::WorkspaceTabStrip,
-                        DocumentTabStrip,
+                        crate::scenes::ui::SceneTabStrip,
                         EditorEntity,
                         Node {
                             flex_direction: FlexDirection::Row,
@@ -270,8 +276,7 @@ fn window_header(icon_font: Handle<Font>) -> impl Bundle {
                     ),
                 ],
             ),
-            // Flexible spacer; absorbs leftover horizontal space
-            // between the left group and the right group.
+            // Flexible spacer between left and right groups.
             (
                 EditorEntity,
                 Node {
@@ -279,17 +284,23 @@ fn window_header(icon_font: Handle<Font>) -> impl Bundle {
                     ..Default::default()
                 },
             ),
-            // Right: Scene View combobox + Play/Pause transport.
+            // Right: Workspace switcher dropdown + Play/Pause transport.
             (
                 EditorEntity,
                 Node {
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
                     padding: UiRect::horizontal(px(tokens::SPACING_MD)),
-                    column_gap: px(6.0),
+                    column_gap: px(8.0),
                     ..Default::default()
                 },
-                children![play_pause_controls(icon_font),],
+                children![
+                    crate::workspace_dropdown::workspace_dropdown_trigger(
+                        editor_font,
+                        icon_font.clone(),
+                    ),
+                    play_pause_controls(icon_font),
+                ],
             ),
         ],
     )

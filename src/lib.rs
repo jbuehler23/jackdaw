@@ -61,7 +61,9 @@ pub mod remote;
 pub mod restart;
 pub mod scene_io;
 pub mod scene_ops;
+pub mod scenes;
 pub mod sdk_paths;
+pub mod workspace_dropdown;
 pub mod selection;
 pub mod snapping;
 pub mod status_bar;
@@ -266,6 +268,8 @@ impl Plugin for EditorCorePlugin {
             selection::SelectionPlugin,
             entity_ops::EntityOpsPlugin,
             scene_io::SceneIoPlugin,
+            scenes::ScenesPlugin,
+            workspace_dropdown::WorkspaceDropdownPlugin,
             asset_browser::AssetBrowserPlugin,
             viewport_select::ViewportSelectPlugin,
             snapping::SnappingPlugin,
@@ -536,9 +540,13 @@ fn auto_hide_internal_entities(
     }
 }
 
-fn spawn_layout(mut commands: Commands, icon_font: Res<jackdaw_feathers::icons::IconFont>) {
+fn spawn_layout(
+    mut commands: Commands,
+    icon_font: Res<jackdaw_feathers::icons::IconFont>,
+    editor_font: Res<jackdaw_feathers::icons::EditorFont>,
+) {
     commands.spawn((Camera2d, EditorEntity));
-    commands.spawn(layout::editor_layout(&icon_font));
+    commands.spawn(layout::editor_layout(&icon_font, &editor_font));
 }
 
 /// Spawn a new keyframe clip on the same target as the currently-
@@ -2077,11 +2085,14 @@ fn populate_menu(
         (
             TopLevelMenu::File,
             vec![
-                op_entry::<scene_ops::SceneNewOp>("New"),
-                op_entry::<scene_ops::SceneOpenOp>("Open"),
+                op_entry::<crate::scenes::operators::SceneNewOp>("New"),
+                op_entry::<crate::scenes::operators::SceneOpenOp>("Open"),
                 separator(),
                 op_entry::<scene_ops::SceneSaveOp>("Save"),
                 op_entry::<scene_ops::SceneSaveAsOp>("Save As..."),
+                op_entry::<crate::scenes::operators::SceneSaveAllOp>("Save All"),
+                separator(),
+                op_entry::<crate::scenes::operators::SceneCloseOp>("Close Tab"),
                 separator(),
                 op_entry::<scene_ops::SceneSaveSelectionAsTemplateOp>("Save Selection as Template"),
                 separator(),
