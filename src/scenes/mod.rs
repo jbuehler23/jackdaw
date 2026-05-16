@@ -29,6 +29,8 @@ impl Plugin for ScenesPlugin {
                 persist_tabs_to_project_config,
                 ui::rebuild_scene_tab_strip,
                 ui::update_scene_tab_visuals,
+                ui::update_scene_tab_label_abbreviation,
+                ui::show_scene_tab_close_on_hover,
                 intercept_window_close,
             ),
         );

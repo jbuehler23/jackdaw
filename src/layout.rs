@@ -252,6 +252,10 @@ fn window_header(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bun
             // Left: menu bar + scene tab strip. The strip carries the
             // scene tabs that drive what's being edited (formerly the
             // workspace tab strip, which is now a dropdown on the right).
+            // `flex_shrink: 1` + `min_width: 0` let the whole left group
+            // (and therefore the scene tab strip inside it) compress
+            // when many tabs are open, instead of pushing into the
+            // right-side workspace dropdown.
             (
                 EditorEntity,
                 Node {
@@ -259,6 +263,9 @@ fn window_header(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bun
                     align_items: AlignItems::Center,
                     height: percent(100),
                     column_gap: px(tokens::SPACING_LG),
+                    flex_shrink: 1.0,
+                    min_width: px(0.0),
+                    flex_grow: 1.0,
                     ..Default::default()
                 },
                 children![
@@ -271,20 +278,20 @@ fn window_header(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bun
                             align_items: AlignItems::Center,
                             height: percent(100),
                             column_gap: px(4.0),
+                            flex_shrink: 1.0,
+                            flex_grow: 1.0,
+                            min_width: px(0.0),
+                            overflow: Overflow::scroll_x(),
                             ..Default::default()
                         },
+                        ScrollPosition::default(),
                     ),
                 ],
             ),
-            // Flexible spacer between left and right groups.
-            (
-                EditorEntity,
-                Node {
-                    flex_grow: 1.0,
-                    ..Default::default()
-                },
-            ),
             // Right: Workspace switcher dropdown + Play/Pause transport.
+            // `flex_shrink: 0` pins the right-side controls so the
+            // scene tab strip on the left is what gives ground when
+            // space gets tight.
             (
                 EditorEntity,
                 Node {
@@ -292,6 +299,7 @@ fn window_header(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bun
                     align_items: AlignItems::Center,
                     padding: UiRect::horizontal(px(tokens::SPACING_MD)),
                     column_gap: px(8.0),
+                    flex_shrink: 0.0,
                     ..Default::default()
                 },
                 children![

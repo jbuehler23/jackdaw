@@ -87,7 +87,7 @@ pub fn bisect_plane(
     let d = plane.distance;
 
     // -----------------------------------------------------------------
-    // Phase 1: classify each vert.
+    // First, classify each vert.
     let mut side: HashMap<VertKey, Side> = HashMap::with_capacity(bmesh.verts.len());
     for (vk, v) in bmesh.verts.iter() {
         let s = signed_dist(v.co, n, d);
@@ -102,7 +102,7 @@ pub fn bisect_plane(
     }
 
     // -----------------------------------------------------------------
-    // Phase 2: split every edge with one Front and one Back endpoint at
+    // Second, split every edge with one Front and one Back endpoint at
     // its plane intersection. Track the resulting on-plane verts in a
     // `on_verts` set so we can use them in face splits and cap building.
     let mut on_verts: HashSet<VertKey> = side
@@ -145,9 +145,10 @@ pub fn bisect_plane(
     }
 
     // -----------------------------------------------------------------
-    // Phase 3: split every face that has both Front and Back ring verts.
-    // After Phase 2 such a face must have exactly two On verts in its
-    // ring (the two new intersection verts), so we split along them.
+    // Third, split every face that has both Front and Back ring verts.
+    // After the edge-split pass above such a face must have exactly two
+    // On verts in its ring (the two new intersection verts), so we
+    // split along them.
     //
     // We iterate until no straddling face remains, since `split_face`
     // produces two new faces (one on each side) and may recurse if the
@@ -165,7 +166,7 @@ pub fn bisect_plane(
     }
 
     // -----------------------------------------------------------------
-    // Phase 4: classify each face as Front, Back, or OnPlane (all-On).
+    // Fourth, classify each face as Front, Back, or OnPlane (all-On).
     // Output classification uses the majority side: a face is Front if
     // it contains at least one Front vert and no Back vert, Back if it
     // contains at least one Back vert and no Front vert, OnPlane if all
@@ -205,7 +206,7 @@ pub fn bisect_plane(
     }
 
     // -----------------------------------------------------------------
-    // Phase 5: pick a fresh `material_idx` for any caps we add and for
+    // Fifth, pick a fresh `material_idx` for any caps we add and for
     // any new mesh ops that follow. We don't yet build cap faces here;
     // we do it after the side-pruning step so the cap polygon ring is
     // walked off the boundary loops that remain.
@@ -217,7 +218,7 @@ pub fn bisect_plane(
         .map_or(0, |m| m + 1);
 
     // -----------------------------------------------------------------
-    // Phase 6: drop the discarded side's faces.
+    // Sixth, drop the discarded side's faces.
     let (faces_to_drop, flip_winding) = match keep {
         BisectKeep::Front => (back_faces, false),
         BisectKeep::Back => (front_faces, true),
@@ -235,7 +236,7 @@ pub fn bisect_plane(
     gc_orphans(bmesh);
 
     // -----------------------------------------------------------------
-    // Phase 7: build a cap face from the boundary ring of on-plane verts.
+    // Finally, build a cap face from the boundary ring of on-plane verts.
     let cap_face = build_cap(bmesh, &on_verts, n, flip_winding, cap_material_idx);
 
     Ok(BisectResult {
@@ -268,7 +269,7 @@ fn face_centroid(bmesh: &EditMesh, fk: FaceKey) -> Vec3 {
 
 /// Walk every face; if any contains both Front and Back ring verts,
 /// return its key plus the two On-plane verts of its ring (which must
-/// exist after Phase 2 edge splits).
+/// exist after the edge-split pass).
 fn find_straddling_face(
     bmesh: &EditMesh,
     side: &HashMap<VertKey, Side>,

@@ -37,10 +37,9 @@ pub(crate) fn brush_reconvexify(
         return OperatorResult::Cancelled;
     };
 
-    // Collect current vertex positions from the brush's topology if available;
-    // fall back to deriving them from the plane representation for legacy brushes.
-    // CONVEX_DEAD: Phase 1 guarantees topology populated; the plane-intersection
-    // fallback is unreachable in practice but kept as a safety net.
+    // Collect current vertex positions from the brush's topology.
+    // The plane-intersection fallback is a safety net for malformed
+    // legacy brushes whose topology never got populated.
     let current_positions: Vec<Vec3> = if !brush_before.topology.vertices.is_empty() {
         brush_before
             .topology
@@ -56,9 +55,8 @@ pub(crate) fn brush_reconvexify(
         return OperatorResult::Cancelled;
     }
 
-    // Build old face_polygons (parallel to faces) for UV-preservation lookup.
-    // CONVEX_DEAD: Phase 1 guarantees topology populated; the plane-intersection
-    // fallback is unreachable in practice but kept as a safety net.
+    // Build old face_polygons (parallel to faces) for UV-preservation
+    // lookup. Same plane-intersection safety net as above.
     let old_face_polygons: Vec<Vec<usize>> = if !brush_before.topology.polygons.is_empty() {
         (0..brush_before.topology.polygons.len())
             .map(|i| {

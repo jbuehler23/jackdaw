@@ -2489,7 +2489,7 @@ fn apply_pending_static_open(world: &mut World) {
 fn drive_static_editor_build(world: &mut World) {
     use crate::build_status::BuildState;
 
-    // Step 1: dispatch a queued request.
+    // First, dispatch a queued request.
     let pending = world
         .resource_mut::<NewProjectState>()
         .static_editor
@@ -2557,7 +2557,7 @@ fn drive_static_editor_build(world: &mut World) {
         }
     }
 
-    // Step 2: poll the in-flight task.
+    // Second, poll the in-flight task.
     let result_opt = {
         let mut state = world.resource_mut::<NewProjectState>();
         state
@@ -2601,7 +2601,7 @@ fn drive_static_editor_build(world: &mut World) {
         }
     }
 
-    // Step 3: auto-fire the handoff once for the scaffold case.
+    // Finally, auto-fire the handoff once for the scaffold case.
     let auto_handoff = matches!(
         world.resource::<crate::build_status::BuildStatus>().state,
         BuildState::Ready {

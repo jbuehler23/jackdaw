@@ -34,7 +34,7 @@ pub fn remove_doubles(bmesh: &mut EditMesh, distance: f32) -> Result<MergeResult
         });
     }
 
-    // Step 1: Collect vertices in a stable sorted order (by slotmap key FFI value).
+    // First, collect vertices in a stable sorted order (by slotmap key FFI value).
     let mut keyed: Vec<(VertKey, bevy::math::Vec3)> =
         bmesh.verts.iter().map(|(k, v)| (k, v.co)).collect();
     keyed.sort_by_key(|(k, _)| {
@@ -42,7 +42,7 @@ pub fn remove_doubles(bmesh: &mut EditMesh, distance: f32) -> Result<MergeResult
         k.data().as_ffi()
     });
 
-    // Step 2: Union-find clustering over all vert pairs within distance.
+    // Second, union-find clustering over all vert pairs within distance.
     let n = keyed.len();
     let mut parent: Vec<usize> = (0..n).collect();
 
@@ -55,7 +55,7 @@ pub fn remove_doubles(bmesh: &mut EditMesh, distance: f32) -> Result<MergeResult
         }
     }
 
-    // Step 3: Pick canonical vert per cluster (lowest index in stable-sorted order
+    // Third, pick canonical vert per cluster (lowest index in stable-sorted order
     // is first encountered, since we iterate in sorted order).
     // cluster_canonical maps root -> canonical VertKey.
     let mut cluster_canonical: HashMap<usize, VertKey> = HashMap::new();
@@ -81,7 +81,7 @@ pub fn remove_doubles(bmesh: &mut EditMesh, distance: f32) -> Result<MergeResult
         });
     }
 
-    // Step 4: Flatten current EditMesh to topology.
+    // Fourth, flatten current EditMesh to topology.
     let topology_before = bmesh.flatten_to_topology();
 
     // Build reverse lookup: topology vertex index -> VertKey.
@@ -130,7 +130,7 @@ pub fn remove_doubles(bmesh: &mut EditMesh, distance: f32) -> Result<MergeResult
         canonical_to_new_idx[&canonical]
     };
 
-    // Step 5: Build new edges, deduplicating by canonical pair.
+    // Fifth, build new edges, deduplicating by canonical pair.
     let mut new_edges: Vec<MeshEdge> = Vec::new();
     let mut edge_lookup: HashMap<(u32, u32), u32> = HashMap::new();
     let mut old_edge_to_new_edge: HashMap<u32, u32> = HashMap::new();
@@ -160,7 +160,7 @@ pub fn remove_doubles(bmesh: &mut EditMesh, distance: f32) -> Result<MergeResult
         old_edge_to_new_edge.insert(old_e_idx as u32, new_e_idx);
     }
 
-    // Step 6: Build new polygons and loops.
+    // Sixth, build new polygons and loops.
     // For each polygon, remap vertices; skip consecutive duplicates; skip degenerate
     // edges; drop faces with fewer than 3 distinct verts after remapping.
     let mut new_polygons: Vec<MeshPoly> = Vec::new();
@@ -211,7 +211,7 @@ pub fn remove_doubles(bmesh: &mut EditMesh, distance: f32) -> Result<MergeResult
 
     let removed_edges = topology_before.edges.len() - new_edges.len();
 
-    // Step 7: Rebuild EditMesh from cleaned topology.
+    // Finally, rebuild EditMesh from cleaned topology.
     let new_topology = BrushTopology {
         vertices: new_vertices,
         edges: new_edges,

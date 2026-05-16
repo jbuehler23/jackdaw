@@ -59,13 +59,14 @@ fn capture_active_tab(world: &mut World) {
 /// Spawn the target tab's snapshot into the live world and restore
 /// per-tab history and view state.
 pub(crate) fn activate_tab(world: &mut World, target: usize) {
-    let (snapshot, view_state, history) = {
+    let (snapshot, view_state, history, tab_path) = {
         let mut scenes = world.resource_mut::<Scenes>();
         let tab = &mut scenes.tabs[target];
         (
             tab.snapshot.take(),
             std::mem::take(&mut tab.view_state),
             std::mem::take(&mut tab.history),
+            tab.path.clone(),
         )
     };
 
@@ -78,6 +79,16 @@ pub(crate) fn activate_tab(world: &mut World, target: usize) {
     let history_depth = history.undo_stack.len();
     *world.resource_mut::<CommandHistory>() = history;
     apply_view_state(world, &view_state);
+
+    // Critical: sync the global `SceneFilePath` to whichever tab is now
+    // active. Without this, `save_scene` sees the previous tab's path
+    // and overwrites the wrong file. Untitled tabs clear the path so
+    // `save_scene` correctly delegates to `save_scene_as`.
+    if let Some(mut spath) = world.get_resource_mut::<crate::scene_io::SceneFilePath>() {
+        spath.path = tab_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned());
+    }
 
     let mut scenes = world.resource_mut::<Scenes>();
     scenes.active = target;

@@ -73,15 +73,15 @@ fn knife_bisects_cube_top_face_along_chord() {
     let top_back = edge_with_endpoints(&bmesh, v6, v7);
     let top_face = face_by_idx(&bmesh, 4);
 
-    // Step 1: split front edge at midpoint.
+    // First, split front edge at midpoint.
     let click1_v = split_edge(&mut bmesh, top_front, 0.5).expect("split top_front");
     bmesh.validate().expect("valid after first split");
 
-    // Step 2: split back edge at midpoint.
+    // Then split back edge at midpoint.
     let click2_v = split_edge(&mut bmesh, top_back, 0.5).expect("split top_back");
     bmesh.validate().expect("valid after second split");
 
-    // Step 3: face-split the top with a chord between the two new verts.
+    // Finally, face-split the top with a chord between the two new verts.
     // `top_face` (the FaceKey) survives both edge splits because split_edge
     // mutates loops without re-keying the face.
     let _new_edge = split_face(&mut bmesh, top_face, click1_v, click2_v)
@@ -407,16 +407,17 @@ fn knife_reuses_existing_vert_when_click_lands_on_corner() {
 //
 // These tests model what `commit_path` in `src/brush/knife_mode.rs` does
 // at the op-call level:
-//   - Phase 1: per-path-point resolution via `split_edge` / `face_poke` /
+//   - First, per-path-point resolution via `split_edge` / `face_poke` /
 //     existing-vert lookup.
-//   - Phase 2: per-segment chord via `split_face` (with cross-face
+//   - Then per-segment chord via `split_face` (with cross-face
 //     routing via `split_edge` then `split_face`).
 //
 // They live here so the underlying ops are exercised in the exact
 // sequence the editor uses, surfacing any regression in the ops or in
 // the call order.
 
-/// Phase 1+2 for two edge-snap clicks on opposite edges of a face.
+/// Resolve + chord pipeline for two edge-snap clicks on opposite
+/// edges of a face.
 /// Expects: 2 `split_edge` + 1 `split_face`. Verifies sub-faces are
 /// both quads and share the new chord edge.
 #[test]
@@ -438,11 +439,11 @@ fn knife_topology_two_edge_chord() {
     let top_front = edge_with_endpoints(&bmesh, v4, v5);
     let top_back = edge_with_endpoints(&bmesh, v6, v7);
 
-    // Phase 1: resolve click 1 (edge midpoint on front) via split_edge.
+    // Resolve click 1 (edge midpoint on front) via split_edge.
     let click1_v = split_edge(&mut bmesh, top_front, 0.5).expect("split top_front");
-    // Phase 1: resolve click 2 (edge midpoint on back) via split_edge.
+    // Resolve click 2 (edge midpoint on back) via split_edge.
     let click2_v = split_edge(&mut bmesh, top_back, 0.5).expect("split top_back");
-    // Phase 2: chord 1->2 (both on top_face ring).
+    // Chord 1->2 (both on top_face ring).
     let chord_edge = split_face(&mut bmesh, top_face, click1_v, click2_v).expect("chord 1->2");
 
     bmesh.validate().expect("valid after topology cut");
@@ -602,10 +603,10 @@ fn knife_topology_zigzag_inside_face() {
 
 /// Cross-face segment: vert on face A -> vert on face B. The chord
 /// needs to traverse the shared edge between them. Pipeline:
-///   Phase 1: both endpoints are corners; no mutation.
-///   Phase 2: chord(va, vb) finds no single face containing both,
-///   so it routes: split_edge(shared, t) -> inter; split_face(A, va,
-///   inter); recurse(inter, vb) -> split_face(B, inter, vb).
+///   Resolve: both endpoints are corners; no mutation.
+///   Chord(va, vb) finds no single face containing both, so it
+///   routes: split_edge(shared, t) -> inter; split_face(A, va, inter);
+///   recurse(inter, vb) -> split_face(B, inter, vb).
 #[test]
 fn knife_topology_cross_face_segment() {
     let brush = Brush::cuboid(2.0, 2.0, 2.0);
@@ -673,9 +674,9 @@ fn knife_topology_cross_face_segment() {
     let _ = (face_a, face_b); // retained to document the original-face indices.
 }
 
-/// Atomicity: if Phase 1 (resolving path points) fails after some
-/// mutations have already been applied, the EditMesh should be
-/// rolled back to its pre-commit snapshot.
+/// Atomicity: if the resolve pass fails after some mutations have
+/// already been applied, the EditMesh should be rolled back to its
+/// pre-commit snapshot.
 ///
 /// We don't have direct access to `commit_path` in this geometry-only
 /// test crate, but we can verify the snapshot/restore contract at the

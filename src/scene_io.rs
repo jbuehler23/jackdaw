@@ -171,7 +171,18 @@ fn spawn_open_dialog(world: &mut World) {
 }
 
 pub fn save_scene(world: &mut World) {
-    // If no path is set yet, delegate to Save As
+    // The active scene tab is the source of truth for which file to
+    // save to. Re-sync the global `SceneFilePath` from it so a stale
+    // path from a previous tab can never cause us to overwrite the
+    // wrong file. Untitled tabs (no path) fall through to Save As.
+    let active_tab_path: Option<String> = world
+        .get_resource::<crate::scenes::Scenes>()
+        .and_then(|s| s.tabs.get(s.active).and_then(|t| t.path.clone()))
+        .map(|p| p.to_string_lossy().into_owned());
+    if let Some(mut spath) = world.get_resource_mut::<SceneFilePath>() {
+        spath.path = active_tab_path;
+    }
+
     let has_path = world.resource::<SceneFilePath>().path.is_some();
     if !has_path {
         save_scene_as(world);
@@ -1584,9 +1595,23 @@ fn do_new_scene(world: &mut World) {
     info!("New scene created");
 }
 
-/// Spawn default lighting for a new/empty scene (Sun directional light + no ambient).
+/// Spawn default lighting for a new / empty scene (Sun directional
+/// light + no ambient). Idempotent: if any `DirectionalLight` already
+/// exists in the world we skip the Sun spawn so loaded scenes that
+/// carry their own lighting don't get a duplicate `Sun`. The ambient
+/// override is always applied since it is a `Resource` mutation, not a
+/// spawn.
 pub fn spawn_default_lighting(world: &mut World) {
     world.insert_resource(GlobalAmbientLight::NONE);
+
+    let has_directional = world
+        .query::<&DirectionalLight>()
+        .iter(world)
+        .next()
+        .is_some();
+    if has_directional {
+        return;
+    }
 
     let sun = world
         .spawn((
@@ -2005,6 +2030,22 @@ fn poll_scene_dialog(world: &mut World) {
                 let mut scene_path = world.resource_mut::<SceneFilePath>();
                 scene_path.path = Some(path_str);
                 scene_path.last_directory = last_dir;
+
+                // Bind the picked path onto the active scene tab so
+                // subsequent swaps/saves go to the right file, and the
+                // dirty-state and display name reflect "saved scene"
+                // instead of "untitled-N".
+                if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
+                    let active = scenes.active;
+                    if let Some(tab) = scenes.tabs.get_mut(active) {
+                        tab.path = Some(path.clone());
+                        if let Some(stem) =
+                            path.file_stem().and_then(|s| s.to_str())
+                        {
+                            tab.display_name = stem.to_string();
+                        }
+                    }
+                }
 
                 if let Err(err) = save_scene_inner(world) {
                     error!("scene save (after Save As dialog) failed: {err}");

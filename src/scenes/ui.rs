@@ -1,16 +1,17 @@
-//! Scene tab bar. Renders one button per `SceneTab` in `Scenes`,
-//! plus a trailing "+" button for `scene.new`. Left-click switches,
-//! middle/X-button closes, right-click opens the context menu. The
-//! strip is rebuilt structurally when the tab list changes; per-tab
-//! highlight + dirty-dot updates happen in-place to keep observer
-//! identities stable across normal editing.
+//! Scene tab bar. One button per `SceneTab` plus a trailing `+` that
+//! fires `scene.new`. Left-click switches, middle-click closes,
+//! right-click opens the context menu. The strip is rebuilt only when
+//! the tab list grows or shrinks. Active highlight and dirty-dot
+//! updates happen in place so click observers survive normal editing.
 
+use bevy::picking::hover::Hovered;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use jackdaw_feathers::{
     context_menu::spawn_context_menu,
     icons::{EditorFont, Icon, IconFont},
     tokens,
+    tooltip::Tooltip,
 };
 use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuState};
 
@@ -29,42 +30,54 @@ const TAB_ACCENT: Color = tokens::DOC_TAB_SCENE_ACCENT;
 const ADD_BTN_LABEL: Color = tokens::DOC_TAB_INACTIVE_LABEL;
 
 const TAB_LABEL_FONT_PX: f32 = 12.0;
-const TAB_ICON_FONT_PX: f32 = 12.0;
-const TAB_CLOSE_ICON_PX: f32 = 9.0;
-const TAB_PAD_X: f32 = 9.0;
+const TAB_ICON_FONT_PX: f32 = 11.0;
+const TAB_CLOSE_ICON_PX: f32 = 10.0;
+const TAB_PAD_X: f32 = 6.0;
 const TAB_PAD_Y: f32 = 5.0;
 const TAB_RADIUS: f32 = 4.0;
-const TAB_GAP: f32 = 6.0;
+const TAB_GAP: f32 = 4.0;
 
-/// Marker for the scene-tab-bar container. The layout owner spawns one
-/// of these; the rebuild system reuses it.
+/// Container for the row of scene tabs. The layout spawns it; the
+/// rebuild system fills it.
 #[derive(Component)]
 pub struct SceneTabStrip;
 
-/// Per-tab marker. Stores the tab index so click observers and the
-/// in-place visual updater can locate it.
+/// Per-tab marker holding its index into `Scenes.tabs`.
 #[derive(Component, Clone, Copy)]
 pub struct SceneTabIndex(pub usize);
 
-/// Marker on the close (`x`) child of a scene tab. Carries the tab
-/// index so it can dispatch the close operator independently of the
-/// parent tab's click observer.
+/// Marker on the close (`x`) child so its click handler can be
+/// distinguished from the parent tab's.
 #[derive(Component, Clone, Copy)]
 pub struct SceneTabCloseButton(pub usize);
 
-/// Marker on the per-tab dirty dot so `update_scene_tab_visuals` can
-/// hide/show it without rebuilding the strip.
+/// Marker on the per-tab dirty dot.
 #[derive(Component, Clone, Copy)]
 pub struct SceneTabDirtyDot(pub usize);
 
-/// Marker on the trailing "+" button at the end of the strip.
+/// Marker on the trailing `+` button.
 #[derive(Component)]
 pub struct SceneTabAddButton;
 
-/// Rebuilds the tab strip's children when the tab list changes.
-/// In-place visual updates (active highlight, dirty dot) go through
-/// `update_scene_tab_visuals` so the observers stay attached across
-/// normal edits.
+/// Marker on the `X` glyph inside a tab's close button. Lets the
+/// hover system fade it in / out without reflowing layout.
+#[derive(Component)]
+pub struct SceneTabCloseIcon;
+
+/// Per-label state for the width-driven abbreviation updater.
+/// `tab_natural_width` is the un-squeezed width measured on the first
+/// frame the full label renders. `0.0` means not yet measured.
+#[derive(Component)]
+pub struct SceneTabLabelKey {
+    pub full: String,
+    pub abbr: String,
+    pub tab: Entity,
+    pub tab_natural_width: f32,
+}
+
+/// Respawns the row of tab entities when the tab count changes.
+/// Active highlight and dirty dot flips are handled by
+/// `update_scene_tab_visuals` to keep click observers attached.
 pub fn rebuild_scene_tab_strip(
     mut commands: Commands,
     scenes: Res<Scenes>,
@@ -102,11 +115,17 @@ pub fn rebuild_scene_tab_strip(
     let active = scenes.active;
 
     for (idx, tab) in scenes.tabs.iter().enumerate() {
+        let path_display = tab
+            .path
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Unsaved scene".to_string());
         spawn_scene_tab(
             &mut commands,
             strip_entity,
             idx,
             &tab.display_name,
+            &path_display,
             tab.dirty,
             idx == active,
             editor_font_handle.clone(),
@@ -117,11 +136,27 @@ pub fn rebuild_scene_tab_strip(
     spawn_add_tab_button(&mut commands, strip_entity, icon_font_handle);
 }
 
+/// Abbreviate a tab's display name when it would not fit the tab's
+/// minimum width. Renders as `{first_char}...{last_3_chars}`, e.g.
+/// `untitled-12` -> `u...-12`. Names short enough to display fully are
+/// returned unchanged. The full name still appears in the tab's
+/// tooltip on hover, so abbreviation is purely visual.
+fn abbreviated_label(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    if chars.len() <= 7 {
+        return name.to_string();
+    }
+    let first = chars[0];
+    let last3: String = chars[chars.len() - 3..].iter().collect();
+    format!("{first}...{last3}")
+}
+
 fn spawn_scene_tab(
     commands: &mut Commands,
     strip: Entity,
     idx: usize,
     display_name: &str,
+    path_display: &str,
     dirty: bool,
     is_active: bool,
     editor_font: Option<Handle<Font>>,
@@ -139,6 +174,8 @@ fn spawn_scene_tab(
         .spawn((
             SceneTabIndex(idx),
             Interaction::default(),
+            Hovered::default(),
+            Tooltip::title(display_name.to_string()).with_description(path_display.to_string()),
             Node {
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
@@ -146,6 +183,14 @@ fn spawn_scene_tab(
                 padding: UiRect::axes(Val::Px(TAB_PAD_X), Val::Px(TAB_PAD_Y)),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(TAB_RADIUS)),
+                // Tabs shrink uniformly when the strip runs out of
+                // room. `min_width` keeps a tab readable down to icon
+                // + a couple of chars + close; `max_width` stops a
+                // long name from monopolizing the strip.
+                flex_shrink: 1.0,
+                min_width: Val::Px(60.0),
+                max_width: Val::Px(200.0),
+                overflow: Overflow::clip_x(),
                 ..Default::default()
             },
             BackgroundColor(bg),
@@ -201,12 +246,12 @@ fn spawn_scene_tab(
         )
         .id();
 
-    // Small colour accent stripe (matches the workspace-tab accent column).
+    // Slim colour accent stripe (matches the workspace-tab accent column).
     commands.spawn((
         Node {
-            width: Val::Px(2.5),
-            height: Val::Px(12.0),
-            border_radius: BorderRadius::all(Val::Px(5.0)),
+            width: Val::Px(2.0),
+            height: Val::Px(11.0),
+            border_radius: BorderRadius::all(Val::Px(4.0)),
             ..Default::default()
         },
         BackgroundColor(TAB_ACCENT),
@@ -229,7 +274,9 @@ fn spawn_scene_tab(
         ));
     }
 
-    // Label.
+    // Label, wrapped in a flex-shrinkable container so long names
+    // clip cleanly when the tab is squeezed rather than pushing the
+    // dirty dot / close button out of the tab.
     let mut label_font = TextFont {
         font_size: TAB_LABEL_FONT_PX,
         ..Default::default()
@@ -237,12 +284,31 @@ fn spawn_scene_tab(
     if let Some(handle) = editor_font {
         label_font.font = handle;
     }
+    let label_container = commands
+        .spawn((
+            Node {
+                flex_shrink: 1.0,
+                min_width: Val::Px(0.0),
+                overflow: Overflow::clip_x(),
+                ..Default::default()
+            },
+            Pickable::IGNORE,
+            ChildOf(tab_entity),
+        ))
+        .id();
     commands.spawn((
         Text::new(display_name.to_string()),
+        SceneTabLabelKey {
+            full: display_name.to_string(),
+            abbr: abbreviated_label(display_name),
+            tab: tab_entity,
+            tab_natural_width: 0.0,
+        },
+        TextLayout::new_with_no_wrap(),
         label_font,
         TextColor(label_color),
         Pickable::IGNORE,
-        ChildOf(tab_entity),
+        ChildOf(label_container),
     ));
 
     // Dirty dot (always present; hidden when not dirty so the visual
@@ -261,18 +327,19 @@ fn spawn_scene_tab(
         ChildOf(tab_entity),
     ));
 
-    // Close button.
+    // Close button slot. Always reserves its 14x14 layout space so
+    // hovering doesn't reflow the rest of the tab; the X glyph inside
+    // is alpha-toggled by `show_scene_tab_close_on_hover`.
     let close_btn = commands
         .spawn((
             SceneTabCloseButton(idx),
             Interaction::default(),
             Node {
-                width: Val::Px(16.0),
-                height: Val::Px(16.0),
+                width: Val::Px(14.0),
+                height: Val::Px(14.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                border_radius: BorderRadius::all(Val::Px(3.0)),
-                margin: UiRect::left(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(2.0)),
                 ..Default::default()
             },
             BackgroundColor(Color::NONE),
@@ -286,14 +353,16 @@ fn spawn_scene_tab(
         .id();
 
     if let Some(handle) = icon_font {
+        let hidden = TAB_INACTIVE_LABEL.with_alpha(0.0);
         commands.spawn((
+            SceneTabCloseIcon,
             Text::new(String::from(Icon::X.unicode())),
             TextFont {
                 font: handle,
                 font_size: TAB_CLOSE_ICON_PX,
                 ..Default::default()
             },
-            TextColor(TAB_INACTIVE_LABEL),
+            TextColor(hidden),
             Pickable::IGNORE,
             ChildOf(close_btn),
         ));
@@ -410,6 +479,64 @@ pub fn on_scene_tab_context_action(event: On<ContextMenuAction>, mut commands: C
             _ => {}
         }
     });
+}
+
+/// Fade each tab's `X` glyph in or out on hover. The button slot
+/// itself always reserves layout space so the rest of the tab does
+/// not shift when the X appears.
+pub fn show_scene_tab_close_on_hover(
+    tabs: Query<(&Hovered, &Children), (With<SceneTabIndex>, Changed<Hovered>)>,
+    close_buttons: Query<&Children, With<SceneTabCloseButton>>,
+    mut icon_colors: Query<&mut TextColor, With<SceneTabCloseIcon>>,
+) {
+    for (hover, tab_children) in tabs.iter() {
+        let alpha = if hover.get() { 1.0 } else { 0.0 };
+        for child in tab_children.iter() {
+            let Ok(close_children) = close_buttons.get(child) else {
+                continue;
+            };
+            for grandchild in close_children.iter() {
+                if let Ok(mut tc) = icon_colors.get_mut(grandchild) {
+                    tc.0 = tc.0.with_alpha(alpha);
+                }
+            }
+        }
+    }
+}
+
+/// Swap each scene tab's label between full and `f...xyz` based on
+/// whether the tab has been squeezed below its un-squeezed natural
+/// width (cached on the first frame the full label renders). The
+/// cache only grows so flipping to the abbreviated text doesn't lower
+/// the threshold and trap the tab in abbreviated mode.
+pub fn update_scene_tab_label_abbreviation(
+    tabs: Query<&ComputedNode>,
+    mut labels: Query<(&mut Text, &mut SceneTabLabelKey)>,
+) {
+    const HYSTERESIS_PX: f32 = 4.0;
+    for (mut text, mut key) in labels.iter_mut() {
+        let Ok(tab_computed) = tabs.get(key.tab) else {
+            continue;
+        };
+        let actual = tab_computed.size().x * tab_computed.inverse_scale_factor();
+        let natural = tab_computed.content_size().x * tab_computed.inverse_scale_factor();
+
+        // Only refresh the cache when the full label is currently
+        // rendered. Caching during the abbreviated state would shrink
+        // the threshold and lock the tab in abbreviated mode.
+        if text.0 == key.full && natural > key.tab_natural_width {
+            key.tab_natural_width = natural;
+        }
+        if key.tab_natural_width <= 0.0 {
+            continue;
+        }
+
+        let want_abbr = actual + HYSTERESIS_PX < key.tab_natural_width;
+        let desired = if want_abbr { &key.abbr } else { &key.full };
+        if text.0 != *desired && !desired.is_empty() {
+            text.0 = desired.clone();
+        }
+    }
 }
 
 /// Per-frame system: update tab visuals (bg, border, label color, dirty

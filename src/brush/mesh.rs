@@ -131,10 +131,8 @@ pub fn regenerate_brush_meshes(
             // already): read straight from `brush.topology`. The
             // plane-intersection path below only handles convex brushes
             // and silently distorts non-convex / chamfered faces, so we
-            // prefer the authored ring whenever it exists.
-            // CONVEX_DEAD: Phase 1 guarantees topology populated; the
-            // plane-intersection fallback below is no longer reachable in
-            // practice but kept as a safety net for malformed/empty brushes.
+            // prefer the authored ring whenever it exists. The fallback
+            // is kept as a safety net for malformed / empty brushes.
             let verts: Vec<Vec3> = brush.topology.vertices.iter().map(|v| v.position).collect();
             let polys: Vec<Vec<usize>> = (0..brush.topology.polygons.len())
                 .map(|i| brush.topology.face_ring(i).map(|v| v as usize).collect())

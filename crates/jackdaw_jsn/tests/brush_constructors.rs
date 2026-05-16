@@ -43,10 +43,9 @@ fn sphere_constructor_populates_topology() {
 
 #[test]
 fn every_primitive_constructor_populates_topology() {
-    // Invariant: any Brush built via a primitive constructor exits with
-    // both `faces` and `topology` populated. Phase 1 of the
-    // concave-by-default migration relies on this so downstream
-    // operations never need to branch on whether topology exists.
+    // Invariant: every primitive constructor returns a Brush with both
+    // `faces` and `topology` populated, so downstream code never has
+    // to branch on whether topology exists.
     let cuboid = Brush::cuboid(0.5, 0.5, 0.5);
     assert!(!cuboid.topology.polygons.is_empty(), "cuboid");
 

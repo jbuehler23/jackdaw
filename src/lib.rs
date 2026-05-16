@@ -2462,7 +2462,18 @@ fn on_scroll(
     let max_offset = (computed.content_size() - computed.size()) * computed.inverse_scale_factor();
     let delta = &mut scroll.delta;
 
-    if node.overflow.x == OverflowAxis::Scroll && delta.x != 0. {
+    // On a horizontal-only-scroll container (e.g. tab strips), a
+    // plain vertical mouse wheel should drive horizontal scrolling.
+    // This matches what browsers / VSCode do for overflowing tab
+    // strips and means users don't need to hold Ctrl to scroll
+    // through tabs.
+    let scroll_x = node.overflow.x == OverflowAxis::Scroll;
+    let scroll_y = node.overflow.y == OverflowAxis::Scroll;
+    if scroll_x && !scroll_y && delta.x == 0. && delta.y != 0. {
+        std::mem::swap(&mut delta.x, &mut delta.y);
+    }
+
+    if scroll_x && delta.x != 0. {
         let at_limit = if delta.x > 0. {
             scroll_position.x >= max_offset.x
         } else {
@@ -2474,7 +2485,7 @@ fn on_scroll(
         }
     }
 
-    if node.overflow.y == OverflowAxis::Scroll && delta.y != 0. {
+    if scroll_y && delta.y != 0. {
         let at_limit = if delta.y > 0. {
             scroll_position.y >= max_offset.y
         } else {
@@ -2980,9 +2991,9 @@ fn sync_active_workspace_from_live_tree(world: &mut World) {
 ///
 /// Each canonical leaf is populated from `WindowRegistry::by_area`
 /// based on the windows registered with that `default_area`. The
-/// `center` leaf is empty in Phase 1 (the hardcoded `SceneViewport`
-/// is parented into it by `setup_viewport`); Phase 2 will register a
-/// viewport panel into it.
+/// `center` leaf is empty today (the hardcoded `SceneViewport` is
+/// parented into it by `setup_viewport`). The multi-viewport work
+/// will register a real viewport panel into it.
 ///
 /// Project Files is split off the bottom of the `left` leaf via the
 /// runtime split API so the resulting bottom-left leaf gets a

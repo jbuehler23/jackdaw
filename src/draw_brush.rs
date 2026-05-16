@@ -1222,7 +1222,7 @@ fn draw_brush_preview(
         }
         DrawPhase::DrawingFootprint => {
             if active.diagonal_snap {
-                // Phase 1: show the line being drawn
+                // First, show the line being drawn.
                 gizmos.line(active.corner1, active.corner2, color);
                 let mid = (active.corner1 + active.corner2) / 2.0;
                 draw_plane_grid(&mut gizmos, &active.plane, mid, &snap_settings);
@@ -2377,14 +2377,14 @@ fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
     }
 
     commands.queue(move |world: &mut World| {
-        // Phase 1: Collect all brush entities and their data
+        // First, collect all brush entities and their data.
         let mut query = world.query::<(Entity, &Brush, &GlobalTransform)>();
         let targets: Vec<(Entity, Brush, GlobalTransform)> = query
             .iter(world)
             .map(|(e, b, gt)| (e, b.clone(), *gt))
             .collect();
 
-        // Phase 2: Compute subtractions (pure computation)
+        // Second, compute subtractions (pure computation).
         struct SubtractionResult {
             original_entity: Entity,
             fragments: Vec<(Brush, Transform)>,
@@ -2557,7 +2557,7 @@ fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
             return;
         }
 
-        // Phase 3: Capture brush data for originals (assigns stable IDs)
+        // Third, capture brush data for originals (assigns stable IDs).
         let mut originals: Vec<BrushData> = Vec::new();
         for result in &results {
             originals.push(brush_data_from_entity(world, result.original_entity));

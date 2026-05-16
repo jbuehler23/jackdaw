@@ -1,10 +1,10 @@
 //! Mesh-CSG glue for jackdaw brushes.
 //!
-//! Phase 3 of the concave-by-default migration. Wraps the
+//! Wraps the
 //! [`manifold-csg`](https://crates.io/crates/manifold-csg) Rust bindings to
-//! [`manifold3d`](https://github.com/elalish/manifold) so that brush boolean
-//! operations (union, difference, intersection) work on arbitrary
-//! (including concave) brush topologies, not just convex half-space sets.
+//! [`manifold3d`](https://github.com/elalish/manifold) so brush boolean
+//! operations (union, difference, intersection) work on arbitrary brush
+//! topologies, not just convex half-space sets.
 //!
 //! ## Build prerequisites
 //!

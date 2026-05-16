@@ -1,10 +1,7 @@
-//! End-to-end test for the Phase 3 mesh-CSG glue:
-//! bevel an edge of a cube (producing a concave-by-default brush), then
-//! subtract another cube from it via `brush_difference_split`. Verifies
-//! the round-trip survives without panic and produces a valid result.
-//!
-//! This corresponds to the integration scenario the brush CSG operator
-//! exercises in the editor.
+//! Integration test for the mesh-CSG glue: bevel one edge of a cube
+//! (producing a chamfered brush), then subtract another cube from it
+//! via `brush_difference_split`. Mirrors the operator path the editor
+//! runs, verifies the round-trip survives without panic.
 
 use bevy::math::Vec3;
 use jackdaw_csg::{BooleanOp, CsgInput, brush_boolean, brush_difference_split};

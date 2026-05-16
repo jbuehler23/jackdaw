@@ -77,6 +77,7 @@ pub fn spawn_tab_bar_world(
                 min_width: Val::Px(0.0),
                 ..default()
             },
+            ScrollPosition::default(),
             ChildOf(tab_bar),
         ))
         .id();

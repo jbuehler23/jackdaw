@@ -879,14 +879,12 @@ fn paste_components(world: &mut World) {
         return;
     }
 
-    // Step 1: Assign fresh BrushStableIds to pasted entities, replacing
-    // the originals so the paste doesn't collide with the source entities.
+    // Mint fresh BrushStableIds for the pasted entities so they don't
+    // collide with their source.
     let spawned_stable_ids = remap_stable_ids(world, &mut parsed);
 
-    // Step 2: Merge assets from the payload into the destination scene.
     merge_payload_assets(world, &payload_assets);
 
-    // Step 3: Spawn the entities.
     let remapped_entities = parsed.clone();
     let local_assets = std::collections::HashMap::new();
     let parent_path = std::path::Path::new(".");
@@ -894,7 +892,6 @@ fn paste_components(world: &mut World) {
 
     crate::scene_io::register_entities_in_ast(world, &spawned);
 
-    // Deselect current, select pasted
     for &entity in &world.resource::<Selection>().entities.clone() {
         if let Ok(mut ec) = world.get_entity_mut(entity) {
             ec.remove::<Selected>();
@@ -908,7 +905,6 @@ fn paste_components(world: &mut World) {
 
     info!("Pasted {} entities from JSN clipboard", spawned.len());
 
-    // Step 4: Push undo command so paste can be reverted (and redone).
     let cmd = PasteEntitiesCommand {
         spawned_stable_ids,
         payload: full_payload,

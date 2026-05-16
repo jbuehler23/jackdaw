@@ -34,13 +34,13 @@ pub fn loop_cut(
         return Err(LoopCutError::EdgeNotFound);
     }
 
-    // Phase 1: walk the edge ring, collecting per-face (entry_edge, exit_edge) pairs.
+    // First, walk the edge ring, collecting per-face (entry_edge, exit_edge) pairs.
     let walk = walk_loop_cut_ring(bmesh, start_edge);
     if walk.is_empty() {
         return Err(LoopCutError::StartFaceNotQuad);
     }
 
-    // Phase 2: split each unique edge, oriented relative to the slide axis.
+    // Second, split each unique edge, oriented relative to the slide axis.
     //
     // The slide axis is the canonical direction of the start edge in world space.
     // For every other crossed edge, we check whether its canonical direction aligns
@@ -82,7 +82,7 @@ pub fn loop_cut(
         new_verts.push(v_new);
     }
 
-    // Phase 3: split each crossed face along the two new verts (one per ring edge).
+    // Finally, split each crossed face along the two new verts (one per ring edge).
     let mut new_loop_edges: Vec<EdgeKey> = Vec::new();
     let mut new_faces_out: Vec<FaceKey> = Vec::new();
     for hop in &walk {

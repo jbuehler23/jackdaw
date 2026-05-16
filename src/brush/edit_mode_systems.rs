@@ -55,9 +55,8 @@ pub fn sync_brush_bmesh_on_edit_mode(
     if let Some(e) = target_entity {
         if !existing.contains(e) {
             if let Ok(brush) = brush_q.get(e) {
-                // CONVEX_DEAD: Phase 1 guarantees topology populated for any
-                // brush with faces; this guard now only protects against the
-                // degenerate empty-brush case (no faces, no topology).
+                // Guard against the degenerate empty-brush case
+                // (no faces, no topology).
                 if !brush.topology.polygons.is_empty() {
                     let bmesh = EditMesh::lift_from_topology(&brush.topology);
                     let vert_keys: Vec<VertKey> = bmesh.verts.keys().collect();

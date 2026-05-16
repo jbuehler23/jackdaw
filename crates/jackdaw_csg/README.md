@@ -4,9 +4,9 @@ Mesh-CSG glue between jackdaw brushes and the
 [`manifold3d`](https://github.com/elalish/manifold) C++ kernel via the
 [`manifold-csg`](https://crates.io/crates/manifold-csg) Rust bindings.
 
-Phase 3 of the concave-by-default brushes migration: replaces the
-convex-only half-space CSG path used by Join, CSG Subtract, and CSG
-Intersect with mesh-CSG that works on arbitrary (concave) topologies.
+Replaces the convex-only half-space CSG path used by Join, CSG
+Subtract, and CSG Intersect with mesh-CSG that works on arbitrary
+(concave) topologies.
 
 ## Status
 

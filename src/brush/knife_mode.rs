@@ -32,7 +32,7 @@
 //! **topology mutations only** (no CDT). The pipeline mirrors how
 //! the knife tool routes a multi-segment cut across faces.
 //!
-//! Phase 1: walk every path point in order, resolving each to a live
+//! First, walk every path point in order, resolving each to a live
 //! `VertKey` in the post-mutation mesh:
 //!
 //! - Vertex snap: position-lookup against the live mesh.
@@ -47,7 +47,7 @@
 //!   alive now and route through it.
 //! - Path-point reclick: inherits the resolved VertKey from its source.
 //!
-//! Phase 2: for each consecutive pair, perform a chord:
+//! Then for each consecutive pair, perform a chord:
 //!
 //! - Both verts on the same live face's ring: `split_face`.
 //! - Different live faces: cross-face routing. Find a face adjacent to
@@ -1308,16 +1308,16 @@ fn canonical_edge(a: usize, b: usize) -> (usize, usize) {
 ///
 /// 1. **Snapshot** `start_brush` and the current `EditMesh` so we can
 ///    roll back atomically if anything panics or fails catastrophically.
-/// 2. **Phase 1: resolve each path point to a live `VertKey`**.
+/// 2. **First, resolve each path point to a live `VertKey`**.
 ///    Vertex snaps lookup by position; edge snaps `split_edge` the live
 ///    sub-edge containing the click; interior snaps `face_poke` the live
 ///    face the click lies in. Path-point reclicks inherit the prior
 ///    resolved vert.
-/// 3. **Phase 2: chord each consecutive pair**. If both verts share a
+/// 3. **Then chord each consecutive pair**. If both verts share a
 ///    live face's ring, `split_face` directly. Otherwise route across
 ///    one or more adjacent faces via intermediate `split_edge` /
 ///    `split_face` calls.
-/// 4. **Phase 3: flatten + sync `Brush`**. Sub-faces inherit the parent
+/// 4. **Finally flatten + sync `Brush`**. Sub-faces inherit the parent
 ///    face's `material_idx`, so per-slot `BrushFaceData` (UV axes,
 ///    material handle, etc.) is copied from `start_brush` keyed by
 ///    `material_idx`.
@@ -1336,13 +1336,13 @@ fn commit_path(
         knife.path.clear();
         return;
     };
-    // Snapshot the live EditMesh so a Phase 1 / Phase 2 catastrophe
-    // (panic-equivalent return path) restores the mesh exactly.
+    // Snapshot the live EditMesh so a catastrophe in either resolve
+    // or chord (panic-equivalent return path) restores it exactly.
     let start_editmesh = bmesh_component.mesh.clone();
     let start_vert_keys = bmesh_component.vert_keys.clone();
     let start_face_keys = bmesh_component.face_keys.clone();
 
-    // --- Phase 1: resolve each path point to a live VertKey. ------------
+    // --- First, resolve each path point to a live VertKey. -------------
     //
     // Walk the user's path in order. For each click, depending on the
     // snap kind, perform exactly one topology mutation (or none if the
@@ -1354,7 +1354,7 @@ fn commit_path(
         return;
     }
     let mut path_verts: Vec<VertKey> = Vec::with_capacity(path_points.len());
-    let mut phase1_failed = false;
+    let mut resolve_failed = false;
     for (i, point) in path_points.iter().enumerate() {
         // PathPoint reclicks: inherit the resolved VertKey from the
         // source click. This is "no new geometry" by construction.
@@ -1372,13 +1372,13 @@ fn commit_path(
                     "Knife: path point {} resolve failed ({}); aborting commit",
                     i, reason
                 );
-                phase1_failed = true;
+                resolve_failed = true;
                 break;
             }
         }
     }
 
-    if phase1_failed {
+    if resolve_failed {
         // Restore the snapshot and bail out without pushing to history.
         bmesh_component.mesh = start_editmesh;
         bmesh_component.vert_keys = start_vert_keys;
@@ -1387,7 +1387,7 @@ fn commit_path(
         return;
     }
 
-    // --- Phase 2: chord each consecutive pair. --------------------------
+    // --- Then chord each consecutive pair. ------------------------------
     //
     // For each `(path_verts[i], path_verts[i+1])`:
     //   - Same live face containing both: `split_face`.
@@ -1430,9 +1430,9 @@ fn commit_path(
         }
     }
 
-    // Phase 1 may have applied mutations (edge splits, face pokes) even
-    // if every segment in Phase 2 was a no-op. We still want to commit
-    // those if any path point actually introduced new geometry.
+    // The resolve pass may have applied mutations (edge splits, face
+    // pokes) even if every chord segment was a no-op. We still want to
+    // commit those if any path point introduced new geometry.
     // Detect "did anything change" by comparing mesh sizes; if not,
     // restore and bail.
     let mesh_unchanged = bmesh_component.mesh.vert_count() == start_editmesh.vert_count()
@@ -1447,7 +1447,7 @@ fn commit_path(
         return;
     }
 
-    // --- Phase 3: flatten + sync brush. ---------------------------------
+    // --- Finally flatten + sync brush. ----------------------------------
     //
     // Every sub-face produced by `split_edge` / `split_face` / `face_poke`
     // inherits its parent's `material_idx`. `flatten_to_topology` sorts
@@ -1531,8 +1531,8 @@ fn commit_path(
 /// true edge/face, so 1e-4 is a safe match radius.
 const KNIFE_POSITION_EPSILON: f32 = 1e-4;
 
-/// Phase 1 entry point: resolve a single path point to a live `VertKey`
-/// in `bmesh`. May mutate the mesh (split_edge / face_poke).
+/// Resolve a single path point to a live `VertKey` in `bmesh`. May
+/// mutate the mesh (split_edge / face_poke).
 fn resolve_path_point(
     bmesh: &mut EditMesh,
     point: &KnifePathPoint,
@@ -1766,9 +1766,9 @@ fn point_in_polygon_3d(point: Vec3, ring: &[Vec3], normal: Vec3) -> bool {
     inside
 }
 
-/// Phase 2 entry point: insert a chord from `va` to `vb`. If the two
-/// verts share a live face's ring, `split_face` directly. Otherwise
-/// recursively split across one or more adjacent faces.
+/// Insert a chord from `va` to `vb`. If the two verts share a live
+/// face's ring, `split_face` directly. Otherwise recursively split
+/// across one or more adjacent faces.
 ///
 /// Returns `Ok(true)` if at least one `split_face` mutation was applied,
 /// `Ok(false)` if the chord was a no-op (e.g., the two verts are

@@ -44,9 +44,8 @@ pub fn rebuild_brush_meshes(
         return;
     };
 
-    // CONVEX_DEAD: Phase 1 guarantees topology populated; the plane-intersection
-    // fallback below is unreachable in practice but kept as a safety net for the
-    // runtime / preview path where the migration system may not have run yet.
+    // Plane-intersection fallback covers the runtime / preview path
+    // where the editor's migration system has not yet run.
     let (vertices, face_polygons) = if !brush.topology.polygons.is_empty() {
         let verts: Vec<Vec3> = brush.topology.vertices.iter().map(|v| v.position).collect();
         let polys: Vec<Vec<usize>> = (0..brush.topology.polygons.len())

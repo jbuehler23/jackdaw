@@ -162,7 +162,18 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     tab.snapshot = Some(jsn);
 
     let target = world.resource_mut::<Scenes>().push_tab(tab);
-    swap_active_tab(world, target);
+
+    // If this is the first tab we've pushed, there is nothing to swap
+    // away from, so `swap_active_tab` would bail at `current == target`
+    // and the snapshot would never get loaded into the world. Skip
+    // straight to activation in that case.
+    let tab_count = world.resource::<Scenes>().tabs.len();
+    if tab_count == 1 {
+        world.resource_mut::<Scenes>().active = target;
+        crate::scenes::swap::activate_tab(world, target);
+    } else {
+        swap_active_tab(world, target);
+    }
 }
 
 fn pick_scene_file() -> Option<std::path::PathBuf> {

@@ -297,12 +297,9 @@ pub(crate) fn clip_apply(
 
     // Dispatch: brushes with populated topology (the common case after the
     // topology migration) take the EditMesh bisect_plane path. Brushes with
-    // empty topology (legacy plane-only inputs that the migration system
-    // hasn't touched yet) use the half-space CSG fast path; pushing a face
-    // plane is sufficient for convex brushes and the migration system will
-    // populate topology on the next frame.
-    // CONVEX_DEAD: Phase 1 guarantees topology populated; legacy fast-path
-    // branch below is now unreachable in practice but kept as a safety net.
+    // Brushes always carry populated topology; the plane-push fast path
+    // below stays as a safety net for malformed legacy inputs the
+    // migration system hasn't touched yet.
     let use_bisect = !brush.topology.polygons.is_empty();
 
     if use_bisect {

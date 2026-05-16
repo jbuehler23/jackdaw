@@ -36,7 +36,7 @@ pub fn subdivide(
     bmesh: &mut EditMesh,
     edges_to_cut: &[EdgeKey],
 ) -> Result<SubdivideResult, SubdivideError> {
-    // Phase 1: snapshot which faces are incident to each edge BEFORE splitting.
+    // First, snapshot which faces are incident to each edge BEFORE splitting.
     // We map each face to the list of new midpoint verts it will receive.
     // Also snapshot the original edge -> face list for faces that need tessellation.
     let mut face_incident_edges: HashMap<FaceKey, Vec<EdgeKey>> = HashMap::new();
@@ -47,7 +47,7 @@ pub fn subdivide(
         }
     }
 
-    // Phase 2: split each edge at t=0.5. Save (edge -> new_vert).
+    // Second, split each edge at t=0.5. Save (edge -> new_vert).
     let mut new_verts_out: Vec<VertKey> = Vec::new();
     let mut edge_to_new_vert: HashMap<EdgeKey, VertKey> = HashMap::new();
     for &edge in edges_to_cut {
@@ -72,7 +72,7 @@ pub fn subdivide(
         }
     }
 
-    // Phase 3: re-tessellate each affected face.
+    // Finally, re-tessellate each affected face.
     let mut new_edges_out: Vec<EdgeKey> = Vec::new();
     let mut new_faces_out: Vec<FaceKey> = Vec::new();
     for (face, midpoint_verts) in face_midpoints {
