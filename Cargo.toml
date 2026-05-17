@@ -19,6 +19,8 @@ include = [
     "src/**/*.rs",
     "examples/extension/*.rs",
     "assets/environment_maps/**/*",
+    "assets/jackdaw_icon.png",
+    "assets/jackdaw_icon_small.png",
     "assets/textures/jd_grid.png",
     "Cargo.toml",
     "Cargo.lock",
@@ -127,9 +129,18 @@ pathdiff.workspace = true
 notify = "8"
 ctrlc = "3"
 bevy_simple_subsecond_system = { version = "0.2", optional = true }
+winit.workspace = true
+image.workspace = true
 
 [workspace.dependencies]
-bevy = { version = "0.18", features = ["experimental_bevy_feathers", "serialize", "debug", "bevy_remote", "file_watcher", "reflect_documentation"] }
+bevy = { version = "0.18", features = [
+    "experimental_bevy_feathers",
+    "serialize",
+    "debug",
+    "bevy_remote",
+    "file_watcher",
+    "reflect_documentation",
+] }
 jackdaw_jsn = { version = "0.4.1", path = "crates/jackdaw_jsn" }
 jackdaw_geometry = { version = "0.4.1", path = "crates/jackdaw_geometry" }
 bevy_monitors = "0.2"
@@ -142,7 +153,7 @@ jackdaw_terrain = { version = "0.4.1", path = "crates/jackdaw_terrain" }
 jackdaw_remote = { version = "0.4.1", path = "crates/jackdaw_remote" }
 jackdaw_node_graph = { version = "0.4.1", path = "crates/jackdaw_node_graph" }
 jackdaw_animation = { version = "0.4.1", path = "crates/jackdaw_animation" }
-jackdaw_fuzzy = { version = "0.4.1", path = "crates/jackdaw_fuzzy"}
+jackdaw_fuzzy = { version = "0.4.1", path = "crates/jackdaw_fuzzy" }
 noise = "0.9"
 rand = "0.9"
 serde = "1"
@@ -150,7 +161,11 @@ lucide-icons = "0.563"
 serde_json = "1"
 bevy_ui_text_input = "0.7"
 bevy_easings = "0.18.0"
-avian3d = { version = "0.6", default-features = false, features = ["3d", "parry-f32", "collider-from-mesh"] }
+avian3d = { version = "0.6", default-features = false, features = [
+    "3d",
+    "parry-f32",
+    "collider-from-mesh",
+] }
 jackdaw_avian_integration = { version = "0.4.1", path = "crates/jackdaw_avian_integration" }
 jackdaw_runtime = { version = "0.4.1", path = "crates/jackdaw_runtime" }
 jackdaw_panels = { version = "0.4.1", path = "crates/jackdaw_panels" }
@@ -164,7 +179,10 @@ jackdaw_rustc_wrapper = { version = "0.4.1", path = "crates/jackdaw_rustc_wrappe
 bevy_enhanced_input = "0.24"
 rfd = "0.15"
 bevy_rerecast = { version = "0.4", default-features = true }
-ehttp = { version = "0.5", default-features = false, features = ["native-async", "json"] }
+ehttp = { version = "0.5", default-features = false, features = [
+    "native-async",
+    "json",
+] }
 bincode = { version = "2", features = ["serde"], default-features = false }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 anyhow = { version = "1", default-features = false }
@@ -173,6 +191,8 @@ regex = "1"
 pathdiff = "0.2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+winit = "0.30.13"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 # Idiomatic Bevy code often triggers these lints, and the CI workflow treats them as errors.
 [workspace.lints.clippy]
