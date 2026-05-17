@@ -544,14 +544,28 @@ fn rewrite_jackdaw_dep_for_dev_checkout(project_path: &Path, linkage: TemplateLi
     let Ok(contents) = std::fs::read_to_string(&manifest_path) else {
         return;
     };
-    if !contents.contains("jackdaw = {") && !contents.contains("jackdaw=") {
+    let Some(new_contents) = rewrite_jackdaw_dep_line(&contents, &checkout) else {
         return; // dylib template has no jackdaw dep; nothing to rewrite.
+    };
+    if let Err(e) = std::fs::write(&manifest_path, new_contents) {
+        warn!(
+            "Failed to rewrite jackdaw dep in {} for dev checkout: {e}",
+            manifest_path.display()
+        );
+    } else {
+        info!(
+            "Rewrote jackdaw dep in {} to path = '{}' (dev checkout detected)",
+            manifest_path.display(),
+            checkout.display()
+        );
     }
-    // Cheap line-by-line rewrite: find the line that starts with
-    // `jackdaw = {` and replace it with a path-dep variant. We
-    // preserve `optional = true` and `default-features = false` if
-    // they were on the original line, since the template's `editor`
-    // feature gate depends on `optional = true`.
+}
+
+/// Single-quoted so Windows backslashes don't get parsed as TOML escapes.
+fn rewrite_jackdaw_dep_line(contents: &str, checkout: &Path) -> Option<String> {
+    if !contents.contains("jackdaw = {") && !contents.contains("jackdaw=") {
+        return None;
+    }
     let mut new_contents = String::with_capacity(contents.len());
     let mut rewritten = false;
     for line in contents.lines() {
@@ -559,7 +573,7 @@ fn rewrite_jackdaw_dep_for_dev_checkout(project_path: &Path, linkage: TemplateLi
         if !rewritten && trimmed.starts_with("jackdaw = {") {
             let optional = trimmed.contains("optional = true");
             let mut replacement = format!(
-                "jackdaw = {{ path = \"{}\", default-features = false",
+                "jackdaw = {{ path = '{}', default-features = false",
                 checkout.display()
             );
             if optional {
@@ -574,18 +588,7 @@ fn rewrite_jackdaw_dep_for_dev_checkout(project_path: &Path, linkage: TemplateLi
         new_contents.push_str(line);
         new_contents.push('\n');
     }
-    if rewritten && let Err(e) = std::fs::write(&manifest_path, new_contents) {
-        warn!(
-            "Failed to rewrite jackdaw dep in {} for dev checkout: {e}",
-            manifest_path.display()
-        );
-    } else if rewritten {
-        info!(
-            "Rewrote jackdaw dep in {} to path = \"{}\" (dev checkout detected)",
-            manifest_path.display(),
-            checkout.display()
-        );
-    }
+    rewritten.then_some(new_contents)
 }
 
 /// Write a `.cargo/config.toml` into the scaffolded project with
@@ -744,5 +747,63 @@ mod tests {
         assert!(body.contains("[env]"));
         assert!(body.contains("JACKDAW_SDK_DYLIB = '/d'"));
         assert!(body.contains("JACKDAW_SDK_DEPS = '/p'"));
+    }
+
+    #[test]
+    fn rewrite_jackdaw_dep_line_handles_windows_backslashes() {
+        let template = "[package]\n\
+                        name = \"my_game\"\n\
+                        \n\
+                        [dependencies]\n\
+                        jackdaw = { version = \"0.4\", optional = true }\n";
+        let checkout = PathBuf::from(r"C:\Code\jackdaw");
+        let out = rewrite_jackdaw_dep_line(template, &checkout).expect("should rewrite");
+        assert!(
+            out.contains(r"path = 'C:\Code\jackdaw'"),
+            "expected literal-string path, got:\n{out}"
+        );
+        assert!(
+            !out.contains(r#"path = "C:\Code"#),
+            "must not emit basic string with raw backslashes:\n{out}"
+        );
+    }
+
+    #[test]
+    fn rewrite_jackdaw_dep_line_preserves_optional_flag() {
+        let template = "jackdaw = { version = \"0.4\", optional = true }\n";
+        let out = rewrite_jackdaw_dep_line(template, Path::new("/dev/checkout")).unwrap();
+        assert!(out.contains("optional = true"));
+        assert!(out.contains("default-features = false"));
+    }
+
+    #[test]
+    fn rewrite_jackdaw_dep_line_omits_optional_when_absent() {
+        let template = "jackdaw = { version = \"0.4\" }\n";
+        let out = rewrite_jackdaw_dep_line(template, Path::new("/dev/checkout")).unwrap();
+        assert!(!out.contains("optional = true"));
+        assert!(out.contains("default-features = false"));
+    }
+
+    #[test]
+    fn rewrite_jackdaw_dep_line_returns_none_when_no_dep() {
+        let template = "[package]\nname = \"my_game\"\n\n[dependencies]\nbevy = \"0.18\"\n";
+        assert!(rewrite_jackdaw_dep_line(template, Path::new("/dev/checkout")).is_none());
+    }
+
+    #[test]
+    fn rewrite_jackdaw_dep_line_leaves_other_lines_intact() {
+        let template = "[package]\n\
+                        name = \"my_game\"\n\
+                        \n\
+                        [dependencies]\n\
+                        bevy = \"0.18\"\n\
+                        jackdaw = { version = \"0.4\", optional = true }\n\
+                        \n\
+                        [features]\n\
+                        editor = [\"jackdaw\"]\n";
+        let out = rewrite_jackdaw_dep_line(template, Path::new("/dev/checkout")).unwrap();
+        assert!(out.contains("name = \"my_game\""));
+        assert!(out.contains("bevy = \"0.18\""));
+        assert!(out.contains("editor = [\"jackdaw\"]"));
     }
 }

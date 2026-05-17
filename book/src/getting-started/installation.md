@@ -27,9 +27,7 @@ Windows don't need anything extra.
 then, build from source:
 
 ```bash
-git clone https://github.com/jbuehler23/jackdaw
-cd jackdaw
-cargo run --release
+cargo install --git https://github.com/jbuehler23/jackdaw
 ```
 
 The launcher will open. From there:
