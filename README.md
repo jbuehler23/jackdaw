@@ -1,4 +1,8 @@
-# 🐦‍⬛ Jackdaw 🐦‍⬛
+<p align="center">
+  <img src="/assets/jackdaw_icon.png" alt="Jackdaw" width="200" />
+</p>
+
+# Jackdaw
 
 [![License](https://img.shields.io/badge/license-MIT%2FApache-blue.svg)](https://github.com/jbuehler23/jackdaw#license)
 [![Crates.io](https://img.shields.io/crates/v/jackdaw.svg)](https://crates.io/crates/jackdaw)

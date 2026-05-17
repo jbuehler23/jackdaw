@@ -4565,6 +4565,7 @@ dependencies = [
  "ctrlc",
  "dirs",
  "ehttp",
+ "image",
  "jackdaw_animation",
  "jackdaw_api",
  "jackdaw_api_internal",
@@ -4591,6 +4592,7 @@ dependencies = [
  "serde",
  "serde_json",
  "test_fixture_extension",
+ "winit",
 ]
 
 [[package]]
@@ -8078,6 +8080,7 @@ checksum = "d8eab23fefc9e41f8e841df4a9c707e8a8c4ed26e944ef69297184de2785e3be"
 dependencies = [
  "dlib",
  "log",
+ "once_cell",
  "pkg-config",
 ]
 
