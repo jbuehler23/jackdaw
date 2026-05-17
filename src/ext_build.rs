@@ -380,9 +380,9 @@ pub fn build_static_editor_with_progress(
 /// when cargo exits non-zero.
 ///
 /// Shared between [`build_extension_project_with_progress`] (used
-/// by the dylib install flow + the original Phase D scaffold-time
-/// build) and [`build_static_editor_with_progress`] (used by the
-/// background static-editor handoff).
+/// by the dylib install flow and the scaffold-time build) and
+/// [`build_static_editor_with_progress`] (used by the background
+/// static-editor handoff).
 fn run_cargo_with_progress(
     mut cmd: Command,
     sink: Option<&Arc<Mutex<BuildProgress>>>,

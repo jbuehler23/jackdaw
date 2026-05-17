@@ -1,6 +1,6 @@
 //! Knife edit mode: incremental, multi-segment face bisection.
 //!
-//! Mirrors the `BrushEditMode::Clip` pattern. Pressing `K` with a brush
+//! Same shape as `BrushEditMode::Clip`. Pressing `K` with a brush
 //! selected enters Knife mode; pressing `K` again or Escape exits and
 //! discards any in-progress path.
 //!
@@ -173,7 +173,7 @@ impl From<&KnifeSnapTarget> for KnifePathPoint {
     }
 }
 
-/// Knife edit-mode state. Mirrors the `ClipState` shape: cleared
+/// Knife edit-mode state. Same shape as `ClipState`: cleared
 /// whenever the user leaves the mode or commits the cuts.
 #[derive(Resource, Default)]
 pub struct KnifeMode {
@@ -1338,7 +1338,7 @@ fn commit_path(
     };
     // Snapshot the live HalfedgeMesh so a catastrophe in either resolve
     // or chord (panic-equivalent return path) restores it exactly.
-    let start_editmesh = halfedge.mesh.clone();
+    let start_mesh = halfedge.mesh.clone();
     let start_vert_keys = halfedge.vert_keys.clone();
     let start_face_keys = halfedge.face_keys.clone();
 
@@ -1380,7 +1380,7 @@ fn commit_path(
 
     if resolve_failed {
         // Restore the snapshot and bail out without pushing to history.
-        halfedge.mesh = start_editmesh;
+        halfedge.mesh = start_mesh;
         halfedge.vert_keys = start_vert_keys;
         halfedge.face_keys = start_face_keys;
         knife.path.clear();
@@ -1435,12 +1435,12 @@ fn commit_path(
     // commit those if any path point introduced new geometry.
     // Detect "did anything change" by comparing mesh sizes; if not,
     // restore and bail.
-    let mesh_unchanged = halfedge.mesh.vert_count() == start_editmesh.vert_count()
-        && halfedge.mesh.edge_count() == start_editmesh.edge_count()
-        && halfedge.mesh.face_count() == start_editmesh.face_count();
+    let mesh_unchanged = halfedge.mesh.vert_count() == start_mesh.vert_count()
+        && halfedge.mesh.edge_count() == start_mesh.edge_count()
+        && halfedge.mesh.face_count() == start_mesh.face_count();
     if mesh_unchanged && applied_segments == 0 {
         debug!("Knife: commit applied no changes; restoring snapshot");
-        halfedge.mesh = start_editmesh;
+        halfedge.mesh = start_mesh;
         halfedge.vert_keys = start_vert_keys;
         halfedge.face_keys = start_face_keys;
         knife.path.clear();
@@ -1501,16 +1501,16 @@ fn commit_path(
 
     // Re-lift HalfedgeMesh so vert_keys / face_keys stay consistent with
     // the flattened brush topology.
-    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
-    let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
-    let mut new_face_keys: Vec<FaceKey> = vec![FaceKey::default(); new_bmesh.faces.len()];
-    for (k, f) in new_bmesh.faces.iter() {
+    let new_mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let new_vert_keys: Vec<_> = new_mesh.verts.keys().collect();
+    let mut new_face_keys: Vec<FaceKey> = vec![FaceKey::default(); new_mesh.faces.len()];
+    for (k, f) in new_mesh.faces.iter() {
         let slot = f.material_idx as usize;
         if slot < new_face_keys.len() {
             new_face_keys[slot] = k;
         }
     }
-    halfedge.mesh = new_bmesh;
+    halfedge.mesh = new_mesh;
     halfedge.vert_keys = new_vert_keys;
     halfedge.face_keys = new_face_keys;
 

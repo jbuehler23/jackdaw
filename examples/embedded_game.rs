@@ -32,7 +32,7 @@ fn main() -> AppExit {
 
 /// Replace with your game's types/operators/windows. This stub
 /// registers nothing so the example stays minimal; the extension
-/// still shows up under File → Extensions as proof the
+/// still shows up under File -> Extensions as proof the
 /// registration round-trip works.
 #[derive(Default)]
 struct MyGameExtension;

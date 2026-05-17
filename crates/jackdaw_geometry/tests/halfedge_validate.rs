@@ -9,7 +9,7 @@ fn cuboid_validates() {
 }
 
 #[test]
-fn empty_bmesh_validates() {
+fn empty_halfedge_validates() {
     let mesh = HalfedgeMesh::default();
     mesh.validate().expect("empty mesh is valid");
 }

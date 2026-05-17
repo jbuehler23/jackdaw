@@ -53,9 +53,9 @@ fn drag_environment_ok(
 
 /// Returns true if the cursor is over any face polygon of `brush_entity`.
 ///
-/// Mirrors the face hit-test in `brush_face_drag`. Used by other
-/// invoke triggers (notably box-select) that must yield to
-/// face-drag when the user shift-clicks on a brush face. Without
+/// Same face hit-test as `brush_face_drag`. Used by other invoke
+/// triggers (notably box-select) that must yield to face-drag when
+/// the user shift-clicks on a brush face. Without
 /// this guard, box-select races face-drag for the same `Shift + LMB`
 /// chord and wins because face-drag's hit-test runs inside the
 /// operator, which dispatches a frame later.
@@ -572,9 +572,10 @@ fn clear_face_drag_state(drag_state: &mut BrushDragState) {
     drag_state.drag_viewport = None;
 }
 
-/// Snap a vertex/edge/face-drag's local-space offset so the dragged geometry
-/// lands on the world grid. Mirrors the snap convention used elsewhere:
-/// translate-snap is on/off via `SnapSettings`, with Ctrl flipping the
+/// Snap a vertex/edge/face-drag's local-space offset so the dragged
+/// geometry lands on the world grid. Same snap convention as
+/// elsewhere: translate-snap is on/off via `SnapSettings`, with Ctrl
+/// flipping the
 /// state for the current gesture. For an unconstrained drag we snap the
 /// primary vertex's final world position on all three axes; for an axis-
 /// constrained drag we snap the scalar offset along the local constraint

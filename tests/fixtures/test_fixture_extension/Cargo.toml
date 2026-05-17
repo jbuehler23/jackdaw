@@ -7,7 +7,7 @@ publish = false
 [lib]
 # `rlib` lets cargo pull this in as a dev-dep of the root `jackdaw`
 # crate (which forces the cdylib to be built during normal test
-# compilation — no runtime shell-out needed). `cdylib` is what
+# compilation - no runtime shell-out needed). `cdylib` is what
 # `jackdaw_loader::load_from_path` dlopens.
 crate-type = ["rlib", "cdylib"]
 

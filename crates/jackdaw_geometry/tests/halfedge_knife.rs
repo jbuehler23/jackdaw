@@ -8,9 +8,9 @@
 //!  * Cross-face cut where the segment crosses a shared edge.
 //!  * Path-point reuse where the third click snaps to the first.
 //!
-//! Mirrors the geometry the `brush.mesh.knife` operator runs at commit time;
-//! the operator code lives in `src/brush/topology_ops/knife.rs` in the
-//! editor crate.
+//! Same geometry path as the `brush.mesh.knife` operator's commit
+//! step; the operator code lives in `src/brush/topology_ops/knife.rs`
+//! in the editor crate.
 
 use bevy::math::Vec3;
 use jackdaw_geometry::halfedge::{
@@ -723,8 +723,8 @@ fn knife_topology_no_partial_state_on_failure() {
 // -----------------------------------------------------------------------------
 
 /// Returns true if `va` and `vb` are consecutive in `face`'s ring.
-/// Mirrors the gate `commit_path` uses before `split_face` to avoid
-/// the `Adjacent` error.
+/// Same gate `commit_path` uses before `split_face` to avoid the
+/// `Adjacent` error.
 fn are_face_ring_neighbors(mesh: &HalfedgeMesh, face: FaceKey, va: VertKey, vb: VertKey) -> bool {
     let f = &mesh.faces[face];
     let n = f.loop_count as usize;

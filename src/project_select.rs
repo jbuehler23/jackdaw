@@ -205,7 +205,7 @@ struct StaticEditorBuild {
     /// updates `BuildStatus` to `Ready` or `Failed`.
     task: Option<Task<Result<PathBuf, crate::ext_build::BuildError>>>,
     /// Auto-reload flag remembered between dispatch and completion.
-    /// Mirrors the second member of `pending`, stashed once the task
+    /// Copies the second member of `pending`, stashed once the task
     /// is spawned because `pending` is drained on dispatch.
     auto_reload: bool,
 }

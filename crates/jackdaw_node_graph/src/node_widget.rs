@@ -34,8 +34,9 @@ pub struct GraphTerminalView {
 
 /// Marker on the body area UI entity of a node.
 ///
-/// Carries the `GraphNode` data entity so consumer code can populate the
-/// body with widgets (labels, sliders, text inputs, etc.) specific to a
+/// Stores the `GraphNode` data entity so consumer code can populate
+/// the body with widgets (labels, sliders, text inputs, etc.) specific
+/// to a
 /// given node type. Consumers add an `Added<GraphNodeBody>` system that
 /// looks up `GraphNode::node_type` for each freshly-spawned body and
 /// spawns appropriate children.

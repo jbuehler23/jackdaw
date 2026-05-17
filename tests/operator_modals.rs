@@ -29,7 +29,7 @@ use jackdaw_feathers::button::{ButtonOperatorCall, ButtonVariant};
 mod util;
 
 /// True iff at least one entity in the world has `ActiveModalOperator`
-/// attached. Mirrors the dispatcher's view of "modal is running."
+/// attached. Matches the dispatcher's view of "modal is running."
 fn modal_running(app: &mut App) -> bool {
     app.world_mut()
         .query::<&ActiveModalOperator>()

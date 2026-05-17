@@ -66,8 +66,8 @@ Seven crates exist for the extension story:
   API.
 - `jackdaw_sdk`: the proxy dylib that scaffolded extension
   projects link against via
-  `--extern bevy=libjackdaw_sdk.so`. Carries the one
-  compiled copy of bevy + jackdaw types both sides share.
+  `--extern bevy=libjackdaw_sdk.so`. Holds the single compiled
+  copy of bevy + jackdaw types shared between both sides.
 - `jackdaw_dylib`: the dynamic-loader shim that dlopens
   extension dylibs at runtime.
 - `jackdaw_loader`: the host-side resource that tracks

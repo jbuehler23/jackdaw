@@ -1,6 +1,6 @@
-//! Connect selected verts that share a face with new edges, splitting the face.
-//! Wraps `split_face`. Silently skips pairs that are adjacent in their
-//! face's ring (`FaceSplitError::Adjacent`).
+//! Connect selected verts that share a face with new edges,
+//! splitting the face. Wraps `split_face`. Pairs that are adjacent in
+//! their face's ring (`FaceSplitError::Adjacent`) are skipped.
 
 use std::collections::HashSet;
 

@@ -55,8 +55,8 @@ Replace the selected brushes with the solid shared by all of them. Requires at l
 **flags**: *undo*
 
 Extend a face of the primary brush to conform to the shape of the other selected brushes. Two entry paths:
-• `EditMode::BrushEdit(Face)` with a face selected on `BrushSelection` and ≥ 1 other brush in `Selection::entities`.
-• `EditMode::Object` with ≥ 2 brushes in `Selection::entities` and a remembered face on the primary.
+* `EditMode::BrushEdit(Face)` with a face selected on `BrushSelection` and >= 1 other brush in `Selection::entities`.
+* `EditMode::Object` with >= 2 brushes in `Selection::entities` and a remembered face on the primary.
 Availability (`can_run_extend_face`) is false when neither entry path applies. The Object-mode path additionally tries to resolve a hovered face via raycast once invoked; if that also fails it returns `Cancelled`.
 
 ### Toggle Add/Cut (`viewport.draw_brush.toggle_mode`)
@@ -365,43 +365,43 @@ Stop editing the brush and return to selecting whole entities.
 
 
 
-### Rotate 90° Yaw CCW (`transform.rotate_90_yaw_ccw`)
+### Rotate 90 deg Yaw CCW (`transform.rotate_90_yaw_ccw`)
 
 **flags**: *undo*
 
 
 
-### Rotate 90° Yaw CW (`transform.rotate_90_yaw_cw`)
+### Rotate 90 deg Yaw CW (`transform.rotate_90_yaw_cw`)
 
 **flags**: *undo*
 
 
 
-### Rotate 90° Pitch CCW (`transform.rotate_90_pitch_ccw`)
+### Rotate 90 deg Pitch CCW (`transform.rotate_90_pitch_ccw`)
 
 **flags**: *undo*
 
 
 
-### Rotate 90° Pitch CW (`transform.rotate_90_pitch_cw`)
+### Rotate 90 deg Pitch CW (`transform.rotate_90_pitch_cw`)
 
 **flags**: *undo*
 
 
 
-### Rotate 90° Roll CCW (`transform.rotate_90_roll_ccw`)
+### Rotate 90 deg Roll CCW (`transform.rotate_90_roll_ccw`)
 
 **flags**: *undo*
 
 
 
-### Rotate 90° Roll CW (`transform.rotate_90_roll_cw`)
+### Rotate 90 deg Roll CW (`transform.rotate_90_roll_cw`)
 
 **flags**: *undo*
 
 
 
-### Nudge −X (`transform.nudge_x_neg`)
+### Nudge -X (`transform.nudge_x_neg`)
 
 **flags**: *undo*
 
@@ -413,7 +413,7 @@ Stop editing the brush and return to selecting whole entities.
 
 
 
-### Nudge −Y (`transform.nudge_y_neg`)
+### Nudge -Y (`transform.nudge_y_neg`)
 
 **flags**: *undo*
 
@@ -425,7 +425,7 @@ Stop editing the brush and return to selecting whole entities.
 
 
 
-### Nudge −Z (`transform.nudge_z_neg`)
+### Nudge -Z (`transform.nudge_z_neg`)
 
 **flags**: *undo*
 
@@ -461,7 +461,7 @@ Raycast the cursor against the selected brush, snap, and add the resulting local
 
 ### Cycle Clip Mode (`brush.clip.cycle_mode`)
 
-Cycle `ClipState.mode` through KeepFront → KeepBack → Split. Availability (`can_apply_or_cycle`) requires clip mode and a computed preview plane.
+Cycle `ClipState.mode` through KeepFront -> KeepBack -> Split. Availability (`can_apply_or_cycle`) requires clip mode and a computed preview plane.
 
 ### Apply Clip (`brush.clip.apply`)
 

@@ -1,7 +1,7 @@
 //! Integration test for the mesh-CSG glue: bevel one edge of a cube
 //! (producing a chamfered brush), then subtract another cube from it
-//! via `brush_difference_split`. Mirrors the operator path the editor
-//! runs, verifies the round-trip survives without panic.
+//! via `brush_difference_split`. Same call path as the editor's
+//! operator; verifies the round-trip survives without panic.
 
 use bevy::math::Vec3;
 use jackdaw_csg::{BooleanOp, CsgInput, brush_boolean, brush_difference_split};

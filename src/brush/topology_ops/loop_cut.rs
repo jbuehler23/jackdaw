@@ -48,7 +48,7 @@ pub struct LoopCutModalState {
     pub start_edge_key: Option<EdgeKey>,
     pub current_t: f32,
     pub start_brush: Option<Brush>,
-    pub start_editmesh: Option<HalfedgeMesh>,
+    pub start_mesh: Option<HalfedgeMesh>,
     /// Window-space pixel position of the start edge's canonical v[0].
     pub start_v0_window: Vec2,
     /// Window-space pixel position of the start edge's canonical v[1].
@@ -157,7 +157,7 @@ pub(crate) fn brush_loop_cut(
         modal_state.start_edge_key = Some(edge_key);
         modal_state.current_t = 0.5;
         modal_state.start_brush = Some(brush_before);
-        modal_state.start_editmesh = Some(mesh_snapshot);
+        modal_state.start_mesh = Some(mesh_snapshot);
         modal_state.start_v0_window = v0_window;
         modal_state.start_v1_window = v1_window;
 
@@ -222,7 +222,7 @@ pub(crate) fn brush_loop_cut(
         };
 
         // Restore HalfedgeMesh to start snapshot before running the real cut.
-        if let Some(ref snap) = modal_state.start_editmesh {
+        if let Some(ref snap) = modal_state.start_mesh {
             halfedge.mesh = snap.clone();
         }
 
@@ -304,16 +304,16 @@ pub(crate) fn brush_loop_cut(
         brush.topology = new_topology;
 
         // Re-lift HalfedgeMesh from the new topology so vert_keys / face_keys are consistent.
-        let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
-        let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
-        let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
-        for (k, f) in new_bmesh.faces.iter() {
+        let new_mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+        let new_vert_keys: Vec<_> = new_mesh.verts.keys().collect();
+        let mut new_face_keys = vec![Default::default(); new_mesh.faces.len()];
+        for (k, f) in new_mesh.faces.iter() {
             let slot = f.material_idx as usize;
             if slot < new_face_keys.len() {
                 new_face_keys[slot] = k;
             }
         }
-        halfedge.mesh = new_bmesh;
+        halfedge.mesh = new_mesh;
         halfedge.vert_keys = new_vert_keys;
         halfedge.face_keys = new_face_keys;
 
@@ -397,7 +397,7 @@ fn update_preview_lines(
     let Some(edge_key) = modal_state.start_edge_key else {
         return;
     };
-    let Some(ref start_mesh) = modal_state.start_editmesh else {
+    let Some(ref start_mesh) = modal_state.start_mesh else {
         return;
     };
     let Ok(brush_xform) = brush_transforms.get(brush_entity) else {

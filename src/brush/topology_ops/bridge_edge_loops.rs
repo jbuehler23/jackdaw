@@ -125,15 +125,15 @@ pub(crate) fn brush_bridge_edge_loops(
     brush.topology = new_topology;
 
     // Re-lift HalfedgeMesh.
-    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
-    let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
-    let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
-    for (k, f) in new_bmesh.faces.iter() {
+    let new_mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let new_vert_keys: Vec<_> = new_mesh.verts.keys().collect();
+    let mut new_face_keys = vec![Default::default(); new_mesh.faces.len()];
+    for (k, f) in new_mesh.faces.iter() {
         if (f.material_idx as usize) < new_face_keys.len() {
             new_face_keys[f.material_idx as usize] = k;
         }
     }
-    halfedge.mesh = new_bmesh;
+    halfedge.mesh = new_mesh;
     halfedge.vert_keys = new_vert_keys;
     halfedge.face_keys = new_face_keys;
 

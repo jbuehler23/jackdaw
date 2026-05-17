@@ -487,10 +487,10 @@ fn purge_edges_at_vert(mesh: &mut HalfedgeMesh, v: VertKey) {
     }
 }
 
-/// Compute the next material_idx for a newly created face: one above the
-/// current maximum. Mirrors the convention used by
-/// `create_face_from_verts_with_material` when called with `None`, but lets
-/// the caller hold onto the chosen index for later lookup.
+/// Compute the next material_idx for a newly created face: one above
+/// the current maximum. Same convention as
+/// `create_face_from_verts_with_material` when called with `None`,
+/// but lets the caller hold onto the chosen index for later lookup.
 fn next_material_idx(mesh: &HalfedgeMesh) -> u32 {
     mesh
         .faces

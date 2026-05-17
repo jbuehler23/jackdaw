@@ -31,7 +31,7 @@ pub struct InsetModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
     /// HalfedgeMesh FaceKeys of the faces being inset. Resolved against
-    /// `start_editmesh`; we re-resolve them from `start_editmesh` each frame
+    /// `start_mesh`; we re-resolve them from `start_mesh` each frame
     /// because the live mesh is reset to the snapshot before running the op.
     pub face_keys: Vec<FaceKey>,
     /// Brush face indices of the faces being inset, captured at modal entry.
@@ -45,7 +45,7 @@ pub struct InsetModalState {
     /// Current inset amount in world-space units.
     pub current_amount: f32,
     pub start_brush: Option<Brush>,
-    pub start_editmesh: Option<HalfedgeMesh>,
+    pub start_mesh: Option<HalfedgeMesh>,
     /// Maximum valid inset amount: minimum vertex-to-centroid distance across
     /// all selected faces, with a small safety factor so the inner ring stays
     /// non-degenerate at the cap.
@@ -189,7 +189,7 @@ pub(crate) fn brush_inset(
         modal_state.start_cursor = cursor_pos;
         modal_state.current_amount = 0.0;
         modal_state.start_brush = Some(brush_before);
-        modal_state.start_editmesh = Some(mesh_snapshot);
+        modal_state.start_mesh = Some(mesh_snapshot);
         modal_state.max_inset = max_inset;
 
         return OperatorResult::Running;
@@ -345,7 +345,7 @@ fn apply_live_inset(
     let Some(brush_entity) = modal_state.brush_entity else {
         return Vec::new();
     };
-    let Some(ref start_mesh) = modal_state.start_editmesh else {
+    let Some(ref start_mesh) = modal_state.start_mesh else {
         return Vec::new();
     };
     let Some(ref start_brush) = modal_state.start_brush else {
@@ -475,16 +475,16 @@ fn apply_live_inset(
     // Re-lift HalfedgeMesh from the new topology so vert_keys / face_keys are
     // consistent with the brush. Next frame we reset halfedge.mesh
     // back to the snapshot before running the op again.
-    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
-    let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
-    let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
-    for (k, f) in new_bmesh.faces.iter() {
+    let new_mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let new_vert_keys: Vec<_> = new_mesh.verts.keys().collect();
+    let mut new_face_keys = vec![Default::default(); new_mesh.faces.len()];
+    for (k, f) in new_mesh.faces.iter() {
         let slot = f.material_idx as usize;
         if slot < new_face_keys.len() {
             new_face_keys[slot] = k;
         }
     }
-    halfedge.mesh = new_bmesh;
+    halfedge.mesh = new_mesh;
     halfedge.vert_keys = new_vert_keys;
     halfedge.face_keys = new_face_keys;
 

@@ -6,8 +6,8 @@
 //! [`EditorDescription`] attribute (or the reflected doc
 //! comment when absent) as body, full type path as footer.
 //!
-//! Mirrors the `ButtonOperatorCall` to `Tooltip` bridge in
-//! `src/operator_tooltip.rs`.
+//! Same bridge shape as the `ButtonOperatorCall` to `Tooltip` path
+//! in `src/operator_tooltip.rs`.
 
 use std::borrow::Cow;
 
