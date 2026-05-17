@@ -8,7 +8,8 @@ use bevy::{
 
 use crate::types::Brush;
 use jackdaw_geometry::{
-    compute_brush_geometry, compute_face_tangent_axes, compute_face_uvs, triangulate_face,
+    compute_brush_geometry_from_planes, compute_face_tangent_axes, compute_face_uvs,
+    triangulate_polygon,
 };
 
 pub(super) struct MeshRebuildPlugin;
@@ -25,6 +26,12 @@ impl Plugin for MeshRebuildPlugin {
 /// typically a catalog `@Name` reference). Faces with an unset handle fall
 /// back to the embedded grid texture so brushes still render before any
 /// material is assigned.
+///
+/// Prefers `brush.topology` for face vertex positions (so concave / beveled
+/// brushes render with the exact rings authored by edit-mesh ops). Falls
+/// back to plane intersection only for legacy brushes whose `.jsn` files
+/// pre-date the topology field - that path is convex-only and silently
+/// distorts non-convex faces.
 pub fn rebuild_brush_meshes(
     insert: On<Insert, Brush>,
     mut commands: Commands,
@@ -37,7 +44,17 @@ pub fn rebuild_brush_meshes(
         return;
     };
 
-    let (vertices, face_polygons) = compute_brush_geometry(&brush.faces);
+    // Plane-intersection fallback covers the runtime / preview path
+    // where the editor's migration system has not yet run.
+    let (vertices, face_polygons) = if !brush.topology.polygons.is_empty() {
+        let verts: Vec<Vec3> = brush.topology.vertices.iter().map(|v| v.position).collect();
+        let polys: Vec<Vec<usize>> = (0..brush.topology.polygons.len())
+            .map(|i| brush.topology.face_ring(i).map(|v| v as usize).collect())
+            .collect();
+        (verts, polys)
+    } else {
+        compute_brush_geometry_from_planes(&brush.faces)
+    };
     let mut fallback_material: Option<Handle<StandardMaterial>> = None;
 
     for (face_idx, face_data) in brush.faces.iter().enumerate() {
@@ -67,7 +84,12 @@ pub fn rebuild_brush_meshes(
         let tangent = [u_axis.x, u_axis.y, u_axis.z, w];
         let tangents: Vec<[f32; 4]> = vec![tangent; indices.len()];
 
-        let local_tris = triangulate_face(&(0..indices.len()).collect::<Vec<_>>());
+        // Concave / keyhole-bridged faces need a real triangulator; fan
+        // triangulation would fill holes and mis-tile L-shapes.
+        let face_verts_3d: Vec<Vec3> = indices.iter().map(|&vi| vertices[vi]).collect();
+        let identity_ring: Vec<u32> = (0..indices.len() as u32).collect();
+        let local_tris =
+            triangulate_polygon(&face_verts_3d, &identity_ring, face_data.plane.normal);
         let flat_indices: Vec<u32> = local_tris.iter().flat_map(|t| t.iter().copied()).collect();
 
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());

@@ -67,7 +67,7 @@ fn can_pass_params_to_operator() {
 /// Verifies that the snapshot mechanism notices changes to editor-state
 /// resources (`EditMode`, `GizmoMode`, `ViewModeSettings`, ...). Two
 /// snapshots taken either side of a resource mutation must compare
-/// unequal — if they compared equal, the operator dispatcher would
+/// unequal - if they compared equal, the operator dispatcher would
 /// silently drop the undo entry and Ctrl+Z wouldn't restore the old
 /// state. The restore-via-`apply` half of the contract goes through
 /// `apply_ast_to_world`, which drives editor UI systems that can't run

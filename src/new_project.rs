@@ -61,7 +61,7 @@ pub enum TemplateLinkage {
 }
 
 /// Which template preset the user opened the scaffolder with.
-/// `Custom` bypasses the preset→URL mapping and lets the user
+/// `Custom` bypasses the preset->URL mapping and lets the user
 /// paste any Bevy-CLI-compatible URL.
 #[derive(Clone, Debug)]
 pub enum TemplatePreset {
@@ -650,7 +650,7 @@ fn write_cargo_config(project_path: &Path) {
 
 fn render_cargo_config(paths: &SdkPaths) -> String {
     // TOML strings need to be on a single line; backslashes on
-    // Windows escape, so we use the raw-string `'…'` form. Paths
+    // Windows escape, so we use the raw-string `'...'` form. Paths
     // from SdkPaths are always absolute.
     format!(
         "# Activates jackdaw-rustc-wrapper so that any cargo\n\

@@ -10,9 +10,9 @@ use jackdaw_runtime::{JackdawCatalog, JackdawCatalogPath, JackdawPlugin};
 
 #[test]
 fn project_catalog_populates_resource() {
-    // Catalogs reference textures by path. We use a fake path —
-    // the AssetServer returns a handle either way; we only check
-    // that `@brick` is keyed into the catalog.
+    // Catalogs reference textures by path. We use a fake path: the
+    // AssetServer returns a handle either way and we only check that
+    // `@brick` is keyed into the catalog.
     let catalog_json = r##"{
         "jsn": {
             "format_version": [3, 0, 0],

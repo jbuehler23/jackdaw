@@ -242,8 +242,8 @@ fn restore_editor_camera(world: &mut World) {
         if let Some(mut c) = world.get_mut::<Camera>(preview) {
             c.is_active = false;
         }
-        // Mirrors the Projection poke in `enter_preview`. See its
-        // comment for why.
+        // Same Projection poke as `enter_preview`. See that
+        // function's comment for why.
         if let Some(mut proj) = world.get_mut::<Projection>(preview) {
             proj.set_changed();
         }

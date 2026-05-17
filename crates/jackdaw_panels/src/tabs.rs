@@ -77,6 +77,7 @@ pub fn spawn_tab_bar_world(
                 min_width: Val::Px(0.0),
                 ..default()
             },
+            ScrollPosition::default(),
             ChildOf(tab_bar),
         ))
         .id();
@@ -226,6 +227,9 @@ fn spawn_tab(
     let icon_font = world.get_resource::<IconFont>().map(|f| f.0.clone());
 
     if let Some(font_handle) = icon_font {
+        // Close-button slot always reserves its 14x14 layout space so
+        // the tab doesn't reflow on hover. The `X` glyph inside is
+        // alpha-toggled by `show_close_on_hover`.
         world.spawn((
             crate::area::DockTabCloseButton {
                 window_id: window_id.to_string(),
@@ -238,22 +242,27 @@ fn spawn_tab(
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 border_radius: BorderRadius::all(Val::Px(2.0)),
-                display: Display::None,
                 ..default()
             },
             ChildOf(tab_entity),
             children![(
+                DockTabCloseIcon,
                 Text::new(String::from(Icon::X.unicode())),
                 TextFont {
                     font: font_handle,
                     font_size: 10.0,
                     ..default()
                 },
-                TextColor(tokens::TAB_INACTIVE_TEXT),
+                TextColor(tokens::TAB_INACTIVE_TEXT.with_alpha(0.0)),
             )],
         ));
     }
 }
+
+/// Marker on the inner `X` glyph of a dock tab close button so the
+/// hover system can fade it in / out without reflowing the tab.
+#[derive(Component)]
+pub struct DockTabCloseIcon;
 
 fn handle_dock_tab_clicks(
     tab_query: Query<(&DockTab, &Interaction, &ChildOf), Changed<Interaction>>,
@@ -266,7 +275,7 @@ fn handle_dock_tab_clicks(
             continue;
         }
 
-        // Walk: tab → tab_row → tab_bar → area
+        // Walk: tab -> tab_row -> tab_bar -> area
         let tab_row = tab_child_of.parent();
         let Ok(row_parent) = parent_query.get(tab_row) else {
             continue;
@@ -288,16 +297,23 @@ fn handle_dock_tab_clicks(
 fn show_close_on_hover(
     tabs: Query<(Entity, &Interaction, &Children), (Changed<Interaction>, With<DockTab>)>,
     drag_state: Option<Res<crate::drag::DockDragState>>,
-    mut close_buttons: Query<&mut Node, With<crate::area::DockTabCloseButton>>,
+    close_buttons: Query<&Children, With<crate::area::DockTabCloseButton>>,
+    mut icon_colors: Query<&mut TextColor, With<DockTabCloseIcon>>,
 ) {
     let hide = drag_state.is_none_or(|s| matches!(*s, crate::drag::DockDragState::Dragging { .. }));
 
     for (_tab_entity, interaction, children) in tabs.iter() {
         let show =
             (*interaction == Interaction::Hovered || *interaction == Interaction::Pressed) && !hide;
+        let alpha = if show { 1.0 } else { 0.0 };
         for child in children.iter() {
-            if let Ok(mut node) = close_buttons.get_mut(child) {
-                node.display = if show { Display::Flex } else { Display::None };
+            let Ok(close_children) = close_buttons.get(child) else {
+                continue;
+            };
+            for grandchild in close_children.iter() {
+                if let Ok(mut tc) = icon_colors.get_mut(grandchild) {
+                    tc.0 = tc.0.with_alpha(alpha);
+                }
             }
         }
     }

@@ -316,7 +316,7 @@ enum DiamondState {
 }
 
 /// Per-frame highlight updater: walks each diamond button's source
-/// entity → `Clip` child → matching `AnimationTrack` → keyframes, and
+/// entity -> `Clip` child -> matching `AnimationTrack` -> keyframes, and
 /// paints the diamond icon with the right state color.
 ///
 /// Runs every frame. Cheap because there are only a handful of
@@ -395,7 +395,7 @@ fn compute_diamond_state(
     f32_keyframes: &Query<&F32Keyframe>,
     cursor_time: f32,
 ) -> DiamondState {
-    // Step 1: find the `Clip` child of the source entity.
+    // First, find the `Clip` child of the source entity.
     let Ok(source_children) = children_query.get(btn.source_entity) else {
         return DiamondState::NoTrack;
     };
@@ -404,7 +404,7 @@ fn compute_diamond_state(
         return DiamondState::NoTrack;
     };
 
-    // Step 2: find an `AnimationTrack` under that clip matching this
+    // Then find an `AnimationTrack` under that clip matching this
     // button's (component_type_path, field_path).
     let Ok(clip_children) = children_query.get(clip_entity) else {
         return DiamondState::NoTrack;
@@ -421,7 +421,7 @@ fn compute_diamond_state(
         return DiamondState::NoTrack;
     };
 
-    // Step 3: walk the track's keyframes and check if any lands
+    // Finally, walk the track's keyframes and check if any lands
     // on the cursor time within the epsilon.
     let Ok(track_children) = children_query.get(track_entity) else {
         return DiamondState::HasTrack;

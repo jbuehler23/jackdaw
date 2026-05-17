@@ -131,7 +131,7 @@ macro_rules! export_extension {
 ///     }
 /// }
 ///
-/// fn spin_cube() { /* … */ }
+/// fn spin_cube() { /* ... */ }
 ///
 /// export_game!("my_game", MyGame);
 /// ```

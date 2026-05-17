@@ -116,7 +116,7 @@ fn set_axis_rotates_only_active_viewports_grid() {
     world.resource_mut::<ActiveViewport>().camera = Some(cam_a);
     dispatch_set_axis(world, 2); // Z axis (front view)
 
-    // A's grid rotated to face the front view (XY plane, ~90° around X).
+    // A's grid rotated to face the front view (XY plane, ~90 deg around X).
     let grid_a_rot = world.get::<Transform>(grid_a).unwrap().rotation;
     assert!(
         (grid_a_rot.x.abs() - (std::f32::consts::FRAC_PI_2 / 2.0).sin()).abs() < 1e-3,

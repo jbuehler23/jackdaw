@@ -37,10 +37,18 @@ pub(super) fn spawn_brush_display(
     brush: &crate::brush::Brush,
     materials: &Assets<StandardMaterial>,
 ) {
-    let (vertices, face_polygons) = crate::brush::compute_brush_geometry(&brush.faces);
-    let face_count = brush.faces.len();
-    let vertex_count = vertices.len();
-    let edge_count = {
+    // Brushes always have populated topology in normal flow; the
+    // plane-intersection fallback only fires for the degenerate
+    // empty-brush case.
+    let (face_count, vertex_count, edge_count) = if !brush.topology.polygons.is_empty() {
+        (
+            brush.topology.polygons.len(),
+            brush.topology.vertices.len(),
+            brush.topology.edges.len(),
+        )
+    } else {
+        let (vertices, face_polygons) =
+            crate::brush::compute_brush_geometry_from_planes(&brush.faces);
         let mut edges = std::collections::HashSet::new();
         for polygon in &face_polygons {
             for i in 0..polygon.len() {
@@ -50,10 +58,11 @@ pub(super) fn spawn_brush_display(
                 edges.insert(edge);
             }
         }
-        edges.len()
+        (brush.faces.len(), vertices.len(), edges.len())
     };
 
     let info = format!("{face_count} faces, {vertex_count} vertices, {edge_count} edges");
+
     commands.spawn((
         Text::new(info),
         TextFont {
@@ -63,6 +72,79 @@ pub(super) fn spawn_brush_display(
         TextColor(tokens::TEXT_SECONDARY),
         ChildOf(parent),
     ));
+
+    // Topology section
+    commands.spawn((
+        Text::new("Topology"),
+        TextFont {
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        Node {
+            margin: UiRect::top(Val::Px(tokens::SPACING_SM)),
+            ..Default::default()
+        },
+        ChildOf(parent),
+    ));
+
+    // Fallback status row for the degenerate empty-brush case while
+    // `topology_migration` still ships as a safety net.
+    if brush.topology.polygons.is_empty() {
+        commands.spawn((
+            Text::new("Empty (legacy brush; will populate after migration)"),
+            TextFont {
+                font_size: tokens::FONT_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_DISABLED),
+            ChildOf(parent),
+        ));
+    } else {
+        let topo_rows: &[(&str, usize)] = &[
+            ("Vertices", brush.topology.vertices.len()),
+            ("Edges", brush.topology.edges.len()),
+            ("Polygons", brush.topology.polygons.len()),
+            ("Loops", brush.topology.loops.len()),
+        ];
+        for (label, count) in topo_rows {
+            let row = commands
+                .spawn((
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: px(tokens::SPACING_XS),
+                        width: Val::Percent(100.0),
+                        ..Default::default()
+                    },
+                    ChildOf(parent),
+                ))
+                .id();
+            commands.spawn((
+                Text::new(*label),
+                TextFont {
+                    font_size: tokens::FONT_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+                Node {
+                    min_width: px(60.0),
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                },
+                ChildOf(row),
+            ));
+            commands.spawn((
+                Text::new(count.to_string()),
+                TextFont {
+                    font_size: tokens::FONT_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_PRIMARY),
+                ChildOf(row),
+            ));
+        }
+    }
 
     // Material summary: shows unique materials used by this brush.
     spawn_material_summary(commands, parent, brush, materials);

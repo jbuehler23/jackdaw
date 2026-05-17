@@ -1,9 +1,14 @@
 mod csg;
+pub mod edit_mode_systems;
 mod geometry;
 mod gizmo_overlay;
 mod hull;
 pub(crate) mod interaction;
+pub(crate) mod knife_mode;
 pub(crate) mod mesh;
+pub mod preview;
+pub mod topology_migration;
+pub mod topology_ops;
 
 use bevy::prelude::*;
 
@@ -12,13 +17,23 @@ use crate::commands::EditorCommand;
 pub use self::csg::{
     brush_planes_to_world, brushes_intersect, clean_degenerate_faces, subtract_brush,
 };
-pub use self::geometry::{compute_brush_geometry, compute_face_tangent_axes};
+pub use self::geometry::{compute_brush_geometry_from_planes, compute_face_tangent_axes};
 pub use self::hull::HullFace;
 pub(crate) use self::hull::{merge_hull_triangles, rebuild_brush_from_vertices};
 pub(crate) use self::interaction::{
     BrushDragState, ClipMode, ClipState, EdgeDragState, VertexDragState,
 };
+pub use edit_mode_systems::BrushHalfedge;
 pub use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
+pub use knife_mode::{KnifeMode, KnifePathPoint, KnifeSnapKind, KnifeSnapTarget};
+pub use preview::{ActivePreview, PreviewMesh, PreviewState};
+pub use topology_ops::edge_bevel::EdgeBevelModalState;
+pub use topology_ops::edge_slide_modal::EdgeSlideModalState;
+pub use topology_ops::extrude::ExtrudeModalState;
+pub use topology_ops::inset::InsetModalState;
+pub use topology_ops::loop_cut::{LoopCutModalState, LoopCutPreviewLines};
+pub use topology_ops::vertex_bevel::VertexBevelModalState;
+pub use topology_ops::vertex_slide_modal::VertexSlideModalState;
 
 /// Cached computed geometry (NOT serialized, rebuilt from Brush).
 #[derive(Component)]
@@ -60,10 +75,11 @@ pub enum BrushEditMode {
     Vertex,
     Edge,
     Clip,
+    Knife,
 }
 
 /// Tracks selected sub-elements within brush edit mode.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct BrushSelection {
     pub entity: Option<Entity>,
     pub faces: Vec<usize>,
@@ -129,29 +145,50 @@ pub struct SetBrush {
 
 impl EditorCommand for SetBrush {
     fn execute(&mut self, world: &mut World) {
-        if let Some(mut brush) = world.get_mut::<Brush>(self.entity) {
-            *brush = self.new.clone();
-        }
-        sync_brush_to_ast(world, self.entity, &self.new);
-        // The Brush display has no reactive refresh; flag the
-        // inspector so it rebuilds against the new face data.
-        if let Ok(mut ec) = world.get_entity_mut(self.entity) {
-            ec.insert(crate::inspector::InspectorDirty);
-        }
+        apply_brush(world, self.entity, &self.new);
     }
 
     fn undo(&mut self, world: &mut World) {
-        if let Some(mut brush) = world.get_mut::<Brush>(self.entity) {
-            *brush = self.old.clone();
-        }
-        sync_brush_to_ast(world, self.entity, &self.old);
-        if let Ok(mut ec) = world.get_entity_mut(self.entity) {
-            ec.insert(crate::inspector::InspectorDirty);
-        }
+        apply_brush(world, self.entity, &self.old);
     }
 
     fn description(&self) -> &str {
         &self.label
+    }
+}
+
+/// Replace `entity`'s `Brush` with `target` and keep dependent components in
+/// sync. The renderer reads `BrushHalfedge` (the live half-edge mesh) while
+/// the user is in vertex / edge / face / knife mode, so reverting only the
+/// `Brush` component leaves the visible mesh stuck at its pre-revert state.
+/// We re-lift `BrushHalfedge` from `target.topology` here so undo / redo
+/// produce the expected visual result, and flag the inspector for rebuild.
+fn apply_brush(world: &mut World, entity: Entity, target: &Brush) {
+    if let Some(mut brush) = world.get_mut::<Brush>(entity) {
+        *brush = target.clone();
+    }
+    sync_brush_to_ast(world, entity, target);
+    if world.get::<BrushHalfedge>(entity).is_some() && !target.topology.polygons.is_empty() {
+        let mesh = jackdaw_geometry::halfedge::HalfedgeMesh::lift_from_topology(&target.topology);
+        let vert_keys: Vec<_> = mesh.verts.keys().collect();
+        let mut face_keys: Vec<_> =
+            vec![jackdaw_geometry::halfedge::FaceKey::default(); mesh.faces.len()];
+        for (k, f) in mesh.faces.iter() {
+            let slot = f.material_idx as usize;
+            if slot < face_keys.len() {
+                face_keys[slot] = k;
+            }
+        }
+        if let Ok(mut ec) = world.get_entity_mut(entity) {
+            ec.insert(BrushHalfedge {
+                mesh,
+                vert_keys,
+                face_keys,
+            });
+        }
+    }
+    if let Ok(mut ec) = world.get_entity_mut(entity) {
+        ec.insert(crate::inspector::InspectorDirty);
     }
 }
 
@@ -213,8 +250,18 @@ impl Plugin for BrushPlugin {
             .init_resource::<VertexDragState>()
             .init_resource::<EdgeDragState>()
             .init_resource::<ClipState>()
+            .init_resource::<InsetModalState>()
+            .init_resource::<LoopCutModalState>()
+            .init_resource::<LoopCutPreviewLines>()
+            .init_resource::<ExtrudeModalState>()
+            .init_resource::<EdgeSlideModalState>()
+            .init_resource::<VertexSlideModalState>()
+            .init_resource::<EdgeBevelModalState>()
+            .init_resource::<VertexBevelModalState>()
+            .init_resource::<KnifeMode>()
             .init_resource::<LastUsedMaterial>()
             .add_plugins(mesh::MeshPlugin)
+            .add_plugins(preview::PreviewPlugin)
             .add_systems(
                 OnEnter(crate::AppState::Editor),
                 mesh::setup_default_materials,
@@ -229,6 +276,7 @@ impl Plugin for BrushPlugin {
                     crate::brush_drag_ops::edge_drag_invoke_trigger,
                     crate::clip_ops::place_point_invoke_trigger,
                     interaction::handle_clip_mode,
+                    knife_mode::handle_knife_mode,
                 )
                     .chain()
                     .in_set(crate::EditorInteractionSystems),
@@ -242,6 +290,8 @@ impl Plugin for BrushPlugin {
                     ApplyDeferred,
                     mesh::ensure_brush_face_materials,
                     gizmo_overlay::draw_brush_edit_gizmos,
+                    gizmo_overlay::draw_loop_cut_preview,
+                    knife_mode::draw_knife_overlay,
                 )
                     .chain()
                     .after(crate::EditorInteractionSystems)
@@ -250,6 +300,16 @@ impl Plugin for BrushPlugin {
             .add_systems(
                 Update,
                 sync_changed_brushes_to_ast.run_if(in_state(crate::AppState::Editor)),
+            )
+            .add_systems(
+                Update,
+                edit_mode_systems::sync_brush_halfedge_on_edit_mode
+                    .run_if(in_state(crate::AppState::Editor)),
+            )
+            .add_systems(
+                Update,
+                topology_migration::migrate_legacy_brush_topology
+                    .run_if(in_state(crate::AppState::Editor)),
             );
     }
 }

@@ -70,8 +70,9 @@ pub struct OverlaySettings {
     pub show_face_grid: bool,
     /// Whether all visible brushes should show a wireframe outline.
     pub show_brush_wireframe: bool,
-    /// Whether all visible brushes should show an outline.
-    /// Note that regardless of this setting, the current selection will always show an outline.
+    /// Whether all visible brushes should show an outline. The
+    /// current selection always shows an outline regardless of this
+    /// setting.
     pub show_brush_outline: bool,
     pub show_alignment_guides: bool,
 }

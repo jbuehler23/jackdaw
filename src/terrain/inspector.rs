@@ -384,7 +384,7 @@ fn sync_brush_fields(
         };
         let formatted = format_numeric_value(new_val, TextEditVariant::NumericF32);
 
-        // Find inner entity: outer → wrapper child → TextEditWrapper → inner entity
+        // Find inner entity: outer -> wrapper child -> TextEditWrapper -> inner entity
         let mut found = false;
         for child in children.iter() {
             if let Ok(wrapper) = wrapper_query.get(child) {

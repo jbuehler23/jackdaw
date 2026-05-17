@@ -109,6 +109,7 @@ pub fn create_default_project(root: &Path) -> JsnProject {
             description: String::new(),
             default_scene: None,
             layout: None,
+            ..Default::default()
         },
     };
 

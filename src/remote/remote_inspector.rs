@@ -69,8 +69,9 @@ pub fn remote_inspector() -> impl Bundle {
     )
 }
 
-/// Phase 1 (exclusive system): detect selection change, populate proxy with real components,
-/// set flag for phase 2.
+/// Exclusive system: detect selection change, populate the proxy
+/// with real components, set the rebuild flag for the follow-up
+/// system to consume.
 pub fn populate_remote_proxy(world: &mut World) {
     // Find inspector entity
     let inspector_entity = {
@@ -187,8 +188,9 @@ pub fn populate_remote_proxy(world: &mut World) {
         });
 }
 
-/// Phase 2 (normal system): read the rebuild flag and build inspector displays using the
-/// shared `build_inspector_displays()` function, which requires normal system params.
+/// Normal system: read the rebuild flag and build inspector displays
+/// using the shared `build_inspector_displays()` function, which
+/// requires normal system params.
 pub fn build_remote_inspector_displays(
     mut commands: Commands,
     components: &Components,

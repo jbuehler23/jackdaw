@@ -8,7 +8,7 @@
 //! grey the entry when it would be a no-op.
 //!
 //! A happy-path "spawn brushes, run op, inspect the result" test is
-//! tracked as a followup — it needs a full render + transform
+//! tracked as a followup - it needs a full render + transform
 //! pipeline that `headless_app()` doesn't spin up.
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -45,7 +45,7 @@ fn brush_join_unavailable_without_two_brushes() {
     use jackdaw::selection::Selection;
 
     with_headless_brush_env(|app| {
-        // Empty selection → not available.
+        // Empty selection -> not available.
         assert!(
             !app.world_mut()
                 .operator("brush.join")
@@ -53,7 +53,7 @@ fn brush_join_unavailable_without_two_brushes() {
                 .unwrap()
         );
 
-        // One selected brush → still not available.
+        // One selected brush -> still not available.
         let b1 = spawn_cuboid_brush(app, Vec3::ZERO);
         app.world_mut().resource_mut::<Selection>().entities = vec![b1];
         app.update();
@@ -64,7 +64,7 @@ fn brush_join_unavailable_without_two_brushes() {
                 .unwrap()
         );
 
-        // Two selected brushes → available.
+        // Two selected brushes -> available.
         let b2 = spawn_cuboid_brush(app, Vec3::X);
         app.world_mut().resource_mut::<Selection>().entities = vec![b1, b2];
         app.update();
@@ -161,7 +161,7 @@ fn brush_extend_face_unavailable_without_resolvable_face() {
         app.update();
         assert!(app.world_mut().operator(op).is_available().unwrap());
 
-        // Face mode with a face picked on the primary and ≥ 1 other
+        // Face mode with a face picked on the primary and >= 1 other
         // brush selected: also available.
         *app.world_mut().resource_mut::<EditMode>() = EditMode::BrushEdit(BrushEditMode::Face);
         {

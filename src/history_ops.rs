@@ -9,6 +9,7 @@
 //! under the modal, leaving its `ActiveModalOperator` marker + per-op
 //! state stale.
 
+use bevy::input::ButtonInput;
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
@@ -43,6 +44,25 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 #[operator(id = "history.undo", label = "Undo", allows_undo = false)]
 pub(crate) fn history_undo(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
+        // Ctrl+Shift+Z fires both the Ctrl-only and Ctrl+Shift bindings
+        // because the modifier matcher is "must include these"; bail when
+        // Shift is held so redo can run alone.
+        let shift_held = world
+            .get_resource::<ButtonInput<KeyCode>>()
+            .is_some_and(|kb| kb.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]));
+        if shift_held {
+            return;
+        }
+        // In-modal undo for knife mode: pop the last placed path point
+        // instead of cancelling the modal. Path points aren't committed
+        // history entries (commit happens on Enter), so the pop is a pure
+        // resource mutation; the popped point goes onto `undone_path` for
+        // symmetric redo.
+        if let Some(mut knife) = world.get_resource_mut::<crate::brush::KnifeMode>()
+            && knife.undo_point()
+        {
+            return;
+        }
         cancel_active_modal_if_any(world);
         world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
             history.undo(world);
@@ -54,6 +74,12 @@ pub(crate) fn history_undo(_: In<OperatorParameters>, mut commands: Commands) ->
 #[operator(id = "history.redo", label = "Redo", allows_undo = false)]
 pub(crate) fn history_redo(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
+        // Symmetric to `history_undo`: re-add the last knife point if any.
+        if let Some(mut knife) = world.get_resource_mut::<crate::brush::KnifeMode>()
+            && knife.redo_point()
+        {
+            return;
+        }
         cancel_active_modal_if_any(world);
         world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
             history.redo(world);

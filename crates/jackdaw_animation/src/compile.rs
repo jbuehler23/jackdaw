@@ -178,7 +178,7 @@ pub fn compile_clips(
 /// a blend graph clip doesn't yet have a `CompiledClip` or when its
 /// canvas contents changed.
 ///
-/// **Scope (Phase 5D MVP):** single-clip passthrough only. If the
+/// **Scope:** single-clip passthrough only. If the
 /// graph has exactly one `anim.clip_ref` node connected to one
 /// `anim.output` node and the referenced clip has a `CompiledClip`,
 /// this system clones the referenced clip's compiled handles onto
@@ -242,7 +242,7 @@ pub fn compile_blend_graphs(
         // Source must be a clip_ref for the MVP passthrough case.
         let Ok(clip_ref) = clip_refs.get(source_node) else {
             warn!(
-                "Blend graph {clip_entity}: only direct Clip Reference → \
+                "Blend graph {clip_entity}: only direct Clip Reference -> \
                  Output is supported in MVP; got source node {source_node}"
             );
             continue;
@@ -273,7 +273,7 @@ pub fn compile_blend_graphs(
 /// Resolve glTF-sourced clips by looking up their Bevy
 /// [`AnimationClip`] handle in the loaded [`Gltf`] asset and wrapping
 /// it in a [`CompiledClip`]. Mirrors [`compile_clips`] for imported
-/// data: no keyframes, no tracks, just a direct handle → graph
+/// data: no keyframes, no tracks, just a direct handle -> graph
 /// conversion.
 ///
 /// Runs every frame but only touches un-compiled glTF clips

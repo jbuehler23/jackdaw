@@ -280,12 +280,12 @@ fn sync_selection_disable_state(
         let was_disabled = tool_state.disabled_by_us.contains(&entity);
 
         if is_selected && was_disabled {
-            // Newly selected → enable physics
+            // Newly selected -> enable physics
             commands.entity(entity).remove::<RigidBodyDisabled>();
             commands.queue(WakeBody(entity));
             tool_state.disabled_by_us.remove(&entity);
         } else if !is_selected && !was_disabled {
-            // Newly deselected → freeze
+            // Newly deselected -> freeze
             commands.entity(entity).insert((
                 RigidBodyDisabled,
                 LinearVelocity(Vec3::ZERO),

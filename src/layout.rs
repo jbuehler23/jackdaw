@@ -14,7 +14,8 @@ use crate::{
     brush::{BrushEditMode, EditMode},
     draw_brush::ActivateDrawBrushModalOp,
     edit_mode_ops::{
-        EditModeClipOp, EditModeEdgeOp, EditModeFaceOp, EditModeObjectOp, EditModeVertexOp,
+        EditModeClipOp, EditModeEdgeOp, EditModeFaceOp, EditModeKnifeOp, EditModeObjectOp,
+        EditModeVertexOp,
     },
     gizmo_ops::{GizmoModeRotateOp, GizmoModeScaleOp, GizmoModeTranslateOp, GizmoSpaceToggleOp},
     gizmos::{GizmoMode, GizmoSpace},
@@ -107,7 +108,10 @@ pub struct HierarchyFilter;
 #[derive(Component)]
 pub struct Toolbar;
 
-pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
+pub fn editor_layout(
+    icon_font: &IconFont,
+    editor_font: &jackdaw_feathers::icons::EditorFont,
+) -> impl Bundle {
     (
         EditorEntity,
         // Outer shell: dark background with padding (Figma: 10px padding, bg #171717)
@@ -136,8 +140,12 @@ pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
             BackgroundColor(tokens::WINDOW_BG),
             BorderColor::all(tokens::BORDER_SUBTLE),
             children![
-                // Integrated window header: menu bar + scene tabs + controls
-                window_header(icon_font.0.clone()),
+                // Integrated window header: menu bar + scene tabs +
+                // workspace dropdown + transport. Scene tabs live in
+                // the header alongside the menu (where workspace tabs
+                // used to sit); workspaces are exposed as a dropdown
+                // next to the Play pill.
+                window_header(icon_font.0.clone(), editor_font.0.clone()),
                 // Content container (flex grow). Holds both workspaces.
                 // Figma: Editor (Rows) has padding: 0px 4px
                 (
@@ -225,25 +233,29 @@ pub fn editor_layout(icon_font: &IconFont) -> impl Bundle {
 /// tabs sit right after the `Add` menu, matching the Figma mock), and
 /// the **right group** owns the Scene View combobox and the Play/Pause
 /// pill. A flex-grow spacer between them absorbs the slack, so resizing
-/// the dropdown label (e.g. `Scene View ▾` → `Animation View ▾`) can't
+/// the dropdown label (e.g. `Scene View v` -> `Animation View v`) can't
 /// shift the tabs.
-fn window_header(icon_font: Handle<Font>) -> impl Bundle {
+fn window_header(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bundle {
     (
         EditorEntity,
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             width: percent(100),
-            height: px(34.0),
+            height: px(36.0),
             flex_shrink: 0.0,
             border_radius: BorderRadius::top(Val::Px(7.0)),
             ..Default::default()
         },
         BackgroundColor(tokens::WINDOW_BG),
         children![
-            // Left: menu bar + tab strip, sitting flush to the left
-            // edge. `column_gap` pushes the tabs slightly away from the
-            // last menu item ("Add").
+            // Left: menu bar + scene tab strip. The strip carries the
+            // scene tabs that drive what's being edited (formerly the
+            // workspace tab strip, which is now a dropdown on the right).
+            // `flex_shrink: 1` + `min_width: 0` let the whole left group
+            // (and therefore the scene tab strip inside it) compress
+            // when many tabs are open, instead of pushing into the
+            // right-side workspace dropdown.
             (
                 EditorEntity,
                 Node {
@@ -251,44 +263,52 @@ fn window_header(icon_font: Handle<Font>) -> impl Bundle {
                     align_items: AlignItems::Center,
                     height: percent(100),
                     column_gap: px(tokens::SPACING_LG),
+                    flex_shrink: 1.0,
+                    min_width: px(0.0),
+                    flex_grow: 1.0,
                     ..Default::default()
                 },
                 children![
                     menu_bar::menu_bar_shell(),
                     (
-                        jackdaw_panels::WorkspaceTabStrip,
-                        DocumentTabStrip,
+                        crate::scenes::ui::SceneTabStrip,
                         EditorEntity,
                         Node {
                             flex_direction: FlexDirection::Row,
                             align_items: AlignItems::Center,
                             height: percent(100),
                             column_gap: px(4.0),
+                            flex_shrink: 1.0,
+                            flex_grow: 1.0,
+                            min_width: px(0.0),
+                            overflow: Overflow::scroll_x(),
                             ..Default::default()
                         },
+                        ScrollPosition::default(),
                     ),
                 ],
             ),
-            // Flexible spacer; absorbs leftover horizontal space
-            // between the left group and the right group.
-            (
-                EditorEntity,
-                Node {
-                    flex_grow: 1.0,
-                    ..Default::default()
-                },
-            ),
-            // Right: Scene View combobox + Play/Pause transport.
+            // Right: Workspace switcher dropdown + Play/Pause transport.
+            // `flex_shrink: 0` pins the right-side controls so the
+            // scene tab strip on the left is what gives ground when
+            // space gets tight.
             (
                 EditorEntity,
                 Node {
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
                     padding: UiRect::horizontal(px(tokens::SPACING_MD)),
-                    column_gap: px(6.0),
+                    column_gap: px(8.0),
+                    flex_shrink: 0.0,
                     ..Default::default()
                 },
-                children![play_pause_controls(icon_font),],
+                children![
+                    crate::workspace_dropdown::workspace_dropdown_trigger(
+                        editor_font,
+                        icon_font.clone(),
+                    ),
+                    play_pause_controls(icon_font),
+                ],
             ),
         ],
     )
@@ -696,7 +716,7 @@ pub fn update_toolbar_button_variants(
     for (call, mut variant) in &mut buttons {
         // While any modal is running only the modal's own button
         // highlights. Gizmo / mode buttons go quiet so the user sees
-        // a single active tool at a time, matching how Blender
+        // a single active tool at a time, matching how mature 3D editors
         // surfaces the current mode. New extension modal operators
         // pick this up automatically through the fall-through arm.
         let active = if modal_running {
@@ -719,6 +739,8 @@ pub fn update_toolbar_button_variants(
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
         } else if call.id == EditModeClipOp::ID {
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Clip)
+        } else if call.id == EditModeKnifeOp::ID {
+            *edit_mode == EditMode::BrushEdit(BrushEditMode::Knife)
         } else if call.id == PhysicsActivateOp::ID {
             *edit_mode == EditMode::Physics
         } else {

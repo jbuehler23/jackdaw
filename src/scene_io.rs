@@ -171,7 +171,18 @@ fn spawn_open_dialog(world: &mut World) {
 }
 
 pub fn save_scene(world: &mut World) {
-    // If no path is set yet, delegate to Save As
+    // The active scene tab is the source of truth for which file to
+    // save to. Re-sync the global `SceneFilePath` from it so a stale
+    // path from a previous tab can never cause us to overwrite the
+    // wrong file. Untitled tabs (no path) fall through to Save As.
+    let active_tab_path: Option<String> = world
+        .get_resource::<crate::scenes::Scenes>()
+        .and_then(|s| s.tabs.get(s.active).and_then(|t| t.path.clone()))
+        .map(|p| p.to_string_lossy().into_owned());
+    if let Some(mut spath) = world.get_resource_mut::<SceneFilePath>() {
+        spath.path = active_tab_path;
+    }
+
     let has_path = world.resource::<SceneFilePath>().path.is_some();
     if !has_path {
         save_scene_as(world);
@@ -190,26 +201,41 @@ pub fn save_scene_as(world: &mut World) {
     spawn_save_dialog(world);
 }
 
-fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
-    let scene_file_path = world.resource::<SceneFilePath>();
-    let parent_path: Cow<'_, Path> = match scene_file_path
-        .path
-        .as_ref()
-        .and_then(|p| Path::new(p).parent())
-    {
-        Some(parent_path) => Cow::Owned(parent_path.to_path_buf()),
-        None => Cow::Owned(env::current_dir()?),
+/// Build a `JsnScene` snapshot of the live world. Pure: does not touch
+/// disk. Used by both `save_scene_inner` (which writes the result to a
+/// file) and by the multi-scene tab swap (which keeps the `JsnScene`
+/// in memory for inactive tabs).
+pub fn serialize_world_to_jsn_scene(world: &mut World) -> JsnScene {
+    let parent_path: Cow<'_, Path> = {
+        let raw_path = world.get_resource::<SceneFilePath>().and_then(|r| {
+            r.path
+                .as_deref()
+                .and_then(|p| Path::new(p).parent().map(std::path::Path::to_path_buf))
+        });
+        match raw_path {
+            Some(p) => Cow::Owned(p),
+            None => Cow::Owned(env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
+        }
     };
 
-    // Pre-compute entity lists while we have &mut World
-    let editor_set = world.run_system_cached(collect_editor_entities)?;
-    let scene_entities =
-        world.run_system_cached_with(collect_scene_entities_from_set, editor_set)?;
+    // Pre-compute entity lists while we have &mut World.
+    let editor_set = world
+        .run_system_cached(collect_editor_entities)
+        .unwrap_or_else(|e| {
+            warn!("serialize_world_to_jsn_scene: collect_editor_entities failed: {e}");
+            Default::default()
+        });
+    let scene_entities = world
+        .run_system_cached_with(collect_scene_entities_from_set, editor_set)
+        .unwrap_or_else(|e| {
+            warn!("serialize_world_to_jsn_scene: collect_scene_entities failed: {e}");
+            Default::default()
+        });
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry_guard = registry.read();
 
-    // Get catalog reverse lookup for emitting @Name references
+    // Get catalog reverse lookup for emitting @Name references.
     let catalog_id_to_name = world
         .get_resource::<crate::asset_catalog::AssetCatalog>()
         .map(|c| c.id_to_name.clone())
@@ -235,10 +261,12 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
 
     drop(registry_guard);
 
-    // Build metadata
+    // Build metadata.
     let now = chrono_now();
-    let scene_path_res = world.resource::<SceneFilePath>();
-    let mut metadata = scene_path_res.metadata.clone();
+    let mut metadata = world
+        .get_resource::<SceneFilePath>()
+        .map(|r| r.metadata.clone())
+        .unwrap_or_default();
     metadata.modified = now.clone();
     if metadata.created.is_empty() {
         metadata.created = now;
@@ -247,13 +275,27 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         metadata.name = "Untitled".to_string();
     }
 
-    let jsn = JsnScene {
-        jsn: JsnHeader::default(),
-        metadata: metadata.clone(),
-        assets,
-        editor: None,
-        scene: entities,
+    // Capture the current viewport camera framing so the next open
+    // lands the user back where they left off.
+    let camera_transform = {
+        let mut q = world.query_filtered::<&Transform, With<crate::viewport::MainViewportCamera>>();
+        q.iter(world).next().copied()
     };
+    let editor_state = camera_transform.map(|t| jackdaw_jsn::format::JsnEditorState {
+        camera: Some(t.into()),
+    });
+
+    JsnScene {
+        jsn: JsnHeader::default(),
+        metadata,
+        assets,
+        editor: editor_state,
+        scene: entities,
+    }
+}
+
+fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
+    let jsn = serialize_world_to_jsn_scene(world);
 
     let json = serde_json::to_string_pretty(&jsn)?;
 
@@ -267,7 +309,7 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
 
     // Save metadata back
     let mut scene_path = world.resource_mut::<SceneFilePath>();
-    scene_path.metadata = metadata;
+    scene_path.metadata = jsn.metadata.clone();
 
     // Mark scene as clean
     let history_len = world
@@ -275,6 +317,17 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         .undo_stack
         .len();
     world.resource_mut::<SceneDirtyState>().undo_len_at_save = history_len;
+
+    // Clear the active scene tab's dirty flag and resync its history
+    // depth marker so `mark_active_dirty_on_history_growth` does not
+    // immediately re-dirty the tab on the next frame.
+    if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
+        let active = scenes.active;
+        if let Some(tab) = scenes.tabs.get_mut(active) {
+            tab.dirty = false;
+            tab.history_depth_at_last_check = history_len;
+        }
+    }
 
     // Write to disk on the IO task pool
     let path_clone = path.clone();
@@ -287,8 +340,16 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         })
         .detach();
 
-    // Sync AST from the serialized scene
-    let ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &scene_entities);
+    // Sync AST from the serialized scene. Re-collect the entity list so
+    // we can map scene indices back to live ECS entities (same logic as
+    // in serialize_world_to_jsn_scene; the collection is cheap).
+    let editor_set_for_ast = world
+        .run_system_cached(collect_editor_entities)
+        .unwrap_or_default();
+    let scene_entities_for_ast = world
+        .run_system_cached_with(collect_scene_entities_from_set, editor_set_for_ast)
+        .unwrap_or_default();
+    let ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &scene_entities_for_ast);
     *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast;
 
     // Save catalog alongside scene if dirty
@@ -404,7 +465,7 @@ impl<'a> ReflectSerializerProcessor for JsnSerializerProcessor<'a> {
             return Ok(Ok(serializer.serialize_str(s)?));
         }
 
-        // Handle<T> → path string or inline #Name
+        // Handle<T> -> path string or inline #Name
         if let Some(reflect_handle) = registry.get_type_data::<ReflectHandle>(type_id) {
             let untyped_handle = reflect_handle
                 .downcast_handle_untyped(value.as_any())
@@ -431,7 +492,7 @@ impl<'a> ReflectSerializerProcessor for JsnSerializerProcessor<'a> {
             return Ok(Ok(serializer.serialize_unit()?));
         }
 
-        // Entity → scene-local index
+        // Entity -> scene-local index
         if type_id == TypeId::of::<Entity>() {
             if let Some(entity) = value.as_any().downcast_ref::<Entity>()
                 && let Some(&idx) = self.entity_to_index.get(entity)
@@ -496,7 +557,7 @@ impl<'a> ReflectDeserializerProcessor for JsnDeserializerProcessor<'a> {
                 }
             };
 
-            // Null sentinel (from old files with "material": null) → default handle
+            // Null sentinel (from old files with "material": null) -> default handle
             if relative_path.is_empty()
                 && let Some(reflect_default) = registration.data::<ReflectDefault>()
             {
@@ -666,7 +727,7 @@ impl<'a> JsnDeserializerProcessor<'a> {
 
 /// Walk all scene entity components, find `Handle<T>` fields that have no asset path
 /// (runtime-created), serialize them into the generic assets table, and return a map
-/// of asset ID → inline name for the serializer processor.
+/// of asset ID -> inline name for the serializer processor.
 ///
 /// Assets already in the `AssetCatalog` are emitted as `@Name` references and excluded
 /// from the scene-local asset table.
@@ -1084,7 +1145,7 @@ fn build_scene_snapshot(
     inline_assets: &HashMap<UntypedAssetId, String>,
     entities: &[Entity],
 ) -> Vec<JsnEntity> {
-    // Build entity → index map for parent and entity-field references
+    // Build entity -> index map for parent and entity-field references
     let entity_to_index: HashMap<Entity, usize> =
         entities.iter().enumerate().map(|(i, &e)| (e, i)).collect();
 
@@ -1103,7 +1164,7 @@ fn build_scene_snapshot(
         TypeId::of::<Children>(),
     ]);
 
-    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
+    let ast = world.get_resource::<jackdaw_jsn::SceneJsnAst>();
 
     entities
         .iter()
@@ -1114,11 +1175,12 @@ fn build_scene_snapshot(
                 .get::<ChildOf>()
                 .and_then(|c| entity_to_index.get(&c.parent()).copied());
 
-            // Derived components for this entity  -- skip them during save
+            // Derived components for this entity  -- skip them during save.
+            // Falls back to an empty set when the AST resource is absent
+            // (e.g. in unit tests that do not load the full editor).
             let derived = ast
-                .node_for_entity(entity)
-                .map(|n| &n.derived_components)
-                .cloned()
+                .and_then(|a| a.node_for_entity(entity))
+                .map(|n| n.derived_components.clone())
                 .unwrap_or_default();
 
             // All components (including Name, Transform, Visibility) via reflection
@@ -1150,7 +1212,7 @@ fn build_scene_snapshot(
                     continue;
                 };
 
-                // Serialize with processor  -- handles Handle<T> → path and Entity → index
+                // Serialize with processor  -- handles Handle<T> -> path and Entity -> index
                 let serializer =
                     TypedReflectSerializer::with_processor(component, registry, &ser_processor);
                 if let Ok(value) = serde_json::to_value(&serializer) {
@@ -1253,6 +1315,16 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
         let ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &spawned);
         *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast;
 
+        // Restore the saved camera framing if present.
+        if let Some(camera) = jsn.editor.as_ref().and_then(|e| e.camera.as_ref()) {
+            let restored: Transform = camera.clone().into();
+            let mut q =
+                world.query_filtered::<&mut Transform, With<crate::viewport::MainViewportCamera>>();
+            for mut tf in q.iter_mut(world) {
+                *tf = restored;
+            }
+        }
+
         info!("Scene loaded from {path}");
 
         // Restore metadata
@@ -1267,7 +1339,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
 }
 
 /// Deserialize inline assets from the generic assets table.
-/// Returns a map of `#Name` / `@Name` → `UntypedHandle` for the deserializer processor.
+/// Returns a map of `#Name` / `@Name` -> `UntypedHandle` for the deserializer processor.
 /// Scan material definitions in `JsnAssets` to find image names used in non-color slots.
 /// These images must be loaded with `is_srgb = false` to avoid gamma decoding artifacts.
 fn collect_linear_image_names(assets: &JsnAssets) -> HashSet<String> {
@@ -1320,7 +1392,7 @@ pub fn load_inline_assets(
                 continue;
             };
 
-            // @Name reference → resolve from catalog
+            // @Name reference -> resolve from catalog
             if rel_path.starts_with('@') {
                 if let Some(handle) = catalog_handles.get(rel_path.as_str()) {
                     local_assets.insert(name.clone(), handle.clone());
@@ -1518,9 +1590,23 @@ fn do_new_scene(world: &mut World) {
     info!("New scene created");
 }
 
-/// Spawn default lighting for a new/empty scene (Sun directional light + no ambient).
+/// Spawn default lighting for a new / empty scene (Sun directional
+/// light + no ambient). Idempotent: if any `DirectionalLight` already
+/// exists in the world we skip the Sun spawn so loaded scenes that
+/// carry their own lighting don't get a duplicate `Sun`. The ambient
+/// override is always applied since it is a `Resource` mutation, not a
+/// spawn.
 pub fn spawn_default_lighting(world: &mut World) {
     world.insert_resource(GlobalAmbientLight::NONE);
+
+    let has_directional = world
+        .query::<&DirectionalLight>()
+        .iter(world)
+        .next()
+        .is_some();
+    if has_directional {
+        return;
+    }
 
     let sun = world
         .spawn((
@@ -1580,7 +1666,7 @@ fn cleanup_pending_new_scene(
 /// Type alias for the query that collects every "real scene" root.
 ///
 /// BEI action entities carry a `Name` (via `Action<A>`'s
-/// `#[require(Name::new(any::type_name::<A>()), ActionSettings, …)]`)
+/// `#[require(Name::new(any::type_name::<A>()), ActionSettings, ...)]`)
 /// but are editor infrastructure; filter them out via
 /// `Without<ActionSettings>` so they don't get serialized into
 /// undo snapshots and re-spawned as scene entities on undo.
@@ -1685,7 +1771,7 @@ pub(crate) fn clear_scene_entities(world: &mut World) {
 /// snapshot apply during undo/redo.
 ///
 /// `bevy_enhanced_input`'s `Action<A>` component auto-inserts a
-/// `Name` component (see its `#[require(Name::new(any::type_name::<A>()), …)]`),
+/// `Name` component (see its `#[require(Name::new(any::type_name::<A>()), ...)]`),
 /// so BEI action entities are otherwise indistinguishable from
 /// scene roots. They also carry the non-generic `ActionSettings`
 /// marker, so excluding those keeps every operator's input routing
@@ -1738,7 +1824,7 @@ pub(crate) fn despawn_scene_entities(world: &mut World) -> Result<(), BevyError>
 /// the resulting `local_assets` into `load_scene_from_jsn`, which
 /// wires runtime handles back up by `#Name`.
 ///
-/// Cost: O(scene entities × registered components) per snapshot.
+/// Cost: O(scene entities x registered components) per snapshot.
 /// Called once per history-creating operator dispatch, not per
 /// frame; acceptable for the current editor workload.
 pub fn build_snapshot_ast(world: &mut World) -> jackdaw_jsn::SceneJsnAst {
@@ -1940,6 +2026,20 @@ fn poll_scene_dialog(world: &mut World) {
                 scene_path.path = Some(path_str);
                 scene_path.last_directory = last_dir;
 
+                // Bind the picked path onto the active scene tab so
+                // subsequent swaps/saves go to the right file, and the
+                // dirty-state and display name reflect "saved scene"
+                // instead of "untitled-N".
+                if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
+                    let active = scenes.active;
+                    if let Some(tab) = scenes.tabs.get_mut(active) {
+                        tab.path = Some(path.clone());
+                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                            tab.display_name = stem.to_string();
+                        }
+                    }
+                }
+
                 if let Err(err) = save_scene_inner(world) {
                     error!("scene save (after Save As dialog) failed: {err}");
                 }
@@ -1980,7 +2080,7 @@ impl ReflectSerializerProcessor for AstSerializerProcessor {
         };
         let type_id = value.reflect_type_info().type_id();
 
-        // Handle<T> → null (default handles have no path)
+        // Handle<T> -> null (default handles have no path)
         if let Some(reflect_handle) = registry.get_type_data::<ReflectHandle>(type_id) {
             let untyped_handle = reflect_handle
                 .downcast_handle_untyped(value.as_any())
@@ -1994,7 +2094,7 @@ impl ReflectSerializerProcessor for AstSerializerProcessor {
             return Ok(Ok(serializer.serialize_unit()?));
         }
 
-        // Entity → null (no scene-local index at registration time)
+        // Entity -> null (no scene-local index at registration time)
         if type_id == TypeId::of::<Entity>() {
             return Ok(Ok(serializer.serialize_unit()?));
         }

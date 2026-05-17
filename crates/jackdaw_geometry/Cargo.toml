@@ -8,6 +8,14 @@ repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
 bevy.workspace = true
+slotmap = "1.0"
+earcutr = "0.5"
+cdt = "0.1"
+bitflags = "2"
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+jackdaw_jsn = { path = "../jackdaw_jsn" }
 
 [lints]
 workspace = true

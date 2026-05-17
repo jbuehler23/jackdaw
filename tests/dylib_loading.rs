@@ -79,7 +79,7 @@ fn headless_app_with_empty_dylib_loader() -> LeakyApp {
 /// at an indeterminate moment relative to the `Extension` entity
 /// that stores a trait object whose vtable lives inside that
 /// library. If the library unloads first, the vtable drop-glue
-/// segfaults. Leaking is harmless in a test binary — the OS reclaims
+/// segfaults. Leaking is harmless in a test binary - the OS reclaims
 /// everything at process exit.
 #[derive(Deref, DerefMut)]
 struct LeakyApp(ManuallyDrop<App>);

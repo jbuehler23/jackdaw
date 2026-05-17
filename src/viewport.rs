@@ -19,8 +19,8 @@ use crate::core_extension::CoreExtensionInputContext;
 use crate::selection::{Selected, Selection};
 use jackdaw_widgets::file_browser::FileBrowserItem;
 
-/// Marker for a 3D viewport camera. With Phase 2 multi-viewport
-/// support every viewport panel spawns its own camera carrying this
+/// Marker for a 3D viewport camera. Once multi-viewport support
+/// lands every viewport panel will spawn its own camera carrying this
 /// marker, so queries that need *all* viewport cameras (or a specific
 /// one selected via [`ActiveViewport`]) iterate them rather than
 /// using `Single<>`.

@@ -35,10 +35,10 @@ impl Plugin for OperatorTooltipPlugin {
 }
 
 /// Derive a [`Tooltip`] from the operator backing a freshly-added
-/// [`ButtonOperatorCall`] and insert it on the same entity.
-/// Silently skips when the operator id doesn't resolve (e.g.
-/// extension not loaded yet); the button just renders without a
-/// tooltip until the next layout pass.
+/// [`ButtonOperatorCall`] and insert it on the same entity. Skips
+/// when the operator id doesn't resolve (e.g. extension not loaded
+/// yet); the button renders without a tooltip until the next layout
+/// pass.
 fn auto_attach_button_tooltip(
     trigger: On<Add, ButtonOperatorCall>,
     calls: Query<&ButtonOperatorCall>,

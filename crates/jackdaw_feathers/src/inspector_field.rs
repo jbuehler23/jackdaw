@@ -305,11 +305,11 @@ fn setup_combobox_fields(
         // Spawn the label + combobox inside a world-exclusive closure
         // that first checks the row entity is still alive. The
         // previous `commands.spawn(...).id()` + `commands.entity(entity)
-        // .add_children(&[…])` flow only checked liveness at queue
+        // .add_children(&[...])` flow only checked liveness at queue
         // time; if `entity` was cascade-despawned before the queued
         // spawns flushed, the children ended up orphaned with
         // `ChildOf(dead entity)` references, producing the
-        // `ChildOf(…) relates to an entity that does not exist` warns
+        // `ChildOf(...) relates to an entity that does not exist` warns
         // on every inspector rebuild.
         let label = config.label.clone();
         let options = config.options.clone();

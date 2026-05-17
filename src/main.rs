@@ -3,6 +3,7 @@ use bevy::{
     ecs::error::ErrorContext,
     image::{ImageAddressMode, ImagePlugin, ImageSamplerDescriptor},
     prelude::*,
+    window::{ExitCondition, WindowPlugin},
 };
 use jackdaw::prelude::*;
 
@@ -83,6 +84,17 @@ fn main() -> AppExit {
                         address_mode_w: ImageAddressMode::Repeat,
                         ..ImageSamplerDescriptor::linear()
                     },
+                })
+                // Disable Bevy's default window-close -> AppExit wiring so
+                // `intercept_window_close` in ScenesPlugin owns the exit path.
+                // `close_when_requested: false` prevents the OS window from
+                // being destroyed automatically; we do it ourselves after the
+                // dialog resolves. `ExitCondition::DontExit` prevents Bevy
+                // from emitting AppExit when all windows close.
+                .set(WindowPlugin {
+                    exit_condition: ExitCondition::DontExit,
+                    close_when_requested: false,
+                    ..default()
                 }),
         )
         // Ambient plugins added next to `DefaultPlugins`. The

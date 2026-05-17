@@ -17,8 +17,9 @@ use crate::registry::NodeTypeDescriptor;
 
 /// Marker component placed on a node's UI root so systems can query it.
 ///
-/// Holds the `GraphNode` entity it visualizes. Used by the terminal-position
-/// tracking system and by selection/drag observers in Phase 2.
+/// Holds the `GraphNode` entity it visualizes. Used by the
+/// terminal-position tracking system and by selection / drag
+/// observers.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct GraphNodeView(pub Entity);
 
@@ -33,8 +34,9 @@ pub struct GraphTerminalView {
 
 /// Marker on the body area UI entity of a node.
 ///
-/// Carries the `GraphNode` data entity so consumer code can populate the
-/// body with widgets (labels, sliders, text inputs, etc.) specific to a
+/// Stores the `GraphNode` data entity so consumer code can populate
+/// the body with widgets (labels, sliders, text inputs, etc.) specific
+/// to a
 /// given node type. Consumers add an `Added<GraphNodeBody>` system that
 /// looks up `GraphNode::node_type` for each freshly-spawned body and
 /// spawns appropriate children.
@@ -312,8 +314,8 @@ pub fn body_label(text: impl Into<String>) -> impl Bundle {
 /// Push the latest [`GraphNode::position`] into the node UI's
 /// `Node::left`/`Node::top`.
 ///
-/// Runs each frame under `Update` so moving a node updates on the next
-/// render. Phase 2's drag system mutates `GraphNode::position` through
+/// Runs each frame under `Update` so moving a node updates on the
+/// next render. The drag system mutates `GraphNode::position` via
 /// `SetJsnField` commands, which triggers this to repaint.
 pub fn apply_node_position(
     nodes: Query<&GraphNode>,
@@ -331,9 +333,9 @@ pub fn apply_node_position(
 /// Update each node UI's border color based on whether its data entity
 /// carries a [`GraphNodeSelected`] marker.
 ///
-/// Runs every frame in `Update`. Cheap even with thousands of nodes ;
-/// Phase 6 polish can switch to `Added<GraphNodeSelected>` +
-/// `RemovedComponents` change detection if profiling shows overhead.
+/// Runs every frame in `Update`. Cheap even with thousands of nodes.
+/// Switching to `Added<GraphNodeSelected>` + `RemovedComponents`
+/// change detection is a future polish if profiling shows overhead.
 pub fn apply_selection_highlight(
     selected: Query<(), With<GraphNodeSelected>>,
     mut views: Query<(&GraphNodeView, &mut BorderColor)>,
@@ -350,9 +352,9 @@ pub fn apply_selection_highlight(
 
 /// Spawn `Terminal` components on `node_entity` to match a descriptor.
 ///
-/// Caller is responsible for calling this once at node creation time; it
-/// writes one child `Terminal` entity per input and per output. This is a
-/// helper used by `AddGraphNodeCmd` in Phase 2 and by the demo example.
+/// Caller is responsible for calling this once at node creation
+/// time; it writes one child `Terminal` entity per input and per
+/// output. Used by `AddGraphNodeCmd` and by the demo example.
 pub fn spawn_terminal_components(
     commands: &mut Commands,
     node_entity: Entity,

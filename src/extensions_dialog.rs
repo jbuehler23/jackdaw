@@ -230,7 +230,7 @@ fn spawn_install_row(commands: &mut Commands, list: Entity) {
         ChildOf(row),
         InstallFromFileButton,
         button(
-            ButtonProps::new("Install prebuilt dylib…")
+            ButtonProps::new("Install prebuilt dylib...")
                 .with_variant(ButtonVariant::Default)
                 .with_size(ButtonSize::MD)
                 .with_left_icon(Icon::FilePlus),
@@ -340,7 +340,7 @@ fn on_install_button_click(
         );
         let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_file().await });
         world.resource_mut::<InstallStatus>().task = Some(task);
-        world.resource_mut::<InstallStatus>().message = Some("Select a dylib file…".into());
+        world.resource_mut::<InstallStatus>().message = Some("Select a dylib file...".into());
     });
 }
 
@@ -453,7 +453,7 @@ fn handle_install(
                 // Soft-fail: caller will detect this and run the
                 // auto-clean-and-retry recovery path. Don't update
                 // the install-status message; the retry UI owns it.
-                "SDK mismatch detected; cleaning project cache…".to_string()
+                "SDK mismatch detected; cleaning project cache...".to_string()
             } else {
                 format!(
                     "Installed to {}, but live-load failed: {err}. Restart the editor to retry.",

@@ -114,8 +114,8 @@ pub struct TimelineKeyframeHandle {
 }
 
 /// **Deprecated alias kept temporarily for consumers migrating to the
-/// path-addressed track model.** Will be removed in Phase 5B once no
-/// code outside the animation crate references it.
+/// path-addressed track model.** Will be removed once no code outside
+/// the animation crate references it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackField {
     Translation,
@@ -123,11 +123,11 @@ pub enum TrackField {
     Scale,
 }
 
-/// Marker on the duration text field in the header; reserved for
-/// future phases when explicit duration storage comes back (e.g. for
-/// trimming clips). Phase 5A derives duration from keyframes, so this
-/// marker currently goes unused but is kept to preserve the public API
-/// that the main editor observer binds to.
+/// Marker on the duration text field in the header. Reserved for when
+/// explicit duration storage comes back (e.g. for trimming clips).
+/// Today duration is derived from keyframes so this marker is unused;
+/// it stays to preserve the public API the main editor observer
+/// binds to.
 #[derive(Component, Clone, Copy)]
 pub struct TimelineDurationInput {
     pub clip: Entity,
@@ -288,7 +288,7 @@ pub fn rebuild_timeline(
                     sibling_clips,
                 );
                 if blend_graphs.contains(clip_entity) {
-                    // Blend graph clip → node canvas in place of the
+                    // Blend graph clip -> node canvas in place of the
                     // keyframe body. The canvas sync systems backfill
                     // UI for any pre-existing nodes/connections when
                     // the canvas world appears.
@@ -499,7 +499,7 @@ fn spawn_header(
     commands.spawn((
         jackdaw_feathers::text_edit::text_edit(
             jackdaw_feathers::text_edit::TextEditProps::default()
-                .with_placeholder("Clip name…")
+                .with_placeholder("Clip name...")
                 .with_default_value(clip_name.to_string()),
         ),
         ChildOf(name_wrapper),
@@ -690,7 +690,7 @@ fn spawn_body(
 
 /// Spawn time labels + vertical gridlines at a "nice" interval so the
 /// user can see where they are in the clip at a glance. The interval
-/// is picked so there are roughly 4–10 ticks across the visible range.
+/// is picked so there are roughly 4-10 ticks across the visible range.
 fn spawn_ruler_ticks(commands: &mut Commands, ruler: Entity, timeline_col: Entity, duration: f32) {
     if duration <= 0.0 {
         return;

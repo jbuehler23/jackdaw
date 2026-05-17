@@ -679,8 +679,8 @@ fn on_tree_node_expanded(
     });
 }
 
-/// Handle tree row click → select the source entity.
-/// Plain click on selected entity → deselect. Ctrl+Click → toggle.
+/// Handle tree row click -> select the source entity.
+/// Plain click on selected entity -> deselect. Ctrl+Click -> toggle.
 fn on_tree_row_clicked(
     event: On<TreeRowClicked>,
     mut commands: Commands,
@@ -783,7 +783,7 @@ fn on_entity_deselected(
     }
 }
 
-/// Handle tree row dropped → reparent the scene entity with undo support.
+/// Handle tree row dropped -> reparent the scene entity with undo support.
 fn on_tree_row_dropped(
     event: On<TreeRowDropped>,
     mut commands: Commands,
@@ -823,7 +823,7 @@ fn on_tree_row_dropped(
     });
 }
 
-/// Handle tree row dropped on root container → deparent the scene entity.
+/// Handle tree row dropped on root container -> deparent the scene entity.
 fn on_tree_row_dropped_on_root(
     event: On<TreeRowDroppedOnRoot>,
     mut commands: Commands,
@@ -1384,7 +1384,7 @@ fn handle_inline_rename_commit(
     mut input_focus: ResMut<InputFocus>,
 ) {
     // Walk up from the committed entity to find if it belongs to an InlineRenameInput
-    // event.entity is the inner EditorTextEdit → parent is wrapper → parent is text_edit outer → parent is content
+    // event.entity is the inner EditorTextEdit -> parent is wrapper -> parent is text_edit outer -> parent is content
     // The InlineRenameInput is on the text_edit outer entity
     let mut current = event.entity;
     let mut found = None;
@@ -1678,7 +1678,7 @@ fn apply_hierarchy_filter(
         if matches {
             visible_tree_entities.insert(tree_entity);
 
-            // Walk up ancestors: tree row → ChildOf → TreeRowChildren → ChildOf → parent tree row
+            // Walk up ancestors: tree row -> ChildOf -> TreeRowChildren -> ChildOf -> parent tree row
             let mut current = tree_entity;
             while let Ok(&ChildOf(parent)) = parent_query.get(current) {
                 if tree_row_children_query.contains(parent) {

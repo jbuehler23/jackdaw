@@ -1,8 +1,7 @@
 //! Gesture state machine for canvas interaction.
 //!
-//! Phase 1 exposes the enum and a default-`Idle` resource; Phase 2 wires in
-//! pointer observers to drive transitions (pan, node move, rect-select,
-//! connection drag).
+//! Exposes the enum and a default-`Idle` resource. Pointer observers
+//! drive transitions (pan, node move, rect-select, connection drag).
 
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -28,8 +27,8 @@ pub struct SnapHit {
 
 /// Active gesture in the graph canvas.
 ///
-/// Exactly one gesture is active at a time. Transitions happen in observers
-/// attached to the canvas and node UI entities in Phase 2.
+/// Exactly one gesture is active at a time. Transitions happen in
+/// observers attached to the canvas and node UI entities.
 #[derive(Resource, Default, Debug)]
 pub enum GraphGesture {
     #[default]

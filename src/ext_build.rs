@@ -380,9 +380,9 @@ pub fn build_static_editor_with_progress(
 /// when cargo exits non-zero.
 ///
 /// Shared between [`build_extension_project_with_progress`] (used
-/// by the dylib install flow + the original Phase D scaffold-time
-/// build) and [`build_static_editor_with_progress`] (used by the
-/// background static-editor handoff).
+/// by the dylib install flow and the scaffold-time build) and
+/// [`build_static_editor_with_progress`] (used by the background
+/// static-editor handoff).
 fn run_cargo_with_progress(
     mut cmd: Command,
     sink: Option<&Arc<Mutex<BuildProgress>>>,
@@ -465,7 +465,7 @@ fn run_cargo_with_progress(
     Ok(())
 }
 
-/// Parse a single line from `cargo --message-format=json-…`. On a
+/// Parse a single line from `cargo --message-format=json-...`. On a
 /// `compiler-artifact` record, bump `artifacts_done` + update
 /// `current_crate`. Errors are swallowed; cargo sometimes emits
 /// non-JSON prefix lines, which we ignore.

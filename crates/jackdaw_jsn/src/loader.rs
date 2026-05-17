@@ -12,7 +12,7 @@ use serde::de::DeserializeSeed;
 
 use crate::format::{JsnEntity, JsnScene, JsnSceneV2};
 
-/// Asset loader for `.jsn` files → `DynamicScene`.
+/// Asset loader for `.jsn` files -> `DynamicScene`.
 #[derive(Debug, TypePath)]
 pub struct JsnAssetLoader {
     type_registry: TypeRegistryArc,

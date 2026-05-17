@@ -62,7 +62,7 @@ impl Plugin for ProjectSelectPlugin {
                 ),
             )
             // The dylib-install step MUST run outside of `Update`'s
-            // `schedule_scope`. The game's `GameApp::add_systems(Update, …)`
+            // `schedule_scope`. The game's `GameApp::add_systems(Update, ...)`
             // inserts into `Schedules`; doing that while bevy has
             // `Update` checked out via `schedule_scope` causes the
             // modification to be overwritten when the scope re-inserts
@@ -86,7 +86,7 @@ pub struct PendingAutoOpen {
     /// `true` when we got here via a post-restart auto-open ;
     /// the parent process already built + installed the dylib,
     /// so we skip that step (preventing an infinite
-    /// build→restart→auto-open→build loop).
+    /// build->restart->auto-open->build loop).
     pub skip_build: bool,
 }
 
@@ -205,7 +205,7 @@ struct StaticEditorBuild {
     /// updates `BuildStatus` to `Ready` or `Failed`.
     task: Option<Task<Result<PathBuf, crate::ext_build::BuildError>>>,
     /// Auto-reload flag remembered between dispatch and completion.
-    /// Mirrors the second member of `pending`, stashed once the task
+    /// Copies the second member of `pending`, stashed once the task
     /// is spawned because `pending` is drained on dispatch.
     auto_reload: bool,
 }
@@ -252,10 +252,10 @@ struct NewProjectState {
     /// See [`StaticEditorBuild`].
     static_editor: StaticEditorBuild,
     /// Whether the post-scaffold path should kick off the editor
-    /// build immediately (default `true` — the user lands in their
+    /// build immediately (default `true`: the user lands in their
     /// editor without leaving the launcher) or stop at "files
     /// written, run `cargo editor` from the project root yourself"
-    /// (`false` — for users who'd rather drive the build from
+    /// (`false`: for users who'd rather drive the build from
     /// their own terminal). Read by the scaffold-success branch
     /// in `poll_new_project_tasks`; set from the New Project
     /// modal's checkbox in `on_create_new_project`.
@@ -446,7 +446,7 @@ fn spawn_project_selector(
                     spawn_new_project_button(
                         card,
                         new_row,
-                        "+ From URL…",
+                        "+ From URL...",
                         font.clone(),
                         TemplatePreset::Custom(String::new()),
                     );
@@ -673,7 +673,7 @@ fn poll_folder_dialog(world: &mut World) {
 ///
 /// All per-session rebuilds therefore happen at the launcher, never
 /// mid-edit. Games' restart-to-activate requirement becomes
-/// invisible; the launcher → editor transition already carries a
+/// invisible; the launcher -> editor transition already carries a
 /// build step, so folding a process restart into it is just a
 /// slightly-longer wait.
 pub fn enter_project(world: &mut World, root: PathBuf) {
@@ -719,7 +719,7 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
         ));
         let mut state = world.resource_mut::<NewProjectState>();
         state.pending_project = Some(root.clone());
-        state.status = Some(format!("Building editor for `{project_name}`…"));
+        state.status = Some(format!("Building editor for `{project_name}`..."));
         state.build_progress = Some(std::sync::Arc::clone(&progress));
         state.build_progress_snapshot = Some(crate::ext_build::BuildProgress::default());
         state.static_editor.pending = Some((root, true));
@@ -764,7 +764,7 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
     {
         let mut state = world.resource_mut::<NewProjectState>();
         state.pending_project = Some(root.clone());
-        state.status = Some(format!("Building `{project_name}`…"));
+        state.status = Some(format!("Building `{project_name}`..."));
         state.build_progress = Some(std::sync::Arc::clone(&progress));
         state.build_progress_snapshot = Some(crate::ext_build::BuildProgress::default());
     }
@@ -816,12 +816,39 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
     let mut next_state = world.resource_mut::<NextState<AppState>>();
     next_state.set(AppState::Editor);
 
-    // Convention: auto-load `assets/scene.jsn` if present. The game
-    // template ships one so scaffolded projects open populated.
-    // Per-project last-opened-scene persistence is a follow-up.
-    let scene_path = root.join("assets").join("scene.jsn");
-    if scene_path.is_file() {
-        crate::scene_io::load_scene_from_file(world, &scene_path);
+    let last_open_tabs = world
+        .resource::<crate::project::ProjectRoot>()
+        .config
+        .project
+        .last_open_tabs
+        .clone();
+    let last_active = world
+        .resource::<crate::project::ProjectRoot>()
+        .config
+        .project
+        .last_active_tab;
+
+    if last_open_tabs.is_empty() {
+        // Legacy convention: auto-load assets/scene.jsn if present.
+        let scene_path = root.join("assets").join("scene.jsn");
+        if scene_path.is_file() {
+            crate::scene_io::load_scene_from_file(world, &scene_path);
+        }
+    } else {
+        for rel in &last_open_tabs {
+            let abs = root.join(rel);
+            if !abs.is_file() {
+                warn!("Persisted tab not found, skipping: {abs:?}");
+                continue;
+            }
+            crate::scenes::operators::scene_open_system(world, &abs);
+        }
+        // Clamp last_active to current tab count.
+        let tab_count = world.resource::<crate::scenes::Scenes>().tabs.len();
+        if tab_count > 0 {
+            let target = last_active.min(tab_count - 1);
+            crate::scenes::swap::swap_active_tab(world, target);
+        }
     }
 }
 
@@ -1249,7 +1276,7 @@ pub fn open_project_progress_modal(world: &mut World, project_name: &str) {
 /// Show the New Project modal with the given preset pre-selected.
 ///
 /// Callable from any `AppState`; the launcher (`ProjectSelect`)
-/// and the editor's **File → New Project** menu both invoke this.
+/// and the editor's **File -> New Project** menu both invoke this.
 /// The modal is a full-window overlay so it renders regardless of
 /// which camera is active.
 pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
@@ -1396,7 +1423,7 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
             },
             BackgroundColor(tokens::TOOLBAR_BG),
             children![(
-                Text::new("Browse…"),
+                Text::new("Browse..."),
                 TextFont {
                     font: editor_font.clone(),
                     font_size: tokens::FONT_SM,
@@ -2078,7 +2105,7 @@ fn poll_new_project_tasks(
                     return;
                 }
 
-                state.status = Some(format!("Building `{project_name}` in background…"));
+                state.status = Some(format!("Building `{project_name}` in background..."));
                 state.pending_project = Some(project_path.clone());
 
                 // Static linkage: open the editor immediately, and
@@ -2106,7 +2133,7 @@ fn poll_new_project_tasks(
                         // modal, spawns the user's binary, and
                         // exits the launcher. We don't transition
                         // into the launcher's own editor for
-                        // static templates — the launcher's editor
+                        // static templates: the launcher's editor
                         // doesn't carry the user's component types,
                         // so opening it would just confuse users.
                         //
@@ -2264,14 +2291,14 @@ fn refresh_build_progress_ui(
         return;
     };
 
-    // "Compiling <crate>" or "Preparing…" if we don't know yet.
+    // "Compiling <crate>" or "Preparing..." if we don't know yet.
     let crate_line = match (&progress.current_crate, progress.artifacts_total) {
         (Some(name), Some(total)) => {
             format!("Compiling {name} ({}/{})", progress.artifacts_done, total)
         }
         (Some(name), None) => format!("Compiling {name} ({} so far)", progress.artifacts_done),
-        (None, Some(total)) => format!("Preparing build… (0/{total})"),
-        (None, None) => "Preparing build…".to_string(),
+        (None, Some(total)) => format!("Preparing build... (0/{total})"),
+        (None, None) => "Preparing build...".to_string(),
     };
     for mut t in crate_labels.iter_mut() {
         if t.0 != crate_line {
@@ -2279,7 +2306,7 @@ fn refresh_build_progress_ui(
         }
     }
 
-    // Progress bar fill; walk slot → bar → bar children → fill.
+    // Progress bar fill; walk slot -> bar -> bar children -> fill.
     let fraction = progress.fraction().unwrap_or(0.0).clamp(0.0, 1.0);
     let desired_width = Val::Percent(fraction * 100.0);
     for bar_children in bar_slots.iter() {
@@ -2313,7 +2340,7 @@ fn refresh_build_progress_ui(
 }
 
 /// Install a freshly-built game/extension dylib, running in the
-/// `Last` schedule so `GameApp::add_systems(Update, …)` inside the
+/// `Last` schedule so `GameApp::add_systems(Update, ...)` inside the
 /// game's build function mutates `Update` while nobody holds it in
 /// `schedule_scope`. See the plugin-registration block at the top
 /// of this file for context.
@@ -2462,7 +2489,7 @@ fn apply_pending_static_open(world: &mut World) {
 fn drive_static_editor_build(world: &mut World) {
     use crate::build_status::BuildState;
 
-    // Step 1: dispatch a queued request.
+    // First, dispatch a queued request.
     let pending = world
         .resource_mut::<NewProjectState>()
         .static_editor
@@ -2484,8 +2511,8 @@ fn drive_static_editor_build(world: &mut World) {
             // Re-use the `Arc<Mutex<BuildProgress>>` already
             // installed on `state.build_progress` (set by the
             // post-scaffold path or the recents-click path) so the
-            // launcher's modal — already wired to render
-            // `state.build_progress_snapshot` — and
+            // launcher's modal (already wired to render
+            // `state.build_progress_snapshot`) and
             // `BuildStatus::Building` both observe the same sink.
             // If neither path set one, allocate a fresh sink and
             // install it ourselves so the modal still renders if
@@ -2530,7 +2557,7 @@ fn drive_static_editor_build(world: &mut World) {
         }
     }
 
-    // Step 2: poll the in-flight task.
+    // Second, poll the in-flight task.
     let result_opt = {
         let mut state = world.resource_mut::<NewProjectState>();
         state
@@ -2574,7 +2601,7 @@ fn drive_static_editor_build(world: &mut World) {
         }
     }
 
-    // Step 3: auto-fire the handoff once for the scaffold case.
+    // Finally, auto-fire the handoff once for the scaffold case.
     let auto_handoff = matches!(
         world.resource::<crate::build_status::BuildStatus>().state,
         BuildState::Ready {
@@ -2625,7 +2652,7 @@ pub(crate) fn do_handoff(world: &mut World, bin: &Path, project_root: &Path) {
     // first frame; if the launcher has unsaved edits and a path
     // is already set, persist them first so the round-trip is
     // transparent. If no path is set (untouched scaffold or
-    // unsaved-as-yet scene), skip — opening a Save As dialog
+    // unsaved-as-yet scene), skip. Opening a Save As dialog
     // mid-handoff would be jarring; the user can save manually
     // before clicking Reload.
     let has_scene_path = world

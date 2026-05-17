@@ -13,7 +13,7 @@ pub struct TreeView;
 #[relationship(relationship_target = TreeNodeSource)]
 pub struct TreeNode(pub Entity);
 
-/// Inverse relationship: source entity → every tree row referencing it.
+/// Inverse relationship: source entity -> every tree row referencing it.
 #[derive(Component, Default)]
 #[relationship_target(relationship = TreeNode)]
 pub struct TreeNodeSource(Vec<Entity>);
@@ -90,7 +90,7 @@ pub struct TreeRowInlineRename;
 /// entry under that container's key.
 #[derive(Resource, Default)]
 pub struct TreeIndex {
-    /// `(container, source)` → tree row entity. The container is the
+    /// `(container, source)` -> tree row entity. The container is the
     /// host entity carrying [`TreeRoot`]; the source is the scene
     /// entity the row represents.
     map: HashMap<(Entity, Entity), Entity>,
@@ -234,7 +234,7 @@ impl Plugin for TreeViewPlugin {
 /// Keep `TreeIndex` in sync with `TreeNode` additions and removals.
 ///
 /// On a freshly-added node, walks up the parent chain until it hits
-/// an entity carrying [`TreeRoot`] and registers `(root, source) →
+/// an entity carrying [`TreeRoot`] and registers `(root, source) ->
 /// row`. Multiple roots in the same world (e.g. two Outliner tabs)
 /// each maintain their own independent mapping.
 pub fn maintain_tree_index(

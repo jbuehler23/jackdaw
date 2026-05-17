@@ -85,8 +85,8 @@ pub trait Operator: InputAction + 'static {
     /// as a call signature and consumed by future scripting surfaces.
     const PARAMETERS: &'static [ParamSpec] = &[];
 
-    /// Whether this operator allows undoing. Note that whether an
-    /// operator actually pushes an undo entry depends on the call site,
+    /// Whether this operator allows undoing. Whether the call
+    /// actually pushes an undo entry also depends on the call site,
     /// so this should usually be `true`.
     const ALLOWS_UNDO: bool = true;
 

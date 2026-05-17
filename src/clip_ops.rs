@@ -19,7 +19,14 @@ use crate::core_extension::CoreExtensionInputContext;
 use crate::draw_brush::{CreateBrushCommand, brush_data_from_entity};
 use crate::viewport::{ActiveViewport, MainViewportCamera, SceneViewport};
 use crate::viewport_util::window_to_viewport_cursor_for;
-use jackdaw_geometry::{EPSILON, compute_face_tangent_axes, point_inside_all_planes};
+use jackdaw_geometry::{
+    EPSILON, compute_face_tangent_axes,
+    halfedge::{
+        HalfedgeMesh,
+        ops::bisect_plane::{BisectKeep, bisect_plane},
+    },
+    point_inside_all_planes,
+};
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ClipPlacePointOp>()
@@ -221,7 +228,7 @@ pub(crate) fn clip_place_point(
 #[operator(
     id = "brush.clip.cycle_mode",
     label = "Cycle Clip Mode",
-    description = "Cycle `ClipState.mode` through KeepFront → KeepBack → Split. \
+    description = "Cycle `ClipState.mode` through KeepFront -> KeepBack -> Split. \
                    Availability (`can_apply_or_cycle`) requires clip mode and a \
                    computed preview plane.",
     is_available = can_apply_or_cycle,
@@ -288,91 +295,263 @@ pub(crate) fn clip_apply(
         return OperatorResult::Cancelled;
     };
 
-    let clip_face = clip_face_from_plane(&plane);
-    let flipped_face = clip_face_from_plane(&BrushPlane {
-        normal: -plane.normal,
-        distance: -plane.distance,
-    });
+    // Dispatch: brushes with populated topology (the common case after the
+    // topology migration) take the HalfedgeMesh bisect_plane path. Brushes with
+    // Brushes always carry populated topology; the plane-push fast path
+    // below stays as a safety net for malformed legacy inputs the
+    // migration system hasn't touched yet.
+    let use_bisect = !brush.topology.polygons.is_empty();
 
-    match clip_state.mode {
-        ClipMode::KeepFront => {
-            push_face_command(
-                &mut history,
-                brush_entity,
-                &mut brush,
-                clip_face,
-                "Clip brush (keep front)",
-            );
+    if use_bisect {
+        match clip_state.mode {
+            ClipMode::KeepFront => {
+                let Some(new_brush) = bisect_brush(&brush, &plane, BisectKeep::Front) else {
+                    warn!("Clip: bisect failed; aborting");
+                    return OperatorResult::Cancelled;
+                };
+                push_brush_command(
+                    &mut history,
+                    brush_entity,
+                    &mut brush,
+                    new_brush,
+                    "Clip brush (keep front)",
+                );
+            }
+            ClipMode::KeepBack => {
+                let Some(new_brush) = bisect_brush(&brush, &plane, BisectKeep::Back) else {
+                    warn!("Clip: bisect failed; aborting");
+                    return OperatorResult::Cancelled;
+                };
+                push_brush_command(
+                    &mut history,
+                    brush_entity,
+                    &mut brush,
+                    new_brush,
+                    "Clip brush (keep back)",
+                );
+            }
+            ClipMode::Split => {
+                let Some(front) = bisect_brush(&brush, &plane, BisectKeep::Front) else {
+                    warn!("Clip: split bisect (front) failed; aborting");
+                    return OperatorResult::Cancelled;
+                };
+                let Some(back) = bisect_brush(&brush, &plane, BisectKeep::Back) else {
+                    warn!("Clip: split bisect (back) failed; aborting");
+                    return OperatorResult::Cancelled;
+                };
+                let old = brush.clone();
+                *brush = front.clone();
+                let set_cmd = SetBrush {
+                    entity: brush_entity,
+                    old,
+                    new: front,
+                    label: "Clip brush (split - front)".to_string(),
+                };
+                queue_split_spawn(&mut commands, brush_entity, brush_global, set_cmd, back);
+            }
         }
-        ClipMode::KeepBack => {
-            push_face_command(
-                &mut history,
-                brush_entity,
-                &mut brush,
-                flipped_face,
-                "Clip brush (keep back)",
-            );
-        }
-        ClipMode::Split => {
-            let old = brush.clone();
-            let mut front = old.clone();
-            front.faces.push(clip_face);
-            let mut back = old.clone();
-            back.faces.push(flipped_face);
-            *brush = front.clone();
+    } else {
+        // Legacy convex fast path: push a half-space face plane.
+        let clip_face = clip_face_from_plane(&plane);
+        let flipped_face = clip_face_from_plane(&BrushPlane {
+            normal: -plane.normal,
+            distance: -plane.distance,
+        });
 
-            let set_cmd = SetBrush {
-                entity: brush_entity,
-                old,
-                new: front,
-                label: "Clip brush (split - front)".to_string(),
-            };
+        match clip_state.mode {
+            ClipMode::KeepFront => {
+                push_face_command(
+                    &mut history,
+                    brush_entity,
+                    &mut brush,
+                    clip_face,
+                    "Clip brush (keep front)",
+                );
+            }
+            ClipMode::KeepBack => {
+                push_face_command(
+                    &mut history,
+                    brush_entity,
+                    &mut brush,
+                    flipped_face,
+                    "Clip brush (keep back)",
+                );
+            }
+            ClipMode::Split => {
+                let old = brush.clone();
+                let mut front = old.clone();
+                front.faces.push(clip_face);
+                let mut back = old.clone();
+                back.faces.push(flipped_face);
+                *brush = front.clone();
 
-            let (_, brush_rot, brush_trans) = brush_global.to_scale_rotation_translation();
-            let spawn_transform = Transform {
-                translation: brush_trans,
-                rotation: brush_rot,
-                scale: Vec3::ONE,
-            };
-            commands.queue(move |world: &mut World| {
-                let parent_group = world
-                    .get::<ChildOf>(brush_entity)
-                    .map(|c| c.0)
-                    .filter(|&p| world.get::<BrushGroup>(p).is_some());
-                let actual_transform = if parent_group.is_some() {
-                    *world.get::<Transform>(brush_entity).unwrap()
-                } else {
-                    spawn_transform
+                let set_cmd = SetBrush {
+                    entity: brush_entity,
+                    old,
+                    new: front,
+                    label: "Clip brush (split - front)".to_string(),
                 };
-
-                let mut spawner = world.spawn((
-                    Name::new("Brush"),
-                    back,
-                    actual_transform,
-                    Visibility::default(),
-                ));
-                if let Some(parent) = parent_group {
-                    spawner.insert(ChildOf(parent));
-                }
-                let entity = spawner.id();
-                crate::scene_io::register_entity_in_ast(world, entity);
-
-                let create_cmd = CreateBrushCommand {
-                    data: brush_data_from_entity(world, entity),
-                };
-                let group = CommandGroup {
-                    commands: vec![Box::new(set_cmd), Box::new(create_cmd)],
-                    label: "Split brush".to_string(),
-                };
-                world
-                    .resource_mut::<CommandHistory>()
-                    .push_executed(Box::new(group));
-            });
+                queue_split_spawn(&mut commands, brush_entity, brush_global, set_cmd, back);
+            }
         }
     }
 
     *clip_state = ClipState::default();
     OperatorResult::Finished
+}
+
+/// Lift the brush's topology into an `HalfedgeMesh`, bisect it along `plane`,
+/// and flatten back into a new `Brush`. Returns `None` if the bisect
+/// produces no faces (degenerate input or plane misses the brush).
+///
+/// Cap face handling: `bisect_plane` emits one new face for the cut
+/// boundary with a fresh `material_idx` (= max + 1). We grow the
+/// brush.faces slot array to match the post-flatten face count, copy
+/// the source face's `BrushFaceData` for each non-cap slot, and seed
+/// the cap slot from the first surviving face (so checker tiling
+/// inherits from the cut's neighbor) before zeroing UV axes so
+/// `ensure_uv_axes` derives proper tangents from the cap's plane.
+fn bisect_brush(brush: &Brush, plane: &BrushPlane, keep: BisectKeep) -> Option<Brush> {
+    let mut mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let result = bisect_plane(&mut mesh, plane, keep).ok()?;
+    if mesh.face_count() == 0 {
+        return None;
+    }
+
+    let new_topology = mesh.flatten_to_topology();
+    if new_topology.polygons.is_empty() {
+        return None;
+    }
+
+    // Build the slot -> source-material-idx map by walking the flattened
+    // topology in slot order. `flatten_to_topology` sorts faces by
+    // `material_idx`, so slot N's source material is the Nth smallest
+    // `material_idx` in the mesh.
+    let mut slot_to_src_material: Vec<u32> =
+        mesh.faces.iter().map(|(_, f)| f.material_idx).collect();
+    slot_to_src_material.sort();
+
+    let cap_idx = result.cap_material_idx;
+    // Template face for the cap slot: prefer the first surviving non-cap
+    // face so the cap inherits the closest neighbor's material / UV
+    // tiling. Fall back to the last face of the source brush, or default.
+    let cap_template = brush
+        .faces
+        .first()
+        .cloned()
+        .or_else(|| brush.faces.last().cloned())
+        .unwrap_or_default();
+
+    let mut new_faces: Vec<BrushFaceData> = Vec::with_capacity(new_topology.polygons.len());
+    for &src_material in &slot_to_src_material {
+        if src_material == cap_idx {
+            // Cap slot: seed from template, mark as cap, clear UV axes so
+            // `ensure_uv_axes` derives a fresh tangent basis from the cut
+            // plane's normal.
+            let mut cap = cap_template.clone();
+            cap.is_cap = true;
+            cap.uv_u_axis = Vec3::ZERO;
+            cap.uv_v_axis = Vec3::ZERO;
+            new_faces.push(cap);
+        } else {
+            let src_idx = src_material as usize;
+            let src = brush
+                .faces
+                .get(src_idx)
+                .cloned()
+                .or_else(|| brush.faces.last().cloned())
+                .unwrap_or_default();
+            new_faces.push(src);
+        }
+    }
+
+    // Update each face's plane (normal, distance) from the new topology
+    // and ensure UV axes are populated for the cap slot.
+    let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
+    for (idx, face_data) in new_faces.iter_mut().enumerate() {
+        if idx >= new_topology.polygons.len() {
+            continue;
+        }
+        let normal = new_topology.face_normal_with(&positions, idx);
+        let v0_idx =
+            new_topology.loops[new_topology.polygons[idx].loop_start as usize].vert as usize;
+        let distance = positions[v0_idx].dot(normal);
+        face_data.plane.normal = normal;
+        face_data.plane.distance = distance;
+        face_data.ensure_uv_axes();
+    }
+
+    Some(Brush {
+        faces: new_faces,
+        topology: new_topology,
+    })
+}
+
+fn push_brush_command(
+    history: &mut CommandHistory,
+    entity: Entity,
+    brush: &mut Brush,
+    new_brush: Brush,
+    label: &str,
+) {
+    let old = brush.clone();
+    *brush = new_brush.clone();
+    let cmd = SetBrush {
+        entity,
+        old,
+        new: new_brush,
+        label: label.to_string(),
+    };
+    history.push_executed(Box::new(cmd));
+}
+
+fn queue_split_spawn(
+    commands: &mut Commands,
+    brush_entity: Entity,
+    brush_global: &GlobalTransform,
+    set_cmd: SetBrush,
+    back: Brush,
+) {
+    let (_, brush_rot, brush_trans) = brush_global.to_scale_rotation_translation();
+    let spawn_transform = Transform {
+        translation: brush_trans,
+        rotation: brush_rot,
+        scale: Vec3::ONE,
+    };
+    commands.queue(move |world: &mut World| {
+        let parent_group = world
+            .get::<ChildOf>(brush_entity)
+            .map(|c| c.0)
+            .filter(|&p| world.get::<BrushGroup>(p).is_some());
+        let actual_transform = if parent_group.is_some() {
+            *world.get::<Transform>(brush_entity).unwrap()
+        } else {
+            spawn_transform
+        };
+
+        let mut spawner = world.spawn((
+            Name::new("Brush"),
+            back,
+            actual_transform,
+            Visibility::default(),
+        ));
+        if let Some(parent) = parent_group {
+            spawner.insert(ChildOf(parent));
+        }
+        let entity = spawner.id();
+        crate::scene_io::register_entity_in_ast(world, entity);
+
+        let create_cmd = CreateBrushCommand {
+            data: brush_data_from_entity(world, entity),
+        };
+        let group = CommandGroup {
+            commands: vec![Box::new(set_cmd), Box::new(create_cmd)],
+            label: "Split brush".to_string(),
+        };
+        world
+            .resource_mut::<CommandHistory>()
+            .push_executed(Box::new(group));
+    });
 }
 
 fn clip_face_from_plane(plane: &BrushPlane) -> BrushFaceData {

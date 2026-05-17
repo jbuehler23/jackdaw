@@ -10,8 +10,9 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use jackdaw_avian_integration::AvianCollider;
+use jackdaw_geometry::is_convex_topology;
 
-use crate::brush::BrushMeshCache;
+use crate::brush::{Brush, BrushMeshCache};
 
 pub struct PhysicsBrushBridgePlugin;
 
@@ -58,10 +59,21 @@ fn sync_editor_collider_config(
         ),
         Or<(Changed<AvianCollider>, Changed<BrushMeshCache>)>,
     >,
+    brushes: Query<&Brush>,
     meshes: Res<Assets<Mesh>>,
 ) {
     for (entity, config, brush_cache, mesh3d) in &changed {
-        let constructor = &config.0;
+        let constructor = if let Ok(brush) = brushes.get(entity) {
+            // CONVEX_FUNCTIONAL: different behavior is intentional (collider type)
+            if !is_convex_topology(&brush.topology) {
+                // Force TriMesh for non-convex brushes; ConvexHull/AABB would mis-simulate.
+                ColliderConstructor::TrimeshFromMesh
+            } else {
+                config.0.clone()
+            }
+        } else {
+            config.0.clone()
+        };
 
         let collider = if constructor.requires_mesh() {
             // Try brush geometry first, then mesh asset

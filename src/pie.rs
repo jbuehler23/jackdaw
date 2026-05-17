@@ -200,7 +200,7 @@ pub fn handle_play(world: &mut World) {
     }
 }
 
-/// Transition `Playing` → `Paused`. No-op otherwise.
+/// Transition `Playing` -> `Paused`. No-op otherwise.
 pub fn handle_pause(world: &mut World) {
     if *world.resource::<State<PlayState>>().get() == PlayState::Playing {
         world

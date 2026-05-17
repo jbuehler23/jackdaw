@@ -1,0 +1,1725 @@
+{
+  "jsn": {
+    "format_version": [
+      2,
+      0,
+      0
+    ],
+    "editor_version": "0.1.5",
+    "bevy_version": "0.18"
+  },
+  "metadata": {
+    "name": "Untitled",
+    "description": "",
+    "author": "",
+    "created": "2026-03-17T16:19:25Z",
+    "modified": "2026-03-17T16:19:25Z"
+  },
+  "assets": {
+    "bevy_image::image::Image": {
+      "#Image0": "wood.png"
+    },
+    "bevy_pbr::pbr_material::StandardMaterial": {
+      "#StandardMaterial0": {
+        "alpha_mode": "Opaque",
+        "anisotropy_rotation": 0.0,
+        "anisotropy_strength": 0.0,
+        "attenuation_color": {
+          "LinearRgba": {
+            "alpha": 1.0,
+            "blue": 1.0,
+            "green": 1.0,
+            "red": 1.0
+          }
+        },
+        "attenuation_distance": "inf",
+        "base_color": {
+          "LinearRgba": {
+            "alpha": 1.0,
+            "blue": 1.0,
+            "green": 1.0,
+            "red": 1.0
+          }
+        },
+        "base_color_channel": "Uv0",
+        "base_color_texture": "#Image0",
+        "clearcoat": 0.0,
+        "clearcoat_perceptual_roughness": 0.5,
+        "deferred_lighting_pass_id": 1,
+        "depth_bias": 0.0,
+        "depth_map": null,
+        "diffuse_transmission": 0.0,
+        "double_sided": false,
+        "emissive": {
+          "alpha": 1.0,
+          "blue": 0.0,
+          "green": 0.0,
+          "red": 0.0
+        },
+        "emissive_channel": "Uv0",
+        "emissive_exposure_weight": 0.0,
+        "emissive_texture": null,
+        "flip_normal_map_y": false,
+        "fog_enabled": true,
+        "ior": 1.5,
+        "lightmap_exposure": 1.0,
+        "max_parallax_layer_count": 16.0,
+        "metallic": 0.0,
+        "metallic_roughness_channel": "Uv0",
+        "metallic_roughness_texture": null,
+        "normal_map_channel": "Uv0",
+        "normal_map_texture": null,
+        "occlusion_channel": "Uv0",
+        "occlusion_texture": null,
+        "opaque_render_method": "Auto",
+        "parallax_depth_scale": 0.10000000149011612,
+        "parallax_mapping_method": "Occlusion",
+        "perceptual_roughness": 0.5,
+        "reflectance": 0.5,
+        "specular_tint": {
+          "LinearRgba": {
+            "alpha": 1.0,
+            "blue": 1.0,
+            "green": 1.0,
+            "red": 1.0
+          }
+        },
+        "specular_transmission": 0.0,
+        "thickness": 0.0,
+        "unlit": false,
+        "uv_transform": [
+          1.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ]
+      }
+    }
+  },
+  "editor": null,
+  "scene": [
+    {
+      "name": "Brush",
+      "transform": {
+        "translation": [
+          4.875,
+          0.4375,
+          -4.25
+        ],
+        "rotation": [
+          -0.7071067,
+          0.0,
+          0.0,
+          0.7071067
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "jackdaw_jsn::types::Brush": {
+          "faces": [
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.6446100473403931,
+                "normal": [
+                  -1.0790994338094606e-6,
+                  0.4325506091117859,
+                  -0.9016096591949463
+                ]
+              },
+              "uv_offset": [
+                -0.18554922938346863,
+                -0.4196150302886963
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.7430190443992615,
+                "normal": [
+                  0.9906919598579407,
+                  0.13038192689418793,
+                  0.039114534854888916
+                ]
+              },
+              "uv_offset": [
+                0.0029482711106538773,
+                0.49060627818107605
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.6250017285346985,
+                "normal": [
+                  -1.1920928955078125e-6,
+                  4.60942692370736e-6,
+                  -1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                -0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.7724980115890503,
+                "normal": [
+                  -0.9993223547935486,
+                  1.6737324415316834e-7,
+                  -0.03680986166000366
+                ]
+              },
+              "uv_offset": [
+                -0.2888934314250946,
+                0.19013476371765137
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.758278489112854,
+                "normal": [
+                  -0.9988013505935669,
+                  -0.048946402966976166,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.1277732402086258,
+                0.06513476371765137
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.413494348526001,
+                "normal": [
+                  9.990238680757102e-8,
+                  0.3038076162338257,
+                  0.9527333974838257
+                ]
+              },
+              "uv_offset": [
+                -0.26238036155700684,
+                0.06513471901416779
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.7884524464607239,
+                "normal": [
+                  0.03078659623861313,
+                  0.3598017692565918,
+                  0.9325207471847534
+                ]
+              },
+              "uv_offset": [
+                0.1731688231229782,
+                0.618241012096405
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.7737456560134888,
+                "normal": [
+                  -0.5903233885765076,
+                  0.7471340894699097,
+                  -0.30546486377716064
+                ]
+              },
+              "uv_offset": [
+                0.3268311619758606,
+                -0.08350791782140732
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.7500000596046448,
+                "normal": [
+                  1.0,
+                  -1.5894548255346308e-7,
+                  -4.76835886331628e-8
+                ]
+              },
+              "uv_offset": [
+                0.2083333283662796,
+                -0.0625
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.18750007450580597,
+                "normal": [
+                  -8.940696716308594e-8,
+                  -1.0,
+                  -1.1920892717398601e-8
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -0.0,
+                -1.0
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Brush",
+      "transform": {
+        "translation": [
+          -2.625,
+          0.0625,
+          -3.8125
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "jackdaw_jsn::types::Brush": {
+          "faces": [
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.875,
+                "normal": [
+                  1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.875,
+                "normal": [
+                  -1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.0625,
+                "normal": [
+                  0.0,
+                  -1.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.1875,
+                "normal": [
+                  0.0,
+                  0.0,
+                  -1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                -0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.1875,
+                "normal": [
+                  -0.0,
+                  -0.0,
+                  1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.0625,
+                "normal": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Brush",
+      "transform": {
+        "translation": [
+          -0.5,
+          0.25,
+          2.125
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "parent": 5,
+      "components": {
+        "jackdaw_jsn::types::Brush": {
+          "faces": [
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 1.25,
+                "normal": [
+                  1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 1.25,
+                "normal": [
+                  -1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.25,
+                "normal": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.25,
+                "normal": [
+                  0.0,
+                  -1.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 1.375,
+                "normal": [
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 1.375,
+                "normal": [
+                  0.0,
+                  0.0,
+                  -1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                -0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                -0.0
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Brush",
+      "transform": {
+        "translation": [
+          -2.625,
+          0.625,
+          -3.8125
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "jackdaw_jsn::types::Brush": {
+          "faces": [
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.875,
+                "normal": [
+                  1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.875,
+                "normal": [
+                  -1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.125,
+                "normal": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.1875,
+                "normal": [
+                  0.0,
+                  0.0,
+                  -1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                -0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.1875,
+                "normal": [
+                  -0.0,
+                  -0.0,
+                  1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.125,
+                "normal": [
+                  -0.0,
+                  -1.0,
+                  -0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Brush",
+      "transform": {
+        "translation": [
+          0.0,
+          0.375,
+          0.25
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "jackdaw_jsn::types::Brush": {
+          "faces": [
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 2.5112802982330322,
+                "normal": [
+                  -0.9593654870986938,
+                  0.0,
+                  0.28216633200645447
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 1.25,
+                "normal": [
+                  0.0,
+                  -0.0,
+                  1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 3.5,
+                "normal": [
+                  -1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 2.25,
+                "normal": [
+                  1.0,
+                  0.0,
+                  -0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 2.8462390899658203,
+                "normal": [
+                  0.4902612566947937,
+                  0.0,
+                  -0.8715755939483643
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                -0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 1.3074471950531006,
+                "normal": [
+                  0.14662958681583405,
+                  -0.9384293556213379,
+                  -0.3128097951412201
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.375,
+                "normal": [
+                  0.0,
+                  -1.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 1.9418842792510986,
+                "normal": [
+                  0.25164809823036194,
+                  0.8052738904953003,
+                  -0.5368492603302002
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 2.461482048034668,
+                "normal": [
+                  0.0,
+                  0.8320502638816833,
+                  -0.5547001957893372
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.9999999403953552,
+                -0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -0.5547001957893372,
+                -0.8320503234863281
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.375,
+                "normal": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 4.25,
+                "normal": [
+                  0.0,
+                  0.0,
+                  -1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                -0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                -0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 1.5811388492584229,
+                "normal": [
+                  0.0,
+                  -0.9486833214759827,
+                  -0.3162277638912201
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                -0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                0.3162277638912201,
+                -0.9486833214759827
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 5.124230861663818,
+                "normal": [
+                  -0.515101432800293,
+                  0.0,
+                  -0.8571292161941528
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.8571292161941528,
+                0.0,
+                -0.515101432800293
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                -0.0
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Sun",
+      "transform": {
+        "translation": [
+          10.0,
+          20.0,
+          10.0
+        ],
+        "rotation": [
+          -0.3816559,
+          0.18298657,
+          -0.07736548,
+          0.9027011
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "bevy_light::directional_light::DirectionalLight": {
+          "affects_lightmapped_mesh_diffuse": true,
+          "color": {
+            "LinearRgba": {
+              "alpha": 1.0,
+              "blue": 1.0,
+              "green": 1.0,
+              "red": 1.0
+            }
+          },
+          "illuminance": 10000.0,
+          "shadow_depth_bias": 0.019999999552965164,
+          "shadow_normal_bias": 1.7999999523162842,
+          "shadows_enabled": true
+        },
+        "bevy_light::cascade::CascadeShadowConfig": {
+          "bounds": [
+            10.0,
+            24.662120819091797,
+            60.822021484375,
+            149.99998474121094
+          ],
+          "minimum_distance": 0.10000000149011612,
+          "overlap_proportion": 0.20000000298023224
+        }
+      }
+    },
+    {
+      "name": "Brush",
+      "transform": {
+        "translation": [
+          -2.625,
+          0.375,
+          -4.125
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "jackdaw_jsn::types::Brush": {
+          "faces": [
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.875,
+                "normal": [
+                  1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.875,
+                "normal": [
+                  -1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.375,
+                "normal": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.375,
+                "normal": [
+                  0.0,
+                  -1.0,
+                  0.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.125,
+                "normal": [
+                  0.0,
+                  0.0,
+                  -1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                0.0,
+                -1.0,
+                0.0
+              ]
+            },
+            {
+              "material": "#StandardMaterial0",
+              "plane": {
+                "distance": 0.125,
+                "normal": [
+                  -0.0,
+                  -0.0,
+                  1.0
+                ]
+              },
+              "uv_offset": [
+                0.0,
+                0.0
+              ],
+              "uv_rotation": 0.0,
+              "uv_scale": [
+                1.0,
+                1.0
+              ],
+              "uv_u_axis": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "uv_v_axis": [
+                -0.0,
+                -1.0,
+                -0.0
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

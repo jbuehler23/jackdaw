@@ -22,11 +22,40 @@ use bevy::{
 };
 use bevy_enhanced_input::prelude::Press;
 use jackdaw_geometry::{
-    brush_planes_to_world, brushes_intersect, clean_degenerate_faces, compute_brush_geometry,
-    compute_face_tangent_axes, compute_face_uvs, intersect_brushes, subtract_brush,
-    triangulate_face,
+    brush_planes_to_world, clean_degenerate_faces, compute_brush_geometry_from_planes,
+    compute_brush_topology, compute_face_tangent_axes, compute_face_uvs, triangulate_face,
+    triangulate_polygon,
 };
-use jackdaw_jsn::{Brush, BrushFaceData, BrushGroup, BrushPlane};
+use jackdaw_jsn::{Brush, BrushFaceData, BrushGroup, BrushPlane, BrushTopology};
+
+/// AABB overlap test on topology vertices. Replaces the convex-only plane
+/// `brushes_intersect` for paths where either brush may be concave; the
+/// half-space separating-plane test isn't sound for concave brushes because a
+/// face plane can pass through the brush's own interior.
+fn topology_aabbs_overlap(a: &BrushTopology, b: &BrushTopology) -> bool {
+    if a.vertices.is_empty() || b.vertices.is_empty() {
+        return false;
+    }
+    let mut a_min = Vec3::MAX;
+    let mut a_max = Vec3::MIN;
+    for v in &a.vertices {
+        a_min = a_min.min(v.position);
+        a_max = a_max.max(v.position);
+    }
+    let mut b_min = Vec3::MAX;
+    let mut b_max = Vec3::MIN;
+    for v in &b.vertices {
+        b_min = b_min.min(v.position);
+        b_max = b_max.max(v.position);
+    }
+    const E: f32 = 1e-4;
+    a_min.x <= b_max.x + E
+        && a_max.x >= b_min.x - E
+        && a_min.y <= b_max.y + E
+        && a_max.y >= b_min.y - E
+        && a_min.z <= b_max.z + E
+        && a_max.z >= b_min.z - E
+}
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     let ext = ctx.id();
@@ -456,13 +485,17 @@ const EXTRUDE_DEPTH_SENSITIVITY: f32 = 0.003;
 const MIN_FOOTPRINT_SIZE: f32 = 0.01;
 const MIN_EXTRUDE_DEPTH: f32 = 0.01;
 const MIN_FRAGMENT_SIZE: f32 = 0.005;
+/// Punch-through depth used by box-cut subtract: large enough to traverse any
+/// reasonably-sized target so the user never needs to drag for depth.
+/// Matches BoxCutter-style default behavior.
+const PUNCH_THROUGH_DEPTH: f32 = 1000.0;
 
 /// Stable identifier that survives the snapshot round-trip (undo
 /// respawns fresh entity ids; selection is restored by matching
 /// on this).
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug, Reflect)]
 #[reflect(Component, @crate::EditorHidden)]
-pub struct BrushStableId(u64);
+pub struct BrushStableId(pub(crate) u64);
 
 #[derive(Resource, Default)]
 struct StableIdCounter(u64);
@@ -472,6 +505,20 @@ impl StableIdCounter {
         self.0 += 1;
         BrushStableId(self.0)
     }
+}
+
+/// Mint a fresh `BrushStableId` by advancing the global counter.
+/// Used by paste to assign new IDs to pasted brush entities so they don't
+/// collide with the originals they were copied from.
+pub(crate) fn mint_stable_id(world: &mut World) -> BrushStableId {
+    world.resource_mut::<StableIdCounter>().next()
+}
+
+/// Initialize the `StableIdCounter` resource on a world that doesn't have the
+/// full `DrawBrushPlugin` loaded. Useful for headless integration tests.
+#[cfg(test)]
+pub(crate) fn init_stable_id_counter(world: &mut World) {
+    world.init_resource::<StableIdCounter>();
 }
 
 /// Find the current Entity for a given stable ID, if it exists.
@@ -576,7 +623,7 @@ pub(crate) struct BrushData {
 /// Either a single brush or a group containing child brushes.
 #[derive(Clone)]
 enum BrushOrGroup {
-    Single(BrushData),
+    Single(Box<BrushData>),
     Group {
         stable_id: BrushStableId,
         transform: Transform,
@@ -1143,7 +1190,7 @@ fn draw_brush_preview(
     if let Some(target) = active.append_target
         && let Ok((brush, brush_tf)) = brushes.get(target)
     {
-        let (verts, polys) = compute_brush_geometry(&brush.faces);
+        let (verts, polys) = compute_brush_geometry_from_planes(&brush.faces);
         for polygon in &polys {
             for i in 0..polygon.len() {
                 let a = brush_tf.transform_point(verts[polygon[i]]);
@@ -1175,7 +1222,7 @@ fn draw_brush_preview(
         }
         DrawPhase::DrawingFootprint => {
             if active.diagonal_snap {
-                // Phase 1: show the line being drawn
+                // First, show the line being drawn.
                 gizmos.line(active.corner1, active.corner2, color);
                 let mid = (active.corner1 + active.corner2) / 2.0;
                 draw_plane_grid(&mut gizmos, &active.plane, mid, &snap_settings);
@@ -1416,7 +1463,7 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
         let inv_rotation = rotation.inverse();
 
         // Get existing brush vertices in local space, then convert drawn verts to local space
-        let existing_verts = compute_brush_geometry(&old_brush.faces).0;
+        let existing_verts = compute_brush_geometry_from_planes(&old_brush.faces).0;
         let existing_count = existing_verts.len();
 
         let mut all_local_verts: Vec<Vec3> = existing_verts;
@@ -1442,7 +1489,7 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
         }
 
         // Build new face data, matching old faces where possible for texture preservation
-        let old_face_polygons = compute_brush_geometry(&old_brush.faces).1;
+        let old_face_polygons = compute_brush_geometry_from_planes(&old_brush.faces).1;
         let last_mat = world
             .resource::<crate::brush::LastUsedMaterial>()
             .material
@@ -1531,7 +1578,11 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
             new_faces.push(face_data);
         }
 
-        let new_brush = Brush { faces: new_faces };
+        let topology = compute_brush_topology(&new_faces);
+        let new_brush = Brush {
+            faces: new_faces,
+            topology,
+        };
 
         // Apply (ECS + AST). Undo is handled by the enclosing
         // `viewport.draw_brush_modal` operator's snapshot diff; no
@@ -1851,15 +1902,26 @@ fn manage_draw_preview_mesh(
     }
     *cached_preview_key = Some(current_key);
 
-    // Build volume planes based on draw type
-    let cutter_planes = if !active.polygon_vertices.is_empty() {
-        build_cutter_planes_polygon(active)
+    // Build volume planes based on draw type. For Cut mode, force a punch-
+    // through depth so the preview matches the actual subtract op (which
+    // always extends the cutter through any target).
+    let cutter_active_storage;
+    let cutter_active = if active.mode == DrawMode::Cut {
+        let mut a = active.clone();
+        a.depth = -PUNCH_THROUGH_DEPTH;
+        cutter_active_storage = a;
+        &cutter_active_storage
     } else {
-        build_cutter_planes(active)
+        active
+    };
+    let cutter_planes = if !cutter_active.polygon_vertices.is_empty() {
+        build_cutter_planes_polygon(cutter_active)
+    } else {
+        build_cutter_planes(cutter_active)
     };
 
     // Compute mesh geometry from planes
-    let (verts, face_polys) = compute_brush_geometry(&cutter_planes);
+    let (verts, face_polys) = compute_brush_geometry_from_planes(&cutter_planes);
     if verts.len() < 4 {
         for entity in preview_query.iter() {
             commands.entity(entity).despawn();
@@ -1963,13 +2025,24 @@ fn manage_draw_preview_mesh(
         ));
     }
 
-    // In Cut mode, spawn solid result preview meshes for affected brushes
+    // In Cut mode, spawn solid result preview meshes for affected brushes.
+    // The cutter goes through the mesh-CSG kernel (manifold) so concave
+    // targets are handled correctly; the convex-only `subtract_brush` path
+    // is intentionally avoided here.
     if active.mode == DrawMode::Cut {
+        let cutter_topology = compute_brush_topology(&cutter_planes);
+        let cutter_input = jackdaw_csg::CsgInput::new(&cutter_planes, &cutter_topology);
+
         for (brush_entity, brush, brush_tf, is_selected) in brushes.iter() {
             let (_, rotation, translation) = brush_tf.to_scale_rotation_translation();
-            let world_target = brush_planes_to_world(&brush.faces, rotation, translation);
+            let (world_target_faces, world_target_topo) =
+                jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, rotation, translation);
 
-            let intersects = brushes_intersect(&world_target, &cutter_planes);
+            // Cheap AABB rejection before invoking the kernel. The plane-
+            // based separating-axis test isn't sound for concave brushes
+            // (a face plane can split the brush's own interior), so we use
+            // a topology-vertex AABB overlap instead.
+            let intersects = topology_aabbs_overlap(&world_target_topo, &cutter_topology);
             if !intersects {
                 if hidden_query.get(brush_entity).is_ok() {
                     if let Ok(mut vis) = visibility_query.get_mut(brush_entity) {
@@ -1980,11 +2053,26 @@ fn manage_draw_preview_mesh(
                 continue;
             }
 
-            let kept_fragments = subtract_brush(&world_target, &cutter_planes);
+            let target_input = jackdaw_csg::CsgInput::new(&world_target_faces, &world_target_topo);
+            let kept_fragments =
+                match jackdaw_csg::brush_difference_split(&target_input, &cutter_input) {
+                    Ok(pieces) => pieces,
+                    Err(jackdaw_csg::CsgError::EmptyResult) => Vec::new(),
+                    Err(e) => {
+                        warn!("cut preview CSG kernel error: {e}");
+                        if hidden_query.get(brush_entity).is_ok() {
+                            if let Ok(mut vis) = visibility_query.get_mut(brush_entity) {
+                                *vis = Visibility::Inherited;
+                            }
+                            commands.entity(brush_entity).remove::<CutPreviewHidden>();
+                        }
+                        continue;
+                    }
+                };
 
-            // Only hide the original brush if subtraction produced valid fragments;
-            // otherwise the cutter is degenerate (e.g. inverted depth) and we keep
-            // the original visible.
+            // If the kernel produced no fragments (cutter degenerate /
+            // entirely consumed target) keep the original visible. This
+            // matches the prior convex-CSG fallback behavior.
             if kept_fragments.is_empty() {
                 if hidden_query.get(brush_entity).is_ok() {
                     if let Ok(mut vis) = visibility_query.get_mut(brush_entity) {
@@ -2002,18 +2090,26 @@ fn manage_draw_preview_mesh(
                 commands.entity(brush_entity).insert(CutPreviewHidden);
             }
 
-            for raw_fragment in &kept_fragments {
-                let fragment_faces = clean_degenerate_faces(raw_fragment);
-                if fragment_faces.len() < 4 {
+            for fragment in &kept_fragments {
+                if fragment.faces.len() < 4 || fragment.topology.vertices.len() < 4 {
                     continue;
                 }
-                let (frag_verts, frag_polys) = compute_brush_geometry(&fragment_faces);
-                if frag_verts.len() < 4 {
-                    continue;
-                }
+                let frag_verts: Vec<Vec3> = fragment
+                    .topology
+                    .vertices
+                    .iter()
+                    .map(|v| v.position)
+                    .collect();
 
-                for (face_idx, face_data) in fragment_faces.iter().enumerate() {
-                    let indices = &frag_polys[face_idx];
+                for (face_idx, face_data) in fragment.faces.iter().enumerate() {
+                    if face_idx >= fragment.topology.polygons.len() {
+                        continue;
+                    }
+                    let indices: Vec<usize> = fragment
+                        .topology
+                        .face_ring(face_idx)
+                        .map(|v| v as usize)
+                        .collect();
                     if indices.len() < 3 {
                         continue;
                     }
@@ -2032,7 +2128,7 @@ fn manage_draw_preview_mesh(
                         };
                     let uvs = compute_face_uvs(
                         &frag_verts,
-                        indices,
+                        &indices,
                         u_axis,
                         v_axis,
                         face_data.uv_offset,
@@ -2040,7 +2136,14 @@ fn manage_draw_preview_mesh(
                         face_data.uv_rotation,
                     );
 
-                    let local_tris = triangulate_face(&(0..indices.len()).collect::<Vec<_>>());
+                    // CSG fragment faces may be concave or keyhole-bridged
+                    // (annulus with hole). Fan triangulation would fill the
+                    // hole; use earcut.
+                    let face_verts_3d: Vec<Vec3> =
+                        indices.iter().map(|&vi| frag_verts[vi]).collect();
+                    let identity_ring: Vec<u32> = (0..indices.len() as u32).collect();
+                    let local_tris =
+                        triangulate_polygon(&face_verts_3d, &identity_ring, face_data.plane.normal);
                     let flat_indices: Vec<u32> =
                         local_tris.iter().flat_map(|t| t.iter().copied()).collect();
 
@@ -2226,49 +2329,170 @@ pub(crate) fn brush_parent_group(world: &World, entity: Entity) -> Option<(Entit
 }
 
 /// Perform CSG subtraction: subtract the drawn cuboid from all intersecting brushes.
+/// Routes through the mesh-CSG kernel so concave targets are handled correctly.
 fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
-    let cutter_planes = if active.polygon_vertices.is_empty() {
-        build_cutter_planes(active)
+    // Box-cut always punches through: extend the cutter far into the brush
+    // along the inward normal so it traverses any reasonably-sized target.
+    // The face plane the user clicked is the cutter's near cap; the far cap
+    // is `PUNCH_THROUGH_DEPTH` behind it (into the brush). The user's drag
+    // for depth is ignored here, matching BoxCutter's default behavior.
+    let mut punch_active = active.clone();
+    punch_active.depth = -PUNCH_THROUGH_DEPTH;
+
+    let cutter_planes = if punch_active.polygon_vertices.is_empty() {
+        build_cutter_planes(&punch_active)
     } else {
-        build_cutter_planes_polygon(active)
+        build_cutter_planes_polygon(&punch_active)
     };
+    let cutter_topology = compute_brush_topology(&cutter_planes);
+
+    // Diagnostic logging for CSG subtract: log cutter geometry so a buggy
+    // op can be reconstructed from the log output. Remove this block once
+    // the box-cutter bugs are pinned down.
+    {
+        let bbox_min = cutter_topology
+            .vertices
+            .iter()
+            .map(|v| v.position)
+            .fold(Vec3::MAX, Vec3::min);
+        let bbox_max = cutter_topology
+            .vertices
+            .iter()
+            .map(|v| v.position)
+            .fold(Vec3::MIN, Vec3::max);
+        info!(
+            "csg-subtract: cutter faces={} verts={} bbox=({:.4},{:.4},{:.4})..({:.4},{:.4},{:.4})",
+            cutter_planes.len(),
+            cutter_topology.vertices.len(),
+            bbox_min.x,
+            bbox_min.y,
+            bbox_min.z,
+            bbox_max.x,
+            bbox_max.y,
+            bbox_max.z,
+        );
+    }
 
     commands.queue(move |world: &mut World| {
-        // Phase 1: Collect all brush entities and their data
+        // First, collect all brush entities and their data.
         let mut query = world.query::<(Entity, &Brush, &GlobalTransform)>();
         let targets: Vec<(Entity, Brush, GlobalTransform)> = query
             .iter(world)
             .map(|(e, b, gt)| (e, b.clone(), *gt))
             .collect();
 
-        // Phase 2: Compute subtractions (pure computation)
+        // Second, compute subtractions (pure computation).
         struct SubtractionResult {
             original_entity: Entity,
             fragments: Vec<(Brush, Transform)>,
         }
 
         let mut results: Vec<SubtractionResult> = Vec::new();
+        let cutter_input = jackdaw_csg::CsgInput::new(&cutter_planes, &cutter_topology);
 
         for (entity, brush, global_transform) in &targets {
-            // Transform target planes to world space
+            // Transform target faces + topology to world space.
             let (_, rotation, translation) = global_transform.to_scale_rotation_translation();
-            let world_target = brush_planes_to_world(&brush.faces, rotation, translation);
+            let (world_target_faces, world_target_topo) =
+                jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, rotation, translation);
 
-            // Check intersection
-            if !brushes_intersect(&world_target, &cutter_planes) {
+            // Cheap AABB rejection before invoking the kernel. See
+            // `topology_aabbs_overlap` above for why we don't use the plane
+            // separating-axis test on concave brushes.
+            if !topology_aabbs_overlap(&world_target_topo, &cutter_topology) {
                 continue;
             }
 
-            // Perform subtraction
-            let raw_fragments = subtract_brush(&world_target, &cutter_planes);
+            // Diagnostic: this target survives the cheap rejection and is
+            // about to go through the kernel.
+            {
+                let bbox_min = world_target_topo
+                    .vertices
+                    .iter()
+                    .map(|v| v.position)
+                    .fold(Vec3::MAX, Vec3::min);
+                let bbox_max = world_target_topo
+                    .vertices
+                    .iter()
+                    .map(|v| v.position)
+                    .fold(Vec3::MIN, Vec3::max);
+                info!(
+                    "csg-subtract: target {:?} faces={} verts={} bbox=({:.4},{:.4},{:.4})..({:.4},{:.4},{:.4})",
+                    entity,
+                    world_target_faces.len(),
+                    world_target_topo.vertices.len(),
+                    bbox_min.x,
+                    bbox_min.y,
+                    bbox_min.z,
+                    bbox_max.x,
+                    bbox_max.y,
+                    bbox_max.z,
+                );
+            }
+
+            let target_input = jackdaw_csg::CsgInput::new(&world_target_faces, &world_target_topo);
+            // `EmptyResult` here means the cutter fully consumed the target;
+            // we treat that the same as "no fragments survive" and let the
+            // downstream code despawn the original. A kernel error is
+            // different: leave the original untouched.
+            let raw_fragments =
+                match jackdaw_csg::brush_difference_split(&target_input, &cutter_input) {
+                    Ok(pieces) => pieces,
+                    Err(jackdaw_csg::CsgError::EmptyResult) => {
+                        info!("csg-subtract: target {entity:?} fully consumed");
+                        Vec::new()
+                    }
+                    Err(e) => {
+                        warn!("box cutter CSG kernel error: {e}");
+                        continue;
+                    }
+                };
+
+            // Diagnostic: how many pieces did the kernel produce, and what's
+            // each fragment's bounding box / face count.
+            info!(
+                "csg-subtract: target {:?} produced {} raw fragment(s)",
+                entity,
+                raw_fragments.len()
+            );
+            for (i, frag) in raw_fragments.iter().enumerate() {
+                let bbox_min = frag
+                    .topology
+                    .vertices
+                    .iter()
+                    .map(|v| v.position)
+                    .fold(Vec3::MAX, Vec3::min);
+                let bbox_max = frag
+                    .topology
+                    .vertices
+                    .iter()
+                    .map(|v| v.position)
+                    .fold(Vec3::MIN, Vec3::max);
+                info!(
+                    "csg-subtract:   fragment {} faces={} verts={} bbox=({:.4},{:.4},{:.4})..({:.4},{:.4},{:.4})",
+                    i,
+                    frag.faces.len(),
+                    frag.topology.vertices.len(),
+                    bbox_min.x,
+                    bbox_min.y,
+                    bbox_min.z,
+                    bbox_max.x,
+                    bbox_max.y,
+                    bbox_max.z,
+                );
+            }
 
             let mut fragment_data: Vec<(Brush, Transform)> = Vec::new();
-            for fragment_faces in &raw_fragments {
-                // Compute vertices to find centroid (world space)
-                let (world_verts, _) = compute_brush_geometry(fragment_faces);
-                if world_verts.len() < 4 {
+            for fragment in &raw_fragments {
+                if fragment.topology.vertices.len() < 4 || fragment.faces.len() < 4 {
                     continue;
                 }
+                let world_verts: Vec<Vec3> = fragment
+                    .topology
+                    .vertices
+                    .iter()
+                    .map(|v| v.position)
+                    .collect();
                 let bbox_min = world_verts.iter().fold(Vec3::MAX, |a, &b| a.min(b));
                 let bbox_max = world_verts.iter().fold(Vec3::MIN, |a, &b| a.max(b));
                 let bbox_size = bbox_max - bbox_min;
@@ -2280,8 +2504,9 @@ fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
                 }
                 let centroid: Vec3 = world_verts.iter().sum::<Vec3>() / world_verts.len() as f32;
 
-                // Convert to local space around centroid
-                let local_faces: Vec<BrushFaceData> = fragment_faces
+                // Recentre faces around the centroid.
+                let local_faces: Vec<BrushFaceData> = fragment
+                    .faces
                     .iter()
                     .map(|f| BrushFaceData {
                         plane: BrushPlane {
@@ -2292,14 +2517,29 @@ fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
                     })
                     .collect();
 
-                // Clean degenerate faces
-                let clean = clean_degenerate_faces(&local_faces);
-                if clean.len() < 4 {
+                if local_faces.len() < 4 {
                     continue;
                 }
 
+                // Recentre the topology to match. The mesh-CSG kernel
+                // already produces clean, manifold geometry with a
+                // matching faces/polygons parallel-array invariant; we
+                // intentionally do NOT route through
+                // `clean_degenerate_faces` + `compute_brush_topology`
+                // here. That convex-era fallback rebuilds topology via
+                // triple-plane intersection, which collapses concave
+                // brushes (e.g., an L-shape fragment) to a convex hull
+                // or empty topology and makes the result vanish.
+                let mut local_topo = fragment.topology.clone();
+                for v in &mut local_topo.vertices {
+                    v.position -= centroid;
+                }
+
                 fragment_data.push((
-                    Brush { faces: clean },
+                    Brush {
+                        faces: local_faces,
+                        topology: local_topo,
+                    },
                     Transform::from_translation(centroid),
                 ));
             }
@@ -2314,7 +2554,7 @@ fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
             return;
         }
 
-        // Phase 3: Capture brush data for originals (assigns stable IDs)
+        // Third, capture brush data for originals (assigns stable IDs).
         let mut originals: Vec<BrushData> = Vec::new();
         for result in &results {
             originals.push(brush_data_from_entity(world, result.original_entity));
@@ -2394,7 +2634,7 @@ fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
                         parent_stable_id: Some(parent_sid),
                     };
                     spawn_brush_from_data(world, &brush_data);
-                    fragments.push(BrushOrGroup::Single(brush_data));
+                    fragments.push(BrushOrGroup::Single(Box::new(brush_data)));
                 }
             } else if result.fragments.len() == 1 {
                 // Single fragment: spawn standalone
@@ -2407,7 +2647,7 @@ fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
                     parent_stable_id: None,
                 };
                 spawn_brush_from_data(world, &brush_data);
-                fragments.push(BrushOrGroup::Single(brush_data));
+                fragments.push(BrushOrGroup::Single(Box::new(brush_data)));
             } else if result.fragments.len() > 1 {
                 // Multiple fragments: group under a BrushGroup parent
                 let group_center = result
@@ -2531,6 +2771,13 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
         return;
     }
 
+    // Join (Convex Merge) wraps all selected brushes' vertices in a single
+    // convex hull. This is well-defined for both convex and concave inputs:
+    // we simply gather every vertex from each brush's topology (rather than
+    // re-deriving them from face planes, which was the convex-paradigm path
+    // and is undefined for non-convex shapes), then call parry's convex_hull
+    // on the combined set.
+
     let primary_entity = selected_brushes[0];
     let others: Vec<Entity> = selected_brushes[1..].to_vec();
 
@@ -2549,12 +2796,19 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
         let (_, rotation, translation) = primary_gtf.to_scale_rotation_translation();
         let inv_rotation = rotation.inverse();
 
-        // Gather all vertices in primary's local space
-        let existing_verts = compute_brush_geometry(&old_primary_brush.faces).0;
+        // Gather every topology vertex from the primary brush, then every
+        // topology vertex from each other brush mapped into primary's local
+        // space. Using topology vertices (not plane-derived ones) keeps the
+        // operation correct for concave inputs.
+        let existing_verts: Vec<Vec3> = old_primary_brush
+            .topology
+            .vertices
+            .iter()
+            .map(|v| v.position)
+            .collect();
         let existing_count = existing_verts.len();
         let mut all_local_verts: Vec<Vec3> = existing_verts;
 
-        // Gather vertices from other brushes, converted to primary's local space
         for &other in &others {
             let Some(other_brush) = world.get::<Brush>(other) else {
                 continue;
@@ -2562,9 +2816,8 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
             let Some(other_gtf) = world.get::<GlobalTransform>(other) else {
                 continue;
             };
-            let (other_verts, _) = compute_brush_geometry(&other_brush.faces);
-            for v in &other_verts {
-                let world_pos = other_gtf.transform_point(*v);
+            for v in &other_brush.topology.vertices {
+                let world_pos = other_gtf.transform_point(v.position);
                 all_local_verts.push(inv_rotation * (world_pos - translation));
             }
         }
@@ -2585,7 +2838,7 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
         }
 
         // Build new face data, matching old primary faces where possible
-        let old_face_polygons = compute_brush_geometry(&old_primary_brush.faces).1;
+        let old_face_polygons = compute_brush_geometry_from_planes(&old_primary_brush.faces).1;
         let last_mat = world
             .resource::<crate::brush::LastUsedMaterial>()
             .material
@@ -2671,7 +2924,11 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
             new_faces.push(face_data);
         }
 
-        let new_brush = Brush { faces: new_faces };
+        let topology = compute_brush_topology(&new_faces);
+        let new_brush = Brush {
+            faces: new_faces,
+            topology,
+        };
 
         // Snapshot others before despawning (for undo)
         let mut undo_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
@@ -2748,16 +3005,20 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
         return;
     }
 
-    // Transform cutter faces to world space
-    let cutter_world_faces: Vec<Vec<BrushFaceData>> = cutters
+    // Subtract via mesh-CSG (manifold kernel). Works on both convex and
+    // concave inputs. For each target, every cutter is differenced off
+    // iteratively; the kernel handles cuts that split the target into
+    // multiple disconnected fragments via `brush_difference_split`.
+
+    // Transform every cutter into world space once (faces + topology).
+    let cutter_world: Vec<(Vec<BrushFaceData>, jackdaw_jsn::BrushTopology)> = cutters
         .iter()
         .map(|(_, brush, gt)| {
             let (_, rotation, translation) = gt.to_scale_rotation_translation();
-            brush_planes_to_world(&brush.faces, rotation, translation)
+            jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, rotation, translation)
         })
         .collect();
 
-    // For each target, check intersection with each cutter and subtract
     struct SubtractionResult {
         original_entity: Entity,
         fragments: Vec<(Brush, Transform)>,
@@ -2768,51 +3029,81 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
     for (entity, brush, global_transform) in &targets {
         let entity = *entity;
         let (_, rotation, translation) = global_transform.to_scale_rotation_translation();
-        let world_target = brush_planes_to_world(&brush.faces, rotation, translation);
+        let (target_world_faces, target_world_topo) =
+            jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, rotation, translation);
 
-        // Iteratively subtract each cutter from the target fragments
-        let mut current_fragments: Vec<Vec<BrushFaceData>> = vec![world_target];
-
-        for cutter_faces in &cutter_world_faces {
-            let mut next_fragments = Vec::new();
-            for fragment in &current_fragments {
-                if brushes_intersect(fragment, cutter_faces) {
-                    let pieces = subtract_brush(fragment, cutter_faces);
-                    next_fragments.extend(pieces);
-                } else {
-                    next_fragments.push(fragment.clone());
-                }
-            }
-            current_fragments = next_fragments;
+        // Cheap rejection: if no cutter's AABB even touches the target's,
+        // skip the whole op. Mesh-CSG would handle it correctly but the
+        // convert-and-decompose round-trip isn't free. Use topology-vertex
+        // AABBs (the plane separating-axis test isn't sound on concave
+        // brushes).
+        let any_cutter_touches = cutter_world
+            .iter()
+            .any(|(_, ct)| topology_aabbs_overlap(&target_world_topo, ct));
+        if !any_cutter_touches {
+            continue;
         }
 
-        // Check if anything was actually cut (same number of fragments with same face count = no cut)
-        if current_fragments.len() == 1 && current_fragments[0].len() == brush.faces.len() {
-            let orig_world = brush_planes_to_world(&brush.faces, rotation, translation);
-            if current_fragments[0].len() == orig_world.len() {
-                let all_same = current_fragments[0]
-                    .iter()
-                    .zip(orig_world.iter())
-                    .all(|(a, b)| {
-                        (a.plane.normal - b.plane.normal).length() < 1e-3
-                            && (a.plane.distance - b.plane.distance).abs() < 1e-3
+        // Iteratively subtract each cutter from the fragment list.
+        struct WorldBrush {
+            faces: Vec<BrushFaceData>,
+            topo: jackdaw_jsn::BrushTopology,
+        }
+        let mut current: Vec<WorldBrush> = vec![WorldBrush {
+            faces: target_world_faces,
+            topo: target_world_topo,
+        }];
+        for (cutter_faces, cutter_topo) in &cutter_world {
+            let mut next: Vec<WorldBrush> = Vec::new();
+            for fragment in &current {
+                if !topology_aabbs_overlap(&fragment.topo, cutter_topo) {
+                    next.push(WorldBrush {
+                        faces: fragment.faces.clone(),
+                        topo: fragment.topo.clone(),
                     });
-                if all_same {
                     continue;
                 }
+                let target_input = jackdaw_csg::CsgInput::new(&fragment.faces, &fragment.topo);
+                let cutter_input = jackdaw_csg::CsgInput::new(cutter_faces, cutter_topo);
+                match jackdaw_csg::brush_difference_split(&target_input, &cutter_input) {
+                    Ok(pieces) => {
+                        for piece in pieces {
+                            next.push(WorldBrush {
+                                faces: piece.faces,
+                                topo: piece.topology,
+                            });
+                        }
+                    }
+                    Err(jackdaw_csg::CsgError::EmptyResult) => {
+                        // Cutter swallowed the fragment whole.
+                    }
+                    Err(e) => {
+                        warn!("CSG subtract kernel error: {e}");
+                        next.push(WorldBrush {
+                            faces: fragment.faces.clone(),
+                            topo: fragment.topo.clone(),
+                        });
+                    }
+                }
             }
+            current = next;
         }
 
-        // Convert world-space fragments to local-space brushes
+        // Recentre each fragment to its own local space.
         let mut fragment_data: Vec<(Brush, Transform)> = Vec::new();
-        for fragment_faces in &current_fragments {
-            let (world_verts, _) = compute_brush_geometry(fragment_faces);
-            if world_verts.len() < 4 {
+        for fragment in &current {
+            if fragment.topo.vertices.len() < 4 {
                 continue;
             }
-            let centroid: Vec3 = world_verts.iter().sum::<Vec3>() / world_verts.len() as f32;
-
-            let local_faces: Vec<BrushFaceData> = fragment_faces
+            let centroid: Vec3 = fragment
+                .topo
+                .vertices
+                .iter()
+                .map(|v| v.position)
+                .sum::<Vec3>()
+                / fragment.topo.vertices.len() as f32;
+            let local_faces: Vec<BrushFaceData> = fragment
+                .faces
                 .iter()
                 .map(|f| BrushFaceData {
                     plane: BrushPlane {
@@ -2822,16 +3113,29 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
                     ..f.clone()
                 })
                 .collect();
-
-            let clean = clean_degenerate_faces(&local_faces);
-            if clean.len() < 4 {
+            if local_faces.len() < 4 {
                 continue;
             }
-
+            let mut local_topo = fragment.topo.clone();
+            for v in &mut local_topo.vertices {
+                v.position -= centroid;
+            }
+            // Use the mesh-CSG kernel's geometry directly. The
+            // `clean_degenerate_faces` + plane-intersection fallback
+            // path is intentionally skipped here because it collapses
+            // concave fragments to a convex hull and makes the brush
+            // appear deleted in the editor.
             fragment_data.push((
-                Brush { faces: clean },
+                Brush {
+                    faces: local_faces,
+                    topology: local_topo,
+                },
                 Transform::from_translation(centroid),
             ));
+        }
+
+        if fragment_data.is_empty() {
+            continue;
         }
 
         results.push(SubtractionResult {
@@ -2919,7 +3223,7 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
                     parent_stable_id: Some(parent_sid),
                 };
                 spawn_brush_from_data(world, &brush_data);
-                fragments.push(BrushOrGroup::Single(brush_data));
+                fragments.push(BrushOrGroup::Single(Box::new(brush_data)));
             }
         } else if result.fragments.len() == 1 {
             let (brush, transform) = &result.fragments[0];
@@ -2931,7 +3235,7 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
                 parent_stable_id: None,
             };
             spawn_brush_from_data(world, &brush_data);
-            fragments.push(BrushOrGroup::Single(brush_data));
+            fragments.push(BrushOrGroup::Single(Box::new(brush_data)));
         } else if result.fragments.len() > 1 {
             let group_center = result
                 .fragments
@@ -2991,35 +3295,48 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
         return;
     }
 
-    // Transform all faces to world space
-    let world_face_sets: Vec<Vec<BrushFaceData>> = selected_brushes
+    // Intersect via mesh-CSG (manifold kernel). Cumulatively intersect
+    // each subsequent brush into the running result. Works for both
+    // convex and concave inputs.
+
+    let world_inputs: Vec<(Vec<BrushFaceData>, jackdaw_jsn::BrushTopology)> = selected_brushes
         .iter()
         .map(|(_, brush, gt)| {
             let (_, rotation, translation) = gt.to_scale_rotation_translation();
-            brush_planes_to_world(&brush.faces, rotation, translation)
+            jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, rotation, translation)
         })
         .collect();
 
-    let face_refs: Vec<&[BrushFaceData]> = world_face_sets
-        .iter()
-        .map(std::vec::Vec::as_slice)
-        .collect();
-    let Some(intersection_faces) = intersect_brushes(&face_refs) else {
-        return;
+    let mut running = jackdaw_csg::CsgBrush {
+        faces: world_inputs[0].0.clone(),
+        topology: world_inputs[0].1.clone(),
     };
-    if intersection_faces.len() < 4 {
+    for (next_faces, next_topo) in world_inputs.iter().skip(1) {
+        let lhs = jackdaw_csg::CsgInput::new(&running.faces, &running.topology);
+        let rhs = jackdaw_csg::CsgInput::new(next_faces, next_topo);
+        match jackdaw_csg::brush_boolean(&lhs, &rhs, jackdaw_csg::BooleanOp::Intersection) {
+            Ok(b) => running = b,
+            Err(jackdaw_csg::CsgError::EmptyResult) => return,
+            Err(e) => {
+                warn!("CSG intersect kernel error: {e}");
+                return;
+            }
+        }
+    }
+    if running.topology.vertices.len() < 4 || running.faces.len() < 4 {
         return;
     }
 
-    // Compute centroid for the result
-    let (world_verts, _) = compute_brush_geometry(&intersection_faces);
-    if world_verts.len() < 4 {
-        return;
-    }
-    let centroid: Vec3 = world_verts.iter().sum::<Vec3>() / world_verts.len() as f32;
+    let centroid: Vec3 = running
+        .topology
+        .vertices
+        .iter()
+        .map(|v| v.position)
+        .sum::<Vec3>()
+        / running.topology.vertices.len() as f32;
 
-    // Convert to local space around centroid
-    let local_faces: Vec<BrushFaceData> = intersection_faces
+    let local_faces: Vec<BrushFaceData> = running
+        .faces
         .iter()
         .map(|f| BrushFaceData {
             plane: BrushPlane {
@@ -3032,6 +3349,10 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
     let clean = clean_degenerate_faces(&local_faces);
     if clean.len() < 4 {
         return;
+    }
+    let mut local_topo = running.topology.clone();
+    for v in &mut local_topo.vertices {
+        v.position -= centroid;
     }
 
     // Capture brush data for originals (assigns stable IDs)
@@ -3059,8 +3380,18 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
         }
     }
 
-    // Spawn the intersection brush
-    let new_brush = Brush { faces: clean };
+    // Spawn the intersection brush. Reuse the manifold-derived topology
+    // when cleaning didn't prune faces; otherwise re-derive from planes
+    // so the parallel-array invariant with `faces` is preserved.
+    let topology = if clean.len() == running.faces.len() {
+        local_topo
+    } else {
+        compute_brush_topology(&clean)
+    };
+    let new_brush = Brush {
+        faces: clean,
+        topology,
+    };
     let frag_sid = world.resource_mut::<StableIdCounter>().next();
     let brush_data = BrushData {
         stable_id: frag_sid,
@@ -3081,7 +3412,7 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
     // Push undo command (reuses SubtractBrushCommand, same undo/redo pattern).
     let cmd = SubtractBrushCommand {
         originals,
-        fragments: vec![BrushOrGroup::Single(brush_data)],
+        fragments: vec![BrushOrGroup::Single(Box::new(brush_data))],
     };
     let mut history = world.resource_mut::<CommandHistory>();
     history.push_executed(Box::new(cmd));
@@ -3421,13 +3752,13 @@ pub(crate) fn extend_face_to_brush_impl(
     }
 
     // Compute geometry from combined face set
-    let (verts, _) = compute_brush_geometry(&world_faces);
+    let (verts, _) = compute_brush_geometry_from_planes(&world_faces);
     if verts.len() < 4 {
         return;
     }
 
     // No-op check: compare with original geometry
-    let (old_verts, _) = compute_brush_geometry(&brush_planes_to_world(
+    let (old_verts, _) = compute_brush_geometry_from_planes(&brush_planes_to_world(
         &old_brush.faces,
         rotation,
         translation,
@@ -3462,7 +3793,11 @@ pub(crate) fn extend_face_to_brush_impl(
         return;
     }
     // Apply via undo-able SetBrush command (ECS + AST)
-    let new_brush = Brush { faces: local_clean };
+    let topology = compute_brush_topology(&local_clean);
+    let new_brush = Brush {
+        faces: local_clean,
+        topology,
+    };
     crate::brush::sync_brush_to_ast(world, primary, &new_brush);
     if let Some(mut brush) = world.get_mut::<Brush>(primary) {
         *brush = new_brush.clone();

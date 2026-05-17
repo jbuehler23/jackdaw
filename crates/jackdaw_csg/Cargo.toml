@@ -1,0 +1,20 @@
+[package]
+name = "jackdaw_csg"
+version = "0.4.1"
+edition = "2024"
+description = "Mesh-CSG glue between jackdaw brushes and the manifold3d kernel"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+bevy.workspace = true
+jackdaw_geometry.workspace = true
+# manifold-csg pulls in manifold3d (C++ via cmake). Build prereqs:
+# cmake, a C++ compiler, git. See the crate README for details.
+manifold-csg = { version = "0.1", default-features = false, features = ["parallel"] }
+
+[dev-dependencies]
+jackdaw_jsn.workspace = true
+
+[lints]
+workspace = true

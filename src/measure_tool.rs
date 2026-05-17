@@ -10,7 +10,7 @@ use crate::{
     viewport::{MainViewportCamera, SceneViewport},
 };
 
-// ── Plugin ──
+// -- Plugin --
 
 pub struct MeasureToolPlugin;
 
@@ -37,7 +37,7 @@ fn configure_measure_tool_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
     config.depth_bias = -1.0;
 }
 
-// ── State ──
+// -- State --
 
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct MeasureToolState {
@@ -61,7 +61,7 @@ struct MeasureLabelEntities {
 #[derive(Component)]
 struct MeasureLabel;
 
-// ── Extension registration ──
+// -- Extension registration --
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     use crate::core_extension::CoreExtensionInputContext;
@@ -84,7 +84,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_menu_entry::<MeasureDistanceOp>(TopLevelMenu::Tools);
 }
 
-// ── Operator ──
+// -- Operator --
 
 #[operator(
     id = "tools.measure_distance",
@@ -201,7 +201,7 @@ fn confirm_measure_distance(
     }
 }
 
-// ── Raycasting helpers ──
+// -- Raycasting helpers --
 
 fn raycast_closest_point(ray: Ray3d, ray_cast: &mut MeshRayCast) -> Option<Vec3> {
     let settings = MeshRayCastSettings::default().with_visibility(RayCastVisibility::Any);
@@ -223,7 +223,7 @@ fn ray_plane_intersection(ray: Ray3d, plane_point: Vec3, plane_normal: Vec3) -> 
     Some(ray.origin + *ray.direction * t)
 }
 
-// ── Viewport drawing ──
+// -- Viewport drawing --
 
 fn draw_measure_line(mut gizmos: Gizmos<MeasureToolGizmoGroup>, state: Res<MeasureToolState>) {
     if !state.active || !state.has_start {

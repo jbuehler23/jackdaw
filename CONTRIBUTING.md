@@ -158,9 +158,9 @@ fn delete_entity(
 }
 ```
 
-Each entry in `params(...)` is `name(Type, default = …, doc = "…")`. `default` and `doc` are optional. Supported types: `bool`, `i64`, `f64`, `String`, `Vec2`, `Vec3`, `Color`, `Entity`. Defaults are supported on `bool` / `i64` / `f64` / `String` for now.
+Each entry in `params(...)` is `name(Type, default = ..., doc = "...")`. `default` and `doc` are optional. Supported types: `bool`, `i64`, `f64`, `String`, `Vec2`, `Vec3`, `Color`, `Entity`. Defaults are supported on `bool` / `i64` / `f64` / `String` for now.
 
-The schema is informational; it does not change how parameters are extracted at call time. Continue reading values via `params.as_int("…")` / `as_str("…")` / `as_entity("…")` etc. inside the function body. The `let Some(...) = ... else { return Cancelled }` pattern is the current shape; the long-term goal is `let entity = params.as_entity("entity")?;`, which needs `OperatorResult` to implement `Try` (and `FromResidual<Option<Infallible>>`). It's not wired up yet, so use the `let-else` form for now.
+The schema is informational; it does not change how parameters are extracted at call time. Continue reading values via `params.as_int("...")` / `as_str("...")` / `as_entity("...")` etc. inside the function body. The `let Some(...) = ... else { return Cancelled }` pattern is the current shape; the long-term goal is `let entity = params.as_entity("entity")?;`, which needs `OperatorResult` to implement `Try` (and `FromResidual<Option<Infallible>>`). It's not wired up yet, so use the `let-else` form for now.
 
 A `# Parameters` heading in the function's `///` doc comment is still welcome for longer prose, but the macro `params(...)` block is the primary record. Keep both in sync.
 

@@ -17,8 +17,8 @@ use jackdaw_widgets::tree_view::{TreeIndex, TreeNode};
 mod util;
 
 /// Spawn a host entity carrying `HierarchyTreeContainer` (which
-/// requires `TreeRoot` + `EditorEntity`). Mirrors the runtime layout's
-/// "Outliner panel content" entity.
+/// requires `TreeRoot` + `EditorEntity`). Matches the runtime
+/// layout's "Outliner panel content" entity.
 fn spawn_outliner_container(world: &mut World) -> Entity {
     world
         .spawn((

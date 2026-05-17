@@ -1,4 +1,24 @@
+use std::collections::HashMap;
+
 use bevy::prelude::*;
+
+pub mod topology;
+pub use topology::{
+    AttributeData, AttributeStack, BrushTopology, EdgeFlag, MeshEdge, MeshLoop, MeshPoly, MeshVert,
+};
+
+pub mod halfedge;
+
+pub mod newell;
+pub use newell::newell_normal;
+
+pub mod triangulate;
+pub use triangulate::{
+    triangulate_face_polygon, triangulate_polygon, triangulate_polygon_with_holes,
+};
+
+pub mod topology_convexity;
+pub use topology_convexity::is_convex_topology;
 
 pub const EPSILON: f32 = 1e-4;
 
@@ -67,9 +87,9 @@ pub fn point_inside_all_planes(point: Vec3, faces: &[BrushFaceData]) -> bool {
     true
 }
 
-/// Compute brush geometry from face planes.
-/// Returns (unique vertices, per-face polygon vertex indices).
-pub fn compute_brush_geometry(faces: &[BrushFaceData]) -> (Vec<Vec3>, Vec<Vec<usize>>) {
+/// Deprecated. Used only by the legacy-scene migration in jackdaw_jsn::migration. Will be removed once migration usage drops.
+#[doc(hidden)]
+pub fn compute_brush_geometry_from_planes(faces: &[BrushFaceData]) -> (Vec<Vec3>, Vec<Vec<usize>>) {
     let n = faces.len();
     let mut vertices: Vec<Vec3> = Vec::new();
 
@@ -113,6 +133,97 @@ pub fn compute_brush_geometry(faces: &[BrushFaceData]) -> (Vec<Vec3>, Vec<Vec<us
     }
 
     (vertices, face_polygons)
+}
+
+/// Build a `BrushTopology` from face plane data by intersecting half-spaces.
+///
+/// This is the canonical "planes -> topology" derivation used by primitive
+/// constructors that don't know their explicit topology up front (e.g.
+/// `Brush::sphere`), by CSG fragment construction, and by the editor's
+/// load-time migration system for legacy `.jsn` brushes whose `topology`
+/// field is empty.
+///
+/// The output is guaranteed to satisfy:
+/// - `vertices` is deduplicated and inside all half-spaces.
+/// - `edges` are canonical (v0 <= v1) and deduplicated.
+/// - `polygons.len() == faces.len()` even for degenerate faces (those get
+///   `loop_total = 0`), so the parallel-array invariant between `faces`
+///   and `polygons` is preserved.
+///
+/// Returns an empty topology if the plane set has fewer than 4 vertices
+/// (i.e. the half-space intersection is unbounded or empty).
+pub fn compute_brush_topology(faces: &[BrushFaceData]) -> BrushTopology {
+    let (positions, face_polygons) = compute_brush_geometry_from_planes(faces);
+    if positions.is_empty() || face_polygons.is_empty() {
+        return BrushTopology::default();
+    }
+    build_topology_from_face_polygons(positions, face_polygons)
+}
+
+/// Build a `BrushTopology` directly from a positions array and per-face
+/// polygon rings (vertex-index lists, CCW). Lower-level helper for callers
+/// that already have positions / rings derived by some other means.
+pub fn build_topology_from_face_polygons(
+    positions: Vec<Vec3>,
+    face_polygons: Vec<Vec<usize>>,
+) -> BrushTopology {
+    let vertices: Vec<MeshVert> = positions
+        .into_iter()
+        .map(|p| MeshVert { position: p })
+        .collect();
+
+    let mut edge_map: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut edges: Vec<MeshEdge> = Vec::new();
+    let mut canonicalize = |a: u32, b: u32| -> u32 {
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        if let Some(&idx) = edge_map.get(&(lo, hi)) {
+            idx
+        } else {
+            let idx = edges.len() as u32;
+            edges.push(MeshEdge {
+                v: [lo, hi],
+                flags: EdgeFlag::empty(),
+            });
+            edge_map.insert((lo, hi), idx);
+            idx
+        }
+    };
+
+    let mut polygons: Vec<MeshPoly> = Vec::with_capacity(face_polygons.len());
+    let mut loops: Vec<MeshLoop> = Vec::new();
+    for ring in &face_polygons {
+        if ring.len() < 3 {
+            // Degenerate face: emit an empty poly to preserve the parallel-array
+            // invariant with `faces`.
+            polygons.push(MeshPoly {
+                loop_start: loops.len() as u32,
+                loop_total: 0,
+            });
+            continue;
+        }
+        let loop_start = loops.len() as u32;
+        for i in 0..ring.len() {
+            let v_cur = ring[i] as u32;
+            let v_next = ring[(i + 1) % ring.len()] as u32;
+            let edge_idx = canonicalize(v_cur, v_next);
+            loops.push(MeshLoop {
+                vert: v_cur,
+                edge: edge_idx,
+            });
+        }
+        polygons.push(MeshPoly {
+            loop_start,
+            loop_total: ring.len() as u32,
+        });
+    }
+
+    BrushTopology {
+        vertices,
+        edges,
+        polygons,
+        loops,
+        attributes: Default::default(),
+    }
 }
 
 /// Sort face vertex indices by winding order around the face normal.
@@ -232,8 +343,8 @@ pub fn brush_planes_to_world(
 /// This avoids the numerical issues of the previous approach which
 /// computed geometry of the combined face set and broke for thin volumes.
 pub fn brushes_intersect(a_faces: &[BrushFaceData], b_faces: &[BrushFaceData]) -> bool {
-    let (a_verts, _) = compute_brush_geometry(a_faces);
-    let (b_verts, _) = compute_brush_geometry(b_faces);
+    let (a_verts, _) = compute_brush_geometry_from_planes(a_faces);
+    let (b_verts, _) = compute_brush_geometry_from_planes(b_faces);
     if a_verts.len() < 4 || b_verts.len() < 4 {
         return false;
     }
@@ -289,7 +400,7 @@ pub fn subtract_brush(
             };
             new_face.ensure_uv_axes();
             outside_faces.push(new_face);
-            let (outside_verts, _) = compute_brush_geometry(&outside_faces);
+            let (outside_verts, _) = compute_brush_geometry_from_planes(&outside_faces);
             if outside_verts.len() >= 4 {
                 result_fragments.push(outside_faces);
             }
@@ -309,7 +420,7 @@ pub fn subtract_brush(
             };
             new_face.ensure_uv_axes();
             inside_faces.push(new_face);
-            let (inside_verts, _) = compute_brush_geometry(&inside_faces);
+            let (inside_verts, _) = compute_brush_geometry_from_planes(&inside_faces);
             if inside_verts.len() >= 4 {
                 next_remaining.push(inside_faces);
             }
@@ -318,7 +429,7 @@ pub fn subtract_brush(
         remaining = next_remaining;
     }
 
-    // remaining = pieces fully inside the cutter → discard
+    // remaining = pieces fully inside the cutter -> discard
     result_fragments
 }
 
@@ -326,7 +437,7 @@ pub fn subtract_brush(
 ///
 /// Collects all face planes from every input brush into one combined set.
 /// Because the intersection of convex half-spaces is itself convex, running
-/// `compute_brush_geometry` on the merged planes directly yields the result.
+/// `compute_brush_geometry_from_planes` on the merged planes directly yields the result.
 /// Returns `None` if the intersection is empty (fewer than 4 vertices).
 pub fn intersect_brushes(brush_face_sets: &[&[BrushFaceData]]) -> Option<Vec<BrushFaceData>> {
     let mut combined: Vec<BrushFaceData> = Vec::new();
@@ -334,7 +445,7 @@ pub fn intersect_brushes(brush_face_sets: &[&[BrushFaceData]]) -> Option<Vec<Bru
         combined.extend(faces.iter().cloned());
     }
 
-    let (verts, _) = compute_brush_geometry(&combined);
+    let (verts, _) = compute_brush_geometry_from_planes(&combined);
     if verts.len() < 4 {
         return None;
     }
@@ -344,7 +455,7 @@ pub fn intersect_brushes(brush_face_sets: &[&[BrushFaceData]]) -> Option<Vec<Bru
 
 /// Remove faces that produce no vertices (degenerate) from a face set.
 pub fn clean_degenerate_faces(faces: &[BrushFaceData]) -> Vec<BrushFaceData> {
-    let (_, polys) = compute_brush_geometry(faces);
+    let (_, polys) = compute_brush_geometry_from_planes(faces);
     faces
         .iter()
         .enumerate()

@@ -13,7 +13,7 @@ use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
 use crate::brush::{
-    BrushDragState, BrushEditMode, BrushSelection, ClipState, EdgeDragState, EditMode,
+    BrushDragState, BrushEditMode, BrushSelection, ClipState, EdgeDragState, EditMode, KnifeMode,
     VertexDragState,
 };
 use crate::core_extension::CoreExtensionInputContext;
@@ -26,6 +26,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<EditModeEdgeOp>()
         .register_operator::<EditModeFaceOp>()
         .register_operator::<EditModeClipOp>()
+        .register_operator::<EditModeKnifeOp>()
         .register_operator::<BrushExitEditModeOp>();
 
     let ext = ctx.id();
@@ -50,6 +51,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         bindings![(KeyCode::Digit4, Press::default())],
     ));
     ctx.spawn((
+        Action::<EditModeKnifeOp>::new(),
+        ActionOf::<CoreExtensionInputContext>::new(ext),
+        bindings![(KeyCode::KeyK, Press::default())],
+    ));
+    ctx.spawn((
         Action::<BrushExitEditModeOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
         bindings![(KeyCode::Escape, Press::default())],
@@ -58,8 +64,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
 /// True only when the user is in `BrushEdit` and an Escape press
 /// should drop them back to Object mode (no modal running, no drag
-/// in flight, not in Clip mode with pending points). Clip-with-points
-/// is owned by `brush.clip.clear`'s Escape binding instead.
+/// in flight, not in Clip mode with pending points, not in Knife
+/// mode with a partial path). Clip-with-points is owned by
+/// `brush.clip.clear`'s Escape binding instead; Knife-with-path is
+/// owned by `handle_knife_mode`'s Escape handling.
 fn can_exit_brush_edit(
     edit_mode: Res<EditMode>,
     active: ActiveModalQuery,
@@ -67,6 +75,7 @@ fn can_exit_brush_edit(
     vertex_drag: Res<VertexDragState>,
     edge_drag: Res<EdgeDragState>,
     clip_state: Res<ClipState>,
+    knife: Res<KnifeMode>,
 ) -> bool {
     if active.is_modal_running() {
         return false;
@@ -79,6 +88,7 @@ fn can_exit_brush_edit(
     }
     match *edit_mode {
         EditMode::BrushEdit(BrushEditMode::Clip) if !clip_state.points.is_empty() => false,
+        EditMode::BrushEdit(BrushEditMode::Knife) if !knife.path.is_empty() => false,
         EditMode::BrushEdit(_) => true,
         _ => false,
     }
@@ -128,7 +138,8 @@ fn can_change_edit_mode(
 #[operator(
     id = "edit_mode.object",
     label = "Object Mode",
-    is_available = can_change_edit_mode
+    is_available = can_change_edit_mode,
+    allows_undo = false,
 )]
 pub fn edit_mode_object(
     _: In<OperatorParameters>,
@@ -145,7 +156,8 @@ pub fn edit_mode_object(
 #[operator(
     id = "edit_mode.vertex",
     label = "Vertex Mode",
-    is_available = can_change_edit_mode
+    is_available = can_change_edit_mode,
+    allows_undo = false,
 )]
 pub(crate) fn edit_mode_vertex(
     _: In<OperatorParameters>,
@@ -168,7 +180,8 @@ pub(crate) fn edit_mode_vertex(
 #[operator(
     id = "edit_mode.edge",
     label = "Edge Mode",
-    is_available = can_change_edit_mode
+    is_available = can_change_edit_mode,
+    allows_undo = false,
 )]
 pub(crate) fn edit_mode_edge(
     _: In<OperatorParameters>,
@@ -191,7 +204,8 @@ pub(crate) fn edit_mode_edge(
 #[operator(
     id = "edit_mode.face",
     label = "Face Mode",
-    is_available = can_change_edit_mode
+    is_available = can_change_edit_mode,
+    allows_undo = false,
 )]
 pub(crate) fn edit_mode_face(
     _: In<OperatorParameters>,
@@ -214,7 +228,8 @@ pub(crate) fn edit_mode_face(
 #[operator(
     id = "edit_mode.clip",
     label = "Clip Mode",
-    is_available = can_change_edit_mode
+    is_available = can_change_edit_mode,
+    allows_undo = false,
 )]
 pub(crate) fn edit_mode_clip(
     _: In<OperatorParameters>,
@@ -226,6 +241,33 @@ pub(crate) fn edit_mode_clip(
 ) -> OperatorResult {
     switch_brush_edit_mode(
         BrushEditMode::Clip,
+        edit_mode,
+        brush_selection,
+        draw_state,
+        selection,
+        brushes,
+    )
+}
+
+#[operator(
+    id = "edit_mode.knife",
+    label = "Knife Mode",
+    description = "Toggle the brush knife edit mode. Click to place path \
+                   points, Enter to apply, Esc to discard the in-progress \
+                   path.",
+    is_available = can_change_edit_mode,
+    allows_undo = false,
+)]
+pub(crate) fn edit_mode_knife(
+    _: In<OperatorParameters>,
+    edit_mode: ResMut<EditMode>,
+    brush_selection: ResMut<BrushSelection>,
+    draw_state: ResMut<DrawBrushState>,
+    selection: Res<Selection>,
+    brushes: Query<(), With<jackdaw_jsn::Brush>>,
+) -> OperatorResult {
+    switch_brush_edit_mode(
+        BrushEditMode::Knife,
         edit_mode,
         brush_selection,
         draw_state,

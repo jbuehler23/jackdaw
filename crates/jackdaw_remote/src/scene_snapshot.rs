@@ -67,9 +67,9 @@ pub fn scene_snapshot_handler(
 }
 
 /// Serializer processor for remote snapshots.
-/// - `Handle<T>` → null (game assets aren't loaded in editor)
-/// - Entity fields → raw u64 bits (no index remapping)
-/// - Non-finite floats → descriptive strings
+/// - `Handle<T>` -> null (game assets aren't loaded in editor)
+/// - Entity fields -> raw u64 bits (no index remapping)
+/// - Non-finite floats -> descriptive strings
 struct RemoteSerializerProcessor;
 
 impl ReflectSerializerProcessor for RemoteSerializerProcessor {
@@ -115,12 +115,12 @@ impl ReflectSerializerProcessor for RemoteSerializerProcessor {
             return Ok(Ok(serializer.serialize_str(s)?));
         }
 
-        // Handle<T> → null
+        // Handle<T> -> null
         if registry.get_type_data::<ReflectHandle>(type_id).is_some() {
             return Ok(Ok(serializer.serialize_unit()?));
         }
 
-        // Entity → raw u64 bits
+        // Entity -> raw u64 bits
         if type_id == TypeId::of::<Entity>() {
             if let Some(entity) = value.as_any().downcast_ref::<Entity>() {
                 return Ok(Ok(serializer.serialize_u64(entity.to_bits())?));

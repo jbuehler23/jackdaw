@@ -9,14 +9,14 @@
 //! * `--extern bevy=<anything>` becomes
 //!   `--extern bevy=$JACKDAW_SDK_DYLIB`. The user's Cargo.toml still
 //!   declares `bevy = "0.18"` so bevy's proc macros find it via
-//!   `CARGO_MANIFEST_DIR` and emit `::bevy::…` paths. Cargo compiles
+//!   `CARGO_MANIFEST_DIR` and emit `::bevy::...` paths. Cargo compiles
 //!   real bevy into the user's target dir; the resulting rlib is
 //!   ignored because the wrapper points the `--extern` at
 //!   `libjackdaw_sdk.so`. The extra compile is a one-time cost that
 //!   keeps the user's Cargo.toml normal (no patches, no stub crate).
 //! * `--extern jackdaw_api=$JACKDAW_SDK_DYLIB` is injected. The user
 //!   never declares `jackdaw_api`; the wrapper makes
-//!   `use jackdaw_api::…` work anyway.
+//!   `use jackdaw_api::...` work anyway.
 //! * `-L dependency=$JACKDAW_SDK_DEPS` is appended so rustc can find
 //!   transitive rlib metadata when resolving re-exported types.
 //! * `-C prefer-dynamic` is appended so rustc links through the SDK
@@ -69,7 +69,7 @@ const ENV_LOG: &str = "JACKDAW_WRAPPER_LOG";
 /// to rustc; we rewrite the value here.
 const REDIRECTED_CRATES: &[&str] = &["bevy"];
 
-/// Crate aliases we inject unconditionally so `use jackdaw_api::…`
+/// Crate aliases we inject unconditionally so `use jackdaw_api::...`
 /// resolves without the user having to declare `jackdaw_api` in
 /// their Cargo.toml. The rustc command picks up these `--extern`
 /// flags exactly as cargo-emitted ones would be.

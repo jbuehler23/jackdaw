@@ -16,11 +16,11 @@ impl Plugin for JackdawCameraPlugin {
 ///
 /// Controls:
 /// - Right-click + drag: look around (yaw/pitch)
-/// - WASD: move forward/back/left/right (view-relative)
-/// - Q / E: move up / down (world-space Y)
+/// - Right-click + WASD: move forward/back/left/right (view-relative)
+/// - Right-click + Q / E: move up / down (world-space Y)
 /// - Scroll wheel: move forward/back along view direction
 /// - Right-click + scroll: adjust camera speed
-/// - Shift (held): run speed multiplier
+/// - Shift (held): run speed multiplier while flying
 #[derive(Component)]
 pub struct JackdawCameraSettings {
     /// Mouse look sensitivity (radians per pixel).
@@ -126,25 +126,29 @@ fn camera_system(
             }
         }
 
-        // WASD + QE movement (independent of right-click, but skip when Ctrl/Alt held for shortcuts)
+        // WASD + QE fly movement: only active while right-mouse is held. This frees
+        // E/Q (and W/A/S/D) for tool keybinds (extrude, edge-slide, etc.) when the
+        // user is not actively flying the camera. Mirrors Unreal/Unity convention.
         let mut movement = Vec3::ZERO;
 
-        if !ctrl && !alt && keybinds.key_pressed(EditorAction::CameraForward, &keyboard) {
+        let fly_active = right_held && !ctrl && !alt;
+
+        if fly_active && keybinds.key_pressed(EditorAction::CameraForward, &keyboard) {
             movement += transform.forward().as_vec3();
         }
-        if !ctrl && !alt && keybinds.key_pressed(EditorAction::CameraBackward, &keyboard) {
+        if fly_active && keybinds.key_pressed(EditorAction::CameraBackward, &keyboard) {
             movement -= transform.forward().as_vec3();
         }
-        if !ctrl && !alt && keybinds.key_pressed(EditorAction::CameraLeft, &keyboard) {
+        if fly_active && keybinds.key_pressed(EditorAction::CameraLeft, &keyboard) {
             movement -= transform.right().as_vec3();
         }
-        if !ctrl && !alt && keybinds.key_pressed(EditorAction::CameraRight, &keyboard) {
+        if fly_active && keybinds.key_pressed(EditorAction::CameraRight, &keyboard) {
             movement += transform.right().as_vec3();
         }
-        if !ctrl && !alt && keybinds.key_pressed(EditorAction::CameraUp, &keyboard) {
+        if fly_active && keybinds.key_pressed(EditorAction::CameraUp, &keyboard) {
             movement += Vec3::Y;
         }
-        if !ctrl && !alt && keybinds.key_pressed(EditorAction::CameraDown, &keyboard) {
+        if fly_active && keybinds.key_pressed(EditorAction::CameraDown, &keyboard) {
             movement -= Vec3::Y;
         }
 

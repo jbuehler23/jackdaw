@@ -623,8 +623,8 @@ fn try_load(app: &mut App, path: &Path) -> Result<LoadedKind, LoadError> {
 /// calls panic because the host keyed resources under different
 /// `TypeId`s than the dylib sees.
 ///
-/// Mirrors the startup loader path but skips the BEI input-context
-/// registration that requires `&mut App`. In practice that means:
+/// Same shape as the startup loader path but skips the BEI
+/// input-context registration that requires `&mut App`. In practice:
 ///
 /// * Windows, operators, menu entries, and panel-extension sections
 ///   activate immediately.

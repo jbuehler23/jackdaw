@@ -84,7 +84,7 @@ pub struct GameBookkeeping {
     pub reflect_types: Vec<TypeId>,
 }
 
-/// Registry mapping game name → bookkeeping. Lives as a `World`
+/// Registry mapping game name -> bookkeeping. Lives as a `World`
 /// resource so teardown can always find it.
 #[derive(Default, Debug, bevy::prelude::Resource)]
 pub struct GameRegistry {

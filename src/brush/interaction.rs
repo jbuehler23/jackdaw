@@ -6,7 +6,7 @@ use crate::{
 };
 
 use super::{BrushEditMode, BrushMeshCache, BrushSelection, EditMode};
-use jackdaw_geometry::{brush_planes_to_world, compute_brush_geometry};
+use jackdaw_geometry::{brush_planes_to_world, compute_brush_geometry_from_planes};
 use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
 
 /// Reactive cleanup: when the active brush entity is no longer
@@ -302,7 +302,7 @@ pub(super) fn handle_clip_mode(
         };
 
         // Draw front half wireframe
-        let (verts, polys) = compute_brush_geometry(&front_faces);
+        let (verts, polys) = compute_brush_geometry_from_planes(&front_faces);
         if verts.len() >= 4 {
             for polygon in &polys {
                 for i in 0..polygon.len() {
@@ -314,7 +314,7 @@ pub(super) fn handle_clip_mode(
         }
 
         // Draw back half wireframe
-        let (verts, polys) = compute_brush_geometry(&back_faces);
+        let (verts, polys) = compute_brush_geometry_from_planes(&back_faces);
         if verts.len() >= 4 {
             for polygon in &polys {
                 for i in 0..polygon.len() {

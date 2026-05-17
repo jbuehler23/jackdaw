@@ -3,6 +3,10 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 /// Top-level `.jsn` file structure.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JsnScene {
@@ -88,6 +92,17 @@ pub struct JsnEntity {
     pub parent: Option<usize>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub components: HashMap<String, serde_json::Value>,
+}
+
+/// Clipboard payload: entities plus any inline assets they reference.
+/// Serialized to JSON text on the OS clipboard via `arboard`. Wrapping
+/// the entity list lets cross-scene paste carry material defs from the
+/// source scene's inline assets.
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct ClipboardPayload {
+    pub entities: Vec<JsnEntity>,
+    #[serde(default)]
+    pub assets: JsnAssets,
 }
 
 /// Legacy v2 entity format, only used for migration.
@@ -229,9 +244,15 @@ impl<'de> serde::Deserialize<'de> for JsnAssets {
     }
 }
 
-/// Reserved for editor-specific state. Currently unused.
+/// Editor-specific state persisted alongside the scene. Restored on
+/// open so the user lands back where they left off.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct JsnEditorState {}
+pub struct JsnEditorState {
+    /// Last-known viewport camera transform. Restored on open so the
+    /// user picks up the same framing they last had.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<JsnTransform>,
+}
 
 /// Top-level `catalog.jsn` file structure for project-wide asset deduplication.
 ///
@@ -254,7 +275,7 @@ pub struct JsnProject {
     pub project: JsnProjectConfig,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct JsnProjectConfig {
     /// Human-readable project name.
     pub name: String,
@@ -268,4 +289,13 @@ pub struct JsnProjectConfig {
     /// Format is opaque to the JSN crate; consumers parse it as `jackdaw_panels::LayoutState`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<serde_json::Value>,
+    /// Scene paths (relative to project root) that were open in the
+    /// editor's tab strip when the project was last closed. Restored
+    /// in order on the next launch. Skipped if empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub last_open_tabs: Vec<String>,
+    /// Index into `last_open_tabs` of the tab that was active.
+    /// Clamped to range on load. Defaults to 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub last_active_tab: usize,
 }
