@@ -5,7 +5,7 @@
 
 use bevy::math::Vec3;
 use jackdaw_csg::{BooleanOp, CsgInput, brush_boolean, brush_difference_split};
-use jackdaw_geometry::editmesh::{EditMesh, ops::edge_bevel::edge_bevel};
+use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::edge_bevel::edge_bevel};
 use jackdaw_jsn::{Brush, BrushFaceData};
 
 /// Helper: bevel one edge of a cube to produce a chamfered brush, then
@@ -14,17 +14,17 @@ use jackdaw_jsn::{Brush, BrushFaceData};
 /// bevel).
 fn beveled_cube(half: f32, width: f32) -> Brush {
     let brush = Brush::cuboid(half, half, half);
-    let mut bmesh = EditMesh::lift_from_topology(&brush.topology);
-    let edge = bmesh
+    let mut mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let edge = mesh
         .edges
         .keys()
         .next()
         .expect("cube has at least one edge");
-    edge_bevel(&mut bmesh, &[edge], width).expect("bevel one cube edge");
-    bmesh
+    edge_bevel(&mut mesh, &[edge], width).expect("bevel one cube edge");
+    mesh
         .validate()
-        .expect("editmesh invariants hold after bevel");
-    let topology = bmesh.flatten_to_topology();
+        .expect("halfedge invariants hold after bevel");
+    let topology = mesh.flatten_to_topology();
 
     // Grow faces vec to match the new polygon count and rederive each
     // face plane from its (now-current) ring. This is the same shape of

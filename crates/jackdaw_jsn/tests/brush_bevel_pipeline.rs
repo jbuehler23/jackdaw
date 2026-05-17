@@ -2,7 +2,7 @@
 //!
 //! `bevel_cube_chamfer_is_a_parallelogram` (in `jackdaw_geometry`) already
 //! verifies that the underlying `edge_bevel` op produces a parallelogram
-//! chamfer in the `EditMesh`. These tests pick the chain back up at the
+//! chamfer in the `HalfedgeMesh`. These tests pick the chain back up at the
 //! topology boundary: after `flatten_to_topology` writes the post-bevel state
 //! back into the `Brush`, the chamfer's `Brush.topology` ring should still
 //! be a parallelogram, the per-face plane on `Brush.faces[chamfer]` should
@@ -10,7 +10,7 @@
 //! should land at the slot index the renderer expects.
 
 use bevy::math::Vec3;
-use jackdaw_geometry::editmesh::{EditMesh, ops::edge_bevel::edge_bevel};
+use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::edge_bevel::edge_bevel};
 use jackdaw_jsn::Brush;
 
 #[test]
@@ -20,12 +20,12 @@ fn beveled_cube_topology_chamfer_ring_is_a_parallelogram() {
     // this fails the bug is in the flatten step; if it passes the topology
     // pipeline is clean and any visual distortion lives in rendering.
     let brush = Brush::cuboid(2.0, 2.0, 2.0);
-    let mut bmesh = EditMesh::lift_from_topology(&brush.topology);
-    let edge = bmesh.edges.keys().next().expect("cube has edges");
+    let mut mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let edge = mesh.edges.keys().next().expect("cube has edges");
     let width = 0.3_f32;
-    let _result = edge_bevel(&mut bmesh, &[edge], width).expect("bevel");
+    let _result = edge_bevel(&mut mesh, &[edge], width).expect("bevel");
 
-    let new_topology = bmesh.flatten_to_topology();
+    let new_topology = mesh.flatten_to_topology();
     // Cube has 6 faces; bevel adds one chamfer face.
     assert_eq!(
         new_topology.polygons.len(),
@@ -89,10 +89,10 @@ fn beveling_every_cube_edge_produces_consistent_post_flatten_chamfer() {
     // consistent.
     for edge_idx in 0..12 {
         let brush = Brush::cuboid(2.0, 2.0, 2.0);
-        let mut bmesh = EditMesh::lift_from_topology(&brush.topology);
-        let edge = bmesh.edges.keys().nth(edge_idx).expect("cube has 12 edges");
-        let _ = edge_bevel(&mut bmesh, &[edge], 0.25).expect("bevel");
-        let topology = bmesh.flatten_to_topology();
+        let mut mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+        let edge = mesh.edges.keys().nth(edge_idx).expect("cube has 12 edges");
+        let _ = edge_bevel(&mut mesh, &[edge], 0.25).expect("bevel");
+        let topology = mesh.flatten_to_topology();
         assert_eq!(
             topology.polygons.len(),
             7,
@@ -132,10 +132,10 @@ fn jsn_runtime_mesh_rebuild_uses_topology_for_chamfer() {
     // the rendered triangles cover the same parallelogram the topology
     // describes.
     let brush_seed = Brush::cuboid(2.0, 2.0, 2.0);
-    let mut bmesh = EditMesh::lift_from_topology(&brush_seed.topology);
-    let edge = bmesh.edges.keys().next().expect("cube has edges");
-    let _result = edge_bevel(&mut bmesh, &[edge], 0.3).expect("bevel");
-    let new_topology = bmesh.flatten_to_topology();
+    let mut mesh = HalfedgeMesh::lift_from_topology(&brush_seed.topology);
+    let edge = mesh.edges.keys().next().expect("cube has edges");
+    let _result = edge_bevel(&mut mesh, &[edge], 0.3).expect("bevel");
+    let new_topology = mesh.flatten_to_topology();
 
     // Build a fully-populated post-bevel Brush.
     let mut brush = Brush {
@@ -185,7 +185,7 @@ fn jsn_runtime_mesh_rebuild_uses_topology_for_chamfer() {
 #[test]
 fn beveled_cube_plane_intersection_recovers_chamfer_ring() {
     // The runtime mesh-rebuild in jackdaw_jsn falls back to
-    // `compute_brush_geometry_from_planes` when there is no `BrushEditMesh`
+    // `compute_brush_geometry_from_planes` when there is no `BrushHalfedge`
     // available (legacy brushes, runtime preview path, etc). For a beveled
     // cube the chamfer is still a convex brush, so plane intersection should
     // in principle recover a 4-vertex ring identical to the topology ring.
@@ -200,14 +200,14 @@ fn beveled_cube_plane_intersection_recovers_chamfer_ring() {
     use jackdaw_geometry::compute_brush_geometry_from_planes;
 
     let brush = Brush::cuboid(2.0, 2.0, 2.0);
-    let mut bmesh = EditMesh::lift_from_topology(&brush.topology);
-    let edge = bmesh.edges.keys().next().expect("cube has edges");
-    let _result = edge_bevel(&mut bmesh, &[edge], 0.3).expect("bevel");
+    let mut mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let edge = mesh.edges.keys().next().expect("cube has edges");
+    let _result = edge_bevel(&mut mesh, &[edge], 0.3).expect("bevel");
 
-    // Mirror the modal commit: flatten EditMesh into a fresh Brush and
+    // Mirror the modal commit: flatten HalfedgeMesh into a fresh Brush and
     // re-derive `brush.faces[i].plane` from the topology Newell normal /
     // first-loop-vert distance, exactly like `apply_live_bevel` does.
-    let new_topology = bmesh.flatten_to_topology();
+    let new_topology = mesh.flatten_to_topology();
     let mut new_brush = Brush {
         faces: vec![Default::default(); new_topology.polygons.len()],
         topology: new_topology.clone(),

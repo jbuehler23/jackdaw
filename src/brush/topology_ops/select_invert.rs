@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode};
 
 /// Flip the current selection: select everything that wasn't selected, deselect
 /// everything that was. Operates per the current edit mode (Vertex / Edge /
@@ -20,36 +20,36 @@ pub(crate) fn brush_select_invert(
     _: In<OperatorParameters>,
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
-    bmesh_q: Query<&BrushEditMesh>,
+    halfedge_q: Query<&BrushHalfedge>,
 ) -> OperatorResult {
     let Some(brush_entity) = selection.entity else {
         return OperatorResult::Cancelled;
     };
-    let Ok(bmesh_component) = bmesh_q.get(brush_entity) else {
+    let Ok(halfedge) = halfedge_q.get(brush_entity) else {
         return OperatorResult::Cancelled;
     };
 
     match *edit_mode {
         EditMode::BrushEdit(BrushEditMode::Vertex) => {
-            let total = bmesh_component.vert_keys.len();
+            let total = halfedge.vert_keys.len();
             let current: std::collections::HashSet<usize> =
                 selection.vertices.iter().copied().collect();
             selection.vertices = (0..total).filter(|i| !current.contains(i)).collect();
             OperatorResult::Finished
         }
         EditMode::BrushEdit(BrushEditMode::Edge) => {
-            // Build the canonical-pair representation for ALL EditMesh edges, then invert.
+            // Build the canonical-pair representation for ALL HalfedgeMesh edges, then invert.
             let mut all_edges: Vec<(usize, usize)> =
-                Vec::with_capacity(bmesh_component.mesh.edges.len());
+                Vec::with_capacity(halfedge.mesh.edges.len());
             // Build VertKey -> idx lookup.
             let mut key_to_idx: std::collections::HashMap<
-                jackdaw_geometry::editmesh::VertKey,
+                jackdaw_geometry::halfedge::VertKey,
                 usize,
-            > = std::collections::HashMap::with_capacity(bmesh_component.vert_keys.len());
-            for (i, &k) in bmesh_component.vert_keys.iter().enumerate() {
+            > = std::collections::HashMap::with_capacity(halfedge.vert_keys.len());
+            for (i, &k) in halfedge.vert_keys.iter().enumerate() {
                 key_to_idx.insert(k, i);
             }
-            for (_, edge) in bmesh_component.mesh.edges.iter() {
+            for (_, edge) in halfedge.mesh.edges.iter() {
                 let Some(&a) = key_to_idx.get(&edge.v[0]) else {
                     continue;
                 };
@@ -68,7 +68,7 @@ pub(crate) fn brush_select_invert(
             OperatorResult::Finished
         }
         EditMode::BrushEdit(BrushEditMode::Face) => {
-            let total = bmesh_component.face_keys.len();
+            let total = halfedge.face_keys.len();
             let current: std::collections::HashSet<usize> =
                 selection.faces.iter().copied().collect();
             selection.faces = (0..total).filter(|i| !current.contains(i)).collect();

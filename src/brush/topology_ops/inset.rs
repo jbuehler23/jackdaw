@@ -11,11 +11,11 @@ use bevy::window::PrimaryWindow;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
-use jackdaw_geometry::editmesh::ops::inset_face::inset_face;
-use jackdaw_geometry::editmesh::{EditMesh, FaceKey};
+use jackdaw_geometry::halfedge::ops::inset_face::inset_face;
+use jackdaw_geometry::halfedge::{HalfedgeMesh, FaceKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -30,7 +30,7 @@ const INSET_SENSITIVITY: f32 = 0.01;
 pub struct InsetModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// EditMesh FaceKeys of the faces being inset. Resolved against
+    /// HalfedgeMesh FaceKeys of the faces being inset. Resolved against
     /// `start_editmesh`; we re-resolve them from `start_editmesh` each frame
     /// because the live mesh is reset to the snapshot before running the op.
     pub face_keys: Vec<FaceKey>,
@@ -45,7 +45,7 @@ pub struct InsetModalState {
     /// Current inset amount in world-space units.
     pub current_amount: f32,
     pub start_brush: Option<Brush>,
-    pub start_editmesh: Option<EditMesh>,
+    pub start_editmesh: Option<HalfedgeMesh>,
     /// Maximum valid inset amount: minimum vertex-to-centroid distance across
     /// all selected faces, with a small safety factor so the inner ring stays
     /// non-degenerate at the cap.
@@ -57,7 +57,7 @@ pub struct InsetModalState {
 /// along the inward direction toward the centroid, so the closest vertex
 /// collapses to the centroid at `amount = min_vertex_to_centroid`. Beyond that
 /// the inner ring inverts.
-fn compute_face_max_inset(mesh: &EditMesh, face_key: FaceKey) -> f32 {
+fn compute_face_max_inset(mesh: &HalfedgeMesh, face_key: FaceKey) -> f32 {
     let face = &mesh.faces[face_key];
     let n = face.loop_count as usize;
 
@@ -118,7 +118,7 @@ pub(crate) fn brush_inset(
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<InsetModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -151,14 +151,14 @@ pub(crate) fn brush_inset(
         let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
             return OperatorResult::Cancelled;
         };
-        let Ok(bmesh_component) = bmesh_q.get(brush_entity) else {
+        let Ok(halfedge) = halfedge_q.get(brush_entity) else {
             return OperatorResult::Cancelled;
         };
 
         // Collect FaceKeys for every selected face index.
         let mut face_keys: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());
         for &face_idx in &selection.faces {
-            if let Some(&fk) = bmesh_component.face_keys.get(face_idx) {
+            if let Some(&fk) = halfedge.face_keys.get(face_idx) {
                 face_keys.push(fk);
             }
         }
@@ -166,7 +166,7 @@ pub(crate) fn brush_inset(
             return OperatorResult::Cancelled;
         }
 
-        let mesh_snapshot = bmesh_component.mesh.clone();
+        let mesh_snapshot = halfedge.mesh.clone();
 
         // Compute geometric max inset: the minimum vertex-to-centroid distance
         // across selected faces, with a tiny safety margin so the inner ring
@@ -202,7 +202,7 @@ pub(crate) fn brush_inset(
     if escape || rmb {
         // Live brush has been mutated each frame, so restore from the snapshot
         // before clearing modal state.
-        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
         *modal_state = InsetModalState::default();
         return OperatorResult::Cancelled;
     }
@@ -231,7 +231,7 @@ pub(crate) fn brush_inset(
     // regular brush mesh pipeline picking up `Changed<Brush>`. The returned
     // indices identify the post-flatten inner-face slots so the commit path
     // can chain selection without recomputing them.
-    let inner_face_indices = apply_live_inset(&mut modal_state, &mut brushes, &mut bmesh_q);
+    let inner_face_indices = apply_live_inset(&mut modal_state, &mut brushes, &mut halfedge_q);
 
     // Commit on LMB.
     if mouse.just_pressed(MouseButton::Left) {
@@ -248,7 +248,7 @@ pub(crate) fn brush_inset(
         // The live brush should already be back to the snapshot in this case
         // (apply_live_inset resets to the snapshot when amount is sub-threshold).
         if modal_state.current_amount < 1e-5 {
-            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
             *modal_state = InsetModalState::default();
             return OperatorResult::Cancelled;
         }
@@ -293,17 +293,17 @@ pub(crate) fn brush_inset(
 fn cancel_inset(
     mut modal_state: ResMut<InsetModalState>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
 ) {
-    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
     *modal_state = InsetModalState::default();
 }
 
-/// Reset the live brush + EditMesh to the snapshot captured at modal start.
+/// Reset the live brush + HalfedgeMesh to the snapshot captured at modal start.
 fn restore_brush_from_snapshot(
     modal_state: &InsetModalState,
     brushes: &mut Query<&mut Brush>,
-    bmesh_q: &mut Query<&mut BrushEditMesh>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
 ) {
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
@@ -315,32 +315,32 @@ fn restore_brush_from_snapshot(
         return;
     };
     *brush = start_brush.clone();
-    if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-            vec![Default::default(); bmesh.faces.len()];
-        for (k, f) in bmesh.faces.iter() {
+    if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
+        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = mesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
+            vec![Default::default(); mesh.faces.len()];
+        for (k, f) in mesh.faces.iter() {
             let slot = f.material_idx as usize;
             if slot < face_keys.len() {
                 face_keys[slot] = k;
             }
         }
-        bmesh_component.mesh = bmesh;
-        bmesh_component.vert_keys = vert_keys;
-        bmesh_component.face_keys = face_keys;
+        halfedge.mesh = mesh;
+        halfedge.vert_keys = vert_keys;
+        halfedge.face_keys = face_keys;
     }
 }
 
 /// Re-run `inset_face` against the snapshot at the current amount and write
-/// the resulting topology back into the live `Brush` + `BrushEditMesh`. Returns
+/// the resulting topology back into the live `Brush` + `BrushHalfedge`. Returns
 /// the post-flatten face indices of the new inner-ring faces (one per
 /// successful inset), in the same order as `modal_state.face_keys`. The commit
 /// path uses these for chained selection.
 fn apply_live_inset(
     modal_state: &mut InsetModalState,
     brushes: &mut Query<&mut Brush>,
-    bmesh_q: &mut Query<&mut BrushEditMesh>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
 ) -> Vec<usize> {
     let Some(brush_entity) = modal_state.brush_entity else {
         return Vec::new();
@@ -351,7 +351,7 @@ fn apply_live_inset(
     let Some(ref start_brush) = modal_state.start_brush else {
         return Vec::new();
     };
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return Vec::new();
     };
 
@@ -361,24 +361,24 @@ fn apply_live_inset(
             return Vec::new();
         };
         *brush = start_brush.clone();
-        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-            vec![Default::default(); bmesh.faces.len()];
-        for (k, f) in bmesh.faces.iter() {
+        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = mesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
+            vec![Default::default(); mesh.faces.len()];
+        for (k, f) in mesh.faces.iter() {
             let slot = f.material_idx as usize;
             if slot < face_keys.len() {
                 face_keys[slot] = k;
             }
         }
-        bmesh_component.mesh = bmesh;
-        bmesh_component.vert_keys = vert_keys;
-        bmesh_component.face_keys = face_keys;
+        halfedge.mesh = mesh;
+        halfedge.vert_keys = vert_keys;
+        halfedge.face_keys = face_keys;
         return Vec::new();
     }
 
     // Always start the per-frame op from the clean snapshot.
-    bmesh_component.mesh = start_mesh.clone();
+    halfedge.mesh = start_mesh.clone();
 
     // Run inset on each selected face; skip degenerate faces silently.
     // `inset_face` rewrites the input face's ring as the inner ring (i.e.
@@ -391,18 +391,18 @@ fn apply_live_inset(
     // topology index equal to `count(faces with material_idx < M)`.
     let mut inner_material_idxs: Vec<u32> = Vec::with_capacity(modal_state.face_keys.len());
     for &fk in &modal_state.face_keys {
-        if let Ok(result) = inset_face(&mut bmesh_component.mesh, fk, modal_state.current_amount) {
-            let mtx = bmesh_component.mesh.faces[result.inner_face].material_idx;
+        if let Ok(result) = inset_face(&mut halfedge.mesh, fk, modal_state.current_amount) {
+            let mtx = halfedge.mesh.faces[result.inner_face].material_idx;
             inner_material_idxs.push(mtx);
         }
     }
 
     // Resolve post-flatten inner-face indices BEFORE flatten/re-lift, while
-    // the bmesh still holds the original material_idx values.
+    // the mesh still holds the original material_idx values.
     let inner_face_indices: Vec<usize> = inner_material_idxs
         .iter()
         .map(|&mtx| {
-            bmesh_component
+            halfedge
                 .mesh
                 .faces
                 .values()
@@ -412,22 +412,22 @@ fn apply_live_inset(
         .collect();
 
     // Re-cache all face normals; inset reshapes the rebuilt inner + side faces.
-    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
     for fk in face_keys_all {
-        let face = &bmesh_component.mesh.faces[fk];
+        let face = &halfedge.mesh.faces[fk];
         let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
         let mut cur = face.loop_first;
         for _ in 0..face.loop_count {
-            let lp = &bmesh_component.mesh.loops[cur];
-            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            let lp = &halfedge.mesh.loops[cur];
+            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
             cur = lp.next;
         }
         let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+        halfedge.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten EditMesh -> topology, sync Brush.
-    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    // Flatten HalfedgeMesh -> topology, sync Brush.
+    let new_topology = halfedge.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return inner_face_indices;
     };
@@ -472,10 +472,10 @@ fn apply_live_inset(
     }
     brush.topology = new_topology;
 
-    // Re-lift EditMesh from the new topology so vert_keys / face_keys are
-    // consistent with the brush. Next frame we reset bmesh_component.mesh
+    // Re-lift HalfedgeMesh from the new topology so vert_keys / face_keys are
+    // consistent with the brush. Next frame we reset halfedge.mesh
     // back to the snapshot before running the op again.
-    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -484,9 +484,9 @@ fn apply_live_inset(
             new_face_keys[slot] = k;
         }
     }
-    bmesh_component.mesh = new_bmesh;
-    bmesh_component.vert_keys = new_vert_keys;
-    bmesh_component.face_keys = new_face_keys;
+    halfedge.mesh = new_bmesh;
+    halfedge.vert_keys = new_vert_keys;
+    halfedge.face_keys = new_face_keys;
 
     inner_face_indices
 }

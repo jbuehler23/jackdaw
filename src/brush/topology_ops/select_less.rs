@@ -5,10 +5,10 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::VertKey;
-use jackdaw_geometry::editmesh::cycles::{disk_walk, radial_walk};
+use jackdaw_geometry::halfedge::VertKey;
+use jackdaw_geometry::halfedge::cycles::{disk_walk, radial_walk};
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode};
 
 /// Shrink the selection by removing elements on its boundary (those with at
 /// least one neighbor not in the selection).
@@ -22,15 +22,15 @@ pub(crate) fn brush_select_less(
     _: In<OperatorParameters>,
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
-    bmesh_q: Query<&BrushEditMesh>,
+    halfedge_q: Query<&BrushHalfedge>,
 ) -> OperatorResult {
     let Some(brush_entity) = selection.entity else {
         return OperatorResult::Cancelled;
     };
-    let Ok(bmesh_component) = bmesh_q.get(brush_entity) else {
+    let Ok(halfedge) = halfedge_q.get(brush_entity) else {
         return OperatorResult::Cancelled;
     };
-    let mesh = &bmesh_component.mesh;
+    let mesh = &halfedge.mesh;
 
     match *edit_mode {
         EditMode::BrushEdit(BrushEditMode::Vertex) => {
@@ -40,7 +40,7 @@ pub(crate) fn brush_select_less(
                 .iter()
                 .copied()
                 .filter(|&vi| {
-                    let Some(&vk) = bmesh_component.vert_keys.get(vi) else {
+                    let Some(&vk) = halfedge.vert_keys.get(vi) else {
                         return false;
                     };
                     let mut all_inside = true;
@@ -52,7 +52,7 @@ pub(crate) fn brush_select_less(
                             edge.v[0]
                         };
                         if let Some(other_idx) =
-                            bmesh_component.vert_keys.iter().position(|&k| k == other)
+                            halfedge.vert_keys.iter().position(|&k| k == other)
                         {
                             if !current.contains(&other_idx) {
                                 all_inside = false;
@@ -72,7 +72,7 @@ pub(crate) fn brush_select_less(
             let current: HashSet<(usize, usize)> = selection.edges.iter().copied().collect();
             let mut key_to_idx: std::collections::HashMap<VertKey, usize> =
                 std::collections::HashMap::new();
-            for (i, &k) in bmesh_component.vert_keys.iter().enumerate() {
+            for (i, &k) in halfedge.vert_keys.iter().enumerate() {
                 key_to_idx.insert(k, i);
             }
             // An edge is "interior" if all edges sharing a vert with it are also selected.
@@ -80,10 +80,10 @@ pub(crate) fn brush_select_less(
                 .iter()
                 .copied()
                 .filter(|&(a, b)| {
-                    let Some(&va) = bmesh_component.vert_keys.get(a) else {
+                    let Some(&va) = halfedge.vert_keys.get(a) else {
                         return false;
                     };
-                    let Some(&vb) = bmesh_component.vert_keys.get(b) else {
+                    let Some(&vb) = halfedge.vert_keys.get(b) else {
                         return false;
                     };
                     for vk in [va, vb] {
@@ -113,7 +113,7 @@ pub(crate) fn brush_select_less(
                 .iter()
                 .copied()
                 .filter(|&fi| {
-                    let Some(&fk) = bmesh_component.face_keys.get(fi) else {
+                    let Some(&fk) = halfedge.face_keys.get(fi) else {
                         return false;
                     };
                     let face_data = &mesh.faces[fk];
@@ -123,7 +123,7 @@ pub(crate) fn brush_select_less(
                         let edge = mesh.loops[cur].edge;
                         for radial_lp in radial_walk(mesh, edge).collect::<Vec<_>>() {
                             let neighbor = mesh.loops[radial_lp].face;
-                            if let Some(neighbor_idx) = bmesh_component
+                            if let Some(neighbor_idx) = halfedge
                                 .face_keys
                                 .iter()
                                 .position(|&k| k == neighbor)

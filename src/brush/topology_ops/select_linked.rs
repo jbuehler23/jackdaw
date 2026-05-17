@@ -6,10 +6,10 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::FaceKey;
-use jackdaw_geometry::editmesh::select::linked_walk::linked_walk;
+use jackdaw_geometry::halfedge::FaceKey;
+use jackdaw_geometry::halfedge::select::linked_walk::linked_walk;
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode};
 
 /// Expand the face selection to all faces reachable via shared edges from
 /// each selected face. Edges flagged SHARP or SEAM act as walk blockers
@@ -25,7 +25,7 @@ pub(crate) fn brush_select_linked(
     _: In<OperatorParameters>,
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
-    bmesh_q: Query<&BrushEditMesh>,
+    halfedge_q: Query<&BrushHalfedge>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return OperatorResult::Cancelled;
@@ -36,25 +36,25 @@ pub(crate) fn brush_select_linked(
     if selection.faces.is_empty() {
         return OperatorResult::Cancelled;
     }
-    let Ok(bmesh_component) = bmesh_q.get(brush_entity) else {
+    let Ok(halfedge) = halfedge_q.get(brush_entity) else {
         return OperatorResult::Cancelled;
     };
 
-    // Map each selected cache face index to its EditMesh FaceKey.
-    let mut bmesh_faces: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());
+    // Map each selected cache face index to its HalfedgeMesh FaceKey.
+    let mut mesh_faces: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());
     for &face_idx in &selection.faces {
-        if let Some(&fk) = bmesh_component.face_keys.get(face_idx) {
-            bmesh_faces.push(fk);
+        if let Some(&fk) = halfedge.face_keys.get(face_idx) {
+            mesh_faces.push(fk);
         }
     }
-    if bmesh_faces.is_empty() {
+    if mesh_faces.is_empty() {
         return OperatorResult::Cancelled;
     }
 
     // For each starting face, walk linked components. Union all.
     let mut walked: HashSet<FaceKey> = HashSet::new();
-    for fk in bmesh_faces {
-        for k in linked_walk(&bmesh_component.mesh, fk, true) {
+    for fk in mesh_faces {
+        for k in linked_walk(&halfedge.mesh, fk, true) {
             walked.insert(k);
         }
     }
@@ -64,7 +64,7 @@ pub(crate) fn brush_select_linked(
 
     // Convert FaceKeys back to cache face indices via face_keys.
     let mut new_faces: Vec<usize> = Vec::with_capacity(walked.len());
-    for (i, &k) in bmesh_component.face_keys.iter().enumerate() {
+    for (i, &k) in halfedge.face_keys.iter().enumerate() {
         if walked.contains(&k) {
             new_faces.push(i);
         }

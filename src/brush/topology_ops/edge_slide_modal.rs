@@ -16,12 +16,12 @@ use bevy::window::PrimaryWindow;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
-use jackdaw_geometry::editmesh::cycles::radial_walk;
-use jackdaw_geometry::editmesh::ops::edge_slide::edge_slide;
-use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, VertKey};
+use jackdaw_geometry::halfedge::cycles::radial_walk;
+use jackdaw_geometry::halfedge::ops::edge_slide::edge_slide;
+use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -49,7 +49,7 @@ pub struct SlideSideInfo {
 pub struct EdgeSlideModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// EditMesh EdgeKeys of the edges being slid. Resolved against
+    /// HalfedgeMesh EdgeKeys of the edges being slid. Resolved against
     /// `start_editmesh`; we re-resolve them from `start_editmesh` each frame
     /// because the live mesh is reset to the snapshot before running the op.
     pub edge_keys: Vec<EdgeKey>,
@@ -63,7 +63,7 @@ pub struct EdgeSlideModalState {
     /// Current factor in `[-1, +1]`. Sign flips slide side; 0 is no slide.
     pub current_factor: f32,
     pub start_brush: Option<Brush>,
-    pub start_editmesh: Option<EditMesh>,
+    pub start_editmesh: Option<HalfedgeMesh>,
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -102,7 +102,7 @@ pub(crate) fn brush_edge_slide_modal(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     brush_transforms: Query<&GlobalTransform>,
     mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<EdgeSlideModalState>,
@@ -138,20 +138,20 @@ pub(crate) fn brush_edge_slide_modal(
         let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
             return OperatorResult::Cancelled;
         };
-        let Ok(bmesh_component) = bmesh_q.get(brush_entity) else {
+        let Ok(halfedge) = halfedge_q.get(brush_entity) else {
             return OperatorResult::Cancelled;
         };
 
-        // Map cache edge pairs to EditMesh EdgeKeys via vert_keys.
+        // Map cache edge pairs to HalfedgeMesh EdgeKeys via vert_keys.
         let mut edge_keys: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
         for &(a, b) in &selection.edges {
-            let Some(&va) = bmesh_component.vert_keys.get(a) else {
+            let Some(&va) = halfedge.vert_keys.get(a) else {
                 continue;
             };
-            let Some(&vb) = bmesh_component.vert_keys.get(b) else {
+            let Some(&vb) = halfedge.vert_keys.get(b) else {
                 continue;
             };
-            if let Some(ek) = find_edge_between(&bmesh_component.mesh, va, vb) {
+            if let Some(ek) = find_edge_between(&halfedge.mesh, va, vb) {
                 edge_keys.push(ek);
             }
         }
@@ -159,7 +159,7 @@ pub(crate) fn brush_edge_slide_modal(
             return OperatorResult::Cancelled;
         }
 
-        let mesh_snapshot = bmesh_component.mesh.clone();
+        let mesh_snapshot = halfedge.mesh.clone();
         let brush_xform = brush_transforms.get(brush_entity).ok();
 
         // Compute cursor-tracks-edge projection info for both adjacent faces of
@@ -194,7 +194,7 @@ pub(crate) fn brush_edge_slide_modal(
     if escape || rmb {
         // Live brush has been mutated each frame, so restore from the snapshot
         // before clearing modal state.
-        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
         *modal_state = EdgeSlideModalState::default();
         return OperatorResult::Cancelled;
     }
@@ -258,7 +258,7 @@ pub(crate) fn brush_edge_slide_modal(
     // Apply the slide to the live brush mesh so the user sees it as a real
     // mesh edit. The op result is discarded; the slid edges are visible
     // through the regular brush mesh pipeline picking up `Changed<Brush>`.
-    apply_live_edge_slide(&mut modal_state, &mut brushes, &mut bmesh_q);
+    apply_live_edge_slide(&mut modal_state, &mut brushes, &mut halfedge_q);
 
     // Commit on LMB.
     if mouse.just_pressed(MouseButton::Left) {
@@ -275,7 +275,7 @@ pub(crate) fn brush_edge_slide_modal(
         // record a useless undo entry. The live brush should already be back
         // to the snapshot (apply_live_edge_slide resets when factor is sub-threshold).
         if modal_state.current_factor.abs() < 1e-4 {
-            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
             *modal_state = EdgeSlideModalState::default();
             return OperatorResult::Cancelled;
         }
@@ -309,17 +309,17 @@ pub(crate) fn brush_edge_slide_modal(
 fn cancel_edge_slide(
     mut modal_state: ResMut<EdgeSlideModalState>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
 ) {
-    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
     *modal_state = EdgeSlideModalState::default();
 }
 
-/// Reset the live brush + EditMesh to the snapshot captured at modal start.
+/// Reset the live brush + HalfedgeMesh to the snapshot captured at modal start.
 fn restore_brush_from_snapshot(
     modal_state: &EdgeSlideModalState,
     brushes: &mut Query<&mut Brush>,
-    bmesh_q: &mut Query<&mut BrushEditMesh>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
 ) {
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
@@ -331,31 +331,31 @@ fn restore_brush_from_snapshot(
         return;
     };
     *brush = start_brush.clone();
-    if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-            vec![Default::default(); bmesh.faces.len()];
-        for (k, f) in bmesh.faces.iter() {
+    if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
+        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = mesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
+            vec![Default::default(); mesh.faces.len()];
+        for (k, f) in mesh.faces.iter() {
             let slot = f.material_idx as usize;
             if slot < face_keys.len() {
                 face_keys[slot] = k;
             }
         }
-        bmesh_component.mesh = bmesh;
-        bmesh_component.vert_keys = vert_keys;
-        bmesh_component.face_keys = face_keys;
+        halfedge.mesh = mesh;
+        halfedge.vert_keys = vert_keys;
+        halfedge.face_keys = face_keys;
     }
 }
 
 /// Re-run `edge_slide` against the snapshot at the current factor and write
-/// the resulting topology back into the live `Brush` + `BrushEditMesh`. Slide
+/// the resulting topology back into the live `Brush` + `BrushHalfedge`. Slide
 /// is a pure vertex transform: it never adds or removes faces, so no face
 /// growth or chained selection bookkeeping is needed.
 fn apply_live_edge_slide(
     modal_state: &mut EdgeSlideModalState,
     brushes: &mut Query<&mut Brush>,
-    bmesh_q: &mut Query<&mut BrushEditMesh>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
 ) {
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
@@ -366,7 +366,7 @@ fn apply_live_edge_slide(
     let Some(ref start_brush) = modal_state.start_brush else {
         return;
     };
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return;
     };
 
@@ -376,27 +376,27 @@ fn apply_live_edge_slide(
             return;
         };
         *brush = start_brush.clone();
-        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-            vec![Default::default(); bmesh.faces.len()];
-        for (k, f) in bmesh.faces.iter() {
+        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = mesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
+            vec![Default::default(); mesh.faces.len()];
+        for (k, f) in mesh.faces.iter() {
             let slot = f.material_idx as usize;
             if slot < face_keys.len() {
                 face_keys[slot] = k;
             }
         }
-        bmesh_component.mesh = bmesh;
-        bmesh_component.vert_keys = vert_keys;
-        bmesh_component.face_keys = face_keys;
+        halfedge.mesh = mesh;
+        halfedge.vert_keys = vert_keys;
+        halfedge.face_keys = face_keys;
         return;
     }
 
     // Always start the per-frame op from the clean snapshot.
-    bmesh_component.mesh = start_mesh.clone();
+    halfedge.mesh = start_mesh.clone();
 
     if edge_slide(
-        &mut bmesh_component.mesh,
+        &mut halfedge.mesh,
         &modal_state.edge_keys,
         modal_state.current_factor,
     )
@@ -406,22 +406,22 @@ fn apply_live_edge_slide(
     }
 
     // Re-cache all face normals (slid verts can rotate face planes).
-    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
     for fk in face_keys_all {
-        let face = &bmesh_component.mesh.faces[fk];
+        let face = &halfedge.mesh.faces[fk];
         let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
         let mut cur = face.loop_first;
         for _ in 0..face.loop_count {
-            let lp = &bmesh_component.mesh.loops[cur];
-            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            let lp = &halfedge.mesh.loops[cur];
+            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
             cur = lp.next;
         }
         let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+        halfedge.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten EditMesh -> topology, sync Brush.
-    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    // Flatten HalfedgeMesh -> topology, sync Brush.
+    let new_topology = halfedge.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return;
     };
@@ -440,8 +440,8 @@ fn apply_live_edge_slide(
     }
     brush.topology = new_topology;
 
-    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
-    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -450,9 +450,9 @@ fn apply_live_edge_slide(
             new_face_keys[slot] = k;
         }
     }
-    bmesh_component.mesh = new_bmesh;
-    bmesh_component.vert_keys = new_vert_keys;
-    bmesh_component.face_keys = new_face_keys;
+    halfedge.mesh = new_bmesh;
+    halfedge.vert_keys = new_vert_keys;
+    halfedge.face_keys = new_face_keys;
 }
 
 /// Compute cursor-tracks-edge projection info for both adjacent quad faces of
@@ -466,7 +466,7 @@ fn apply_live_edge_slide(
 /// pixel length of that segment and the world-space length of the parallel
 /// edge, is the projection info.
 fn compute_slide_sides(
-    mesh: &EditMesh,
+    mesh: &HalfedgeMesh,
     edge_key: EdgeKey,
     brush_xform: Option<&GlobalTransform>,
     camera_query: &Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
@@ -492,7 +492,7 @@ fn compute_slide_sides(
         None => rt,
     };
 
-    let compute_side = |lp_key: jackdaw_geometry::editmesh::LoopKey| -> Option<SlideSideInfo> {
+    let compute_side = |lp_key: jackdaw_geometry::halfedge::LoopKey| -> Option<SlideSideInfo> {
         let next_loop = mesh.loops[lp_key].next;
         let v_end = mesh.loops[next_loop].vert;
         let slide_edge = mesh.loops[next_loop].edge;
@@ -531,8 +531,8 @@ fn compute_slide_sides(
     (pos_side, neg_side)
 }
 
-fn find_edge_between(bmesh: &EditMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    bmesh
+fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
+    mesh
         .edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))

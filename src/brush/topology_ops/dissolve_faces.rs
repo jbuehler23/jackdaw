@@ -2,11 +2,11 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::ops::dissolve_faces::dissolve_faces;
-use jackdaw_geometry::editmesh::{EditMesh, FaceKey};
+use jackdaw_geometry::halfedge::ops::dissolve_faces::dissolve_faces;
+use jackdaw_geometry::halfedge::{HalfedgeMesh, FaceKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Remove the selected faces, leaving holes. Boundary edges become wire edges.
@@ -22,7 +22,7 @@ pub(crate) fn brush_dissolve_faces(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
@@ -40,42 +40,42 @@ pub(crate) fn brush_dissolve_faces(
         return OperatorResult::Cancelled;
     };
 
-    // Map cache face indices to EditMesh FaceKeys via face_keys parallel array.
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+    // Map cache face indices to HalfedgeMesh FaceKeys via face_keys parallel array.
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
-    let mut bmesh_faces: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());
+    let mut mesh_faces: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());
     for &face_idx in &selection.faces {
-        if let Some(&fk) = bmesh_component.face_keys.get(face_idx) {
-            bmesh_faces.push(fk);
+        if let Some(&fk) = halfedge.face_keys.get(face_idx) {
+            mesh_faces.push(fk);
         }
     }
-    if bmesh_faces.is_empty() {
+    if mesh_faces.is_empty() {
         return OperatorResult::Cancelled;
     }
 
     // Run dissolve_faces on the selected faces.
-    let Ok(_) = dissolve_faces(&mut bmesh_component.mesh, &bmesh_faces) else {
+    let Ok(_) = dissolve_faces(&mut halfedge.mesh, &mesh_faces) else {
         return OperatorResult::Cancelled;
     };
 
     // Re-cache all face normals.
-    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
     for fk in face_keys_all {
-        let face = &bmesh_component.mesh.faces[fk];
+        let face = &halfedge.mesh.faces[fk];
         let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
         let mut cur = face.loop_first;
         for _ in 0..face.loop_count {
-            let lp = &bmesh_component.mesh.loops[cur];
-            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            let lp = &halfedge.mesh.loops[cur];
+            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
             cur = lp.next;
         }
         let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+        halfedge.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten EditMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
-    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
+    let new_topology = halfedge.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
@@ -107,8 +107,8 @@ pub(crate) fn brush_dissolve_faces(
     }
     brush.topology = new_topology;
 
-    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
-    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -117,9 +117,9 @@ pub(crate) fn brush_dissolve_faces(
             new_face_keys[slot] = k;
         }
     }
-    bmesh_component.mesh = new_bmesh;
-    bmesh_component.vert_keys = new_vert_keys;
-    bmesh_component.face_keys = new_face_keys;
+    halfedge.mesh = new_bmesh;
+    halfedge.vert_keys = new_vert_keys;
+    halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
     history.push_executed(Box::new(SetBrush {

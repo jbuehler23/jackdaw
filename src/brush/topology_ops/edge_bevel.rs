@@ -11,11 +11,11 @@ use bevy::window::PrimaryWindow;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
-use jackdaw_geometry::editmesh::ops::edge_bevel::edge_bevel;
-use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, VertKey};
+use jackdaw_geometry::halfedge::ops::edge_bevel::edge_bevel;
+use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -29,7 +29,7 @@ const BEVEL_SENSITIVITY: f32 = 0.01;
 pub struct EdgeBevelModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// EditMesh EdgeKeys of the edges being beveled. These are resolved
+    /// HalfedgeMesh EdgeKeys of the edges being beveled. These are resolved
     /// against `start_editmesh`; we re-resolve them from `start_editmesh`
     /// each frame because the live mesh is reset to the snapshot before
     /// running the op.
@@ -39,7 +39,7 @@ pub struct EdgeBevelModalState {
     /// Current bevel width in world-space units.
     pub current_width: f32,
     pub start_brush: Option<Brush>,
-    pub start_editmesh: Option<EditMesh>,
+    pub start_editmesh: Option<HalfedgeMesh>,
     /// Maximum valid bevel width: minimum over each input edge of half the
     /// length of every parallel edge at its endpoints, with a small safety
     /// factor. Past this point an offset overshoots its parallel edge and
@@ -82,7 +82,7 @@ pub(crate) fn brush_edge_bevel(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<EdgeBevelModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -113,20 +113,20 @@ pub(crate) fn brush_edge_bevel(
         let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
             return OperatorResult::Cancelled;
         };
-        let Ok(bmesh_component) = bmesh_q.get(brush_entity) else {
+        let Ok(halfedge) = halfedge_q.get(brush_entity) else {
             return OperatorResult::Cancelled;
         };
 
-        // Resolve EditMesh EdgeKeys for every selected cache edge pair.
+        // Resolve HalfedgeMesh EdgeKeys for every selected cache edge pair.
         let mut edge_keys: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
         for &(a, b) in &selection.edges {
-            let Some(&va) = bmesh_component.vert_keys.get(a) else {
+            let Some(&va) = halfedge.vert_keys.get(a) else {
                 continue;
             };
-            let Some(&vb) = bmesh_component.vert_keys.get(b) else {
+            let Some(&vb) = halfedge.vert_keys.get(b) else {
                 continue;
             };
-            if let Some(ek) = find_edge_between(&bmesh_component.mesh, va, vb) {
+            if let Some(ek) = find_edge_between(&halfedge.mesh, va, vb) {
                 edge_keys.push(ek);
             }
         }
@@ -134,7 +134,7 @@ pub(crate) fn brush_edge_bevel(
             return OperatorResult::Cancelled;
         }
 
-        let mesh_snapshot = bmesh_component.mesh.clone();
+        let mesh_snapshot = halfedge.mesh.clone();
         let max_width = compute_max_bevel_width(&mesh_snapshot, &edge_keys);
 
         modal_state.active = true;
@@ -156,7 +156,7 @@ pub(crate) fn brush_edge_bevel(
     if escape || rmb {
         // Live brush has been mutated each frame, so restore from the snapshot
         // before clearing modal state.
-        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
         *modal_state = EdgeBevelModalState::default();
         return OperatorResult::Cancelled;
     }
@@ -182,7 +182,7 @@ pub(crate) fn brush_edge_bevel(
     // Apply the bevel to the live brush mesh so the user sees it as a real
     // mesh edit. The op result is discarded; the chamfer is visible through
     // the regular brush mesh pipeline picking up `Changed<Brush>`.
-    apply_live_bevel(&mut modal_state, &mut brushes, &mut bmesh_q);
+    apply_live_bevel(&mut modal_state, &mut brushes, &mut halfedge_q);
 
     // Commit on LMB.
     if mouse.just_pressed(MouseButton::Left) {
@@ -199,7 +199,7 @@ pub(crate) fn brush_edge_bevel(
         // The live brush should already be back to the snapshot in this case
         // (apply_live_bevel resets to the snapshot when width is sub-threshold).
         if modal_state.current_width < 1e-5 {
-            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
             *modal_state = EdgeBevelModalState::default();
             return OperatorResult::Cancelled;
         }
@@ -229,17 +229,17 @@ pub(crate) fn brush_edge_bevel(
 fn cancel_edge_bevel(
     mut modal_state: ResMut<EdgeBevelModalState>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
 ) {
-    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
     *modal_state = EdgeBevelModalState::default();
 }
 
-/// Reset the live brush + EditMesh to the snapshot captured at modal start.
+/// Reset the live brush + HalfedgeMesh to the snapshot captured at modal start.
 fn restore_brush_from_snapshot(
     modal_state: &EdgeBevelModalState,
     brushes: &mut Query<&mut Brush>,
-    bmesh_q: &mut Query<&mut BrushEditMesh>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
 ) {
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
@@ -251,31 +251,31 @@ fn restore_brush_from_snapshot(
         return;
     };
     *brush = start_brush.clone();
-    if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-            vec![Default::default(); bmesh.faces.len()];
-        for (k, f) in bmesh.faces.iter() {
+    if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
+        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = mesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
+            vec![Default::default(); mesh.faces.len()];
+        for (k, f) in mesh.faces.iter() {
             let slot = f.material_idx as usize;
             if slot < face_keys.len() {
                 face_keys[slot] = k;
             }
         }
-        bmesh_component.mesh = bmesh;
-        bmesh_component.vert_keys = vert_keys;
-        bmesh_component.face_keys = face_keys;
+        halfedge.mesh = mesh;
+        halfedge.vert_keys = vert_keys;
+        halfedge.face_keys = face_keys;
     }
 }
 
 /// Re-run `edge_bevel` against the snapshot at the current width and write
-/// the resulting topology back into the live `Brush` + `BrushEditMesh`. The
+/// the resulting topology back into the live `Brush` + `BrushHalfedge`. The
 /// brush mesh pipeline picks up `Changed<Brush>` and regenerates the GPU
 /// mesh on the next frame.
 fn apply_live_bevel(
     modal_state: &mut EdgeBevelModalState,
     brushes: &mut Query<&mut Brush>,
-    bmesh_q: &mut Query<&mut BrushEditMesh>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
 ) {
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
@@ -286,7 +286,7 @@ fn apply_live_bevel(
     let Some(ref start_brush) = modal_state.start_brush else {
         return;
     };
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return;
     };
 
@@ -296,27 +296,27 @@ fn apply_live_bevel(
             return;
         };
         *brush = start_brush.clone();
-        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-            vec![Default::default(); bmesh.faces.len()];
-        for (k, f) in bmesh.faces.iter() {
+        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = mesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
+            vec![Default::default(); mesh.faces.len()];
+        for (k, f) in mesh.faces.iter() {
             let slot = f.material_idx as usize;
             if slot < face_keys.len() {
                 face_keys[slot] = k;
             }
         }
-        bmesh_component.mesh = bmesh;
-        bmesh_component.vert_keys = vert_keys;
-        bmesh_component.face_keys = face_keys;
+        halfedge.mesh = mesh;
+        halfedge.vert_keys = vert_keys;
+        halfedge.face_keys = face_keys;
         return;
     }
 
     // Always start the per-frame op from the clean snapshot.
-    bmesh_component.mesh = start_mesh.clone();
+    halfedge.mesh = start_mesh.clone();
 
     if edge_bevel(
-        &mut bmesh_component.mesh,
+        &mut halfedge.mesh,
         &modal_state.edge_keys,
         modal_state.current_width,
     )
@@ -326,22 +326,22 @@ fn apply_live_bevel(
     }
 
     // Re-cache all face normals; bevel reshapes the rebuilt faces.
-    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
     for fk in face_keys_all {
-        let face = &bmesh_component.mesh.faces[fk];
+        let face = &halfedge.mesh.faces[fk];
         let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
         let mut cur = face.loop_first;
         for _ in 0..face.loop_count {
-            let lp = &bmesh_component.mesh.loops[cur];
-            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            let lp = &halfedge.mesh.loops[cur];
+            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
             cur = lp.next;
         }
         let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+        halfedge.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten EditMesh -> topology, sync Brush.
-    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    // Flatten HalfedgeMesh -> topology, sync Brush.
+    let new_topology = halfedge.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return;
     };
@@ -382,11 +382,11 @@ fn apply_live_bevel(
     }
     brush.topology = new_topology;
 
-    // Re-lift EditMesh from the new topology so vert_keys / face_keys are
+    // Re-lift HalfedgeMesh from the new topology so vert_keys / face_keys are
     // consistent with the brush. This also keeps subsequent input-edge lookup
-    // working because next frame we reset bmesh_component.mesh back to the
+    // working because next frame we reset halfedge.mesh back to the
     // snapshot before running the op again.
-    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -395,9 +395,9 @@ fn apply_live_bevel(
             new_face_keys[slot] = k;
         }
     }
-    bmesh_component.mesh = new_bmesh;
-    bmesh_component.vert_keys = new_vert_keys;
-    bmesh_component.face_keys = new_face_keys;
+    halfedge.mesh = new_bmesh;
+    halfedge.vert_keys = new_vert_keys;
+    halfedge.face_keys = new_face_keys;
 }
 
 /// Geometric cap on bevel width: half the length of the shortest parallel
@@ -408,7 +408,7 @@ fn apply_live_bevel(
 /// edges are also beveled, they collapse from both ends), so the parallel
 /// edge collapses at `width == length / 2`. We back off slightly so the
 /// rebuilt face is never exactly degenerate.
-fn compute_max_bevel_width(mesh: &EditMesh, edges: &[EdgeKey]) -> f32 {
+fn compute_max_bevel_width(mesh: &HalfedgeMesh, edges: &[EdgeKey]) -> f32 {
     let mut min_half_len = f32::MAX;
     for &edge_key in edges {
         let Some(edge) = mesh.edges.get(edge_key) else {
@@ -416,7 +416,7 @@ fn compute_max_bevel_width(mesh: &EditMesh, edges: &[EdgeKey]) -> f32 {
         };
         // Both adjacent face loops on this edge.
         let radial: Vec<_> =
-            jackdaw_geometry::editmesh::cycles::radial_walk(mesh, edge_key).collect();
+            jackdaw_geometry::halfedge::cycles::radial_walk(mesh, edge_key).collect();
         if radial.len() != 2 {
             continue;
         }
@@ -460,8 +460,8 @@ fn compute_max_bevel_width(mesh: &EditMesh, edges: &[EdgeKey]) -> f32 {
     }
 }
 
-fn find_edge_between(bmesh: &EditMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    bmesh
+fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
+    mesh
         .edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))

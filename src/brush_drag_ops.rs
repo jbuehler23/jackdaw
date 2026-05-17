@@ -164,7 +164,7 @@ pub fn brush_face_drag(
     mut history: ResMut<CommandHistory>,
     mut commands: Commands,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
-    mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
+    mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
 ) -> OperatorResult {
     let Ok(window) = vp.windows.single() else {
         return OperatorResult::Cancelled;
@@ -406,17 +406,17 @@ pub fn brush_face_drag(
                 let cam_dist = (cam_tf.translation() - brush_pos).length();
                 let drag_amount =
                     snap_translate(projected * cam_dist * 0.003, &snap_settings, ctrl);
-                if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-                    // EditMesh path: translate each selected face's ring vertices along the face normal.
-                    let face_keys = bmesh_component.face_keys.clone();
+                if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
+                    // HalfedgeMesh path: translate each selected face's ring vertices along the face normal.
+                    let face_keys = halfedge.face_keys.clone();
                     let start_positions: Vec<bevy::math::Vec3> =
                         if !start.topology.vertices.is_empty() {
                             start.topology.vertices.iter().map(|v| v.position).collect()
                         } else {
-                            bmesh_component.mesh.verts.values().map(|v| v.co).collect()
+                            halfedge.mesh.verts.values().map(|v| v.co).collect()
                         };
                     use std::collections::HashSet;
-                    let mut translated: HashSet<jackdaw_geometry::editmesh::VertKey> =
+                    let mut translated: HashSet<jackdaw_geometry::halfedge::VertKey> =
                         HashSet::new();
                     for &face_idx in &brush_selection.faces {
                         if face_idx >= face_keys.len() {
@@ -426,22 +426,22 @@ pub fn brush_face_drag(
                         let face_normal = if face_idx < start.faces.len() {
                             start.faces[face_idx].plane.normal
                         } else {
-                            bmesh_component.mesh.faces[fk].normal_cache
+                            halfedge.mesh.faces[fk].normal_cache
                         };
-                        let face = &bmesh_component.mesh.faces[fk];
+                        let face = &halfedge.mesh.faces[fk];
                         let mut cur = face.loop_first;
-                        let mut ring_keys: Vec<jackdaw_geometry::editmesh::VertKey> =
+                        let mut ring_keys: Vec<jackdaw_geometry::halfedge::VertKey> =
                             Vec::with_capacity(face.loop_count as usize);
                         for _ in 0..face.loop_count {
-                            ring_keys.push(bmesh_component.mesh.loops[cur].vert);
-                            cur = bmesh_component.mesh.loops[cur].next;
+                            ring_keys.push(halfedge.mesh.loops[cur].vert);
+                            cur = halfedge.mesh.loops[cur].next;
                         }
                         for vk in ring_keys {
                             if translated.contains(&vk) {
                                 continue;
                             }
                             translated.insert(vk);
-                            let start_pos_for_key = bmesh_component
+                            let start_pos_for_key = halfedge
                                 .vert_keys
                                 .iter()
                                 .position(|&k| k == vk)
@@ -449,28 +449,28 @@ pub fn brush_face_drag(
                             let new_co = match start_pos_for_key {
                                 Some(start_co) => start_co + face_normal * drag_amount,
                                 None => {
-                                    bmesh_component.mesh.verts[vk].co + face_normal * drag_amount
+                                    halfedge.mesh.verts[vk].co + face_normal * drag_amount
                                 }
                             };
-                            bmesh_component.mesh.verts[vk].co = new_co;
+                            halfedge.mesh.verts[vk].co = new_co;
                         }
                     }
                     // Recompute all face normals.
-                    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+                    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
                     for fk in face_keys_all {
-                        let face = &bmesh_component.mesh.faces[fk];
+                        let face = &halfedge.mesh.faces[fk];
                         let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
                         let mut cur = face.loop_first;
                         for _ in 0..face.loop_count {
-                            let lp = &bmesh_component.mesh.loops[cur];
-                            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+                            let lp = &halfedge.mesh.loops[cur];
+                            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
                             cur = lp.next;
                         }
                         let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-                        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+                        halfedge.mesh.faces[fk].normal_cache = new_normal;
                     }
                     // Sync brush.faces[i].plane and brush.topology.
-                    let new_topology = bmesh_component.mesh.flatten_to_topology();
+                    let new_topology = halfedge.mesh.flatten_to_topology();
                     let positions: Vec<bevy::math::Vec3> =
                         new_topology.vertices.iter().map(|v| v.position).collect();
                     for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
@@ -528,7 +528,7 @@ fn cancel_face_drag(
     mut brush_selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut drag_state: ResMut<BrushDragState>,
-    mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
+    mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
 ) {
     if drag_state.extrude_mode == FaceExtrudeMode::Merge
         && let Some(brush_entity) = brush_selection.entity
@@ -536,21 +536,21 @@ fn cancel_face_drag(
         && let Ok(mut brush) = brushes.get_mut(brush_entity)
     {
         *brush = start.clone();
-        // If EditMesh was active, re-lift from the restored topology.
-        if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-            let bmesh = jackdaw_geometry::editmesh::EditMesh::lift_from_topology(&start.topology);
-            let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-            let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-                vec![Default::default(); bmesh.faces.len()];
-            for (k, f) in bmesh.faces.iter() {
+        // If HalfedgeMesh was active, re-lift from the restored topology.
+        if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
+            let mesh = jackdaw_geometry::halfedge::HalfedgeMesh::lift_from_topology(&start.topology);
+            let vert_keys: Vec<_> = mesh.verts.keys().collect();
+            let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
+                vec![Default::default(); mesh.faces.len()];
+            for (k, f) in mesh.faces.iter() {
                 let slot = f.material_idx as usize;
                 if slot < face_keys.len() {
                     face_keys[slot] = k;
                 }
             }
-            bmesh_component.mesh = bmesh;
-            bmesh_component.vert_keys = vert_keys;
-            bmesh_component.face_keys = face_keys;
+            halfedge.mesh = mesh;
+            halfedge.vert_keys = vert_keys;
+            halfedge.face_keys = face_keys;
         }
     }
     let was_quick = drag_state.quick_action;
@@ -756,7 +756,7 @@ pub fn brush_vertex_drag(
     mut drag_state: ResMut<VertexDragState>,
     mut history: ResMut<CommandHistory>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
-    mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
+    mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
     snap_settings: Res<SnapSettings>,
 ) -> OperatorResult {
     let Some(brush_entity) = brush_selection.entity else {
@@ -999,34 +999,34 @@ pub fn brush_vertex_drag(
             ctrl,
         );
 
-        if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-            // EditMesh path: mutate vertex positions directly. Concave drags work.
-            let vert_keys = bmesh_component.vert_keys.clone();
+        if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
+            // HalfedgeMesh path: mutate vertex positions directly. Concave drags work.
+            let vert_keys = halfedge.vert_keys.clone();
             for (sel_idx, &vert_idx) in brush_selection.vertices.iter().enumerate() {
                 if sel_idx < drag_state.start_vertex_positions.len() && vert_idx < vert_keys.len() {
                     let new_pos = drag_state.start_vertex_positions[sel_idx] + local_offset;
                     let key = vert_keys[vert_idx];
-                    if let Some(v) = bmesh_component.mesh.verts.get_mut(key) {
+                    if let Some(v) = halfedge.mesh.verts.get_mut(key) {
                         v.co = new_pos;
                     }
                 }
             }
             // Re-cache normals on every face (cheap for brush sizes).
-            let face_keys: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+            let face_keys: Vec<_> = halfedge.mesh.faces.keys().collect();
             for fk in face_keys {
-                let face = &bmesh_component.mesh.faces[fk];
+                let face = &halfedge.mesh.faces[fk];
                 let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
                 let mut cur = face.loop_first;
                 for _ in 0..face.loop_count {
-                    let lp = &bmesh_component.mesh.loops[cur];
-                    ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+                    let lp = &halfedge.mesh.loops[cur];
+                    ring_positions.push(halfedge.mesh.verts[lp.vert].co);
                     cur = lp.next;
                 }
                 let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-                bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+                halfedge.mesh.faces[fk].normal_cache = new_normal;
             }
-            // Sync the brush.faces[i].plane and flatten EditMesh into brush.topology.
-            let new_topology = bmesh_component.mesh.flatten_to_topology();
+            // Sync the brush.faces[i].plane and flatten HalfedgeMesh into brush.topology.
+            let new_topology = halfedge.mesh.flatten_to_topology();
             let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
             for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
                 if face_idx < new_topology.polygons.len() {
@@ -1041,7 +1041,7 @@ pub fn brush_vertex_drag(
             }
             brush.topology = new_topology;
         } else {
-            // Legacy plane / Quickhull path. Used when EditMesh isn't present (e.g. Clip mode).
+            // Legacy plane / Quickhull path. Used when HalfedgeMesh isn't present (e.g. Clip mode).
             let mut new_verts = drag_state.start_all_vertices.clone();
             for (sel_idx, &vert_idx) in brush_selection.vertices.iter().enumerate() {
                 if sel_idx < drag_state.start_vertex_positions.len() && vert_idx < new_verts.len() {
@@ -1064,7 +1064,7 @@ pub fn brush_vertex_drag(
 fn cancel_vertex_drag(
     brush_selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
+    mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
     mut drag_state: ResMut<VertexDragState>,
 ) {
     if let Some(brush_entity) = brush_selection.entity
@@ -1072,21 +1072,21 @@ fn cancel_vertex_drag(
         && let Ok(mut brush) = brushes.get_mut(brush_entity)
     {
         *brush = start.clone();
-        // If EditMesh was active, re-lift from the restored topology.
-        if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-            let bmesh = jackdaw_geometry::editmesh::EditMesh::lift_from_topology(&start.topology);
-            let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-            let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-                vec![Default::default(); bmesh.faces.len()];
-            for (k, f) in bmesh.faces.iter() {
+        // If HalfedgeMesh was active, re-lift from the restored topology.
+        if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
+            let mesh = jackdaw_geometry::halfedge::HalfedgeMesh::lift_from_topology(&start.topology);
+            let vert_keys: Vec<_> = mesh.verts.keys().collect();
+            let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
+                vec![Default::default(); mesh.faces.len()];
+            for (k, f) in mesh.faces.iter() {
                 let slot = f.material_idx as usize;
                 if slot < face_keys.len() {
                     face_keys[slot] = k;
                 }
             }
-            bmesh_component.mesh = bmesh;
-            bmesh_component.vert_keys = vert_keys;
-            bmesh_component.face_keys = face_keys;
+            halfedge.mesh = mesh;
+            halfedge.vert_keys = vert_keys;
+            halfedge.face_keys = face_keys;
         }
     }
     clear_vertex_drag_state(&mut drag_state);
@@ -1166,7 +1166,7 @@ pub fn brush_edge_drag(
     mut drag_state: ResMut<EdgeDragState>,
     mut history: ResMut<CommandHistory>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
-    mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
+    mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
     snap_settings: Res<SnapSettings>,
 ) -> OperatorResult {
     let Some(brush_entity) = brush_selection.entity else {
@@ -1364,32 +1364,32 @@ pub fn brush_edge_drag(
             &snap_settings,
             ctrl,
         );
-        if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-            let vert_keys = bmesh_component.vert_keys.clone();
+        if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
+            let vert_keys = halfedge.vert_keys.clone();
             for &(vi, start_pos) in &drag_state.start_edge_vertices {
                 if vi < vert_keys.len() {
                     let key = vert_keys[vi];
-                    if let Some(v) = bmesh_component.mesh.verts.get_mut(key) {
+                    if let Some(v) = halfedge.mesh.verts.get_mut(key) {
                         v.co = start_pos + local_offset;
                     }
                 }
             }
             // Recompute all face normals.
-            let face_keys: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+            let face_keys: Vec<_> = halfedge.mesh.faces.keys().collect();
             for fk in face_keys {
-                let face = &bmesh_component.mesh.faces[fk];
+                let face = &halfedge.mesh.faces[fk];
                 let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
                 let mut cur = face.loop_first;
                 for _ in 0..face.loop_count {
-                    let lp = &bmesh_component.mesh.loops[cur];
-                    ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+                    let lp = &halfedge.mesh.loops[cur];
+                    ring_positions.push(halfedge.mesh.verts[lp.vert].co);
                     cur = lp.next;
                 }
                 let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-                bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+                halfedge.mesh.faces[fk].normal_cache = new_normal;
             }
-            // Sync brush.faces[].plane and brush.topology from EditMesh.
-            let new_topology = bmesh_component.mesh.flatten_to_topology();
+            // Sync brush.faces[].plane and brush.topology from HalfedgeMesh.
+            let new_topology = halfedge.mesh.flatten_to_topology();
             let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
             for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
                 if face_idx < new_topology.polygons.len() {
@@ -1427,7 +1427,7 @@ pub fn brush_edge_drag(
 fn cancel_edge_drag(
     brush_selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut crate::brush::BrushEditMesh>,
+    mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
     mut drag_state: ResMut<EdgeDragState>,
 ) {
     if let Some(brush_entity) = brush_selection.entity
@@ -1435,21 +1435,21 @@ fn cancel_edge_drag(
         && let Ok(mut brush) = brushes.get_mut(brush_entity)
     {
         *brush = start.clone();
-        // If EditMesh was active, re-lift from the restored topology.
-        if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-            let bmesh = jackdaw_geometry::editmesh::EditMesh::lift_from_topology(&start.topology);
-            let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-            let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-                vec![Default::default(); bmesh.faces.len()];
-            for (k, f) in bmesh.faces.iter() {
+        // If HalfedgeMesh was active, re-lift from the restored topology.
+        if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
+            let mesh = jackdaw_geometry::halfedge::HalfedgeMesh::lift_from_topology(&start.topology);
+            let vert_keys: Vec<_> = mesh.verts.keys().collect();
+            let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
+                vec![Default::default(); mesh.faces.len()];
+            for (k, f) in mesh.faces.iter() {
                 let slot = f.material_idx as usize;
                 if slot < face_keys.len() {
                     face_keys[slot] = k;
                 }
             }
-            bmesh_component.mesh = bmesh;
-            bmesh_component.vert_keys = vert_keys;
-            bmesh_component.face_keys = face_keys;
+            halfedge.mesh = mesh;
+            halfedge.vert_keys = vert_keys;
+            halfedge.face_keys = face_keys;
         }
     }
     clear_edge_drag_state(&mut drag_state);

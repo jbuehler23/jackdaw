@@ -23,7 +23,7 @@ pub(crate) use self::hull::{merge_hull_triangles, rebuild_brush_from_vertices};
 pub(crate) use self::interaction::{
     BrushDragState, ClipMode, ClipState, EdgeDragState, VertexDragState,
 };
-pub use edit_mode_systems::BrushEditMesh;
+pub use edit_mode_systems::BrushHalfedge;
 pub use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
 pub use knife_mode::{KnifeMode, KnifePathPoint, KnifeSnapKind, KnifeSnapTarget};
 pub use preview::{ActivePreview, PreviewMesh, PreviewState};
@@ -158,30 +158,30 @@ impl EditorCommand for SetBrush {
 }
 
 /// Replace `entity`'s `Brush` with `target` and keep dependent components in
-/// sync. The renderer reads `BrushEditMesh` (the live half-edge mesh) while
+/// sync. The renderer reads `BrushHalfedge` (the live half-edge mesh) while
 /// the user is in vertex / edge / face / knife mode, so reverting only the
 /// `Brush` component leaves the visible mesh stuck at its pre-revert state.
-/// We re-lift `BrushEditMesh` from `target.topology` here so undo / redo
+/// We re-lift `BrushHalfedge` from `target.topology` here so undo / redo
 /// produce the expected visual result, and flag the inspector for rebuild.
 fn apply_brush(world: &mut World, entity: Entity, target: &Brush) {
     if let Some(mut brush) = world.get_mut::<Brush>(entity) {
         *brush = target.clone();
     }
     sync_brush_to_ast(world, entity, target);
-    if world.get::<BrushEditMesh>(entity).is_some() && !target.topology.polygons.is_empty() {
-        let bmesh = jackdaw_geometry::editmesh::EditMesh::lift_from_topology(&target.topology);
-        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
+    if world.get::<BrushHalfedge>(entity).is_some() && !target.topology.polygons.is_empty() {
+        let mesh = jackdaw_geometry::halfedge::HalfedgeMesh::lift_from_topology(&target.topology);
+        let vert_keys: Vec<_> = mesh.verts.keys().collect();
         let mut face_keys: Vec<_> =
-            vec![jackdaw_geometry::editmesh::FaceKey::default(); bmesh.faces.len()];
-        for (k, f) in bmesh.faces.iter() {
+            vec![jackdaw_geometry::halfedge::FaceKey::default(); mesh.faces.len()];
+        for (k, f) in mesh.faces.iter() {
             let slot = f.material_idx as usize;
             if slot < face_keys.len() {
                 face_keys[slot] = k;
             }
         }
         if let Ok(mut ec) = world.get_entity_mut(entity) {
-            ec.insert(BrushEditMesh {
-                mesh: bmesh,
+            ec.insert(BrushHalfedge {
+                mesh: mesh,
                 vert_keys,
                 face_keys,
             });
@@ -303,7 +303,7 @@ impl Plugin for BrushPlugin {
             )
             .add_systems(
                 Update,
-                edit_mode_systems::sync_brush_bmesh_on_edit_mode
+                edit_mode_systems::sync_brush_halfedge_on_edit_mode
                     .run_if(in_state(crate::AppState::Editor)),
             )
             .add_systems(

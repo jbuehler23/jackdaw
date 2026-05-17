@@ -5,11 +5,11 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::EditMesh;
-use jackdaw_geometry::editmesh::ops::remove_doubles::remove_doubles;
+use jackdaw_geometry::halfedge::HalfedgeMesh;
+use jackdaw_geometry::halfedge::ops::remove_doubles::remove_doubles;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Weld all selected verts together at their centroid, regardless of distance.
@@ -26,7 +26,7 @@ pub(crate) fn brush_weld_selected(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
@@ -42,14 +42,14 @@ pub(crate) fn brush_weld_selected(
     let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
         return OperatorResult::Cancelled;
     };
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
 
-    // Map cache vertex indices to EditMesh VertKeys.
+    // Map cache vertex indices to HalfedgeMesh VertKeys.
     let mut vert_keys = Vec::with_capacity(selection.vertices.len());
     for &vi in &selection.vertices {
-        if let Some(&k) = bmesh_component.vert_keys.get(vi) {
+        if let Some(&k) = halfedge.vert_keys.get(vi) {
             vert_keys.push(k);
         }
     }
@@ -60,7 +60,7 @@ pub(crate) fn brush_weld_selected(
     // Compute centroid of selected verts.
     let mut sum = Vec3::ZERO;
     for &k in &vert_keys {
-        if let Some(v) = bmesh_component.mesh.verts.get(k) {
+        if let Some(v) = halfedge.mesh.verts.get(k) {
             sum += v.co;
         }
     }
@@ -68,32 +68,32 @@ pub(crate) fn brush_weld_selected(
 
     // Move all selected verts to the centroid.
     for &k in &vert_keys {
-        if let Some(v) = bmesh_component.mesh.verts.get_mut(k) {
+        if let Some(v) = halfedge.mesh.verts.get_mut(k) {
             v.co = centroid;
         }
     }
 
     // Run remove_doubles to weld coincident verts into one. The tiny threshold
     // ensures only verts we just moved together are merged, not distant ones.
-    let _ = remove_doubles(&mut bmesh_component.mesh, 0.0001);
+    let _ = remove_doubles(&mut halfedge.mesh, 0.0001);
 
     // Re-cache all face normals.
-    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
     for fk in face_keys_all {
-        let face = &bmesh_component.mesh.faces[fk];
+        let face = &halfedge.mesh.faces[fk];
         let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
         let mut cur = face.loop_first;
         for _ in 0..face.loop_count {
-            let lp = &bmesh_component.mesh.loops[cur];
-            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            let lp = &halfedge.mesh.loops[cur];
+            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
             cur = lp.next;
         }
         let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+        halfedge.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten EditMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
-    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
+    let new_topology = halfedge.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
@@ -120,8 +120,8 @@ pub(crate) fn brush_weld_selected(
     }
     brush.topology = new_topology;
 
-    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
-    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -130,9 +130,9 @@ pub(crate) fn brush_weld_selected(
             new_face_keys[slot] = k;
         }
     }
-    bmesh_component.mesh = new_bmesh;
-    bmesh_component.vert_keys = new_vert_keys;
-    bmesh_component.face_keys = new_face_keys;
+    halfedge.mesh = new_bmesh;
+    halfedge.vert_keys = new_vert_keys;
+    halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
     history.push_executed(Box::new(SetBrush {

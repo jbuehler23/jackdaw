@@ -2,11 +2,11 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::ops::subdivide::subdivide;
-use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, VertKey};
+use jackdaw_geometry::halfedge::ops::subdivide::subdivide;
+use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Split each selected edge at its midpoint and re-tessellate touched faces.
@@ -23,7 +23,7 @@ pub(crate) fn brush_subdivide(
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
@@ -41,45 +41,45 @@ pub(crate) fn brush_subdivide(
         return OperatorResult::Cancelled;
     };
 
-    // Map each selected cache-edge (a, b) to a EditMesh EdgeKey via vert_keys.
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+    // Map each selected cache-edge (a, b) to a HalfedgeMesh EdgeKey via vert_keys.
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
-    let mut bmesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
+    let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
     for &(a, b) in &selection.edges {
-        let Some(&va) = bmesh_component.vert_keys.get(a) else {
+        let Some(&va) = halfedge.vert_keys.get(a) else {
             continue;
         };
-        let Some(&vb) = bmesh_component.vert_keys.get(b) else {
+        let Some(&vb) = halfedge.vert_keys.get(b) else {
             continue;
         };
-        if let Some(ek) = find_edge_between(&bmesh_component.mesh, va, vb) {
-            bmesh_edges.push(ek);
+        if let Some(ek) = find_edge_between(&halfedge.mesh, va, vb) {
+            mesh_edges.push(ek);
         }
     }
-    if bmesh_edges.is_empty() {
+    if mesh_edges.is_empty() {
         return OperatorResult::Cancelled;
     }
 
-    // Run the EditMesh op.
-    let Ok(subdivide_result) = subdivide(&mut bmesh_component.mesh, &bmesh_edges) else {
+    // Run the HalfedgeMesh op.
+    let Ok(subdivide_result) = subdivide(&mut halfedge.mesh, &mesh_edges) else {
         return OperatorResult::Cancelled;
     };
 
     // Capture the topology vertex index pair for each new cross-cut edge so we
     // can write them into `BrushSelection.edges` after the flatten/re-lift
-    // roundtrip. Topology vertex order matches EditMesh slotmap iteration order
+    // roundtrip. Topology vertex order matches HalfedgeMesh slotmap iteration order
     // (see `flatten_to_topology`); subdivide never removes verts, so the slot
     // positions are stable here.
     let new_edge_pairs: Vec<(usize, usize)> = {
         let mut vk_to_topo: std::collections::HashMap<VertKey, usize> =
-            std::collections::HashMap::with_capacity(bmesh_component.mesh.verts.len());
-        for (i, (k, _)) in bmesh_component.mesh.verts.iter().enumerate() {
+            std::collections::HashMap::with_capacity(halfedge.mesh.verts.len());
+        for (i, (k, _)) in halfedge.mesh.verts.iter().enumerate() {
             vk_to_topo.insert(k, i);
         }
         let mut out: Vec<(usize, usize)> = Vec::with_capacity(subdivide_result.new_edges.len());
         for ek in &subdivide_result.new_edges {
-            let Some(edge) = bmesh_component.mesh.edges.get(*ek) else {
+            let Some(edge) = halfedge.mesh.edges.get(*ek) else {
                 continue;
             };
             let Some(&a) = vk_to_topo.get(&edge.v[0]) else {
@@ -97,22 +97,22 @@ pub(crate) fn brush_subdivide(
     };
 
     // Re-cache all face normals.
-    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
     for fk in face_keys_all {
-        let face = &bmesh_component.mesh.faces[fk];
+        let face = &halfedge.mesh.faces[fk];
         let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
         let mut cur = face.loop_first;
         for _ in 0..face.loop_count {
-            let lp = &bmesh_component.mesh.loops[cur];
-            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            let lp = &halfedge.mesh.loops[cur];
+            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
             cur = lp.next;
         }
         let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+        halfedge.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten EditMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
-    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
+    let new_topology = halfedge.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
@@ -140,8 +140,8 @@ pub(crate) fn brush_subdivide(
     }
     brush.topology = new_topology;
 
-    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
-    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -150,9 +150,9 @@ pub(crate) fn brush_subdivide(
             new_face_keys[slot] = k;
         }
     }
-    bmesh_component.mesh = new_bmesh;
-    bmesh_component.vert_keys = new_vert_keys;
-    bmesh_component.face_keys = new_face_keys;
+    halfedge.mesh = new_bmesh;
+    halfedge.vert_keys = new_vert_keys;
+    halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
     history.push_executed(Box::new(SetBrush {
@@ -177,8 +177,8 @@ pub(crate) fn brush_subdivide(
     OperatorResult::Finished
 }
 
-fn find_edge_between(bmesh: &EditMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    bmesh
+fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
+    mesh
         .edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))

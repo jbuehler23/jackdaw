@@ -5,10 +5,10 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::select::loop_walk::loop_walk;
-use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, VertKey};
+use jackdaw_geometry::halfedge::select::loop_walk::loop_walk;
+use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode};
 
 /// Expand the edge selection by walking the parallel-edge ring around each
 /// selected edge through quad faces. Stops at non-quad faces or boundary
@@ -23,7 +23,7 @@ pub(crate) fn brush_select_loop(
     _: In<OperatorParameters>,
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
-    bmesh_q: Query<&BrushEditMesh>,
+    halfedge_q: Query<&BrushHalfedge>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
         return OperatorResult::Cancelled;
@@ -34,31 +34,31 @@ pub(crate) fn brush_select_loop(
     if selection.edges.is_empty() {
         return OperatorResult::Cancelled;
     }
-    let Ok(bmesh_component) = bmesh_q.get(brush_entity) else {
+    let Ok(halfedge) = halfedge_q.get(brush_entity) else {
         return OperatorResult::Cancelled;
     };
 
-    // Map each selected cache edge (a, b) to its EditMesh EdgeKey.
-    let mut bmesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
+    // Map each selected cache edge (a, b) to its HalfedgeMesh EdgeKey.
+    let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
     for &(a, b) in &selection.edges {
-        let Some(&va) = bmesh_component.vert_keys.get(a) else {
+        let Some(&va) = halfedge.vert_keys.get(a) else {
             continue;
         };
-        let Some(&vb) = bmesh_component.vert_keys.get(b) else {
+        let Some(&vb) = halfedge.vert_keys.get(b) else {
             continue;
         };
-        if let Some(ek) = find_edge_between(&bmesh_component.mesh, va, vb) {
-            bmesh_edges.push(ek);
+        if let Some(ek) = find_edge_between(&halfedge.mesh, va, vb) {
+            mesh_edges.push(ek);
         }
     }
-    if bmesh_edges.is_empty() {
+    if mesh_edges.is_empty() {
         return OperatorResult::Cancelled;
     }
 
-    // For each selected EditMesh edge, walk its loop ring. Union all results.
+    // For each selected HalfedgeMesh edge, walk its loop ring. Union all results.
     let mut walked: HashSet<EdgeKey> = HashSet::new();
-    for ek in bmesh_edges {
-        for k in loop_walk(&bmesh_component.mesh, ek) {
+    for ek in mesh_edges {
+        for k in loop_walk(&halfedge.mesh, ek) {
             walked.insert(k);
         }
     }
@@ -68,15 +68,15 @@ pub(crate) fn brush_select_loop(
 
     // Build a VertKey -> cache index lookup (inverse of vert_keys).
     let mut key_to_idx: std::collections::HashMap<VertKey, usize> =
-        std::collections::HashMap::with_capacity(bmesh_component.vert_keys.len());
-    for (i, &k) in bmesh_component.vert_keys.iter().enumerate() {
+        std::collections::HashMap::with_capacity(halfedge.vert_keys.len());
+    for (i, &k) in halfedge.vert_keys.iter().enumerate() {
         key_to_idx.insert(k, i);
     }
 
-    // Convert walked EditMesh edges back to (usize, usize) cache pairs.
+    // Convert walked HalfedgeMesh edges back to (usize, usize) cache pairs.
     let mut new_edges: Vec<(usize, usize)> = Vec::with_capacity(walked.len());
     for ek in walked {
-        let edge = &bmesh_component.mesh.edges[ek];
+        let edge = &halfedge.mesh.edges[ek];
         let Some(&a) = key_to_idx.get(&edge.v[0]) else {
             continue;
         };
@@ -93,8 +93,8 @@ pub(crate) fn brush_select_loop(
     OperatorResult::Finished
 }
 
-fn find_edge_between(bmesh: &EditMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    bmesh
+fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
+    mesh
         .edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))

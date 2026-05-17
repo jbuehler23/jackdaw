@@ -7,7 +7,7 @@
 //!   amount. The brush mesh is mutated each frame so the user sees the live
 //!   extrusion as a real mesh edit.
 //!
-//! Both share the same EditMesh op (`extrude_face_region`) and the same
+//! Both share the same HalfedgeMesh op (`extrude_face_region`) and the same
 //! chained selection behavior: post-commit, `BrushSelection.faces` is updated
 //! to the new top face indices.
 
@@ -17,11 +17,11 @@ use bevy::window::PrimaryWindow;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
-use jackdaw_geometry::editmesh::ops::extrude_face_region::extrude_face_region;
-use jackdaw_geometry::editmesh::{EditMesh, FaceKey};
+use jackdaw_geometry::halfedge::ops::extrude_face_region::extrude_face_region;
+use jackdaw_geometry::halfedge::{HalfedgeMesh, FaceKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -40,7 +40,7 @@ const EXTRUDE_SENSITIVITY: f32 = 0.01;
 pub struct ExtrudeModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// EditMesh FaceKeys of the faces being extruded. Resolved against
+    /// HalfedgeMesh FaceKeys of the faces being extruded. Resolved against
     /// `start_editmesh`; we re-resolve them from `start_editmesh` each frame
     /// because the live mesh is reset to the snapshot before running the op.
     pub face_keys: Vec<FaceKey>,
@@ -60,7 +60,7 @@ pub struct ExtrudeModalState {
     /// face normal; negative = against face normal.
     pub current_amount: f32,
     pub start_brush: Option<Brush>,
-    pub start_editmesh: Option<EditMesh>,
+    pub start_editmesh: Option<HalfedgeMesh>,
 }
 
 /// Duplicate each selected face along its normal by a fixed depth and
@@ -77,7 +77,7 @@ pub(crate) fn brush_extrude_region(
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
@@ -95,17 +95,17 @@ pub(crate) fn brush_extrude_region(
         return OperatorResult::Cancelled;
     };
 
-    // Map cache face indices to EditMesh FaceKeys via face_keys parallel array.
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+    // Map cache face indices to HalfedgeMesh FaceKeys via face_keys parallel array.
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
-    let mut bmesh_faces: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());
+    let mut mesh_faces: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());
     for &face_idx in &selection.faces {
-        if let Some(&fk) = bmesh_component.face_keys.get(face_idx) {
-            bmesh_faces.push(fk);
+        if let Some(&fk) = halfedge.face_keys.get(face_idx) {
+            mesh_faces.push(fk);
         }
     }
-    if bmesh_faces.is_empty() {
+    if mesh_faces.is_empty() {
         return OperatorResult::Cancelled;
     }
 
@@ -119,33 +119,33 @@ pub(crate) fn brush_extrude_region(
     // the original (now top) face sits first in slotmap iteration order, so
     // the top face lands at the topology index equal to
     // `count(faces with material_idx < M)` after flatten.
-    let mut top_material_idxs: Vec<u32> = Vec::with_capacity(bmesh_faces.len());
-    for fk in bmesh_faces {
+    let mut top_material_idxs: Vec<u32> = Vec::with_capacity(mesh_faces.len());
+    for fk in mesh_faces {
         if let Ok(result) =
-            extrude_face_region(&mut bmesh_component.mesh, fk, DEFAULT_EXTRUDE_DEPTH)
+            extrude_face_region(&mut halfedge.mesh, fk, DEFAULT_EXTRUDE_DEPTH)
         {
-            let mtx = bmesh_component.mesh.faces[result.top_face].material_idx;
+            let mtx = halfedge.mesh.faces[result.top_face].material_idx;
             top_material_idxs.push(mtx);
         }
     }
 
     // Re-cache all face normals.
-    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
     for fk in face_keys_all {
-        let face = &bmesh_component.mesh.faces[fk];
+        let face = &halfedge.mesh.faces[fk];
         let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
         let mut cur = face.loop_first;
         for _ in 0..face.loop_count {
-            let lp = &bmesh_component.mesh.loops[cur];
-            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            let lp = &halfedge.mesh.loops[cur];
+            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
             cur = lp.next;
         }
         let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+        halfedge.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten EditMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
-    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
+    let new_topology = halfedge.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
@@ -173,8 +173,8 @@ pub(crate) fn brush_extrude_region(
     }
     brush.topology = new_topology;
 
-    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
-    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -183,9 +183,9 @@ pub(crate) fn brush_extrude_region(
             new_face_keys[slot] = k;
         }
     }
-    bmesh_component.mesh = new_bmesh;
-    bmesh_component.vert_keys = new_vert_keys;
-    bmesh_component.face_keys = new_face_keys;
+    halfedge.mesh = new_bmesh;
+    halfedge.vert_keys = new_vert_keys;
+    halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
     history.push_executed(Box::new(SetBrush {
@@ -202,7 +202,7 @@ pub(crate) fn brush_extrude_region(
     let new_top_indices: Vec<usize> = top_material_idxs
         .into_iter()
         .map(|mtx| {
-            bmesh_component
+            halfedge
                 .mesh
                 .faces
                 .values()
@@ -248,7 +248,7 @@ pub(crate) fn brush_extrude(
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     brush_transforms: Query<&GlobalTransform>,
     mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<ExtrudeModalState>,
@@ -284,13 +284,13 @@ pub(crate) fn brush_extrude(
         let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
             return OperatorResult::Cancelled;
         };
-        let Ok(bmesh_component) = bmesh_q.get(brush_entity) else {
+        let Ok(halfedge) = halfedge_q.get(brush_entity) else {
             return OperatorResult::Cancelled;
         };
 
         let mut face_keys: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());
         for &face_idx in &selection.faces {
-            if let Some(&fk) = bmesh_component.face_keys.get(face_idx) {
+            if let Some(&fk) = halfedge.face_keys.get(face_idx) {
                 face_keys.push(fk);
             }
         }
@@ -298,7 +298,7 @@ pub(crate) fn brush_extrude(
             return OperatorResult::Cancelled;
         }
 
-        let mesh_snapshot = bmesh_component.mesh.clone();
+        let mesh_snapshot = halfedge.mesh.clone();
         let brush_xform = brush_transforms.get(brush_entity).ok();
 
         // Derive the screen-space direction corresponding to "+1 world-unit
@@ -333,7 +333,7 @@ pub(crate) fn brush_extrude(
     if escape || rmb {
         // Live brush has been mutated each frame, so restore from the snapshot
         // before clearing modal state.
-        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
         *modal_state = ExtrudeModalState::default();
         return OperatorResult::Cancelled;
     }
@@ -358,7 +358,7 @@ pub(crate) fn brush_extrude(
     // the regular brush mesh pipeline picking up `Changed<Brush>`. The returned
     // indices identify the post-flatten top-face slots so the commit path can
     // chain selection without recomputing them.
-    let top_face_indices = apply_live_extrude(&mut modal_state, &mut brushes, &mut bmesh_q);
+    let top_face_indices = apply_live_extrude(&mut modal_state, &mut brushes, &mut halfedge_q);
 
     // Commit on LMB.
     if mouse.just_pressed(MouseButton::Left) {
@@ -375,7 +375,7 @@ pub(crate) fn brush_extrude(
         // record a useless undo entry. The live brush should already be back
         // to the snapshot (apply_live_extrude resets when amount is sub-threshold).
         if modal_state.current_amount.abs() < 1e-4 {
-            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
             *modal_state = ExtrudeModalState::default();
             return OperatorResult::Cancelled;
         }
@@ -417,17 +417,17 @@ pub(crate) fn brush_extrude(
 fn cancel_extrude(
     mut modal_state: ResMut<ExtrudeModalState>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
 ) {
-    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
     *modal_state = ExtrudeModalState::default();
 }
 
-/// Reset the live brush + EditMesh to the snapshot captured at modal start.
+/// Reset the live brush + HalfedgeMesh to the snapshot captured at modal start.
 fn restore_brush_from_snapshot(
     modal_state: &ExtrudeModalState,
     brushes: &mut Query<&mut Brush>,
-    bmesh_q: &mut Query<&mut BrushEditMesh>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
 ) {
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
@@ -439,32 +439,32 @@ fn restore_brush_from_snapshot(
         return;
     };
     *brush = start_brush.clone();
-    if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-            vec![Default::default(); bmesh.faces.len()];
-        for (k, f) in bmesh.faces.iter() {
+    if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
+        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = mesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
+            vec![Default::default(); mesh.faces.len()];
+        for (k, f) in mesh.faces.iter() {
             let slot = f.material_idx as usize;
             if slot < face_keys.len() {
                 face_keys[slot] = k;
             }
         }
-        bmesh_component.mesh = bmesh;
-        bmesh_component.vert_keys = vert_keys;
-        bmesh_component.face_keys = face_keys;
+        halfedge.mesh = mesh;
+        halfedge.vert_keys = vert_keys;
+        halfedge.face_keys = face_keys;
     }
 }
 
 /// Re-run `extrude_face_region` against the snapshot at the current amount and
-/// write the resulting topology back into the live `Brush` + `BrushEditMesh`.
+/// write the resulting topology back into the live `Brush` + `BrushHalfedge`.
 /// Returns the post-flatten face indices of the new top faces (one per
 /// successful extrusion), in the same order as `modal_state.face_keys`. The
 /// commit path uses these for chained selection.
 fn apply_live_extrude(
     modal_state: &mut ExtrudeModalState,
     brushes: &mut Query<&mut Brush>,
-    bmesh_q: &mut Query<&mut BrushEditMesh>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
 ) -> Vec<usize> {
     let Some(brush_entity) = modal_state.brush_entity else {
         return Vec::new();
@@ -475,7 +475,7 @@ fn apply_live_extrude(
     let Some(ref start_brush) = modal_state.start_brush else {
         return Vec::new();
     };
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return Vec::new();
     };
 
@@ -485,24 +485,24 @@ fn apply_live_extrude(
             return Vec::new();
         };
         *brush = start_brush.clone();
-        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-            vec![Default::default(); bmesh.faces.len()];
-        for (k, f) in bmesh.faces.iter() {
+        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = mesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
+            vec![Default::default(); mesh.faces.len()];
+        for (k, f) in mesh.faces.iter() {
             let slot = f.material_idx as usize;
             if slot < face_keys.len() {
                 face_keys[slot] = k;
             }
         }
-        bmesh_component.mesh = bmesh;
-        bmesh_component.vert_keys = vert_keys;
-        bmesh_component.face_keys = face_keys;
+        halfedge.mesh = mesh;
+        halfedge.vert_keys = vert_keys;
+        halfedge.face_keys = face_keys;
         return Vec::new();
     }
 
     // Always start the per-frame op from the clean snapshot.
-    bmesh_component.mesh = start_mesh.clone();
+    halfedge.mesh = start_mesh.clone();
 
     // Run extrude on each selected face; capture each successful op's
     // top-face `material_idx` for the chained-selection index math.
@@ -515,19 +515,19 @@ fn apply_live_extrude(
     let mut top_material_idxs: Vec<u32> = Vec::with_capacity(modal_state.face_keys.len());
     for &fk in &modal_state.face_keys {
         if let Ok(result) =
-            extrude_face_region(&mut bmesh_component.mesh, fk, modal_state.current_amount)
+            extrude_face_region(&mut halfedge.mesh, fk, modal_state.current_amount)
         {
-            let mtx = bmesh_component.mesh.faces[result.top_face].material_idx;
+            let mtx = halfedge.mesh.faces[result.top_face].material_idx;
             top_material_idxs.push(mtx);
         }
     }
 
     // Resolve post-flatten top-face indices BEFORE flatten/re-lift, while
-    // the bmesh still holds the original material_idx values.
+    // the mesh still holds the original material_idx values.
     let top_face_indices: Vec<usize> = top_material_idxs
         .iter()
         .map(|&mtx| {
-            bmesh_component
+            halfedge
                 .mesh
                 .faces
                 .values()
@@ -537,22 +537,22 @@ fn apply_live_extrude(
         .collect();
 
     // Re-cache all face normals; extrude reshapes the top + side faces.
-    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
     for fk in face_keys_all {
-        let face = &bmesh_component.mesh.faces[fk];
+        let face = &halfedge.mesh.faces[fk];
         let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
         let mut cur = face.loop_first;
         for _ in 0..face.loop_count {
-            let lp = &bmesh_component.mesh.loops[cur];
-            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            let lp = &halfedge.mesh.loops[cur];
+            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
             cur = lp.next;
         }
         let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+        halfedge.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten EditMesh -> topology, sync Brush.
-    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    // Flatten HalfedgeMesh -> topology, sync Brush.
+    let new_topology = halfedge.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return top_face_indices;
     };
@@ -597,8 +597,8 @@ fn apply_live_extrude(
     }
     brush.topology = new_topology;
 
-    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
-    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -607,9 +607,9 @@ fn apply_live_extrude(
             new_face_keys[slot] = k;
         }
     }
-    bmesh_component.mesh = new_bmesh;
-    bmesh_component.vert_keys = new_vert_keys;
-    bmesh_component.face_keys = new_face_keys;
+    halfedge.mesh = new_bmesh;
+    halfedge.vert_keys = new_vert_keys;
+    halfedge.face_keys = new_face_keys;
 
     top_face_indices
 }
@@ -621,7 +621,7 @@ fn apply_live_extrude(
 /// if anything in the projection pipeline is unavailable, matching the
 /// heuristic spelled out in the spec.
 fn compute_screen_normal_dir(
-    mesh: &EditMesh,
+    mesh: &HalfedgeMesh,
     face_keys: &[FaceKey],
     brush_xform: Option<&GlobalTransform>,
     camera_query: &Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,

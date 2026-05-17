@@ -1,7 +1,7 @@
 //! Topology operators for brush editing: loop cut, subdivide, knife, inset,
-//! extrude, bevel, etc. Each operator wraps a EditMesh op from `jackdaw_geometry::editmesh::ops`,
+//! extrude, bevel, etc. Each operator wraps a HalfedgeMesh op from `jackdaw_geometry::halfedge::ops`,
 //! handles selection mapping, syncs `Brush::faces[i].plane` + `Brush::topology` from
-//! the mutated EditMesh, and fires `SetBrush` for undo.
+//! the mutated HalfedgeMesh, and fires `SetBrush` for undo.
 
 pub mod bridge_edge_loops;
 pub mod connect_verts;

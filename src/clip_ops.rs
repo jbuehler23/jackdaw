@@ -21,8 +21,8 @@ use crate::viewport::{ActiveViewport, MainViewportCamera, SceneViewport};
 use crate::viewport_util::window_to_viewport_cursor_for;
 use jackdaw_geometry::{
     EPSILON, compute_face_tangent_axes,
-    editmesh::{
-        EditMesh,
+    halfedge::{
+        HalfedgeMesh,
         ops::bisect_plane::{BisectKeep, bisect_plane},
     },
     point_inside_all_planes,
@@ -296,7 +296,7 @@ pub(crate) fn clip_apply(
     };
 
     // Dispatch: brushes with populated topology (the common case after the
-    // topology migration) take the EditMesh bisect_plane path. Brushes with
+    // topology migration) take the HalfedgeMesh bisect_plane path. Brushes with
     // Brushes always carry populated topology; the plane-push fast path
     // below stays as a safety net for malformed legacy inputs the
     // migration system hasn't touched yet.
@@ -400,7 +400,7 @@ pub(crate) fn clip_apply(
     OperatorResult::Finished
 }
 
-/// Lift the brush's topology into an EditMesh, bisect it along `plane`,
+/// Lift the brush's topology into an HalfedgeMesh, bisect it along `plane`,
 /// and flatten back into a new `Brush`. Returns `None` if the bisect
 /// produces no faces (degenerate input or plane misses the brush).
 ///
@@ -412,13 +412,13 @@ pub(crate) fn clip_apply(
 /// inherits from the cut's neighbor) before zeroing UV axes so
 /// `ensure_uv_axes` derives proper tangents from the cap's plane.
 fn bisect_brush(brush: &Brush, plane: &BrushPlane, keep: BisectKeep) -> Option<Brush> {
-    let mut bmesh = EditMesh::lift_from_topology(&brush.topology);
-    let result = bisect_plane(&mut bmesh, plane, keep).ok()?;
-    if bmesh.face_count() == 0 {
+    let mut mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let result = bisect_plane(&mut mesh, plane, keep).ok()?;
+    if mesh.face_count() == 0 {
         return None;
     }
 
-    let new_topology = bmesh.flatten_to_topology();
+    let new_topology = mesh.flatten_to_topology();
     if new_topology.polygons.is_empty() {
         return None;
     }
@@ -426,9 +426,9 @@ fn bisect_brush(brush: &Brush, plane: &BrushPlane, keep: BisectKeep) -> Option<B
     // Build the slot -> source-material-idx map by walking the flattened
     // topology in slot order. `flatten_to_topology` sorts faces by
     // `material_idx`, so slot N's source material is the Nth smallest
-    // `material_idx` in the bmesh.
+    // `material_idx` in the mesh.
     let mut slot_to_src_material: Vec<u32> =
-        bmesh.faces.iter().map(|(_, f)| f.material_idx).collect();
+        mesh.faces.iter().map(|(_, f)| f.material_idx).collect();
     slot_to_src_material.sort();
 
     let cap_idx = result.cap_material_idx;

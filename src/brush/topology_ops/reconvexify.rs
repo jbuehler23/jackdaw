@@ -5,12 +5,12 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::EditMesh;
+use jackdaw_geometry::halfedge::HalfedgeMesh;
 use jackdaw_geometry::{compute_brush_geometry_from_planes, compute_brush_topology};
 use jackdaw_jsn::Brush;
 
 use crate::brush::hull::rebuild_brush_from_vertices;
-use crate::brush::{BrushEditMesh, BrushSelection, SetBrush};
+use crate::brush::{BrushHalfedge, BrushSelection, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Snap the selected brush back to the convex hull of its current vertices.
@@ -27,7 +27,7 @@ pub(crate) fn brush_reconvexify(
     _: In<OperatorParameters>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     let Some(brush_entity) = selection.entity else {
@@ -92,10 +92,10 @@ pub(crate) fn brush_reconvexify(
     };
     *brush_mut = new_brush.clone();
 
-    // If an EditMesh is present (brush is in vertex/edge/face edit mode),
+    // If an HalfedgeMesh is present (brush is in vertex/edge/face edit mode),
     // re-lift it from the new topology so indices stay consistent.
-    if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-        let new_bmesh = EditMesh::lift_from_topology(&brush_mut.topology);
+    if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
+        let new_bmesh = HalfedgeMesh::lift_from_topology(&brush_mut.topology);
         let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
         let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
         for (k, f) in new_bmesh.faces.iter() {
@@ -104,9 +104,9 @@ pub(crate) fn brush_reconvexify(
                 new_face_keys[slot] = k;
             }
         }
-        bmesh_component.mesh = new_bmesh;
-        bmesh_component.vert_keys = new_vert_keys;
-        bmesh_component.face_keys = new_face_keys;
+        halfedge.mesh = new_bmesh;
+        halfedge.vert_keys = new_vert_keys;
+        halfedge.face_keys = new_face_keys;
     }
 
     history.push_executed(Box::new(SetBrush {

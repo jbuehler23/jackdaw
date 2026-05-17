@@ -1,6 +1,6 @@
 use bevy::math::Vec3;
-use jackdaw_geometry::editmesh::{
-    EditMesh,
+use jackdaw_geometry::halfedge::{
+    HalfedgeMesh,
     ops::{dissolve_verts::dissolve_verts, subdivide::subdivide},
 };
 use jackdaw_jsn::Brush;
@@ -17,26 +17,26 @@ fn fan_triangulate(n: usize) -> Vec<[u32; 3]> {
 #[test]
 fn diagnose_post_fix_render_state() {
     let brush = Brush::cuboid(1.0, 1.0, 1.0);
-    let mut bmesh = EditMesh::lift_from_topology(&brush.topology);
+    let mut mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
 
     // STEP 1: subdivide one edge.
-    let some_edge = bmesh.edges.keys().next().unwrap();
-    let result = subdivide(&mut bmesh, &[some_edge]).expect("subdivide");
+    let some_edge = mesh.edges.keys().next().unwrap();
+    let result = subdivide(&mut mesh, &[some_edge]).expect("subdivide");
     let midpoint = result.new_verts[0];
 
     // STEP 2: dissolve the midpoint.
-    let _ = dissolve_verts(&mut bmesh, &[midpoint]).expect("dissolve");
-    bmesh.validate().expect("valid");
+    let _ = dissolve_verts(&mut mesh, &[midpoint]).expect("dissolve");
+    mesh.validate().expect("valid");
 
-    println!("\n=== POST-DISSOLVE EditMesh STATE ===");
+    println!("\n=== POST-DISSOLVE HalfedgeMesh STATE ===");
     println!(
         "verts: {}, edges: {}, loops: {}, faces: {}",
-        bmesh.vert_count(),
-        bmesh.edge_count(),
-        bmesh.loop_count(),
-        bmesh.face_count()
+        mesh.vert_count(),
+        mesh.edge_count(),
+        mesh.loop_count(),
+        mesh.face_count()
     );
-    let mut mat_idxs: Vec<u32> = bmesh.faces.values().map(|f| f.material_idx).collect();
+    let mut mat_idxs: Vec<u32> = mesh.faces.values().map(|f| f.material_idx).collect();
     mat_idxs.sort();
     println!("material_idxes (sorted): {:?}", mat_idxs);
     let unique: std::collections::HashSet<u32> = mat_idxs.iter().copied().collect();
@@ -46,18 +46,18 @@ fn diagnose_post_fix_render_state() {
     );
     assert_eq!(
         unique.len(),
-        bmesh.face_count(),
+        mesh.face_count(),
         "material_idx should be unique now per the fix"
     );
 
     println!("\nFaces:");
-    for (k, f) in bmesh.faces.iter() {
+    for (k, f) in mesh.faces.iter() {
         // Walk the face's ring to gather positions.
         let mut ring_pos: Vec<Vec3> = Vec::new();
         let mut cur = f.loop_first;
         for _ in 0..f.loop_count {
-            ring_pos.push(bmesh.verts[bmesh.loops[cur].vert].co);
-            cur = bmesh.loops[cur].next;
+            ring_pos.push(mesh.verts[mesh.loops[cur].vert].co);
+            cur = mesh.loops[cur].next;
         }
         let _ = k; // suppress unused warning
         println!(
@@ -75,7 +75,7 @@ fn diagnose_post_fix_render_state() {
     }
 
     // STEP 3: simulate the render path.
-    let topology = bmesh.flatten_to_topology();
+    let topology = mesh.flatten_to_topology();
     let positions: Vec<Vec3> = topology.vertices.iter().map(|v| v.position).collect();
     println!("\n=== RENDER SIMULATION ===");
     for (i, poly) in topology.polygons.iter().enumerate() {

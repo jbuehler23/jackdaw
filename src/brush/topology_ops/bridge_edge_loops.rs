@@ -4,11 +4,11 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::ops::bridge_edge_loops::bridge_edge_loops;
-use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, VertKey};
+use jackdaw_geometry::halfedge::ops::bridge_edge_loops::bridge_edge_loops;
+use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Connect two selected edge loops with a quad strip. The selection must
@@ -25,7 +25,7 @@ pub(crate) fn brush_bridge_edge_loops(
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
@@ -41,36 +41,36 @@ pub(crate) fn brush_bridge_edge_loops(
     let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
         return OperatorResult::Cancelled;
     };
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
 
-    // Map cache edge pairs (a, b) -> EditMesh EdgeKeys via vert_keys.
-    let mut bmesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
+    // Map cache edge pairs (a, b) -> HalfedgeMesh EdgeKeys via vert_keys.
+    let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
     for &(a, b) in &selection.edges {
-        let Some(&va) = bmesh_component.vert_keys.get(a) else {
+        let Some(&va) = halfedge.vert_keys.get(a) else {
             continue;
         };
-        let Some(&vb) = bmesh_component.vert_keys.get(b) else {
+        let Some(&vb) = halfedge.vert_keys.get(b) else {
             continue;
         };
-        if let Some(ek) = find_edge_between(&bmesh_component.mesh, va, vb) {
-            bmesh_edges.push(ek);
+        if let Some(ek) = find_edge_between(&halfedge.mesh, va, vb) {
+            mesh_edges.push(ek);
         }
     }
-    if bmesh_edges.len() < 2 {
+    if mesh_edges.len() < 2 {
         return OperatorResult::Cancelled;
     }
 
     // Partition into connected components (BFS over edge adjacency through verts).
-    let components = partition_edges_by_connectivity(&bmesh_component.mesh, &bmesh_edges);
+    let components = partition_edges_by_connectivity(&halfedge.mesh, &mesh_edges);
     if components.len() != 2 {
         return OperatorResult::Cancelled;
     }
     let edges_a = &components[0];
     let edges_b = &components[1];
 
-    let Ok(result) = bridge_edge_loops(&mut bmesh_component.mesh, edges_a, edges_b) else {
+    let Ok(result) = bridge_edge_loops(&mut halfedge.mesh, edges_a, edges_b) else {
         return OperatorResult::Cancelled;
     };
 
@@ -83,26 +83,26 @@ pub(crate) fn brush_bridge_edge_loops(
     let new_face_material_idxs: Vec<u32> = result
         .new_faces
         .iter()
-        .filter_map(|fk| bmesh_component.mesh.faces.get(*fk).map(|f| f.material_idx))
+        .filter_map(|fk| halfedge.mesh.faces.get(*fk).map(|f| f.material_idx))
         .collect();
 
     // Re-cache normals (mirror inset/extrude pattern).
-    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
     for fk in face_keys_all {
-        let face = &bmesh_component.mesh.faces[fk];
+        let face = &halfedge.mesh.faces[fk];
         let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
         let mut cur = face.loop_first;
         for _ in 0..face.loop_count {
-            let lp = &bmesh_component.mesh.loops[cur];
-            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            let lp = &halfedge.mesh.loops[cur];
+            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
             cur = lp.next;
         }
         let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+        halfedge.mesh.faces[fk].normal_cache = new_normal;
     }
 
     // Flatten + sync planes + grow brush.faces.
-    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    let new_topology = halfedge.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
@@ -124,8 +124,8 @@ pub(crate) fn brush_bridge_edge_loops(
     }
     brush.topology = new_topology;
 
-    // Re-lift EditMesh.
-    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    // Re-lift HalfedgeMesh.
+    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -133,9 +133,9 @@ pub(crate) fn brush_bridge_edge_loops(
             new_face_keys[f.material_idx as usize] = k;
         }
     }
-    bmesh_component.mesh = new_bmesh;
-    bmesh_component.vert_keys = new_vert_keys;
-    bmesh_component.face_keys = new_face_keys;
+    halfedge.mesh = new_bmesh;
+    halfedge.vert_keys = new_vert_keys;
+    halfedge.face_keys = new_face_keys;
 
     history.push_executed(Box::new(SetBrush {
         entity: brush_entity,
@@ -151,7 +151,7 @@ pub(crate) fn brush_bridge_edge_loops(
     let new_face_indices: Vec<usize> = new_face_material_idxs
         .into_iter()
         .map(|mtx| {
-            bmesh_component
+            halfedge
                 .mesh
                 .faces
                 .values()
@@ -166,8 +166,8 @@ pub(crate) fn brush_bridge_edge_loops(
     OperatorResult::Finished
 }
 
-fn find_edge_between(bmesh: &EditMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    bmesh
+fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
+    mesh
         .edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
@@ -175,11 +175,11 @@ fn find_edge_between(bmesh: &EditMesh, va: VertKey, vb: VertKey) -> Option<EdgeK
 }
 
 /// Partition the given edges into connected components based on shared vertices.
-fn partition_edges_by_connectivity(bmesh: &EditMesh, edges: &[EdgeKey]) -> Vec<Vec<EdgeKey>> {
+fn partition_edges_by_connectivity(mesh: &HalfedgeMesh, edges: &[EdgeKey]) -> Vec<Vec<EdgeKey>> {
     let edge_set: HashSet<EdgeKey> = edges.iter().copied().collect();
     let mut vert_to_edges: HashMap<VertKey, Vec<EdgeKey>> = HashMap::new();
     for &e in edges {
-        let edge = &bmesh.edges[e];
+        let edge = &mesh.edges[e];
         vert_to_edges.entry(edge.v[0]).or_default().push(e);
         vert_to_edges.entry(edge.v[1]).or_default().push(e);
     }
@@ -200,7 +200,7 @@ fn partition_edges_by_connectivity(bmesh: &EditMesh, edges: &[EdgeKey]) -> Vec<V
                 continue;
             }
             component.push(e);
-            let edge = &bmesh.edges[e];
+            let edge = &mesh.edges[e];
             for &v in &edge.v {
                 if let Some(neigh) = vert_to_edges.get(&v) {
                     for &ne in neigh {

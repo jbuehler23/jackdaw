@@ -2,11 +2,11 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::EditMesh;
-use jackdaw_geometry::editmesh::ops::remove_doubles::remove_doubles;
+use jackdaw_geometry::halfedge::HalfedgeMesh;
+use jackdaw_geometry::halfedge::ops::remove_doubles::remove_doubles;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMesh, EditMode, SetBrush};
+use crate::brush::{BrushHalfedge, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 const DEFAULT_MERGE_DISTANCE: f32 = 0.0001;
@@ -25,7 +25,7 @@ pub(crate) fn brush_merge_by_distance(
     edit_mode: Res<EditMode>,
     selection: Res<crate::brush::BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     // Check that we're in any brush edit mode.
@@ -43,33 +43,33 @@ pub(crate) fn brush_merge_by_distance(
         return OperatorResult::Cancelled;
     };
 
-    // Get mutable EditMesh and run remove_doubles.
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+    // Get mutable HalfedgeMesh and run remove_doubles.
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
 
     // Run remove_doubles on the whole mesh.
-    let Ok(_) = remove_doubles(&mut bmesh_component.mesh, DEFAULT_MERGE_DISTANCE) else {
+    let Ok(_) = remove_doubles(&mut halfedge.mesh, DEFAULT_MERGE_DISTANCE) else {
         return OperatorResult::Cancelled;
     };
 
     // Re-cache all face normals.
-    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
     for fk in face_keys_all {
-        let face = &bmesh_component.mesh.faces[fk];
+        let face = &halfedge.mesh.faces[fk];
         let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
         let mut cur = face.loop_first;
         for _ in 0..face.loop_count {
-            let lp = &bmesh_component.mesh.loops[cur];
-            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            let lp = &halfedge.mesh.loops[cur];
+            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
             cur = lp.next;
         }
         let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+        halfedge.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten EditMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
-    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
+    let new_topology = halfedge.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
@@ -101,8 +101,8 @@ pub(crate) fn brush_merge_by_distance(
     }
     brush.topology = new_topology;
 
-    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
-    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -111,9 +111,9 @@ pub(crate) fn brush_merge_by_distance(
             new_face_keys[slot] = k;
         }
     }
-    bmesh_component.mesh = new_bmesh;
-    bmesh_component.vert_keys = new_vert_keys;
-    bmesh_component.face_keys = new_face_keys;
+    halfedge.mesh = new_bmesh;
+    halfedge.vert_keys = new_vert_keys;
+    halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
     history.push_executed(Box::new(SetBrush {

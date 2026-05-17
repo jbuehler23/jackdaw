@@ -2,11 +2,11 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::editmesh::ops::dissolve_verts::dissolve_verts;
-use jackdaw_geometry::editmesh::{EditMesh, VertKey};
+use jackdaw_geometry::halfedge::ops::dissolve_verts::dissolve_verts;
+use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Remove the selected verts and merge incident faces. MVP: only valence-2 verts are
@@ -22,7 +22,7 @@ pub(crate) fn brush_dissolve_verts(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
@@ -40,13 +40,13 @@ pub(crate) fn brush_dissolve_verts(
         return OperatorResult::Cancelled;
     };
 
-    // Map cache vertex indices to EditMesh VertKeys via vert_keys parallel array.
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+    // Map cache vertex indices to HalfedgeMesh VertKeys via vert_keys parallel array.
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
     let mut vert_keys: Vec<VertKey> = Vec::with_capacity(selection.vertices.len());
     for &vert_idx in &selection.vertices {
-        if let Some(&vk) = bmesh_component.vert_keys.get(vert_idx) {
+        if let Some(&vk) = halfedge.vert_keys.get(vert_idx) {
             vert_keys.push(vk);
         }
     }
@@ -55,34 +55,34 @@ pub(crate) fn brush_dissolve_verts(
     }
 
     // Run dissolve_verts on the selected vertices.
-    let Ok(_) = dissolve_verts(&mut bmesh_component.mesh, &vert_keys) else {
+    let Ok(_) = dissolve_verts(&mut halfedge.mesh, &vert_keys) else {
         return OperatorResult::Cancelled;
     };
 
     // Re-cache all face normals.
-    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
     for fk in face_keys_all {
-        let face = &bmesh_component.mesh.faces[fk];
+        let face = &halfedge.mesh.faces[fk];
         let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
         let mut cur = face.loop_first;
         for _ in 0..face.loop_count {
-            let lp = &bmesh_component.mesh.loops[cur];
-            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            let lp = &halfedge.mesh.loops[cur];
+            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
             cur = lp.next;
         }
         let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+        halfedge.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten EditMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
-    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
+    let new_topology = halfedge.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
 
-    // Collect the EditMesh's material_idxes sorted in ascending order: this matches
+    // Collect the HalfedgeMesh's material_idxes sorted in ascending order: this matches
     // the ordering that flatten_to_topology uses for new_topology.polygons.
-    let mut sorted_mat_idxes: Vec<u32> = bmesh_component
+    let mut sorted_mat_idxes: Vec<u32> = halfedge
         .mesh
         .faces
         .values()
@@ -119,8 +119,8 @@ pub(crate) fn brush_dissolve_verts(
     }
     brush.topology = new_topology;
 
-    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
-    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -129,9 +129,9 @@ pub(crate) fn brush_dissolve_verts(
             new_face_keys[slot] = k;
         }
     }
-    bmesh_component.mesh = new_bmesh;
-    bmesh_component.vert_keys = new_vert_keys;
-    bmesh_component.face_keys = new_face_keys;
+    halfedge.mesh = new_bmesh;
+    halfedge.vert_keys = new_vert_keys;
+    halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
     history.push_executed(Box::new(SetBrush {

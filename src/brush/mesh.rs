@@ -87,7 +87,7 @@ pub fn regenerate_brush_meshes(
             Option<&super::BrushPreview>,
             Has<Selected>,
         ),
-        Or<(Changed<super::Brush>, Changed<crate::brush::BrushEditMesh>)>,
+        Or<(Changed<super::Brush>, Changed<crate::brush::BrushHalfedge>)>,
     >,
     mesh3d_query: Query<(), With<Mesh3d>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -95,7 +95,7 @@ pub fn regenerate_brush_meshes(
     parents: Query<&ChildOf>,
     selected_query: Query<(), With<Selected>>,
     group_edit: Res<crate::viewport_select::GroupEditState>,
-    bmesh_q: Query<&crate::brush::BrushEditMesh>,
+    halfedge_q: Query<&crate::brush::BrushHalfedge>,
 ) {
     for (entity, brush, children, preview, is_selected) in &changed_brushes {
         let in_active_group = group_edit
@@ -117,10 +117,10 @@ pub fn regenerate_brush_meshes(
             }
         }
 
-        let (vertices, face_polygons) = if let Ok(bmesh_component) = bmesh_q.get(entity) {
-            // In Vertex/Edge/Face edit mode the EditMesh holds the live
+        let (vertices, face_polygons) = if let Ok(halfedge) = halfedge_q.get(entity) {
+            // In Vertex/Edge/Face edit mode the HalfedgeMesh holds the live
             // post-op topology; flatten it so previews track in-flight edits.
-            let topology = bmesh_component.mesh.flatten_to_topology();
+            let topology = halfedge.mesh.flatten_to_topology();
             let verts: Vec<Vec3> = topology.vertices.iter().map(|v| v.position).collect();
             let polys: Vec<Vec<usize>> = (0..topology.polygons.len())
                 .map(|i| topology.face_ring(i).map(|v| v as usize).collect())

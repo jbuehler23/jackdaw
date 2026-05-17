@@ -28,7 +28,7 @@
 //! bisects each adjacent pair of points as a single `SetBrush` undo
 //! entry. Esc or RMB cancels the in-progress path.
 //!
-//! Commit handling: the path is applied to the EditMesh using
+//! Commit handling: the path is applied to the HalfedgeMesh using
 //! **topology mutations only** (no CDT). The pipeline mirrors how
 //! the knife tool routes a multi-segment cut across faces.
 //!
@@ -65,14 +65,14 @@
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
 use bevy::window::PrimaryWindow;
-use jackdaw_geometry::editmesh::ops::edge_split::split_edge;
-use jackdaw_geometry::editmesh::ops::face_poke::face_poke;
-use jackdaw_geometry::editmesh::ops::face_split::split_face;
-use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, FaceKey, LoopKey, VertKey};
+use jackdaw_geometry::halfedge::ops::edge_split::split_edge;
+use jackdaw_geometry::halfedge::ops::face_poke::face_poke;
+use jackdaw_geometry::halfedge::ops::face_split::split_face;
+use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, FaceKey, LoopKey, VertKey};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{
-    BrushEditMesh, BrushEditMode, BrushMeshCache, BrushSelection, EditMode, SetBrush,
+    BrushHalfedge, BrushEditMode, BrushMeshCache, BrushSelection, EditMode, SetBrush,
 };
 use crate::commands::CommandHistory;
 use crate::default_style;
@@ -142,7 +142,7 @@ pub struct KnifeSnapTarget {
 }
 
 /// A point already placed by an LMB click. Holds enough information to
-/// resolve the corresponding `VertKey` in a freshly-lifted `EditMesh`
+/// resolve the corresponding `VertKey` in a freshly-lifted `HalfedgeMesh`
 /// at commit time (edge-splitting, face-poking, or vert-reuse).
 #[derive(Clone, Debug)]
 pub struct KnifePathPoint {
@@ -251,7 +251,7 @@ pub(super) fn handle_knife_mode(
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     mut history: ResMut<CommandHistory>,
     mut knife: ResMut<KnifeMode>,
     snap_settings: Res<crate::snapping::SnapSettings>,
@@ -453,7 +453,7 @@ pub(super) fn handle_knife_mode(
             brush_entity,
             &mut knife,
             &mut brushes,
-            &mut bmesh_q,
+            &mut halfedge_q,
             &mut history,
         );
         return;
@@ -1301,12 +1301,12 @@ fn canonical_edge(a: usize, b: usize) -> (usize, usize) {
 }
 
 /// Run the queued path as a single knife commit, using only topology
-/// mutations on the `EditMesh` (no CDT). Wraps the whole thing in a
+/// mutations on the `HalfedgeMesh` (no CDT). Wraps the whole thing in a
 /// single `SetBrush` undo entry.
 ///
 /// Pipeline:
 ///
-/// 1. **Snapshot** `start_brush` and the current `EditMesh` so we can
+/// 1. **Snapshot** `start_brush` and the current `HalfedgeMesh` so we can
 ///    roll back atomically if anything panics or fails catastrophically.
 /// 2. **First, resolve each path point to a live `VertKey`**.
 ///    Vertex snaps lookup by position; edge snaps `split_edge` the live
@@ -1325,22 +1325,22 @@ fn commit_path(
     brush_entity: Entity,
     knife: &mut KnifeMode,
     brushes: &mut Query<&mut Brush>,
-    bmesh_q: &mut Query<&mut BrushEditMesh>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
     history: &mut ResMut<CommandHistory>,
 ) {
     let Ok(start_brush) = brushes.get(brush_entity).cloned() else {
         knife.path.clear();
         return;
     };
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         knife.path.clear();
         return;
     };
-    // Snapshot the live EditMesh so a catastrophe in either resolve
+    // Snapshot the live HalfedgeMesh so a catastrophe in either resolve
     // or chord (panic-equivalent return path) restores it exactly.
-    let start_editmesh = bmesh_component.mesh.clone();
-    let start_vert_keys = bmesh_component.vert_keys.clone();
-    let start_face_keys = bmesh_component.face_keys.clone();
+    let start_editmesh = halfedge.mesh.clone();
+    let start_vert_keys = halfedge.vert_keys.clone();
+    let start_face_keys = halfedge.face_keys.clone();
 
     // --- First, resolve each path point to a live VertKey. -------------
     //
@@ -1365,7 +1365,7 @@ fn commit_path(
             path_verts.push(v);
             continue;
         }
-        match resolve_path_point(&mut bmesh_component.mesh, point, &start_brush) {
+        match resolve_path_point(&mut halfedge.mesh, point, &start_brush) {
             Ok(v) => path_verts.push(v),
             Err(reason) => {
                 warn!(
@@ -1380,9 +1380,9 @@ fn commit_path(
 
     if resolve_failed {
         // Restore the snapshot and bail out without pushing to history.
-        bmesh_component.mesh = start_editmesh;
-        bmesh_component.vert_keys = start_vert_keys;
-        bmesh_component.face_keys = start_face_keys;
+        halfedge.mesh = start_editmesh;
+        halfedge.vert_keys = start_vert_keys;
+        halfedge.face_keys = start_face_keys;
         knife.path.clear();
         return;
     }
@@ -1409,7 +1409,7 @@ fn commit_path(
             );
             continue;
         }
-        match chord_between_verts(&mut bmesh_component.mesh, va, vb) {
+        match chord_between_verts(&mut halfedge.mesh, va, vb) {
             Ok(applied) => {
                 if applied {
                     applied_segments += 1;
@@ -1435,14 +1435,14 @@ fn commit_path(
     // commit those if any path point introduced new geometry.
     // Detect "did anything change" by comparing mesh sizes; if not,
     // restore and bail.
-    let mesh_unchanged = bmesh_component.mesh.vert_count() == start_editmesh.vert_count()
-        && bmesh_component.mesh.edge_count() == start_editmesh.edge_count()
-        && bmesh_component.mesh.face_count() == start_editmesh.face_count();
+    let mesh_unchanged = halfedge.mesh.vert_count() == start_editmesh.vert_count()
+        && halfedge.mesh.edge_count() == start_editmesh.edge_count()
+        && halfedge.mesh.face_count() == start_editmesh.face_count();
     if mesh_unchanged && applied_segments == 0 {
         debug!("Knife: commit applied no changes; restoring snapshot");
-        bmesh_component.mesh = start_editmesh;
-        bmesh_component.vert_keys = start_vert_keys;
-        bmesh_component.face_keys = start_face_keys;
+        halfedge.mesh = start_editmesh;
+        halfedge.vert_keys = start_vert_keys;
+        halfedge.face_keys = start_face_keys;
         knife.path.clear();
         return;
     }
@@ -1456,7 +1456,7 @@ fn commit_path(
     // from `start_brush.faces[material_idx]`. UV axes copy verbatim:
     // sub-faces are coplanar with their parent, so the parent's tangent
     // basis is correct for every sub-face.
-    let mut slot_to_src_material: Vec<u32> = bmesh_component
+    let mut slot_to_src_material: Vec<u32> = halfedge
         .mesh
         .faces
         .iter()
@@ -1464,7 +1464,7 @@ fn commit_path(
         .collect();
     slot_to_src_material.sort();
 
-    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    let new_topology = halfedge.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         // Restore the snapshot if we somehow lost the Brush component
         // (effectively impossible during normal commit; defensive).
@@ -1499,9 +1499,9 @@ fn commit_path(
     }
     brush.topology = new_topology;
 
-    // Re-lift EditMesh so vert_keys / face_keys stay consistent with
+    // Re-lift HalfedgeMesh so vert_keys / face_keys stay consistent with
     // the flattened brush topology.
-    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys: Vec<FaceKey> = vec![FaceKey::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -1510,9 +1510,9 @@ fn commit_path(
             new_face_keys[slot] = k;
         }
     }
-    bmesh_component.mesh = new_bmesh;
-    bmesh_component.vert_keys = new_vert_keys;
-    bmesh_component.face_keys = new_face_keys;
+    halfedge.mesh = new_bmesh;
+    halfedge.vert_keys = new_vert_keys;
+    halfedge.face_keys = new_face_keys;
 
     history.push_executed(Box::new(SetBrush {
         entity: brush_entity,
@@ -1531,31 +1531,31 @@ fn commit_path(
 /// true edge/face, so 1e-4 is a safe match radius.
 const KNIFE_POSITION_EPSILON: f32 = 1e-4;
 
-/// Resolve a single path point to a live `VertKey` in `bmesh`. May
+/// Resolve a single path point to a live `VertKey` in `mesh`. May
 /// mutate the mesh (split_edge / face_poke).
 fn resolve_path_point(
-    bmesh: &mut EditMesh,
+    mesh: &mut HalfedgeMesh,
     point: &KnifePathPoint,
     start_brush: &Brush,
 ) -> Result<VertKey, &'static str> {
     match point.kind {
-        KnifeSnapKind::Vertex => resolve_vertex_snap(bmesh, point, start_brush),
+        KnifeSnapKind::Vertex => resolve_vertex_snap(mesh, point, start_brush),
         KnifeSnapKind::EdgePoint | KnifeSnapKind::EdgeMidpoint => {
-            resolve_edge_snap(bmesh, point, start_brush)
+            resolve_edge_snap(mesh, point, start_brush)
         }
         KnifeSnapKind::FaceInterior | KnifeSnapKind::GridPoint => {
-            resolve_interior_snap(bmesh, point)
+            resolve_interior_snap(mesh, point)
         }
         KnifeSnapKind::PathPoint => {
             // PathPoint reclicks with no resolvable source (e.g., snap
             // metadata was incomplete) fall through to the underlying
             // kind based on whatever snap data was copied.
             if point.vert_idx.is_some() {
-                resolve_vertex_snap(bmesh, point, start_brush)
+                resolve_vertex_snap(mesh, point, start_brush)
             } else if point.edge_pair.is_some() {
-                resolve_edge_snap(bmesh, point, start_brush)
+                resolve_edge_snap(mesh, point, start_brush)
             } else {
-                resolve_interior_snap(bmesh, point)
+                resolve_interior_snap(mesh, point)
             }
         }
     }
@@ -1566,7 +1566,7 @@ fn resolve_path_point(
 /// at modal-start time; we map that to a 3D position and find any vert
 /// matching it within KNIFE_POSITION_EPSILON.
 fn resolve_vertex_snap(
-    bmesh: &EditMesh,
+    mesh: &HalfedgeMesh,
     point: &KnifePathPoint,
     start_brush: &Brush,
 ) -> Result<VertKey, &'static str> {
@@ -1577,7 +1577,7 @@ fn resolve_vertex_snap(
         .get(vi)
         .map(|v| v.position)
         .ok_or("vertex snap vert_idx out of range")?;
-    find_vert_by_position(bmesh, target).ok_or("vertex snap vert not found in live mesh")
+    find_vert_by_position(mesh, target).ok_or("vertex snap vert not found in live mesh")
 }
 
 /// Edge snap: find a live edge whose endpoints flank the click position
@@ -1585,22 +1585,22 @@ fn resolve_vertex_snap(
 /// finds the right sub-edge even after earlier mutations split the
 /// original edge into pieces.
 fn resolve_edge_snap(
-    bmesh: &mut EditMesh,
+    mesh: &mut HalfedgeMesh,
     point: &KnifePathPoint,
     _start_brush: &Brush,
 ) -> Result<VertKey, &'static str> {
     let click = point.local_pos;
-    let Some((ek, t)) = find_live_edge_for_position(bmesh, click) else {
+    let Some((ek, t)) = find_live_edge_for_position(mesh, click) else {
         // Fallback: if a sibling vert already exists at this position
         // from an earlier mutation (e.g., this same click position was
         // reached by an earlier face_poke / split_edge), return that
         // vert directly. This handles the "two consecutive edge clicks
         // on the same original edge" case where the second click sits
         // exactly on the new vert introduced by the first.
-        return find_vert_by_position(bmesh, click)
+        return find_vert_by_position(mesh, click)
             .ok_or("edge snap: no live edge or vert contains click position");
     };
-    split_edge(bmesh, ek, t).map_err(|_| "split_edge failed")
+    split_edge(mesh, ek, t).map_err(|_| "split_edge failed")
 }
 
 /// Interior snap: find the live face whose ring contains the click
@@ -1609,36 +1609,36 @@ fn resolve_edge_snap(
 /// tri or split-face child); the search walks every face and returns
 /// the one matching.
 fn resolve_interior_snap(
-    bmesh: &mut EditMesh,
+    mesh: &mut HalfedgeMesh,
     point: &KnifePathPoint,
 ) -> Result<VertKey, &'static str> {
     let click = point.local_pos;
     // First: maybe the click coincides with a live vert already (the
     // user clicked exactly on a newly-introduced center vert from a
     // prior poke). Reuse it without creating new geometry.
-    if let Some(v) = find_vert_by_position(bmesh, click) {
+    if let Some(v) = find_vert_by_position(mesh, click) {
         return Ok(v);
     }
-    let face_key = find_live_face_containing_point(bmesh, click)
+    let face_key = find_live_face_containing_point(mesh, click)
         .ok_or("interior snap: no live face contains click position")?;
     // Project the click onto the face plane for robust face_poke; the
     // op enforces a plane-distance tolerance and rejects out-of-plane
     // points.
-    let projected = project_point_onto_face(bmesh, face_key, click);
-    let result = face_poke(bmesh, face_key, projected).map_err(|_| "face_poke failed")?;
+    let projected = project_point_onto_face(mesh, face_key, click);
+    let result = face_poke(mesh, face_key, projected).map_err(|_| "face_poke failed")?;
     Ok(result.center_vert)
 }
 
-/// Walk every edge in `bmesh`. Return any edge whose segment passes
+/// Walk every edge in `mesh`. Return any edge whose segment passes
 /// within `KNIFE_POSITION_EPSILON` of `click`, plus the parameter `t`
 /// along that edge at the closest point. We strongly prefer interior
 /// hits (0 < t < 1) over endpoint hits: an endpoint hit means the
 /// click coincides with a vert, which the caller handles separately.
-fn find_live_edge_for_position(bmesh: &EditMesh, click: Vec3) -> Option<(EdgeKey, f32)> {
+fn find_live_edge_for_position(mesh: &HalfedgeMesh, click: Vec3) -> Option<(EdgeKey, f32)> {
     let mut best: Option<(EdgeKey, f32, f32)> = None; // (edge, t, dist)
-    for (k, e) in bmesh.edges.iter() {
-        let p0 = bmesh.verts[e.v[0]].co;
-        let p1 = bmesh.verts[e.v[1]].co;
+    for (k, e) in mesh.edges.iter() {
+        let p0 = mesh.verts[e.v[0]].co;
+        let p1 = mesh.verts[e.v[1]].co;
         let dir = p1 - p0;
         let len_sq = dir.length_squared();
         if len_sq < 1e-12 {
@@ -1664,14 +1664,14 @@ fn find_live_edge_for_position(bmesh: &EditMesh, click: Vec3) -> Option<(EdgeKey
     best.map(|(k, t, _)| (k, t))
 }
 
-/// Walk every face in `bmesh`. Return any face whose 2D ring (projected
+/// Walk every face in `mesh`. Return any face whose 2D ring (projected
 /// onto its newell plane) contains `click` AND whose plane is within
 /// `KNIFE_POSITION_EPSILON * 100` of `click`. We use a looser plane
 /// tolerance here (1e-2) because subsequent `face_poke` projects the
 /// click back onto the plane anyway.
-fn find_live_face_containing_point(bmesh: &EditMesh, click: Vec3) -> Option<FaceKey> {
-    for (k, face) in bmesh.faces.iter() {
-        let ring_positions = face_ring_positions(bmesh, k);
+fn find_live_face_containing_point(mesh: &HalfedgeMesh, click: Vec3) -> Option<FaceKey> {
+    for (k, face) in mesh.faces.iter() {
+        let ring_positions = face_ring_positions(mesh, k);
         if ring_positions.len() < 3 {
             continue;
         }
@@ -1696,13 +1696,13 @@ fn find_live_face_containing_point(bmesh: &EditMesh, click: Vec3) -> Option<Face
 /// Project `click` onto `face`'s plane (the face's normal_cache + a
 /// ring-centroid anchor). Used to keep `face_poke`'s plane-tolerance
 /// check happy.
-fn project_point_onto_face(bmesh: &EditMesh, face: FaceKey, click: Vec3) -> Vec3 {
-    let ring = face_ring_positions(bmesh, face);
+fn project_point_onto_face(mesh: &HalfedgeMesh, face: FaceKey, click: Vec3) -> Vec3 {
+    let ring = face_ring_positions(mesh, face);
     if ring.is_empty() {
         return click;
     }
     let centroid: Vec3 = ring.iter().copied().sum::<Vec3>() / ring.len() as f32;
-    let n = bmesh.faces[face].normal_cache;
+    let n = mesh.faces[face].normal_cache;
     if n.length_squared() < 1e-12 {
         return click;
     }
@@ -1712,13 +1712,13 @@ fn project_point_onto_face(bmesh: &EditMesh, face: FaceKey, click: Vec3) -> Vec3
 
 /// Return the world (brush-local) ring positions of `face` in loop
 /// order.
-fn face_ring_positions(bmesh: &EditMesh, face: FaceKey) -> Vec<Vec3> {
-    let f = &bmesh.faces[face];
+fn face_ring_positions(mesh: &HalfedgeMesh, face: FaceKey) -> Vec<Vec3> {
+    let f = &mesh.faces[face];
     let mut out = Vec::with_capacity(f.loop_count as usize);
     let mut cur = f.loop_first;
     for _ in 0..f.loop_count {
-        out.push(bmesh.verts[bmesh.loops[cur].vert].co);
-        cur = bmesh.loops[cur].next;
+        out.push(mesh.verts[mesh.loops[cur].vert].co);
+        cur = mesh.loops[cur].next;
     }
     out
 }
@@ -1775,11 +1775,11 @@ fn point_in_polygon_3d(point: Vec3, ring: &[Vec3], normal: Vec3) -> bool {
 /// already connected by a single edge or have collapsed to the same
 /// face boundary). `Err` for unrecoverable cases.
 fn chord_between_verts(
-    bmesh: &mut EditMesh,
+    mesh: &mut HalfedgeMesh,
     va: VertKey,
     vb: VertKey,
 ) -> Result<bool, &'static str> {
-    chord_between_verts_recursive(bmesh, va, vb, 0)
+    chord_between_verts_recursive(mesh, va, vb, 0)
 }
 
 /// Recursion depth limit: cuts that cross more than this many faces
@@ -1787,7 +1787,7 @@ fn chord_between_verts(
 const KNIFE_CROSS_FACE_MAX_DEPTH: u32 = 16;
 
 fn chord_between_verts_recursive(
-    bmesh: &mut EditMesh,
+    mesh: &mut HalfedgeMesh,
     va: VertKey,
     vb: VertKey,
     depth: u32,
@@ -1799,31 +1799,31 @@ fn chord_between_verts_recursive(
         return Ok(false);
     }
     // Same face containing both verts: direct split_face.
-    if let Some(face) = find_face_containing_both_verts(bmesh, va, vb) {
+    if let Some(face) = find_face_containing_both_verts(mesh, va, vb) {
         // If `va` and `vb` are adjacent in the face's ring, a chord
         // would yield a degenerate face. The path already follows the
         // existing edge between them; nothing to do.
-        if are_ring_neighbors(bmesh, face, va, vb) {
+        if are_ring_neighbors(mesh, face, va, vb) {
             return Ok(false);
         }
-        split_face(bmesh, face, va, vb).map_err(|_| "split_face failed")?;
+        split_face(mesh, face, va, vb).map_err(|_| "split_face failed")?;
         return Ok(true);
     }
 
     // Cross-face: find a face adjacent to `va` whose boundary the
     // segment (va_pos -> vb_pos) crosses. Split that boundary edge,
     // and recurse with the intermediate vert as the new `va`.
-    let va_pos = bmesh.verts[va].co;
-    let vb_pos = bmesh.verts[vb].co;
+    let va_pos = mesh.verts[va].co;
+    let vb_pos = mesh.verts[vb].co;
 
     let Some((boundary_face, crossing_edge, t)) =
-        find_outgoing_face_and_edge(bmesh, va, va_pos, vb_pos)
+        find_outgoing_face_and_edge(mesh, va, va_pos, vb_pos)
     else {
         return Err("no outgoing face/edge for cross-face chord");
     };
 
     // Split the boundary edge at the crossing.
-    let inter = split_edge(bmesh, crossing_edge, t).map_err(|_| "split_edge failed")?;
+    let inter = split_edge(mesh, crossing_edge, t).map_err(|_| "split_edge failed")?;
 
     // Chord va -> inter inside `boundary_face`. The face was just split
     // by split_edge such that its ring includes the new vert; if va is
@@ -1832,11 +1832,11 @@ fn chord_between_verts_recursive(
     // would be degenerate, which means va is actually the endpoint of
     // the crossing edge we just split, in which case the chord is just
     // the edge itself and there's nothing to split).
-    let live_face = find_face_containing_both_verts(bmesh, va, inter);
+    let live_face = find_face_containing_both_verts(mesh, va, inter);
     let mut any = false;
     if let Some(face) = live_face {
-        if !are_ring_neighbors(bmesh, face, va, inter) {
-            split_face(bmesh, face, va, inter).map_err(|_| "split_face failed (cross-face leg)")?;
+        if !are_ring_neighbors(mesh, face, va, inter) {
+            split_face(mesh, face, va, inter).map_err(|_| "split_face failed (cross-face leg)")?;
             any = true;
         }
         let _ = boundary_face; // captured for diagnostics only
@@ -1845,33 +1845,33 @@ fn chord_between_verts_recursive(
         // happen when `va` was at a fan vertex from a prior face_poke
         // and `boundary_face` was actually a different face. Recurse
         // from `va` toward `inter` so the next pass finds a route.
-        let sub = chord_between_verts_recursive(bmesh, va, inter, depth + 1)?;
+        let sub = chord_between_verts_recursive(mesh, va, inter, depth + 1)?;
         if sub {
             any = true;
         }
     }
 
     // Recurse for the second leg: inter -> vb.
-    let sub = chord_between_verts_recursive(bmesh, inter, vb, depth + 1)?;
+    let sub = chord_between_verts_recursive(mesh, inter, vb, depth + 1)?;
     Ok(any || sub)
 }
 
 /// Walk every face. Return any whose ring contains both `va` and `vb`.
 /// Deterministic for a given mesh state.
-fn find_face_containing_both_verts(bmesh: &EditMesh, va: VertKey, vb: VertKey) -> Option<FaceKey> {
-    for (k, f) in bmesh.faces.iter() {
+fn find_face_containing_both_verts(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<FaceKey> {
+    for (k, f) in mesh.faces.iter() {
         let mut has_a = false;
         let mut has_b = false;
         let mut cur = f.loop_first;
         for _ in 0..f.loop_count {
-            let v = bmesh.loops[cur].vert;
+            let v = mesh.loops[cur].vert;
             if v == va {
                 has_a = true;
             }
             if v == vb {
                 has_b = true;
             }
-            cur = bmesh.loops[cur].next;
+            cur = mesh.loops[cur].next;
         }
         if has_a && has_b {
             return Some(k);
@@ -1883,8 +1883,8 @@ fn find_face_containing_both_verts(bmesh: &EditMesh, va: VertKey, vb: VertKey) -
 /// Returns true if `va` and `vb` are consecutive in `face`'s ring
 /// (either direction). split_face errors on adjacent verts; this is
 /// the gate before we try.
-fn are_ring_neighbors(bmesh: &EditMesh, face: FaceKey, va: VertKey, vb: VertKey) -> bool {
-    let f = &bmesh.faces[face];
+fn are_ring_neighbors(mesh: &HalfedgeMesh, face: FaceKey, va: VertKey, vb: VertKey) -> bool {
+    let f = &mesh.faces[face];
     let n = f.loop_count as usize;
     if n < 2 {
         return false;
@@ -1892,8 +1892,8 @@ fn are_ring_neighbors(bmesh: &EditMesh, face: FaceKey, va: VertKey, vb: VertKey)
     let mut cur = f.loop_first;
     let mut ring: Vec<VertKey> = Vec::with_capacity(n);
     for _ in 0..n {
-        ring.push(bmesh.loops[cur].vert);
-        cur = bmesh.loops[cur].next;
+        ring.push(mesh.loops[cur].vert);
+        cur = mesh.loops[cur].next;
     }
     for i in 0..n {
         let p = ring[i];
@@ -1916,19 +1916,19 @@ fn are_ring_neighbors(bmesh: &EditMesh, face: FaceKey, va: VertKey, vb: VertKey)
 /// call only finds the FIRST face boundary crossing; subsequent recursive
 /// calls find later crossings until both endpoints land on the same face.
 fn find_outgoing_face_and_edge(
-    bmesh: &EditMesh,
+    mesh: &HalfedgeMesh,
     va: VertKey,
     va_pos: Vec3,
     vb_pos: Vec3,
 ) -> Option<(FaceKey, EdgeKey, f32)> {
     let mut best: Option<(FaceKey, EdgeKey, f32, f32)> = None; // face, edge, t, segment_t
-    for (face_key, f) in bmesh.faces.iter() {
+    for (face_key, f) in mesh.faces.iter() {
         // face must contain `va`
         let mut ring: Vec<(LoopKey, VertKey)> = Vec::with_capacity(f.loop_count as usize);
         let mut cur = f.loop_first;
         for _ in 0..f.loop_count {
-            ring.push((cur, bmesh.loops[cur].vert));
-            cur = bmesh.loops[cur].next;
+            ring.push((cur, mesh.loops[cur].vert));
+            cur = mesh.loops[cur].next;
         }
         if !ring.iter().any(|&(_, v)| v == va) {
             continue;
@@ -1936,13 +1936,13 @@ fn find_outgoing_face_and_edge(
         // Walk each ring edge; skip edges touching va.
         for i in 0..ring.len() {
             let (lp, _) = ring[i];
-            let edge_key = bmesh.loops[lp].edge;
-            let e = &bmesh.edges[edge_key];
+            let edge_key = mesh.loops[lp].edge;
+            let e = &mesh.edges[edge_key];
             if e.v[0] == va || e.v[1] == va {
                 continue;
             }
-            let e0 = bmesh.verts[e.v[0]].co;
-            let e1 = bmesh.verts[e.v[1]].co;
+            let e0 = mesh.verts[e.v[0]].co;
+            let e1 = mesh.verts[e.v[1]].co;
             // Compute the 2D crossing of (va_pos -> vb_pos) with the
             // edge, in the face's plane.
             let n = f.normal_cache;
@@ -2025,10 +2025,10 @@ fn segment_edge_intersection_in_plane(
 
 /// Find the vert with the smallest squared distance to `target`, but
 /// only return it when within `KNIFE_POSITION_EPSILON`.
-fn find_vert_by_position(bmesh: &EditMesh, target: Vec3) -> Option<VertKey> {
+fn find_vert_by_position(mesh: &HalfedgeMesh, target: Vec3) -> Option<VertKey> {
     let eps_sq = KNIFE_POSITION_EPSILON * KNIFE_POSITION_EPSILON;
     let mut best: Option<(VertKey, f32)> = None;
-    for (k, v) in bmesh.verts.iter() {
+    for (k, v) in mesh.verts.iter() {
         let d = (v.co - target).length_squared();
         match best {
             Some((_, prev)) if prev <= d => {}

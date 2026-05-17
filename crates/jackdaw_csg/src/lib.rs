@@ -380,7 +380,7 @@ fn manifold_to_brush(
     // holes via point-in-polygon containment, then:
     //   - simple ring (no holes): emit as a single face;
     //   - annulus (outer + holes): triangulate via earcut-with-holes and
-    //     emit each triangle as its own simply-connected face (every face has a single boundary cycle, so all editmesh
+    //     emit each triangle as its own simply-connected face (every face has a single boundary cycle, so all halfedge
     //     ops work without multi-cycle awareness).
     // Sub-faces of the same source coplanar group share material + UV via
     // `match_plane_to_slot`, so the visual is one continuous textured

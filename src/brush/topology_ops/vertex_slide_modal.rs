@@ -18,12 +18,12 @@ use bevy::window::PrimaryWindow;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
-use jackdaw_geometry::editmesh::cycles::disk_walk;
-use jackdaw_geometry::editmesh::ops::vertex_slide::vertex_slide;
-use jackdaw_geometry::editmesh::{EdgeKey, EditMesh, VertKey};
+use jackdaw_geometry::halfedge::cycles::disk_walk;
+use jackdaw_geometry::halfedge::ops::vertex_slide::vertex_slide;
+use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMesh, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -57,7 +57,7 @@ struct CandidateEdge {
 pub struct VertexSlideModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// EditMesh VertKey of the vertex being slid. Resolved against
+    /// HalfedgeMesh VertKey of the vertex being slid. Resolved against
     /// `start_editmesh`; we re-resolve it from `start_editmesh` each frame
     /// because the live mesh is reset to the snapshot before running the op.
     pub vert_key: Option<VertKey>,
@@ -72,7 +72,7 @@ pub struct VertexSlideModalState {
     /// Current factor in `[0, 1]`. 0 = no slide, 1 = collapsed onto neighbor.
     pub current_factor: f32,
     pub start_brush: Option<Brush>,
-    pub start_editmesh: Option<EditMesh>,
+    pub start_editmesh: Option<HalfedgeMesh>,
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -110,7 +110,7 @@ pub(crate) fn brush_vertex_slide_modal(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
     brush_transforms: Query<&GlobalTransform>,
     mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<VertexSlideModalState>,
@@ -146,18 +146,18 @@ pub(crate) fn brush_vertex_slide_modal(
         let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
             return OperatorResult::Cancelled;
         };
-        let Ok(bmesh_component) = bmesh_q.get(brush_entity) else {
+        let Ok(halfedge) = halfedge_q.get(brush_entity) else {
             return OperatorResult::Cancelled;
         };
 
         let Some(&vert_idx) = selection.vertices.first() else {
             return OperatorResult::Cancelled;
         };
-        let Some(&vert_key) = bmesh_component.vert_keys.get(vert_idx) else {
+        let Some(&vert_key) = halfedge.vert_keys.get(vert_idx) else {
             return OperatorResult::Cancelled;
         };
 
-        let mesh_snapshot = bmesh_component.mesh.clone();
+        let mesh_snapshot = halfedge.mesh.clone();
         let brush_xform = brush_transforms.get(brush_entity).ok();
 
         let candidates = collect_candidate_edges(
@@ -191,7 +191,7 @@ pub(crate) fn brush_vertex_slide_modal(
     if escape || rmb {
         // Live brush has been mutated each frame, so restore from the snapshot
         // before clearing modal state.
-        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
         *modal_state = VertexSlideModalState::default();
         return OperatorResult::Cancelled;
     }
@@ -261,7 +261,7 @@ pub(crate) fn brush_vertex_slide_modal(
     // Apply the slide to the live brush mesh so the user sees it as a real
     // mesh edit. The op result is discarded; the slid vertex is visible
     // through the regular brush mesh pipeline picking up `Changed<Brush>`.
-    apply_live_vertex_slide(&mut modal_state, &mut brushes, &mut bmesh_q);
+    apply_live_vertex_slide(&mut modal_state, &mut brushes, &mut halfedge_q);
 
     // Commit on LMB.
     if mouse.just_pressed(MouseButton::Left) {
@@ -275,7 +275,7 @@ pub(crate) fn brush_vertex_slide_modal(
         };
         if modal_state.chosen_idx.is_none() {
             // No chosen edge: treat as no-op cancel.
-            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
             *modal_state = VertexSlideModalState::default();
             return OperatorResult::Cancelled;
         }
@@ -284,7 +284,7 @@ pub(crate) fn brush_vertex_slide_modal(
         // record a useless undo entry. The live brush should already be back
         // to the snapshot (apply_live_vertex_slide resets when factor is sub-threshold).
         if modal_state.current_factor.abs() < 1e-4 {
-            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
             *modal_state = VertexSlideModalState::default();
             return OperatorResult::Cancelled;
         }
@@ -317,17 +317,17 @@ pub(crate) fn brush_vertex_slide_modal(
 fn cancel_vertex_slide(
     mut modal_state: ResMut<VertexSlideModalState>,
     mut brushes: Query<&mut Brush>,
-    mut bmesh_q: Query<&mut BrushEditMesh>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
 ) {
-    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut bmesh_q);
+    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
     *modal_state = VertexSlideModalState::default();
 }
 
-/// Reset the live brush + EditMesh to the snapshot captured at modal start.
+/// Reset the live brush + HalfedgeMesh to the snapshot captured at modal start.
 fn restore_brush_from_snapshot(
     modal_state: &VertexSlideModalState,
     brushes: &mut Query<&mut Brush>,
-    bmesh_q: &mut Query<&mut BrushEditMesh>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
 ) {
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
@@ -339,31 +339,31 @@ fn restore_brush_from_snapshot(
         return;
     };
     *brush = start_brush.clone();
-    if let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) {
-        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-            vec![Default::default(); bmesh.faces.len()];
-        for (k, f) in bmesh.faces.iter() {
+    if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
+        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = mesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
+            vec![Default::default(); mesh.faces.len()];
+        for (k, f) in mesh.faces.iter() {
             let slot = f.material_idx as usize;
             if slot < face_keys.len() {
                 face_keys[slot] = k;
             }
         }
-        bmesh_component.mesh = bmesh;
-        bmesh_component.vert_keys = vert_keys;
-        bmesh_component.face_keys = face_keys;
+        halfedge.mesh = mesh;
+        halfedge.vert_keys = vert_keys;
+        halfedge.face_keys = face_keys;
     }
 }
 
 /// Re-run `vertex_slide` against the snapshot at the current factor and write
-/// the resulting topology back into the live `Brush` + `BrushEditMesh`. Slide
+/// the resulting topology back into the live `Brush` + `BrushHalfedge`. Slide
 /// is a pure vertex transform: it never adds or removes faces, so no face
 /// growth or chained selection bookkeeping is needed.
 fn apply_live_vertex_slide(
     modal_state: &mut VertexSlideModalState,
     brushes: &mut Query<&mut Brush>,
-    bmesh_q: &mut Query<&mut BrushEditMesh>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
 ) {
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
@@ -377,7 +377,7 @@ fn apply_live_vertex_slide(
     let Some(vert_key) = modal_state.vert_key else {
         return;
     };
-    let Ok(mut bmesh_component) = bmesh_q.get_mut(brush_entity) else {
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return;
     };
 
@@ -389,19 +389,19 @@ fn apply_live_vertex_slide(
             return;
         };
         *brush = start_brush.clone();
-        let bmesh = EditMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = bmesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::editmesh::FaceKey> =
-            vec![Default::default(); bmesh.faces.len()];
-        for (k, f) in bmesh.faces.iter() {
+        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
+        let vert_keys: Vec<_> = mesh.verts.keys().collect();
+        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
+            vec![Default::default(); mesh.faces.len()];
+        for (k, f) in mesh.faces.iter() {
             let slot = f.material_idx as usize;
             if slot < face_keys.len() {
                 face_keys[slot] = k;
             }
         }
-        bmesh_component.mesh = bmesh;
-        bmesh_component.vert_keys = vert_keys;
-        bmesh_component.face_keys = face_keys;
+        halfedge.mesh = mesh;
+        halfedge.vert_keys = vert_keys;
+        halfedge.face_keys = face_keys;
         return;
     }
 
@@ -409,20 +409,20 @@ fn apply_live_vertex_slide(
     let chosen_edge = modal_state.candidates[chosen_idx].edge_key;
 
     // Always start the per-frame op from the clean snapshot.
-    bmesh_component.mesh = start_mesh.clone();
+    halfedge.mesh = start_mesh.clone();
 
     // Steer the `vertex_slide` op toward our chosen edge. The op reads
     // `verts[v].edge` to pick the slide target; the disk cycle's
     // doubly-linked structure (via `disk_next` / `disk_prev` on edges) is
     // independent of this anchor, so retargeting it does not break any
     // invariants. We have to do this after restoring the snapshot since
-    // `verts[v].edge` is part of the EditMesh state.
-    if let Some(vert) = bmesh_component.mesh.verts.get_mut(vert_key) {
+    // `verts[v].edge` is part of the HalfedgeMesh state.
+    if let Some(vert) = halfedge.mesh.verts.get_mut(vert_key) {
         vert.edge = Some(chosen_edge);
     }
 
     if vertex_slide(
-        &mut bmesh_component.mesh,
+        &mut halfedge.mesh,
         &[vert_key],
         modal_state.current_factor,
     )
@@ -432,22 +432,22 @@ fn apply_live_vertex_slide(
     }
 
     // Re-cache all face normals (slid vert can rotate face planes).
-    let face_keys_all: Vec<_> = bmesh_component.mesh.faces.keys().collect();
+    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
     for fk in face_keys_all {
-        let face = &bmesh_component.mesh.faces[fk];
+        let face = &halfedge.mesh.faces[fk];
         let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
         let mut cur = face.loop_first;
         for _ in 0..face.loop_count {
-            let lp = &bmesh_component.mesh.loops[cur];
-            ring_positions.push(bmesh_component.mesh.verts[lp.vert].co);
+            let lp = &halfedge.mesh.loops[cur];
+            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
             cur = lp.next;
         }
         let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        bmesh_component.mesh.faces[fk].normal_cache = new_normal;
+        halfedge.mesh.faces[fk].normal_cache = new_normal;
     }
 
-    // Flatten EditMesh -> topology, sync Brush.
-    let new_topology = bmesh_component.mesh.flatten_to_topology();
+    // Flatten HalfedgeMesh -> topology, sync Brush.
+    let new_topology = halfedge.mesh.flatten_to_topology();
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return;
     };
@@ -466,8 +466,8 @@ fn apply_live_vertex_slide(
     }
     brush.topology = new_topology;
 
-    // Re-lift EditMesh from new topology so vert_keys / face_keys are consistent.
-    let new_bmesh = EditMesh::lift_from_topology(&brush.topology);
+    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
+    let new_bmesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let new_vert_keys: Vec<_> = new_bmesh.verts.keys().collect();
     let mut new_face_keys = vec![Default::default(); new_bmesh.faces.len()];
     for (k, f) in new_bmesh.faces.iter() {
@@ -476,16 +476,16 @@ fn apply_live_vertex_slide(
             new_face_keys[slot] = k;
         }
     }
-    bmesh_component.mesh = new_bmesh;
-    bmesh_component.vert_keys = new_vert_keys;
-    bmesh_component.face_keys = new_face_keys;
+    halfedge.mesh = new_bmesh;
+    halfedge.vert_keys = new_vert_keys;
+    halfedge.face_keys = new_face_keys;
 }
 
 /// Enumerate incident edges of `vert_key` and project each neighbor into
 /// window-space pixels. Used at modal entry to pre-compute the per-frame
 /// "which edge does the cursor point at" decision.
 fn collect_candidate_edges(
-    mesh: &EditMesh,
+    mesh: &HalfedgeMesh,
     vert_key: VertKey,
     brush_xform: Option<&GlobalTransform>,
     camera_query: &Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
