@@ -1,6 +1,6 @@
 //! Split an edge at parametric position `t`. Inserts a new vertex on the
-//! edge, relabels the edge to (v[0], `new_vert`), creates a new edge
-//! (`new_vert`, v[1]), and splits each incident loop into two. Disk + radial
+//! edge, relabels the edge to (`v[0]`, `new_vert`), creates a new edge
+//! (`new_vert`, `v[1]`), and splits each incident loop into two. Disk + radial
 //! cycles maintained.
 
 use crate::halfedge::cycles::{

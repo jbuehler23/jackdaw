@@ -35,7 +35,7 @@ impl Brush {
     ///   0: (-x, -y, -z)   1: (+x, -y, -z)   2: (+x, +y, -z)   3: (-x, +y, -z)
     ///   4: (-x, -y, +z)   5: (+x, -y, +z)   6: (+x, +y, +z)   7: (-x, +y, +z)
     ///
-    /// Edge layout (canonical v[0] < v[1], indices 0-11):
+    /// Edge layout (canonical `v[0]` < `v[1]`, indices 0-11):
     ///   0:(0,1) 1:(1,2) 2:(2,3) 3:(0,3) - bottom ring
     ///   4:(4,5) 5:(5,6) 6:(6,7) 7:(4,7) - top ring
     ///   8:(0,4) 9:(1,5) 10:(2,6) 11:(3,7) - verticals

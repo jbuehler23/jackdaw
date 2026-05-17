@@ -49,9 +49,9 @@ pub struct LoopCutModalState {
     pub current_t: f32,
     pub start_brush: Option<Brush>,
     pub start_mesh: Option<HalfedgeMesh>,
-    /// Window-space pixel position of the start edge's canonical v[0].
+    /// Window-space pixel position of the start edge's canonical `v[0]`.
     pub start_v0_window: Vec2,
-    /// Window-space pixel position of the start edge's canonical v[1].
+    /// Window-space pixel position of the start edge's canonical `v[1]`.
     pub start_v1_window: Vec2,
 }
 
@@ -416,7 +416,7 @@ fn update_preview_lines(
     }
 }
 
-/// Project the canonical v[0] and v[1] of `edge_key` to window-space pixels.
+/// Project the canonical `v[0]` and `v[1]` of `edge_key` to window-space pixels.
 ///
 /// Returns `(v0_window, v1_window)` in the same coordinate system as
 /// `window.cursor_position()` so the cursor can be projected directly onto

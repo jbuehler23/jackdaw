@@ -5,8 +5,8 @@
 //! New geometry per inset on an N-ring face:
 //!   - N inner verts (offset = `old_pos` + `inward_dir` * amount, projected on face plane)
 //!   - N inner-ring edges
-//!   - N wall edges (old[i] -> new[i])
-//!   - N side-quad faces (CCW from outside): [old[i], old[i+1], new[i+1], new[i]]
+//!   - N wall edges (`old[i]` -> `new[i]`)
+//!   - N side-quad faces (CCW from outside): \[`old[i]`, `old[i+1]`, `new[i+1]`, `new[i]`\]
 
 use bevy::math::Vec3;
 

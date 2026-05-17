@@ -21,10 +21,10 @@ pub enum FaceSplitError {
 /// carry `edge = new_edge`, one per new face.
 ///
 /// Partition scheme (no overlap):
-///   Forward ring (original face):   ring[ia], ..., ring[ib-1], `bridge_orig`
-///     `bridge_orig.vert` = vb, .edge = `new_edge`, .next = ring[ia]
-///   Backward ring (new face):       ring[ib], ..., ring[ia-1], `bridge_new`
-///     `bridge_new.vert`  = va, .edge = `new_edge`, .next = ring[ib]
+///   Forward ring (original face):   `ring[ia]`, ..., `ring[ib-1]`, `bridge_orig`
+///     `bridge_orig.vert` = vb, .edge = `new_edge`, .next = `ring[ia]`
+///   Backward ring (new face):       `ring[ib]`, ..., `ring[ia-1]`, `bridge_new`
+///     `bridge_new.vert`  = va, .edge = `new_edge`, .next = `ring[ib]`
 ///
 /// This ensures every original loop ends up in exactly one face.
 pub fn split_face(

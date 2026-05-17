@@ -591,10 +591,7 @@ fn recover_polygon_boundaries(tris: &[(u32, u32, u32)]) -> Vec<Vec<u32>> {
         let mut ring = vec![seed_from];
         visited.insert(seed_from);
         let mut cur = seed_from;
-        loop {
-            let Some(&n) = next_of.get(&cur) else {
-                break;
-            };
+        while let Some(&n) = next_of.get(&cur) {
             if n == seed_from {
                 break;
             }

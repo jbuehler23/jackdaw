@@ -55,9 +55,9 @@ pub struct EdgeSlideModalState {
     pub edge_keys: Vec<EdgeKey>,
     /// Window-space cursor position at the moment the modal started.
     pub start_cursor: Vec2,
-    /// Cursor-tracks-edge info for the positive side (face[0] in radial cycle).
+    /// Cursor-tracks-edge info for the positive side (`face[0]` in radial cycle).
     pub pos_side: Option<SlideSideInfo>,
-    /// Cursor-tracks-edge info for the negative side (face[1] in radial cycle).
+    /// Cursor-tracks-edge info for the negative side (`face[1]` in radial cycle).
     /// `None` for boundary edges with only one adjacent quad face.
     pub neg_side: Option<SlideSideInfo>,
     /// Current factor in `[-1, +1]`. Sign flips slide side; 0 is no slide.
