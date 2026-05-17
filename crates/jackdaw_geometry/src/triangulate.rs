@@ -44,9 +44,8 @@ pub fn triangulate_polygon(vertices: &[Vec3], ring: &[u32], normal: Vec3) -> Vec
     }
 
     // Run earcut triangulation
-    let triangles = match earcutr::earcut(&flat, &[], 2) {
-        Ok(t) => t,
-        Err(_) => return Vec::new(),
+    let Ok(triangles) = earcutr::earcut(&flat, &[], 2) else {
+        return Vec::new();
     };
 
     // Convert earcut indices back to ring indices
@@ -87,7 +86,7 @@ pub fn triangulate_polygon_with_holes(
     }
     let (u_axis, v_axis) = compute_face_tangent_axes(normal);
 
-    let total_count: usize = outer.len() + holes.iter().map(|h| h.len()).sum::<usize>();
+    let total_count: usize = outer.len() + holes.iter().map(std::vec::Vec::len).sum::<usize>();
     let mut flat: Vec<f64> = Vec::with_capacity(total_count * 2);
     let mut all_indices: Vec<u32> = Vec::with_capacity(total_count);
     let mut hole_starts: Vec<usize> = Vec::with_capacity(holes.len());
@@ -112,9 +111,8 @@ pub fn triangulate_polygon_with_holes(
         }
     }
 
-    let triangles = match earcutr::earcut(&flat, &hole_starts, 2) {
-        Ok(t) => t,
-        Err(_) => return Vec::new(),
+    let Ok(triangles) = earcutr::earcut(&flat, &hole_starts, 2) else {
+        return Vec::new();
     };
 
     let mut out = Vec::with_capacity(triangles.len() / 3);

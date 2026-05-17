@@ -1,7 +1,7 @@
 //! Edge bevel: chamfer each selected edge into a quad. Single-segment MVP.
 //!
 //! For each selected edge `e` with endpoints `v0`, `v1` and two adjacent quad
-//! (loop_count >= 4) faces `fA`, `fB`:
+//! (`loop_count` >= 4) faces `fA`, `fB`:
 //!   - Replace `v0` with two vertices `v0_A` and `v0_B`, offset along the
 //!     parallel-edge direction in `fA` and `fB` by `width`. Same for `v1`.
 //!   - The original edge `e` is removed; in its place a new chamfer quad
@@ -52,7 +52,7 @@ pub struct BevelResult {
 /// Bevel each edge in `edges` into a quad of width `width`.
 ///
 /// Returns `EmptyInput` if `edges` is empty, `WidthTooSmall` if `width < 1e-6`.
-/// Per-edge non-manifold (not exactly 2 adjacent faces with loop_count >= 4)
+/// Per-edge non-manifold (not exactly 2 adjacent faces with `loop_count` >= 4)
 /// is silently skipped; the result reflects whatever edges did succeed.
 pub fn edge_bevel(
     mesh: &mut HalfedgeMesh,
@@ -223,8 +223,7 @@ fn bevel_one_edge(
         }
         if let Ok(face) = create_face_from_verts_with_material(mesh, ring, Some(*mat)) {
             // Re-cache normal.
-            let positions: Vec<bevy::math::Vec3> =
-                ring.iter().map(|&k| mesh.verts[k].co).collect();
+            let positions: Vec<bevy::math::Vec3> = ring.iter().map(|&k| mesh.verts[k].co).collect();
             mesh.faces[face].normal_cache = newell_normal(&positions);
         }
     }
@@ -261,8 +260,7 @@ fn bevel_one_edge(
     else {
         return;
     };
-    let positions: Vec<bevy::math::Vec3> =
-        chamfer_ring.iter().map(|&k| mesh.verts[k].co).collect();
+    let positions: Vec<bevy::math::Vec3> = chamfer_ring.iter().map(|&k| mesh.verts[k].co).collect();
     mesh.faces[chamfer_face].normal_cache = newell_normal(&positions);
     new_faces.push(chamfer_face);
 
@@ -487,13 +485,12 @@ fn purge_edges_at_vert(mesh: &mut HalfedgeMesh, v: VertKey) {
     }
 }
 
-/// Compute the next material_idx for a newly created face: one above
+/// Compute the next `material_idx` for a newly created face: one above
 /// the current maximum. Same convention as
 /// `create_face_from_verts_with_material` when called with `None`,
 /// but lets the caller hold onto the chosen index for later lookup.
 fn next_material_idx(mesh: &HalfedgeMesh) -> u32 {
-    mesh
-        .faces
+    mesh.faces
         .values()
         .map(|f| f.material_idx)
         .max()
@@ -502,8 +499,7 @@ fn next_material_idx(mesh: &HalfedgeMesh) -> u32 {
 
 /// Linear scan of `mesh.edges` for an edge connecting `va` and `vb`.
 fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    mesh
-        .edges
+    mesh.edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
         .map(|(k, _)| k)

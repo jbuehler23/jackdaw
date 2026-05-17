@@ -63,7 +63,6 @@ pub mod scene_io;
 pub mod scene_ops;
 pub mod scenes;
 pub mod sdk_paths;
-pub mod workspace_dropdown;
 pub mod selection;
 pub mod snapping;
 pub mod status_bar;
@@ -76,6 +75,7 @@ pub mod viewport;
 pub mod viewport_overlays;
 pub mod viewport_select;
 pub mod viewport_util;
+pub mod workspace_dropdown;
 
 use bevy::{
     app::PluginGroupBuilder,

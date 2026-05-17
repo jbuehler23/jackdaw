@@ -1,4 +1,4 @@
-//! Selection utilities for HalfedgeMesh. Selection state lives on element flags
+//! Selection utilities for `HalfedgeMesh`. Selection state lives on element flags
 //! (`VertFlag::SELECT`, `EdgeFlag::SELECT`, `FaceFlag::SELECT`).
 //!
 //! `SelectionDelta` records changes; `apply_*_delta` functions apply a delta
@@ -22,19 +22,19 @@ pub fn apply_vert_delta(
 ) -> SelectionDelta<VertKey> {
     let mut inverse = SelectionDelta::<VertKey>::default();
     for &k in &delta.add {
-        if let Some(v) = mesh.verts.get_mut(k) {
-            if !v.flag.contains(VertFlag::SELECT) {
-                v.flag.insert(VertFlag::SELECT);
-                inverse.remove.push(k);
-            }
+        if let Some(v) = mesh.verts.get_mut(k)
+            && !v.flag.contains(VertFlag::SELECT)
+        {
+            v.flag.insert(VertFlag::SELECT);
+            inverse.remove.push(k);
         }
     }
     for &k in &delta.remove {
-        if let Some(v) = mesh.verts.get_mut(k) {
-            if v.flag.contains(VertFlag::SELECT) {
-                v.flag.remove(VertFlag::SELECT);
-                inverse.add.push(k);
-            }
+        if let Some(v) = mesh.verts.get_mut(k)
+            && v.flag.contains(VertFlag::SELECT)
+        {
+            v.flag.remove(VertFlag::SELECT);
+            inverse.add.push(k);
         }
     }
     inverse
@@ -46,19 +46,19 @@ pub fn apply_edge_delta(
 ) -> SelectionDelta<EdgeKey> {
     let mut inverse = SelectionDelta::<EdgeKey>::default();
     for &k in &delta.add {
-        if let Some(e) = mesh.edges.get_mut(k) {
-            if !e.flag.contains(EdgeFlag::SELECT) {
-                e.flag.insert(EdgeFlag::SELECT);
-                inverse.remove.push(k);
-            }
+        if let Some(e) = mesh.edges.get_mut(k)
+            && !e.flag.contains(EdgeFlag::SELECT)
+        {
+            e.flag.insert(EdgeFlag::SELECT);
+            inverse.remove.push(k);
         }
     }
     for &k in &delta.remove {
-        if let Some(e) = mesh.edges.get_mut(k) {
-            if e.flag.contains(EdgeFlag::SELECT) {
-                e.flag.remove(EdgeFlag::SELECT);
-                inverse.add.push(k);
-            }
+        if let Some(e) = mesh.edges.get_mut(k)
+            && e.flag.contains(EdgeFlag::SELECT)
+        {
+            e.flag.remove(EdgeFlag::SELECT);
+            inverse.add.push(k);
         }
     }
     inverse
@@ -70,19 +70,19 @@ pub fn apply_face_delta(
 ) -> SelectionDelta<FaceKey> {
     let mut inverse = SelectionDelta::<FaceKey>::default();
     for &k in &delta.add {
-        if let Some(f) = mesh.faces.get_mut(k) {
-            if !f.flag.contains(FaceFlag::SELECT) {
-                f.flag.insert(FaceFlag::SELECT);
-                inverse.remove.push(k);
-            }
+        if let Some(f) = mesh.faces.get_mut(k)
+            && !f.flag.contains(FaceFlag::SELECT)
+        {
+            f.flag.insert(FaceFlag::SELECT);
+            inverse.remove.push(k);
         }
     }
     for &k in &delta.remove {
-        if let Some(f) = mesh.faces.get_mut(k) {
-            if f.flag.contains(FaceFlag::SELECT) {
-                f.flag.remove(FaceFlag::SELECT);
-                inverse.add.push(k);
-            }
+        if let Some(f) = mesh.faces.get_mut(k)
+            && f.flag.contains(FaceFlag::SELECT)
+        {
+            f.flag.remove(FaceFlag::SELECT);
+            inverse.add.push(k);
         }
     }
     inverse

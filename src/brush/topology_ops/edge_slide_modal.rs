@@ -21,7 +21,7 @@ use jackdaw_geometry::halfedge::ops::edge_slide::edge_slide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -49,7 +49,7 @@ pub struct SlideSideInfo {
 pub struct EdgeSlideModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// HalfedgeMesh EdgeKeys of the edges being slid. Resolved against
+    /// `HalfedgeMesh` `EdgeKeys` of the edges being slid. Resolved against
     /// `start_mesh`; we re-resolve them from `start_mesh` each frame
     /// because the live mesh is reset to the snapshot before running the op.
     pub edge_keys: Vec<EdgeKey>,
@@ -315,7 +315,7 @@ fn cancel_edge_slide(
     *modal_state = EdgeSlideModalState::default();
 }
 
-/// Reset the live brush + HalfedgeMesh to the snapshot captured at modal start.
+/// Reset the live brush + `HalfedgeMesh` to the snapshot captured at modal start.
 fn restore_brush_from_snapshot(
     modal_state: &EdgeSlideModalState,
     brushes: &mut Query<&mut Brush>,
@@ -532,8 +532,7 @@ fn compute_slide_sides(
 }
 
 fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    mesh
-        .edges
+    mesh.edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
         .map(|(k, _)| k)

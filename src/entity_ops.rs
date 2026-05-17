@@ -801,7 +801,7 @@ fn merge_payload_assets(world: &mut World, src_assets: &jackdaw_jsn::format::Jsn
 /// Returns the list of newly-assigned stable IDs (one per entity that had one).
 fn remap_stable_ids(
     world: &mut World,
-    entities: &mut Vec<jackdaw_jsn::format::JsnEntity>,
+    entities: &mut [jackdaw_jsn::format::JsnEntity],
 ) -> Vec<crate::draw_brush::BrushStableId> {
     const STABLE_ID_KEY: &str = "jackdaw::draw_brush::BrushStableId";
     let mut assigned = Vec::new();
@@ -1462,7 +1462,10 @@ mod tests {
 
         // The freshly-assigned ID must differ from the original.
         let fresh_id = assigned[0].0;
-        assert_ne!(fresh_id, original_id, "pasted entity should have a new stable ID");
+        assert_ne!(
+            fresh_id, original_id,
+            "pasted entity should have a new stable ID"
+        );
 
         // The entity component map should hold the new value.
         let stored = entities[0].components[STABLE_ID_KEY]
@@ -1494,6 +1497,10 @@ mod tests {
 
         // No BrushStableId present: nothing should be assigned or added.
         assert!(assigned.is_empty());
-        assert!(!entities[0].components.contains_key("jackdaw::draw_brush::BrushStableId"));
+        assert!(
+            !entities[0]
+                .components
+                .contains_key("jackdaw::draw_brush::BrushStableId")
+        );
     }
 }

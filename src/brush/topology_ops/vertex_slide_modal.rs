@@ -23,7 +23,7 @@ use jackdaw_geometry::halfedge::ops::vertex_slide::vertex_slide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -57,7 +57,7 @@ struct CandidateEdge {
 pub struct VertexSlideModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// HalfedgeMesh VertKey of the vertex being slid. Resolved against
+    /// `HalfedgeMesh` `VertKey` of the vertex being slid. Resolved against
     /// `start_mesh`; we re-resolve it from `start_mesh` each frame
     /// because the live mesh is reset to the snapshot before running the op.
     pub vert_key: Option<VertKey>,
@@ -323,7 +323,7 @@ fn cancel_vertex_slide(
     *modal_state = VertexSlideModalState::default();
 }
 
-/// Reset the live brush + HalfedgeMesh to the snapshot captured at modal start.
+/// Reset the live brush + `HalfedgeMesh` to the snapshot captured at modal start.
 fn restore_brush_from_snapshot(
     modal_state: &VertexSlideModalState,
     brushes: &mut Query<&mut Brush>,
@@ -421,13 +421,7 @@ fn apply_live_vertex_slide(
         vert.edge = Some(chosen_edge);
     }
 
-    if vertex_slide(
-        &mut halfedge.mesh,
-        &[vert_key],
-        modal_state.current_factor,
-    )
-    .is_err()
-    {
+    if vertex_slide(&mut halfedge.mesh, &[vert_key], modal_state.current_factor).is_err() {
         return;
     }
 

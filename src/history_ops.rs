@@ -58,10 +58,10 @@ pub(crate) fn history_undo(_: In<OperatorParameters>, mut commands: Commands) ->
         // history entries (commit happens on Enter), so the pop is a pure
         // resource mutation; the popped point goes onto `undone_path` for
         // symmetric redo.
-        if let Some(mut knife) = world.get_resource_mut::<crate::brush::KnifeMode>() {
-            if knife.undo_point() {
-                return;
-            }
+        if let Some(mut knife) = world.get_resource_mut::<crate::brush::KnifeMode>()
+            && knife.undo_point()
+        {
+            return;
         }
         cancel_active_modal_if_any(world);
         world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
@@ -75,10 +75,10 @@ pub(crate) fn history_undo(_: In<OperatorParameters>, mut commands: Commands) ->
 pub(crate) fn history_redo(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         // Symmetric to `history_undo`: re-add the last knife point if any.
-        if let Some(mut knife) = world.get_resource_mut::<crate::brush::KnifeMode>() {
-            if knife.redo_point() {
-                return;
-            }
+        if let Some(mut knife) = world.get_resource_mut::<crate::brush::KnifeMode>()
+            && knife.redo_point()
+        {
+            return;
         }
         cancel_active_modal_if_any(world);
         world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {

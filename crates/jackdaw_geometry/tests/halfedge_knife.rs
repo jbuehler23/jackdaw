@@ -1,6 +1,6 @@
 //! Smoke test for the knife bisect pipeline: edge-split two opposing edges of
 //! a cube's top face, then face-split the original face with a chord between
-//! the two new verts. Validates the post-cut counts and that the HalfedgeMesh
+//! the two new verts. Validates the post-cut counts and that the `HalfedgeMesh`
 //! still passes its half-edge invariants.
 //!
 //! Also exercises the polish features added on top of MVP knife:
@@ -14,17 +14,16 @@
 
 use bevy::math::Vec3;
 use jackdaw_geometry::halfedge::{
-    EdgeKey, HalfedgeMesh, FaceKey, VertKey,
+    EdgeKey, FaceKey, HalfedgeMesh, VertKey,
     ops::{edge_split::split_edge, face_poke::face_poke, face_split::split_face},
 };
 use jackdaw_jsn::Brush;
 
-/// Locate the FaceKey whose `material_idx == idx`. `lift_from_topology` sets
+/// Locate the `FaceKey` whose `material_idx == idx`. `lift_from_topology` sets
 /// `material_idx` to the topology face index, so this is a stable lookup that
-/// survives edge splits (which preserve face material_idx).
+/// survives edge splits (which preserve face `material_idx`).
 fn face_by_idx(mesh: &HalfedgeMesh, idx: u32) -> FaceKey {
-    mesh
-        .faces
+    mesh.faces
         .iter()
         .find(|(_, f)| f.material_idx == idx)
         .map(|(k, _)| k)
@@ -36,8 +35,7 @@ fn edge_with_endpoints(
     va: VertKey,
     vb: VertKey,
 ) -> jackdaw_geometry::halfedge::EdgeKey {
-    mesh
-        .edges
+    mesh.edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
         .map(|(k, _)| k)
@@ -137,8 +135,7 @@ fn knife_bisects_cube_top_face_along_chord() {
 
 /// Helper: walk every face and return one whose ring contains both verts.
 fn face_containing_verts(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<FaceKey> {
-    mesh
-        .faces
+    mesh.faces
         .iter()
         .find(|(_, f)| {
             let mut has_a = false;
@@ -492,7 +489,7 @@ fn knife_topology_two_edge_chord() {
 /// between consecutive centers runs into degenerate-chord cases (every
 /// pair of verts on a triangle is adjacent in the ring) which the
 /// commit pipeline correctly logs and skips. This test exercises a
-/// simpler topology: 1 face_poke on a quad, then chord from the new
+/// simpler topology: 1 `face_poke` on a quad, then chord from the new
 /// center to each of two opposite ring verts via cross-face routing.
 /// That mirrors the spec's "verify the new edges form the zigzag"
 /// intent at the op level.
@@ -605,8 +602,8 @@ fn knife_topology_zigzag_inside_face() {
 /// needs to traverse the shared edge between them. Pipeline:
 ///   Resolve: both endpoints are corners; no mutation.
 ///   Chord(va, vb) finds no single face containing both, so it
-///   routes: split_edge(shared, t) -> inter; split_face(A, va, inter);
-///   recurse(inter, vb) -> split_face(B, inter, vb).
+///   routes: `split_edge(shared`, t) -> inter; `split_face(A`, va, inter);
+///   recurse(inter, vb) -> `split_face(B`, inter, vb).
 #[test]
 fn knife_topology_cross_face_segment() {
     let brush = Brush::cuboid(2.0, 2.0, 2.0);
@@ -675,7 +672,7 @@ fn knife_topology_cross_face_segment() {
 }
 
 /// Atomicity: if the resolve pass fails after some mutations have
-/// already been applied, the HalfedgeMesh should be rolled back to its
+/// already been applied, the `HalfedgeMesh` should be rolled back to its
 /// pre-commit snapshot.
 ///
 /// We don't have direct access to `commit_path` in this geometry-only

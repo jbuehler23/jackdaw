@@ -15,7 +15,7 @@ use jackdaw_geometry::halfedge::ops::edge_bevel::edge_bevel;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -29,7 +29,7 @@ const BEVEL_SENSITIVITY: f32 = 0.01;
 pub struct EdgeBevelModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// HalfedgeMesh EdgeKeys of the edges being beveled. These are resolved
+    /// `HalfedgeMesh` `EdgeKeys` of the edges being beveled. These are resolved
     /// against `start_mesh`; we re-resolve them from `start_mesh`
     /// each frame because the live mesh is reset to the snapshot before
     /// running the op.
@@ -235,7 +235,7 @@ fn cancel_edge_bevel(
     *modal_state = EdgeBevelModalState::default();
 }
 
-/// Reset the live brush + HalfedgeMesh to the snapshot captured at modal start.
+/// Reset the live brush + `HalfedgeMesh` to the snapshot captured at modal start.
 fn restore_brush_from_snapshot(
     modal_state: &EdgeBevelModalState,
     brushes: &mut Query<&mut Brush>,
@@ -461,8 +461,7 @@ fn compute_max_bevel_width(mesh: &HalfedgeMesh, edges: &[EdgeKey]) -> f32 {
 }
 
 fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    mesh
-        .edges
+    mesh.edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
         .map(|(k, _)| k)

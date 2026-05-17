@@ -21,8 +21,7 @@ fn beveled_cube(half: f32, width: f32) -> Brush {
         .next()
         .expect("cube has at least one edge");
     edge_bevel(&mut mesh, &[edge], width).expect("bevel one cube edge");
-    mesh
-        .validate()
+    mesh.validate()
         .expect("halfedge invariants hold after bevel");
     let topology = mesh.flatten_to_topology();
 

@@ -5,7 +5,7 @@
 //!
 //! Deviation: if the tab being saved has no path (untitled), the Save
 //! action falls back to Discard with a warning log. Implementing the
-//! full rfd::FileDialog sub-flow for that case is deferred to a
+//! full `rfd::FileDialog` sub-flow for that case is deferred to a
 //! follow-up task.
 
 use bevy::picking::events::{Click, Pointer};
@@ -194,9 +194,7 @@ fn spawn_dialog_button(
         ChildOf(btn),
     ));
 
-    world
-        .entity_mut(btn)
-        .observe(on_dialog_button_click);
+    world.entity_mut(btn).observe(on_dialog_button_click);
 }
 
 // ---------------------------------------------------------------------------
@@ -359,9 +357,7 @@ fn spawn_quit_button(
         ChildOf(btn),
     ));
 
-    world
-        .entity_mut(btn)
-        .observe(on_quit_dialog_button_click);
+    world.entity_mut(btn).observe(on_quit_dialog_button_click);
 }
 
 /// Observer attached to each quit-dialog button.
@@ -431,9 +427,8 @@ pub fn on_dialog_button_click(
     }
 
     commands.queue(move |world: &mut World| {
-        let target = match world.resource::<PendingTabClose>().tab_index {
-            Some(idx) => idx,
-            None => return,
+        let Some(target) = world.resource::<PendingTabClose>().tab_index else {
+            return;
         };
 
         match action {
@@ -444,9 +439,7 @@ pub fn on_dialog_button_click(
                     return;
                 }
 
-                let tab_path = world
-                    .resource::<crate::scenes::Scenes>()
-                    .tabs[target]
+                let tab_path = world.resource::<crate::scenes::Scenes>().tabs[target]
                     .path
                     .clone();
 
@@ -459,7 +452,9 @@ pub fn on_dialog_button_click(
 
                     // Point SceneFilePath at this tab so save works correctly.
                     let path_str = path.to_string_lossy().into_owned();
-                    if let Some(mut sfp) = world.get_resource_mut::<crate::scene_io::SceneFilePath>() {
+                    if let Some(mut sfp) =
+                        world.get_resource_mut::<crate::scene_io::SceneFilePath>()
+                    {
                         sfp.path = Some(path_str);
                     }
 

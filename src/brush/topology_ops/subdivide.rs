@@ -6,7 +6,7 @@ use jackdaw_geometry::halfedge::ops::subdivide::subdivide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Split each selected edge at its midpoint and re-tessellate touched faces.
@@ -178,8 +178,7 @@ pub(crate) fn brush_subdivide(
 }
 
 fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    mesh
-        .edges
+    mesh.edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
         .map(|(k, _)| k)

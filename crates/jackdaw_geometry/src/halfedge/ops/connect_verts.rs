@@ -67,9 +67,8 @@ pub fn connect_verts(
             let vb = window[1];
 
             // Find which face currently contains both va and vb.
-            let target_face = match find_face_with_verts(mesh, va, vb) {
-                Some(fk) => fk,
-                None => continue, // no shared face exists any more; skip
+            let Some(target_face) = find_face_with_verts(mesh, va, vb) else {
+                continue;
             };
 
             let face_count_before = mesh.faces.len();

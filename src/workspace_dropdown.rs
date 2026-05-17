@@ -128,10 +128,10 @@ fn update_trigger_label(
         .unwrap_or_default();
     for children in triggers.iter() {
         for child in children.iter() {
-            if let Ok(mut text) = labels.get_mut(child) {
-                if text.0 != name {
-                    text.0 = name.clone();
-                }
+            if let Ok(mut text) = labels.get_mut(child)
+                && text.0 != name
+            {
+                text.0 = name.clone();
             }
         }
     }
@@ -147,7 +147,8 @@ fn on_trigger_click(
     if click.event().button != PointerButton::Primary {
         return;
     }
-    let Some(trigger) = find_ancestor_with(click.event_target(), &parents, |e| triggers.contains(e))
+    let Some(trigger) =
+        find_ancestor_with(click.event_target(), &parents, |e| triggers.contains(e))
     else {
         return;
     };
@@ -170,14 +171,14 @@ fn on_trigger_click(
 
     commands.queue(move |world: &mut World| {
         let popover = spawn_popover(world, right, top);
-        world.resource_mut::<WorkspaceDropdownState>().popover_entity = Some(popover);
+        world
+            .resource_mut::<WorkspaceDropdownState>()
+            .popover_entity = Some(popover);
     });
 }
 
 fn spawn_popover(world: &mut World, right_x: f32, top_y: f32) -> Entity {
-    let editor_font = world
-        .get_resource::<EditorFont>()
-        .map(|f| f.0.clone());
+    let editor_font = world.get_resource::<EditorFont>().map(|f| f.0.clone());
     let icon_font = world.get_resource::<IconFont>().map(|f| f.0.clone());
 
     let registry_snapshot: Vec<(String, String, Color, Option<String>)> = world
@@ -239,7 +240,11 @@ fn spawn_popover_row(
     editor_font: Option<Handle<Font>>,
     icon_font: Option<Handle<Font>>,
 ) {
-    let row_bg = if is_active { ROW_ACTIVE_BG } else { Color::NONE };
+    let row_bg = if is_active {
+        ROW_ACTIVE_BG
+    } else {
+        Color::NONE
+    };
     let label_color = if is_active {
         tokens::DOC_TAB_ACTIVE_LABEL
     } else {
@@ -385,10 +390,10 @@ fn on_workspace_changed_close_popover(
     mut state: ResMut<WorkspaceDropdownState>,
     mut commands: Commands,
 ) {
-    if let Some(popover) = state.popover_entity.take() {
-        if let Ok(mut ec) = commands.get_entity(popover) {
-            ec.despawn();
-        }
+    if let Some(popover) = state.popover_entity.take()
+        && let Ok(mut ec) = commands.get_entity(popover)
+    {
+        ec.despawn();
     }
 }
 
@@ -420,7 +425,7 @@ fn close_popover_on_outside_click(
     let cursor = windows
         .single()
         .ok()
-        .and_then(|w| w.cursor_position());
+        .and_then(bevy::prelude::Window::cursor_position);
     if let (Some(cursor), Ok(computed), Ok(global_tf)) = (
         cursor,
         popovers.get(popover_entity),
@@ -441,11 +446,7 @@ fn close_popover_on_outside_click(
     state.popover_entity = None;
 }
 
-fn find_ancestor_with<F>(
-    start: Entity,
-    parents: &Query<&ChildOf>,
-    predicate: F,
-) -> Option<Entity>
+fn find_ancestor_with<F>(start: Entity, parents: &Query<&ChildOf>, predicate: F) -> Option<Entity>
 where
     F: Fn(Entity) -> bool,
 {

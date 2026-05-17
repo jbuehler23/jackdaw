@@ -269,8 +269,7 @@ fn purge_edges_at_vert(mesh: &mut HalfedgeMesh, v: VertKey) {
 /// convention used by `create_face_from_verts_with_material` when called with
 /// `None`, but lets the caller hold onto the chosen index.
 fn next_material_idx(mesh: &HalfedgeMesh) -> u32 {
-    mesh
-        .faces
+    mesh.faces
         .values()
         .map(|f| f.material_idx)
         .max()

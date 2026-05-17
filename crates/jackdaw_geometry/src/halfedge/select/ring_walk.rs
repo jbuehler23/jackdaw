@@ -1,7 +1,7 @@
 //! Walk the perpendicular-edge ring around a starting edge, through quad faces.
-//! Different from loop_walk: collects `next` (perpendicular) edges in each face
+//! Different from `loop_walk`: collects `next` (perpendicular) edges in each face
 //! while crossing via `next.next` (parallel) edges, the same traversal path as
-//! loop_walk but recording the adjacent perpendicular edge at each step.
+//! `loop_walk` but recording the adjacent perpendicular edge at each step.
 
 use std::collections::HashSet;
 

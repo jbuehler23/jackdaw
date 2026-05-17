@@ -1,6 +1,6 @@
 //! Multi-scene editor state. Owns the tab list; the active tab's
 //! contents live in the live Bevy world, inactive tabs hold a
-//! JsnScene snapshot plus the per-tab view state and history.
+//! `JsnScene` snapshot plus the per-tab view state and history.
 
 pub mod confirm_dialog;
 pub mod operators;
@@ -127,7 +127,9 @@ pub fn persist_tabs_to_project_config(
     if !scenes.is_changed() {
         return;
     }
-    let Some(mut project_root) = project_root else { return; };
+    let Some(mut project_root) = project_root else {
+        return;
+    };
 
     let last_open_tabs: Vec<String> = scenes
         .tabs

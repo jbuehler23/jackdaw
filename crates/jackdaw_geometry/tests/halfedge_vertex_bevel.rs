@@ -59,8 +59,7 @@ fn vertex_bevel_cube_corner_creates_triangle_face() {
         "cube-corner bevel face is a triangle"
     );
 
-    mesh
-        .validate()
+    mesh.validate()
         .expect("HalfedgeMesh invariants hold after vertex bevel");
 }
 

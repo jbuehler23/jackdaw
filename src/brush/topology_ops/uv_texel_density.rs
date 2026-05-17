@@ -10,7 +10,7 @@ use crate::commands::CommandHistory;
 const DEFAULT_TEXEL_DENSITY: f32 = 64.0; // texels per world unit
 const ASSUMED_TEXTURE_PIXELS: f32 = 1024.0;
 
-/// Set uv_scale so the face has a uniform texel density (default 64 texels per
+/// Set `uv_scale` so the face has a uniform texel density (default 64 texels per
 /// world unit, assuming a 1024 px texture). Useful for keeping a consistent
 /// look across brushes of different sizes.
 #[operator(

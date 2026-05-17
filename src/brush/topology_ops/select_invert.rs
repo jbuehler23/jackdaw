@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 /// Flip the current selection: select everything that wasn't selected, deselect
 /// everything that was. Operates per the current edit mode (Vertex / Edge /
@@ -39,8 +39,7 @@ pub(crate) fn brush_select_invert(
         }
         EditMode::BrushEdit(BrushEditMode::Edge) => {
             // Build the canonical-pair representation for ALL HalfedgeMesh edges, then invert.
-            let mut all_edges: Vec<(usize, usize)> =
-                Vec::with_capacity(halfedge.mesh.edges.len());
+            let mut all_edges: Vec<(usize, usize)> = Vec::with_capacity(halfedge.mesh.edges.len());
             // Build VertKey -> idx lookup.
             let mut key_to_idx: std::collections::HashMap<
                 jackdaw_geometry::halfedge::VertKey,

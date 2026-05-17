@@ -104,7 +104,7 @@ pub fn loop_cut(
 }
 
 /// One quad face in the ring: the face and the two edges the cut crosses on it.
-/// `entry_edge` is the side shared with the previous face (or start_edge for the
+/// `entry_edge` is the side shared with the previous face (or `start_edge` for the
 /// first face). `exit_edge` is the parallel side shared with the next face.
 #[derive(Clone, Copy)]
 struct FaceHop {
@@ -113,13 +113,13 @@ struct FaceHop {
     exit_edge: EdgeKey,
 }
 
-/// Walk both directions from start_edge through the quad strip.
+/// Walk both directions from `start_edge` through the quad strip.
 ///
-/// Returns a list of `FaceHop`s. Each entry_edge and exit_edge in the list is
-/// the cut edges bounding that face. For a closed ring the exit_edge of the
-/// last face equals the entry_edge of the first (start_edge itself), so
-/// start_edge appears as the entry of the first face and the exit of the last.
-/// For an open chain, start_edge appears only as an entry edge.
+/// Returns a list of `FaceHop`s. Each `entry_edge` and `exit_edge` in the list is
+/// the cut edges bounding that face. For a closed ring the `exit_edge` of the
+/// last face equals the `entry_edge` of the first (`start_edge` itself), so
+/// `start_edge` appears as the entry of the first face and the exit of the last.
+/// For an open chain, `start_edge` appears only as an entry edge.
 ///
 /// The caller deduplicates edges across hops before splitting.
 fn walk_loop_cut_ring(mesh: &HalfedgeMesh, start_edge: EdgeKey) -> Vec<FaceHop> {

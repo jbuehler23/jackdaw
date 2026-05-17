@@ -9,15 +9,14 @@
 
 use bevy::math::Vec3;
 use jackdaw_geometry::halfedge::{
-    HalfedgeMesh, FaceKey, VertKey,
+    FaceKey, HalfedgeMesh, VertKey,
     ops::face_retriangulate::{RetriangulateError, face_retriangulate},
 };
 use jackdaw_jsn::Brush;
 
-/// Locate the FaceKey whose `material_idx == idx`.
+/// Locate the `FaceKey` whose `material_idx == idx`.
 fn face_by_idx(mesh: &HalfedgeMesh, idx: u32) -> FaceKey {
-    mesh
-        .faces
+    mesh.faces
         .iter()
         .find(|(_, f)| f.material_idx == idx)
         .map(|(k, _)| k)
@@ -38,8 +37,7 @@ fn face_ring(mesh: &HalfedgeMesh, face: FaceKey) -> Vec<VertKey> {
 
 /// Return `true` if an edge exists in the mesh connecting `va` and `vb`.
 fn has_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> bool {
-    mesh
-        .edges
+    mesh.edges
         .iter()
         .any(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
 }

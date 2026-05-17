@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "diagnostic test prints geometry to stdout for inspection"
+)]
+
 use bevy::math::Vec3;
 use jackdaw_geometry::halfedge::{
     HalfedgeMesh,

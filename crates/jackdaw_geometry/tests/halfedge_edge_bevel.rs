@@ -51,8 +51,7 @@ fn bevel_cube_edge_creates_chamfer_quad() {
     // (v1_A,v1_B). For a cube vertex with degree 3, each end-cap edge is
     // shared with the rebuilt third face, so it gets created exactly once.
     let _ = initial_edges; // suppress unused if assertion changes
-    mesh
-        .validate()
+    mesh.validate()
         .expect("HalfedgeMesh invariants hold after bevel");
 }
 
@@ -178,7 +177,7 @@ fn bevel_every_cube_edge_is_a_parallelogram() {
 }
 
 /// Beveling an edge adjacent to an existing chamfer still produces a clean
-/// parallelogram. With the in-face-perpendicular offset (face_normal x walk_dir)
+/// parallelogram. With the in-face-perpendicular offset (`face_normal` x `walk_dir`)
 /// the chamfer's rails in each adjacent face are perpendicular to the selected
 /// edge and parallel to it as vectors, regardless of whether the adjacent face
 /// is axis-aligned or a slanted chamfer.
@@ -211,8 +210,7 @@ fn bevel_adjacent_to_existing_chamfer_is_still_a_parallelogram() {
     // corners get torn down). In that case we just pick another fresh edge
     // adjacent to the new chamfer to demonstrate the same point.
     let second_edge = touching.unwrap_or_else(|| {
-        mesh
-            .edges
+        mesh.edges
             .keys()
             .nth(3)
             .expect("plenty of edges remain after first bevel")
@@ -279,7 +277,6 @@ fn bevel_preserves_face_count_plus_new_chamfer() {
         initial_faces + 2,
         "face count +N chamfers"
     );
-    mesh
-        .validate()
+    mesh.validate()
         .expect("invariants hold after multi-edge bevel");
 }

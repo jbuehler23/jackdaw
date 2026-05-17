@@ -7,7 +7,7 @@
 //!   amount. The brush mesh is mutated each frame so the user sees the live
 //!   extrusion as a real mesh edit.
 //!
-//! Both share the same HalfedgeMesh op (`extrude_face_region`) and the same
+//! Both share the same `HalfedgeMesh` op (`extrude_face_region`) and the same
 //! chained selection behavior: post-commit, `BrushSelection.faces` is updated
 //! to the new top face indices.
 
@@ -18,10 +18,10 @@ use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::ops::extrude_face_region::extrude_face_region;
-use jackdaw_geometry::halfedge::{HalfedgeMesh, FaceKey};
+use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -40,7 +40,7 @@ const EXTRUDE_SENSITIVITY: f32 = 0.01;
 pub struct ExtrudeModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// HalfedgeMesh FaceKeys of the faces being extruded. Resolved against
+    /// `HalfedgeMesh` `FaceKeys` of the faces being extruded. Resolved against
     /// `start_mesh`; we re-resolve them from `start_mesh` each frame
     /// because the live mesh is reset to the snapshot before running the op.
     pub face_keys: Vec<FaceKey>,
@@ -121,9 +121,7 @@ pub(crate) fn brush_extrude_region(
     // `count(faces with material_idx < M)` after flatten.
     let mut top_material_idxs: Vec<u32> = Vec::with_capacity(mesh_faces.len());
     for fk in mesh_faces {
-        if let Ok(result) =
-            extrude_face_region(&mut halfedge.mesh, fk, DEFAULT_EXTRUDE_DEPTH)
-        {
+        if let Ok(result) = extrude_face_region(&mut halfedge.mesh, fk, DEFAULT_EXTRUDE_DEPTH) {
             let mtx = halfedge.mesh.faces[result.top_face].material_idx;
             top_material_idxs.push(mtx);
         }
@@ -423,7 +421,7 @@ fn cancel_extrude(
     *modal_state = ExtrudeModalState::default();
 }
 
-/// Reset the live brush + HalfedgeMesh to the snapshot captured at modal start.
+/// Reset the live brush + `HalfedgeMesh` to the snapshot captured at modal start.
 fn restore_brush_from_snapshot(
     modal_state: &ExtrudeModalState,
     brushes: &mut Query<&mut Brush>,
@@ -514,8 +512,7 @@ fn apply_live_extrude(
     // `count(faces with material_idx < M)` after flatten.
     let mut top_material_idxs: Vec<u32> = Vec::with_capacity(modal_state.face_keys.len());
     for &fk in &modal_state.face_keys {
-        if let Ok(result) =
-            extrude_face_region(&mut halfedge.mesh, fk, modal_state.current_amount)
+        if let Ok(result) = extrude_face_region(&mut halfedge.mesh, fk, modal_state.current_amount)
         {
             let mtx = halfedge.mesh.faces[result.top_face].material_idx;
             top_material_idxs.push(mtx);

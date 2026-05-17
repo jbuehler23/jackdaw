@@ -16,7 +16,7 @@ use jackdaw_geometry::halfedge::ops::vertex_bevel::vertex_bevel;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -31,7 +31,7 @@ const VERTEX_BEVEL_SENSITIVITY: f32 = 0.01;
 pub struct VertexBevelModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// HalfedgeMesh VertKey of the vertex being beveled. Re-resolved against
+    /// `HalfedgeMesh` `VertKey` of the vertex being beveled. Re-resolved against
     /// `start_mesh` each frame because the live mesh is reset to the
     /// snapshot before running the op.
     pub vert_key: Option<VertKey>,
@@ -229,7 +229,7 @@ fn cancel_vertex_bevel(
     *modal_state = VertexBevelModalState::default();
 }
 
-/// Reset the live brush + HalfedgeMesh to the snapshot captured at modal start.
+/// Reset the live brush + `HalfedgeMesh` to the snapshot captured at modal start.
 fn restore_brush_from_snapshot(
     modal_state: &VertexBevelModalState,
     brushes: &mut Query<&mut Brush>,
@@ -310,13 +310,7 @@ fn apply_live_bevel(
     // Always start the per-frame op from the clean snapshot.
     halfedge.mesh = start_mesh.clone();
 
-    if vertex_bevel(
-        &mut halfedge.mesh,
-        vert_key,
-        modal_state.current_width,
-    )
-    .is_err()
-    {
+    if vertex_bevel(&mut halfedge.mesh, vert_key, modal_state.current_width).is_err() {
         return;
     }
 

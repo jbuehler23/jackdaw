@@ -59,17 +59,16 @@ pub fn remove_doubles(mesh: &mut HalfedgeMesh, distance: f32) -> Result<MergeRes
     // is first encountered, since we iterate in sorted order).
     // cluster_canonical maps root -> canonical VertKey.
     let mut cluster_canonical: HashMap<usize, VertKey> = HashMap::new();
-    for i in 0..n {
+    for (i, entry) in keyed.iter().enumerate().take(n) {
         let root = union_find_root(&mut parent, i);
-        cluster_canonical.entry(root).or_insert(keyed[i].0);
+        cluster_canonical.entry(root).or_insert(entry.0);
     }
 
-    // Build vert_remap: original_key -> canonical_key.
     let mut vert_remap: HashMap<VertKey, VertKey> = HashMap::new();
-    for i in 0..n {
+    for (i, entry) in keyed.iter().enumerate().take(n) {
         let root = union_find_root(&mut parent, i);
         let canonical = cluster_canonical[&root];
-        vert_remap.insert(keyed[i].0, canonical);
+        vert_remap.insert(entry.0, canonical);
     }
 
     let merged_count = vert_remap.iter().filter(|(k, v)| **k != **v).count();
@@ -114,9 +113,10 @@ pub fn remove_doubles(mesh: &mut HalfedgeMesh, distance: f32) -> Result<MergeRes
     for i in 0..n {
         let root = union_find_root(&mut parent, i);
         let canonical = cluster_canonical[&root];
-        if !canonical_to_new_idx.contains_key(&canonical) {
+        if let std::collections::hash_map::Entry::Vacant(e) = canonical_to_new_idx.entry(canonical)
+        {
             let new_idx = new_vertices.len() as u32;
-            canonical_to_new_idx.insert(canonical, new_idx);
+            e.insert(new_idx);
             new_vertices.push(MeshVert {
                 position: mesh.verts[canonical].co,
             });
@@ -181,10 +181,10 @@ pub fn remove_doubles(mesh: &mut HalfedgeMesh, distance: f32) -> Result<MergeRes
                 continue;
             };
             // Skip if this vert is the same as the previous one (consecutive duplicate).
-            if let Some(&(prev_v, _)) = ring.last() {
-                if prev_v == new_v {
-                    continue;
-                }
+            if let Some(&(prev_v, _)) = ring.last()
+                && prev_v == new_v
+            {
+                continue;
             }
             ring.push((new_v, new_e));
         }

@@ -9,7 +9,7 @@ use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::FaceKey;
 use jackdaw_geometry::halfedge::select::linked_walk::linked_walk;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 /// Expand the face selection to all faces reachable via shared edges from
 /// each selected face. Edges flagged SHARP or SEAM act as walk blockers

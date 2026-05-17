@@ -7,7 +7,7 @@ use jackdaw_jsn::Brush;
 use crate::brush::{BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
-/// Set uv_scale so the face spans 0..1 in UV space. The texture covers the
+/// Set `uv_scale` so the face spans 0..1 in UV space. The texture covers the
 /// face exactly once.
 #[operator(
     id = "brush.face.uv.fit_to_face",

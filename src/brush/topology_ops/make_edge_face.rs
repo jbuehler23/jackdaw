@@ -6,10 +6,10 @@ use jackdaw_geometry::halfedge::VertKey;
 use jackdaw_geometry::halfedge::ops::contextual_create::{ContextualResult, contextual_create};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
-/// Captured selection target for the F-key contextual_create result. Held
+/// Captured selection target for the F-key `contextual_create` result. Held
 /// across the flatten/re-lift roundtrip so the post-commit selection update
 /// can map back to a topology index (or vertex index pair).
 enum ChainTarget {

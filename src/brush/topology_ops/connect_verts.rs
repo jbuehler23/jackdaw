@@ -6,7 +6,7 @@ use jackdaw_geometry::halfedge::ops::connect_verts::connect_verts;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Connect selected verts in the same face with new edges, splitting the face.

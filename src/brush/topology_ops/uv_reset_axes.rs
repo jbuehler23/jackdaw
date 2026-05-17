@@ -8,7 +8,7 @@ use crate::brush::{BrushEditMode, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Recompute the U and V axes on each selected face from the face normal.
-/// Resets uv_offset and uv_rotation. Keeps uv_scale unchanged.
+/// Resets `uv_offset` and `uv_rotation`. Keeps `uv_scale` unchanged.
 #[operator(
     id = "brush.face.uv.reset_axes",
     label = "Reset UV Axes",

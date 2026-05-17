@@ -8,7 +8,7 @@ use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::select::ring_walk::ring_walk;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 /// Expand the edge selection by walking the perpendicular-edge ring around each
 /// selected edge through quad faces. Stops at non-quad faces or boundary
@@ -94,8 +94,7 @@ pub(crate) fn brush_select_ring(
 }
 
 fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    mesh
-        .edges
+    mesh.edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
         .map(|(k, _)| k)

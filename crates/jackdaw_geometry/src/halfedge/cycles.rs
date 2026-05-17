@@ -1,9 +1,9 @@
-//! Disk and radial cycle maintenance for HalfedgeMesh.
+//! Disk and radial cycle maintenance for `HalfedgeMesh`.
 //!
 //! Disk cycle: doubly-linked ring of edges around a vertex.
 //! Radial cycle: doubly-linked ring of loops around an edge (one per incident face).
 //!
-//! These cycles give half-edge meshes O(1) adjacency walks. All HalfedgeMesh
+//! These cycles give half-edge meshes O(1) adjacency walks. All `HalfedgeMesh`
 //! mutations that add or remove edges / loops MUST keep the cycles consistent.
 
 use crate::halfedge::types::*;

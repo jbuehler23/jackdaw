@@ -1,6 +1,6 @@
 use bevy::math::Vec3;
 use jackdaw_geometry::halfedge::{
-    HalfedgeMesh, FaceKey,
+    FaceKey, HalfedgeMesh,
     ops::face_poke::{PokeError, face_poke},
 };
 use jackdaw_jsn::Brush;
@@ -8,8 +8,7 @@ use jackdaw_jsn::Brush;
 /// Find the cuboid face whose cached normal matches `target`.
 /// Cuboid faces are 6 axis-aligned quads, so this uniquely identifies one.
 fn face_with_normal(mesh: &HalfedgeMesh, target: Vec3) -> FaceKey {
-    mesh
-        .faces
+    mesh.faces
         .iter()
         .find(|(_, f)| f.normal_cache.distance(target) < 1e-3)
         .map(|(k, _)| k)

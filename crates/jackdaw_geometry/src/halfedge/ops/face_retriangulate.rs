@@ -277,7 +277,6 @@ fn tear_down_face(mesh: &mut HalfedgeMesh, face: FaceKey) {
     mesh.faces.remove(face);
 }
 
-#[allow(dead_code)]
 fn _project_2d(p: Vec3, origin: Vec3, u_axis: Vec3, v_axis: Vec3) -> Vec2 {
     let d = p - origin;
     Vec2::new(d.dot(u_axis), d.dot(v_axis))
@@ -363,7 +362,7 @@ fn merge_pass(
         if a >= ring_len || b >= ring_len {
             return false;
         }
-        let diff = if a >= b { a - b } else { b - a };
+        let diff = a.abs_diff(b);
         diff == 1 || diff == ring_len - 1
     };
 

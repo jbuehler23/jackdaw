@@ -152,7 +152,7 @@ impl<'a> CsgInput<'a> {
 struct ConvertedInput {
     manifold: Manifold,
     /// Per-input-face slot data. After a boolean we use the plane of
-    /// each output triangle to look up the matching FaceSlot from this
+    /// each output triangle to look up the matching `FaceSlot` from this
     /// vec (or the partner brush's vec).
     face_slots: Vec<FaceSlot>,
 }
@@ -421,19 +421,17 @@ fn manifold_to_brush(
         // ultimately nested inside). `None` => the ring is itself an outer.
         let n = normalized_rings.len();
         let mut topmost_container: Vec<Option<usize>> = vec![None; n];
-        for i in 0..n {
-            let test_3d = positions[normalized_rings[i][0] as usize];
+        for (i, ring) in normalized_rings.iter().enumerate() {
+            let test_3d = positions[ring[0] as usize];
             let test_2d = Vec2::new(test_3d.dot(u_axis), test_3d.dot(v_axis));
             let mut best: Option<usize> = None;
             let mut best_area = f32::MAX;
-            for j in 0..n {
+            for (j, other) in normalized_rings.iter().enumerate() {
                 if i == j {
                     continue;
                 }
-                if point_in_ring_2d(test_2d, &normalized_rings[j], &positions, u_axis, v_axis)
-                {
-                    let area =
-                        ring_area_2d(&normalized_rings[j], &positions, u_axis, v_axis).abs();
+                if point_in_ring_2d(test_2d, other, &positions, u_axis, v_axis) {
+                    let area = ring_area_2d(other, &positions, u_axis, v_axis).abs();
                     if area < best_area {
                         best_area = area;
                         best = Some(j);
@@ -444,16 +442,16 @@ fn manifold_to_brush(
         }
 
         let mut groupings: Vec<(usize, Vec<usize>)> = Vec::new();
-        for i in 0..n {
-            if topmost_container[i].is_none() {
+        for (i, container) in topmost_container.iter().enumerate() {
+            if container.is_none() {
                 groupings.push((i, Vec::new()));
             }
         }
-        for i in 0..n {
-            if let Some(parent) = topmost_container[i] {
-                if let Some(entry) = groupings.iter_mut().find(|(o, _)| *o == parent) {
-                    entry.1.push(i);
-                }
+        for (i, container) in topmost_container.iter().enumerate() {
+            if let Some(parent) = *container
+                && let Some(entry) = groupings.iter_mut().find(|(o, _)| *o == parent)
+            {
+                entry.1.push(i);
             }
         }
 
@@ -487,23 +485,14 @@ fn manifold_to_brush(
                     .iter()
                     .map(|&hi| normalized_rings[hi].clone())
                     .collect();
-                let tris = triangulate_polygon_with_holes(
-                    &positions,
-                    outer,
-                    &holes,
-                    g.plane.normal,
-                );
+                let tris =
+                    triangulate_polygon_with_holes(&positions, outer, &holes, g.plane.normal);
                 // Greedy tris-to-quads merge: matches the common post-boolean
                 // cleanup. Adjacent coplanar tri pairs combine into a convex
                 // quad when the merge is geometrically valid; otherwise the
                 // tri stays. For a rectangular frame around a rectangular
                 // hole, this collapses ~8 tris into 4 trapezoidal quads.
-                let polys = merge_coplanar_tris_to_quads(
-                    &tris,
-                    &positions,
-                    u_axis,
-                    v_axis,
-                );
+                let polys = merge_coplanar_tris_to_quads(&tris, &positions, u_axis, v_axis);
                 for poly in polys {
                     if poly.len() < 3 {
                         continue;
@@ -626,7 +615,7 @@ fn recover_polygon_boundaries(tris: &[(u32, u32, u32)]) -> Vec<Vec<u32>> {
     rings
 }
 
-/// 2D signed area of a 3D ring projected onto the (u_axis, v_axis) plane.
+/// 2D signed area of a 3D ring projected onto the (`u_axis`, `v_axis`) plane.
 /// Positive when the ring is wound CCW viewed from +N (with N = u x v).
 fn ring_area_2d(ring: &[u32], positions: &[Vec3], u: Vec3, v: Vec3) -> f32 {
     if ring.len() < 3 {
@@ -844,7 +833,7 @@ pub fn brush_difference_split(
 }
 
 /// Union of an arbitrary number of brushes (used by Join's mesh-CSG
-/// path; the parry convex_hull path remains for true convex inputs).
+/// path; the parry `convex_hull` path remains for true convex inputs).
 pub fn brush_batch_union(inputs: &[CsgInput<'_>]) -> Result<CsgBrush, CsgError> {
     if inputs.is_empty() {
         return Err(CsgError::DegenerateBrush);
@@ -927,7 +916,6 @@ pub fn brush_recentre(brush: &mut CsgBrush) -> Vec3 {
     centroid
 }
 
-#[allow(dead_code)]
 const _: f32 = EPSILON;
 
 #[cfg(test)]

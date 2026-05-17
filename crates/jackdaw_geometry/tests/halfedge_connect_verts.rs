@@ -62,8 +62,8 @@ fn connect_verts_in_different_faces_splits_each_face() {
     mesh.validate().expect("valid");
     // Each face should split, so face count goes up by at least 1 (more if both faces had
     // diagonal verts that don't conflict).
-    assert!(mesh.face_count() >= initial_faces + 1);
-    assert!(result.new_edges.len() >= 1);
+    assert!(mesh.face_count() > initial_faces);
+    assert!(!result.new_edges.is_empty());
 }
 
 #[test]

@@ -78,7 +78,7 @@ fn dissolve_one_vert(mesh: &mut HalfedgeMesh, v: VertKey) -> bool {
 /// Iterative dissolve for valence >= 2.
 ///
 /// Handles the wire case, then selectively dissolves "co-planar structural
-/// diagonal" edges (face_split diagonals whose two adjacent faces share the
+/// diagonal" edges (`face_split` diagonals whose two adjacent faces share the
 /// same surface plane). If none exist, falls back to the outer-ring merge.
 ///
 /// The co-planarity criterion identifies structural diagonals without needing
@@ -183,10 +183,10 @@ fn dissolve_valence_n(mesh: &mut HalfedgeMesh, v: VertKey) -> bool {
 
 /// Returns true if dissolving edge `e` would produce a merged face with no
 /// duplicate vertices. This detects structural diagonal edges (created by
-/// face_split, safe to dissolve) vs. boundary half-edges (unsafe).
+/// `face_split`, safe to dissolve) vs. boundary half-edges (unsafe).
 ///
-/// A dissolve is valid iff chain A (loops in face_a, excluding the removed
-/// lp_a) and chain B (loops in face_b, excluding lp_b) have disjoint vertex
+/// A dissolve is valid iff chain A (loops in `face_a`, excluding the removed
+/// `lp_a`) and chain B (loops in `face_b`, excluding `lp_b`) have disjoint vertex
 /// sets.
 fn would_merge_produce_valid_face(mesh: &HalfedgeMesh, e: EdgeKey) -> bool {
     let radial: Vec<_> = radial_walk(mesh, e).collect();

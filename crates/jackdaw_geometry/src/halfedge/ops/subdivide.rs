@@ -140,20 +140,17 @@ pub fn subdivide(
                         continue;
                     }
                     let before_faces: HashSet<_> = mesh.faces.keys().collect();
-                    match split_face(mesh, target_face, va, vb) {
-                        Ok(new_edge) => {
-                            new_edges_out.push(new_edge);
-                            let after_faces: HashSet<_> = mesh.faces.keys().collect();
-                            let added: Vec<_> =
-                                after_faces.difference(&before_faces).copied().collect();
-                            // After first cut, the face is gone; next iteration looks for
-                            // a face containing the second pair among newly added faces.
-                            if let Some(&f) = added.first() {
-                                current_face = f;
-                            }
-                            new_faces_out.extend(added);
+                    if let Ok(new_edge) = split_face(mesh, target_face, va, vb) {
+                        new_edges_out.push(new_edge);
+                        let after_faces: HashSet<_> = mesh.faces.keys().collect();
+                        let added: Vec<_> =
+                            after_faces.difference(&before_faces).copied().collect();
+                        // After first cut, the face is gone; next iteration looks for
+                        // a face containing the second pair among newly added faces.
+                        if let Some(&f) = added.first() {
+                            current_face = f;
                         }
-                        Err(_) => {}
+                        new_faces_out.extend(added);
                     }
                 }
             }
@@ -178,18 +175,15 @@ pub fn subdivide(
                         continue;
                     }
                     let before_faces: HashSet<_> = mesh.faces.keys().collect();
-                    match split_face(mesh, target_face, pivot, other) {
-                        Ok(new_edge) => {
-                            new_edges_out.push(new_edge);
-                            let after_faces: HashSet<_> = mesh.faces.keys().collect();
-                            let added: Vec<_> =
-                                after_faces.difference(&before_faces).copied().collect();
-                            if let Some(&f) = added.first() {
-                                current_face = f;
-                            }
-                            new_faces_out.extend(added);
+                    if let Ok(new_edge) = split_face(mesh, target_face, pivot, other) {
+                        new_edges_out.push(new_edge);
+                        let after_faces: HashSet<_> = mesh.faces.keys().collect();
+                        let added: Vec<_> =
+                            after_faces.difference(&before_faces).copied().collect();
+                        if let Some(&f) = added.first() {
+                            current_face = f;
                         }
-                        Err(_) => {}
+                        new_faces_out.extend(added);
                     }
                 }
             }
@@ -204,7 +198,7 @@ pub fn subdivide(
 }
 
 /// For a face with one newly inserted midpoint vert, find the vert on the opposite
-/// side of the ring (index + loop_count/2). Returns `None` for triangles or if the
+/// side of the ring (index + `loop_count/2`). Returns `None` for triangles or if the
 /// midpoint is not in the ring.
 fn find_opposite_ring_vert(mesh: &HalfedgeMesh, face: FaceKey, vert: VertKey) -> Option<VertKey> {
     let f = &mesh.faces[face];

@@ -10,7 +10,7 @@ use jackdaw_geometry::halfedge::ops::loop_cut::loop_cut;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -131,9 +131,8 @@ pub(crate) fn brush_loop_cut(
             Some(&k) => k,
             None => return OperatorResult::Cancelled,
         };
-        let edge_key = match find_edge_between(&halfedge.mesh, va, vb) {
-            Some(k) => k,
-            None => return OperatorResult::Cancelled,
+        let Some(edge_key) = find_edge_between(&halfedge.mesh, va, vb) else {
+            return OperatorResult::Cancelled;
         };
 
         // Project the start edge's canonical endpoints to window space so each
@@ -382,7 +381,7 @@ fn clear_modal(modal_state: &mut LoopCutModalState, preview_lines: &mut LoopCutP
     preview_lines.lines.clear();
 }
 
-/// Speculatively run loop_cut on a clone of the start HalfedgeMesh and write the
+/// Speculatively run `loop_cut` on a clone of the start `HalfedgeMesh` and write the
 /// resulting new-edge world-space endpoints into `LoopCutPreviewLines`.
 fn update_preview_lines(
     modal_state: &LoopCutModalState,
@@ -456,8 +455,7 @@ fn edge_endpoints_window(
 }
 
 fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    mesh
-        .edges
+    mesh.edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
         .map(|(k, _)| k)

@@ -1,4 +1,4 @@
-//! HalfedgeMesh topology operations. Each op mutates a `HalfedgeMesh` in place and
+//! `HalfedgeMesh` topology operations. Each op mutates a `HalfedgeMesh` in place and
 //! preserves the half-edge invariants (disk + radial cycles, manifold faces).
 
 pub mod bisect_plane;

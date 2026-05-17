@@ -13,7 +13,9 @@ pub mod newell;
 pub use newell::newell_normal;
 
 pub mod triangulate;
-pub use triangulate::{triangulate_face_polygon, triangulate_polygon, triangulate_polygon_with_holes};
+pub use triangulate::{
+    triangulate_face_polygon, triangulate_polygon, triangulate_polygon_with_holes,
+};
 
 pub mod topology_convexity;
 pub use topology_convexity::is_convex_topology;

@@ -1,4 +1,4 @@
-//! Invariant checker for HalfedgeMesh. Used in tests; optional in production.
+//! Invariant checker for `HalfedgeMesh`. Used in tests; optional in production.
 
 use crate::halfedge::cycles::{disk_walk, radial_walk};
 use crate::halfedge::types::*;

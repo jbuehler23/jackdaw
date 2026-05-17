@@ -6,7 +6,7 @@ use jackdaw_geometry::halfedge::ops::dissolve_verts::dissolve_verts;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Remove the selected verts and merge incident faces. MVP: only valence-2 verts are

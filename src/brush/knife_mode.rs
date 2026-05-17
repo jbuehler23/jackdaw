@@ -28,7 +28,7 @@
 //! bisects each adjacent pair of points as a single `SetBrush` undo
 //! entry. Esc or RMB cancels the in-progress path.
 //!
-//! Commit handling: the path is applied to the HalfedgeMesh using
+//! Commit handling: the path is applied to the `HalfedgeMesh` using
 //! **topology mutations only** (no CDT). The pipeline mirrors how
 //! the knife tool routes a multi-segment cut across faces.
 //!
@@ -45,7 +45,7 @@
 //!   (point-in-polygon in the face plane) and `face_poke` it. Subsequent
 //!   path points on the same original face look up which fan tri is
 //!   alive now and route through it.
-//! - Path-point reclick: inherits the resolved VertKey from its source.
+//! - Path-point reclick: inherits the resolved `VertKey` from its source.
 //!
 //! Then for each consecutive pair, perform a chord:
 //!
@@ -68,11 +68,11 @@ use bevy::window::PrimaryWindow;
 use jackdaw_geometry::halfedge::ops::edge_split::split_edge;
 use jackdaw_geometry::halfedge::ops::face_poke::face_poke;
 use jackdaw_geometry::halfedge::ops::face_split::split_face;
-use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, FaceKey, LoopKey, VertKey};
+use jackdaw_geometry::halfedge::{EdgeKey, FaceKey, HalfedgeMesh, LoopKey, VertKey};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{
-    BrushHalfedge, BrushEditMode, BrushMeshCache, BrushSelection, EditMode, SetBrush,
+    BrushEditMode, BrushHalfedge, BrushMeshCache, BrushSelection, EditMode, SetBrush,
 };
 use crate::commands::CommandHistory;
 use crate::default_style;
@@ -82,7 +82,7 @@ use crate::viewport_util::{ViewportRemap, point_in_polygon_2d};
 
 /// Screen-space pixel tolerance for snapping the cursor onto a vert, an
 /// edge midpoint, or an edge interior. Specified in window logical
-/// pixels; converted to camera-target pixels per frame so HiDPI and
+/// pixels; converted to camera-target pixels per frame so `HiDPI` and
 /// fractional UI scaling don't shrink the snap region.
 const KNIFE_SNAP_PIXELS: f32 = 12.0;
 
@@ -90,7 +90,7 @@ const KNIFE_SNAP_PIXELS: f32 = 12.0;
 /// color in `default_style`).
 const KNIFE_COLOR: Color = Color::srgb(1.0, 0.2, 0.2);
 
-/// White outline used to make the PathPoint marker pop against the
+/// White outline used to make the `PathPoint` marker pop against the
 /// red wireframe and red preview line.
 const KNIFE_PATH_POINT_OUTLINE: Color = Color::srgb(1.0, 1.0, 1.0);
 
@@ -668,7 +668,7 @@ const PREVIEW_INTERSECT_TOL_SQ: f32 = 0.05 * 0.05;
 /// split.
 ///
 /// Screen-space intersection (not full 3D) keeps this cheap: the brush's
-/// face_polygons + vertex cache is already in screen-projection range,
+/// `face_polygons` + vertex cache is already in screen-projection range,
 /// and the resulting 3D point is computed from the *edge* parameter (so
 /// the dot sits on the actual mesh edge, not floating in space).
 fn compute_path_edge_intersections(
@@ -684,10 +684,10 @@ fn compute_path_edge_intersections(
         return out;
     }
     let mut world_pts: Vec<Vec3> = path.iter().map(|p| p.world_pos).collect();
-    if let Some(snap) = cursor_snap {
-        if path.last().map(|p| p.world_pos) != Some(snap.world_pos) {
-            world_pts.push(snap.world_pos);
-        }
+    if let Some(snap) = cursor_snap
+        && path.last().map(|p| p.world_pos) != Some(snap.world_pos)
+    {
+        world_pts.push(snap.world_pos);
     }
     if world_pts.len() < 2 {
         return out;
@@ -741,9 +741,9 @@ fn compute_path_edge_intersections(
                         continue;
                     }
                     let crossing = p_edge;
-                    let on_endpoint = world_pts.iter().any(|p| {
-                        p.distance_squared(crossing) < 1e-8
-                    });
+                    let on_endpoint = world_pts
+                        .iter()
+                        .any(|p| p.distance_squared(crossing) < 1e-8);
                     if !on_endpoint {
                         out.push(crossing);
                     }
@@ -1532,7 +1532,7 @@ fn commit_path(
 const KNIFE_POSITION_EPSILON: f32 = 1e-4;
 
 /// Resolve a single path point to a live `VertKey` in `mesh`. May
-/// mutate the mesh (split_edge / face_poke).
+/// mutate the mesh (`split_edge` / `face_poke`).
 fn resolve_path_point(
     mesh: &mut HalfedgeMesh,
     point: &KnifePathPoint,
@@ -1561,10 +1561,10 @@ fn resolve_path_point(
     }
 }
 
-/// Vertex snap: look up the live VertKey by position against the live
+/// Vertex snap: look up the live `VertKey` by position against the live
 /// mesh. The recorded `vert_idx` is the index in `start_brush.topology`
 /// at modal-start time; we map that to a 3D position and find any vert
-/// matching it within KNIFE_POSITION_EPSILON.
+/// matching it within `KNIFE_POSITION_EPSILON`.
 fn resolve_vertex_snap(
     mesh: &HalfedgeMesh,
     point: &KnifePathPoint,
@@ -1581,7 +1581,7 @@ fn resolve_vertex_snap(
 }
 
 /// Edge snap: find a live edge whose endpoints flank the click position
-/// (within KNIFE_POSITION_EPSILON in 3D), then `split_edge` it. This
+/// (within `KNIFE_POSITION_EPSILON` in 3D), then `split_edge` it. This
 /// finds the right sub-edge even after earlier mutations split the
 /// original edge into pieces.
 fn resolve_edge_snap(
@@ -1653,7 +1653,7 @@ fn find_live_edge_for_position(mesh: &HalfedgeMesh, click: Vec3) -> Option<(Edge
         // Reject hits at endpoints (within a small tolerance in t):
         // those mean the click coincides with a vert, which the caller
         // resolves via vert reuse rather than split_edge.
-        if t < 1e-4 || t > 1.0 - 1e-4 {
+        if !(1e-4..=1.0 - 1e-4).contains(&t) {
             continue;
         }
         match best {
@@ -1693,7 +1693,7 @@ fn find_live_face_containing_point(mesh: &HalfedgeMesh, click: Vec3) -> Option<F
     None
 }
 
-/// Project `click` onto `face`'s plane (the face's normal_cache + a
+/// Project `click` onto `face`'s plane (the face's `normal_cache` + a
 /// ring-centroid anchor). Used to keep `face_poke`'s plane-tolerance
 /// check happy.
 fn project_point_onto_face(mesh: &HalfedgeMesh, face: FaceKey, click: Vec3) -> Vec3 {
@@ -1858,7 +1858,11 @@ fn chord_between_verts_recursive(
 
 /// Walk every face. Return any whose ring contains both `va` and `vb`.
 /// Deterministic for a given mesh state.
-fn find_face_containing_both_verts(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<FaceKey> {
+fn find_face_containing_both_verts(
+    mesh: &HalfedgeMesh,
+    va: VertKey,
+    vb: VertKey,
+) -> Option<FaceKey> {
     for (k, f) in mesh.faces.iter() {
         let mut has_a = false;
         let mut has_b = false;
@@ -1881,7 +1885,7 @@ fn find_face_containing_both_verts(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey
 }
 
 /// Returns true if `va` and `vb` are consecutive in `face`'s ring
-/// (either direction). split_face errors on adjacent verts; this is
+/// (either direction). `split_face` errors on adjacent verts; this is
 /// the gate before we try.
 fn are_ring_neighbors(mesh: &HalfedgeMesh, face: FaceKey, va: VertKey, vb: VertKey) -> bool {
     let f = &mesh.faces[face];
@@ -1934,8 +1938,7 @@ fn find_outgoing_face_and_edge(
             continue;
         }
         // Walk each ring edge; skip edges touching va.
-        for i in 0..ring.len() {
-            let (lp, _) = ring[i];
+        for &(lp, _) in &ring {
             let edge_key = mesh.loops[lp].edge;
             let e = &mesh.edges[edge_key];
             if e.v[0] == va || e.v[1] == va {

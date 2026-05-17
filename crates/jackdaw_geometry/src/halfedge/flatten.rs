@@ -1,4 +1,4 @@
-//! Flatten `HalfedgeMesh` back to `BrushTopology`. Re-keys SlotMap keys to dense u32
+//! Flatten `HalfedgeMesh` back to `BrushTopology`. Re-keys `SlotMap` keys to dense u32
 //! indices.
 
 use std::collections::HashMap;

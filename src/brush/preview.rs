@@ -1,7 +1,7 @@
-//! ActivePreview: translucent ghost-geometry overlay for modal operations.
+//! `ActivePreview`: translucent ghost-geometry overlay for modal operations.
 //!
 //! During modal ops (loop cut, knife, inset, extrude, bevel, slide, drag),
-//! operators populate `ActivePreview` each frame with the proposed BrushTopology.
+//! operators populate `ActivePreview` each frame with the proposed `BrushTopology`.
 //! This module spawns/updates/despawns a `PreviewMesh` entity rendering that
 //! topology as a translucent overlay.
 //!

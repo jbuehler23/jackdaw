@@ -397,24 +397,23 @@ pub(crate) fn build_inspector_displays(
                     // forces TriMesh regardless of the user's AvianCollider setting. Show a
                     // read-only note so the change is visible in the inspector.
                     // CONVEX_FUNCTIONAL: different behavior is intentional (mirrors collider-type choice in physics_brush_bridge)
-                    if entity_ref.contains::<AvianCollider>() {
-                        if let Some(brush) = entity_ref.get::<crate::brush::Brush>() {
-                            if !is_convex_topology(&brush.topology) {
-                                commands.spawn((
-                                    Text::new("Status: non-convex (collider forced to TriMesh)"),
-                                    TextFont {
-                                        font_size: tokens::FONT_SM,
-                                        ..Default::default()
-                                    },
-                                    TextColor(tokens::TEXT_DISABLED),
-                                    Node {
-                                        margin: UiRect::top(Val::Px(tokens::SPACING_XS)),
-                                        ..Default::default()
-                                    },
-                                    ChildOf(body_entity),
-                                ));
-                            }
-                        }
+                    if entity_ref.contains::<AvianCollider>()
+                        && let Some(brush) = entity_ref.get::<crate::brush::Brush>()
+                        && !is_convex_topology(&brush.topology)
+                    {
+                        commands.spawn((
+                            Text::new("Status: non-convex (collider forced to TriMesh)"),
+                            TextFont {
+                                font_size: tokens::FONT_SM,
+                                ..Default::default()
+                            },
+                            TextColor(tokens::TEXT_DISABLED),
+                            Node {
+                                margin: UiRect::top(Val::Px(tokens::SPACING_XS)),
+                                ..Default::default()
+                            },
+                            ChildOf(body_entity),
+                        ));
                     }
                 }
                 continue;

@@ -623,7 +623,7 @@ pub(crate) struct BrushData {
 /// Either a single brush or a group containing child brushes.
 #[derive(Clone)]
 enum BrushOrGroup {
-    Single(BrushData),
+    Single(Box<BrushData>),
     Group {
         stable_id: BrushStableId,
         transform: Transform,
@@ -2142,11 +2142,8 @@ fn manage_draw_preview_mesh(
                     let face_verts_3d: Vec<Vec3> =
                         indices.iter().map(|&vi| frag_verts[vi]).collect();
                     let identity_ring: Vec<u32> = (0..indices.len() as u32).collect();
-                    let local_tris = triangulate_polygon(
-                        &face_verts_3d,
-                        &identity_ring,
-                        face_data.plane.normal,
-                    );
+                    let local_tris =
+                        triangulate_polygon(&face_verts_3d, &identity_ring, face_data.plane.normal);
                     let flat_indices: Vec<u32> =
                         local_tris.iter().flat_map(|t| t.iter().copied()).collect();
 
@@ -2637,7 +2634,7 @@ fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
                         parent_stable_id: Some(parent_sid),
                     };
                     spawn_brush_from_data(world, &brush_data);
-                    fragments.push(BrushOrGroup::Single(brush_data));
+                    fragments.push(BrushOrGroup::Single(Box::new(brush_data)));
                 }
             } else if result.fragments.len() == 1 {
                 // Single fragment: spawn standalone
@@ -2650,7 +2647,7 @@ fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
                     parent_stable_id: None,
                 };
                 spawn_brush_from_data(world, &brush_data);
-                fragments.push(BrushOrGroup::Single(brush_data));
+                fragments.push(BrushOrGroup::Single(Box::new(brush_data)));
             } else if result.fragments.len() > 1 {
                 // Multiple fragments: group under a BrushGroup parent
                 let group_center = result
@@ -3226,7 +3223,7 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
                     parent_stable_id: Some(parent_sid),
                 };
                 spawn_brush_from_data(world, &brush_data);
-                fragments.push(BrushOrGroup::Single(brush_data));
+                fragments.push(BrushOrGroup::Single(Box::new(brush_data)));
             }
         } else if result.fragments.len() == 1 {
             let (brush, transform) = &result.fragments[0];
@@ -3238,7 +3235,7 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
                 parent_stable_id: None,
             };
             spawn_brush_from_data(world, &brush_data);
-            fragments.push(BrushOrGroup::Single(brush_data));
+            fragments.push(BrushOrGroup::Single(Box::new(brush_data)));
         } else if result.fragments.len() > 1 {
             let group_center = result
                 .fragments
@@ -3415,7 +3412,7 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
     // Push undo command (reuses SubtractBrushCommand, same undo/redo pattern).
     let cmd = SubtractBrushCommand {
         originals,
-        fragments: vec![BrushOrGroup::Single(brush_data)],
+        fragments: vec![BrushOrGroup::Single(Box::new(brush_data))],
     };
     let mut history = world.resource_mut::<CommandHistory>();
     history.push_executed(Box::new(cmd));

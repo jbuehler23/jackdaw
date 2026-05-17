@@ -31,8 +31,7 @@ pub fn create_face_from_verts_with_material(
 
     // Default material_idx: max existing + 1, so we never collide.
     let material_idx = material_idx.unwrap_or_else(|| {
-        mesh
-            .faces
+        mesh.faces
             .values()
             .map(|f| f.material_idx)
             .max()

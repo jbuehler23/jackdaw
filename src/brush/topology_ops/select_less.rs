@@ -8,7 +8,7 @@ use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::VertKey;
 use jackdaw_geometry::halfedge::cycles::{disk_walk, radial_walk};
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 /// Shrink the selection by removing elements on its boundary (those with at
 /// least one neighbor not in the selection).
@@ -51,13 +51,11 @@ pub(crate) fn brush_select_less(
                         } else {
                             edge.v[0]
                         };
-                        if let Some(other_idx) =
-                            halfedge.vert_keys.iter().position(|&k| k == other)
+                        if let Some(other_idx) = halfedge.vert_keys.iter().position(|&k| k == other)
+                            && !current.contains(&other_idx)
                         {
-                            if !current.contains(&other_idx) {
-                                all_inside = false;
-                                break;
-                            }
+                            all_inside = false;
+                            break;
                         }
                     }
                     all_inside
@@ -123,15 +121,12 @@ pub(crate) fn brush_select_less(
                         let edge = mesh.loops[cur].edge;
                         for radial_lp in radial_walk(mesh, edge).collect::<Vec<_>>() {
                             let neighbor = mesh.loops[radial_lp].face;
-                            if let Some(neighbor_idx) = halfedge
-                                .face_keys
-                                .iter()
-                                .position(|&k| k == neighbor)
+                            if let Some(neighbor_idx) =
+                                halfedge.face_keys.iter().position(|&k| k == neighbor)
+                                && !current.contains(&neighbor_idx)
                             {
-                                if !current.contains(&neighbor_idx) {
-                                    all_inside = false;
-                                    break;
-                                }
+                                all_inside = false;
+                                break;
                             }
                         }
                         if !all_inside {

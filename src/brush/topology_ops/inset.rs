@@ -12,10 +12,10 @@ use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::ops::inset_face::inset_face;
-use jackdaw_geometry::halfedge::{HalfedgeMesh, FaceKey};
+use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -30,7 +30,7 @@ const INSET_SENSITIVITY: f32 = 0.01;
 pub struct InsetModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// HalfedgeMesh FaceKeys of the faces being inset. Resolved against
+    /// `HalfedgeMesh` `FaceKeys` of the faces being inset. Resolved against
     /// `start_mesh`; we re-resolve them from `start_mesh` each frame
     /// because the live mesh is reset to the snapshot before running the op.
     pub face_keys: Vec<FaceKey>,
@@ -299,7 +299,7 @@ fn cancel_inset(
     *modal_state = InsetModalState::default();
 }
 
-/// Reset the live brush + HalfedgeMesh to the snapshot captured at modal start.
+/// Reset the live brush + `HalfedgeMesh` to the snapshot captured at modal start.
 fn restore_brush_from_snapshot(
     modal_state: &InsetModalState,
     brushes: &mut Query<&mut Brush>,

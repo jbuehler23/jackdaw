@@ -3,7 +3,7 @@
 //! ring is rewritten to the inner ring; N new side-quad faces are added.
 //!
 //! New geometry per inset on an N-ring face:
-//!   - N inner verts (offset = old_pos + inward_dir * amount, projected on face plane)
+//!   - N inner verts (offset = `old_pos` + `inward_dir` * amount, projected on face plane)
 //!   - N inner-ring edges
 //!   - N wall edges (old[i] -> new[i])
 //!   - N side-quad faces (CCW from outside): [old[i], old[i+1], new[i+1], new[i]]
@@ -67,13 +67,11 @@ pub fn inset_face(
     // 3. Allocate inner verts.
     //    For each old vert, move toward the centroid by `amount`, projected on the face plane.
     let mut new_verts: Vec<VertKey> = Vec::with_capacity(n);
-    for i in 0..n {
-        let to_centroid = centroid - positions[i];
-        // Project onto the face plane (remove normal component).
+    for &pos in &positions {
+        let to_centroid = centroid - pos;
         let inward = to_centroid - face_normal * to_centroid.dot(face_normal);
         let inward_norm = inward.normalize_or_zero();
-        let new_pos = positions[i] + inward_norm * amount;
-        new_verts.push(mesh.add_vert(new_pos));
+        new_verts.push(mesh.add_vert(pos + inward_norm * amount));
     }
 
     // 4. Allocate inner-ring edges: new[i] -- new[i+1].

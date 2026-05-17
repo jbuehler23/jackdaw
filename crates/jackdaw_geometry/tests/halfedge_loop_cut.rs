@@ -50,11 +50,7 @@ fn loop_cut_at_t_0_25_places_loop_offset_from_midpoint() {
     // All 4 new verts should sit at t=0.25 along their respective ring edges.
     // Just check they exist and are distinct.
     assert_eq!(result.new_verts.len(), 4);
-    let positions: Vec<_> = result
-        .new_verts
-        .iter()
-        .map(|&k| mesh.verts[k].co)
-        .collect();
+    let positions: Vec<_> = result.new_verts.iter().map(|&k| mesh.verts[k].co).collect();
     let mut unique = positions.clone();
     unique.sort_by(|a, b| {
         a.x.partial_cmp(&b.x)

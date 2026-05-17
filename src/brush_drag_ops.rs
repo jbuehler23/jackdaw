@@ -448,9 +448,7 @@ pub fn brush_face_drag(
                                 .and_then(|idx| start_positions.get(idx).copied());
                             let new_co = match start_pos_for_key {
                                 Some(start_co) => start_co + face_normal * drag_amount,
-                                None => {
-                                    halfedge.mesh.verts[vk].co + face_normal * drag_amount
-                                }
+                                None => halfedge.mesh.verts[vk].co + face_normal * drag_amount,
                             };
                             halfedge.mesh.verts[vk].co = new_co;
                         }
@@ -538,7 +536,8 @@ fn cancel_face_drag(
         *brush = start.clone();
         // If HalfedgeMesh was active, re-lift from the restored topology.
         if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
-            let mesh = jackdaw_geometry::halfedge::HalfedgeMesh::lift_from_topology(&start.topology);
+            let mesh =
+                jackdaw_geometry::halfedge::HalfedgeMesh::lift_from_topology(&start.topology);
             let vert_keys: Vec<_> = mesh.verts.keys().collect();
             let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
                 vec![Default::default(); mesh.faces.len()];
@@ -596,15 +595,16 @@ pub(crate) fn snap_drag_local_offset(
     match constraint {
         VertexDragConstraint::Free => {
             let world_end = brush_global.transform_point(primary_start_local + local_offset);
-            let snapped_world =
-                Vec3::new(snap_to(world_end.x), snap_to(world_end.y), snap_to(world_end.z));
+            let snapped_world = Vec3::new(
+                snap_to(world_end.x),
+                snap_to(world_end.y),
+                snap_to(world_end.z),
+            );
             let inv = brush_global.affine().inverse();
             let snapped_local_end = inv.transform_point3(snapped_world);
             snapped_local_end - primary_start_local
         }
-        VertexDragConstraint::AxisX
-        | VertexDragConstraint::AxisY
-        | VertexDragConstraint::AxisZ => {
+        VertexDragConstraint::AxisX | VertexDragConstraint::AxisY | VertexDragConstraint::AxisZ => {
             let axis_local = match constraint {
                 VertexDragConstraint::AxisX => Vec3::X,
                 VertexDragConstraint::AxisY => Vec3::Y,
@@ -1075,7 +1075,8 @@ fn cancel_vertex_drag(
         *brush = start.clone();
         // If HalfedgeMesh was active, re-lift from the restored topology.
         if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
-            let mesh = jackdaw_geometry::halfedge::HalfedgeMesh::lift_from_topology(&start.topology);
+            let mesh =
+                jackdaw_geometry::halfedge::HalfedgeMesh::lift_from_topology(&start.topology);
             let vert_keys: Vec<_> = mesh.verts.keys().collect();
             let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
                 vec![Default::default(); mesh.faces.len()];
@@ -1438,7 +1439,8 @@ fn cancel_edge_drag(
         *brush = start.clone();
         // If HalfedgeMesh was active, re-lift from the restored topology.
         if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
-            let mesh = jackdaw_geometry::halfedge::HalfedgeMesh::lift_from_topology(&start.topology);
+            let mesh =
+                jackdaw_geometry::halfedge::HalfedgeMesh::lift_from_topology(&start.topology);
             let vert_keys: Vec<_> = mesh.verts.keys().collect();
             let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
                 vec![Default::default(); mesh.faces.len()];

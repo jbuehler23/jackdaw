@@ -62,9 +62,8 @@ pub fn extrude_face_region(
 
     // 3. Allocate top-ring verts offset along the face normal.
     let mut new_verts: Vec<VertKey> = Vec::with_capacity(n);
-    for i in 0..n {
-        let new_pos = positions[i] + offset;
-        new_verts.push(mesh.add_vert(new_pos));
+    for &pos in &positions {
+        new_verts.push(mesh.add_vert(pos + offset));
     }
 
     // 4. Allocate top-ring edges (between consecutive new verts) and wall edges (old[i] -> new[i]).

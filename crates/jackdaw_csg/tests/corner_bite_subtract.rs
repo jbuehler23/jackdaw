@@ -149,7 +149,7 @@ fn jittered_world_cuboid(half_x: f32, half_y: f32, half_z: f32, center: Vec3) ->
     }
     // Also nudge the planes so they don't perfectly bound the jittered
     // vertices, closer to the editor's saved state.
-    let noise = 0.9999999403953552_f32;
+    let noise = 0.999_999_94_f32;
     for f in &mut b.faces {
         let n = f.plane.normal;
         if n == Vec3::Z {

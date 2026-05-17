@@ -28,8 +28,10 @@ fn view_state_round_trips_camera_transform() {
     use bevy::math::Vec3;
     use bevy::prelude::Transform;
     use jackdaw::scenes::ViewState;
-    let mut vs = ViewState::default();
-    vs.camera_transform = Transform::from_xyz(1.0, 2.0, 3.0);
+    let vs = ViewState {
+        camera_transform: Transform::from_xyz(1.0, 2.0, 3.0),
+        ..ViewState::default()
+    };
     assert_eq!(vs.camera_transform.translation, Vec3::new(1.0, 2.0, 3.0));
 }
 
@@ -44,8 +46,8 @@ fn view_state_default_has_empty_selection_and_no_sub_selection() {
 #[test]
 fn serialize_world_to_jsn_scene_captures_brushes() {
     use bevy::prelude::*;
-    use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::winit::WinitPlugin;
     use jackdaw_jsn::Brush;
 
@@ -66,14 +68,17 @@ fn serialize_world_to_jsn_scene_captures_brushes() {
         .spawn((Brush::cuboid(1.0, 1.0, 1.0), Name::new("test_brush")));
 
     let jsn = jackdaw::scene_io::serialize_world_to_jsn_scene(app.world_mut());
-    assert!(!jsn.scene.is_empty(), "expected at least one entity in serialized scene");
+    assert!(
+        !jsn.scene.is_empty(),
+        "expected at least one entity in serialized scene"
+    );
 }
 
 #[test]
 fn swap_round_trips_a_single_brush() {
     use bevy::prelude::*;
-    use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::winit::WinitPlugin;
     use jackdaw_jsn::Brush;
 
@@ -123,19 +128,15 @@ fn swap_round_trips_a_single_brush() {
 
     // Swap back to tab A. The brush respawns (fresh Entity, same data).
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
-    let brush_count: usize = app
-        .world_mut()
-        .query::<&Brush>()
-        .iter(app.world())
-        .count();
+    let brush_count: usize = app.world_mut().query::<&Brush>().iter(app.world()).count();
     assert_eq!(brush_count, 1);
 }
 
 #[test]
 fn swap_preserves_camera_transform_per_tab() {
     use bevy::prelude::*;
-    use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::winit::WinitPlugin;
 
     let mut app = App::new();
@@ -190,8 +191,8 @@ fn swap_preserves_camera_transform_per_tab() {
 #[test]
 fn scene_new_appends_an_untitled_tab() {
     use bevy::prelude::*;
-    use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::winit::WinitPlugin;
 
     let mut app = App::new();
@@ -237,8 +238,8 @@ fn scene_new_appends_an_untitled_tab() {
 #[test]
 fn scene_open_dedupes_by_path() {
     use bevy::prelude::*;
-    use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::winit::WinitPlugin;
 
     let mut app = App::new();
@@ -298,8 +299,8 @@ fn scene_open_dedupes_by_path() {
 
 fn make_app_with_n_tabs(n: usize) -> bevy::app::App {
     use bevy::prelude::*;
-    use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::winit::WinitPlugin;
 
     let mut app = App::new();
@@ -325,7 +326,9 @@ fn make_app_with_n_tabs(n: usize) -> bevy::app::App {
     {
         let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
         for i in 0..n {
-            scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled((i + 1) as u32));
+            scenes
+                .tabs
+                .push(jackdaw::scenes::SceneTab::new_untitled((i + 1) as u32));
         }
         scenes.active = 0;
     }
@@ -405,15 +408,14 @@ fn scene_close_drops_active_tab_and_picks_neighbor() {
 #[test]
 fn pushing_to_history_marks_active_tab_dirty() {
     use bevy::prelude::*;
-    use bevy::render::settings::{RenderCreation, WgpuSettings};
-    use bevy::render::RenderPlugin;
-    use bevy::winit::WinitPlugin;
 
     struct NoOpCommand;
     impl jackdaw::commands::EditorCommand for NoOpCommand {
         fn execute(&mut self, _world: &mut World) {}
         fn undo(&mut self, _world: &mut World) {}
-        fn description(&self) -> &str { "noop" }
+        fn description(&self) -> &str {
+            "noop"
+        }
     }
 
     let mut app = make_app_with_n_tabs(1);
@@ -449,16 +451,17 @@ fn project_config_persists_tab_paths_and_active_index() {
     )
     .unwrap();
 
-    app.world_mut().insert_resource(jackdaw::project::ProjectRoot {
-        root: tmp_root.clone(),
-        config: JsnProject {
-            jsn: JsnHeader::default(),
-            project: JsnProjectConfig {
-                name: "test".into(),
-                ..Default::default()
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot {
+            root: tmp_root.clone(),
+            config: JsnProject {
+                jsn: JsnHeader::default(),
+                project: JsnProjectConfig {
+                    name: "test".into(),
+                    ..Default::default()
+                },
             },
-        },
-    });
+        });
 
     // Open one tab.
     jackdaw::scenes::operators::scene_open_system(app.world_mut(), &scene_path);
@@ -481,7 +484,7 @@ fn project_config_persists_tab_paths_and_active_index() {
 /// not overwritten by incoming ones with the same name.
 ///
 /// We test this directly by calling `merge_payload_assets` (which is the internal
-/// helper extracted from paste_components) via the public API of `SceneJsnAst`.
+/// helper extracted from `paste_components`) via the public API of `SceneJsnAst`.
 /// The actual paste flow (clipboard read, entity spawn) is exercised in the
 /// inline unit tests in `src/entity_ops.rs`.
 #[test]
@@ -500,7 +503,10 @@ fn paste_merges_assets_without_clobbering_existing() {
     let mut src_map: HashMap<String, HashMap<String, serde_json::Value>> = HashMap::new();
     let mut src_mat_map: HashMap<String, serde_json::Value> = HashMap::new();
     src_mat_map.insert("Metal".to_string(), serde_json::json!({"metallic": 0.5}));
-    src_mat_map.insert("Brick".to_string(), serde_json::json!({"base_color": [1.0, 0.5, 0.0, 1.0]}));
+    src_mat_map.insert(
+        "Brick".to_string(),
+        serde_json::json!({"base_color": [1.0, 0.5, 0.0, 1.0]}),
+    );
     src_map.insert("bevy_pbr::StandardMaterial".to_string(), src_mat_map);
     let src_assets = JsnAssets(src_map);
 
@@ -555,10 +561,7 @@ fn closing_dirty_tab_defers_via_pending_close_resource() {
 
     // Tab should still be there (deferred to dialog).
     assert_eq!(
-        app.world()
-            .resource::<jackdaw::scenes::Scenes>()
-            .tabs
-            .len(),
+        app.world().resource::<jackdaw::scenes::Scenes>().tabs.len(),
         2
     );
     // PendingTabClose should record index 0.

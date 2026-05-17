@@ -85,9 +85,7 @@ pub(crate) fn activate_tab(world: &mut World, target: usize) {
     // and overwrites the wrong file. Untitled tabs clear the path so
     // `save_scene` correctly delegates to `save_scene_as`.
     if let Some(mut spath) = world.get_resource_mut::<crate::scene_io::SceneFilePath>() {
-        spath.path = tab_path
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned());
+        spath.path = tab_path.as_ref().map(|p| p.to_string_lossy().into_owned());
     }
 
     let mut scenes = world.resource_mut::<Scenes>();

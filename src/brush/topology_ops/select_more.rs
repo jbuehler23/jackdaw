@@ -9,7 +9,7 @@ use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::VertKey;
 use jackdaw_geometry::halfedge::cycles::{disk_walk, radial_walk};
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 /// Extend the selection to its immediate neighbors based on the current edit mode.
 #[operator(
@@ -49,9 +49,7 @@ pub(crate) fn brush_select_more(
                     } else {
                         edge.v[0]
                     };
-                    if let Some(other_idx) =
-                        halfedge.vert_keys.iter().position(|&k| k == other)
-                    {
+                    if let Some(other_idx) = halfedge.vert_keys.iter().position(|&k| k == other) {
                         new_set.insert(other_idx);
                     }
                 }
@@ -110,10 +108,8 @@ pub(crate) fn brush_select_more(
                     let edge = mesh.loops[cur].edge;
                     for radial_lp in radial_walk(mesh, edge).collect::<Vec<_>>() {
                         let neighbor = mesh.loops[radial_lp].face;
-                        if let Some(neighbor_idx) = halfedge
-                            .face_keys
-                            .iter()
-                            .position(|&k| k == neighbor)
+                        if let Some(neighbor_idx) =
+                            halfedge.face_keys.iter().position(|&k| k == neighbor)
                         {
                             new_set.insert(neighbor_idx);
                         }

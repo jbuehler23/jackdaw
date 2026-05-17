@@ -314,14 +314,14 @@ impl Brush {
         // Base ring: indices 0..n
         // Top ring:  indices n..2n
         let mut topo_verts: Vec<MeshVert> = Vec::with_capacity(2 * n);
-        for i in 0..n {
+        for &v in vertices.iter().take(n) {
             topo_verts.push(MeshVert {
-                position: vertices[i] - normal * half_depth,
+                position: v - normal * half_depth,
             });
         }
-        for i in 0..n {
+        for &v in vertices.iter().take(n) {
             topo_verts.push(MeshVert {
-                position: vertices[i] + normal * half_depth,
+                position: v + normal * half_depth,
             });
         }
 

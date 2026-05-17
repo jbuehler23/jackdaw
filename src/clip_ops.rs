@@ -400,7 +400,7 @@ pub(crate) fn clip_apply(
     OperatorResult::Finished
 }
 
-/// Lift the brush's topology into an HalfedgeMesh, bisect it along `plane`,
+/// Lift the brush's topology into an `HalfedgeMesh`, bisect it along `plane`,
 /// and flatten back into a new `Brush`. Returns `None` if the bisect
 /// produces no faces (degenerate input or plane misses the brush).
 ///

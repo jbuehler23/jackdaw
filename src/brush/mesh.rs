@@ -165,8 +165,7 @@ pub fn regenerate_brush_meshes(
             // triangulation would silently mis-triangulate concave faces
             // and fill keyhole-bridged holes with bogus geometry.
             let ring_u32: Vec<u32> = indices.iter().map(|&i| i as u32).collect();
-            let tris =
-                triangulate_polygon(&vertices, &ring_u32, face_data.plane.normal);
+            let tris = triangulate_polygon(&vertices, &ring_u32, face_data.plane.normal);
 
             let mut positions: Vec<[f32; 3]> = Vec::with_capacity(tris.len() * 3);
             let mut normals: Vec<[f32; 3]> = Vec::with_capacity(tris.len() * 3);

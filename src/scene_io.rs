@@ -207,14 +207,14 @@ pub fn save_scene_as(world: &mut World) {
 /// in memory for inactive tabs).
 pub fn serialize_world_to_jsn_scene(world: &mut World) -> JsnScene {
     let parent_path: Cow<'_, Path> = {
-        let raw_path = world
-            .get_resource::<SceneFilePath>()
-            .and_then(|r| r.path.as_deref().and_then(|p| Path::new(p).parent().map(|p| p.to_path_buf())));
+        let raw_path = world.get_resource::<SceneFilePath>().and_then(|r| {
+            r.path
+                .as_deref()
+                .and_then(|p| Path::new(p).parent().map(std::path::Path::to_path_buf))
+        });
         match raw_path {
             Some(p) => Cow::Owned(p),
-            None => Cow::Owned(
-                env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            ),
+            None => Cow::Owned(env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
         }
     };
 
@@ -278,8 +278,7 @@ pub fn serialize_world_to_jsn_scene(world: &mut World) -> JsnScene {
     // Capture the current viewport camera framing so the next open
     // lands the user back where they left off.
     let camera_transform = {
-        let mut q = world
-            .query_filtered::<&Transform, With<crate::viewport::MainViewportCamera>>();
+        let mut q = world.query_filtered::<&Transform, With<crate::viewport::MainViewportCamera>>();
         q.iter(world).next().copied()
     };
     let editor_state = camera_transform.map(|t| jackdaw_jsn::format::JsnEditorState {
@@ -1317,14 +1316,10 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
         *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast;
 
         // Restore the saved camera framing if present.
-        if let Some(camera) = jsn
-            .editor
-            .as_ref()
-            .and_then(|e| e.camera.as_ref())
-        {
+        if let Some(camera) = jsn.editor.as_ref().and_then(|e| e.camera.as_ref()) {
             let restored: Transform = camera.clone().into();
-            let mut q = world
-                .query_filtered::<&mut Transform, With<crate::viewport::MainViewportCamera>>();
+            let mut q =
+                world.query_filtered::<&mut Transform, With<crate::viewport::MainViewportCamera>>();
             for mut tf in q.iter_mut(world) {
                 *tf = restored;
             }
@@ -2039,9 +2034,7 @@ fn poll_scene_dialog(world: &mut World) {
                     let active = scenes.active;
                     if let Some(tab) = scenes.tabs.get_mut(active) {
                         tab.path = Some(path.clone());
-                        if let Some(stem) =
-                            path.file_stem().and_then(|s| s.to_str())
-                        {
+                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                             tab.display_name = stem.to_string();
                         }
                     }

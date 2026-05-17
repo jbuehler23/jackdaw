@@ -6,8 +6,8 @@ use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
+use crate::scene_io::{SceneDirtyState, SceneFilePath};
 use crate::scenes::{SceneTab, Scenes, swap::swap_active_tab};
-use crate::scene_io::{SceneFilePath, SceneDirtyState};
 
 /// Counter for default `untitled-N` names. Persists across the editor
 /// session so closing unsaved tabs and creating new ones doesn't reuse
@@ -108,16 +108,12 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
     // De-dupe: if a tab with this path is already open, switch to it.
-    let existing = world
-        .resource::<Scenes>()
-        .tabs
-        .iter()
-        .position(|t| {
-            t.path
-                .as_ref()
-                .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()) == canonical)
-                .unwrap_or(false)
-        });
+    let existing = world.resource::<Scenes>().tabs.iter().position(|t| {
+        t.path
+            .as_ref()
+            .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()) == canonical)
+            .unwrap_or(false)
+    });
     if let Some(idx) = existing {
         swap_active_tab(world, idx);
         return;
@@ -152,11 +148,7 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     // Restore the saved viewport camera framing if the scene file
     // carried one; otherwise leave the default (0, 4, 8) from
     // `new_untitled`.
-    if let Some(camera) = jsn
-        .editor
-        .as_ref()
-        .and_then(|e| e.camera.as_ref())
-    {
+    if let Some(camera) = jsn.editor.as_ref().and_then(|e| e.camera.as_ref()) {
         tab.view_state.camera_transform = camera.clone().into();
     }
     tab.snapshot = Some(jsn);
@@ -248,11 +240,19 @@ pub fn scene_close_system_unprompted(world: &mut World, target: usize) {
         // back into the closed tab).
         crate::scene_io::clear_scene_entities(world);
         // Pick a neighbor BEFORE removing the closed tab.
-        let neighbor = if active + 1 < tab_count { active + 1 } else { active - 1 };
+        let neighbor = if active + 1 < tab_count {
+            active + 1
+        } else {
+            active - 1
+        };
         // Remove the closed tab.
         world.resource_mut::<Scenes>().tabs.remove(target);
         // Indices shift if the removed tab came BEFORE the neighbor.
-        let new_target = if neighbor > target { neighbor - 1 } else { neighbor };
+        let new_target = if neighbor > target {
+            neighbor - 1
+        } else {
+            neighbor
+        };
         world.resource_mut::<Scenes>().active = new_target;
         crate::scenes::swap::reactivate_after_close(world, new_target);
     } else {
@@ -299,9 +299,8 @@ pub fn scene_save_all_system(world: &mut World) {
         .and_then(|r| r.path.clone());
 
     for i in 0..count {
-        let path = match world.resource::<Scenes>().tabs[i].path.clone() {
-            Some(p) => p,
-            None => continue,
+        let Some(path) = world.resource::<Scenes>().tabs[i].path.clone() else {
+            continue;
         };
 
         if i != world.resource::<Scenes>().active {
@@ -324,18 +323,18 @@ pub fn scene_save_all_system(world: &mut World) {
                             .resource::<crate::commands::CommandHistory>()
                             .undo_stack
                             .len();
-                        let mut scenes = world.resource_mut::<Scenes>();
-                        scenes.tabs[i].dirty = false;
-                        scenes.tabs[i].history_depth_at_last_check = depth;
-                        drop(scenes);
+                        {
+                            let mut scenes = world.resource_mut::<Scenes>();
+                            scenes.tabs[i].dirty = false;
+                            scenes.tabs[i].history_depth_at_last_check = depth;
+                        }
                         // Sync the dirty state counter.
                         if let Some(history_len) = world
                             .get_resource::<jackdaw_commands::CommandHistory>()
                             .map(|h| h.undo_stack.len())
+                            && let Some(mut ds) = world.get_resource_mut::<SceneDirtyState>()
                         {
-                            if let Some(mut ds) = world.get_resource_mut::<SceneDirtyState>() {
-                                ds.undo_len_at_save = history_len;
-                            }
+                            ds.undo_len_at_save = history_len;
                         }
                     }
                     Err(err) => warn!("scene.save_all: failed to write {path:?}: {err}"),
@@ -379,7 +378,11 @@ pub fn scene_cycle_next(_: In<OperatorParameters>, mut commands: Commands) -> Op
     OperatorResult::Finished
 }
 
-#[operator(id = "scene.cycle_prev", label = "Previous Scene Tab", allows_undo = false)]
+#[operator(
+    id = "scene.cycle_prev",
+    label = "Previous Scene Tab",
+    allows_undo = false
+)]
 pub fn scene_cycle_prev(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         let scenes = world.resource::<Scenes>();

@@ -3,10 +3,10 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::dissolve_faces::dissolve_faces;
-use jackdaw_geometry::halfedge::{HalfedgeMesh, FaceKey};
+use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 /// Remove the selected faces, leaving holes. Boundary edges become wire edges.

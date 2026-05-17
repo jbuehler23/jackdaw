@@ -162,8 +162,16 @@ fn spawn_scene_tab(
     editor_font: Option<Handle<Font>>,
     icon_font: Option<Handle<Font>>,
 ) {
-    let bg = if is_active { TAB_ACTIVE_BG } else { TAB_INACTIVE_BG };
-    let border = if is_active { TAB_ACTIVE_BORDER } else { Color::NONE };
+    let bg = if is_active {
+        TAB_ACTIVE_BG
+    } else {
+        TAB_INACTIVE_BG
+    };
+    let border = if is_active {
+        TAB_ACTIVE_BORDER
+    } else {
+        Color::NONE
+    };
     let label_color = if is_active {
         TAB_ACTIVE_LABEL
     } else {
@@ -217,7 +225,7 @@ fn spawn_scene_tab(
                         let cursor_pos = windows
                             .single()
                             .ok()
-                            .and_then(|w| w.cursor_position())
+                            .and_then(bevy::prelude::Window::cursor_position)
                             .unwrap_or_default();
                         if let Some(menu) = state.menu_entity.take()
                             && let Ok(mut ec) = commands.get_entity(menu)
@@ -237,8 +245,7 @@ fn spawn_scene_tab(
                             .iter()
                             .map(|(a, l)| (a.as_str(), l.as_str()))
                             .collect();
-                        let menu =
-                            spawn_context_menu(&mut commands, cursor_pos, None, &item_refs);
+                        let menu = spawn_context_menu(&mut commands, cursor_pos, None, &item_refs);
                         state.menu_entity = Some(menu);
                     }
                 }
@@ -369,11 +376,7 @@ fn spawn_scene_tab(
     }
 }
 
-fn spawn_add_tab_button(
-    commands: &mut Commands,
-    strip: Entity,
-    icon_font: Option<Handle<Font>>,
-) {
+fn spawn_add_tab_button(commands: &mut Commands, strip: Entity, icon_font: Option<Handle<Font>>) {
     let btn = commands
         .spawn((
             SceneTabAddButton,
@@ -429,55 +432,50 @@ pub fn on_scene_tab_context_action(event: On<ContextMenuAction>, mut commands: C
         return;
     };
     let prefix = prefix.to_string();
-    commands.queue(move |world: &mut World| {
-        match prefix.as_str() {
-            "scene.tab.save" => {
-                let current = world.resource::<crate::scenes::Scenes>().active;
-                if idx != current {
-                    crate::scenes::swap::swap_active_tab(world, idx);
-                }
-                if let Some(path) = world
-                    .resource::<crate::scenes::Scenes>()
-                    .tabs
-                    .get(idx)
-                    .and_then(|t| t.path.clone())
-                {
-                    if let Some(mut spath) =
-                        world.get_resource_mut::<crate::scene_io::SceneFilePath>()
-                    {
-                        spath.path = Some(path.to_string_lossy().into_owned());
-                    }
-                }
-                crate::scene_io::save_scene(world);
-                if let Some(tab) = world
-                    .resource_mut::<crate::scenes::Scenes>()
-                    .tabs
-                    .get_mut(idx)
-                {
-                    tab.dirty = false;
-                }
+    commands.queue(move |world: &mut World| match prefix.as_str() {
+        "scene.tab.save" => {
+            let current = world.resource::<crate::scenes::Scenes>().active;
+            if idx != current {
+                crate::scenes::swap::swap_active_tab(world, idx);
             }
-            "scene.tab.save_as" => {
-                let current = world.resource::<crate::scenes::Scenes>().active;
-                if idx != current {
-                    crate::scenes::swap::swap_active_tab(world, idx);
-                }
-                crate::scene_io::save_scene_as(world);
+            if let Some(path) = world
+                .resource::<crate::scenes::Scenes>()
+                .tabs
+                .get(idx)
+                .and_then(|t| t.path.clone())
+                && let Some(mut spath) = world.get_resource_mut::<crate::scene_io::SceneFilePath>()
+            {
+                spath.path = Some(path.to_string_lossy().into_owned());
             }
-            "scene.tab.close" => {
-                crate::scenes::operators::scene_close_system(world, idx);
+            crate::scene_io::save_scene(world);
+            if let Some(tab) = world
+                .resource_mut::<crate::scenes::Scenes>()
+                .tabs
+                .get_mut(idx)
+            {
+                tab.dirty = false;
             }
-            "scene.tab.close_others" => {
-                let count = world.resource::<crate::scenes::Scenes>().tabs.len();
-                for i in (0..count).rev() {
-                    if i == idx {
-                        continue;
-                    }
-                    crate::scenes::operators::scene_close_system(world, i);
-                }
-            }
-            _ => {}
         }
+        "scene.tab.save_as" => {
+            let current = world.resource::<crate::scenes::Scenes>().active;
+            if idx != current {
+                crate::scenes::swap::swap_active_tab(world, idx);
+            }
+            crate::scene_io::save_scene_as(world);
+        }
+        "scene.tab.close" => {
+            crate::scenes::operators::scene_close_system(world, idx);
+        }
+        "scene.tab.close_others" => {
+            let count = world.resource::<crate::scenes::Scenes>().tabs.len();
+            for i in (0..count).rev() {
+                if i == idx {
+                    continue;
+                }
+                crate::scenes::operators::scene_close_system(world, i);
+            }
+        }
+        _ => {}
     });
 }
 
@@ -562,14 +560,14 @@ pub fn update_scene_tab_visuals(
 
     for (tab_entity, &SceneTabIndex(idx)) in tabs.iter() {
         let is_active = idx == active;
-        let dirty = scenes
-            .tabs
-            .get(idx)
-            .map(|t| t.dirty)
-            .unwrap_or(false);
+        let dirty = scenes.tabs.get(idx).map(|t| t.dirty).unwrap_or(false);
 
         if let Ok(mut bg) = bg_query.get_mut(tab_entity) {
-            bg.0 = if is_active { TAB_ACTIVE_BG } else { TAB_INACTIVE_BG };
+            bg.0 = if is_active {
+                TAB_ACTIVE_BG
+            } else {
+                TAB_INACTIVE_BG
+            };
         }
         if let Ok(mut bc) = border_query.get_mut(tab_entity) {
             *bc = BorderColor::all(if is_active {

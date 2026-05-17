@@ -181,7 +181,7 @@ fn apply_brush(world: &mut World, entity: Entity, target: &Brush) {
         }
         if let Ok(mut ec) = world.get_entity_mut(entity) {
             ec.insert(BrushHalfedge {
-                mesh: mesh,
+                mesh,
                 vert_keys,
                 face_keys,
             });

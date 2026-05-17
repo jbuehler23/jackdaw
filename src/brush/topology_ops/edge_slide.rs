@@ -6,7 +6,7 @@ use jackdaw_geometry::halfedge::ops::edge_slide::edge_slide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, BrushEditMode, BrushSelection, EditMode, SetBrush};
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
 use crate::commands::CommandHistory;
 
 const DEFAULT_SLIDE_T: f32 = 0.5;
@@ -64,8 +64,7 @@ pub(crate) fn brush_edge_slide(
     }
 
     // Run the HalfedgeMesh op.
-    let Ok(_edge_slide_result) =
-        edge_slide(&mut halfedge.mesh, &mesh_edges, DEFAULT_SLIDE_T)
+    let Ok(_edge_slide_result) = edge_slide(&mut halfedge.mesh, &mesh_edges, DEFAULT_SLIDE_T)
     else {
         return OperatorResult::Cancelled;
     };
@@ -132,8 +131,7 @@ pub(crate) fn brush_edge_slide(
 }
 
 fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    mesh
-        .edges
+    mesh.edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
         .map(|(k, _)| k)

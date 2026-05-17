@@ -147,8 +147,7 @@ fn tear_down_face(mesh: &mut HalfedgeMesh, face: FaceKey) {
 
 /// Linear scan of `mesh.edges` for an edge connecting `va` and `vb`.
 fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    mesh
-        .edges
+    mesh.edges
         .iter()
         .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
         .map(|(k, _)| k)
