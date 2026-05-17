@@ -50,9 +50,9 @@ pub struct SpinningCube {
 }
 
 #[derive(Default)]
-pub struct MyGame;
+pub struct GamePlugin;
 
-impl GamePlugin for MyGame {
+impl GamePlugin for GamePlugin {
     fn build(&self, ctx: &mut GameApp<'_>) {
         ctx.add_systems(Update, spin_cube.run_if(in_state(PlayState::Playing)));
     }
@@ -65,4 +65,4 @@ fn spin_cube(time: Res<Time>, mut cubes: Query<(&SpinningCube, &mut Transform)>)
     }
 }
 
-jackdaw_api::export_game!("{{project-name}}", MyGame);
+jackdaw_api::export_game!("{{project-name}}", GamePlugin);

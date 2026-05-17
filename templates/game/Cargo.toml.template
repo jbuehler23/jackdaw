@@ -31,3 +31,5 @@ bevy = "0.18"
 # `ctx.register_type::<T>()` by hand.
 [build-dependencies]
 syn = { version = "2", features = ["full", "visit"] }
+thiserror = "2.0.18"
+walkdir = "2.5.0"
