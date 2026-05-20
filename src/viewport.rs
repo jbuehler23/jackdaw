@@ -477,6 +477,7 @@ fn handle_viewport_drop(
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     active: Res<ActiveViewport>,
     snap_settings: Res<crate::snapping::SnapSettings>,
+    mut drag: ResMut<crate::asset_browser::ActiveAssetDrag>,
     mut commands: Commands,
 ) {
     // Walk up the hierarchy to find the FileBrowserItem component
@@ -489,8 +490,13 @@ fn handle_viewport_drop(
     let is_gltf = path_lower.ends_with(".gltf") || path_lower.ends_with(".glb");
     let is_template = path_lower.ends_with(".template.json");
     let is_jsn = path_lower.ends_with(".jsn");
+    // The asset browser sets `ActiveAssetDrag.path` only for entries
+    // whose underlying file actually carries a `Prefab` component, so a
+    // present path here means "route this drop through the prefab
+    // system".
+    let prefab_drag = drag.path.take();
 
-    if !is_gltf && !is_template && !is_jsn {
+    if !is_gltf && !is_template && !is_jsn && prefab_drag.is_none() {
         return;
     }
 
@@ -518,15 +524,25 @@ fn handle_viewport_drop(
     let ctrl = false; // No Ctrl check needed for drop placement
     let snapped_pos = snap_settings.snap_translate_vec3_if(position, ctrl);
 
+    if let Some(prefab_path) = prefab_drag {
+        commands
+            .operator("prefab.spawn_instance")
+            .param("path", prefab_path.to_string_lossy().into_owned())
+            .param("pos_x", snapped_pos.x as f64)
+            .param("pos_y", snapped_pos.y as f64)
+            .param("pos_z", snapped_pos.z as f64)
+            .call();
+        return;
+    }
+
     let path = item.path.clone();
     if is_jsn {
-        commands.queue(move |world: &mut World| {
-            crate::entity_templates::instantiate_jsn_prefab(world, &path, snapped_pos);
-        });
+        warn!(
+            "drag-spawning non-prefab .jsn files is no longer supported; \
+             save the source as a prefab first"
+        );
     } else if is_template {
-        commands.queue(move |world: &mut World| {
-            crate::entity_templates::instantiate_template(world, &path, snapped_pos);
-        });
+        warn!(".template.json files are no longer supported; use prefabs instead");
     } else {
         commands.queue(move |world: &mut World| {
             crate::entity_ops::spawn_gltf_in_world(world, &path, snapped_pos);

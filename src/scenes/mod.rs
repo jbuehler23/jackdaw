@@ -1,6 +1,6 @@
 //! Multi-scene editor state. Owns the tab list; the active tab's
 //! contents live in the live Bevy world, inactive tabs hold a
-//! `JsnScene` snapshot plus the per-tab view state and history.
+//! `SceneJsnAst` snapshot plus the per-tab view state and history.
 
 pub mod confirm_dialog;
 pub mod operators;
@@ -10,7 +10,6 @@ pub mod ui;
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use jackdaw_jsn::format::JsnScene;
 
 use crate::commands::CommandHistory;
 use crate::project::ProjectRoot;
@@ -88,11 +87,42 @@ impl Scenes {
     }
 }
 
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
+pub enum TabKind {
+    #[default]
+    Scene,
+    Prefab,
+}
+
+/// What a tab holds when it isn't the active tab.
+///
+/// `Scene` owns its AST directly. `Prefab` keys into `PrefabAstCache`
+/// instead, so the cache stays the single source of truth for prefab
+/// content and a prefab tab can't drift from the cache entry.
+pub enum TabContent {
+    /// Scene document. `None` is the just-pushed / never-captured state
+    /// for an untitled tab; `Some` is what `capture_active_tab` stores
+    /// during a swap.
+    Scene(Option<jackdaw_jsn::SceneJsnAst>),
+    /// Prefab document. The AST lives in `PrefabAstCache`, keyed by
+    /// this canonical path. Capturing flushes the live `SceneJsnAst`
+    /// resource into the cache entry; activating installs the cache
+    /// entry back into the resource.
+    Prefab(crate::prefab::CanonicalPrefabPath),
+}
+
+impl Default for TabContent {
+    fn default() -> Self {
+        Self::Scene(None)
+    }
+}
+
 pub struct SceneTab {
     pub path: Option<PathBuf>,
     pub display_name: String,
     pub dirty: bool,
-    pub snapshot: Option<JsnScene>,
+    pub kind: TabKind,
+    pub content: TabContent,
     pub view_state: ViewState,
     pub history: CommandHistory,
     /// Recorded `CommandHistory.undo_stack.len()` as of the last time
@@ -109,10 +139,24 @@ impl SceneTab {
             path: None,
             display_name: format!("untitled-{n}"),
             dirty: false,
-            snapshot: None,
+            kind: TabKind::Scene,
+            content: TabContent::default(),
             view_state: ViewState::with_default_camera(),
             history: CommandHistory::default(),
             history_depth_at_last_check: 0,
+        }
+    }
+
+    /// Read the tab's AST regardless of variant. For `Prefab(path)`,
+    /// reads through `cache`. Returns `None` if no AST is available
+    /// (untitled scene, or prefab whose cache entry is missing).
+    pub fn ast_view<'a>(
+        &'a self,
+        cache: &'a crate::prefab::PrefabAstCache,
+    ) -> Option<&'a jackdaw_jsn::SceneJsnAst> {
+        match &self.content {
+            TabContent::Scene(opt) => opt.as_ref(),
+            TabContent::Prefab(path) => cache.get_canonical(path),
         }
     }
 }

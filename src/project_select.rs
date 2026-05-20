@@ -828,13 +828,7 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
         .project
         .last_active_tab;
 
-    if last_open_tabs.is_empty() {
-        // Legacy convention: auto-load assets/scene.jsn if present.
-        let scene_path = root.join("assets").join("scene.jsn");
-        if scene_path.is_file() {
-            crate::scene_io::load_scene_from_file(world, &scene_path);
-        }
-    } else {
+    if !last_open_tabs.is_empty() {
         for rel in &last_open_tabs {
             let abs = root.join(rel);
             if !abs.is_file() {
@@ -848,6 +842,19 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
         if tab_count > 0 {
             let target = last_active.min(tab_count - 1);
             crate::scenes::swap::swap_active_tab(world, target);
+        }
+    }
+
+    // If we ended up with zero tabs (no persisted list, or every
+    // persisted entry was missing on disk), fall back to either the
+    // legacy `assets/scene.jsn` or an empty untitled scene so the user
+    // never lands in the editor with no scene.
+    if world.resource::<crate::scenes::Scenes>().tabs.is_empty() {
+        let scene_path = root.join("assets").join("scene.jsn");
+        if scene_path.is_file() {
+            crate::scene_io::load_scene_from_file(world, &scene_path);
+        } else {
+            crate::scenes::operators::scene_new_system(world);
         }
     }
 }

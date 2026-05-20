@@ -128,6 +128,7 @@ pub fn rebuild_scene_tab_strip(
             &path_display,
             tab.dirty,
             idx == active,
+            tab.kind.clone(),
             editor_font_handle.clone(),
             icon_font_handle.clone(),
         );
@@ -159,6 +160,7 @@ fn spawn_scene_tab(
     path_display: &str,
     dirty: bool,
     is_active: bool,
+    kind: crate::scenes::TabKind,
     editor_font: Option<Handle<Font>>,
     icon_font: Option<Handle<Font>>,
 ) {
@@ -266,10 +268,17 @@ fn spawn_scene_tab(
         ChildOf(tab_entity),
     ));
 
-    // File icon prefix (only if icon font is available).
+    // Tab icon: Package when the whole tab is a prefab document, File
+    // otherwise. Constraint: only the entire-scene-is-a-prefab case
+    // gets the Package glyph; instances nested inside a regular scene
+    // do not change the tab icon.
     if let Some(handle) = icon_font.clone() {
+        let glyph = match kind {
+            crate::scenes::TabKind::Prefab => Icon::Package,
+            crate::scenes::TabKind::Scene => Icon::File,
+        };
         commands.spawn((
-            Text::new(String::from(Icon::File.unicode())),
+            Text::new(String::from(glyph.unicode())),
             TextFont {
                 font: handle,
                 font_size: TAB_ICON_FONT_PX,
@@ -538,10 +547,10 @@ pub fn update_scene_tab_label_abbreviation(
 }
 
 /// Per-frame system: update tab visuals (bg, border, label color, dirty
-/// dot) in-place. The structural rebuild only fires when the number of
-/// tabs changes, so this is the path that handles flips between
-/// active/inactive and clean/dirty without disrupting per-entity
-/// observers.
+/// dot, label text) in-place. The structural rebuild only fires when the
+/// number of tabs changes, so this is the path that handles flips between
+/// active/inactive, clean/dirty, and Save-As renames without disrupting
+/// per-entity observers.
 pub fn update_scene_tab_visuals(
     scenes: Res<Scenes>,
     tabs: Query<(Entity, &SceneTabIndex)>,
@@ -552,9 +561,39 @@ pub fn update_scene_tab_visuals(
     mut node_query: Query<&mut Node>,
     close_buttons: Query<&SceneTabCloseButton>,
     dirty_dots: Query<&SceneTabDirtyDot>,
+    mut label_keys: Query<(&mut Text, &mut SceneTabLabelKey)>,
+    mut tooltips: Query<&mut Tooltip>,
 ) {
     if !scenes.is_changed() {
         return;
+    }
+    for (mut text, mut key) in label_keys.iter_mut() {
+        let owner = key.tab;
+        let Ok((_, &SceneTabIndex(idx))) = tabs.get(owner) else {
+            continue;
+        };
+        let Some(tab) = scenes.tabs.get(idx) else {
+            continue;
+        };
+        if key.full != tab.display_name {
+            key.full = tab.display_name.clone();
+            key.abbr = abbreviated_label(&tab.display_name);
+            key.tab_natural_width = 0.0;
+            text.0 = key.full.clone();
+        }
+    }
+    for (tab_entity, &SceneTabIndex(idx)) in tabs.iter() {
+        let Some(tab) = scenes.tabs.get(idx) else {
+            continue;
+        };
+        let path_display = tab
+            .path
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Unsaved scene".to_string());
+        if let Ok(mut tip) = tooltips.get_mut(tab_entity) {
+            *tip = Tooltip::title(tab.display_name.clone()).with_description(path_display);
+        }
     }
     let active = scenes.active;
 

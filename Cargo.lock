@@ -4591,6 +4591,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "tempfile",
  "test_fixture_extension",
  "winit",
 ]

@@ -81,12 +81,23 @@ fn setup_directory_watcher(root: &Path, commands: &mut Commands) {
     }
 }
 
+/// Path of the asset currently being dragged from the asset browser. Set by a
+/// `Pointer<DragStart>` observer attached to each prefab entry, read by the
+/// viewport's drop handler, and cleared after the drop (or by `DragEnd` if no
+/// drop happened). Resource-based so the consumer doesn't need to dig the
+/// payload out of pointer event metadata.
+#[derive(Resource, Default)]
+pub struct ActiveAssetDrag {
+    pub path: Option<PathBuf>,
+}
+
 pub struct AssetBrowserPlugin;
 
 impl Plugin for AssetBrowserPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AssetBrowserState>()
             .init_resource::<AssetPreviewState>()
+            .init_resource::<ActiveAssetDrag>()
             .add_systems(OnEnter(crate::AppState::Editor), setup_initial_directory)
             .add_systems(
                 Update,
@@ -98,11 +109,34 @@ impl Plugin for AssetBrowserPlugin {
                     check_watcher_events,
                     remove_incompatible_image_nodes,
                     update_asset_browser_filter,
+                    toggle_prefabs_only_chip,
+                    update_prefabs_only_chip_style,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             )
             .add_observer(handle_file_double_click)
-            .add_observer(handle_select_asset_preview);
+            .add_observer(handle_select_asset_preview)
+            .add_observer(on_asset_browser_context_action);
+    }
+}
+
+fn on_asset_browser_context_action(
+    event: On<jackdaw_widgets::context_menu::ContextMenuAction>,
+    mut commands: Commands,
+    state: Res<AssetBrowserState>,
+    mut menu_state: ResMut<jackdaw_widgets::context_menu::ContextMenuState>,
+) {
+    if event.action != "asset_browser.delete" {
+        return;
+    }
+    let Some(path) = state.selected_file.clone() else {
+        return;
+    };
+    commands.operator("file.delete").param("path", path).call();
+    if let Some(menu) = menu_state.menu_entity.take()
+        && let Ok(mut ec) = commands.get_entity(menu)
+    {
+        ec.despawn();
     }
 }
 
@@ -138,6 +172,13 @@ pub struct AssetBrowserState {
     pub selected_file: Option<String>,
     /// Timestamp of last click for double-click detection.
     pub last_click_time: f64,
+    /// When true, only `.jsn` files that contain a `Prefab` component are
+    /// shown in the grid.
+    pub prefabs_only: bool,
+    /// Per-path memo of whether a `.jsn` file is a prefab. Keyed by
+    /// absolute path, valued by `(mtime, is_prefab)`; invalidated when
+    /// the file's mtime changes.
+    prefab_cache: PrefabCheckCache,
 }
 
 impl Default for AssetBrowserState {
@@ -152,6 +193,8 @@ impl Default for AssetBrowserState {
             entries: Vec::new(),
             selected_file: None,
             last_click_time: 0.0,
+            prefabs_only: false,
+            prefab_cache: PrefabCheckCache::default(),
         }
     }
 }
@@ -162,6 +205,47 @@ pub struct DirEntry {
     pub file_name: String,
     pub is_directory: bool,
     pub texture_info: Option<TextureInfo>,
+    pub is_prefab: bool,
+}
+
+/// Returns true if `path` is a `.jsn` file whose first scene entity carries
+/// a `jackdaw::prefab::components::Prefab` component. The file is opened and
+/// parsed as JSON; any I/O or parse error returns false.
+fn read_is_prefab(path: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    value
+        .get("scene")
+        .and_then(|v| v.get(0))
+        .and_then(|e| e.get("components"))
+        .and_then(|c| c.get("jackdaw::prefab::components::Prefab"))
+        .is_some()
+}
+
+#[derive(Default)]
+struct PrefabCheckCache {
+    entries: std::collections::HashMap<PathBuf, (std::time::SystemTime, bool)>,
+}
+
+impl PrefabCheckCache {
+    fn check(&mut self, path: &Path) -> bool {
+        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        if let Some(mtime) = mtime
+            && let Some((cached_mtime, cached)) = self.entries.get(path)
+            && *cached_mtime == mtime
+        {
+            return *cached;
+        }
+        let is_prefab = read_is_prefab(path);
+        if let Some(mtime) = mtime {
+            self.entries.insert(path.to_path_buf(), (mtime, is_prefab));
+        }
+        is_prefab
+    }
 }
 
 // -- Preview state -----------------------------------------------------------
@@ -193,6 +277,9 @@ pub struct AssetBrowserBreadcrumb;
 
 #[derive(Component)]
 pub struct AssetBrowserFilter;
+
+#[derive(Component)]
+struct PrefabsOnlyChip;
 
 #[derive(Component)]
 struct PreviewPanelContainer;
@@ -270,6 +357,7 @@ fn refresh_browser_on_change(
 
     // Scan directory
     state.entries.clear();
+    let filter = state.filter.clone();
     if let Ok(read_dir) = std::fs::read_dir(&state.current_directory) {
         let mut entries: Vec<DirEntry> = read_dir
             .filter_map(|entry| {
@@ -278,10 +366,7 @@ fn refresh_browser_on_change(
                 if file_name.starts_with('.') {
                     return None;
                 }
-                if !state.filter.is_empty()
-                    && !file_name
-                        .to_lowercase()
-                        .contains(&state.filter.to_lowercase())
+                if !filter.is_empty() && !file_name.to_lowercase().contains(&filter.to_lowercase())
                 {
                     return None;
                 }
@@ -328,9 +413,27 @@ fn refresh_browser_on_change(
                     file_name,
                     is_directory,
                     texture_info,
+                    is_prefab: false,
                 })
             })
             .collect();
+
+        // Compute is_prefab for `.jsn` files (cached by mtime), then apply
+        // the prefabs_only filter if it's enabled.
+        for entry in entries.iter_mut() {
+            if !entry.is_directory
+                && entry
+                    .path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("jsn"))
+            {
+                entry.is_prefab = state.prefab_cache.check(&entry.path);
+            }
+        }
+        if state.prefabs_only {
+            entries.retain(|e| e.is_directory || e.is_prefab);
+        }
 
         entries.sort_by(|a, b| {
             b.is_directory
@@ -499,16 +602,26 @@ fn refresh_browser_on_change(
                 file_name: entry.file_name.clone(),
             };
 
+            let icon_override = if entry.is_prefab {
+                Some(icons::Icon::Package)
+            } else {
+                None
+            };
+
             let item_entity = match state.view_mode {
                 BrowserViewMode::Grid => commands
                     .spawn((
-                        file_browser::file_browser_item(&item, &icon_font),
+                        file_browser::file_browser_item_with_icon(&item, &icon_font, icon_override),
                         ChildOf(content_entity),
                     ))
                     .id(),
                 BrowserViewMode::List => commands
                     .spawn((
-                        file_browser::file_browser_list_item(&item, &icon_font),
+                        file_browser::file_browser_list_item_with_icon(
+                            &item,
+                            &icon_font,
+                            icon_override,
+                        ),
                         ChildOf(content_entity),
                     ))
                     .id(),
@@ -528,9 +641,14 @@ fn refresh_browser_on_change(
                 .observe(highlight_on_hover)
                 .observe(unhighlight_on_out)
                 .observe(
-                    move |_: On<Pointer<Click>>,
+                    move |click: On<Pointer<Click>>,
                           mut state: ResMut<AssetBrowserState>,
                           time: Res<Time>| {
+                        // Right-click is handled by the context menu observer
+                        // below; let it through here.
+                        if click.event().button != PointerButton::Primary {
+                            return;
+                        }
                         let now = time.elapsed_secs_f64();
                         let is_double = state.selected_file.as_deref() == Some(&path_for_click)
                             && (now - state.last_click_time) < 0.4;
@@ -551,6 +669,60 @@ fn refresh_browser_on_change(
                         }
                     },
                 );
+
+            // Right-click: open context menu with a Delete entry. The
+            // click also selects the row so the breadcrumb shows the
+            // target and the Delete dispatch can pick it up.
+            let rmb_path = entry.path.clone();
+            commands.entity(item_entity).observe(
+                move |click: On<Pointer<Click>>,
+                      mut commands: Commands,
+                      mut state: ResMut<AssetBrowserState>,
+                      windows: Query<&Window>,
+                      mut menu_state: ResMut<jackdaw_widgets::context_menu::ContextMenuState>| {
+                    if click.event().button != PointerButton::Secondary {
+                        return;
+                    }
+                    state.selected_file = Some(rmb_path.to_string_lossy().into_owned());
+                    state.needs_refresh = true;
+
+                    let cursor_pos = windows
+                        .single()
+                        .ok()
+                        .and_then(bevy::prelude::Window::cursor_position)
+                        .unwrap_or_default();
+                    if let Some(existing) = menu_state.menu_entity.take()
+                        && let Ok(mut ec) = commands.get_entity(existing)
+                    {
+                        ec.despawn();
+                    }
+                    let menu = jackdaw_feathers::context_menu::spawn_context_menu(
+                        &mut commands,
+                        cursor_pos,
+                        None,
+                        &[("asset_browser.delete", "Delete")],
+                    );
+                    menu_state.menu_entity = Some(menu);
+                },
+            );
+
+            // Prefab entries: track drag start so the viewport's drop
+            // handler can pull the source path out of `ActiveAssetDrag`
+            // and route through `spawn_instance`. Clear on DragEnd if
+            // nothing consumed it.
+            if entry.is_prefab {
+                let drag_path = entry.path.clone();
+                commands.entity(item_entity).observe(
+                    move |_: On<Pointer<DragStart>>, mut drag: ResMut<ActiveAssetDrag>| {
+                        drag.path = Some(drag_path.clone());
+                    },
+                );
+                commands.entity(item_entity).observe(
+                    |_: On<Pointer<DragEnd>>, mut drag: ResMut<ActiveAssetDrag>| {
+                        drag.path = None;
+                    },
+                );
+            }
         }
     }
 
@@ -1243,6 +1415,7 @@ fn poll_asset_browser_folder(world: &mut World) {
 
 pub fn asset_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
     let folder_icon_font = icon_font.clone();
+    let chip_icon_font = icon_font.clone();
     // NOTE: the 30px window-selector sidebar that used to live here
     // is now owned by `layout::bottom_panels` (the dock container),
     // because it's about picking WHICH tool window is shown in the
@@ -1331,6 +1504,7 @@ pub fn asset_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
                                                 .allow_empty()
                                         ),)],
                                     ),
+                                    prefabs_only_chip(chip_icon_font),
                                     asset_folder_button(folder_icon_font),
                                 ],
                             ),
@@ -1399,6 +1573,93 @@ fn asset_folder_button(icon_font: Handle<Font>) -> impl Bundle {
         ),
         ButtonOperatorCall::new(AssetSelectFolderOp::ID),
     )
+}
+
+/// Compact toolbar chip that toggles the asset browser's "Prefabs only"
+/// filter. The chip's background is updated by
+/// `update_prefabs_only_chip_style` to reflect whether the filter is on,
+/// and `toggle_prefabs_only_chip` flips `state.prefabs_only` on press.
+fn prefabs_only_chip(icon_font: Handle<Font>) -> impl Bundle {
+    (
+        PrefabsOnlyChip,
+        Interaction::default(),
+        Hovered::default(),
+        Tooltip::title("Prefabs only")
+            .with_description("Show only `.jsn` files that define a prefab."),
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(tokens::SPACING_XS),
+            padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(2.0)),
+            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
+            ..Default::default()
+        },
+        BackgroundColor(Color::NONE),
+        children![
+            (
+                Text::new(String::from(icons::Icon::Package.unicode())),
+                TextFont {
+                    font: icon_font,
+                    font_size: tokens::FONT_MD,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+            ),
+            (
+                Text::new("Prefabs"),
+                TextFont {
+                    font_size: tokens::FONT_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+            ),
+        ],
+    )
+}
+
+/// Flip `state.prefabs_only` and request a refresh whenever the chip is
+/// pressed.
+fn toggle_prefabs_only_chip(
+    mut state: ResMut<AssetBrowserState>,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<PrefabsOnlyChip>)>,
+) {
+    for interaction in &interactions {
+        if *interaction == Interaction::Pressed {
+            state.prefabs_only = !state.prefabs_only;
+            state.needs_refresh = true;
+        }
+    }
+}
+
+/// Mirror `state.prefabs_only` onto the chip's background/text colors so
+/// the active state is visually obvious.
+fn update_prefabs_only_chip_style(
+    state: Res<AssetBrowserState>,
+    mut chips: Query<(&mut BackgroundColor, Option<&Children>), With<PrefabsOnlyChip>>,
+    mut text_colors: Query<&mut TextColor>,
+) {
+    if !state.is_changed() {
+        return;
+    }
+    let active = state.prefabs_only;
+    for (mut bg, children) in &mut chips {
+        bg.0 = if active {
+            tokens::ELEVATED_BG
+        } else {
+            Color::NONE
+        };
+        let target_color = if active {
+            tokens::TEXT_PRIMARY
+        } else {
+            tokens::TEXT_SECONDARY
+        };
+        let Some(children) = children else { continue };
+        for child in children.iter() {
+            if let Ok(mut color) = text_colors.get_mut(child) {
+                color.0 = target_color;
+            }
+        }
+    }
 }
 
 /// Checks for filesystem events from the `notify` watcher and triggers browser refreshes.
@@ -1483,4 +1744,54 @@ pub fn asset_select_folder(
     let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_folder().await });
     commands.insert_resource(AssetBrowserFolderTask(task));
     OperatorResult::Finished
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_is_prefab;
+
+    #[test]
+    fn read_is_prefab_detects_prefab_component() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("p.jsn");
+        let body = r#"{
+            "jsn": { "format_version": [3,0,0], "editor_version": "0", "bevy_version": "0.18" },
+            "metadata": { "name": "p", "created": "", "modified": "" },
+            "assets": {},
+            "scene": [{
+                "components": {
+                    "jackdaw::prefab::components::Prefab": null,
+                    "bevy_ecs::name::Name": "p"
+                }
+            }]
+        }"#;
+        std::fs::write(&path, body).unwrap();
+        assert!(read_is_prefab(&path), "prefab JSON is detected");
+    }
+
+    #[test]
+    fn read_is_prefab_rejects_regular_scene() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("s.jsn");
+        let body = r#"{
+            "jsn": { "format_version": [3,0,0], "editor_version": "0", "bevy_version": "0.18" },
+            "metadata": { "name": "s", "created": "", "modified": "" },
+            "assets": {},
+            "scene": [{
+                "components": {
+                    "bevy_ecs::name::Name": "root"
+                }
+            }]
+        }"#;
+        std::fs::write(&path, body).unwrap();
+        assert!(!read_is_prefab(&path), "regular scene JSON is not a prefab");
+    }
+
+    #[test]
+    fn read_is_prefab_returns_false_on_garbage() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("g.jsn");
+        std::fs::write(&path, "not json at all").unwrap();
+        assert!(!read_is_prefab(&path), "invalid JSON returns false");
+    }
 }

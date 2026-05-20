@@ -133,9 +133,12 @@ fn viewport_drag_detect(
         Res<crate::draw_brush::DrawBrushState>,
         Res<crate::terrain::TerrainEditMode>,
     ),
-    mut ray_cast: MeshRayCast,
-    parents: Query<&ChildOf>,
-    brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    (mut ray_cast, parents, brushes, editor_entities): (
+        MeshRayCast,
+        Query<&ChildOf>,
+        Query<(), With<jackdaw_jsn::Brush>>,
+        Query<(), With<crate::EditorEntity>>,
+    ),
 ) {
     if modal.active.is_some() || gizmo_drag.active || gizmo_hover.hovered_axis.is_some() {
         return;
@@ -211,7 +214,13 @@ fn viewport_drag_detect(
     let Ok(ray) = camera.viewport_to_world(cam_tf, viewport_cursor) else {
         return;
     };
-    let settings = MeshRayCastSettings::default().with_visibility(RayCastVisibility::Any);
+    // Filter out editor-internal mesh entities (material preview spheres,
+    // gizmo meshes, draw previews) so they don't occlude clicks against
+    // the actual scene geometry. Same fix as in `viewport_select::handle_viewport_click`.
+    let editor_filter = |entity: Entity| !editor_entities.contains(entity);
+    let settings = MeshRayCastSettings::default()
+        .with_visibility(RayCastVisibility::Any)
+        .with_filter(&editor_filter);
     let hits = ray_cast.cast_ray(ray, &settings);
 
     let mut hit_primary = false;

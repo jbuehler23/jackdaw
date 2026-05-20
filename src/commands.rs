@@ -145,14 +145,31 @@ impl EditorCommand for ReparentEntity {
     }
 }
 
-fn set_parent(world: &mut World, entity: Entity, parent: Option<Entity>) {
-    // Preserve world position across reparent. Compute the entity's current
-    // world transform, then update its local Transform so that:
-    //   new_parent_global * new_local = current_world
-    // This prevents the brush from "jumping" (or disappearing off-screen)
-    // when parented under an entity at a non-origin position.
+/// Reparent `entity` under `parent` (or to top-level if `None`), keeping
+/// the live AST authoritative: AST `node.parent` is the source of truth;
+/// the ECS `ChildOf` is mirrored from it so the visual scene tracks the
+/// AST. Preserves the entity's world position across the move.
+///
+/// Any code path that needs to change an entity's parent should call
+/// this (or push `ReparentEntity` through the command history) -- never
+/// `world.entity_mut(e).insert(ChildOf(..))` directly. Bypassing the
+/// AST update leaves `node.parent` stale, and later consumers (prefab
+/// save, scene serialization, tab swap) read the AST and silently
+/// disagree with the visible hierarchy.
+pub(crate) fn set_parent(world: &mut World, entity: Entity, parent: Option<Entity>) {
     let current_world = world.get::<GlobalTransform>(entity).copied();
     let new_parent_world = parent.and_then(|p| world.get::<GlobalTransform>(p).copied());
+
+    let parent_idx = {
+        let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
+        parent.and_then(|p| ast.ecs_to_jsn.get(&p).copied())
+    };
+    {
+        let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        if let Some(node) = ast.node_for_entity_mut(entity) {
+            node.parent = parent_idx;
+        }
+    }
 
     match parent {
         Some(p) => {
@@ -177,18 +194,6 @@ fn set_parent(world: &mut World, entity: Entity, parent: Option<Entity>) {
         && let Some(mut tf) = world.get_mut::<Transform>(entity)
     {
         *tf = new_tf;
-    }
-
-    // Update AST parent and (if changed) Transform
-    let parent_idx = {
-        let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-        parent.and_then(|p| ast.ecs_to_jsn.get(&p).copied())
-    };
-    {
-        let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
-        if let Some(node) = ast.node_for_entity_mut(entity) {
-            node.parent = parent_idx;
-        }
     }
     if let Some(new_tf) = new_transform {
         sync_component_to_ast(

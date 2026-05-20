@@ -29,6 +29,8 @@ pub fn category_color(category: EntityCategory) -> Color {
         EntityCategory::Light => tokens::CATEGORY_LIGHT,
         EntityCategory::Mesh => tokens::CATEGORY_MESH,
         EntityCategory::Scene => tokens::CATEGORY_SCENE,
+        EntityCategory::Prefab => tokens::CATEGORY_PREFAB,
+        EntityCategory::Inherited => tokens::CATEGORY_INHERITED,
         EntityCategory::Entity => tokens::CATEGORY_ENTITY,
     }
 }
@@ -400,7 +402,8 @@ fn category_dot(category: EntityCategory, icon_font: &Handle<Font>) -> impl Bund
     let icon_char = match category {
         EntityCategory::Camera => Icon::Video,
         EntityCategory::Light => Icon::Lightbulb,
-        EntityCategory::Mesh | EntityCategory::Scene => Icon::Box,
+        EntityCategory::Prefab => Icon::Package,
+        EntityCategory::Inherited | EntityCategory::Mesh | EntityCategory::Scene => Icon::Box,
         EntityCategory::Entity => Icon::Dot,
     };
     (

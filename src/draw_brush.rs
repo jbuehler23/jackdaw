@@ -744,6 +744,9 @@ impl EditorCommand for CreateBrushCommand {
     fn undo(&mut self, world: &mut World) {
         if let Some(entity) = entity_by_stable_id(world, self.data.stable_id) {
             deselect_entities(world, &[entity]);
+            world
+                .resource_mut::<jackdaw_jsn::SceneJsnAst>()
+                .remove_node(entity);
             if let Ok(entity_mut) = world.get_entity_mut(entity) {
                 entity_mut.despawn();
             }

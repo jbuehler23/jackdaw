@@ -141,8 +141,22 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
         .and_then(|s| s.to_str())
         .unwrap_or("scene")
         .to_string();
+    let kind = if jsn
+        .scene
+        .first()
+        .map(|e| {
+            e.components
+                .contains_key("jackdaw::prefab::components::Prefab")
+        })
+        .unwrap_or(false)
+    {
+        crate::scenes::TabKind::Prefab
+    } else {
+        crate::scenes::TabKind::Scene
+    };
     let mut tab = SceneTab::new_untitled(0);
-    tab.path = Some(canonical);
+    tab.kind = kind.clone();
+    tab.path = Some(canonical.clone());
     tab.display_name = display_name;
     tab.dirty = false;
     // Restore the saved viewport camera framing if the scene file
@@ -151,7 +165,19 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     if let Some(camera) = jsn.editor.as_ref().and_then(|e| e.camera.as_ref()) {
         tab.view_state.camera_transform = camera.clone().into();
     }
-    tab.snapshot = Some(jsn);
+    let ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &[]);
+    tab.content = match kind {
+        crate::scenes::TabKind::Prefab => {
+            let canonical_path = crate::prefab::canonical_prefab_path(&canonical);
+            if let Some(mut cache) = world.get_resource_mut::<crate::prefab::PrefabAstCache>()
+                && cache.get_canonical(&canonical_path).is_none()
+            {
+                cache.insert(canonical_path.as_path(), ast);
+            }
+            crate::scenes::TabContent::Prefab(canonical_path)
+        }
+        crate::scenes::TabKind::Scene => crate::scenes::TabContent::Scene(Some(ast)),
+    };
 
     let target = world.resource_mut::<Scenes>().push_tab(tab);
 

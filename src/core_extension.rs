@@ -197,6 +197,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::transform_ops::add_to_extension(ctx);
         crate::physics_tool::add_to_extension(ctx);
         crate::hierarchy::add_to_extension(ctx);
+        crate::file_ops::add_to_extension(ctx);
         crate::viewport_select::add_to_extension(ctx);
         crate::clip_ops::add_to_extension(ctx);
         crate::brush_element_ops::add_to_extension(ctx);

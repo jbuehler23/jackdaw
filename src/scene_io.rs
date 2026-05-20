@@ -54,6 +54,12 @@ const ALWAYS_SAVE_PATHS: &[&str] = &[
     // Overrides the `jackdaw::` skip so `apply_ast_to_world` can
     // match selected brushes by stable id across an undo.
     "jackdaw::draw_brush::BrushStableId",
+    // Prefab marker components must round-trip through save and AST
+    // registration; stripping them breaks instance inheritance and
+    // causes `revert_component` to lose track of the prefab source.
+    "jackdaw::prefab::components::Prefab",
+    "jackdaw::prefab::components::IsA",
+    "jackdaw::prefab::components::PrefabEntityId",
 ];
 
 pub fn should_skip_component(type_path: &str) -> bool {
@@ -201,6 +207,15 @@ pub fn save_scene_as(world: &mut World) {
     spawn_save_dialog(world);
 }
 
+/// Derive a transient `JsnScene` from a `SceneJsnAst` snapshot. Used at
+/// the tab-swap boundary so the spawn pipeline still gets a `JsnScene`
+/// without forcing every tab to keep one parallel to the AST. Editor
+/// state (camera, view) is dropped: it's already carried on the
+/// `SceneTab` and re-applied separately.
+pub fn jsn_scene_from_ast(ast: &jackdaw_jsn::SceneJsnAst) -> JsnScene {
+    ast.to_jsn_scene(jackdaw_jsn::format::JsnMetadata::default())
+}
+
 /// Build a `JsnScene` snapshot of the live world. Pure: does not touch
 /// disk. Used by both `save_scene_inner` (which writes the result to a
 /// file) and by the multi-scene tab swap (which keeps the `JsnScene`
@@ -256,6 +271,13 @@ pub fn serialize_world_to_jsn_scene(world: &mut World) -> JsnScene {
         &inline_assets,
         &scene_entities,
     );
+
+    // Sparsify instance subtree components against cached prefabs.
+    let entities = if let Some(cache) = world.get_resource::<crate::prefab::PrefabAstCache>() {
+        crate::prefab::save_load::sparsify_instance_entities(entities, cache, &parent_path)
+    } else {
+        entities
+    };
 
     let assets = JsnAssets(inline_asset_data);
 
@@ -340,17 +362,12 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         })
         .detach();
 
-    // Sync AST from the serialized scene. Re-collect the entity list so
-    // we can map scene indices back to live ECS entities (same logic as
-    // in serialize_world_to_jsn_scene; the collection is cheap).
-    let editor_set_for_ast = world
-        .run_system_cached(collect_editor_entities)
-        .unwrap_or_default();
-    let scene_entities_for_ast = world
-        .run_system_cached_with(collect_scene_entities_from_set, editor_set_for_ast)
-        .unwrap_or_default();
-    let ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &scene_entities_for_ast);
-    *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast;
+    // The live `SceneJsnAst` is the source of truth and stays untouched
+    // across save. Do not rebuild it from `jsn` here:
+    // `collect_scene_entities_from_set` iterates a `HashSet`, so a
+    // re-collection returns entities in a different order than the one
+    // used to serialize, which would rebind `ecs_to_jsn` to the wrong
+    // nodes.
 
     // Save catalog alongside scene if dirty
     crate::asset_catalog::save_catalog(world);
@@ -1138,7 +1155,7 @@ pub fn serialize_asset_into(
 
 /// Build a `Vec<JsnEntity>` from scene entities using reflection.
 /// Uses the serializer processor to handle `Handle<T>` and `Entity` fields.
-fn build_scene_snapshot(
+pub(crate) fn build_scene_snapshot(
     world: &World,
     registry: &TypeRegistry,
     parent_path: &Path,
@@ -1241,10 +1258,6 @@ pub fn load_scene_from_file(world: &mut World, chosen: &std::path::Path) {
 
 fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
     let path = chosen.to_string_lossy().to_string();
-    let last_dir = chosen.parent().map(std::path::Path::to_path_buf);
-
-    // Update last directory
-    world.resource_mut::<SceneFilePath>().last_directory = last_dir;
 
     let json = match std::fs::read_to_string(&path) {
         Ok(json) => json,
@@ -1253,6 +1266,12 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
             return;
         }
     };
+
+    // Only update `last_directory` once the file has been successfully read
+    // and we're committed to the load. A failed read must NOT leak a stale
+    // path into the dialog state.
+    world.resource_mut::<SceneFilePath>().last_directory =
+        chosen.parent().map(std::path::Path::to_path_buf);
 
     if path.ends_with(".scene.json") {
         // Legacy format: raw DynamicScene JSON
@@ -1308,12 +1327,44 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
         // Deserialize inline assets before entities
         let local_assets = load_inline_assets(world, &jsn.assets, parent_path);
 
-        // Load entities with processor
-        let spawned = load_scene_from_jsn(world, &jsn.scene, parent_path, &local_assets);
+        // Build the unresolved AST from the on-disk JsnScene.
+        let unresolved_ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &[]);
 
-        // Populate the AST from the loaded scene
-        let ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &spawned);
-        *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast;
+        // Populate the prefab cache from any IsA references in the scene.
+        {
+            let mut cache = world.resource_mut::<crate::prefab::PrefabAstCache>();
+            crate::prefab::save_load::populate_cache_for_scene(
+                &unresolved_ast,
+                &mut cache,
+                parent_path,
+            );
+        }
+
+        // Resolve the AST against the cache. If resolution fails (e.g. cycle),
+        // fall back to the unresolved AST so the editor stays usable.
+        let resolved_ast = {
+            let cache = world.resource::<crate::prefab::PrefabAstCache>();
+            match crate::prefab::resolver::resolve_scene(&unresolved_ast, cache) {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("prefab resolution failed: {e}; spawning unresolved scene");
+                    unresolved_ast.clone()
+                }
+            }
+        };
+
+        // Spawn from the resolved AST (one ECS entity per resolved AST node).
+        let resolved_jsn = jsn_scene_from_ast(&resolved_ast);
+        let spawned = load_scene_from_jsn(world, &resolved_jsn.scene, parent_path, &local_assets);
+
+        // Install the UNRESOLVED AST as the source of truth (so save still
+        // emits sparse references). Map the first N spawned entities (the
+        // authored ones) to the AST's node indices; the remaining spawned
+        // entities are inherited and live ECS-only until edited.
+        let authored_count = unresolved_ast.nodes.len();
+        let authored_entities: Vec<_> = spawned.iter().copied().take(authored_count).collect();
+        let ast_with_ecs = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &authored_entities);
+        *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast_with_ecs;
 
         // Restore the saved camera framing if present.
         if let Some(camera) = jsn.editor.as_ref().and_then(|e| e.camera.as_ref()) {
@@ -1802,6 +1853,21 @@ pub(crate) fn despawn_scene_entities(world: &mut World) -> Result<(), BevyError>
     }
 
     for entity in scene_set {
+        if let Ok(entity_mut) = world.get_entity_mut(entity) {
+            entity_mut.despawn();
+        }
+    }
+
+    // Sweep any leftover `BrushFaceEntity` mesh children. Despawning a
+    // parent brush does not always cascade through `ChildOf` in time;
+    // orphan face meshes would otherwise survive, keep their
+    // `Transform` and `MeshMaterial3d`, and render as a ghost box at
+    // world origin in the next scene.
+    let orphan_faces: Vec<Entity> = world
+        .query_filtered::<Entity, With<crate::brush::BrushFaceEntity>>()
+        .iter(world)
+        .collect();
+    for entity in orphan_faces {
         if let Ok(entity_mut) = world.get_entity_mut(entity) {
             entity_mut.despawn();
         }

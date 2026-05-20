@@ -286,6 +286,8 @@ impl Plugin for BrushPlugin {
                 (
                     mesh::sync_brush_preview,
                     ApplyDeferred,
+                    mesh::recenter_brush_origins,
+                    ApplyDeferred,
                     mesh::regenerate_brush_meshes,
                     ApplyDeferred,
                     mesh::ensure_brush_face_materials,
