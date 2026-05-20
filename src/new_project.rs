@@ -19,6 +19,8 @@ use std::process::Command;
 
 use bevy::log::{info, warn};
 
+use crate::command_runner::{self, CommandError, CommandIo};
+
 use crate::sdk_paths::SdkPaths;
 
 /// Single-repo URL for all built-in templates. Each variant lives
@@ -309,27 +311,12 @@ pub enum ScaffoldError {
     InvalidName(String),
     LocationNotFound(PathBuf),
     ProjectAlreadyExists(PathBuf),
-    /// Child started and exited non-zero.
-    CommandFailed {
-        program: String,
-        args: Vec<String>,
-        status: std::process::ExitStatus,
-        stdout: String,
-        stderr: String,
-    },
-    /// `execve` itself failed.
-    Spawn {
-        program: String,
-        args: Vec<String>,
-        source: std::io::Error,
-    },
+    Command(CommandError),
 }
 
-fn format_invocation(program: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        program.to_string()
-    } else {
-        format!("{program} {}", args.join(" "))
+impl From<CommandError> for ScaffoldError {
+    fn from(e: CommandError) -> Self {
+        Self::Command(e)
     }
 }
 
@@ -357,69 +344,17 @@ impl std::fmt::Display for ScaffoldError {
                 "a project already exists at {}; pick a different name or location.",
                 p.display()
             ),
-            Self::CommandFailed {
-                program,
-                args,
-                status,
-                stdout,
-                stderr,
-            } => {
-                write!(
-                    f,
-                    "`{}` exited with {status}",
-                    format_invocation(program, args)
-                )?;
-                if !stderr.is_empty() {
-                    write!(f, "\nstderr:\n{stderr}")?;
-                }
-                if !stdout.is_empty() {
-                    write!(f, "\nstdout:\n{stdout}")?;
-                }
-                Ok(())
-            }
-            Self::Spawn {
-                program,
-                args,
-                source,
-            } => write!(
-                f,
-                "failed to spawn `{}`: {source}",
-                format_invocation(program, args)
-            ),
+            Self::Command(e) => write!(f, "{e}"),
         }
     }
 }
 
 impl std::error::Error for ScaffoldError {}
 
-fn run_command(cmd: &mut Command) -> Result<std::process::Output, ScaffoldError> {
-    let program = cmd.get_program().to_string_lossy().into_owned();
-    let args: Vec<String> = cmd
-        .get_args()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
-    let output = match cmd.output() {
-        Ok(o) => o,
-        Err(source) => {
-            return Err(ScaffoldError::Spawn {
-                program,
-                args,
-                source,
-            });
-        }
-    };
-    if output.status.success() {
-        return Ok(output);
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    Err(ScaffoldError::CommandFailed {
-        program,
-        args,
-        status: output.status,
-        stdout,
-        stderr,
-    })
+/// `true` for scaffold failures that originated from the user clicking
+/// Cancel; lets the UI suppress the "Create failed: …" toast in that case.
+pub fn is_cancelled(err: &ScaffoldError) -> bool {
+    matches!(err, ScaffoldError::Command(CommandError::Cancelled { .. }))
 }
 
 /// Scaffold a project from `template_url` into `<location>/<name>`.
@@ -445,6 +380,7 @@ pub fn scaffold_project(
     template_url: &str,
     branch: Option<&str>,
     linkage: TemplateLinkage,
+    io: &CommandIo,
 ) -> Result<PathBuf, ScaffoldError> {
     if name.is_empty()
         || !name
@@ -484,6 +420,7 @@ pub fn scaffold_project(
             subdir,
             linkage,
             &project_path,
+            io,
         );
     }
     // Sanity-check that `bevy` is on PATH before invoking it.
@@ -508,7 +445,7 @@ pub fn scaffold_project(
         }
     }
 
-    run_command(&mut cmd)?;
+    command_runner::run(&mut cmd, io)?;
 
     // `bevy new` is consistent about where it drops the project:
     // `<location>/<name>/`. Trust that and return.
@@ -537,6 +474,7 @@ fn scaffold_from_local_path(
     subdir: Option<&str>,
     linkage: TemplateLinkage,
     project_path: &Path,
+    io: &CommandIo,
 ) -> Result<PathBuf, ScaffoldError> {
     let cargo_generate = which_cargo_generate().ok_or(ScaffoldError::CargoGenerateNotFound)?;
 
@@ -555,7 +493,7 @@ fn scaffold_from_local_path(
         .args(["--name", name])
         .arg("--destination")
         .arg(location);
-    run_command(&mut cmd)?;
+    command_runner::run(&mut cmd, io)?;
     if matches!(linkage, TemplateLinkage::Dylib) {
         write_cargo_config(project_path);
     }
