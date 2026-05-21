@@ -10,7 +10,8 @@ pub mod preview;
 pub mod topology_migration;
 pub mod topology_ops;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_reflect::prelude::*;
 
 use crate::commands::EditorCommand;
 

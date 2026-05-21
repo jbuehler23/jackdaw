@@ -1,4 +1,8 @@
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_camera::Camera2d;
+use bevy_ecs::prelude::*;
+use bevy_internal::DefaultPlugins;
+use bevy_ui::prelude::*;
 use jackdaw_feathers::{EditorFeathersPlugin, split_panel};
 
 fn main() -> AppExit {

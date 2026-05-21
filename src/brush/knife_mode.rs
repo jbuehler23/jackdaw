@@ -62,9 +62,10 @@
 //! Cut-through (project the cut through the whole brush
 //! so the back face is cut simultaneously) is filed as task #97.
 
-use bevy::prelude::*;
-use bevy::ui::ui_transform::UiGlobalTransform;
-use bevy::window::PrimaryWindow;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
+use bevy_ui::ui_transform::UiGlobalTransform;
+use bevy_window::PrimaryWindow;
 use jackdaw_geometry::halfedge::ops::edge_split::split_edge;
 use jackdaw_geometry::halfedge::ops::face_poke::face_poke;
 use jackdaw_geometry::halfedge::ops::face_split::split_face;

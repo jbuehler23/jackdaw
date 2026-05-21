@@ -150,8 +150,8 @@ fn error_handler(error: BevyError, ctx: ErrorContext) {
     let msg = format!("{error}");
     if msg.contains("Note that interacting with a despawned entity is the most common cause of this error but there are others") {
         // TODO: Ideally these should not happen. But as-is, we get a lot of them and they are benign, so let's not flood the logs
-        bevy::ecs::error::debug(error, ctx);
+        bevy_ecs::error::debug(error, ctx);
         return;
     }
-    bevy::ecs::error::error(error, ctx);
+    bevy_ecs::error::error(error, ctx);
 }

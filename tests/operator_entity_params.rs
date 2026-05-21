@@ -21,7 +21,8 @@
 //!    `PropertyValue::Int`, that's a deliberate behaviour change and
 //!    these tests will demand attention.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
 #[cfg(feature = "avian")]

@@ -1,16 +1,15 @@
 use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
 use crate::selection::Selection;
 
-use bevy::reflect::{NamedField, UnnamedField};
-use bevy::{
-    ecs::reflect::{AppTypeRegistry, ReflectComponent},
-    feathers::theme::ThemedText,
-    input_focus::InputFocus,
-    math::Vec3A,
-    prelude::*,
-    reflect::ReflectRef,
-    ui_widgets::observe,
-};
+use bevy_ecs::prelude::*;
+use bevy_ecs::reflect::{AppTypeRegistry, ReflectComponent};
+use bevy_feathers::theme::ThemedText;
+use bevy_input_focus::InputFocus;
+use bevy_math::prelude::*;
+use bevy_reflect::ReflectRef;
+use bevy_ui_widgets::observe;
+
+use bevy_reflect::{NamedField, UnnamedField};
 use jackdaw_feathers::{
     checkbox::{CheckboxCommitEvent, CheckboxProps, CheckboxState, checkbox},
     color_picker::{ColorPickerCommitEvent, ColorPickerProps, color_picker},
@@ -1965,7 +1964,7 @@ pub(crate) fn refresh_enum_variants(
     // `Without<EnumVariantHost>` makes this query disjoint from `hosts` so the
     // two queries can coexist  -- we only ever need to read the selected source
     // entity, never a UI container.
-    entity_query: Query<bevy::ecs::world::EntityRef, Without<super::EnumVariantHost>>,
+    entity_query: Query<bevy_ecs::world::EntityRef, Without<super::EnumVariantHost>>,
     dirty_sources: Query<(), With<super::InspectorDirty>>,
 ) {
     let Some(primary) = selection.primary() else {
@@ -1998,7 +1997,7 @@ pub(crate) fn refresh_enum_variants(
             continue;
         };
 
-        let enum_partial: &dyn bevy::reflect::PartialReflect = if host.field_path.is_empty() {
+        let enum_partial: &dyn bevy_reflect::PartialReflect = if host.field_path.is_empty() {
             reflected.as_partial_reflect()
         } else {
             let Ok(field) = reflected.reflect_path(host.field_path.as_str()) else {
@@ -2097,7 +2096,7 @@ fn is_opaque_type(value: &dyn PartialReflect) -> bool {
 fn spawn_enum_field(
     commands: &mut Commands,
     parent: Entity,
-    enum_ref: &dyn bevy::reflect::Enum,
+    enum_ref: &dyn bevy_reflect::Enum,
     depth: usize,
     field_path: String,
     source_entity: Entity,
@@ -2119,7 +2118,7 @@ fn spawn_enum_field(
         );
         return;
     };
-    let bevy::reflect::TypeInfo::Enum(enum_info) = type_info else {
+    let bevy_reflect::TypeInfo::Enum(enum_info) = type_info else {
         spawn_text_row(
             commands,
             parent,
@@ -2154,7 +2153,7 @@ fn spawn_enum_field(
     let all_unit = (0..enum_info.variant_len()).all(|i| {
         enum_info
             .variant_at(i)
-            .map(|v| matches!(v, bevy::reflect::VariantInfo::Unit(_)))
+            .map(|v| matches!(v, bevy_reflect::VariantInfo::Unit(_)))
             .unwrap_or(false)
     });
 
@@ -2250,7 +2249,7 @@ pub(super) fn spawn_variant_contents(
     commands: &mut Commands,
     container: Entity,
     host: &super::EnumVariantHost,
-    enum_ref: &dyn bevy::reflect::Enum,
+    enum_ref: &dyn bevy_reflect::Enum,
     entity_names: &Query<&Name>,
     type_registry: &AppTypeRegistry,
     editor_font: &Handle<Font>,
@@ -2260,7 +2259,7 @@ pub(super) fn spawn_variant_contents(
     let Some(type_info) = enum_ref.get_represented_type_info() else {
         return;
     };
-    let bevy::reflect::TypeInfo::Enum(enum_info) = type_info else {
+    let bevy_reflect::TypeInfo::Enum(enum_info) = type_info else {
         return;
     };
 
@@ -2403,9 +2402,9 @@ fn apply_enum_variant_with_undo(
 fn resolve_enum_info<'a>(
     type_path: &str,
     field_path: &str,
-    registry: &'a bevy::reflect::TypeRegistry,
-) -> Option<&'a bevy::reflect::EnumInfo> {
-    use bevy::reflect::TypeInfo;
+    registry: &'a bevy_reflect::TypeRegistry,
+) -> Option<&'a bevy_reflect::EnumInfo> {
+    use bevy_reflect::TypeInfo;
 
     let mut current_reg = registry.get_with_type_path(type_path)?;
     let mut current_info = current_reg.type_info();
@@ -2434,11 +2433,11 @@ fn resolve_enum_info<'a>(
 /// default of the named enum variant. Returns `None` if any field type lacks
 /// `ReflectDefault`.
 fn build_variant_default_json(
-    enum_info: &bevy::reflect::EnumInfo,
+    enum_info: &bevy_reflect::EnumInfo,
     variant_name: &str,
-    registry: &bevy::reflect::TypeRegistry,
+    registry: &bevy_reflect::TypeRegistry,
 ) -> Option<serde_json::Value> {
-    use bevy::reflect::{VariantInfo, prelude::ReflectDefault, serde::TypedReflectSerializer};
+    use bevy_reflect::{VariantInfo, prelude::ReflectDefault, serde::TypedReflectSerializer};
 
     let variant = enum_info.variant(variant_name)?;
 

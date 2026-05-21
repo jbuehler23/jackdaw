@@ -5,7 +5,9 @@
 //! or indeterminate (unknown total; bar stays at 0%, caller
 //! typically shows a spinner separately or leaves the bar empty).
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 
 use crate::tokens;
 

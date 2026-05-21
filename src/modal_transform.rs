@@ -1,9 +1,7 @@
-use bevy::{
-    picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
-    prelude::*,
-    ui::UiGlobalTransform,
-    window::{CursorGrabMode, CursorOptions},
-};
+use bevy_ecs::prelude::*;
+use bevy_picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility};
+use bevy_ui::UiGlobalTransform;
+use bevy_window::{CursorGrabMode, CursorOptions};
 
 use crate::{
     commands::{CommandHistory, SetTransform},

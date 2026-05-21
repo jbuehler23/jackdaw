@@ -7,7 +7,8 @@
 //! and calling:
 //!
 //! ```ignore
-//! use bevy::prelude::*;
+//! use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 //! use jackdaw::prelude::*;
 //!
 //! fn main() {
@@ -26,7 +27,8 @@
 
 use std::sync::Arc;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw::prelude::*;
 
 /// The extension's entry point. Register it with

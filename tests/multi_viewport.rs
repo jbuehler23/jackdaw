@@ -15,7 +15,8 @@
 //!    `InfiniteGrid`, so axis-aligned views aren't edge-on. Other
 //!    viewports' grids must stay put.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use bevy_infinite_grid::InfiniteGridBundle;
 use jackdaw::viewport::{ActiveViewport, MainViewportCamera, ViewportConfig, ViewportGrid};
 use jackdaw_api::prelude::*;

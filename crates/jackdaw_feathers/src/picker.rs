@@ -30,17 +30,23 @@
 //! }
 //! ```
 
-use bevy::ecs::lifecycle::HookContext;
-use bevy::ecs::relationship::RelatedSpawner;
-use bevy::ecs::system::SystemId;
-use bevy::ecs::world::DeferredWorld;
-use bevy::feathers::font_styles::InheritableFont;
-use bevy::feathers::handle_or_path::HandleOrPath;
-use bevy::feathers::theme::ThemedText;
-use bevy::input_focus::InputFocus;
-use bevy::input_focus::tab_navigation::{TabGroup, TabIndex};
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_derive::Deref;
+use bevy_ecs::lifecycle::HookContext;
+use bevy_ecs::prelude::*;
+use bevy_ecs::relationship::RelatedSpawner;
+use bevy_ecs::system::SystemId;
+use bevy_ecs::world::DeferredWorld;
+use bevy_feathers::font_styles::InheritableFont;
+use bevy_feathers::handle_or_path::HandleOrPath;
+use bevy_feathers::theme::ThemedText;
+use bevy_input_focus::InputFocus;
+use bevy_input_focus::tab_navigation::{TabGroup, TabIndex};
+use bevy_log::prelude::*;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
 use bevy_ui_text_input::SubmitText;
+use bevy_utils::prelude::*;
 use jackdaw_fuzzy::FuzzyMatcher;
 pub use jackdaw_fuzzy::{Category, Match, Matchable, MatchedStr};
 use lucide_icons::Icon;

@@ -1,7 +1,7 @@
 //! Decide whether a keybind/operator gate should refuse because the
 //! user is typing into a UI text input.
 //!
-//! Why a wrapper exists: Bevy's [`bevy::input_focus::InputFocus`]
+//! Why a wrapper exists: Bevy's [`bevy_input_focus::InputFocus`]
 //! `set_initial_focus` system runs in `PostStartup` and assigns the
 //! `PrimaryWindow` entity as the focused entity when nothing else has
 //! claimed focus yet. A gate written as `input_focus.0.is_none()`
@@ -14,9 +14,10 @@
 //! [`KeybindFocus`] returns `is_typing()` only when the focused entity
 //! has a [`TextInputNode`].
 
-use bevy::ecs::system::SystemParam;
-use bevy::input_focus::InputFocus;
-use bevy::prelude::*;
+use bevy_ecs::system::SystemParam;
+use bevy_input_focus::InputFocus;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::prelude::ActionSources;
 use jackdaw_feathers::text_edit::TextInputNode;
 

@@ -1,4 +1,5 @@
-use bevy::{input_focus::InputFocus, prelude::*};
+use bevy_ecs::prelude::*;
+use bevy_input_focus::InputFocus;
 
 use crate::default_style;
 use crate::{

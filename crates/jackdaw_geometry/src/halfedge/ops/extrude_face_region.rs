@@ -4,7 +4,7 @@
 //!
 //! Single-face MVP -- multi-face region merging deferred.
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 
 use crate::halfedge::cycles::{disk_insert_edge, radial_insert_loop};
 use crate::halfedge::types::*;

@@ -1,7 +1,10 @@
-use bevy::prelude::*;
-use bevy::reflect::TypePath;
-use bevy::render::render_resource::*;
-use bevy::shader::ShaderRef;
+use bevy_asset::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_reflect::TypePath;
+use bevy_render::render_resource::*;
+use bevy_shader::ShaderRef;
+use bevy_ui_render::prelude::*;
 
 const SHADER_HSV_RECT_PATH: &str =
     "embedded://jackdaw_feathers/color_picker/shaders/color_picker_hsv_rect.wgsl";

@@ -10,7 +10,7 @@ fn dissolve_midpoint_vert_from_edge_split_restores_original_edge() {
     // Build a two-quad mesh (two quads sharing an edge) and split the shared edge.
     // The split produces a valence-2 midpoint vert; dissolving it restores the original.
     let mut mesh = HalfedgeMesh::default();
-    use bevy::math::Vec3;
+    use bevy_math::Vec3;
     // Quad A: (0,0,0)-(1,0,0)-(1,1,0)-(0,1,0)
     let v0 = mesh.add_vert(Vec3::new(0.0, 0.0, 0.0));
     let v1 = mesh.add_vert(Vec3::new(1.0, 0.0, 0.0));
@@ -82,7 +82,7 @@ fn dissolve_corner_produces_outward_facing_merged_face() {
             incident_faces.insert(mesh.loops[lp].face);
         }
     }
-    let mut expected = bevy::math::Vec3::ZERO;
+    let mut expected = bevy_math::Vec3::ZERO;
     for f in &incident_faces {
         expected += mesh.faces[*f].normal_cache;
     }

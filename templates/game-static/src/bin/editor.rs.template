@@ -38,7 +38,7 @@ fn main() -> AppExit {
         .unwrap_or_else(|| "assets".to_string());
 
     let mut app = App::new();
-    app.set_error_handler(bevy::ecs::error::error)
+    app.set_error_handler(bevy_ecs::error::error)
         .add_plugins(
             DefaultPlugins
                 .set(AssetPlugin {

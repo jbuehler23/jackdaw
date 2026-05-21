@@ -1,4 +1,4 @@
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_geometry::halfedge::ops::loop_cut::loop_cut;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::edge_slide::edge_slide};
 use jackdaw_jsn::Brush;

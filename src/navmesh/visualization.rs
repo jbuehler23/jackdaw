@@ -1,9 +1,7 @@
-use bevy::{
-    asset::RenderAssetUsages,
-    light::{NotShadowCaster, NotShadowReceiver},
-    mesh::{Indices, PrimitiveTopology},
-    prelude::*,
-};
+use bevy_asset::RenderAssetUsages;
+use bevy_ecs::prelude::*;
+use bevy_light::{NotShadowCaster, NotShadowReceiver};
+use bevy_mesh::{Indices, PrimitiveTopology};
 
 use crate::default_style;
 use bevy_rerecast::{

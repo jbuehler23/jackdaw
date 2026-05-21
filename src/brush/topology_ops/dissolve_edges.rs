@@ -1,6 +1,7 @@
 //! `brush.mesh.dissolve_edges` operator.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::dissolve_edges::dissolve_edges;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};

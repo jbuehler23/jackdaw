@@ -23,7 +23,7 @@
 //!   - `Degenerate`           if the face has fewer than 3 loops.
 //!   - `PointNotInFacePlane`  if `|face.normal_cache.dot(point - centroid)| > 1e-3`.
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 
 use crate::halfedge::cycles::radial_remove_loop;
 use crate::halfedge::ops::face_create::create_face_from_verts_with_material;

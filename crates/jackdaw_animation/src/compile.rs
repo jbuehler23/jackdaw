@@ -11,13 +11,18 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-use bevy::animation::{
+use bevy_animation::prelude::*;
+use bevy_animation::{
     AnimationClip, AnimationTargetId, animated_field,
     animation_curves::{AnimatableCurve, AnimatableKeyframeCurve},
     graph::{AnimationGraph, AnimationNodeIndex},
 };
-use bevy::gltf::Gltf;
-use bevy::prelude::*;
+use bevy_asset::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_gltf::Gltf;
+use bevy_log::prelude::*;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 
 use crate::blend_graph::{AnimationBlendGraph, ClipNodeRef, OutputNode};
 use crate::clip::{
@@ -187,7 +192,7 @@ pub fn compile_clips(
 /// un-compiled until a later phase adds the proper tree walker.
 ///
 /// [`AnimationBlendGraph`]: crate::blend_graph::AnimationBlendGraph
-/// [`AnimationGraph`]: bevy::animation::graph::AnimationGraph
+/// [`AnimationGraph`]: bevy_animation::graph::AnimationGraph
 pub fn compile_blend_graphs(
     blend_graphs: Query<(Entity, Option<&Children>), (With<Clip>, With<AnimationBlendGraph>)>,
     existing_compiled: Query<&CompiledClip>,

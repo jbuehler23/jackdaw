@@ -1,7 +1,12 @@
-use bevy::color::palettes::tailwind;
-use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
-use bevy::picking::hover::{HoverMap, Hovered};
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_camera::prelude::*;
+use bevy_color::palettes::tailwind;
+use bevy_ecs::prelude::*;
+use bevy_input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy_math::prelude::*;
+use bevy_picking::hover::{HoverMap, Hovered};
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 
 const SCROLL_SPEED: f32 = 24.0;
 

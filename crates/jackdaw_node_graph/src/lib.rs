@@ -27,6 +27,7 @@ pub mod registry;
 pub mod selection;
 pub mod sync;
 
+use bevy_ui_render::UiMaterialPlugin;
 pub use canvas::{GraphCanvasViewport, GraphCanvasWorld, canvas, canvas_world};
 pub use commands::{
     AddGraphNodeCmd, CreateConnectionCmd, MoveGraphNodesCmd, RemoveConnectionCmd,
@@ -44,8 +45,9 @@ pub use registry::{NodeTypeDescriptor, NodeTypeRegistry, TerminalDescriptor};
 pub use selection::GraphSelection;
 pub use sync::CanvasWorldIndex;
 
-use bevy::asset::embedded_asset;
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_asset::embedded_asset;
+use bevy_ecs::prelude::*;
 use jackdaw_commands::CommandHistory;
 
 /// Registers all node-graph types, resources, systems, and assets.
@@ -119,7 +121,7 @@ impl Plugin for NodeGraphPlugin {
                 connection::update_connection_endpoints,
                 connection::update_ghost_wire,
             )
-                .after(bevy::ui::UiSystems::Layout),
+                .after(bevy_ui::UiSystems::Layout),
         );
 
         // Pointer observers for gesture handling. Terminal observers fire

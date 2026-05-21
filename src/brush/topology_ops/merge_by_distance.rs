@@ -1,6 +1,6 @@
 //! `brush.mesh.merge_by_distance` operator.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::HalfedgeMesh;
 use jackdaw_geometry::halfedge::ops::remove_doubles::remove_doubles;

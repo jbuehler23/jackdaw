@@ -1,8 +1,13 @@
 use std::{borrow::Cow, collections::BTreeMap};
 
-use bevy::ecs::system::{SystemId, SystemState};
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_derive::{Deref, DerefMut};
+use bevy_ecs::prelude::*;
+use bevy_ecs::system::{SystemId, SystemState};
 use bevy_enhanced_input::prelude::InputAction;
+use bevy_log::prelude::*;
+use bevy_reflect::prelude::*;
+use bevy_utils::prelude::*;
 use jackdaw_commands::{CommandHistory, EditorCommand};
 use jackdaw_jsn::PropertyValue;
 

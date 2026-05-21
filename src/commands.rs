@@ -1,12 +1,12 @@
 use std::any::TypeId;
 
-use bevy::{
-    ecs::{
-        component::ComponentId,
-        reflect::{AppTypeRegistry, ReflectComponent},
-    },
+use bevy_ecs::{
+    component::ComponentId,
     prelude::*,
+    reflect::{AppTypeRegistry, ReflectComponent},
 };
+use bevy_log::prelude::*;
+
 use serde::de::DeserializeSeed;
 
 // Re-export the core command framework from the jackdaw_commands crate
@@ -308,7 +308,7 @@ impl EditorCommand for AddComponent {
         //     `set_component` is a silent no-op. Same UX
         //     consequence as above.
         let serializer =
-            bevy::reflect::serde::TypedReflectSerializer::new(default_value.as_ref(), &registry);
+            bevy_reflect::serde::TypedReflectSerializer::new(default_value.as_ref(), &registry);
         match serde_json::to_value(&serializer) {
             Ok(json_value) => {
                 drop(registry);
@@ -343,7 +343,7 @@ impl EditorCommand for AddComponent {
         // so we can remove them from the ECS as well as the AST.
         let registry = world.resource::<AppTypeRegistry>().clone();
         let reg = registry.read();
-        let promoted_component_ids: Vec<bevy::ecs::component::ComponentId> = self
+        let promoted_component_ids: Vec<bevy_ecs::component::ComponentId> = self
             .promoted_components
             .iter()
             .filter_map(|type_path| {
@@ -508,7 +508,7 @@ impl EditorCommand for DespawnEntity {
     fn undo(&mut self, world: &mut World) {
         // Re-build the scene from scratch and write it back
         let scene = snapshot_rebuild(&self.scene_snapshot);
-        let mut entity_map = bevy::ecs::entity::hash_map::EntityHashMap::default();
+        let mut entity_map = bevy_ecs::entity::hash_map::EntityHashMap::default();
         let _ = scene.write_to_world(world, &mut entity_map);
         if let Some(&new_id) = entity_map.get(&self.entity) {
             self.entity = new_id;
@@ -579,7 +579,7 @@ pub(crate) fn snapshot_rebuild(scene: &DynamicScene) -> DynamicScene {
         entities: scene
             .entities
             .iter()
-            .map(|e| bevy::scene::DynamicEntity {
+            .map(|e| bevy_scene::DynamicEntity {
                 entity: e.entity,
                 components: e.components.iter().map(|c| c.to_dynamic()).collect(),
             })
@@ -694,7 +694,7 @@ fn apply_jsn_field_to_ecs(
         //  - Components removed externally (e.g. avian removing ColliderConstructor)
         //  - Normal mutable components (insert replaces in-place)
         let deserializer =
-            bevy::reflect::serde::TypedReflectDeserializer::new(registration, &registry);
+            bevy_reflect::serde::TypedReflectDeserializer::new(registration, &registry);
         if let Ok(reflected) = deserializer.deserialize(value) {
             reflect_component.insert(&mut world.entity_mut(entity), reflected.as_ref(), &registry);
         }
@@ -713,9 +713,9 @@ fn apply_jsn_field_to_ecs(
 /// Falls back to Bevy's typed deserialization for complex types (enums, structs)
 /// that can't be handled by simple primitive downcasts.
 fn apply_json_to_reflect(
-    field: &mut dyn bevy::reflect::PartialReflect,
+    field: &mut dyn bevy_reflect::PartialReflect,
     value: &serde_json::Value,
-    registry: &bevy::reflect::TypeRegistry,
+    registry: &bevy_reflect::TypeRegistry,
 ) {
     match value {
         serde_json::Value::Number(n) => {
@@ -768,9 +768,9 @@ fn apply_json_to_reflect(
 /// Look up the field's `TypeRegistration` via its represented type info and run
 /// `TypedReflectDeserializer` on the JSON, then apply the result.
 fn try_typed_deserialize(
-    field: &mut dyn bevy::reflect::PartialReflect,
+    field: &mut dyn bevy_reflect::PartialReflect,
     value: &serde_json::Value,
-    registry: &bevy::reflect::TypeRegistry,
+    registry: &bevy_reflect::TypeRegistry,
 ) {
     let Some(type_info) = field.get_represented_type_info() else {
         return;
@@ -778,14 +778,14 @@ fn try_typed_deserialize(
     let Some(registration) = registry.get(type_info.type_id()) else {
         return;
     };
-    let deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, registry);
+    let deserializer = bevy_reflect::serde::TypedReflectDeserializer::new(registration, registry);
     if let Ok(reflected) = deserializer.deserialize(value) {
         field.apply(reflected.as_ref());
     }
 }
 
 /// Serialize a component to JSON and store it in the AST.
-pub fn sync_component_to_ast<T: bevy::reflect::Reflect>(
+pub fn sync_component_to_ast<T: bevy_reflect::Reflect>(
     world: &mut World,
     entity: Entity,
     type_path: &str,
@@ -795,7 +795,7 @@ pub fn sync_component_to_ast<T: bevy::reflect::Reflect>(
     let registry = registry.read();
     let processor = crate::scene_io::AstSerializerProcessor;
     let serializer =
-        bevy::reflect::serde::TypedReflectSerializer::with_processor(value, &registry, &processor);
+        bevy_reflect::serde::TypedReflectSerializer::with_processor(value, &registry, &processor);
     if let Ok(json_value) = serde_json::to_value(&serializer) {
         drop(registry);
         world
@@ -867,7 +867,7 @@ pub fn sync_required_to_ast(world: &mut World, entity: Entity) -> Vec<String> {
         let Some(component) = reflect_component.reflect(entity_ref) else {
             continue;
         };
-        let serializer = bevy::reflect::serde::TypedReflectSerializer::with_processor(
+        let serializer = bevy_reflect::serde::TypedReflectSerializer::with_processor(
             component, &reg, &processor,
         );
         if let Ok(value) = serde_json::to_value(&serializer) {

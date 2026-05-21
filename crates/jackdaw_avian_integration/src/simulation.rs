@@ -12,9 +12,13 @@
 //! stays jackdaw-agnostic and only provides the avian hookup + state types.
 
 use avian3d::prelude::*;
-use bevy::ecs::entity::EntityHashSet;
-use bevy::platform::collections::HashMap;
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::entity::EntityHashSet;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_platform::collections::HashMap;
+use bevy_time::prelude::*;
+use bevy_transform::prelude::*;
 
 /// Resource for the editor's Physics tool. Owned + mutated by tool systems
 /// in the main crate; exposed here because we need the type in the

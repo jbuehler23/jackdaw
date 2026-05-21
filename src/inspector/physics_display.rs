@@ -5,7 +5,7 @@
 //! command palette can still toggle the canonical bundle in one shot.
 
 use avian3d::prelude::*;
-use bevy::{ecs::reflect::AppTypeRegistry, prelude::*};
+use bevy_ecs::prelude::*;
 use jackdaw_avian_integration::AvianCollider;
 
 use crate::commands::{AddComponent, CommandGroup, CommandHistory, EditorCommand};
@@ -86,13 +86,13 @@ impl EditorCommand for DisablePhysics {
                 continue;
             };
             let Some(reflect_component) =
-                registration.data::<bevy::ecs::reflect::ReflectComponent>()
+                registration.data::<bevy_ecs::reflect::ReflectComponent>()
             else {
                 continue;
             };
             // Deserialize JSON -> reflected value -> insert into ECS
             let deserializer =
-                bevy::reflect::serde::TypedReflectDeserializer::new(registration, &reg);
+                bevy_reflect::serde::TypedReflectDeserializer::new(registration, &reg);
             use serde::de::DeserializeSeed;
             let Ok(reflected) = deserializer.deserialize(value) else {
                 continue;

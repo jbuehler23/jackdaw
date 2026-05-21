@@ -1,5 +1,9 @@
-use bevy::picking::pointer::PointerButton;
-use bevy::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_picking::{pointer::PointerButton, prelude::*};
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 use jackdaw_feathers::tokens;
 
 use crate::reconcile::LeafBinding;

@@ -1,4 +1,11 @@
-use bevy::{prelude::*, ui_widgets::observe};
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_picking::prelude::*;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_ui_widgets::observe;
+use bevy_utils::prelude::*;
+
 use jackdaw_widgets::list_view::{ListItem, ListItemContent, ListView};
 
 use crate::tokens;

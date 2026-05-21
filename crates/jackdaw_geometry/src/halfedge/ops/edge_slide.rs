@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 
 use crate::halfedge::cycles::radial_walk;
 use crate::halfedge::types::*;

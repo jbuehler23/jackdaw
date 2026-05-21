@@ -1,5 +1,11 @@
-use bevy::picking::hover::Hovered;
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_asset::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_picking::hover::Hovered;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 use lucide_icons::Icon;
 
 use crate::tokens::{BORDER_COLOR, TEXT_BODY_COLOR, TEXT_SIZE};

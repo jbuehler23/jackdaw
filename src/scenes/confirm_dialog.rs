@@ -8,8 +8,9 @@
 //! full `rfd::FileDialog` sub-flow for that case is deferred to a
 //! follow-up task.
 
-use bevy::picking::events::{Click, Pointer};
-use bevy::prelude::*;
+use bevy_picking::events::{Click, Pointer};
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_feathers::{icons::EditorFont, tokens};
 
 /// Holds the pending tab index when the user tried to close a dirty tab
@@ -386,13 +387,13 @@ pub fn on_quit_dialog_button_click(
             ConfirmQuitButton::SaveAll => {
                 crate::scenes::operators::scene_save_all_system(world);
                 world
-                    .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
-                    .write(bevy::app::AppExit::Success);
+                    .resource_mut::<bevy_ecs::message::Messages<bevy_app::AppExit>>()
+                    .write(bevy_app::AppExit::Success);
             }
             ConfirmQuitButton::DiscardAll => {
                 world
-                    .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
-                    .write(bevy::app::AppExit::Success);
+                    .resource_mut::<bevy_ecs::message::Messages<bevy_app::AppExit>>()
+                    .write(bevy_app::AppExit::Success);
             }
             ConfirmQuitButton::Cancel => {
                 // Nothing to do; dialog is already despawned.

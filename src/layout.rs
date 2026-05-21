@@ -1,4 +1,6 @@
-use bevy::{picking::hover::Hovered, prelude::*, ui_widgets::observe};
+use bevy_ecs::prelude::*;
+use bevy_picking::hover::Hovered;
+use bevy_ui_widgets::observe;
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{self, ButtonOperatorCall, ButtonSize, ButtonVariant},
@@ -907,7 +909,7 @@ fn editor_status_bar() -> impl Bundle {
                     font_size: tokens::FONT_SM,
                     ..Default::default()
                 },
-                bevy::feathers::theme::ThemedText,
+                bevy_feathers::theme::ThemedText,
             ),
             (
                 status_bar::StatusBarCenter,

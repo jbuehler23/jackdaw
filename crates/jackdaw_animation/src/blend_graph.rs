@@ -9,7 +9,9 @@
 //! another clip), `anim.blend`, `anim.additive`, and `anim.output`.
 //! Currently only single-clip passthrough compiles (`ClipRef` -> Output).
 
-use bevy::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_reflect::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Marker on a `Clip` entity whose source is a node-canvas blend tree.

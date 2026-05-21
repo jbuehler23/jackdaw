@@ -12,10 +12,18 @@
 //! filtering and keyboard navigation to match Maya's quick-add UX
 //! more closely.
 
-use bevy::picking::events::{Click, Pointer};
-use bevy::picking::pointer::PointerButton;
-use bevy::prelude::*;
-use bevy::ui::UiGlobalTransform;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_input::prelude::*;
+use bevy_math::prelude::*;
+use bevy_picking::events::{Click, Pointer};
+use bevy_picking::pointer::PointerButton;
+use bevy_picking::prelude::*;
+use bevy_text::prelude::*;
+use bevy_ui::UiGlobalTransform;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
+use bevy_window::prelude::*;
 use jackdaw_commands::CommandHistory;
 
 use crate::canvas::{GraphCanvasViewport, GraphCanvasWorld};
@@ -329,7 +337,7 @@ pub fn on_entry_click(
 
 /// Hover highlighting for list entries.
 pub fn on_entry_over(
-    event: On<Pointer<bevy::picking::events::Over>>,
+    event: On<Pointer<bevy_picking::events::Over>>,
     mut bg: Query<&mut BackgroundColor, With<AddNodeEntry>>,
 ) {
     if let Ok(mut color) = bg.get_mut(event.event_target()) {
@@ -338,7 +346,7 @@ pub fn on_entry_over(
 }
 
 pub fn on_entry_out(
-    event: On<Pointer<bevy::picking::events::Out>>,
+    event: On<Pointer<bevy_picking::events::Out>>,
     mut bg: Query<&mut BackgroundColor, With<AddNodeEntry>>,
 ) {
     if let Ok(mut color) = bg.get_mut(event.event_target()) {
@@ -382,8 +390,8 @@ pub fn on_canvas_right_click(
 /// (Maya / Blender quick-add pattern).
 pub fn handle_tab_quick_add(
     keys: Res<ButtonInput<KeyCode>>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    hover_map: Res<bevy::picking::hover::HoverMap>,
+    windows: Query<&Window, With<bevy_window::PrimaryWindow>>,
+    hover_map: Res<bevy_picking::hover::HoverMap>,
     viewports: Query<&GraphCanvasViewport>,
     canvas_worlds: Query<(&GraphCanvasWorld, &UiGlobalTransform)>,
     registry: Res<NodeTypeRegistry>,

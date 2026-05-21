@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 
 use super::interaction::{
     BrushDragState, EdgeDragState, FaceExtrudeMode, VertexDragConstraint, VertexDragState,

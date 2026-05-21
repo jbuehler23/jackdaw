@@ -4,7 +4,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::prelude::*;
 
 use crate::commands::CommandHistory;

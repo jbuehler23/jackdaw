@@ -39,8 +39,9 @@
 //! See `project_remote_game_integration.md` and the concave-by-default
 //! audit doc in MEMORY.md for the broader rollout plan.
 
-use bevy::math::{Quat, Vec2, Vec3};
-use bevy::prelude::{Handle, StandardMaterial};
+use bevy_asset::prelude::*;
+use bevy_math::{Quat, Vec2, Vec3};
+use bevy_pbr::prelude::*;
 use jackdaw_geometry::{
     BrushFaceData, BrushPlane, BrushTopology, EPSILON, compute_face_tangent_axes, newell_normal,
     triangulate_face_polygon, triangulate_polygon_with_holes,

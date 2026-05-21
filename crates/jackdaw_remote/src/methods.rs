@@ -1,4 +1,7 @@
-use bevy::{prelude::*, reflect::TypeRegistry, remote::BrpResult};
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
+use bevy_reflect::TypeRegistry;
+use bevy_remote::BrpResult;
 use serde_json::Value;
 use std::path::Path;
 
@@ -120,11 +123,11 @@ pub fn generate_component_definitions(type_registry: Res<AppTypeRegistry>) {
 /// Build a `JsnComponentDef` from a Bevy `TypeInfo`.
 fn build_component_def(
     registry: &TypeRegistry,
-    type_info: &bevy::reflect::TypeInfo,
+    type_info: &bevy_reflect::TypeInfo,
 ) -> JsnComponentDef {
     let mut fields = std::collections::HashMap::new();
 
-    if let bevy::reflect::TypeInfo::Struct(struct_info) = type_info {
+    if let bevy_reflect::TypeInfo::Struct(struct_info) = type_info {
         for i in 0..struct_info.field_len() {
             let field = struct_info.field_at(i).unwrap();
             let field_name = field.name().to_string();
@@ -152,10 +155,10 @@ fn build_component_def(
 /// preserving hand-edits on existing fields.
 fn merge_fields_from_registry(
     registry: &TypeRegistry,
-    type_info: &bevy::reflect::TypeInfo,
+    type_info: &bevy_reflect::TypeInfo,
     existing: &mut JsnComponentDef,
 ) {
-    if let bevy::reflect::TypeInfo::Struct(struct_info) = type_info {
+    if let bevy_reflect::TypeInfo::Struct(struct_info) = type_info {
         for i in 0..struct_info.field_len() {
             let field = struct_info.field_at(i).unwrap();
             let field_name = field.name();

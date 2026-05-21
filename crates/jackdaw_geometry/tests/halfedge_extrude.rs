@@ -1,4 +1,4 @@
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::extrude_face_region::extrude_face_region};
 use jackdaw_jsn::Brush;
 

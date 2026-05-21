@@ -48,7 +48,9 @@ use std::ffi::CStr;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
 use jackdaw_api_internal::JackdawExtension;
 use jackdaw_api_internal::ffi::{
     ENTRY_SYMBOL, ExtensionEntry, GAME_ENTRY_SYMBOL, GameEntry, JackdawExtensionPtr,
@@ -75,8 +77,8 @@ pub struct GameCatalog {
 /// [`LoadedDylibs`].
 #[derive(Clone, Copy, Debug)]
 pub struct LoadedGameEntry {
-    pub build: unsafe extern "C" fn(*mut bevy::ecs::world::World),
-    pub teardown: unsafe extern "C" fn(*mut bevy::ecs::world::World),
+    pub build: unsafe extern "C" fn(*mut World),
+    pub teardown: unsafe extern "C" fn(*mut World),
 }
 
 /// Sub-directory inside the platform config directory where the
@@ -398,8 +400,8 @@ enum OpenedDylib {
     Game {
         lib: libloading::Library,
         name: String,
-        build: unsafe extern "C" fn(*mut bevy::ecs::world::World),
-        teardown: unsafe extern "C" fn(*mut bevy::ecs::world::World),
+        build: unsafe extern "C" fn(*mut bevy_ecs::world::World),
+        teardown: unsafe extern "C" fn(*mut bevy_ecs::world::World),
     },
 }
 
@@ -570,7 +572,7 @@ fn try_load(app: &mut App, path: &Path) -> Result<LoadedKind, LoadError> {
             // v2 builds take `*mut World`. Call from an exclusive
             // context: we have `&mut App` here, so deriving
             // `&mut World` via `world_mut()` is fine.
-            let world_ptr: *mut bevy::ecs::world::World = std::ptr::from_mut(app.world_mut());
+            let world_ptr: *mut bevy_ecs::world::World = std::ptr::from_mut(app.world_mut());
             #[expect(
                 clippy::disallowed_methods,
                 reason = "FFI dylib boundary: unwinding across the C ABI is UB. \
@@ -693,7 +695,7 @@ pub fn load_from_path(world: &mut World, path: &Path) -> Result<LoadedKind, Load
                 let prior = world.resource::<GameCatalog>().entries.get(&name).copied();
                 if let Some(prior_entry) = prior {
                     info!("Hot reload: tearing down prior version of `{name}`");
-                    let world_ptr: *mut bevy::ecs::world::World = std::ptr::from_mut(world);
+                    let world_ptr: *mut bevy_ecs::world::World = std::ptr::from_mut(world);
                     #[expect(
                         clippy::disallowed_methods,
                         reason = "FFI dylib boundary: unwinding across the C ABI is UB. \
@@ -712,7 +714,7 @@ pub fn load_from_path(world: &mut World, path: &Path) -> Result<LoadedKind, Load
             call_reflect_register_symbol(world, &lib);
             register_derived_component_ids(world);
 
-            let world_ptr: *mut bevy::ecs::world::World = std::ptr::from_mut(world);
+            let world_ptr: *mut bevy_ecs::world::World = std::ptr::from_mut(world);
             #[expect(
                 clippy::disallowed_methods,
                 reason = "FFI dylib boundary: unwinding across the C ABI is UB. \
@@ -753,8 +755,8 @@ enum OpenedKind {
     },
     Game {
         name: String,
-        build: unsafe extern "C" fn(*mut bevy::ecs::world::World),
-        teardown: unsafe extern "C" fn(*mut bevy::ecs::world::World),
+        build: unsafe extern "C" fn(*mut bevy_ecs::world::World),
+        teardown: unsafe extern "C" fn(*mut bevy_ecs::world::World),
     },
 }
 
@@ -794,7 +796,7 @@ fn open_and_verify_keep_lib(path: &Path) -> Result<(libloading::Library, OpenedK
 fn call_reflect_register_symbol(world: &mut World, lib: &libloading::Library) {
     use jackdaw_api_internal::ffi::{REFLECT_REGISTER_SYMBOL, ReflectRegisterFn};
 
-    let Some(registry_res) = world.get_resource::<bevy::ecs::reflect::AppTypeRegistry>() else {
+    let Some(registry_res) = world.get_resource::<bevy_ecs::reflect::AppTypeRegistry>() else {
         debug!("reflect-register: AppTypeRegistry missing, skipping");
         return;
     };
@@ -842,13 +844,13 @@ fn call_reflect_register_symbol(world: &mut World, lib: &libloading::Library) {
 /// [`ReflectComponent::register_component`] is idempotent, so this sweep
 /// is safe to run on every dlopen.
 fn register_derived_component_ids(world: &mut World) {
-    let reflect_components: Vec<bevy::ecs::reflect::ReflectComponent> = {
+    let reflect_components: Vec<bevy_ecs::reflect::ReflectComponent> = {
         let registry = world
-            .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+            .resource::<bevy_ecs::reflect::AppTypeRegistry>()
             .read();
         registry
             .iter()
-            .filter_map(|r| r.data::<bevy::ecs::reflect::ReflectComponent>().cloned())
+            .filter_map(|r| r.data::<bevy_ecs::reflect::ReflectComponent>().cloned())
             .collect()
     };
     for rc in &reflect_components {

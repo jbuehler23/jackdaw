@@ -1,6 +1,7 @@
 //! Creates a new window chock-full of all our widgets.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw::prelude::*;
 use jackdaw_feathers::{
     button::{ButtonProps, button},
@@ -10,7 +11,7 @@ use jackdaw_feathers::{
 fn main() -> AppExit {
     App::new()
         // log errors instead of panicking
-        .set_error_handler(bevy::ecs::error::error)
+        .set_error_handler(bevy_ecs::error::error)
         .add_plugins((
             DefaultPlugins,
             #[cfg(feature = "avian")]

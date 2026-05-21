@@ -1,16 +1,16 @@
 use std::any::TypeId;
 use std::collections::HashMap;
 
-use bevy::{
-    asset::ReflectHandle,
-    ecs::reflect::AppTypeRegistry,
-    prelude::*,
-    reflect::{
-        TypeRegistry,
-        serde::{ReflectSerializerProcessor, TypedReflectSerializer},
-    },
-    remote::BrpResult,
+use bevy_asset::ReflectHandle;
+use bevy_ecs::prelude::*;
+use bevy_ecs::reflect::AppTypeRegistry;
+use bevy_reflect::{
+    PartialReflect, TypeRegistry,
+    serde::{ReflectSerializerProcessor, TypedReflectSerializer},
 };
+use bevy_remote::BrpResult;
+use bevy_transform::prelude::*;
+
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 

@@ -108,7 +108,7 @@ fn dissolve_one_edge(mesh: &mut HalfedgeMesh, edge: EdgeKey) -> bool {
     mesh.faces[f_a].loop_count = f_a_new_count;
 
     // Re-cache normal via Newell's method.
-    let mut ring_positions: Vec<bevy::math::Vec3> = Vec::with_capacity(f_a_new_count as usize);
+    let mut ring_positions: Vec<bevy_math::Vec3> = Vec::with_capacity(f_a_new_count as usize);
     {
         let mut cur = f_a_first;
         for _ in 0..f_a_new_count {

@@ -2,7 +2,7 @@
 //! complement: full set of element keys (in current edit mode) minus current
 //! selection. Works in Vertex, Edge, or Face mode.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_api::prelude::*;
 
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};

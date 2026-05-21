@@ -1,4 +1,9 @@
-use bevy::{feathers::theme::ThemedText, prelude::*};
+use bevy_asset::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_feathers::theme::ThemedText;
+use bevy_picking::prelude::*;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
 use jackdaw_widgets::collapsible::{
     CollapsibleBody, CollapsibleHeader, CollapsibleSection, ToggleCollapsible,
 };

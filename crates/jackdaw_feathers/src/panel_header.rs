@@ -1,4 +1,8 @@
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
 use lucide_icons::Icon;
 
 use crate::{icons::IconFont, tokens};

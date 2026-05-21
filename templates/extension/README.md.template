@@ -43,6 +43,7 @@ rustc wrapper rewrites `--extern bevy=<rlib>` to point at
 editor's.
 
 `jackdaw_api` isn't declared in Cargo.toml — the wrapper injects
-its `--extern` flag unconditionally. `use bevy::prelude::*;`
+its `--extern` flag unconditionally. `use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;`
 reaches both bevy and jackdaw extension APIs through a single
 unified prelude.

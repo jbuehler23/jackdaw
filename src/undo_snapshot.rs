@@ -12,7 +12,8 @@
 
 use std::any::Any;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api_internal::snapshot::{ActiveSnapshotter, SceneSnapshot, SceneSnapshotter};
 #[cfg(feature = "avian")]
 use jackdaw_avian_integration::PhysicsOverlayConfig;

@@ -30,12 +30,12 @@ pub mod utils;
 pub mod variant_edit;
 pub mod vector_edit;
 
-use bevy::app::Plugin;
+use bevy_app::Plugin;
 
 pub struct EditorFeathersPlugin;
 
 impl Plugin for EditorFeathersPlugin {
-    fn build(&self, app: &mut bevy::app::App) {
+    fn build(&self, app: &mut bevy_app::App) {
         // text_edit::plugin adds TextInputPlugin which adds InputDispatchPlugin,
         // so we must not add InputDispatchPlugin ourselves.
         app.add_plugins((

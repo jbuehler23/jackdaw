@@ -1,4 +1,10 @@
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_picking::prelude::*;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 use jackdaw_feathers::{icons::IconFont, tokens};
 use lucide_icons::Icon;
 

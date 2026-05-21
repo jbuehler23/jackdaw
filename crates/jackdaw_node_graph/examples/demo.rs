@@ -13,9 +13,16 @@
 //!
 //! Run with: `cargo run -p jackdaw_node_graph --example demo`
 
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_camera::Camera2d;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_picking::prelude::*;
+use bevy_ui::prelude::*;
 
 use bevy_enhanced_input::prelude::EnhancedInputPlugin;
+use bevy_internal::DefaultPlugins;
 use jackdaw_feathers::{
     EditorFeathersPlugin,
     text_edit::{self, TextEditProps, TextEditValue},

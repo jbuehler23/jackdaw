@@ -1,6 +1,6 @@
 pub mod keybinds;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 
 pub trait EditorCommand: Send + Sync + 'static {
     fn execute(&mut self, world: &mut World);

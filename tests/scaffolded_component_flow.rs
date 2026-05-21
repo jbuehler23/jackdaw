@@ -5,7 +5,8 @@
 
 use std::collections::HashSet;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw::commands::{EditorCommand, SetJsnField};
 use jackdaw::inspector::component_picker::{PickerDenylist, enumerate_pickable_components};
 use jackdaw::selection::Selection;
@@ -58,7 +59,7 @@ fn scaffolded_user_components_reach_picker() {
     let app = app_with_user_components();
     let registry = app
         .world()
-        .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+        .resource::<bevy_ecs::reflect::AppTypeRegistry>()
         .read();
     let pickables =
         enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
@@ -89,7 +90,7 @@ fn editor_hidden_marker_hides_component_in_real_app() {
 
     let registry = app
         .world()
-        .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+        .resource::<bevy_ecs::reflect::AppTypeRegistry>()
         .read();
     let pickables =
         enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
@@ -228,7 +229,7 @@ fn inspector_field_edit_updates_ecs_and_ast() {
 
     let registry = app
         .world()
-        .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+        .resource::<bevy_ecs::reflect::AppTypeRegistry>()
         .clone();
     let registry = registry.read();
     let ast = app.world().resource::<SceneJsnAst>();

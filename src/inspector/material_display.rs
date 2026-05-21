@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_feathers::{
     text_edit::{self, TextEditCommitEvent, TextEditProps},
     tokens,

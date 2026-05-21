@@ -10,9 +10,17 @@
 //! main editor's existing `SpawnEntity` / `SetJsnField` / `DespawnEntity`
 //! command primitives; see [`crate::commands`] for the rationale.
 
-use bevy::prelude::*;
-use bevy::ui::ComputedNode;
-use bevy::ui::ui_transform::UiGlobalTransform;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_input::prelude::*;
+use bevy_log::prelude::*;
+use bevy_picking::prelude::*;
+use bevy_text::prelude::*;
+use bevy_transform::prelude::*;
+use bevy_ui::ComputedNode;
+use bevy_ui::prelude::*;
+use bevy_ui::ui_transform::UiGlobalTransform;
+use bevy_utils::prelude::*;
 use jackdaw_feathers::button::{
     ButtonClickEvent, ButtonProps, ButtonSize, ButtonVariant, IconButtonProps, button, icon_button,
 };

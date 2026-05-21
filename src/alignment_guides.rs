@@ -1,4 +1,7 @@
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_gizmos::prelude::*;
+use bevy_reflect::prelude::*;
 
 use crate::brush::BrushMeshCache;
 use crate::default_style;

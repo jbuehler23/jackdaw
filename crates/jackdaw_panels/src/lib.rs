@@ -24,7 +24,7 @@ pub use workspace::{
     WorkspaceTabStrip, WorkspacesPersist,
 };
 
-use bevy::prelude::*;
+use bevy_app::prelude::*;
 
 pub struct DockPlugin;
 

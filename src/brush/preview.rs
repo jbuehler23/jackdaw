@@ -8,8 +8,9 @@
 //! When `ActivePreview.brush_entity` is `None`, any existing preview mesh
 //! entity is despawned.
 
-use bevy::math::Vec3;
-use bevy::prelude::*;
+use bevy_math::Vec3;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 
 use jackdaw_geometry::{BrushTopology, triangulate_polygon};
 
@@ -111,12 +112,12 @@ fn update_preview_mesh(
     }
 
     let mut mesh = Mesh::new(
-        bevy::mesh::PrimitiveTopology::TriangleList,
-        bevy::asset::RenderAssetUsages::default(),
+        bevy_mesh::PrimitiveTopology::TriangleList,
+        bevy_asset::RenderAssetUsages::default(),
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, mesh_positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, mesh_normals);
-    mesh.insert_indices(bevy::mesh::Indices::U32(mesh_indices));
+    mesh.insert_indices(bevy_mesh::Indices::U32(mesh_indices));
 
     let mesh_handle = meshes.add(mesh);
 

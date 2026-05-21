@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::prelude::*;
 
 use crate::util::OperatorResultExt as _;

@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use bevy::prelude::*;
+use bevy_camera::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 use serde::{Deserialize, Serialize};
 
 fn is_zero(n: &usize) -> bool {

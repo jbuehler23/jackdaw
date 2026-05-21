@@ -7,7 +7,8 @@
 //! usual Ctrl+N / Ctrl+O / Ctrl+S / Ctrl+Shift+S keybinds are attached
 //! here.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 

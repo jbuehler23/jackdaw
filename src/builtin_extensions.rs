@@ -3,7 +3,8 @@
 //! same API third-party authors do. Disable one in File > Extensions
 //! to remove its windows from the layout.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::{
     DefaultArea, ExtensionPoint, HierarchyWindow, InspectorWindow,
     prelude::{ExtensionContext, ExtensionKind, JackdawExtension, WindowDescriptor},

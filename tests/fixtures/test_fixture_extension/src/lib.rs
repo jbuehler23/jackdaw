@@ -6,7 +6,8 @@
 //! dispatch needs the `dylib` feature plus `jackdaw_sdk` for type
 //! coherence and lives in a separate harness.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::export_extension;
 use jackdaw_api::prelude::*;
 

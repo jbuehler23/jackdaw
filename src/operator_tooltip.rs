@@ -18,7 +18,8 @@
 //! `src/inspector/component_tooltip.rs` for the reflection-driven
 //! counterpart.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use bevy_enhanced_input::prelude::{Binding, Bindings};
 use jackdaw_api_internal::lifecycle::{OperatorAction, OperatorEntity};
 use jackdaw_commands::keybinds::key_display_name;

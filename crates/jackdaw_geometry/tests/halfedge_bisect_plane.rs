@@ -1,7 +1,7 @@
 //! Tests for `bisect_plane`: split an `HalfedgeMesh` along a plane,
 //! verify cap polygon and side classification.
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_geometry::BrushPlane;
 use jackdaw_geometry::halfedge::HalfedgeMesh;
 use jackdaw_geometry::halfedge::ops::bisect_plane::{BisectKeep, bisect_plane};

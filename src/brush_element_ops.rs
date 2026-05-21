@@ -8,7 +8,8 @@
 
 use std::collections::HashSet;
 
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::Brush;
@@ -31,20 +32,30 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             Action::<BrushDeleteElementOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![
-                (KeyCode::Delete, Press::default()),
-                (KeyCode::Backspace, Press::default()),
-            ],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    (KeyCode::Delete, Press::default()),
+                    (KeyCode::Backspace, Press::default()),
+                ))]
+            ),
         ));
         world.spawn((
             Action::<BrushNudgeUpOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::PageUp, Press::default())],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    (KeyCode::PageUp, Press::default()),
+                ))]
+            ),
         ));
         world.spawn((
             Action::<BrushNudgeDownOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::PageDown, Press::default())],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    (KeyCode::PageDown, Press::default()),
+                ))]
+            ),
         ));
     });
 }

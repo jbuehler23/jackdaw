@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_commands::keybinds::{EditorAction, Keybind, KeybindRegistry};
 use jackdaw_feathers::{
     button::{ButtonClickEvent, ButtonProps, ButtonVariant, button},

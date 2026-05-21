@@ -3,8 +3,8 @@ use crate::brush::{Brush, BrushEditMode, BrushFaceData, BrushSelection, EditMode
 use crate::commands::CommandHistory;
 use crate::selection::Selection;
 
-use bevy::picking::hover::Hovered;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_picking::hover::Hovered;
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::ButtonOperatorCall,

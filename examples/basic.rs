@@ -1,10 +1,11 @@
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw::prelude::*;
 
 fn main() -> AppExit {
     App::new()
         // log errors instead of panicking
-        .set_error_handler(bevy::ecs::error::error)
+        .set_error_handler(bevy_ecs::error::error)
         .add_plugins((
             DefaultPlugins,
             EnhancedInputPlugin,

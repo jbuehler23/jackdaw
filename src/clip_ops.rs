@@ -6,8 +6,11 @@
 //! Default keybinds: LMB places a point, Tab cycles mode, Enter
 //! applies, Escape clears.
 
-use bevy::{prelude::*, ui::ui_transform::UiGlobalTransform, window::PrimaryWindow};
+use bevy_ecs::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
+use bevy_log::prelude::*;
+use bevy_ui::ui_transform::UiGlobalTransform;
+use bevy_window::PrimaryWindow;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::{Brush, BrushFaceData, BrushGroup, BrushPlane};
 
@@ -39,17 +42,28 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             Action::<ClipCycleModeOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Tab, Press::default())],
+            related!(
+                Bindings
+                    [IntoBindingBundle::into_binding_bundle(((KeyCode::Tab, Press::default()),))]
+            ),
         ));
         world.spawn((
             Action::<ClipApplyOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Enter, Press::default())],
+            related!(
+                Bindings
+                    [IntoBindingBundle::into_binding_bundle(((KeyCode::Enter, Press::default()),))]
+            ),
         ));
         world.spawn((
             Action::<ClipClearOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Escape, Press::default())],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle(((
+                    KeyCode::Escape,
+                    Press::default()
+                ),))]
+            ),
         ));
     });
 }

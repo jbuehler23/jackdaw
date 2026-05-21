@@ -17,7 +17,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use bevy::log::{info, warn};
+use bevy_log::{info, warn};
 
 use crate::sdk_paths::SdkPaths;
 

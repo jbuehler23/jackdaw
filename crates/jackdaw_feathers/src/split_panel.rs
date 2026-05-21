@@ -1,7 +1,9 @@
-use bevy::{
-    ecs::{query::QueryFilter, spawn::SpawnableList},
-    prelude::*,
-};
+use bevy_app::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::{prelude::*, query::QueryFilter, spawn::SpawnableList};
+use bevy_picking::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 use jackdaw_widgets::split_panel::{Panel, PanelGroup, PanelHandle};
 
 const HANDLE_SIZE: f32 = 3.0;

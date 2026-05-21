@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::area::{ActiveDockWindow, DockArea, DockTabContent};

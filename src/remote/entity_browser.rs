@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use bevy::{prelude::*, tasks::Task, tasks::futures_lite::future};
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
+use bevy_tasks::{Task, futures_lite::future};
+
 use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_feathers::{
     panel_header, tokens,

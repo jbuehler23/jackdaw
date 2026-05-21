@@ -5,7 +5,8 @@ pub mod panel;
 mod registry_fetch;
 pub mod remote_inspector;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 
 pub use connection::{ConnectionManager, ConnectionState};
 

@@ -9,7 +9,7 @@
 //! * `--extern bevy=<anything>` becomes
 //!   `--extern bevy=$JACKDAW_SDK_DYLIB`. The user's Cargo.toml still
 //!   declares `bevy = "0.18"` so bevy's proc macros find it via
-//!   `CARGO_MANIFEST_DIR` and emit `::bevy::...` paths. Cargo compiles
+//!   `CARGO_MANIFEST_DIR` and emit `::bevy_...` paths. Cargo compiles
 //!   real bevy into the user's target dir; the resulting rlib is
 //!   ignored because the wrapper points the `--extern` at
 //!   `libjackdaw_sdk.so`. The extra compile is a one-time cost that

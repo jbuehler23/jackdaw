@@ -24,7 +24,8 @@
 //! surfaces (keybinds, menu entries) want to trigger PIE
 //! transitions without going through a button.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::pie::PlayState;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::SceneJsnAst;

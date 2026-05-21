@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 
 pub type DockWindowBuildFn = Arc<dyn Fn(&mut ChildSpawner) + Send + Sync + 'static>;
 

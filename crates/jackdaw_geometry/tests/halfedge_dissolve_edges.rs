@@ -24,8 +24,8 @@ fn dissolve_a_loop_cut_edge_merges_two_quads_back_into_one() {
 fn dissolve_boundary_edge_errors() {
     // A boundary edge has only 1 incident loop. We can't merge two faces if there's only one.
     let mut mesh = HalfedgeMesh::default();
-    let v0 = mesh.add_vert(bevy::math::Vec3::ZERO);
-    let v1 = mesh.add_vert(bevy::math::Vec3::X);
+    let v0 = mesh.add_vert(bevy_math::Vec3::ZERO);
+    let v1 = mesh.add_vert(bevy_math::Vec3::X);
     let e = jackdaw_geometry::halfedge::ops::edge_create::create_edge(&mut mesh, v0, v1);
     // No face on this edge.
     let result = dissolve_edges(&mut mesh, &[e]);

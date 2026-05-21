@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
 
 use jackdaw_jsn::BrushGroup;
 
@@ -11,6 +12,8 @@ use crate::snapping::SnapSettings;
 use crate::viewport_overlays::OverlaySettings;
 use crate::viewport_select::GroupEditState;
 use crate::{JackdawDrawSystems, default_style};
+use bevy_gizmos::prelude::*;
+use bevy_reflect::prelude::*;
 
 /// Gizmo group for face grid lines. Rendered slightly in front of geometry.
 #[derive(Default, Reflect, GizmoConfigGroup)]

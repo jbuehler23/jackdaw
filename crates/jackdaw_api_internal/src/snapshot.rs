@@ -7,7 +7,8 @@
 
 use std::any::Any;
 
-use bevy::prelude::*;
+use bevy_derive::{Deref, DerefMut};
+use bevy_ecs::prelude::*;
 
 /// A point-in-time representation of the editor scene.
 pub trait SceneSnapshot: Any + Send + Sync + 'static {

@@ -12,10 +12,10 @@
 //! slides by a fixed amount along the first disk-cycle edge) -- this is a
 //! separate entry point.
 
-use bevy::prelude::*;
-use bevy::ui::ui_transform::UiGlobalTransform;
-use bevy::window::PrimaryWindow;
+use bevy_ecs::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
+use bevy_ui::ui_transform::UiGlobalTransform;
+use bevy_window::PrimaryWindow;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::cycles::disk_walk;
@@ -83,10 +83,12 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             Action::<BrushVertexSlideModalOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyV.with_mod_keys(ModKeys::SHIFT),
-                Press::default(),
-            )],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    KeyCode::KeyV.with_mod_keys(ModKeys::SHIFT),
+                    Press::default(),
+                ))]
+            ),
         ));
     });
 }

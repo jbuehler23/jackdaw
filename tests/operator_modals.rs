@@ -17,7 +17,8 @@
 //! call sites compile-fail when the operator is renamed instead of
 //! silently going stale.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw::draw_brush::ActivateDrawBrushModalOp;
 use jackdaw::edit_mode_ops::EditModeObjectOp;
 use jackdaw::gizmo_ops::GizmoModeRotateOp;

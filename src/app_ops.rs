@@ -3,7 +3,9 @@
 //! home screen. None have keybinds currently; they exist so menus (and
 //! a future command palette) can dispatch them uniformly.
 
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
 use jackdaw_api::prelude::*;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

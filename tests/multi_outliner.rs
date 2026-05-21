@@ -10,7 +10,8 @@
 //!    `TreeRowChildren` in every container;
 //!  - despawning the source removes the row in every container.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw::hierarchy::HierarchyTreeContainer;
 use jackdaw_widgets::tree_view::{TreeIndex, TreeNode};
 

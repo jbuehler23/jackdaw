@@ -11,7 +11,7 @@ use crate::{
     commands::{CommandHistory, DespawnEntity, EditorCommand},
     selection::{Selected, Selection},
 };
-use bevy::input_focus::InputFocus;
+use bevy_input_focus::InputFocus;
 
 /// System clipboard for copy/paste of entities as JSN text.
 /// On Linux/X11 the clipboard is ownership-based: data is only available while
@@ -193,7 +193,7 @@ pub fn create_entity(
                     is_active: false,
                     ..default()
                 },
-                bevy::camera::RenderTarget::None {
+                bevy_camera::RenderTarget::None {
                     size: UVec2::splat(1),
                 },
                 Transform::from_xyz(0.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),

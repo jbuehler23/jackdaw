@@ -9,7 +9,8 @@
 //!   so quad-view / stacked viewport setups respond to whichever
 //!   panel the cursor is in.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
@@ -182,7 +183,7 @@ fn perspective_default() -> Projection {
 
 fn orthographic_default() -> Projection {
     Projection::Orthographic(OrthographicProjection {
-        scaling_mode: bevy::camera::ScalingMode::FixedVertical {
+        scaling_mode: bevy_camera::ScalingMode::FixedVertical {
             viewport_height: ORTHO_VIEWPORT_HEIGHT,
         },
         scale: 1.0,
@@ -419,7 +420,7 @@ pub(crate) fn view_frame_all(
 pub(crate) fn axis_view_keys(
     keyboard: Res<ButtonInput<KeyCode>>,
     modal: Res<crate::modal_transform::ModalTransformState>,
-    input_focus: Res<bevy::input_focus::InputFocus>,
+    input_focus: Res<bevy_input_focus::InputFocus>,
     mut commands: Commands,
 ) {
     if modal.active.is_some() || input_focus.0.is_some() {

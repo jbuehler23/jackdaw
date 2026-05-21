@@ -14,9 +14,10 @@
 //! NOT surfaced here; per user request, workspaces are views you
 //! switch between, not files you close.
 
-use bevy::picking::pointer::PointerButton;
-use bevy::prelude::*;
-use bevy::ui::ui_transform::UiGlobalTransform;
+use bevy_picking::pointer::PointerButton;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ui::ui_transform::UiGlobalTransform;
 use jackdaw_feathers::icons::{EditorFont, Icon, IconFont};
 use jackdaw_feathers::tokens;
 use jackdaw_panels::workspace::{WorkspaceChanged, WorkspaceRegistry, WorkspaceTab};

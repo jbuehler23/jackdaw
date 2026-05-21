@@ -1,4 +1,5 @@
-use bevy::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::layout::LayoutState;

@@ -34,7 +34,7 @@
 //!   - All constraint edges lie on the face plane (caller projects).
 //!   - Interior points are on or near the face plane (caller ensures).
 
-use bevy::math::{Vec2, Vec3};
+use bevy_math::{Vec2, Vec3};
 
 use crate::compute_face_tangent_axes;
 use crate::halfedge::cycles::radial_remove_loop;

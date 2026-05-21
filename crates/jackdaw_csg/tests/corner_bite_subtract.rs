@@ -14,7 +14,7 @@
 //! ballpark as in the editor), with the cutter overlapping a single
 //! corner of the target. The expected result is one solid L-shape.
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_csg::{CsgInput, brush_difference_split, brush_to_world};
 use jackdaw_jsn::Brush;
 
@@ -25,7 +25,7 @@ fn world_cuboid(half_x: f32, half_y: f32, half_z: f32, center: Vec3) -> Brush {
     let (world_faces, world_topo) = brush_to_world(
         &brush.faces,
         &brush.topology,
-        bevy::math::Quat::IDENTITY,
+        bevy_math::Quat::IDENTITY,
         center,
     );
     Brush {

@@ -10,7 +10,8 @@
 //! A happy-path "spawn brushes, run op, inspect the result" test is
 //! tracked as a followup - it needs a full render + transform
 //! pipeline that `headless_app()` doesn't spin up.
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::prelude::*;
 
 mod util;
@@ -28,7 +29,7 @@ fn spawn_cuboid_brush(app: &mut App, offset: Vec3) -> Entity {
 }
 
 fn with_headless_brush_env<F: FnOnce(&mut App)>(f: F) {
-    use bevy::input_focus::InputFocus;
+    use bevy_input_focus::InputFocus;
     let mut app = util::headless_app();
     app.finish();
     app.update();

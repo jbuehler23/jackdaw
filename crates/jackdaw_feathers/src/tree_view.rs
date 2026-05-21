@@ -1,5 +1,14 @@
-use bevy::{feathers::theme::ThemedText, prelude::*, ui_widgets::observe};
+use bevy_asset::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_feathers::theme::ThemedText;
+use bevy_input::prelude::*;
 use bevy_monitors::prelude::{MonitorSelf, Mutation, NotifyChanged};
+use bevy_picking::prelude::*;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_ui_widgets::observe;
+use bevy_utils::prelude::*;
 use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeFocused, TreeNode, TreeNodeExpandToggle,
     TreeNodeExpanded, TreeRowChildren, TreeRowClicked, TreeRowContent, TreeRowDot, TreeRowDropped,
@@ -504,7 +513,7 @@ pub fn tree_keyboard_navigation(
     node_query: Query<&Node>,
     mut commands: Commands,
     tree_node_query: Query<&TreeNode>,
-    input_focus: Res<bevy::input_focus::InputFocus>,
+    input_focus: Res<bevy_input_focus::InputFocus>,
 ) {
     // Skip tree keyboard navigation when a text input is focused
     // to avoid Enter/arrow keys interfering with text editing.

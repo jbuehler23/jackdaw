@@ -1,4 +1,4 @@
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_geometry::halfedge::{
     FaceKey, HalfedgeMesh,
     ops::face_poke::{PokeError, face_poke},

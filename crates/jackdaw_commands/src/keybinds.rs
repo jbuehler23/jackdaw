@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_input::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Every remappable editor action.

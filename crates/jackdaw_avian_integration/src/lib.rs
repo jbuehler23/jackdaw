@@ -8,7 +8,12 @@ use std::marker::PhantomData;
 
 use avian3d::debug_render::{PhysicsGizmoExt, PhysicsGizmos};
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_camera::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_gizmos::prelude::*;
+use bevy_reflect::prelude::*;
+use bevy_transform::prelude::*;
 
 pub mod simulation;
 
@@ -29,7 +34,7 @@ pub mod simulation;
 pub struct AvianCollider(pub ColliderConstructor);
 
 pub mod physics_colors {
-    use bevy::prelude::Color;
+    use bevy_color::prelude::*;
 
     pub const COLLIDER_WIREFRAME: Color = Color::srgba(0.0, 1.0, 0.5, 0.7);
     pub const SENSOR_WIREFRAME: Color = Color::srgba(0.0, 0.8, 1.0, 0.5);
@@ -86,7 +91,7 @@ impl<S: Component> Plugin for PhysicsOverlaysPlugin<S> {
                 PostUpdate,
                 // TODO: Use `JackdawDrawSystems` here
                 (draw_collider_gizmos::<S>, draw_hierarchy_arrows::<S>)
-                    .after(bevy::transform::TransformSystems::Propagate),
+                    .after(bevy_transform::TransformSystems::Propagate),
             );
 
         let mut store = app.world_mut().resource_mut::<GizmoConfigStore>();
@@ -160,7 +165,7 @@ fn draw_collider_gizmos<S: Component>(
         return;
     }
 
-    let mut highlighted = bevy::ecs::entity::EntityHashSet::default();
+    let mut highlighted = bevy_ecs::entity::EntityHashSet::default();
     for body_entity in &selected_bodies {
         collect_descendant_colliders(
             body_entity,
@@ -206,7 +211,7 @@ fn draw_hierarchy_arrows<S: Component>(
 
     for (body_entity, body_tf) in &selected_bodies {
         let body_pos = body_tf.translation();
-        let mut descendants = bevy::ecs::entity::EntityHashSet::default();
+        let mut descendants = bevy_ecs::entity::EntityHashSet::default();
         collect_descendant_colliders(
             body_entity,
             &children_query,
@@ -233,7 +238,7 @@ fn collect_descendant_colliders(
     entity: Entity,
     children_query: &Query<&Children>,
     collider_check: &Query<(), With<Collider>>,
-    out: &mut bevy::ecs::entity::EntityHashSet,
+    out: &mut bevy_ecs::entity::EntityHashSet,
 ) {
     if let Ok(children) = children_query.get(entity) {
         for child in children.iter() {

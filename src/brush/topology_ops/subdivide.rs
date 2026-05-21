@@ -1,6 +1,6 @@
 //! `brush.mesh.subdivide` operator.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::subdivide::subdivide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};

@@ -3,7 +3,8 @@
 //! plus extension-contributed `RegisteredMenuEntry` rows under
 //! `menu == "Add"`.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::picker::{
     Category, Matchable, PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text,

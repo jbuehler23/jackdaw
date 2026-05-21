@@ -11,9 +11,14 @@
 //! Pan uses middle-mouse drag; zoom uses the scroll wheel, both gated on
 //! cursor hover over the viewport.
 
-use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
-use bevy::picking::hover::HoverMap;
-use bevy::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy_input::prelude::*;
+use bevy_math::prelude::*;
+use bevy_picking::{hover::HoverMap, prelude::*};
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 
 use crate::graph::{GraphCanvasView, MAX_ZOOM, MIN_ZOOM};
 
@@ -99,7 +104,7 @@ pub fn apply_canvas_view(
 pub fn handle_canvas_pan_zoom(
     hover_map: Res<HoverMap>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    mut motion: MessageReader<bevy::input::mouse::MouseMotion>,
+    mut motion: MessageReader<bevy_input::mouse::MouseMotion>,
     mut wheel: MessageReader<MouseWheel>,
     viewports: Query<&GraphCanvasViewport>,
     mut graphs: Query<&mut GraphCanvasView>,

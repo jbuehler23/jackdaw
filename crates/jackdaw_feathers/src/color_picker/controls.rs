@@ -1,6 +1,10 @@
-use bevy::picking::events::{DragEnd, DragStart, Press, Release};
-use bevy::prelude::*;
-use bevy::ui::UiGlobalTransform;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_picking::events::{DragEnd, DragStart, Press, Release};
+use bevy_picking::prelude::*;
+use bevy_ui::prelude::*;
+
+use bevy_ui::UiGlobalTransform;
 
 use super::{
     AlphaSlider, ColorPickerChangeEvent, ColorPickerCommitEvent, ColorPickerState, HsvRectangle,

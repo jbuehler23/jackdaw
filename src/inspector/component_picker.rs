@@ -3,10 +3,10 @@ use crate::selection::{Selected, Selection};
 use std::any::TypeId;
 use std::collections::HashSet;
 
-use bevy::ecs::archetype::Archetype;
-use bevy::ecs::component::Components;
-use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
-use bevy::prelude::*;
+use bevy_ecs::archetype::Archetype;
+use bevy_ecs::component::Components;
+use bevy_ecs::prelude::*;
+use bevy_ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::picker::{
     Category, Matchable, PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text,
@@ -14,7 +14,7 @@ use jackdaw_feathers::picker::{
 };
 use jackdaw_feathers::tokens;
 
-use bevy::reflect::{TypeInfo, attributes::CustomAttributes};
+use bevy_reflect::{TypeInfo, attributes::CustomAttributes};
 use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden};
 
@@ -170,7 +170,7 @@ pub struct PickableComponent {
 ///
 /// [`build_reflective_default`]: crate::reflect_default::build_reflective_default
 pub fn enumerate_pickable_components(
-    registry: &bevy::reflect::TypeRegistry,
+    registry: &bevy_reflect::TypeRegistry,
     existing_types: &HashSet<TypeId>,
     denylist: &PickerDenylist,
 ) -> Vec<PickableComponent> {
@@ -279,7 +279,7 @@ pub(crate) fn on_add_component_button_click(
         .filter_map(|cid| {
             components
                 .get_info(cid)
-                .and_then(bevy::ecs::component::ComponentInfo::type_id)
+                .and_then(bevy_ecs::component::ComponentInfo::type_id)
         })
         .collect();
 

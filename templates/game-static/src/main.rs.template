@@ -14,7 +14,7 @@ fn main() -> AppExit {
     let _ = ctrlc::set_handler(|| std::process::exit(130));
 
     App::new()
-        .set_error_handler(bevy::ecs::error::error)
+        .set_error_handler(bevy_ecs::error::error)
         // Bevy's `file_watcher` cargo feature (Cargo.toml) drives
         // hot reload: on save, `JackdawPlugin` despawns the scene
         // entities and respawns from the new asset.

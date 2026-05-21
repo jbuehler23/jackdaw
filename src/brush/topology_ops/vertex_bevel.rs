@@ -6,9 +6,10 @@
 //! each frame so the user sees the live N-gon bevel as they drag. LMB
 //! commits; Esc / RMB cancels and restores the pre-modal mesh.
 
-use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
+use bevy_window::PrimaryWindow;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::cycles::disk_walk;
@@ -55,10 +56,12 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             Action::<BrushVertexBevelOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyB.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    KeyCode::KeyB.with_mod_keys(ModKeys::CONTROL),
+                    Press::default(),
+                ))]
+            ),
         ));
     });
 }

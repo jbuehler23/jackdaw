@@ -57,9 +57,12 @@ pub mod snapshot;
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use bevy::ecs::{system::IntoObserverSystem, world::EntityWorldMut};
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_ecs::{system::IntoObserverSystem, world::EntityWorldMut};
 use bevy_enhanced_input::prelude::{Action, Fire};
+use bevy_log::prelude::*;
+use bevy_utils::prelude::*;
 use jackdaw_panels::{
     DockWindowDescriptor, WindowRegistry, WorkspaceDescriptor, WorkspaceRegistry,
 };
@@ -110,7 +113,7 @@ pub mod prelude {
     // BEI types extension authors need for `actions!` / `bindings!` / observers.
     pub use bevy_enhanced_input::prelude::*;
     // Re-export Bevy's SystemId here so Operator impls don't need to import it.
-    pub use bevy::ecs::system::SystemId;
+    pub use bevy_ecs::system::SystemId;
 }
 
 /// Trait implemented by every extension. Declares the extension's name
@@ -294,7 +297,7 @@ impl<'a> ExtensionContext<'a> {
         let ext = self.extension_entity;
 
         let (execute, invoke, availability_check, cancel) = {
-            let mut queue = bevy::ecs::world::CommandQueue::default();
+            let mut queue = bevy_ecs::world::CommandQueue::default();
             let mut commands = Commands::new(&mut queue, self.world);
             let execute = O::register_execute(&mut commands);
             let invoke = O::register_invoke(&mut commands);

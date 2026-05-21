@@ -17,7 +17,8 @@
 //! `jackdaw_runtime` and `jackdaw` re-export both newtypes
 //! through their preludes.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_reflect::prelude::*;
 use std::borrow::Cow;
 
 /// Picker grouping for a component. Attach via

@@ -1,5 +1,6 @@
-use bevy::input_focus::InputFocus;
-use bevy::prelude::*;
+use bevy_input_focus::InputFocus;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{self, ButtonProps, ButtonVariant},

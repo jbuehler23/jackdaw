@@ -2,9 +2,10 @@
 //! and the small set of typed actions (`physics.enable` / `physics.disable`,
 //! `animation.toggle_keyframe`).
 
-use bevy::ecs::component::ComponentId;
-use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
-use bevy::prelude::*;
+use bevy_ecs::component::ComponentId;
+use bevy_ecs::prelude::*;
+use bevy_ecs::reflect::{AppTypeRegistry, ReflectComponent};
+use bevy_log::prelude::*;
 use jackdaw_api::prelude::*;
 
 use super::component_display::revert_component_to_baseline;

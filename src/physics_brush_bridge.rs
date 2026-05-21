@@ -8,7 +8,8 @@
 //! `init_collider_constructors` system never fires and can't interfere.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_avian_integration::AvianCollider;
 use jackdaw_geometry::is_convex_topology;
 
@@ -117,10 +118,10 @@ fn brush_mesh_from_cache(cache: &BrushMeshCache) -> Option<Mesh> {
         }
     }
     let mut m = Mesh::new(
-        bevy::mesh::PrimitiveTopology::TriangleList,
-        bevy::asset::RenderAssetUsages::default(),
+        bevy_mesh::PrimitiveTopology::TriangleList,
+        bevy_asset::RenderAssetUsages::default(),
     );
     m.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    m.insert_indices(bevy::mesh::Indices::U32(indices));
+    m.insert_indices(bevy_mesh::Indices::U32(indices));
     Some(m)
 }

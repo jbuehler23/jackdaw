@@ -13,7 +13,8 @@
 //! A wrong-type case proves `OperatorParameters::as_int` / `as_str`
 //! coerce or refuse the way the runtime expects.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::PropertyValue;
 

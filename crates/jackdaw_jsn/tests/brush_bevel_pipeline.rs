@@ -9,7 +9,7 @@
 //! match the Newell normal of that ring, and the chamfer's `material_idx`
 //! should land at the slot index the renderer expects.
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::edge_bevel::edge_bevel};
 use jackdaw_jsn::Brush;
 

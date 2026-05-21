@@ -19,7 +19,8 @@
 //!
 //!
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
 use jackdaw_commands::CommandHistory;

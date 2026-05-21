@@ -5,16 +5,15 @@ use crate::prelude::*;
 use crate::selection::{Selected, Selection};
 use std::any::TypeId;
 
-use bevy::ecs::component::ComponentInfo;
-use bevy::{
-    ecs::{
-        archetype::Archetype,
-        component::{ComponentId, Components},
-        reflect::{AppTypeRegistry, ReflectComponent},
-    },
+use bevy_ecs::component::ComponentInfo;
+use bevy_ecs::{
+    archetype::Archetype,
+    component::{ComponentId, Components},
     prelude::*,
-    reflect::serde::TypedReflectSerializer,
+    reflect::{AppTypeRegistry, ReflectComponent},
 };
+use bevy_log::prelude::*;
+use bevy_reflect::serde::TypedReflectSerializer;
 use jackdaw_feathers::{
     button::ButtonOperatorCall,
     icons::{EditorFont, Icon, IconFont},
@@ -38,10 +37,10 @@ use jackdaw_runtime::EditorCategory;
 use super::{
     AddComponentButton, ComponentDisplay, ComponentDisplayBody, ComponentName, ComponentPicker,
     Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch, InspectorTarget,
-    ReflectDisplayable, brush_display, component_tooltip::ReflectedTypeTooltip,
-    custom_props_display, extract_module_group, material_display, reflect_fields,
+    brush_display, component_tooltip::ReflectedTypeTooltip, custom_props_display,
+    extract_module_group, material_display, reflect_fields,
 };
-use bevy::picking::hover::Hovered;
+use bevy_picking::hover::Hovered;
 
 pub(crate) fn add_component_displays(
     _: On<Add, Selected>,
@@ -172,7 +171,7 @@ pub(crate) fn build_inspector_displays(
                 }
                 // AST filter: hide Bevy-internal components that
                 // aren't tracked in the scene file. User-defined
-                // components (anything outside the `bevy::*`,
+                // components (anything outside the `bevy_*`,
                 // `core::*`, `std::*`, and `jackdaw_*` namespaces)
                 // are always shown so the inspector reflects the
                 // actual ECS state. Without this exception, a user
@@ -196,9 +195,9 @@ pub(crate) fn build_inspector_displays(
                 let short = table.short_path().to_string();
                 let info = registration.type_info();
                 let attrs = match info {
-                    bevy::reflect::TypeInfo::Struct(s) => Some(s.custom_attributes()),
-                    bevy::reflect::TypeInfo::TupleStruct(s) => Some(s.custom_attributes()),
-                    bevy::reflect::TypeInfo::Enum(e) => Some(e.custom_attributes()),
+                    bevy_reflect::TypeInfo::Struct(s) => Some(s.custom_attributes()),
+                    bevy_reflect::TypeInfo::TupleStruct(s) => Some(s.custom_attributes()),
+                    bevy_reflect::TypeInfo::Enum(e) => Some(e.custom_attributes()),
                     _ => None,
                 };
                 let module_group = if let Some(cat) = attrs
@@ -796,7 +795,7 @@ pub(crate) fn spawn_component_display(
                 Hovered::default(),
                 bo_call,
                 ChildOf(header),
-                bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                bevy_ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                     commands
                         .operator(super::ops::ComponentRevertBaselineOp::ID)
                         .param("entity", entity_param)
@@ -823,7 +822,7 @@ pub(crate) fn spawn_component_display(
             Hovered::default(),
             remove_call,
             ChildOf(header),
-            bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            bevy_ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                 commands
                     .operator(super::ops::ComponentRemoveOp::ID)
                     .param("entity", entity_param)
@@ -908,8 +907,8 @@ pub(crate) fn revert_component_to_baseline(
     In((entity, component_id)): In<(Entity, ComponentId)>,
     world: &mut World,
 ) {
-    use bevy::ecs::reflect::AppTypeRegistry;
-    use bevy::reflect::serde::TypedReflectDeserializer;
+    use bevy_ecs::reflect::AppTypeRegistry;
+    use bevy_reflect::serde::TypedReflectDeserializer;
     use serde::de::DeserializeSeed;
 
     let Some(baseline) = world.get::<jackdaw_jsn::JsnPrefabBaseline>(entity).cloned() else {

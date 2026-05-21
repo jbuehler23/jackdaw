@@ -8,7 +8,8 @@
 //! `OperatorAction` marker, which is what makes the keybind lookup
 //! id-keyed instead of generic-over-`Op`.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api_internal::lifecycle::OperatorAction;
 use jackdaw_feathers::button::ButtonOperatorCall;
 use jackdaw_feathers::tooltip::Tooltip;

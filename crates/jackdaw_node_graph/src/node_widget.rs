@@ -10,7 +10,12 @@
 //! [`apply_node_position`] reading from
 //! [`GraphNode::position`].
 
-use bevy::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_picking::prelude::*;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 
 use crate::graph::{GraphNode, GraphNodeSelected, Terminal, TerminalDirection};
 use crate::registry::NodeTypeDescriptor;

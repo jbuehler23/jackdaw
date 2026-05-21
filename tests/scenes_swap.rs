@@ -25,7 +25,7 @@ fn untitled_tab_has_correct_display_name() {
 
 #[test]
 fn view_state_round_trips_camera_transform() {
-    use bevy::math::Vec3;
+    use bevy_math::Vec3;
     use bevy::prelude::Transform;
     use jackdaw::scenes::ViewState;
     let vs = ViewState {
@@ -45,10 +45,11 @@ fn view_state_default_has_empty_selection_and_no_sub_selection() {
 
 #[test]
 fn serialize_world_to_jsn_scene_captures_brushes() {
-    use bevy::prelude::*;
-    use bevy::render::RenderPlugin;
-    use bevy::render::settings::{RenderCreation, WgpuSettings};
-    use bevy::winit::WinitPlugin;
+    use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
+    use bevy_render::RenderPlugin;
+    use bevy_render::settings::{RenderCreation, WgpuSettings};
+    use bevy_winit::WinitPlugin;
     use jackdaw_jsn::Brush;
 
     let mut app = App::new();
@@ -76,10 +77,11 @@ fn serialize_world_to_jsn_scene_captures_brushes() {
 
 #[test]
 fn swap_round_trips_a_single_brush() {
-    use bevy::prelude::*;
-    use bevy::render::RenderPlugin;
-    use bevy::render::settings::{RenderCreation, WgpuSettings};
-    use bevy::winit::WinitPlugin;
+    use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
+    use bevy_render::RenderPlugin;
+    use bevy_render::settings::{RenderCreation, WgpuSettings};
+    use bevy_winit::WinitPlugin;
     use jackdaw_jsn::Brush;
 
     let mut app = App::new();
@@ -134,10 +136,11 @@ fn swap_round_trips_a_single_brush() {
 
 #[test]
 fn swap_preserves_camera_transform_per_tab() {
-    use bevy::prelude::*;
-    use bevy::render::RenderPlugin;
-    use bevy::render::settings::{RenderCreation, WgpuSettings};
-    use bevy::winit::WinitPlugin;
+    use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
+    use bevy_render::RenderPlugin;
+    use bevy_render::settings::{RenderCreation, WgpuSettings};
+    use bevy_winit::WinitPlugin;
 
     let mut app = App::new();
     app.add_plugins(
@@ -190,10 +193,11 @@ fn swap_preserves_camera_transform_per_tab() {
 
 #[test]
 fn scene_new_appends_an_untitled_tab() {
-    use bevy::prelude::*;
-    use bevy::render::RenderPlugin;
-    use bevy::render::settings::{RenderCreation, WgpuSettings};
-    use bevy::winit::WinitPlugin;
+    use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
+    use bevy_render::RenderPlugin;
+    use bevy_render::settings::{RenderCreation, WgpuSettings};
+    use bevy_winit::WinitPlugin;
 
     let mut app = App::new();
     app.add_plugins(
@@ -237,10 +241,11 @@ fn scene_new_appends_an_untitled_tab() {
 
 #[test]
 fn scene_open_dedupes_by_path() {
-    use bevy::prelude::*;
-    use bevy::render::RenderPlugin;
-    use bevy::render::settings::{RenderCreation, WgpuSettings};
-    use bevy::winit::WinitPlugin;
+    use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
+    use bevy_render::RenderPlugin;
+    use bevy_render::settings::{RenderCreation, WgpuSettings};
+    use bevy_winit::WinitPlugin;
 
     let mut app = App::new();
     app.add_plugins(
@@ -297,11 +302,12 @@ fn scene_open_dedupes_by_path() {
     let _ = std::fs::remove_file(&path);
 }
 
-fn make_app_with_n_tabs(n: usize) -> bevy::app::App {
-    use bevy::prelude::*;
-    use bevy::render::RenderPlugin;
-    use bevy::render::settings::{RenderCreation, WgpuSettings};
-    use bevy::winit::WinitPlugin;
+fn make_app_with_n_tabs(n: usize) -> bevy_app::App {
+    use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
+    use bevy_render::RenderPlugin;
+    use bevy_render::settings::{RenderCreation, WgpuSettings};
+    use bevy_winit::WinitPlugin;
 
     let mut app = App::new();
     app.add_plugins(
@@ -407,7 +413,8 @@ fn scene_close_drops_active_tab_and_picks_neighbor() {
 
 #[test]
 fn pushing_to_history_marks_active_tab_dirty() {
-    use bevy::prelude::*;
+    use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 
     struct NoOpCommand;
     impl jackdaw::commands::EditorCommand for NoOpCommand {
@@ -587,13 +594,13 @@ fn window_close_with_dirty_tabs_does_not_exit() {
         bevy::prelude::Update,
         jackdaw::scenes::intercept_window_close,
     );
-    app.add_message::<bevy::window::WindowCloseRequested>();
-    app.add_message::<bevy::app::AppExit>();
+    app.add_message::<bevy_window::WindowCloseRequested>();
+    app.add_message::<bevy_app::AppExit>();
 
     // Fire a WindowCloseRequested.
     app.world_mut()
-        .resource_mut::<bevy::ecs::message::Messages<bevy::window::WindowCloseRequested>>()
-        .write(bevy::window::WindowCloseRequested {
+        .resource_mut::<bevy_ecs::message::Messages<bevy_window::WindowCloseRequested>>()
+        .write(bevy_window::WindowCloseRequested {
             window: bevy::prelude::Entity::PLACEHOLDER,
         });
     app.update();
@@ -601,7 +608,7 @@ fn window_close_with_dirty_tabs_does_not_exit() {
     // No AppExit should have been emitted.
     let exits: Vec<_> = app
         .world_mut()
-        .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
+        .resource_mut::<bevy_ecs::message::Messages<bevy_app::AppExit>>()
         .drain()
         .collect();
     assert!(exits.is_empty(), "should not have emitted AppExit");
@@ -624,13 +631,13 @@ fn window_close_with_no_dirty_tabs_exits_cleanly() {
         bevy::prelude::Update,
         jackdaw::scenes::intercept_window_close,
     );
-    app.add_message::<bevy::window::WindowCloseRequested>();
-    app.add_message::<bevy::app::AppExit>();
+    app.add_message::<bevy_window::WindowCloseRequested>();
+    app.add_message::<bevy_app::AppExit>();
 
     // Fire a WindowCloseRequested with no dirty tabs.
     app.world_mut()
-        .resource_mut::<bevy::ecs::message::Messages<bevy::window::WindowCloseRequested>>()
-        .write(bevy::window::WindowCloseRequested {
+        .resource_mut::<bevy_ecs::message::Messages<bevy_window::WindowCloseRequested>>()
+        .write(bevy_window::WindowCloseRequested {
             window: bevy::prelude::Entity::PLACEHOLDER,
         });
     app.update();
@@ -638,7 +645,7 @@ fn window_close_with_no_dirty_tabs_exits_cleanly() {
     // Exactly one AppExit::Success should have been emitted.
     let exits: Vec<_> = app
         .world_mut()
-        .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
+        .resource_mut::<bevy_ecs::message::Messages<bevy_app::AppExit>>()
         .drain()
         .collect();
     assert_eq!(exits.len(), 1);

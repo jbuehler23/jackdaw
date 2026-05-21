@@ -17,7 +17,8 @@
 //! 6. Click Stop. The authored entity is preserved.
 //! 7. `cargo run` launches the same game without the editor.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 // Brings `EditorCategory` and `EditorDescription` into scope so
 // `#[reflect(@EditorCategory::new("..."))]` resolves without a
 // fully-qualified path.
@@ -65,7 +66,7 @@ fn spin_cube(time: Res<Time>, mut cubes: Query<(&SpinningCube, &mut Transform)>)
 pub mod play_gate {
     #[cfg(feature = "editor")]
     pub fn is_playing(
-        state: bevy::prelude::Res<bevy::state::state::State<jackdaw::prelude::PlayState>>,
+        state: bevy::prelude::Res<bevy_state::state::State<jackdaw::prelude::PlayState>>,
     ) -> bool {
         matches!(*state.get(), jackdaw::prelude::PlayState::Playing)
     }

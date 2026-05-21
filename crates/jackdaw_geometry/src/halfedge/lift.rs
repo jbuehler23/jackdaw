@@ -44,7 +44,7 @@ impl HalfedgeMesh {
                 material_idx: face_idx as u32,
                 loop_first: LoopKey::default(), // patched below
                 loop_count: total as u32,
-                normal_cache: bevy::math::Vec3::ZERO,
+                normal_cache: bevy_math::Vec3::ZERO,
             });
 
             let loop_keys: Vec<LoopKey> = face_loops_topology
@@ -80,7 +80,7 @@ impl HalfedgeMesh {
             mesh.faces[face_key].loop_first = loop_keys[0];
 
             // Cache normal (Newell over ring).
-            let positions: Vec<bevy::math::Vec3> = (0..total)
+            let positions: Vec<bevy_math::Vec3> = (0..total)
                 .map(|i| t.vertices[face_loops_topology[i].vert as usize].position)
                 .collect();
             mesh.faces[face_key].normal_cache = newell_normal(&positions);

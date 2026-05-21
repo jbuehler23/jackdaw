@@ -1,9 +1,10 @@
-use bevy::{
-    feathers::cursor::{CursorIconPlugin, EntityCursor, OverrideCursor},
-    prelude::*,
-    window::SystemCursorIcon,
-};
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_feathers::cursor::{CursorIconPlugin, EntityCursor, OverrideCursor};
 use bevy_monitors::prelude::{Mutation, NotifyChanged};
+use bevy_picking::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_window::SystemCursorIcon;
 
 #[derive(Component)]
 pub struct PanelGroup {

@@ -5,7 +5,8 @@
 
 use std::{borrow::Cow, collections::HashMap};
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<WindowExtensionRegistry>();

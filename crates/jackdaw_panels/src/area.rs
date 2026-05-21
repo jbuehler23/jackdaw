@@ -1,4 +1,6 @@
-use bevy::prelude::*;
+use bevy_asset::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_text::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::tree::TabId;

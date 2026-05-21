@@ -3,7 +3,12 @@ use std::{
     collections::{BTreeMap, HashMap},
 };
 
-use bevy::prelude::*;
+use bevy_color::prelude::*;
+use bevy_derive::{Deref, DerefMut};
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_reflect::prelude::*;
+use bevy_utils::prelude::*;
 use serde::{Deserialize, Serialize};
 
 // Re-export geometry types so consumers see them from jackdaw_jsn

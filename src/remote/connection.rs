@@ -1,4 +1,6 @@
-use bevy::{prelude::*, tasks::Task, tasks::futures_lite::future};
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
+use bevy_tasks::{Task, futures_lite::future};
 use jackdaw_remote::{JackdawAppInfo, schema::JsnRegistry};
 
 use super::brp;

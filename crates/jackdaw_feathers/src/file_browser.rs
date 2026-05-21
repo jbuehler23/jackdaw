@@ -1,4 +1,8 @@
-use bevy::{feathers::theme::ThemedText, prelude::*};
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_feathers::theme::ThemedText;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
 use jackdaw_widgets::file_browser::FileBrowserItem;
 use lucide_icons::Icon;
 

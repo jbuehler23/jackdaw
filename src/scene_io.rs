@@ -6,10 +6,6 @@ use std::fmt::{self, Formatter};
 use std::path::{Path, PathBuf};
 use std::result::Result;
 
-use bevy::asset::{ReflectAsset, ReflectHandle, UntypedAssetId};
-use bevy::image::ImageLoaderSettings;
-use bevy::reflect::serde::{ReflectDeserializerProcessor, ReflectSerializerProcessor};
-use bevy::reflect::{TypeRegistration, TypeRegistry};
 use bevy::{
     asset::AssetPath,
     ecs::reflect::AppTypeRegistry,
@@ -18,6 +14,10 @@ use bevy::{
     tasks::{AsyncComputeTaskPool, IoTaskPool, Task, futures_lite::future},
     window::{PrimaryWindow, RawHandleWrapper},
 };
+use bevy_asset::{ReflectAsset, ReflectHandle, UntypedAssetId};
+use bevy_image::ImageLoaderSettings;
+use bevy_reflect::serde::{ReflectDeserializerProcessor, ReflectSerializerProcessor};
+use bevy_reflect::{TypeRegistration, TypeRegistry};
 use jackdaw_jsn::format::{JsnAssets, JsnEntity, JsnHeader, JsnMetadata, JsnScene};
 use rfd::{AsyncFileDialog, FileHandle};
 use serde::de::{DeserializeSeed, Visitor};
@@ -931,7 +931,7 @@ fn collect_handles_from_reflect(
 
     // Recurse into struct/tuple/list/map fields
     match value.reflect_ref() {
-        bevy::reflect::ReflectRef::Struct(s) => {
+        bevy_reflect::ReflectRef::Struct(s) => {
             for i in 0..s.field_len() {
                 if let Some(field) = s.field_at(i) {
                     collect_handles_from_reflect(
@@ -947,7 +947,7 @@ fn collect_handles_from_reflect(
                 }
             }
         }
-        bevy::reflect::ReflectRef::TupleStruct(ts) => {
+        bevy_reflect::ReflectRef::TupleStruct(ts) => {
             for i in 0..ts.field_len() {
                 if let Some(field) = ts.field(i) {
                     collect_handles_from_reflect(
@@ -963,7 +963,7 @@ fn collect_handles_from_reflect(
                 }
             }
         }
-        bevy::reflect::ReflectRef::Tuple(t) => {
+        bevy_reflect::ReflectRef::Tuple(t) => {
             for i in 0..t.field_len() {
                 if let Some(field) = t.field(i) {
                     collect_handles_from_reflect(
@@ -979,7 +979,7 @@ fn collect_handles_from_reflect(
                 }
             }
         }
-        bevy::reflect::ReflectRef::List(l) => {
+        bevy_reflect::ReflectRef::List(l) => {
             for i in 0..l.len() {
                 if let Some(item) = l.get(i) {
                     collect_handles_from_reflect(
@@ -995,7 +995,7 @@ fn collect_handles_from_reflect(
                 }
             }
         }
-        bevy::reflect::ReflectRef::Array(a) => {
+        bevy_reflect::ReflectRef::Array(a) => {
             for i in 0..a.len() {
                 if let Some(item) = a.get(i) {
                     collect_handles_from_reflect(
@@ -1011,7 +1011,7 @@ fn collect_handles_from_reflect(
                 }
             }
         }
-        bevy::reflect::ReflectRef::Map(m) => {
+        bevy_reflect::ReflectRef::Map(m) => {
             for (_k, v) in m.iter() {
                 collect_handles_from_reflect(
                     v,
@@ -1025,7 +1025,7 @@ fn collect_handles_from_reflect(
                 );
             }
         }
-        bevy::reflect::ReflectRef::Set(s) => {
+        bevy_reflect::ReflectRef::Set(s) => {
             for item in s.iter() {
                 collect_handles_from_reflect(
                     item,
@@ -1039,7 +1039,7 @@ fn collect_handles_from_reflect(
                 );
             }
         }
-        bevy::reflect::ReflectRef::Enum(e) => {
+        bevy_reflect::ReflectRef::Enum(e) => {
             for i in 0..e.field_len() {
                 if let Some(field) = e.field_at(i) {
                     collect_handles_from_reflect(
@@ -1055,7 +1055,7 @@ fn collect_handles_from_reflect(
                 }
             }
         }
-        bevy::reflect::ReflectRef::Opaque(_) => {}
+        bevy_reflect::ReflectRef::Opaque(_) => {}
     }
 }
 
@@ -1259,7 +1259,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
         let registry = world.resource::<AppTypeRegistry>().clone();
         let registry = registry.read();
 
-        use bevy::scene::serde::SceneDeserializer;
+        use bevy_scene::serde::SceneDeserializer;
         let scene_deserializer = SceneDeserializer {
             type_registry: &registry,
         };
@@ -1429,7 +1429,7 @@ pub fn load_inline_assets(
                     "External asset entry '{name}' has unknown type '{type_path}'  -- loading untyped"
                 );
                 asset_server
-                    .load::<bevy::asset::LoadedUntypedAsset>(&asset_path)
+                    .load::<bevy_asset::LoadedUntypedAsset>(&asset_path)
                     .untyped()
             };
             local_assets.insert(name.clone(), handle);

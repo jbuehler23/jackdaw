@@ -4,9 +4,10 @@
 //! the tab list grows or shrinks. Active highlight and dirty-dot
 //! updates happen in place so click observers survive normal editing.
 
-use bevy::picking::hover::Hovered;
-use bevy::picking::pointer::PointerButton;
-use bevy::prelude::*;
+use bevy_picking::hover::Hovered;
+use bevy_picking::pointer::PointerButton;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_feathers::{
     context_menu::spawn_context_menu,
     icons::{EditorFont, Icon, IconFont},

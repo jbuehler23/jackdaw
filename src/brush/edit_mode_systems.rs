@@ -6,7 +6,7 @@
 //! not lift an `HalfedgeMesh` (it operates on the plane representation directly
 //! until A.4.x).
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 

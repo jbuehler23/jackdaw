@@ -3,14 +3,21 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Formatter};
 use std::path::{Path, PathBuf};
 
-use bevy::asset::{
-    AssetLoader, LoadContext, ReflectAsset, ReflectHandle, UntypedHandle, io::Reader,
+use bevy_app::prelude::*;
+use bevy_asset::{
+    AssetLoader, LoadContext, ReflectAsset, ReflectHandle, UntypedHandle, io::Reader, prelude::*,
 };
-use bevy::ecs::reflect::AppTypeRegistry;
-use bevy::image::ImageLoaderSettings;
-use bevy::prelude::*;
-use bevy::reflect::serde::{ReflectDeserializerProcessor, TypedReflectDeserializer};
-use bevy::reflect::{TypeRegistration, TypeRegistry};
+use bevy_camera::prelude::*;
+use bevy_derive::Deref;
+use bevy_ecs::prelude::*;
+use bevy_ecs::reflect::AppTypeRegistry;
+use bevy_image::{Image, ImageLoaderSettings};
+use bevy_log::prelude::*;
+use bevy_reflect::serde::{ReflectDeserializerProcessor, TypedReflectDeserializer};
+use bevy_reflect::std_traits::ReflectDefault;
+use bevy_reflect::{PartialReflect, TypePath, TypeRegistration, TypeRegistry};
+use bevy_scene::prelude::*;
+use bevy_transform::prelude::*;
 use jackdaw_jsn::JsnPlugin;
 use jackdaw_jsn::format::{JsnAssets, JsnCatalog, JsnScene, JsnSceneV2};
 use serde::Deserializer;
@@ -181,13 +188,13 @@ pub enum JackdawLoadError {
 /// asset content. Pair with Bevy's `file_watcher` feature to get
 /// hot reload of `assets/scene.jsn` in the standalone runner.
 fn clear_modified_scene_roots(
-    mut events: bevy::ecs::message::MessageReader<bevy::asset::AssetEvent<JackdawScene>>,
+    mut events: bevy_ecs::message::MessageReader<bevy_asset::AssetEvent<JackdawScene>>,
     roots: Query<(Entity, &JackdawSceneRoot, Option<&Children>), With<SceneSpawned>>,
     mut commands: Commands,
 ) {
-    use bevy::asset::AssetEvent;
+    use bevy_asset::AssetEvent;
 
-    let modified: Vec<bevy::asset::AssetId<JackdawScene>> = events
+    let modified: Vec<bevy_asset::AssetId<JackdawScene>> = events
         .read()
         .filter_map(|event| match event {
             AssetEvent::Modified { id } | AssetEvent::LoadedWithDependencies { id } => Some(*id),
@@ -314,13 +321,13 @@ fn spawn_scene_entities(
 
             if type_path == TRANSFORM_TYPE_PATH {
                 if let Some(t) =
-                    <Transform as bevy::reflect::FromReflect>::from_reflect(reflected.as_ref())
+                    <Transform as bevy_reflect::FromReflect>::from_reflect(reflected.as_ref())
                 {
                     local_transform = t;
                 }
             } else if type_path == VISIBILITY_TYPE_PATH {
                 if let Some(v) =
-                    <Visibility as bevy::reflect::FromReflect>::from_reflect(reflected.as_ref())
+                    <Visibility as bevy_reflect::FromReflect>::from_reflect(reflected.as_ref())
                 {
                     local_visibility = v;
                 }
@@ -478,7 +485,7 @@ fn load_inline_assets(
                 }
             } else {
                 asset_server
-                    .load::<bevy::asset::LoadedUntypedAsset>(&resolved)
+                    .load::<bevy_asset::LoadedUntypedAsset>(&resolved)
                     .untyped()
             };
             local_assets.insert(name.clone(), handle);
@@ -585,7 +592,7 @@ fn apply_catalog(world: &mut World, jsn: &JsnCatalog) {
     world.resource_mut::<JackdawCatalog>().handles = handles;
 }
 
-/// Mirrors `bevy::asset::io::file::FileAssetReader::get_base_path`
+/// Mirrors `bevy_asset::io::file::FileAssetReader::get_base_path`
 /// and returns the candidate catalog path. Falls back through
 /// `BEVY_ASSET_ROOT`, `CARGO_MANIFEST_DIR`, and the executable's
 /// directory. The catalog itself lives at `<base>/.jsn/catalog.jsn`,

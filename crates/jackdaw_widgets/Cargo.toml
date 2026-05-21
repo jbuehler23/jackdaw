@@ -7,7 +7,14 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-bevy.workspace = true
+bevy_ecs.workspace = true
+bevy_app.workspace = true
+bevy_input.workspace = true
+bevy_window.workspace = true
+bevy_ui.workspace = true
+bevy_feathers.workspace = true
+bevy_picking.workspace = true
+
 bevy_monitors.workspace = true
 bevy_enhanced_input.workspace = true
 

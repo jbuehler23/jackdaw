@@ -1,9 +1,9 @@
 //! `brush.mesh.loop_cut` operator.
 
-use bevy::prelude::*;
-use bevy::ui::ui_transform::UiGlobalTransform;
-use bevy::window::PrimaryWindow;
+use bevy_ecs::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
+use bevy_ui::ui_transform::UiGlobalTransform;
+use bevy_window::PrimaryWindow;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::ops::loop_cut::loop_cut;
@@ -32,10 +32,12 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             Action::<BrushLoopCutOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyR.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    KeyCode::KeyR.with_mod_keys(ModKeys::CONTROL),
+                    Press::default(),
+                ))]
+            ),
         ));
     });
 }

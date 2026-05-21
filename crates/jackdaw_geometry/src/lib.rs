@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 
-use bevy::prelude::*;
+use bevy_asset::prelude::*;
+use bevy_math::prelude::*;
+use bevy_pbr::prelude::*;
+use bevy_reflect::prelude::*;
+use bevy_utils::prelude::*;
 
 pub mod topology;
 pub use topology::{

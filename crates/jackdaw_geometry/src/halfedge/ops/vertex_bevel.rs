@@ -22,7 +22,7 @@
 
 use std::collections::HashSet;
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 
 use crate::halfedge::cycles::{disk_remove_edge, disk_walk, radial_remove_loop, radial_walk};
 use crate::halfedge::ops::face_create::create_face_from_verts_with_material;

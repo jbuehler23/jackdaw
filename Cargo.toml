@@ -39,7 +39,7 @@ default-run = "jackdaw"
 default = ["navmesh", "avian"]
 navmesh = ["dep:bevy_rerecast"]
 avian = ["dep:avian3d", "dep:jackdaw_avian_integration"]
-dynamic_linking = ["bevy/dynamic_linking"]
+dynamic_linking = []
 
 hot-reload = ["dep:bevy_simple_subsecond_system"]
 # Experimental dylib-based extension flow. Enables Bevy's
@@ -71,7 +71,6 @@ members = [
 ]
 
 [dependencies]
-bevy.workspace = true
 jackdaw_jsn.workspace = true
 jackdaw_geometry.workspace = true
 jackdaw_csg.workspace = true
@@ -137,8 +136,68 @@ ctrlc = "3"
 bevy_simple_subsecond_system = { version = "0.2", optional = true }
 winit.workspace = true
 image.workspace = true
+bevy_ecs.workspace = true
+bevy_app.workspace = true
+bevy_feathers.workspace = true
+bevy_input.workspace = true
+bevy_input_focus.workspace = true
+bevy_picking.workspace = true
+bevy_platform.workspace = true
+bevy_ui_widgets.workspace = true
+bevy_ui.workspace = true
+bevy_window.workspace = true
+bevy_log.workspace = true
+bevy_asset.workspace = true
+bevy_image.workspace = true
+bevy_light.workspace = true
+bevy_mesh.workspace = true
+bevy_reflect.workspace = true
+bevy_math.workspace = true
+bevy_gizmos.workspace = true
+bevy_remote.workspace = true
+bevy_tasks.workspace = true
+bevy_derive.workspace = true
+bevy_utils.workspace = true
+bevy_render.workspace = true
+bevy_color.workspace = true
 
 [workspace.dependencies]
+bevy_ecs = "0.18"
+bevy_app = "0.18"
+bevy_feathers = "0.18"
+bevy_reflect = "0.18"
+bevy_color = "0.18"
+bevy_transform = "0.18"
+bevy_animation = "0.18"
+bevy_gizmos = "0.18"
+bevy_camera = "0.18"
+bevy_platform = "0.18"
+bevy_math = "0.18"
+bevy_time = "0.18"
+bevy_ui = "0.18"
+bevy_ui_widgets = "0.18"
+bevy_picking = "0.18"
+bevy_asset = "0.18"
+bevy_pbr = "0.18"
+bevy_utils = "0.18"
+bevy_scene = "0.18"
+bevy_log = "0.18"
+bevy_derive = "0.18"
+bevy_mesh = "0.18"
+bevy_image = "0.18"
+bevy_render = "0.18"
+bevy_remote = "0.18"
+bevy_internal = "0.18"
+bevy_window = "0.18"
+bevy_input_focus = "0.18"
+bevy_shader = "0.18"
+bevy_ui_render = "0.18"
+bevy_text = "0.18"
+bevy_state = "0.18"
+bevy_gltf = "0.18"
+bevy_light = "0.18"
+bevy_tasks = "0.18"
+bevy_input = { version = "0.18", features = ["serialize"] }
 bevy = { version = "0.18", features = [
     "experimental_bevy_feathers",
     "serialize",
@@ -236,7 +295,7 @@ redundant_closure_for_method_calls = "warn"
 # undocumented_unsafe_blocks = "warn"
 
 [dev-dependencies]
-bevy = { workspace = true, features = ["dynamic_linking"] }
+#bevy = { workspace = true, features = ["dynamic_linking"] }
 jackdaw_runtime.workspace = true
 # Pulled in so cargo builds the fixture cdylib as part of the
 # workspace test-target graph. `tests/dylib_loading.rs` dlopens the

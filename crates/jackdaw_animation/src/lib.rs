@@ -9,7 +9,8 @@
 //! All mutations go through `SpawnEntity` / `SetJsnField` /
 //! `DespawnEntity`. No custom `EditorCommand` types.
 
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
 
 pub mod blend_graph;
 pub mod clip;

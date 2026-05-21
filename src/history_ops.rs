@@ -9,8 +9,9 @@
 //! under the modal, leaving its `ActiveModalOperator` marker + per-op
 //! state stale.
 
-use bevy::input::ButtonInput;
-use bevy::prelude::*;
+use bevy_input::ButtonInput;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 

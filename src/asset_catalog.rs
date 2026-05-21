@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
-use bevy::asset::UntypedAssetId;
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_asset::UntypedAssetId;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
+
 use jackdaw_jsn::format::{JsnAssets, JsnCatalog, JsnHeader};
 
 /// Project-level asset catalog for cross-scene deduplication.

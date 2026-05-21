@@ -1,6 +1,6 @@
 //! `brush.mesh.dissolve_verts` operator.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::dissolve_verts::dissolve_verts;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey};

@@ -223,7 +223,7 @@ fn bevel_one_edge(
         }
         if let Ok(face) = create_face_from_verts_with_material(mesh, ring, Some(*mat)) {
             // Re-cache normal.
-            let positions: Vec<bevy::math::Vec3> = ring.iter().map(|&k| mesh.verts[k].co).collect();
+            let positions: Vec<bevy_math::Vec3> = ring.iter().map(|&k| mesh.verts[k].co).collect();
             mesh.faces[face].normal_cache = newell_normal(&positions);
         }
     }
@@ -244,7 +244,7 @@ fn bevel_one_edge(
     // can end up wound clockwise viewed from outside, the face renders as a
     // backface, and the chamfer looks dark / inverted.
     let candidate_ring: [VertKey; 4] = [v0_a, v0_b, v1_b, v1_a];
-    let candidate_positions: Vec<bevy::math::Vec3> =
+    let candidate_positions: Vec<bevy_math::Vec3> =
         candidate_ring.iter().map(|&k| mesh.verts[k].co).collect();
     let candidate_normal = newell_normal(&candidate_positions);
     let chamfer_ring: [VertKey; 4] = if outward_expected.length_squared() > 1e-6
@@ -260,7 +260,7 @@ fn bevel_one_edge(
     else {
         return;
     };
-    let positions: Vec<bevy::math::Vec3> = chamfer_ring.iter().map(|&k| mesh.verts[k].co).collect();
+    let positions: Vec<bevy_math::Vec3> = chamfer_ring.iter().map(|&k| mesh.verts[k].co).collect();
     mesh.faces[chamfer_face].normal_cache = newell_normal(&positions);
     new_faces.push(chamfer_face);
 
@@ -285,10 +285,10 @@ fn bevel_one_edge(
 fn walk_dir_along_edge_in_face(
     mesh: &HalfedgeMesh,
     lp_at_v0: LoopKey,
-    v0_pos: bevy::math::Vec3,
-    v1_pos: bevy::math::Vec3,
+    v0_pos: bevy_math::Vec3,
+    v1_pos: bevy_math::Vec3,
     e: EdgeKey,
-) -> bevy::math::Vec3 {
+) -> bevy_math::Vec3 {
     if mesh.loops[lp_at_v0].edge == e {
         // The face's walk leaves v0 along e, heading toward v1.
         v1_pos - v0_pos

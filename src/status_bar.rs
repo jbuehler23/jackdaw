@@ -1,4 +1,5 @@
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_feathers::status_bar::{StatusBarCenter, StatusBarLeft, StatusBarRight};
 
 use crate::{
@@ -180,7 +181,7 @@ fn update_status_right(
                 .find(|l| !l.trim().is_empty())
                 .unwrap_or("see terminal for details");
             text.0 = format!("Build failed: {head}");
-            color.0 = bevy::color::Color::srgb(0.95, 0.4, 0.4);
+            color.0 = bevy_color::Color::srgb(0.95, 0.4, 0.4);
             return;
         }
         BuildState::Idle => {

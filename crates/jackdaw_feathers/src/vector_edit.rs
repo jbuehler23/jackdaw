@@ -1,6 +1,7 @@
-use bevy::prelude::*;
-
-use bevy::color::Color;
+use bevy_color::Color;
+use bevy_ecs::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 
 use crate::text_edit::{TextEditPrefix, TextEditProps, text_edit};
 use crate::tokens::{self, TEXT_SIZE, TEXT_SIZE_SM};

@@ -1,4 +1,10 @@
-use bevy::{feathers::theme::ThemedText, prelude::*, ui::ui_transform::UiGlobalTransform};
+use bevy_app::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_feathers::theme::ThemedText;
+use bevy_picking::prelude::*;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
 use jackdaw_widgets::menu_bar::{
     MenuAction, MenuBar, MenuBarDropdown, MenuBarDropdownItem, MenuBarItem, MenuBarState,
 };

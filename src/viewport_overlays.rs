@@ -5,8 +5,9 @@ use crate::entity_ops::EmptyEntity;
 use crate::selection::Selected;
 use crate::viewport::{AxisIndicator, SceneViewport};
 use crate::{JackdawDrawSystems, default_style};
-use bevy::prelude::*;
-use bevy::ui::widget::ViewportNode;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ui::widget::ViewportNode;
 use jackdaw_jsn::BrushGroup;
 use parry3d::transformation::convex_hull;
 
@@ -43,7 +44,7 @@ impl Plugin for ViewportOverlaysPlugin {
                     draw_camera_gizmo,
                     draw_empty_entity_marker,
                 )
-                    .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+                    .after(bevy_camera::visibility::VisibilitySystems::VisibilityPropagate)
                     .run_if(in_state(crate::AppState::Editor)),
             )
             .add_systems(
@@ -519,7 +520,7 @@ fn ensure_axis_labels(
 /// Position each viewport's axis indicator in front of its own camera
 /// and update the matching label positions.
 ///
-/// The indicator itself is a retained [`bevy::gizmos::retained::Gizmo`]
+/// The indicator itself is a retained [`bevy_gizmos::retained::Gizmo`]
 /// entity carrying the viewport's private `RenderLayers`, spawned in
 /// `viewport::build_viewport_panel`. Per-camera `RenderLayers` gating
 /// is what keeps each indicator scoped to one viewport: an immediate
