@@ -6,8 +6,7 @@ use jackdaw_geometry::halfedge::ops::dissolve_verts::dissolve_verts;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 /// Remove the selected verts and merge incident faces. MVP: only valence-2 verts are
 /// dissolved; higher-valence verts skipped silently. Available in Vertex mode.
@@ -23,7 +22,6 @@ pub(crate) fn brush_dissolve_verts(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
         return OperatorResult::Cancelled;
@@ -34,11 +32,6 @@ pub(crate) fn brush_dissolve_verts(
     if selection.vertices.is_empty() {
         return OperatorResult::Cancelled;
     }
-
-    // Snapshot before mutation for undo.
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
 
     // Map cache vertex indices to HalfedgeMesh VertKeys via vert_keys parallel array.
     let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
@@ -132,14 +125,6 @@ pub(crate) fn brush_dissolve_verts(
     halfedge.mesh = new_mesh;
     halfedge.vert_keys = new_vert_keys;
     halfedge.face_keys = new_face_keys;
-
-    // Push undo entry.
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "Dissolve Vertices".to_string(),
-    }));
 
     OperatorResult::Finished
 }

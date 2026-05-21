@@ -4,8 +4,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushSelection, EditMode};
 
 /// Recompute the U and V axes on each selected face from the face normal.
 /// Resets `uv_offset` and `uv_rotation`. Keeps `uv_scale` unchanged.
@@ -20,7 +19,6 @@ pub(crate) fn brush_uv_reset_axes(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return OperatorResult::Cancelled;
@@ -31,9 +29,6 @@ pub(crate) fn brush_uv_reset_axes(
     if selection.faces.is_empty() {
         return OperatorResult::Cancelled;
     }
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
@@ -51,12 +46,6 @@ pub(crate) fn brush_uv_reset_axes(
         face.uv_rotation = 0.0;
     }
 
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "Reset UV Axes".to_string(),
-    }));
     OperatorResult::Finished
 }
 

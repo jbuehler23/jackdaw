@@ -6,8 +6,7 @@ use jackdaw_geometry::halfedge::ops::subdivide::subdivide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 /// Split each selected edge at its midpoint and re-tessellate touched faces.
 /// Operates on the current edge selection. No modal interaction. Available
@@ -24,7 +23,6 @@ pub(crate) fn brush_subdivide(
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
         return OperatorResult::Cancelled;
@@ -37,9 +35,6 @@ pub(crate) fn brush_subdivide(
     }
 
     // Snapshot before mutation for undo.
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
 
     // Map each selected cache-edge (a, b) to a HalfedgeMesh EdgeKey via vert_keys.
     let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
@@ -155,13 +150,6 @@ pub(crate) fn brush_subdivide(
     halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "Subdivide".to_string(),
-    }));
-
     // Chain selection: write the new cross-cut edges into `BrushSelection.edges`
     // so a follow-up gesture (loop cut, edge slide, subdivide again) operates
     // on the freshly created geometry.

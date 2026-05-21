@@ -21,8 +21,7 @@ use jackdaw_geometry::halfedge::ops::edge_slide::edge_slide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
 use crate::viewport::{MainViewportCamera, SceneViewport};
@@ -104,7 +103,6 @@ pub(crate) fn brush_edge_slide_modal(
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
     brush_transforms: Query<&GlobalTransform>,
-    mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<EdgeSlideModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -262,15 +260,6 @@ pub(crate) fn brush_edge_slide_modal(
 
     // Commit on LMB.
     if mouse.just_pressed(MouseButton::Left) {
-        let Some(brush_entity) = modal_state.brush_entity else {
-            *modal_state = EdgeSlideModalState::default();
-            return OperatorResult::Cancelled;
-        };
-        let Some(start_brush) = modal_state.start_brush.clone() else {
-            *modal_state = EdgeSlideModalState::default();
-            return OperatorResult::Cancelled;
-        };
-
         // Degenerate zero-factor commit: treat as no-op cancel so we don't
         // record a useless undo entry. The live brush should already be back
         // to the snapshot (apply_live_edge_slide resets when factor is sub-threshold).
@@ -279,18 +268,6 @@ pub(crate) fn brush_edge_slide_modal(
             *modal_state = EdgeSlideModalState::default();
             return OperatorResult::Cancelled;
         }
-
-        let Ok(brush) = brushes.get(brush_entity).cloned() else {
-            *modal_state = EdgeSlideModalState::default();
-            return OperatorResult::Cancelled;
-        };
-
-        history.push_executed(Box::new(SetBrush {
-            entity: brush_entity,
-            old: start_brush,
-            new: brush,
-            label: "Edge Slide".to_string(),
-        }));
 
         // selection.edges intentionally untouched: edge_slide preserves edge
         // identity (no add/remove), and vertex indices are preserved across

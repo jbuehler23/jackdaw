@@ -6,8 +6,7 @@ use jackdaw_geometry::halfedge::ops::edge_slide::edge_slide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 const DEFAULT_SLIDE_T: f32 = 0.5;
 
@@ -26,7 +25,6 @@ pub(crate) fn brush_edge_slide(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
         return OperatorResult::Cancelled;
@@ -39,9 +37,6 @@ pub(crate) fn brush_edge_slide(
     }
 
     // Snapshot before mutation for undo.
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
 
     // Map each selected cache-edge (a, b) to a HalfedgeMesh EdgeKey via vert_keys.
     let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
@@ -120,13 +115,6 @@ pub(crate) fn brush_edge_slide(
     halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "Edge Slide".to_string(),
-    }));
-
     OperatorResult::Finished
 }
 

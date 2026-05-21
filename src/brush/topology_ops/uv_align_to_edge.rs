@@ -4,8 +4,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushSelection, EditMode};
 
 /// Rotate UV axes so the U direction aligns with a selected edge of the face.
 /// Useful for getting a texture's grain to follow a particular feature edge.
@@ -22,7 +21,6 @@ pub(crate) fn brush_uv_align_to_edge(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return OperatorResult::Cancelled;
@@ -33,9 +31,6 @@ pub(crate) fn brush_uv_align_to_edge(
     if selection.faces.is_empty() {
         return OperatorResult::Cancelled;
     }
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return OperatorResult::Cancelled;
     };
@@ -75,12 +70,6 @@ pub(crate) fn brush_uv_align_to_edge(
         }
     }
 
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "Align UV to Edge".to_string(),
-    }));
     OperatorResult::Finished
 }
 

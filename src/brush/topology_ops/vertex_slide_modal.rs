@@ -23,8 +23,7 @@ use jackdaw_geometry::halfedge::ops::vertex_slide::vertex_slide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
 use crate::viewport::{MainViewportCamera, SceneViewport};
@@ -112,7 +111,6 @@ pub(crate) fn brush_vertex_slide_modal(
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
     brush_transforms: Query<&GlobalTransform>,
-    mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<VertexSlideModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -265,14 +263,6 @@ pub(crate) fn brush_vertex_slide_modal(
 
     // Commit on LMB.
     if mouse.just_pressed(MouseButton::Left) {
-        let Some(brush_entity) = modal_state.brush_entity else {
-            *modal_state = VertexSlideModalState::default();
-            return OperatorResult::Cancelled;
-        };
-        let Some(start_brush) = modal_state.start_brush.clone() else {
-            *modal_state = VertexSlideModalState::default();
-            return OperatorResult::Cancelled;
-        };
         if modal_state.chosen_idx.is_none() {
             // No chosen edge: treat as no-op cancel.
             restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
@@ -288,18 +278,6 @@ pub(crate) fn brush_vertex_slide_modal(
             *modal_state = VertexSlideModalState::default();
             return OperatorResult::Cancelled;
         }
-
-        let Ok(brush) = brushes.get(brush_entity).cloned() else {
-            *modal_state = VertexSlideModalState::default();
-            return OperatorResult::Cancelled;
-        };
-
-        history.push_executed(Box::new(SetBrush {
-            entity: brush_entity,
-            old: start_brush,
-            new: brush,
-            label: "Vertex Slide".to_string(),
-        }));
 
         // selection.vertices intentionally untouched: vertex_slide preserves
         // vertex identity (no add/remove), and slotmap iteration order is

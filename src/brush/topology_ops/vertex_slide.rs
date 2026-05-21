@@ -6,8 +6,7 @@ use jackdaw_geometry::halfedge::ops::vertex_slide::vertex_slide;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 const DEFAULT_SLIDE_T: f32 = 0.5;
 
@@ -25,7 +24,6 @@ pub(crate) fn brush_vertex_slide(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
         return OperatorResult::Cancelled;
@@ -38,9 +36,6 @@ pub(crate) fn brush_vertex_slide(
     }
 
     // Snapshot before mutation for undo.
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
 
     // Map cache vertex indices to HalfedgeMesh VertKeys via vert_keys parallel array.
     let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
@@ -116,13 +111,6 @@ pub(crate) fn brush_vertex_slide(
     halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "Vertex Slide".to_string(),
-    }));
-
     OperatorResult::Finished
 }
 

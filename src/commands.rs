@@ -123,6 +123,19 @@ impl EditorCommand for SetTransform {
     fn description(&self) -> &str {
         "Set transform"
     }
+
+    fn sync_after_external_execute(&self, world: &mut World) {
+        // Live-drag paths (gizmo, modal transform) mutate the ECS
+        // Transform every frame. By the time the command reaches the
+        // history, the ECS is already at `new_transform`. Only the
+        // AST sync still needs to happen.
+        sync_component_to_ast::<Transform>(
+            world,
+            self.entity,
+            "bevy_transform::components::transform::Transform",
+            &self.new_transform,
+        );
+    }
 }
 
 pub struct ReparentEntity {

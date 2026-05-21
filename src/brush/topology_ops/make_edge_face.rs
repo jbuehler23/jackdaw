@@ -6,8 +6,7 @@ use jackdaw_geometry::halfedge::VertKey;
 use jackdaw_geometry::halfedge::ops::contextual_create::{ContextualResult, contextual_create};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 /// Captured selection target for the F-key `contextual_create` result. Held
 /// across the flatten/re-lift roundtrip so the post-commit selection update
@@ -35,7 +34,6 @@ pub(crate) fn brush_make_edge_face(
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
         return OperatorResult::Cancelled;
@@ -48,9 +46,6 @@ pub(crate) fn brush_make_edge_face(
     }
 
     // Snapshot before mutation for undo.
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
 
     // Map cache vertex indices to HalfedgeMesh VertKeys via vert_keys parallel array.
     let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
@@ -163,13 +158,6 @@ pub(crate) fn brush_make_edge_face(
     halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "Make Edge / Face".to_string(),
-    }));
-
     // Chain selection: write the new edge or face into `BrushSelection` so the
     // user can immediately act on it (e.g. toggle to Edge / Face mode and drag).
     match chain_target {

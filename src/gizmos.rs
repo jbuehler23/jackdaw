@@ -1,4 +1,5 @@
 use bevy::{
+    ecs::system::SystemParam,
     prelude::*,
     ui::UiGlobalTransform,
     window::{CursorGrabMode, CursorOptions},
@@ -8,7 +9,6 @@ use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 
 use crate::default_style;
 use crate::{
-    commands::{CommandHistory, SetTransform},
     modal_transform::ModalTransformState,
     selection::{Selected, Selection},
     snapping::SnapSettings,
@@ -22,6 +22,16 @@ use crate::{
 /// Gizmo group for transform gizmos, rendered on top of all geometry.
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct TransformGizmoGroup;
+
+/// Bundles viewport-pick params so `gizmo_drag` can stay under Bevy's
+/// system-param ceiling while still accepting `Commands`.
+#[derive(SystemParam)]
+struct GizmoViewportCtx<'w, 's> {
+    active_viewport: Res<'w, crate::viewport::ActiveViewport>,
+    viewport_query:
+        Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<SceneViewport>>,
+    windows: Query<'w, 's, &'static Window>,
+}
 
 const AXIS_LENGTH: f32 = 1.0;
 const AXIS_TIP_LENGTH: f32 = 0.25;
@@ -285,7 +295,7 @@ fn gizmo_drag_invoke_trigger(
                    the toolbar's `GizmoMode` resource and the click-time \
                    `GizmoHoverState`.",
     modal = true,
-    allows_undo = false,
+    allows_undo = true,
     cancel = cancel_gizmo_drag,
 )]
 pub fn gizmo_drag(
@@ -293,21 +303,18 @@ pub fn gizmo_drag(
     selection: Res<Selection>,
     mut transforms: Query<(&GlobalTransform, &mut Transform), With<Selected>>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    windows: Query<&Window>,
+    viewport_ctx: GizmoViewportCtx,
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mode: Res<GizmoMode>,
     space: Res<GizmoSpace>,
     hover: Res<GizmoHoverState>,
-    active_viewport: Res<crate::viewport::ActiveViewport>,
     mut drag_state: ResMut<GizmoDragState>,
-    mut history: ResMut<CommandHistory>,
     snap_settings: Res<SnapSettings>,
-    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
 ) -> OperatorResult {
-    let Ok(window) = windows.single() else {
+    let Ok(window) = viewport_ctx.windows.single() else {
         return OperatorResult::Cancelled;
     };
     let Some(cursor_pos) = window.cursor_position() else {
@@ -317,10 +324,10 @@ pub fn gizmo_drag(
     // frames: use the captured one so the drag stays attached even
     // if the cursor strays into a different viewport.
     let (camera_entity, viewport_entity) = if modal.is_none() {
-        let Some(camera_entity) = active_viewport.camera else {
+        let Some(camera_entity) = viewport_ctx.active_viewport.camera else {
             return OperatorResult::Cancelled;
         };
-        let Some(viewport_entity) = active_viewport.ui_node else {
+        let Some(viewport_entity) = viewport_ctx.active_viewport.ui_node else {
             return OperatorResult::Cancelled;
         };
         (camera_entity, viewport_entity)
@@ -344,9 +351,12 @@ pub fn gizmo_drag(
     // operator cancels, and the cancel handler restores the start
     // transform, which the user sees as a snap-back.
     let viewport_cursor = if modal.is_none() {
-        let Some(c) =
-            window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, &viewport_query)
-        else {
+        let Some(c) = window_to_viewport_cursor_for(
+            cursor_pos,
+            camera,
+            viewport_entity,
+            &viewport_ctx.viewport_query,
+        ) else {
             return OperatorResult::Cancelled;
         };
         c
@@ -355,7 +365,7 @@ pub fn gizmo_drag(
             cursor_pos,
             camera,
             viewport_entity,
-            &viewport_query,
+            &viewport_ctx.viewport_query,
         ) else {
             return OperatorResult::Cancelled;
         };
@@ -387,15 +397,12 @@ pub fn gizmo_drag(
     }
 
     if mouse.just_released(MouseButton::Left) {
-        if let Some(entity) = drag_state.entity
-            && let Ok((_, transform)) = transforms.get(entity)
-        {
-            history.push_executed(Box::new(SetTransform {
-                entity,
-                old_transform: drag_state.start_transform,
-                new_transform: *transform,
-            }));
-        }
+        // The operator framework handles undo for us: it captured a
+        // before-snapshot when the modal started and will capture an
+        // after-snapshot now that we're returning Finished, pushing a
+        // `SnapshotDiff` to history if anything changed. The snapshot
+        // walks the live ECS and rebuilds the AST, so the dragged
+        // Transform is captured automatically.
         clear_gizmo_drag_state(&mut drag_state, &mut cursor_query);
         return OperatorResult::Finished;
     }

@@ -6,7 +6,7 @@ use bevy::{
 };
 
 use crate::{
-    commands::{CommandHistory, SetTransform},
+    commands::SetTransform,
     gizmos::{GizmoAxis, GizmoDragState, GizmoHoverState, GizmoMode},
     selection::Selection,
     snapping::SnapSettings,
@@ -378,8 +378,8 @@ fn viewport_drag_finish(
     mouse: Res<ButtonInput<MouseButton>>,
     mut drag_state: ResMut<ViewportDragState>,
     transforms: Query<&Transform>,
-    mut history: ResMut<CommandHistory>,
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
+    mut commands: Commands,
 ) {
     if !mouse.just_released(MouseButton::Left) {
         return;
@@ -392,12 +392,18 @@ fn viewport_drag_finish(
     };
 
     if let Ok(transform) = transforms.get(active.entity) {
-        let cmd = SetTransform {
-            entity: active.entity,
-            old_transform: active.start_transform,
-            new_transform: *transform,
-        };
-        history.push_executed(Box::new(cmd));
+        // The modal mutated the ECS Transform directly during the
+        // drag; `push_executed_synced` runs the AST-sync hook before
+        // pushing so a later reload doesn't restore the original
+        // position.
+        jackdaw_commands::push_executed_synced(
+            Box::new(SetTransform {
+                entity: active.entity,
+                old_transform: active.start_transform,
+                new_transform: *transform,
+            }),
+            &mut commands,
+        );
     }
 
     // Release cursor confinement

@@ -289,7 +289,7 @@ fn rebuild_hierarchy_on_container_added(
     }
 }
 
-fn rebuild_hierarchy(world: &mut World) -> Result {
+pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
     fn rebuild_hierarchy_inner(
         world: &mut World,
         containers: &mut QueryState<Entity, With<HierarchyTreeContainer>>,

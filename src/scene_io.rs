@@ -1972,13 +1972,22 @@ pub(crate) fn despawn_scene_entities(world: &mut World) -> Result<(), BevyError>
 /// Called once per history-creating operator dispatch, not per
 /// frame; acceptable for the current editor workload.
 pub fn build_snapshot_ast(world: &mut World) -> jackdaw_jsn::SceneJsnAst {
-    match build_snapshot_ast_inner(world) {
+    let ast = match build_snapshot_ast_inner(world) {
         Ok(ast) => ast,
         Err(err) => {
             error!("build_snapshot_ast failed, returning empty snapshot: {err}");
             jackdaw_jsn::SceneJsnAst::default()
         }
-    }
+    };
+
+    // Install the freshly captured AST as the live source of truth.
+    // Operators mutate ECS directly for live preview during a drag; the
+    // AST resource lags until snapshot capture reconciles it. Without
+    // this install, a subsequent reload (e.g. dragging in another
+    // prefab instance) reads the stale pre-edit AST and erases the
+    // user's work. Cheap: this is a single resource swap.
+    *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast.clone();
+    ast
 }
 
 fn build_snapshot_ast_inner(world: &mut World) -> Result<jackdaw_jsn::SceneJsnAst, BevyError> {
@@ -2028,10 +2037,115 @@ fn build_snapshot_ast_inner(world: &mut World) -> Result<jackdaw_jsn::SceneJsnAs
         scene: entities,
     };
 
-    Ok(jackdaw_jsn::SceneJsnAst::from_jsn_scene(
-        &jsn,
-        &scene_entities,
-    ))
+    let mut ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &scene_entities);
+
+    // Inherited descendants of prefab instances were serialized as full
+    // entities by `build_scene_snapshot`. The data model wants them as
+    // override entries instead (`PrefabEntityId(N)` + only the components
+    // that diverge from the prefab baseline). Reduce them in place so
+    // the snapshot reflects the data model, and so the live `SceneJsnAst`
+    // we install at the call site does the same.
+    if let Some(cache) = world.get_resource::<crate::prefab::PrefabAstCache>() {
+        prefabify_inherited_descendants(&mut ast, cache);
+    }
+
+    Ok(ast)
+}
+
+/// Reduce ECS-only inherited descendants of prefab instances to override
+/// entries. After `build_scene_snapshot` walks the live world it produces
+/// a full `JsnEntity` per entity (including ones materialised by the
+/// resolver from prefab files). Those don't belong in the source AST as
+/// authored entities; they belong as sparse-delta override nodes under
+/// the instance. This function walks the snapshot AST, finds each
+/// inherited descendant by `PrefabEntityId + no IsA + IsA-bearing ancestor`,
+/// looks up the matching entry in the prefab cache, and strips any
+/// components on the snapshot node that match the prefab baseline.
+fn prefabify_inherited_descendants(
+    ast: &mut jackdaw_jsn::SceneJsnAst,
+    cache: &crate::prefab::PrefabAstCache,
+) {
+    const PREFAB_ENTITY_ID_TYPE: &str = "jackdaw::prefab::components::PrefabEntityId";
+    const ISA_TYPE: &str = "jackdaw::prefab::components::IsA";
+
+    let node_count = ast.nodes.len();
+    for idx in 0..node_count {
+        // Skip instance roots and entities without a PrefabEntityId.
+        if ast.nodes[idx].components.contains_key(ISA_TYPE) {
+            continue;
+        }
+        let Some(peid_value) = ast.nodes[idx].components.get(PREFAB_ENTITY_ID_TYPE) else {
+            continue;
+        };
+        let Some(peid) = peid_value.as_u64().map(|u| u as u32) else {
+            continue;
+        };
+
+        // Walk the parent chain looking for the instance root.
+        let mut cursor = ast.nodes[idx].parent;
+        let mut isa_source: Option<PathBuf> = None;
+        while let Some(p_idx) = cursor {
+            if let Some(isa) = ast.nodes[p_idx].components.get(ISA_TYPE)
+                && let Some(src) = isa.get("source").and_then(|v| v.as_str())
+            {
+                isa_source = Some(PathBuf::from(src));
+                break;
+            }
+            cursor = ast.nodes[p_idx].parent;
+        }
+        let Some(source) = isa_source else {
+            // Has `PrefabEntityId` but no IsA ancestor — treat as
+            // authored. This shouldn't normally happen, but if it does
+            // we just leave the node alone.
+            continue;
+        };
+        let Some(prefab) = cache.get(&source) else {
+            // Prefab not in cache; emit full node so the user's edits
+            // aren't silently lost.
+            continue;
+        };
+
+        // Find the matching prefab entry by PrefabEntityId.
+        let Some(prefab_entry_idx) = prefab.nodes.iter().position(|n| {
+            n.components
+                .get(PREFAB_ENTITY_ID_TYPE)
+                .and_then(serde_json::Value::as_u64)
+                .map(|u| u as u32)
+                == Some(peid)
+        }) else {
+            // Prefab doesn't have this id; user has an orphan inherited
+            // entity. Leave as authored override carrying everything.
+            continue;
+        };
+        let prefab_entry = &prefab.nodes[prefab_entry_idx];
+
+        // Strip components that match the prefab baseline. Keep
+        // PrefabEntityId always so the resolver still recognises the
+        // node as an override target.
+        let current: Vec<(String, serde_json::Value)> = ast.nodes[idx]
+            .components
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        ast.nodes[idx].components.clear();
+        ast.nodes[idx].components.insert(
+            PREFAB_ENTITY_ID_TYPE.to_string(),
+            serde_json::Value::from(peid),
+        );
+        for (type_path, value) in current {
+            if type_path == PREFAB_ENTITY_ID_TYPE {
+                continue;
+            }
+            match prefab_entry.components.get(&type_path) {
+                Some(base) if base == &value => {
+                    // Identical to the prefab baseline; omit.
+                }
+                _ => {
+                    ast.nodes[idx].components.insert(type_path, value);
+                }
+            }
+        }
+    }
 }
 
 /// Replace the current world's scene with the one encoded in `ast`.

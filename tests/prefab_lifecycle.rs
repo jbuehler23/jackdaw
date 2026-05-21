@@ -2562,3 +2562,511 @@ fn save_then_respawn_keeps_isa_on_instance_entity() {
         "instance has InheritedVisibility after respawn (require-chain backfill)"
     );
 }
+
+#[test]
+fn three_instances_keep_independent_positions() {
+    // Spawn the same prefab three times at three different positions.
+    // Each instance must keep its own Transform; adding a new instance
+    // must NOT reset existing instances' positions.
+    use bevy::math::Vec3;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+
+    // Hand-write a minimal prefab: synthetic root + 1 brush child.
+    let prefab_json = serde_json::json!({
+        "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
+        "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
+        "assets": {},
+        "editor": null,
+        "scene": [
+            {
+                "components": {
+                    "jackdaw::prefab::components::Prefab": null,
+                    "jackdaw::prefab::components::PrefabEntityId": 0,
+                    "bevy_ecs::name::Name": "p",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [0.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            },
+            {
+                "parent": 0,
+                "components": {
+                    "jackdaw::prefab::components::PrefabEntityId": 1,
+                    "bevy_ecs::name::Name": "child",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [0.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            }
+        ]
+    });
+    std::fs::write(
+        &prefab_path,
+        serde_json::to_string_pretty(&prefab_json).unwrap(),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(10.0, 0.0, 0.0),
+    );
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(20.0, 0.0, 0.0),
+    );
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(30.0, 0.0, 0.0),
+    );
+
+    // Three instance entities. Each must have a distinct Transform.translation.
+    let world = app.world_mut();
+    let mut q = world.query::<(
+        bevy::prelude::Entity,
+        &jackdaw::prefab::IsA,
+        &bevy::prelude::Transform,
+    )>();
+    let mut xs: Vec<f32> = q.iter(world).map(|(_, _, t)| t.translation.x).collect();
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    assert_eq!(xs.len(), 3, "exactly three instance entities exist");
+    assert!(
+        (xs[0] - 10.0).abs() < 1e-3,
+        "first instance kept X=10; got {xs:?}"
+    );
+    assert!(
+        (xs[1] - 20.0).abs() < 1e-3,
+        "second instance kept X=20; got {xs:?}"
+    );
+    assert!(
+        (xs[2] - 30.0).abs() < 1e-3,
+        "third instance kept X=30; got {xs:?}"
+    );
+}
+
+#[test]
+fn three_instances_each_carry_isa_on_ecs() {
+    // Every instance entity must carry IsA on its ECS state so the
+    // outliner classifies it as `Prefab` (Package icon). After
+    // multiple spawn_instance calls + reload_all_instances passes, no
+    // instance can be missing IsA.
+    use bevy::math::Vec3;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+
+    let prefab_json = serde_json::json!({
+        "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
+        "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
+        "assets": {},
+        "editor": null,
+        "scene": [
+            {
+                "components": {
+                    "jackdaw::prefab::components::Prefab": null,
+                    "jackdaw::prefab::components::PrefabEntityId": 0,
+                    "bevy_ecs::name::Name": "p",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [0.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            }
+        ]
+    });
+    std::fs::write(
+        &prefab_path,
+        serde_json::to_string_pretty(&prefab_json).unwrap(),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    for x in [10.0_f32, 20.0, 30.0] {
+        jackdaw::prefab::operators::spawn_instance(
+            app.world_mut(),
+            &prefab_path,
+            Vec3::new(x, 0.0, 0.0),
+        );
+    }
+
+    let world = app.world_mut();
+    let mut q = world.query::<&jackdaw::prefab::IsA>();
+    let isa_count = q.iter(world).count();
+    assert_eq!(
+        isa_count, 3,
+        "three instance entities, each carrying IsA on ECS",
+    );
+}
+
+#[test]
+fn save_then_drag_spawn_twice_keeps_distinct_positions() {
+    // Mirrors the editor flow that's been showing position clustering:
+    // 1. Draw a brush at position A, save selection as prefab.
+    //    -> instance #1 ends up at A.
+    // 2. spawn_instance at position B (drag from asset browser).
+    //    -> instance #2 at B.
+    // 3. spawn_instance at position C.
+    //    -> instance #3 at C.
+    // After all three, each instance's Transform must reflect its
+    // original placement. Adding instance #3 must NOT reset #1 or #2.
+    use bevy::math::Vec3;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("p.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    let source = app
+        .world_mut()
+        .spawn((
+            bevy::prelude::Name::new("source"),
+            bevy::prelude::Transform::from_xyz(5.0, 0.0, 0.0),
+            bevy::camera::visibility::Visibility::Inherited,
+        ))
+        .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let key = ast.create_node(source, None);
+        ast.insert_component(
+            key,
+            "bevy_ecs::name::Name",
+            serde_json::Value::String("source".to_string()),
+        );
+        ast.insert_component(
+            key,
+            "bevy_transform::components::transform::Transform",
+            serde_json::json!({
+                "translation": [5.0, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0, 1.0],
+                "scale": [1.0, 1.0, 1.0],
+            }),
+        );
+    }
+    app.update();
+
+    // Step 1: save selection as prefab. Source despawn + spawn_instance
+    // at centroid (5, 0, 0).
+    jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[source], &target);
+
+    // Step 2: drag-spawn at (20, 0, 0).
+    jackdaw::prefab::operators::spawn_instance(app.world_mut(), &target, Vec3::new(20.0, 0.0, 0.0));
+
+    // Step 3: drag-spawn at (30, 0, 0). This is the move that the
+    // user reports resetting the earlier two instances' positions.
+    jackdaw::prefab::operators::spawn_instance(app.world_mut(), &target, Vec3::new(30.0, 0.0, 0.0));
+
+    let world = app.world_mut();
+    let mut q = world.query::<(
+        bevy::prelude::Entity,
+        &jackdaw::prefab::IsA,
+        &bevy::prelude::Transform,
+    )>();
+    let mut xs: Vec<f32> = q.iter(world).map(|(_, _, t)| t.translation.x).collect();
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    assert_eq!(xs.len(), 3, "three instances exist");
+    assert!(
+        (xs[0] - 5.0).abs() < 1e-3,
+        "instance from save_as_prefab kept X=5; got {xs:?}"
+    );
+    assert!(
+        (xs[1] - 20.0).abs() < 1e-3,
+        "second drag-spawn kept X=20; got {xs:?}"
+    );
+    assert!(
+        (xs[2] - 30.0).abs() < 1e-3,
+        "third drag-spawn kept X=30; got {xs:?}"
+    );
+}
+
+#[test]
+fn set_transform_sync_after_external_execute_writes_to_ast() {
+    // Reproduces the gizmo-drag-then-reload regression: a "live drag"
+    // path mutates the ECS Transform directly and pushes a
+    // `SetTransform` via `push_executed` (no execute). Previously this
+    // left the AST holding the pre-drag value, and a subsequent reload
+    // (triggered e.g. by a prefab spawn) snapped the entity back.
+    //
+    // `SetTransform::sync_after_external_execute` is the hook that
+    // brings the AST up to date.
+    use bevy::math::Vec3;
+    use jackdaw_commands::EditorCommand;
+
+    let mut app = make_app_for_prefab_tests();
+    let entity = app
+        .world_mut()
+        .spawn((
+            bevy::prelude::Name::new("e"),
+            bevy::prelude::Transform::from_xyz(0.0, 0.0, 0.0),
+        ))
+        .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let key = ast.create_node(entity, None);
+        ast.insert_component(
+            key,
+            "bevy_transform::components::transform::Transform",
+            serde_json::json!({
+                "translation": [0.0, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0, 1.0],
+                "scale": [1.0, 1.0, 1.0],
+            }),
+        );
+    }
+
+    let dragged_to = Vec3::new(7.0, 0.0, -3.0);
+    if let Some(mut t) = app.world_mut().get_mut::<bevy::prelude::Transform>(entity) {
+        t.translation = dragged_to;
+    }
+
+    let cmd = jackdaw::commands::SetTransform {
+        entity,
+        old_transform: bevy::prelude::Transform::from_xyz(0.0, 0.0, 0.0),
+        new_transform: bevy::prelude::Transform::from_xyz(dragged_to.x, dragged_to.y, dragged_to.z),
+    };
+    cmd.sync_after_external_execute(app.world_mut());
+
+    let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
+    let key = ast.key_for_entity(entity).unwrap();
+    let tx = ast
+        .get_component_at(key, "bevy_transform::components::transform::Transform")
+        .unwrap();
+    let translation = tx["translation"].as_array().unwrap();
+    let x = translation[0].as_f64().unwrap() as f32;
+    let z = translation[2].as_f64().unwrap() as f32;
+    assert!(
+        (x - 7.0).abs() < 1e-4,
+        "AST Transform.x reflects the dragged value (7.0); got {x}"
+    );
+    assert!(
+        (z - (-3.0)).abs() < 1e-4,
+        "AST Transform.z reflects the dragged value (-3.0); got {z}"
+    );
+}
+
+#[test]
+fn snapshot_captures_inherited_descendant_edit_as_override() {
+    // After editing a component on an inherited brush child (ECS-only,
+    // materialised by the resolver), the snapshot AST must encode the
+    // change as an override entry under the instance, not as a top-level
+    // authored entity. Without this, the snapshot loses the prefab
+    // relationship and a subsequent reload spawns a duplicate inherited
+    // child alongside the edited one.
+    use bevy::math::Vec3;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+
+    // Prefab with one synthetic root + one child carrying Transform.
+    let prefab_json = serde_json::json!({
+        "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
+        "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
+        "assets": {},
+        "editor": null,
+        "scene": [
+            {
+                "components": {
+                    "jackdaw::prefab::components::Prefab": null,
+                    "jackdaw::prefab::components::PrefabEntityId": 0,
+                    "bevy_ecs::name::Name": "p",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [0.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            },
+            {
+                "parent": 0,
+                "components": {
+                    "jackdaw::prefab::components::PrefabEntityId": 1,
+                    "bevy_ecs::name::Name": "child",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [1.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            }
+        ]
+    });
+    std::fs::write(
+        &prefab_path,
+        serde_json::to_string_pretty(&prefab_json).unwrap(),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(5.0, 0.0, 0.0),
+    );
+
+    // The resolver materialises a child entity (PrefabEntityId=1).
+    // Find it and mutate its Transform to simulate an inherited-child
+    // edit.
+    let child_entity = {
+        let world = app.world_mut();
+        let mut q = world.query::<(bevy::prelude::Entity, &jackdaw::prefab::PrefabEntityId)>();
+        q.iter(world)
+            .find(|(_, id)| id.0 == 1)
+            .map(|(e, _)| e)
+            .expect("inherited child with PrefabEntityId 1 exists")
+    };
+    if let Some(mut t) = app
+        .world_mut()
+        .get_mut::<bevy::prelude::Transform>(child_entity)
+    {
+        t.translation = Vec3::new(99.0, 0.0, 0.0);
+    }
+
+    // Capture a snapshot. The result must encode the edit as an override.
+    let snapshot = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+
+    // The instance entity (with IsA) should still have a child node
+    // carrying PrefabEntityId(1). The child node should NOT have a Name
+    // (matches prefab, omitted), but SHOULD have a Transform (differs
+    // from prefab).
+    let isa_type = "jackdaw::prefab::components::IsA";
+    let prefab_entity_id_type = "jackdaw::prefab::components::PrefabEntityId";
+    let instance_idx = snapshot
+        .nodes
+        .iter()
+        .position(|n| n.components.contains_key(isa_type))
+        .expect("instance node in snapshot");
+    let override_node = snapshot
+        .nodes
+        .iter()
+        .find(|n| {
+            n.parent == Some(instance_idx)
+                && n.components
+                    .get(prefab_entity_id_type)
+                    .and_then(serde_json::Value::as_u64)
+                    == Some(1)
+        })
+        .expect("override node for PrefabEntityId 1 under the instance");
+
+    assert!(
+        !override_node
+            .components
+            .contains_key("bevy_ecs::name::Name"),
+        "name matched the prefab baseline; should be omitted from the override. got components: {:?}",
+        override_node.components.keys().collect::<Vec<_>>()
+    );
+    let tx = override_node
+        .components
+        .get("bevy_transform::components::transform::Transform")
+        .expect("Transform diverged from prefab and should appear in the override");
+    let x = tx["translation"].as_array().unwrap()[0].as_f64().unwrap();
+    assert!(
+        (x - 99.0).abs() < 1e-4,
+        "override carries the edited translation X (99.0); got {x}"
+    );
+}
+
+#[test]
+fn snapshot_install_plus_reload_keeps_inherited_child_visible() {
+    // Reproduces the regression: capturing a snapshot then dragging in
+    // another instance (which triggers `reload_all_instances`) must NOT
+    // erase the existing instance's children. Earlier the resolver was
+    // skipping materialisation of inherited descendants whose id matched
+    // an override entry, but the override entry only carried
+    // `PrefabEntityId`. After reload, spawned entities had no Name /
+    // Transform / Brush data.
+    use bevy::math::Vec3;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+
+    let prefab_json = serde_json::json!({
+        "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
+        "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
+        "assets": {},
+        "editor": null,
+        "scene": [
+            {
+                "components": {
+                    "jackdaw::prefab::components::Prefab": null,
+                    "jackdaw::prefab::components::PrefabEntityId": 0,
+                    "bevy_ecs::name::Name": "p",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [0.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            },
+            {
+                "parent": 0,
+                "components": {
+                    "jackdaw::prefab::components::PrefabEntityId": 1,
+                    "bevy_ecs::name::Name": "child",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [2.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            }
+        ]
+    });
+    std::fs::write(
+        &prefab_path,
+        serde_json::to_string_pretty(&prefab_json).unwrap(),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(10.0, 0.0, 0.0),
+    );
+
+    // Capture the snapshot (the install side effect updates live AST).
+    let _ = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+
+    // Drag in a second instance, which triggers reload_all_instances.
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(20.0, 0.0, 0.0),
+    );
+
+    // Both instances should have a visible child entity carrying the
+    // inherited Name and Transform.
+    let world = app.world_mut();
+    let mut q = world.query::<(
+        &jackdaw::prefab::PrefabEntityId,
+        &bevy::prelude::Name,
+        &bevy::prelude::Transform,
+    )>();
+    let children: Vec<_> = q.iter(world).filter(|(id, _, _)| id.0 == 1).collect();
+    assert_eq!(
+        children.len(),
+        2,
+        "two instances => two inherited child entities with PrefabEntityId 1"
+    );
+    for (_, name, _) in &children {
+        assert_eq!(name.as_str(), "child", "inherited Name carries through");
+    }
+}

@@ -15,9 +15,8 @@ use jackdaw_jsn::Brush;
 
 use crate::brush::{
     BrushDragState, BrushEditMode, BrushMeshCache, BrushSelection, EdgeDragState, EditMode,
-    SetBrush, VertexDragState, rebuild_brush_from_vertices,
+    VertexDragState, rebuild_brush_from_vertices,
 };
-use crate::commands::CommandHistory;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::keybind_focus::KeybindFocus;
 
@@ -83,7 +82,6 @@ pub(crate) fn brush_delete_element(
     mut brush_selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     brush_caches: Query<&BrushMeshCache>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     let EditMode::BrushEdit(mode) = *edit_mode else {
         return OperatorResult::Cancelled;
@@ -104,14 +102,7 @@ pub(crate) fn brush_delete_element(
                 return OperatorResult::Cancelled;
             };
             let removed: HashSet<usize> = brush_selection.vertices.iter().copied().collect();
-            if !rebuild_after_remove(
-                &mut brush,
-                cache,
-                &removed,
-                "Remove brush vertex",
-                brush_entity,
-                &mut history,
-            ) {
+            if !rebuild_after_remove(&mut brush, cache, &removed) {
                 return OperatorResult::Cancelled;
             }
             brush_selection.vertices.clear();
@@ -128,14 +119,7 @@ pub(crate) fn brush_delete_element(
                 .iter()
                 .flat_map(|&(a, b)| [a, b])
                 .collect();
-            if !rebuild_after_remove(
-                &mut brush,
-                cache,
-                &removed,
-                "Remove brush edge",
-                brush_entity,
-                &mut history,
-            ) {
+            if !rebuild_after_remove(&mut brush, cache, &removed) {
                 return OperatorResult::Cancelled;
             }
             brush_selection.edges.clear();
@@ -148,7 +132,6 @@ pub(crate) fn brush_delete_element(
                 return OperatorResult::Cancelled;
             }
             let removed: HashSet<usize> = brush_selection.faces.iter().copied().collect();
-            let old = brush.clone();
             brush.faces = brush
                 .faces
                 .iter()
@@ -156,12 +139,6 @@ pub(crate) fn brush_delete_element(
                 .filter(|(i, _)| !removed.contains(i))
                 .map(|(_, f)| f.clone())
                 .collect();
-            history.push_executed(Box::new(SetBrush {
-                entity: brush_entity,
-                old,
-                new: brush.clone(),
-                label: "Remove brush face".to_string(),
-            }));
             brush_selection.faces.clear();
         }
         BrushEditMode::Clip | BrushEditMode::Knife => return OperatorResult::Cancelled,
@@ -173,9 +150,6 @@ fn rebuild_after_remove(
     brush: &mut Brush,
     cache: &BrushMeshCache,
     removed: &HashSet<usize>,
-    label: &str,
-    entity: Entity,
-    history: &mut CommandHistory,
 ) -> bool {
     let remaining: Vec<Vec3> = cache
         .vertices
@@ -187,19 +161,12 @@ fn rebuild_after_remove(
     if remaining.len() < 4 {
         return false;
     }
-    let old = brush.clone();
     let Some((new_brush, _)) =
-        rebuild_brush_from_vertices(&old, &cache.vertices, &cache.face_polygons, &remaining)
+        rebuild_brush_from_vertices(brush, &cache.vertices, &cache.face_polygons, &remaining)
     else {
         return false;
     };
     *brush = new_brush;
-    history.push_executed(Box::new(SetBrush {
-        entity,
-        old,
-        new: brush.clone(),
-        label: label.to_string(),
-    }));
     true
 }
 
@@ -217,7 +184,6 @@ pub(crate) fn brush_nudge_up(
     mut brush_selection: ResMut<BrushSelection>,
     brushes: Query<&mut Brush>,
     brush_caches: Query<&BrushMeshCache>,
-    history: ResMut<CommandHistory>,
     snap: Res<crate::snapping::SnapSettings>,
 ) -> OperatorResult {
     nudge_brush_element(
@@ -226,7 +192,6 @@ pub(crate) fn brush_nudge_up(
         &mut brush_selection,
         brushes,
         brush_caches,
-        history,
         snap,
     )
 }
@@ -245,7 +210,6 @@ pub(crate) fn brush_nudge_down(
     mut brush_selection: ResMut<BrushSelection>,
     brushes: Query<&mut Brush>,
     brush_caches: Query<&BrushMeshCache>,
-    history: ResMut<CommandHistory>,
     snap: Res<crate::snapping::SnapSettings>,
 ) -> OperatorResult {
     nudge_brush_element(
@@ -254,7 +218,6 @@ pub(crate) fn brush_nudge_down(
         &mut brush_selection,
         brushes,
         brush_caches,
-        history,
         snap,
     )
 }
@@ -265,7 +228,6 @@ fn nudge_brush_element(
     brush_selection: &mut BrushSelection,
     mut brushes: Query<&mut Brush>,
     brush_caches: Query<&BrushMeshCache>,
-    mut history: ResMut<CommandHistory>,
     snap: Res<crate::snapping::SnapSettings>,
 ) -> OperatorResult {
     let EditMode::BrushEdit(mode) = *edit_mode else {
@@ -306,17 +268,15 @@ fn nudge_brush_element(
             new_verts[vi] += offset;
         }
     }
-    let old = brush.clone();
     let Some((new_brush, old_to_new)) =
-        rebuild_brush_from_vertices(&old, &cache.vertices, &cache.face_polygons, &new_verts)
+        rebuild_brush_from_vertices(&brush, &cache.vertices, &cache.face_polygons, &new_verts)
     else {
         return OperatorResult::Cancelled;
     };
     *brush = new_brush;
 
-    let label = match mode {
-        BrushEditMode::Vertex => "Nudge brush vertex",
-        BrushEditMode::Edge => "Nudge brush edge",
+    match mode {
+        BrushEditMode::Vertex | BrushEditMode::Edge => {}
         BrushEditMode::Face => {
             // Face indices may have been remapped during rebuild.
             brush_selection.faces = brush_selection
@@ -324,15 +284,8 @@ fn nudge_brush_element(
                 .iter()
                 .filter_map(|&fi| old_to_new.get(fi).copied())
                 .collect();
-            "Nudge brush face"
         }
         BrushEditMode::Clip | BrushEditMode::Knife => unreachable!(),
-    };
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old,
-        new: brush.clone(),
-        label: label.to_string(),
-    }));
+    }
     OperatorResult::Finished
 }

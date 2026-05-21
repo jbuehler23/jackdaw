@@ -225,4 +225,16 @@ pub fn reload_all_instances(world: &mut World) {
             tab.history_depth_at_last_check = 0;
         }
     }
+
+    // Force-rebuild the outliner. The observer-driven row creation can
+    // fire from a transient archetype during `insert_reflect` (Add<Transform>
+    // dispatches before IsA / Name land), causing classify_entity to pick
+    // the wrong category and pin the wrong icon. Clear + rebuild guarantees
+    // every row is classified against the final, fully-populated archetype.
+    if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
+        bevy::log::warn!("reload_all_instances: clear_all_tree_rows failed: {err}");
+    }
+    if let Err(err) = crate::hierarchy::rebuild_hierarchy(world) {
+        bevy::log::warn!("reload_all_instances: rebuild_hierarchy failed: {err}");
+    }
 }

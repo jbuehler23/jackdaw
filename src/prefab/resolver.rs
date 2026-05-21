@@ -223,6 +223,30 @@ fn merge_prefab_under_instance(
             continue;
         };
 
+        // First: inherit every prefab component that the override
+        // doesn't already provide. This is what makes sparse override
+        // entries work — the snapshot capture strips any component
+        // that matches the prefab baseline, so the override carries
+        // only the diverged fields; the resolver fills in the rest.
+        // Without this, spawning produces entities with just
+        // `PrefabEntityId` and nothing else.
+        let inherited_pairs: Vec<(String, serde_json::Value)> = prefab
+            .components_at(prefab_match)
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+        for (type_path, base_value) in &inherited_pairs {
+            if type_path == PREFAB_ENTITY_ID_TYPE || type_path == ISA_TYPE {
+                continue;
+            }
+            if ast.get_component_at(ok, type_path).is_none() {
+                ast.insert_component(ok, type_path, base_value.clone());
+            }
+        }
+
+        // Second: for any component the override DOES provide, merge
+        // it onto the inherited base as a sparse delta. This preserves
+        // the "override only what differs" semantics for field-level
+        // diffs (e.g. Transform with just `translation` overridden).
         let component_pairs: Vec<(String, serde_json::Value)> = ast
             .components_at(ok)
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
@@ -231,7 +255,9 @@ fn merge_prefab_under_instance(
             if type_path == PREFAB_ENTITY_ID_TYPE || type_path == ISA_TYPE {
                 continue;
             }
-            if let Some(inherited) = prefab.get_component_at(prefab_match, &type_path).cloned() {
+            if let Some(inherited) = prefab.get_component_at(prefab_match, &type_path).cloned()
+                && inherited != delta_value
+            {
                 let mut merged = inherited;
                 if overrides::apply_deltas(&mut merged, &delta_value).is_ok() {
                     ast.replace_component(ok, &type_path, merged);

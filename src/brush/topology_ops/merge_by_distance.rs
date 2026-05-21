@@ -6,8 +6,7 @@ use jackdaw_geometry::halfedge::HalfedgeMesh;
 use jackdaw_geometry::halfedge::ops::remove_doubles::remove_doubles;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushHalfedge, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushHalfedge, EditMode};
 
 const DEFAULT_MERGE_DISTANCE: f32 = 0.0001;
 
@@ -26,7 +25,6 @@ pub(crate) fn brush_merge_by_distance(
     selection: Res<crate::brush::BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     // Check that we're in any brush edit mode.
     if !matches!(*edit_mode, EditMode::BrushEdit(_)) {
@@ -39,9 +37,6 @@ pub(crate) fn brush_merge_by_distance(
     };
 
     // Snapshot before mutation for undo.
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
 
     // Get mutable HalfedgeMesh and run remove_doubles.
     let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
@@ -116,13 +111,6 @@ pub(crate) fn brush_merge_by_distance(
     halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "Merge by Distance".to_string(),
-    }));
-
     OperatorResult::Finished
 }
 
