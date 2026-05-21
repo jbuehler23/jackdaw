@@ -96,7 +96,7 @@ pub fn spawn(world: &mut World, parent: Entity, props: ScrollingLogProps) -> Ent
     container
 }
 
-fn refresh_scrolling_logs(
+pub fn refresh_scrolling_logs(
     mut logs: Query<
         (&ScrollingLog, &Children, &mut ScrollPosition, &mut Node),
         Changed<ScrollingLog>,

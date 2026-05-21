@@ -56,7 +56,9 @@ pub enum BuildError {
         expected: PathBuf,
     },
     /// Caller flipped the cancel flag; child was killed and reaped.
-    Cancelled { stderr_tail: String },
+    Cancelled {
+        stderr_tail: String,
+    },
 }
 
 impl std::fmt::Display for BuildError {
@@ -464,10 +466,7 @@ fn run_cargo_with_progress(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
-                if cancel
-                    .map(|c| c.load(Ordering::Acquire))
-                    .unwrap_or(false)
-                {
+                if cancel.map(|c| c.load(Ordering::Acquire)).unwrap_or(false) {
                     let _ = child.kill();
                     let _ = child.wait();
                     let _ = stdout_handle.join();

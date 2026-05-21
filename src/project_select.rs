@@ -26,18 +26,29 @@ use crate::{
     scrolling_log::{self, ScrollingLog},
 };
 
-/// All in-flight scaffold state. `handle` is `None` when no scaffold
-/// is running; the other fields linger after completion so the modal
-/// can still show the final log/error before being dismissed.
 #[derive(Default)]
-struct ScaffoldState {
-    handle: Option<ScaffoldHandle>,
-    /// Accumulated subprocess output, drained from `handle.log_rx`
-    /// each frame and rendered into the modal's log panel.
-    log: String,
-    /// `true` after the user clicked Cancel and before the task has
-    /// finished unwinding. Modal stays open showing "Cancelling…".
-    cancelling: bool,
+enum ScaffoldState {
+    #[default]
+    Idle,
+    Running(ScaffoldHandle),
+    /// User clicked Cancel; waiting for the task to unwind.
+    Cancelling(ScaffoldHandle),
+}
+
+impl ScaffoldState {
+    fn handle(&self) -> Option<&ScaffoldHandle> {
+        match self {
+            Self::Running(h) | Self::Cancelling(h) => Some(h),
+            Self::Idle => None,
+        }
+    }
+
+    fn handle_mut(&mut self) -> Option<&mut ScaffoldHandle> {
+        match self {
+            Self::Running(h) | Self::Cancelling(h) => Some(h),
+            Self::Idle => None,
+        }
+    }
 }
 
 struct ScaffoldHandle {
@@ -267,9 +278,10 @@ struct NewProjectState {
     location: PathBuf,
     /// In-flight folder picker (rfd).
     folder_task: Option<Task<Option<FileHandle>>>,
-    /// In-flight scaffold (bevy-cli / cargo-generate subprocess) plus
-    /// its drained-log and cancel bookkeeping. See [`ScaffoldState`].
+    /// In-flight scaffold (bevy-cli / cargo-generate subprocess).
     scaffold: ScaffoldState,
+    /// Accumulated subprocess outputs.
+    scaffold_log: String,
     /// In-flight initial build after scaffold. Queued immediately
     /// after the scaffold task succeeds so the user lands in the
     /// editor with the game/extension dylib already installed.
@@ -1401,6 +1413,7 @@ pub fn close_new_project_modal(world: &mut World) {
     state.linkage = TemplateLinkage::default();
     state.folder_task = None;
     state.scaffold = ScaffoldState::default();
+    state.scaffold_log.clear();
     state.status = None;
     // `pending_static_open` is already drained by
     // `apply_pending_static_open` on the happy path, and isn't set
@@ -2165,7 +2178,7 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
 fn on_cancel_new_project(_: On<Pointer<Click>>, mut commands: Commands) {
     commands.queue(|world: &mut World| {
         let mut state = world.resource_mut::<NewProjectState>();
-        if let Some(handle) = state.scaffold.handle.as_ref() {
+        if let Some(handle) = state.scaffold.handle() {
             // Cooperative cancel: flip the flag the worker polls and
             // keep the modal open showing "Cancelling…". The poller's
             // Err(Cancelled) arm will switch the status to
@@ -2173,7 +2186,9 @@ fn on_cancel_new_project(_: On<Pointer<Click>>, mut commands: Commands) {
             // the child + drainer threads join + final Err returns),
             // leaving the user free to tweak inputs and retry.
             handle.cancel.store(true, Ordering::Release);
-            state.scaffold.cancelling = true;
+            if let ScaffoldState::Running(h) = std::mem::take(&mut state.scaffold) {
+                state.scaffold = ScaffoldState::Cancelling(h);
+            }
             state.status = Some("Cancelling…".into());
         } else if let Some(cancel) = state.build_cancel.as_ref() {
             // Build-time cancel: the cargo poller in
@@ -2364,7 +2379,7 @@ fn on_create_new_project(
             if state.preset.is_none() {
                 return;
             }
-            if state.scaffold.handle.is_some() {
+            if state.scaffold.handle().is_some() {
                 return; // already running
             }
             // Force `build_after_scaffold = false` for static-
@@ -2434,8 +2449,8 @@ fn on_create_new_project(
         {
             let mut state = world.resource_mut::<NewProjectState>();
             state.status = Some(format!("Scaffolding `{name}`..."));
-            state.scaffold.log.clear();
-            state.scaffold.cancelling = false;
+            state.scaffold_log.clear();
+            state.scaffold = ScaffoldState::Idle;
         }
 
         let task = AsyncComputeTaskPool::get().spawn(async move {
@@ -2448,7 +2463,7 @@ fn on_create_new_project(
                 &io,
             )
         });
-        world.resource_mut::<NewProjectState>().scaffold.handle = Some(ScaffoldHandle {
+        world.resource_mut::<NewProjectState>().scaffold = ScaffoldState::Running(ScaffoldHandle {
             task,
             cancel,
             log_rx: Mutex::new(log_rx),
@@ -2477,34 +2492,27 @@ fn poll_new_project_tasks(
         }
     }
 
-    // Drain live log lines first, while the handle is borrowed
-    // separately from `state.scaffold.log`. Collect into a temporary
-    // so the inner borrow ends before we push.
     let drained: Vec<LogChunk> = state
         .scaffold
-        .handle
-        .as_ref()
+        .handle()
         .map(|h| h.log_rx.lock().unwrap().try_iter().collect())
         .unwrap_or_default();
     for chunk in drained {
-        state.scaffold.log.push_str(chunk.line());
-        state.scaffold.log.push('\n');
+        state.scaffold_log.push_str(chunk.line());
+        state.scaffold_log.push('\n');
     }
     for mut log in &mut scaffold_logs {
-        if log.content != state.scaffold.log {
-            log.content = state.scaffold.log.clone();
+        if log.content != state.scaffold_log {
+            log.content = state.scaffold_log.clone();
         }
     }
 
-    // Scaffold task completion.
     let scaffold_result = state
         .scaffold
-        .handle
-        .as_mut()
+        .handle_mut()
         .and_then(|h| future::block_on(future::poll_once(&mut h.task)));
     if let Some(result) = scaffold_result {
-        state.scaffold.handle = None;
-        state.scaffold.cancelling = false;
+        state.scaffold = ScaffoldState::Idle;
         match result {
             Ok(project_path) => {
                 info!("Scaffolded project at {}", project_path.display());
