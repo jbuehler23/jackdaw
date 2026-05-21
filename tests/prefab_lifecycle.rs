@@ -414,7 +414,11 @@ fn save_as_prefab_writes_file_and_converts_in_place() {
     // has something concrete to write.
     let entity = app.world_mut().spawn(Name::new("test_entity")).id();
 
-    jackdaw::prefab::operators::save_as_prefab(app.world_mut(), entity, &prefab_target);
+    jackdaw::prefab::operators::save_as_prefab_from_selection(
+        app.world_mut(),
+        &[entity],
+        &prefab_target,
+    );
 
     assert!(prefab_target.exists(), "prefab file written");
     let written: serde_json::Value =
@@ -424,22 +428,22 @@ fn save_as_prefab_writes_file_and_converts_in_place() {
         written["scene"][0]["components"]
             .get("jackdaw::prefab::components::Prefab")
             .is_some(),
-        "prefab root has Prefab marker; got {written:?}"
+        "synthetic root has Prefab marker; got {written:?}"
     );
     assert!(
         written["scene"][0]["components"]
             .get("jackdaw::prefab::components::PrefabEntityId")
             .is_some(),
-        "prefab root has PrefabEntityId(0)"
+        "synthetic root has PrefabEntityId(0)"
     );
 
-    // After conversion, the source entity's AST node has IsA.
+    // After conversion, a new instance node carrying IsA was inserted.
     let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
     let has_isa = ast
         .entities_with_component("jackdaw::prefab::components::IsA")
         .next()
         .is_some();
-    assert!(has_isa, "source scene entity converted to instance");
+    assert!(has_isa, "new instance node carrying IsA inserted");
 
     // The prefab is now in the cache (so re-resolving the scene works).
     let cache = app.world().resource::<jackdaw::prefab::PrefabAstCache>();
@@ -1283,20 +1287,24 @@ fn save_as_prefab_from_selection_filters_descendants_of_selected_ancestors() {
     let value: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
     let scene = value["scene"].as_array().unwrap();
-    // Single-root path: parent is index 0 with Prefab marker, child is index 1.
-    assert_eq!(scene.len(), 2, "parent + child only, no synthetic root");
+    // Always-wrap shape: synthetic PrefabRoot + parent + child.
+    assert_eq!(
+        scene.len(),
+        3,
+        "synthetic root + parent + child, no duplicate child"
+    );
     assert!(
         scene[0]["components"]
             .get("jackdaw::prefab::components::Prefab")
             .is_some(),
-        "single-root path tags the actual root with Prefab"
+        "synthetic root carries the Prefab marker"
     );
 }
 
 #[test]
-fn save_as_prefab_from_selection_one_root_matches_single_save() {
-    // Regression: selection of size 1 must behave exactly like
-    // save_as_prefab.
+fn save_as_prefab_from_selection_one_root_inserts_instance() {
+    // Selection of size 1 still mutates the source AST to add a new
+    // instance node carrying IsA + PrefabEntityId(0).
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("solo.jsn");
 
@@ -1306,12 +1314,11 @@ fn save_as_prefab_from_selection_one_root_matches_single_save() {
     jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[solo], &target);
 
     let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
-    // Single-root path mutates the source AST to add IsA.
     assert!(
         ast.entities_with_component("jackdaw::prefab::components::IsA")
             .next()
             .is_some(),
-        "single-root flow converted source to IsA instance"
+        "single-root flow inserts a new instance node carrying IsA"
     );
 }
 
@@ -1510,5 +1517,700 @@ fn revert_component_operator_runs_through_dispatch() {
         name,
         Some(&serde_json::Value::String("prefab_root".to_string())),
         "operator-driven revert restored the inherited prefab value",
+    );
+}
+
+#[test]
+fn save_as_prefab_strips_inherited_prefab_markers() {
+    // An entity whose AST node already carries an `IsA` (because the
+    // user previously converted it to an instance) must not bake that
+    // marker into the freshly-authored prefab file. After saving,
+    // neither the synthetic root nor any packaged child carries the
+    // inherited IsA.
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("fresh.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    let entity = app
+        .world_mut()
+        .spawn(bevy::prelude::Name::new("source"))
+        .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let key = ast.create_node(entity, None);
+        ast.insert_component(
+            key,
+            "jackdaw::prefab::components::IsA",
+            serde_json::json!({ "source": "/tmp/some_other_prefab.jsn", "deleted": [] }),
+        );
+    }
+
+    jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[entity], &target);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    let scene = value["scene"].as_array().unwrap();
+    assert!(
+        scene[0]["components"]
+            .get("jackdaw::prefab::components::Prefab")
+            .is_some(),
+        "synthetic root has fresh Prefab marker"
+    );
+    for entry in scene {
+        assert!(
+            entry["components"]
+                .get("jackdaw::prefab::components::IsA")
+                .is_none(),
+            "no packaged entity may carry inherited IsA: entry={entry:?}"
+        );
+    }
+}
+
+#[test]
+fn save_as_prefab_does_not_bake_self_isa_into_file() {
+    // The source entity already has an `IsA` pointing at `target`.
+    // The always-wrap save path writes a synthetic PrefabRoot wrapping
+    // the source entity; the source's pre-existing IsA must be stripped
+    // from the written file so the prefab does not reference itself.
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("box.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    let entity = app
+        .world_mut()
+        .spawn(bevy::prelude::Name::new("source"))
+        .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let key = ast.create_node(entity, None);
+        ast.insert_component(
+            key,
+            "jackdaw::prefab::components::IsA",
+            serde_json::json!({ "source": target.to_string_lossy(), "deleted": [] }),
+        );
+    }
+
+    jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[entity], &target);
+
+    assert!(target.exists(), "always-wrap path writes the file");
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    for entry in value["scene"].as_array().unwrap() {
+        assert!(
+            entry["components"]
+                .get("jackdaw::prefab::components::IsA")
+                .is_none(),
+            "no entry in the written prefab carries a self-IsA: entry={entry:?}"
+        );
+    }
+}
+
+#[test]
+fn repair_self_cycles_strips_self_isa_from_cached_prefab() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("poisoned.jsn");
+    let poisoned = format!(
+        r#"{{
+            "jsn": {{ "format_version": [3,0,0], "editor_version": "0", "bevy_version": "0.18" }},
+            "metadata": {{ "name": "poisoned", "created": "", "modified": "" }},
+            "assets": {{}},
+            "scene": [{{
+                "components": {{
+                    "jackdaw::prefab::components::Prefab": null,
+                    "jackdaw::prefab::components::PrefabEntityId": 0,
+                    "jackdaw::prefab::components::IsA": {{ "source": "{}", "deleted": [] }},
+                    "bevy_ecs::name::Name": "poisoned"
+                }}
+            }}]
+        }}"#,
+        path.to_string_lossy()
+    );
+    std::fs::write(&path, poisoned).unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    let scene: jackdaw_jsn::format::JsnScene =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&scene, &[]);
+    app.world_mut()
+        .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+        .insert(&path, ast);
+
+    jackdaw::prefab::operators::repair_self_cycles_system(app.world_mut());
+
+    let cache = app.world().resource::<jackdaw::prefab::PrefabAstCache>();
+    let repaired = cache.get(&path).expect("still cached");
+    let root = &repaired.nodes[0];
+    assert!(
+        !root
+            .components
+            .contains_key("jackdaw::prefab::components::IsA"),
+        "self-IsA was stripped"
+    );
+    assert!(
+        root.components
+            .contains_key("jackdaw::prefab::components::Prefab"),
+        "Prefab marker preserved"
+    );
+
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(
+        written["scene"][0]["components"]
+            .get("jackdaw::prefab::components::IsA")
+            .is_none(),
+        "disk file also has IsA stripped"
+    );
+}
+
+#[test]
+fn prefab_edit_propagates_to_instance_in_other_tab_on_swap() {
+    // Simulates: user has tab A with an instance of box.jsn + tab B
+    // editing box.jsn directly. Edit the prefab via the cache (as
+    // `scene.save`'s prefab branch does), then swap back to tab A and
+    // assert the instance's spawned entity reflects the updated prefab.
+    use bevy::prelude::*;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("box.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    app.init_resource::<jackdaw::scenes::Scenes>();
+
+    // 1. Seed a prefab with a Name component and a Transform.
+    {
+        let mut prefab_ast = jackdaw_jsn::SceneJsnAst::default();
+        let root = prefab_ast.add_root();
+        prefab_ast.insert_component(
+            root,
+            "jackdaw::prefab::components::Prefab",
+            serde_json::Value::Null,
+        );
+        prefab_ast.insert_component(
+            root,
+            "jackdaw::prefab::components::PrefabEntityId",
+            serde_json::json!(0),
+        );
+        prefab_ast.insert_component(
+            root,
+            "bevy_ecs::name::Name",
+            serde_json::Value::String("initial_name".to_string()),
+        );
+        prefab_ast.insert_component(
+            root,
+            "bevy_transform::components::transform::Transform",
+            serde_json::json!({
+                "translation": [0.0, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0, 1.0],
+                "scale": [1.0, 1.0, 1.0]
+            }),
+        );
+        app.world_mut()
+            .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+            .insert(&prefab_path, prefab_ast);
+    }
+
+    // 2. Build tab A: a scene with one instance of the prefab. Push a
+    //    second tab (tab B) pointing at the prefab via its cache entry.
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        let mut tab_a = jackdaw::scenes::SceneTab::new_untitled(1);
+        let mut scene_ast = jackdaw_jsn::SceneJsnAst::default();
+        let instance = scene_ast.add_root();
+        scene_ast.insert_component(
+            instance,
+            "jackdaw::prefab::components::IsA",
+            serde_json::json!({ "source": prefab_path.to_string_lossy(), "deleted": [] }),
+        );
+        scene_ast.insert_component(
+            instance,
+            "jackdaw::prefab::components::PrefabEntityId",
+            serde_json::json!(0),
+        );
+        tab_a.content = jackdaw::scenes::TabContent::Scene(Some(scene_ast));
+        scenes.tabs.push(tab_a);
+        scenes.active = 0;
+
+        let canonical = jackdaw::prefab::canonical_prefab_path(&prefab_path);
+        let mut tab_b = jackdaw::scenes::SceneTab::new_untitled(2);
+        tab_b.path = Some(prefab_path.clone());
+        tab_b.kind = jackdaw::scenes::TabKind::Prefab;
+        tab_b.content = jackdaw::scenes::TabContent::Prefab(canonical);
+        scenes.tabs.push(tab_b);
+    }
+
+    // 3. Activate tab A: resolver should spawn the instance with the
+    //    initial name + transform inherited from the prefab.
+    jackdaw::scenes::swap::activate_tab(app.world_mut(), 0);
+
+    let initial_names: Vec<String> = {
+        let world = app.world_mut();
+        let mut q = world.query::<&bevy::prelude::Name>();
+        q.iter(world).map(|n| n.as_str().to_string()).collect()
+    };
+    assert!(
+        initial_names.iter().any(|n| n == "initial_name"),
+        "instance should spawn with the inherited prefab Name; got {initial_names:?}"
+    );
+
+    // 4. Swap to tab B (the prefab tab). This is what happens when the
+    //    user clicks the prefab tab in the strip. capture_active_tab
+    //    flushes tab A's instance AST into tab.content; activate_tab
+    //    reads the cache, resolves, and spawns the prefab into the
+    //    live world. Now the live SceneJsnAst is the prefab AST.
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+
+    // 5. Mutate the cache entry: rename the prefab. This is what
+    //    `scene.save`'s prefab branch does after the user hits Ctrl+S
+    //    on a prefab tab: clone the live AST and insert it into the
+    //    cache under the prefab path.
+    {
+        let mut cache = app
+            .world_mut()
+            .resource_mut::<jackdaw::prefab::PrefabAstCache>();
+        cache.mutate(&prefab_path, |ast| {
+            let root_key = ast
+                .entities_with_component("jackdaw::prefab::components::Prefab")
+                .next()
+                .expect("prefab root exists");
+            ast.replace_component(
+                root_key,
+                "bevy_ecs::name::Name",
+                serde_json::Value::String("renamed_in_prefab".to_string()),
+            );
+        });
+        // Also update the live AST so the upcoming capture-on-swap
+        // doesn't clobber our mutation. In the real editor, scene.save
+        // mutates the cache from the live AST, so they stay in sync.
+        let mut live = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let root_key = live
+            .entities_with_component("jackdaw::prefab::components::Prefab")
+            .next();
+        if let Some(root_key) = root_key {
+            live.replace_component(
+                root_key,
+                "bevy_ecs::name::Name",
+                serde_json::Value::String("renamed_in_prefab".to_string()),
+            );
+        }
+    }
+
+    // 6. Swap back to tab A. The resolver should re-read the cache and
+    //    respawn the instance with the new Name.
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+
+    let final_names: Vec<String> = {
+        let world = app.world_mut();
+        let mut q = world.query::<&bevy::prelude::Name>();
+        q.iter(world).map(|n| n.as_str().to_string()).collect()
+    };
+    assert!(
+        final_names.iter().any(|n| n == "renamed_in_prefab"),
+        "after the swap-back, the instance should reflect the renamed prefab; got {final_names:?}"
+    );
+    assert!(
+        !final_names.iter().any(|n| n == "initial_name"),
+        "the stale initial_name must NOT still be present; got {final_names:?}"
+    );
+}
+
+#[test]
+fn scene_save_on_prefab_tab_clears_dirty_state() {
+    // After a Ctrl+S on a prefab tab, neither the per-tab dirty flag
+    // nor the global `SceneDirtyState` should report unsaved work.
+    use bevy::prelude::*;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    app.init_resource::<jackdaw::scenes::Scenes>();
+
+    // Seed the cache with a prefab.
+    {
+        let mut prefab_ast = jackdaw_jsn::SceneJsnAst::default();
+        let root = prefab_ast.add_root();
+        prefab_ast.insert_component(
+            root,
+            "jackdaw::prefab::components::Prefab",
+            serde_json::Value::Null,
+        );
+        prefab_ast.insert_component(
+            root,
+            "jackdaw::prefab::components::PrefabEntityId",
+            serde_json::json!(0),
+        );
+        prefab_ast.insert_component(
+            root,
+            "bevy_ecs::name::Name",
+            serde_json::Value::String("p".to_string()),
+        );
+        app.world_mut()
+            .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+            .insert(&prefab_path, prefab_ast);
+    }
+
+    // Set up one prefab tab as the active tab.
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        let canonical = jackdaw::prefab::canonical_prefab_path(&prefab_path);
+        let mut tab = jackdaw::scenes::SceneTab::new_untitled(1);
+        tab.path = Some(prefab_path.clone());
+        tab.kind = jackdaw::scenes::TabKind::Prefab;
+        tab.content = jackdaw::scenes::TabContent::Prefab(canonical);
+        scenes.tabs.push(tab);
+        scenes.active = 0;
+    }
+    // Sync the global file path so save_scene routes to save_scene_inner.
+    {
+        let mut sp = app
+            .world_mut()
+            .resource_mut::<jackdaw::scene_io::SceneFilePath>();
+        sp.path = Some(prefab_path.to_string_lossy().into_owned());
+    }
+    jackdaw::scenes::swap::activate_tab(app.world_mut(), 0);
+
+    // Simulate a user edit: push something onto the command history and
+    // flip the tab dirty flag. Also drift `undo_len_at_save` so the
+    // global status bar would otherwise still show `*Unsaved`.
+    struct NoOpCommand;
+    impl jackdaw_commands::EditorCommand for NoOpCommand {
+        fn execute(&mut self, _world: &mut bevy::prelude::World) {}
+        fn undo(&mut self, _world: &mut bevy::prelude::World) {}
+        fn description(&self) -> &str {
+            "noop"
+        }
+    }
+    app.world_mut()
+        .resource_mut::<jackdaw_commands::CommandHistory>()
+        .push_executed(Box::new(NoOpCommand));
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs[0].dirty = true;
+        scenes.tabs[0].history_depth_at_last_check = 1;
+    }
+    assert!(jackdaw::scene_io::is_scene_dirty(app.world()));
+
+    // Save: this routes through the prefab branch in save_scene_inner
+    // because the active tab is a prefab.
+    jackdaw::scene_io::save_scene(app.world_mut());
+
+    assert!(
+        !app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty,
+        "prefab tab.dirty must be cleared after save"
+    );
+    assert!(
+        !jackdaw::scene_io::is_scene_dirty(app.world()),
+        "global SceneDirtyState must report clean after save"
+    );
+
+    // Pump the dirty-tracker system once; it must not flip dirty back on.
+    let _ = app
+        .world_mut()
+        .run_system_cached(jackdaw::scenes::mark_active_dirty_on_history_growth);
+    assert!(
+        !app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty,
+        "mark_active_dirty_on_history_growth must not re-dirty the tab post-save"
+    );
+
+    // Pump the cache-epoch-change driver: this is what fires on the next
+    // frame after the save inserts into the cache. It calls
+    // `reload_all_instances`, which calls `clear_scene_entities`, which
+    // *clears the command history*. If `SceneDirtyState.undo_len_at_save`
+    // is not also reset to 0, the status bar will keep showing `*Unsaved`
+    // because `undo_stack.len() (0) != undo_len_at_save (>0)`.
+    jackdaw::prefab::sync::drive_respawn_on_prefab_cache_change(app.world_mut());
+    assert!(
+        !jackdaw::scene_io::is_scene_dirty(app.world()),
+        "after the respawn-on-cache-change driver fires, the scene must still report clean; \
+         got undo_stack.len()={} undo_len_at_save={}",
+        app.world()
+            .resource::<jackdaw_commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        app.world()
+            .resource::<jackdaw::scene_io::SceneDirtyState>()
+            .undo_len_at_save,
+    );
+    assert!(
+        !app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty,
+        "after the respawn-on-cache-change driver fires, tab.dirty must still be false"
+    );
+}
+
+#[test]
+fn save_scene_as_prefab_converts_tab_to_prefab() {
+    use bevy::prelude::*;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("box.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw::scene_io::SceneFilePath>();
+    app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
+    app.init_resource::<jackdaw::selection::Selection>();
+
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(1));
+        scenes.active = 0;
+    }
+    {
+        let entity = app.world_mut().spawn(Name::new("source")).id();
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let key = ast.create_node(entity, None);
+        ast.insert_component(
+            key,
+            "bevy_ecs::name::Name",
+            serde_json::Value::String("source".to_string()),
+        );
+    }
+
+    jackdaw::prefab::operators::save_scene_as_prefab(app.world_mut(), &target);
+
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    let tab = &scenes.tabs[0];
+    assert!(
+        matches!(tab.kind, jackdaw::scenes::TabKind::Prefab),
+        "tab kind transitioned to Prefab"
+    );
+    assert!(
+        matches!(&tab.content, jackdaw::scenes::TabContent::Prefab(_)),
+        "tab content references the prefab cache, not a Scene AST"
+    );
+    assert_eq!(tab.path.as_deref(), Some(target.as_path()));
+    assert!(!tab.dirty, "tab cleared dirty flag after save");
+    assert_eq!(tab.display_name, "box");
+
+    assert!(target.exists(), "prefab file written");
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    let components = &written["scene"][0]["components"];
+    assert!(
+        components
+            .get("jackdaw::prefab::components::Prefab")
+            .is_some(),
+        "root has Prefab marker"
+    );
+    assert!(
+        components
+            .get("jackdaw::prefab::components::PrefabEntityId")
+            .is_some(),
+        "root has PrefabEntityId(0)"
+    );
+    assert!(
+        components.get("jackdaw::prefab::components::IsA").is_none(),
+        "root has NO IsA (this is the prefab definition, not an instance)"
+    );
+
+    let cache = app.world().resource::<jackdaw::prefab::PrefabAstCache>();
+    assert!(cache.get(&target).is_some(), "new prefab cached");
+}
+
+#[test]
+fn save_scene_as_prefab_with_multiple_roots_uses_synthetic_root() {
+    use bevy::prelude::*;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("multi.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw::scene_io::SceneFilePath>();
+    app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
+    app.init_resource::<jackdaw::selection::Selection>();
+
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(1));
+        scenes.active = 0;
+    }
+    {
+        let a = app.world_mut().spawn(Name::new("a")).id();
+        let b = app.world_mut().spawn(Name::new("b")).id();
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let ka = ast.create_node(a, None);
+        let kb = ast.create_node(b, None);
+        ast.insert_component(
+            ka,
+            "bevy_ecs::name::Name",
+            serde_json::Value::String("a".into()),
+        );
+        ast.insert_component(
+            kb,
+            "bevy_ecs::name::Name",
+            serde_json::Value::String("b".into()),
+        );
+    }
+
+    jackdaw::prefab::operators::save_scene_as_prefab(app.world_mut(), &target);
+
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    let scene = written["scene"].as_array().unwrap();
+    assert_eq!(scene.len(), 3, "synthetic root + 2 children = 3 entries");
+    assert!(
+        scene[0]["components"]
+            .get("jackdaw::prefab::components::Prefab")
+            .is_some(),
+        "first entry is the synthetic Prefab root"
+    );
+}
+
+#[test]
+fn save_as_prefab_from_selection_always_wraps_in_prefab_root() {
+    // Single-entity selection produces the same shape as multi-entity:
+    // synthetic PrefabRoot + child(ren) with PrefabEntityId(1..).
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("solo.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    let solo = app.world_mut().spawn(bevy::prelude::Name::new("solo")).id();
+
+    jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[solo], &target);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    let scene = value["scene"].as_array().unwrap();
+    assert_eq!(scene.len(), 2, "synthetic root + 1 child");
+    let root_components = &scene[0]["components"];
+    assert!(
+        root_components
+            .get("jackdaw::prefab::components::Prefab")
+            .is_some()
+    );
+    assert_eq!(
+        root_components
+            .get("bevy_ecs::name::Name")
+            .and_then(|v| v.as_str()),
+        Some("PrefabRoot"),
+        "synthetic root is named PrefabRoot"
+    );
+    assert_eq!(
+        scene[1]["parent"].as_u64(),
+        Some(0),
+        "child parented under PrefabRoot"
+    );
+    assert_eq!(
+        scene[1]["components"]["jackdaw::prefab::components::PrefabEntityId"].as_u64(),
+        Some(1)
+    );
+}
+
+#[test]
+fn save_as_prefab_from_selection_restructures_source_scene() {
+    // After save, the source scene's AST has a new instance node with
+    // IsA + PrefabEntityId(0), and the selected entity is reparented
+    // under it carrying PrefabEntityId(1).
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("box.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    let source = app
+        .world_mut()
+        .spawn(bevy::prelude::Name::new("source"))
+        .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let key = ast.create_node(source, None);
+        ast.insert_component(
+            key,
+            "bevy_ecs::name::Name",
+            serde_json::Value::String("source".to_string()),
+        );
+    }
+
+    jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[source], &target);
+
+    let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
+    let instance_key = ast
+        .entities_with_component("jackdaw::prefab::components::IsA")
+        .next()
+        .expect("instance node added to source scene");
+    assert!(
+        ast.nodes[instance_key].parent.is_none(),
+        "instance is a top-level node"
+    );
+    let source_key = ast.key_for_entity(source).expect("source still in AST");
+    assert_eq!(
+        ast.nodes[source_key].parent,
+        Some(instance_key),
+        "source entity reparented under the new instance"
+    );
+    assert_eq!(
+        ast.get_component_at(source_key, "jackdaw::prefab::components::PrefabEntityId")
+            .and_then(serde_json::Value::as_u64),
+        Some(1),
+        "source entity tagged with PrefabEntityId(1)"
+    );
+}
+
+#[test]
+fn unbundle_instance_promotes_children_and_strips_markers() {
+    // Bundle a single entity, then unbundle. After unbundle, the
+    // promoted child node should be a top-level node with no
+    // PrefabEntityId, and the former instance node should be inert.
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("u.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    let source = app
+        .world_mut()
+        .spawn(bevy::prelude::Name::new("source"))
+        .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let key = ast.create_node(source, None);
+        ast.insert_component(
+            key,
+            "bevy_ecs::name::Name",
+            serde_json::Value::String("source".to_string()),
+        );
+    }
+    jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[source], &target);
+
+    // Capture the source AST key BEFORE unbundle, because the reload
+    // pass inside `unbundle_instance` despawns and respawns ECS entities
+    // (so `key_for_entity(source)` no longer resolves afterwards).
+    let (instance_key, source_key) = {
+        let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
+        let instance_key = ast
+            .entities_with_component("jackdaw::prefab::components::IsA")
+            .next()
+            .unwrap();
+        let source_key = ast
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(i, n)| {
+                let same_name = n
+                    .components
+                    .get("bevy_ecs::name::Name")
+                    .and_then(|v| v.as_str())
+                    == Some("source");
+                if same_name { Some(i) } else { None }
+            })
+            .expect("source node exists in AST");
+        (instance_key, source_key)
+    };
+
+    jackdaw::prefab::operators::unbundle_instance(app.world_mut(), instance_key);
+
+    let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
+    assert!(
+        ast.get_component_at(instance_key, "jackdaw::prefab::components::IsA")
+            .is_none(),
+        "IsA stripped from former instance node"
+    );
+    assert!(
+        ast.nodes[source_key].parent.is_none(),
+        "source promoted to top-level"
+    );
+    assert!(
+        ast.get_component_at(source_key, "jackdaw::prefab::components::PrefabEntityId")
+            .is_none(),
+        "PrefabEntityId stripped from promoted child"
     );
 }

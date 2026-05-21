@@ -81,7 +81,7 @@ fn capture_active_tab(world: &mut World) {
 
 /// Spawn the target tab's AST into the live world and restore per-tab
 /// history and view state.
-pub(crate) fn activate_tab(world: &mut World, target: usize) {
+pub fn activate_tab(world: &mut World, target: usize) {
     let (content, view_state, history, tab_path) = {
         let mut scenes = world.resource_mut::<Scenes>();
         let tab = &mut scenes.tabs[target];

@@ -317,6 +317,46 @@ pub fn serialize_world_to_jsn_scene(world: &mut World) -> JsnScene {
 }
 
 fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
+    // If the active tab is a prefab, flush the live AST into the cache
+    // and persist via the prefab-aware writer. Reflect-serializing the
+    // live world would drop the `Prefab` marker (its deserializer fails,
+    // so the resource never carries it) and turn the file into a regular
+    // scene on the next save.
+    let prefab_path: Option<PathBuf> = {
+        let scenes = world.resource::<crate::scenes::Scenes>();
+        scenes
+            .tabs
+            .get(scenes.active)
+            .and_then(|t| match &t.content {
+                crate::scenes::TabContent::Prefab(p) => Some(p.as_path().to_path_buf()),
+                crate::scenes::TabContent::Scene(_) => None,
+            })
+    };
+    if let Some(path) = prefab_path {
+        let live_ast = world.resource::<jackdaw_jsn::SceneJsnAst>().clone();
+        world
+            .resource_mut::<crate::prefab::PrefabAstCache>()
+            .insert(&path, live_ast);
+        if let Err(err) = crate::prefab::operators::save_prefab_to_disk(world, &path) {
+            warn!("scene.save: prefab save failed: {err}");
+        }
+        // Clear dirty bit + sync history depth so the tab stops showing
+        // as unsaved.
+        let history_len = world
+            .resource::<jackdaw_commands::CommandHistory>()
+            .undo_stack
+            .len();
+        world.resource_mut::<SceneDirtyState>().undo_len_at_save = history_len;
+        if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
+            let active = scenes.active;
+            if let Some(tab) = scenes.tabs.get_mut(active) {
+                tab.dirty = false;
+                tab.history_depth_at_last_check = history_len;
+            }
+        }
+        return Ok(());
+    }
+
     let jsn = serialize_world_to_jsn_scene(world);
 
     let json = serde_json::to_string_pretty(&jsn)?;

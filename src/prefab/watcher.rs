@@ -209,4 +209,20 @@ pub fn reload_all_instances(world: &mut World) {
         .filter_map(|(i, n)| n.ecs_entity.map(|e| (e, i)))
         .collect();
     *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = new_ast;
+
+    // `clear_scene_entities` truncated the command history to 0, so the
+    // dirty-state baselines now reference a stack that no longer exists.
+    // Re-anchor them on the cleared stack: without this, the status bar
+    // and the per-tab dirty dot keep showing unsaved work even though the
+    // user just saved (regression observed when scene.save on a prefab
+    // tab bumps the cache epoch and this driver fires on the next frame).
+    if let Some(mut ds) = world.get_resource_mut::<crate::scene_io::SceneDirtyState>() {
+        ds.undo_len_at_save = 0;
+    }
+    if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
+        let active = scenes.active;
+        if let Some(tab) = scenes.tabs.get_mut(active) {
+            tab.history_depth_at_last_check = 0;
+        }
+    }
 }
