@@ -1276,6 +1276,17 @@ fn save_as_prefab_from_selection_filters_descendants_of_selected_ancestors() {
         ))
         .id();
 
+    // Register both in the AST so they survive the snapshot's
+    // "AST-tracked only" filter. In the real editor every user-drawn
+    // entity is registered as part of scene_io's spawn path; ECS-only
+    // children of brushes (face overlays etc.) are deliberately not
+    // registered and therefore get filtered out.
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        ast.create_node(parent, None);
+        ast.create_node(child, Some(parent));
+    }
+
     // Select both - normalization should drop the child (its parent
     // already covers it), leaving a single top root.
     jackdaw::prefab::operators::save_as_prefab_from_selection(
@@ -2100,10 +2111,11 @@ fn save_as_prefab_from_selection_always_wraps_in_prefab_root() {
 }
 
 #[test]
-fn save_as_prefab_from_selection_restructures_source_scene() {
-    // After save, the source scene's AST has a new instance node with
-    // IsA + PrefabEntityId(0), and the selected entity is reparented
-    // under it carrying PrefabEntityId(1).
+fn save_as_prefab_from_selection_replaces_source_with_instance() {
+    // After save, the source scene's AST has exactly one new authored
+    // node: the instance. The originally-selected entity is removed
+    // from the AST; the resolver materialises it back as an inherited
+    // descendant when the next respawn fires.
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("box.jsn");
 
@@ -2125,33 +2137,28 @@ fn save_as_prefab_from_selection_restructures_source_scene() {
     jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[source], &target);
 
     let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
-    let instance_key = ast
+    let isa_keys: Vec<usize> = ast
         .entities_with_component("jackdaw::prefab::components::IsA")
-        .next()
-        .expect("instance node added to source scene");
+        .collect();
+    assert_eq!(isa_keys.len(), 1, "exactly one instance node was added");
+    let instance_key = isa_keys[0];
     assert!(
         ast.nodes[instance_key].parent.is_none(),
         "instance is a top-level node"
     );
-    let source_key = ast.key_for_entity(source).expect("source still in AST");
     assert_eq!(
-        ast.nodes[source_key].parent,
-        Some(instance_key),
-        "source entity reparented under the new instance"
-    );
-    assert_eq!(
-        ast.get_component_at(source_key, "jackdaw::prefab::components::PrefabEntityId")
-            .and_then(serde_json::Value::as_u64),
-        Some(1),
-        "source entity tagged with PrefabEntityId(1)"
+        ast.children_of(instance_key).count(),
+        0,
+        "instance has no authored children in the source AST; descendants come from the prefab via the resolver"
     );
 }
 
 #[test]
-fn unbundle_instance_promotes_children_and_strips_markers() {
-    // Bundle a single entity, then unbundle. After unbundle, the
-    // promoted child node should be a top-level node with no
-    // PrefabEntityId, and the former instance node should be inert.
+fn unbundle_instance_promotes_inherited_children_to_authored() {
+    // Bundle a single entity, then unbundle. The new model puts only
+    // the instance node in the source AST after bundling; the inherited
+    // child is materialised by the resolver. Unbundle promotes the
+    // inherited child to an authored AST node and strips PrefabEntityId.
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("u.jsn");
 
@@ -2171,29 +2178,11 @@ fn unbundle_instance_promotes_children_and_strips_markers() {
     }
     jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[source], &target);
 
-    // Capture the source AST key BEFORE unbundle, because the reload
-    // pass inside `unbundle_instance` despawns and respawns ECS entities
-    // (so `key_for_entity(source)` no longer resolves afterwards).
-    let (instance_key, source_key) = {
+    let instance_key = {
         let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
-        let instance_key = ast
-            .entities_with_component("jackdaw::prefab::components::IsA")
+        ast.entities_with_component("jackdaw::prefab::components::IsA")
             .next()
-            .unwrap();
-        let source_key = ast
-            .nodes
-            .iter()
-            .enumerate()
-            .find_map(|(i, n)| {
-                let same_name = n
-                    .components
-                    .get("bevy_ecs::name::Name")
-                    .and_then(|v| v.as_str())
-                    == Some("source");
-                if same_name { Some(i) } else { None }
-            })
-            .expect("source node exists in AST");
-        (instance_key, source_key)
+            .expect("instance exists after bundle")
     };
 
     jackdaw::prefab::operators::unbundle_instance(app.world_mut(), instance_key);
@@ -2204,14 +2193,31 @@ fn unbundle_instance_promotes_children_and_strips_markers() {
             .is_none(),
         "IsA stripped from former instance node"
     );
+
+    // One authored node remains: the promoted child. It has no IsA,
+    // no PrefabEntityId, and is a top-level node.
+    let promoted: Vec<usize> = ast
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| {
+            let has_name = n.components.contains_key("bevy_ecs::name::Name");
+            let no_isa = !n
+                .components
+                .contains_key("jackdaw::prefab::components::IsA");
+            let no_peid = !n
+                .components
+                .contains_key("jackdaw::prefab::components::PrefabEntityId");
+            if has_name && no_isa && no_peid && n.parent.is_none() {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .collect();
     assert!(
-        ast.nodes[source_key].parent.is_none(),
-        "source promoted to top-level"
-    );
-    assert!(
-        ast.get_component_at(source_key, "jackdaw::prefab::components::PrefabEntityId")
-            .is_none(),
-        "PrefabEntityId stripped from promoted child"
+        !promoted.is_empty(),
+        "at least one authored top-level node with no prefab markers exists after unbundle"
     );
 }
 
@@ -2272,9 +2278,11 @@ fn save_as_prefab_preserves_world_positions_of_selection() {
 
     jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[e1, e2], &target);
 
-    // Centroid is (3, 0, 0). Instance Transform.x should equal the
-    // centroid; each child's local Transform.x should be its original
-    // world X minus 3.0 so the world position survives reparenting.
+    // Centroid is (3, 0, 0). Instance Transform.x in the source AST
+    // should equal the centroid. The packaged children live in the
+    // prefab file with centroid-relative translations so a fresh
+    // instance spawn at world (3, 0, 0) reproduces the originals at
+    // (2, 0, 0) and (4, 0, 0).
     let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
     let instance_key = ast
         .entities_with_component("jackdaw::prefab::components::IsA")
@@ -2292,24 +2300,28 @@ fn save_as_prefab_preserves_world_positions_of_selection() {
         "instance Transform.x is the centroid (3.0); got {instance_translation:?}"
     );
 
-    let e1_key = ast.key_for_entity(e1).unwrap();
-    let e1_tx = ast
-        .get_component_at(e1_key, "bevy_transform::components::transform::Transform")
-        .unwrap();
-    let e1_translation = e1_tx["translation"].as_array().unwrap();
+    // Verify the prefab file: children's translations should be
+    // (-1, 0, 0) and (1, 0, 0) (centroid-relative).
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    let scene = value["scene"].as_array().unwrap();
+    let mut child_xs: Vec<f64> = Vec::new();
+    for entry in scene.iter().skip(1) {
+        let tx = entry["components"]
+            .get("bevy_transform::components::transform::Transform")
+            .unwrap();
+        let x = tx["translation"].as_array().unwrap()[0].as_f64().unwrap();
+        child_xs.push(x);
+    }
+    child_xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(child_xs.len(), 2, "two packaged children in the prefab");
     assert!(
-        (e1_translation[0].as_f64().unwrap() - (-1.0)).abs() < 1e-4,
-        "e1 local Transform.x is centroid-relative (-1.0); got {e1_translation:?}"
+        (child_xs[0] - (-1.0)).abs() < 1e-4,
+        "first child Transform.x is -1.0 (centroid-relative); got {child_xs:?}"
     );
-
-    let e2_key = ast.key_for_entity(e2).unwrap();
-    let e2_tx = ast
-        .get_component_at(e2_key, "bevy_transform::components::transform::Transform")
-        .unwrap();
-    let e2_translation = e2_tx["translation"].as_array().unwrap();
     assert!(
-        (e2_translation[0].as_f64().unwrap() - 1.0).abs() < 1e-4,
-        "e2 local Transform.x is centroid-relative (1.0); got {e2_translation:?}"
+        (child_xs[1] - 1.0).abs() < 1e-4,
+        "second child Transform.x is 1.0 (centroid-relative); got {child_xs:?}"
     );
 }
 
@@ -2337,17 +2349,17 @@ fn save_as_prefab_synthetic_root_has_visibility() {
         "synthetic PrefabRoot carries Visibility for hierarchy propagation; got {root_components:?}"
     );
 
-    // The in-place instance entity in the source AST also needs
-    // Visibility for the same reason.
+    // The instance entity in the source AST inherits Visibility from
+    // the prefab's synthetic root via the resolver merge; the local
+    // node only needs to carry the sparse delta (IsA + placement
+    // Transform). Verify the instance exists and the prefab's synthetic
+    // root has Visibility (the latter is what the resolver will pull in).
     let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
-    let instance_key = ast
-        .entities_with_component("jackdaw::prefab::components::IsA")
-        .next()
-        .unwrap();
     assert!(
-        ast.get_component_at(instance_key, "bevy_camera::visibility::Visibility")
+        ast.entities_with_component("jackdaw::prefab::components::IsA")
+            .next()
             .is_some(),
-        "in-place instance entity carries Visibility for hierarchy propagation"
+        "instance node with IsA exists in source AST after save"
     );
 }
 
@@ -2430,5 +2442,123 @@ fn load_scene_from_jsn_backfills_visibility_require_chain() {
     assert!(
         app.world().get::<ViewVisibility>(e).is_some(),
         "spawn path backfills ViewVisibility when Visibility is reflected in",
+    );
+}
+
+#[test]
+fn save_as_prefab_skips_ecs_only_descendants() {
+    // Brushes have ECS-only children (face overlays, clip previews) that
+    // aren't registered in the AST. Bundling them into the prefab would
+    // orphan them after respawn because the in-place restructure has no
+    // way to re-attach unknown ECS entities to the brush they belong to.
+    // The brush spawn pipeline re-derives them from the brush data, so
+    // they don't belong in the prefab file at all.
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("derived.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    let brush = app
+        .world_mut()
+        .spawn(bevy::prelude::Name::new("brush"))
+        .id();
+    // Child entity exists in ECS as a child of `brush` but never gets
+    // registered in the AST - emulating a brush face overlay.
+    let _derived = app
+        .world_mut()
+        .spawn((
+            bevy::prelude::Name::new("derived-overlay"),
+            bevy::ecs::hierarchy::ChildOf(brush),
+        ))
+        .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        ast.create_node(brush, None);
+    }
+
+    jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[brush], &target);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    let scene = value["scene"].as_array().unwrap();
+    assert_eq!(
+        scene.len(),
+        2,
+        "synthetic root + brush only; ECS-only derived child must be filtered out"
+    );
+}
+
+#[test]
+fn save_then_respawn_keeps_isa_on_instance_entity() {
+    // Reproduces the editor flow: draw a brush, save selection as prefab,
+    // let the cache-driven respawn fire, then assert that the new
+    // instance entity has IsA on its ECS - which classify_entity needs
+    // to assign EntityCategory::Prefab and draw the Package icon.
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("p_test.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    let brush = app
+        .world_mut()
+        .spawn((
+            bevy::prelude::Name::new("Brush"),
+            bevy::prelude::Transform::from_xyz(1.0, 0.0, 0.0),
+            bevy::camera::visibility::Visibility::Inherited,
+        ))
+        .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let key = ast.create_node(brush, None);
+        ast.insert_component(
+            key,
+            "bevy_transform::components::transform::Transform",
+            serde_json::json!({
+                "translation": [1.0, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0, 1.0],
+                "scale": [1.0, 1.0, 1.0],
+            }),
+        );
+    }
+    app.update();
+
+    jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[brush], &target);
+    // Force the cache-driven driver to run reload_all_instances.
+    jackdaw::prefab::watcher::reload_all_instances(app.world_mut());
+
+    // After respawn, find the instance entity (the one carrying IsA).
+    let mut q = app
+        .world_mut()
+        .query::<(bevy::prelude::Entity, &jackdaw::prefab::IsA)>();
+    let instances: Vec<bevy::prelude::Entity> = q.iter(app.world()).map(|(e, _)| e).collect();
+    assert_eq!(
+        instances.len(),
+        1,
+        "exactly one instance entity must carry IsA after respawn; got {instances:?}"
+    );
+
+    // The instance entity must also carry the visibility / transform
+    // require-chain so Bevy's hierarchy propagation doesn't B0004-warn.
+    let instance = instances[0];
+    let world = app.world();
+    assert!(
+        world.get::<bevy::prelude::Transform>(instance).is_some(),
+        "instance has Transform after respawn"
+    );
+    assert!(
+        world
+            .get::<bevy::prelude::GlobalTransform>(instance)
+            .is_some(),
+        "instance has GlobalTransform after respawn (require-chain backfill)"
+    );
+    assert!(
+        world
+            .get::<bevy::camera::visibility::Visibility>(instance)
+            .is_some(),
+        "instance has Visibility after respawn"
+    );
+    assert!(
+        world
+            .get::<bevy::camera::visibility::InheritedVisibility>(instance)
+            .is_some(),
+        "instance has InheritedVisibility after respawn (require-chain backfill)"
     );
 }

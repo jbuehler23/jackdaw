@@ -598,6 +598,7 @@ fn spawn_remote_tree_row(
                 false,
                 proxy,
                 EntityCategory::Entity,
+                false,
                 &style,
             ),
             ChildOf(parent_container),

@@ -1594,16 +1594,14 @@ pub fn load_scene_from_jsn(
         spawned.push(entity.id());
     }
 
-    // Second pass: set parents (ChildOf)
-    for (i, jsn) in entities.iter().enumerate() {
-        if let Some(parent_idx) = jsn.parent
-            && let Some(&parent_entity) = spawned.get(parent_idx)
-        {
-            world.entity_mut(spawned[i]).insert(ChildOf(parent_entity));
-        }
-    }
-
-    // Third pass: deserialize extensible components via reflection with processor
+    // Second pass: deserialize extensible components via reflection with processor.
+    //
+    // We defer `ChildOf` insertion to AFTER components + the require-chain
+    // post-pass land. Bevy validates parent-has-required-component on
+    // `on_insert` for `InheritedVisibility` / `GlobalTransform`; if a
+    // child gets its derived components before its parent has them, the
+    // validator logs a B0004 warning even though the eventual state is
+    // fine. Wiring `ChildOf` last avoids the order dependency entirely.
     let registry_guard = registry.read();
     for (i, jsn) in entities.iter().enumerate() {
         for (type_path, value) in &jsn.components {
@@ -1663,6 +1661,18 @@ pub fn load_scene_from_jsn(
             if !ent.contains::<ViewVisibility>() {
                 ent.insert(ViewVisibility::default());
             }
+        }
+    }
+
+    // Final pass: wire ChildOf relationships now that every entity has
+    // its full component set. Inserting earlier would let Bevy's
+    // validate_parent_has_component hook fire on still-incomplete
+    // parents and emit spurious B0004 warnings.
+    for (i, jsn) in entities.iter().enumerate() {
+        if let Some(parent_idx) = jsn.parent
+            && let Some(&parent_entity) = spawned.get(parent_idx)
+        {
+            world.entity_mut(spawned[i]).insert(ChildOf(parent_entity));
         }
     }
 

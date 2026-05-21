@@ -30,6 +30,17 @@ fn collect_descendants(world: &World, root: Entity, out: &mut Vec<Entity>) {
         {
             continue;
         }
+        // Skip ECS-only derived children (brush clip overlays, face
+        // entities, etc.) that have no AST node. Persisting them as
+        // top-level prefab entries would orphan them after respawn,
+        // because the in-place restructure can't reparent unknown ECS
+        // entities back under the brush they belong to. The brush spawn
+        // pipeline recreates them from the brush data, so they don't
+        // belong in the prefab file at all.
+        let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
+        if !ast.ecs_to_jsn.contains_key(&child) {
+            continue;
+        }
         out.push(child);
         collect_descendants(world, child, out);
     }
@@ -65,19 +76,24 @@ fn normalize_selection_roots(world: &World, roots: &[Entity]) -> Vec<Entity> {
     out
 }
 
-/// Save the given roots (and their descendants) as a single prefab file.
+/// Save the given roots (and their descendants) as a prefab file, then
+/// replace them in the source scene with a fresh instance.
 ///
 /// Selection normalization runs first: any entity whose ancestor is also
 /// in `roots` gets dropped (its parent already covers it). The remaining
 /// "top roots" are the ones that get packaged.
 ///
-/// Regardless of selection size the output is the same shape: a synthetic
-/// `PrefabRoot` entry (`PrefabEntityId(0)`) at index 0 with every top
-/// root and its descendants parented under it. The source scene's AST is
-/// then restructured so a new instance entity (carrying `IsA` +
-/// `PrefabEntityId(0)` + a centroid `Transform`) replaces the top roots
-/// at their original parent position, and the original entities become
-/// the instance's children with sequential `PrefabEntityId(1..N)`.
+/// If a selected root carries `IsA`, this is the **propagate** path:
+/// the instance's current resolved state (inherited + overrides +
+/// local-only children) is written back to the prefab file. The
+/// instance entity stays at its current scene position.
+///
+/// Otherwise this is the **bundle** path: the prefab file is written
+/// from the selection snapshot, the selection is removed from the
+/// source scene's AST and ECS, and a fresh instance is spawned at the
+/// selection's centroid via `spawn_instance`. The resolver then
+/// materialises the inherited children — same shape as a drag-spawn
+/// instance.
 pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target_path: &Path) {
     let normalized = normalize_selection_roots(world, roots);
     if normalized.is_empty() {
@@ -85,10 +101,42 @@ pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target
         return;
     }
 
+    // Propagate only when the selection is a single instance root, the
+    // target path matches its existing IsA source, AND the prefab is
+    // cached (i.e. it actually exists and the resolver can run).
+    // Anything else falls through to the bundle path, which strips
+    // any stale IsA and writes a fresh prefab.
+    let propagate_target = if normalized.len() == 1 {
+        let root = normalized[0];
+        let ast = world.resource::<SceneJsnAst>();
+        let cache = world.resource::<PrefabAstCache>();
+        ast.key_for_entity(root).and_then(|key| {
+            let isa = ast.get_component_at(key, ISA_TYPE)?;
+            let source = isa.get("source").and_then(|v| v.as_str())?;
+            if Path::new(source) == target_path && cache.get(target_path).is_some() {
+                Some(key)
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
+    if let Some(instance_key) = propagate_target {
+        propagate_instance_to_prefab(world, instance_key, target_path);
+        return;
+    }
+
+    save_selection_as_new_prefab(world, &normalized, target_path);
+}
+
+/// Bundle path: write a fresh prefab file from the snapshot and replace
+/// the selection in the source scene with an instance of the new prefab.
+fn save_selection_as_new_prefab(world: &mut World, normalized: &[Entity], target_path: &Path) {
     // BFS each top root in input order so `PrefabEntityId` assignment
     // 1..N is stable across runs.
     let mut entities: Vec<Entity> = Vec::new();
-    for &root in &normalized {
+    for &root in normalized {
         entities.push(root);
         collect_descendants(world, root, &mut entities);
     }
@@ -114,14 +162,13 @@ pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target
     // Centroid of the normalized top-roots becomes the new instance's
     // translation so the wrapper sits at the visual center of the
     // packaged geometry. Read GlobalTransform so a selection under a
-    // non-identity parent (e.g. a prior PrefabRoot) bundles relative to
-    // its real world position. Fall back to Transform for top-level
-    // entities where GlobalTransform hasn't been populated yet (first
-    // frame after spawn in tests that skip `app.update()`).
+    // non-identity parent bundles relative to its real world position;
+    // fall back to Transform for top-level entities where the resolver
+    // hasn't populated GlobalTransform yet (first frame after spawn).
     let centroid: bevy::math::Vec3 = {
         let mut sum = bevy::math::Vec3::ZERO;
         let mut count = 0u32;
-        for &root in &normalized {
+        for &root in normalized {
             if let Some(gt) = world.get::<bevy::prelude::GlobalTransform>(root) {
                 sum += gt.translation();
                 count += 1;
@@ -137,10 +184,45 @@ pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target
         }
     };
 
+    if !write_prefab_file(target_path, &snapshot, &entities, &top_root_set, centroid) {
+        return;
+    }
+
+    // Remove the AST entries for the packaged entities so the upcoming
+    // reload_all_instances doesn't respawn them alongside the new
+    // instance. The ECS entities will be cleaned up by reload's
+    // clear_scene_entities pass.
+    {
+        let mut ast = world.resource_mut::<SceneJsnAst>();
+        for &entity in &entities {
+            ast.remove_node(entity);
+        }
+    }
+
+    // spawn_instance adds the new instance node to the AST, then
+    // triggers reload_all_instances which clears + respawns the world.
+    // The resolver materialises the inherited children from the prefab
+    // file we just wrote, producing the same shape as a drag-spawn.
+    spawn_instance(world, target_path, centroid);
+}
+
+/// Write `snapshot` as a prefab file at `target_path`, with the
+/// synthetic root carrying `Name = file stem`, identity Transform, and
+/// `Visibility::Inherited`. Children's translations are shifted by
+/// `-centroid` so a fresh instance spawn reproduces the original world
+/// layout. Returns false on write failure.
+fn write_prefab_file(
+    target_path: &Path,
+    snapshot: &[JsnEntity],
+    entities: &[Entity],
+    top_root_set: &std::collections::HashSet<Entity>,
+    centroid: bevy::math::Vec3,
+) -> bool {
     // Strip stale prefab markers and shift every entry's parent index by
     // +1 because we'll prepend the synthetic root at index 0.
     let mut prefab_entities: Vec<JsnEntity> = snapshot
-        .into_iter()
+        .iter()
+        .cloned()
         .map(|mut e| {
             e.components.remove(PREFAB_TYPE);
             e.components.remove(ISA_TYPE);
@@ -155,8 +237,7 @@ pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target
     // Top roots in the snapshot had no parent (their natural parents
     // weren't in the slice). Parent them under the synthetic root and
     // shift their Transform.translation into the synthetic root's
-    // local frame so a fresh instance spawn reproduces the original
-    // world layout.
+    // local frame.
     for (i, entry) in prefab_entities.iter_mut().enumerate() {
         if entry.parent.is_none() && top_root_set.contains(&entities[i]) {
             entry.parent = Some(0);
@@ -176,36 +257,9 @@ pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target
         .and_then(|s| s.to_str())
         .unwrap_or("PrefabRoot")
         .to_string();
-    let synthetic_components = {
-        let mut map: HashMap<String, serde_json::Value> = HashMap::new();
-        map.insert(PREFAB_TYPE.to_string(), serde_json::Value::Null);
-        map.insert(PREFAB_ENTITY_ID_TYPE.to_string(), serde_json::json!(0));
-        map.insert(
-            "bevy_ecs::name::Name".to_string(),
-            serde_json::Value::String(display_name.clone()),
-        );
-        map.insert(
-            "bevy_transform::components::transform::Transform".to_string(),
-            serde_json::json!({
-                "translation": [0.0, 0.0, 0.0],
-                "rotation": [0.0, 0.0, 0.0, 1.0],
-                "scale": [1.0, 1.0, 1.0],
-            }),
-        );
-        // Visibility is required for Bevy's hierarchy propagation
-        // (InheritedVisibility, ViewVisibility, GlobalTransform). Without
-        // it, every descendant entity logs a B0004-style warning and
-        // renders at the wrong world position because the parent's
-        // GlobalTransform never updates.
-        map.insert(
-            "bevy_camera::visibility::Visibility".to_string(),
-            serde_json::Value::String("Inherited".to_string()),
-        );
-        map
-    };
     let synthetic_entry = JsnEntity {
         parent: None,
-        components: synthetic_components,
+        components: synthetic_root_components(display_name),
     };
 
     let mut final_entities: Vec<JsnEntity> = Vec::with_capacity(prefab_entities.len() + 1);
@@ -226,12 +280,155 @@ pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target
         Ok(t) => t,
         Err(err) => {
             warn!("save_as_prefab_from_selection: serialize failed: {err}");
+            return false;
+        }
+    };
+    if let Err(err) = std::fs::write(target_path, &text) {
+        warn!(
+            "save_as_prefab_from_selection: failed to write {}: {err}",
+            target_path.display()
+        );
+        return false;
+    }
+    true
+}
+
+/// Components for the synthetic prefab root entry at index 0:
+/// `Prefab` marker, `PrefabEntityId(0)`, `Name = display_name`,
+/// identity `Transform`, and `Visibility::Inherited`. Visibility is
+/// required for Bevy's hierarchy propagation (`InheritedVisibility` /
+/// `ViewVisibility` / `GlobalTransform`); the prefab needs to carry it
+/// so the resolver merges it onto each instance.
+fn synthetic_root_components(display_name: String) -> HashMap<String, serde_json::Value> {
+    let mut map: HashMap<String, serde_json::Value> = HashMap::new();
+    map.insert(PREFAB_TYPE.to_string(), serde_json::Value::Null);
+    map.insert(PREFAB_ENTITY_ID_TYPE.to_string(), serde_json::json!(0));
+    map.insert(
+        "bevy_ecs::name::Name".to_string(),
+        serde_json::Value::String(display_name),
+    );
+    map.insert(
+        "bevy_transform::components::transform::Transform".to_string(),
+        serde_json::json!({
+            "translation": [0.0, 0.0, 0.0],
+            "rotation": [0.0, 0.0, 0.0, 1.0],
+            "scale": [1.0, 1.0, 1.0],
+        }),
+    );
+    map.insert(
+        "bevy_camera::visibility::Visibility".to_string(),
+        serde_json::Value::String("Inherited".to_string()),
+    );
+    map
+}
+
+/// Propagate path: snapshot the instance's current resolved subtree
+/// (inherited + overrides + local-only) and write it back to the
+/// prefab file at `target_path`. The instance entity stays put in the
+/// source scene. Other instances of the same prefab pick up the new
+/// baseline on the next cache-driven respawn.
+fn propagate_instance_to_prefab(world: &mut World, instance_key: usize, target_path: &Path) {
+    // Resolve the source AST so the snapshot reflects merged overrides
+    // and materialised inherited descendants.
+    let resolved = {
+        let unresolved = world.resource::<SceneJsnAst>().clone();
+        let cache = world.resource::<PrefabAstCache>();
+        match crate::prefab::resolver::resolve_scene(&unresolved, cache) {
+            Ok(r) => r,
+            Err(err) => {
+                warn!("propagate_instance_to_prefab: resolver failed: {err}");
+                return;
+            }
+        }
+    };
+
+    // Find the resolved index for the instance. Since resolve_scene
+    // returns a clone with descendants appended (not inserted), the
+    // authored indices line up with the unresolved AST.
+    let resolved_instance_idx = instance_key;
+
+    // Walk the resolved AST under the instance to collect descendant
+    // indices in BFS order. These become the prefab's child entries.
+    let mut descendants: Vec<usize> = Vec::new();
+    let mut stack: Vec<usize> = vec![resolved_instance_idx];
+    while let Some(idx) = stack.pop() {
+        let children: Vec<usize> = resolved.children_of(idx).collect();
+        for child in children {
+            descendants.push(child);
+            stack.push(child);
+        }
+    }
+
+    // Build the child entries from the resolved AST. Strip prefab
+    // markers (they get rewritten with fresh sequential IDs) and remap
+    // parent indices to the prefab's index space: instance -> 0,
+    // descendants -> 1..N.
+    let mut old_to_new: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    old_to_new.insert(resolved_instance_idx, 0);
+    for (i, &d) in descendants.iter().enumerate() {
+        old_to_new.insert(d, i + 1);
+    }
+
+    let mut prefab_entries: Vec<JsnEntity> = Vec::with_capacity(descendants.len());
+    for &d in &descendants {
+        let Some(resolved_node) = resolved.nodes.get(d) else {
+            continue;
+        };
+        let mut components = resolved_node.components.clone();
+        components.remove(PREFAB_TYPE);
+        components.remove(ISA_TYPE);
+        components.remove(PREFAB_ENTITY_ID_TYPE);
+        let parent = resolved_node
+            .parent
+            .and_then(|p| old_to_new.get(&p).copied());
+        prefab_entries.push(JsnEntity { parent, components });
+    }
+
+    // Assign fresh sequential PrefabEntityIds 1..N.
+    for (i, entry) in prefab_entries.iter_mut().enumerate() {
+        entry.components.insert(
+            PREFAB_ENTITY_ID_TYPE.to_string(),
+            serde_json::json!((i + 1) as u32),
+        );
+    }
+
+    // Synthetic root takes its Name from the target file stem; its
+    // Transform is identity in the prefab file (the instance's
+    // placement transform stays in the scene file).
+    let display_name = target_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("PrefabRoot")
+        .to_string();
+    let synthetic_entry = JsnEntity {
+        parent: None,
+        components: synthetic_root_components(display_name),
+    };
+
+    let mut final_entities: Vec<JsnEntity> = Vec::with_capacity(prefab_entries.len() + 1);
+    final_entities.push(synthetic_entry);
+    final_entities.extend(prefab_entries);
+
+    let prefab_jsn = JsnScene {
+        jsn: JsnHeader::default(),
+        metadata: JsnMetadata::default(),
+        assets: JsnAssets::default(),
+        editor: None,
+        scene: final_entities,
+    };
+    if let Some(parent) = target_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let text = match serde_json::to_string_pretty(&prefab_jsn) {
+        Ok(t) => t,
+        Err(err) => {
+            warn!("propagate_instance_to_prefab: serialize failed: {err}");
             return;
         }
     };
-    if let Err(err) = std::fs::write(target_path, text) {
+    if let Err(err) = std::fs::write(target_path, &text) {
         warn!(
-            "save_as_prefab_from_selection: failed to write {}: {err}",
+            "propagate_instance_to_prefab: failed to write {}: {err}",
             target_path.display()
         );
         return;
@@ -247,87 +444,29 @@ pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target
             .record_saved_fingerprint(target_path, fp);
     }
 
-    // Restructure the source scene's AST: insert a new instance node and
-    // reparent the normalized top roots underneath it, tagging every
-    // packaged entity with the matching PrefabEntityId so the resolver
-    // treats them as already-materialised members of the instance.
+    // Clear local override / local-only entries under the instance.
+    // After propagation those values live in the prefab; respawning
+    // resolves them as inherited.
     {
         let mut ast = world.resource_mut::<SceneJsnAst>();
-
-        let instance_key = ast.add_root();
-        ast.insert_component(
-            instance_key,
-            ISA_TYPE,
-            serde_json::json!({
-                "source": target_path.to_string_lossy(),
-                "deleted": []
-            }),
-        );
-        ast.insert_component(instance_key, PREFAB_ENTITY_ID_TYPE, serde_json::json!(0));
-        ast.insert_component(
-            instance_key,
-            "bevy_transform::components::transform::Transform",
-            serde_json::json!({
-                "translation": [centroid.x, centroid.y, centroid.z],
-                "rotation": [0.0, 0.0, 0.0, 1.0],
-                "scale": [1.0, 1.0, 1.0],
-            }),
-        );
-        ast.insert_component(
-            instance_key,
-            "bevy_camera::visibility::Visibility",
-            serde_json::Value::String("Inherited".to_string()),
-        );
-
-        for (i, scene_entity) in entities.iter().enumerate() {
-            let Some(key) = ast.key_for_entity(*scene_entity) else {
-                // Source entity has no AST node yet; register one so the
-                // PrefabEntityId tag lands and the resolver recognises it
-                // as an already-materialised member.
-                let new_key = ast.add_root();
-                if let Some(node) = ast.nodes.get_mut(new_key) {
-                    node.ecs_entity = Some(*scene_entity);
-                    if top_root_set.contains(scene_entity) {
-                        node.parent = Some(instance_key);
-                    }
-                }
-                ast.ecs_to_jsn.insert(*scene_entity, new_key);
-                ast.insert_component(
-                    new_key,
-                    PREFAB_ENTITY_ID_TYPE,
-                    serde_json::json!((i + 1) as u32),
-                );
-                continue;
-            };
-            if top_root_set.contains(scene_entity) {
-                // Rewrite this top-root's Transform.translation into the
-                // instance's local frame so its world position survives
-                // reparenting. Only translation is adjusted; rotated /
-                // scaled selections will shift slightly because we don't
-                // run the full parent inverse-transform here.
-                let transform_path = "bevy_transform::components::transform::Transform";
-                let current = ast.get_component_at(key, transform_path).cloned();
-                let next = match current {
-                    Some(value) => shift_translation_value(value, -centroid),
-                    None => serde_json::json!({
-                        "translation": [-centroid.x, -centroid.y, -centroid.z],
-                        "rotation": [0.0, 0.0, 0.0, 1.0],
-                        "scale": [1.0, 1.0, 1.0],
-                    }),
-                };
-                ast.replace_component(key, transform_path, next);
-
-                if let Some(node) = ast.nodes.get_mut(key) {
-                    node.parent = Some(instance_key);
+        let child_keys: Vec<usize> = ast.children_of(instance_key).collect();
+        let mut entities_to_remove: Vec<Entity> = Vec::new();
+        for child_key in child_keys {
+            let descendants: Vec<usize> = ast.descendants_of(child_key);
+            for d in std::iter::once(child_key).chain(descendants) {
+                if let Some(node) = ast.nodes.get(d)
+                    && let Some(e) = node.ecs_entity
+                {
+                    entities_to_remove.push(e);
                 }
             }
-            ast.insert_component(
-                key,
-                PREFAB_ENTITY_ID_TYPE,
-                serde_json::json!((i + 1) as u32),
-            );
+        }
+        for entity in entities_to_remove {
+            ast.remove_node(entity);
         }
     }
+
+    crate::prefab::watcher::reload_all_instances(world);
 }
 
 /// Shift the `translation` field of a Transform JSON value by `offset`.
@@ -381,34 +520,149 @@ fn shift_transform_translation(
     components.insert(key.to_string(), shift_translation_value(value, offset));
 }
 
-/// Remove a prefab instance wrapper, leaving its inherited children as
-/// standalone entities at the wrapper's former parent slot. Strips
-/// `PrefabEntityId` markers from the promoted children and wipes the
-/// instance node so the resolver no longer materialises it.
+/// Remove a prefab instance wrapper, promoting its children to the
+/// wrapper's former parent slot. Inherited children (materialised by
+/// the resolver, ECS-only) are first promoted to authored AST nodes
+/// carrying their full component set from the prefab cache.
+/// Local-only children of the instance (AST nodes with no
+/// `PrefabEntityId`) are reparented unchanged.
 pub fn unbundle_instance(world: &mut World, instance_root_key: usize) {
-    let instance_parent = {
+    // Validate target + capture the parent slot and prefab source path.
+    let (instance_parent, prefab_path, instance_world_transform) = {
         let ast = world.resource::<SceneJsnAst>();
-        if ast.get_component_at(instance_root_key, ISA_TYPE).is_none() {
+        let Some(isa_value) = ast.get_component_at(instance_root_key, ISA_TYPE) else {
             warn!("unbundle_instance: target is not an IsA instance");
             return;
-        }
-        ast.nodes.get(instance_root_key).and_then(|n| n.parent)
+        };
+        let parent = ast.nodes.get(instance_root_key).and_then(|n| n.parent);
+        let source = isa_value
+            .get("source")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from);
+        let placement = ast
+            .get_component_at(
+                instance_root_key,
+                "bevy_transform::components::transform::Transform",
+            )
+            .cloned();
+        (parent, source, placement)
     };
 
+    // Resolve the source AST so we can read the full component set of
+    // every inherited descendant. The resolver merges prefab values +
+    // any local overrides; the merged values are what we promote to
+    // authored entries.
+    let resolved = {
+        let unresolved = world.resource::<SceneJsnAst>().clone();
+        let cache = world.resource::<PrefabAstCache>();
+        match crate::prefab::resolver::resolve_scene(&unresolved, cache) {
+            Ok(r) => r,
+            Err(err) => {
+                warn!("unbundle_instance: resolver failed: {err}");
+                return;
+            }
+        }
+    };
+
+    // Snapshot the instance's promoted children before we mutate the
+    // source AST. Each entry is (new_node_components, original_parent_idx_in_resolved).
+    let resolved_descendants: Vec<usize> = resolved.descendants_of(instance_root_key);
+
+    // For each inherited descendant, build a JsnEntityNode that
+    // captures its resolved components (without prefab markers) and
+    // its parent in the resolved AST. Top-of-subtree descendants get
+    // reparented to `instance_parent`; deeper descendants stay
+    // parented to their resolved-AST parent (which we'll rewire).
+    let mut promoted: Vec<(usize, HashMap<String, serde_json::Value>, Option<usize>)> = Vec::new();
+    for &d in &resolved_descendants {
+        let Some(node) = resolved.nodes.get(d) else {
+            continue;
+        };
+        let mut components = node.components.clone();
+        components.remove(PREFAB_TYPE);
+        components.remove(PREFAB_ENTITY_ID_TYPE);
+        components.remove(ISA_TYPE);
+        let parent_in_resolved = node.parent;
+        promoted.push((d, components, parent_in_resolved));
+    }
+
+    // Apply the instance's placement Transform to top-of-subtree
+    // promoted entries so unbundling preserves world positions. Top
+    // entries are those whose resolved parent IS the instance root.
+    let instance_offset: Option<bevy::math::Vec3> =
+        instance_world_transform.as_ref().and_then(|t| {
+            let arr = t.get("translation")?.as_array()?;
+            Some(bevy::math::Vec3::new(
+                arr.first()?.as_f64()? as f32,
+                arr.get(1)?.as_f64()? as f32,
+                arr.get(2)?.as_f64()? as f32,
+            ))
+        });
+
+    let _ = prefab_path; // path captured but not currently load-bearing; kept for future hooks
+
+    // Now mutate the source AST: insert authored nodes for each
+    // promoted descendant, reparent local-only children, then remove
+    // the instance node.
     {
         let mut ast = world.resource_mut::<SceneJsnAst>();
-        let child_keys: Vec<usize> = ast.children_of(instance_root_key).collect();
-        for child_key in child_keys {
+
+        // resolved_idx -> new authored node key in the source AST.
+        let mut resolved_to_new: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+
+        for (resolved_idx, mut components, parent_in_resolved) in promoted {
+            let new_key = ast.add_root();
+            for (type_path, value) in components.drain() {
+                ast.insert_component(new_key, &type_path, value);
+            }
+
+            // Resolve the new parent for this node:
+            // - If its resolved parent IS the instance, it's a top
+            //   subtree node; reparent to `instance_parent` and apply
+            //   the instance's placement transform offset.
+            // - Otherwise its resolved parent should already be in
+            //   `resolved_to_new` because we iterate in BFS order from
+            //   the resolver's `descendants_of`.
+            let new_parent = if parent_in_resolved == Some(instance_root_key) {
+                if let Some(offset) = instance_offset {
+                    let transform_path = "bevy_transform::components::transform::Transform";
+                    let current = ast.get_component_at(new_key, transform_path).cloned();
+                    let next = match current {
+                        Some(v) => shift_translation_value(v, offset),
+                        None => serde_json::json!({
+                            "translation": [offset.x, offset.y, offset.z],
+                            "rotation": [0.0, 0.0, 0.0, 1.0],
+                            "scale": [1.0, 1.0, 1.0],
+                        }),
+                    };
+                    ast.replace_component(new_key, transform_path, next);
+                }
+                instance_parent
+            } else {
+                parent_in_resolved.and_then(|p| resolved_to_new.get(&p).copied())
+            };
+            if let Some(node) = ast.nodes.get_mut(new_key) {
+                node.parent = new_parent;
+            }
+
+            resolved_to_new.insert(resolved_idx, new_key);
+        }
+
+        // Reparent any pre-existing local-only AST children of the
+        // instance (nodes that were authored under the instance in the
+        // source scene with no PrefabEntityId).
+        let local_children: Vec<usize> = ast.children_of(instance_root_key).collect();
+        for child_key in local_children {
             if let Some(node) = ast.nodes.get_mut(child_key) {
                 node.parent = instance_parent;
             }
-            ast.remove_component(child_key, PREFAB_ENTITY_ID_TYPE);
         }
 
-        // The AST has no node-removal API that keeps indices stable; the
-        // existing `remove_node` shifts indices and breaks every other
-        // tracked key. Wipe the node's components and detach it instead,
-        // which leaves the resolver / spawn path treating it as inert.
+        // Finally, wipe the instance node. We don't `remove_node`
+        // because that would shift every other index; clearing its
+        // components and detaching it leaves the spawn path treating
+        // it as inert.
         if let Some(node) = ast.nodes.get_mut(instance_root_key) {
             node.components.clear();
             node.derived_components.clear();

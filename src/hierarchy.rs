@@ -138,14 +138,13 @@ impl Plugin for HierarchyPlugin {
 }
 
 /// Classify a scene entity by its primary component for tree display.
+/// Returns the underlying category (Brush mesh, Camera, Light, etc.)
+/// regardless of whether the entity is inherited from a prefab. Inherited
+/// status is conveyed separately via [`is_inherited_descendant`] so the
+/// outliner can pair the right icon with a muted color.
 fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
     if world.get::<crate::prefab::IsA>(entity).is_some() {
         return EntityCategory::Prefab;
-    }
-    // Entity inherited from a prefab: has PrefabEntityId but no IsA.
-    // Marked separately so the outliner can draw it with a faint tinge.
-    if world.get::<crate::prefab::PrefabEntityId>(entity).is_some() {
-        return EntityCategory::Inherited;
     }
     if world.get::<BrushGroup>(entity).is_some() {
         return EntityCategory::Mesh;
@@ -166,6 +165,14 @@ fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
         return EntityCategory::Scene;
     }
     EntityCategory::Entity
+}
+
+/// True when this entity is an inherited descendant of a prefab instance
+/// (`PrefabEntityId` present, `IsA` absent). The outliner mutes such
+/// rows so they're visually distinguishable from authored entities.
+fn is_inherited_descendant(world: &World, entity: Entity) -> bool {
+    world.get::<crate::prefab::IsA>(entity).is_none()
+        && world.get::<crate::prefab::PrefabEntityId>(entity).is_some()
 }
 
 /// Check if an entity has any non-editor children.
@@ -242,12 +249,21 @@ fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: En
         .unwrap_or_else(|| format!("Entity {source}"));
     let has_children = has_visible_children(world, source);
     let category = classify_entity(world, source);
+    let inherited = is_inherited_descendant(world, source);
     let icon_font = world.resource::<IconFont>().0.clone();
     let style = TreeRowStyle { icon_font };
 
     let tree_row_entity = world
         .spawn((
-            tree_row(&label, has_children, false, source, category, &style),
+            tree_row(
+                &label,
+                has_children,
+                false,
+                source,
+                category,
+                inherited,
+                &style,
+            ),
             ChildOf(parent_container),
         ))
         .id();

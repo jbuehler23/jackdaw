@@ -66,6 +66,56 @@ pub(crate) struct PrefabFieldOverrideDot {
     pub(crate) field_path: String,
 }
 
+/// Compute the set of component type paths to treat as "AST-tracked"
+/// for inspector filtering. For ECS-only inherited descendants of a
+/// prefab instance (entity has `PrefabEntityId` but no AST node), the
+/// AST has nothing to anchor on; fall back to the matching entry in the
+/// prefab cache so the inspector still has a baseline component set to
+/// render against.
+fn inspector_type_paths_for(
+    ast: &SceneJsnAst,
+    prefab_cache: &PrefabAstCache,
+    source_entity: Entity,
+    entity_ref: bevy::ecs::world::EntityRef,
+    child_of_query: &Query<&bevy::ecs::hierarchy::ChildOf>,
+    isa_query: &Query<&crate::prefab::IsA>,
+) -> HashSet<String> {
+    if let Some(node) = ast.node_for_entity(source_entity) {
+        return node.components.keys().cloned().collect();
+    }
+    let Some(peid) = entity_ref.get::<crate::prefab::PrefabEntityId>() else {
+        return HashSet::new();
+    };
+    // Walk up ChildOf to find the nearest ancestor with IsA.
+    let mut current = source_entity;
+    let isa_source = loop {
+        let Ok(child_of) = child_of_query.get(current) else {
+            return HashSet::new();
+        };
+        let parent = child_of.0;
+        if let Ok(isa) = isa_query.get(parent) {
+            break isa.source.clone();
+        }
+        current = parent;
+    };
+    let Some(prefab) = prefab_cache.get(&isa_source) else {
+        return HashSet::new();
+    };
+    let prefab_entity_id_type = "jackdaw::prefab::components::PrefabEntityId";
+    for node in &prefab.nodes {
+        let matches = node
+            .components
+            .get(prefab_entity_id_type)
+            .and_then(serde_json::Value::as_u64)
+            .map(|u| u as u32)
+            == Some(peid.0);
+        if matches {
+            return node.components.keys().cloned().collect();
+        }
+    }
+    HashSet::new()
+}
+
 pub(crate) fn add_component_displays(
     _: On<Add, Selected>,
     mut commands: Commands,
@@ -80,6 +130,8 @@ pub(crate) fn add_component_displays(
     materials: Res<Assets<StandardMaterial>>,
     ast: Res<jackdaw_jsn::SceneJsnAst>,
     prefab_cache: Res<PrefabAstCache>,
+    child_of_query: Query<&bevy::ecs::hierarchy::ChildOf>,
+    isa_query: Query<&crate::prefab::IsA>,
 ) {
     let Some(primary) = selection.primary() else {
         return;
@@ -91,11 +143,14 @@ pub(crate) fn add_component_displays(
     let source_entity = entity_ref.entity();
     let sel_count = selection.entities.len();
 
-    // Collect AST-tracked component type paths
-    let jsn_type_paths: HashSet<String> = ast
-        .node_for_entity(source_entity)
-        .map(|node| node.components.keys().cloned().collect())
-        .unwrap_or_default();
+    let jsn_type_paths = inspector_type_paths_for(
+        &ast,
+        &prefab_cache,
+        source_entity,
+        entity_ref,
+        &child_of_query,
+        &isa_query,
+    );
 
     // Build the same component panel into every Inspector instance.
     // Multi-instance dock layouts can host more than one inspector
@@ -606,6 +661,8 @@ pub(crate) fn on_inspector_dirty(
     materials: Res<Assets<StandardMaterial>>,
     ast: Res<jackdaw_jsn::SceneJsnAst>,
     prefab_cache: Res<PrefabAstCache>,
+    child_of_query: Query<&bevy::ecs::hierarchy::ChildOf>,
+    isa_query: Query<&crate::prefab::IsA>,
 ) {
     // Multi-instance: rebuild every Inspector tab in lockstep. Each
     // inspector entity carries its own `InspectorTarget`; the dirty
@@ -645,10 +702,14 @@ pub(crate) fn on_inspector_dirty(
         };
         let sel_count = selection.entities.len();
 
-        let jsn_type_paths: HashSet<String> = ast
-            .node_for_entity(source_entity)
-            .map(|node| node.components.keys().cloned().collect())
-            .unwrap_or_default();
+        let jsn_type_paths = inspector_type_paths_for(
+            &ast,
+            &prefab_cache,
+            source_entity,
+            entity_ref,
+            &child_of_query,
+            &isa_query,
+        );
 
         build_inspector_displays(
             &mut commands,
