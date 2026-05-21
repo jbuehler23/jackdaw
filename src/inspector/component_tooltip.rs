@@ -11,7 +11,7 @@
 
 use std::borrow::Cow;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_feathers::tooltip::Tooltip;
 
 use jackdaw_runtime::EditorDescription;
@@ -61,9 +61,9 @@ fn auto_attach_reflected_type_tooltip(
     // `custom_attributes()` lives on the variant types
     // (StructInfo / EnumInfo / ...), so reach in via a match.
     let attrs = match info {
-        bevy::reflect::TypeInfo::Struct(s) => Some(s.custom_attributes()),
-        bevy::reflect::TypeInfo::TupleStruct(s) => Some(s.custom_attributes()),
-        bevy::reflect::TypeInfo::Enum(e) => Some(e.custom_attributes()),
+        bevy_reflect::TypeInfo::Struct(s) => Some(s.custom_attributes()),
+        bevy_reflect::TypeInfo::TupleStruct(s) => Some(s.custom_attributes()),
+        bevy_reflect::TypeInfo::Enum(e) => Some(e.custom_attributes()),
         _ => None,
     };
     let description = attrs

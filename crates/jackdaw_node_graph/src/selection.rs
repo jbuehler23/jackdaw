@@ -5,7 +5,7 @@
 //! selection. The API mirrors `src/selection.rs` (`select_single`, `toggle`,
 //! `extend`, `clear`) so interaction code reads the same.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 
 use crate::graph::GraphNodeSelected;
 

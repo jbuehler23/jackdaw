@@ -1,5 +1,7 @@
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
+use bevy_log::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
 use jackdaw_feathers::{
@@ -92,12 +94,15 @@ impl JackdawExtension for JackdawCoreExtension {
     fn register(&self, ctx: &mut ExtensionContext) {
         ctx.entity_mut().insert((
             CoreExtensionInputContext,
-            actions!(
-                CoreExtensionInputContext[(
-                    Action::<CancelModalOp>::new(),
-                    bindings!((KeyCode::Escape, Press::default()))
-                )]
-            ),
+            related!(Actions<CoreExtensionInputContext>[(
+                Action::<CancelModalOp>::new(),
+                related!(
+                    Bindings[IntoBindingBundle::into_binding_bundle((
+                        KeyCode::Escape,
+                        Press::default()
+                    ))]
+                )
+            )]),
         ));
 
         ctx.register_operator::<CancelModalOp>();
@@ -122,10 +127,10 @@ impl JackdawExtension for JackdawCoreExtension {
         ctx.spawn((
             Action::<crate::ClipDeleteKeyframesOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![
-                (KeyCode::Delete, Press::default()),
-                (KeyCode::Backspace, Press::default()),
-            ],
+            related!(Bindings[
+                IntoBindingBundle::into_binding_bundle((KeyCode::Delete, Press::default())),
+                IntoBindingBundle::into_binding_bundle((KeyCode::Backspace, Press::default()))
+            ]),
         ));
         // No `Press` on Step Left / Right: holding an arrow scrubs
         // the timeline frame-by-frame. Shift+Arrow keyframe jumps
@@ -133,54 +138,71 @@ impl JackdawExtension for JackdawCoreExtension {
         ctx.spawn((
             Action::<crate::ClipTimelineStepLeftOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![KeyCode::ArrowLeft],
+            related!(Bindings[
+                IntoBindingBundle::into_binding_bundle(KeyCode::ArrowLeft),
+            ]),
         ));
         ctx.spawn((
             Action::<crate::ClipTimelineStepRightOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![KeyCode::ArrowRight],
+            related!(Bindings[
+                IntoBindingBundle::into_binding_bundle(KeyCode::ArrowRight),
+            ]),
         ));
         ctx.spawn((
             Action::<crate::ClipTimelineJumpPrevOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![(
-                KeyCode::ArrowLeft.with_mod_keys(ModKeys::SHIFT),
-                Press::default(),
-            )],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    KeyCode::ArrowLeft.with_mod_keys(ModKeys::SHIFT),
+                    Press::default(),
+                ))]
+            ),
         ));
         ctx.spawn((
             Action::<crate::ClipTimelineJumpNextOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![(
-                KeyCode::ArrowRight.with_mod_keys(ModKeys::SHIFT),
-                Press::default(),
-            )],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    KeyCode::ArrowRight.with_mod_keys(ModKeys::SHIFT),
+                    Press::default(),
+                ))]
+            ),
         ));
         ctx.spawn((
             Action::<crate::ClipTimelineJumpStartOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![(KeyCode::Home, Press::default())],
+            related!(
+                Bindings
+                    [IntoBindingBundle::into_binding_bundle((KeyCode::Home, Press::default(),))]
+            ),
         ));
         ctx.spawn((
             Action::<crate::ClipTimelineJumpEndOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![(KeyCode::End, Press::default())],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((KeyCode::End, Press::default(),))]
+            ),
         ));
         ctx.spawn((
             Action::<crate::ClipCopyKeyframesOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![(
-                KeyCode::KeyC.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    KeyCode::KeyC.with_mod_keys(ModKeys::CONTROL),
+                    Press::default(),
+                ))]
+            ),
         ));
         ctx.spawn((
             Action::<crate::ClipPasteKeyframesOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![(
-                KeyCode::KeyV.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    KeyCode::KeyV.with_mod_keys(ModKeys::CONTROL),
+                    Press::default(),
+                ))]
+            ),
         ));
         crate::draw_brush::add_to_extension(ctx);
         crate::measure_tool::add_to_extension(ctx);
@@ -195,6 +217,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::edit_mode_ops::add_to_extension(ctx);
         crate::entity_ops::add_to_extension(ctx);
         crate::transform_ops::add_to_extension(ctx);
+        #[cfg(feature = "avian")]
         crate::physics_tool::add_to_extension(ctx);
         crate::hierarchy::add_to_extension(ctx);
         crate::viewport_select::add_to_extension(ctx);
@@ -234,6 +257,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::brush::topology_ops::reconvexify::add_to_extension(ctx);
         crate::gizmos::add_to_extension(ctx);
         crate::terrain::sculpt::add_to_extension(ctx);
+        #[cfg(feature = "navmesh")]
         crate::navmesh::ops::add_to_extension(ctx);
         crate::pie::add_to_extension(ctx);
         crate::terrain::ops::add_to_extension(ctx);

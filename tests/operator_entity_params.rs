@@ -21,9 +21,11 @@
 //!    `PropertyValue::Int`, that's a deliberate behaviour change and
 //!    these tests will demand attention.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
+#[cfg(feature = "avian")]
 use jackdaw_avian_integration::AvianCollider;
 use jackdaw_jsn::PropertyValue;
 
@@ -211,6 +213,7 @@ fn component_remove_with_entity_param_removes_component() {
 }
 
 #[test]
+#[cfg(feature = "avian")]
 fn physics_enable_with_entity_param_attaches_components() {
     use avian3d::prelude::RigidBody;
 
@@ -238,6 +241,7 @@ fn physics_enable_with_entity_param_attaches_components() {
 }
 
 #[test]
+#[cfg(feature = "avian")]
 fn physics_disable_with_entity_param_detaches_components() {
     use avian3d::prelude::ColliderConstructor;
     use avian3d::prelude::RigidBody;

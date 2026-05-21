@@ -13,7 +13,8 @@
 //! [`{{crate_name}}::{{crate_name | pascal_case}}`] the same way this
 //! launcher does.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw::prelude::*;
 
 fn main() -> AppExit {

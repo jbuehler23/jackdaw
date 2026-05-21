@@ -1,5 +1,6 @@
-use bevy::color::palettes::tailwind;
-use bevy::prelude::*;
+use bevy_color::palettes::tailwind;
+use bevy_color::prelude::*;
+use bevy_ui::prelude::*;
 
 // ---------------------------------------------------------------------------
 // Corner radii

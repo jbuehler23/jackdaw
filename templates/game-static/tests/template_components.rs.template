@@ -6,7 +6,8 @@
 
 use std::collections::HashSet;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw::inspector::component_picker::{PickerDenylist, enumerate_pickable_components};
 
 #[test]
@@ -21,7 +22,7 @@ fn user_components_reach_picker() {
 
     let registry = app
         .world()
-        .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+        .resource::<bevy_ecs::reflect::AppTypeRegistry>()
         .read();
     let pickables =
         enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());

@@ -5,8 +5,13 @@ pub mod materials;
 mod setup;
 mod visuals;
 
-use bevy::asset::embedded_asset;
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_asset::embedded_asset;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_ui_render::prelude::*;
+use bevy_utils::prelude::*;
 
 use color_math::{hsv_to_rgb, rgb_to_hsv};
 pub use materials::{

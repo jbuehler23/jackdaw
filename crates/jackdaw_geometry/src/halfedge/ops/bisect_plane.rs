@@ -15,7 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 
 use crate::BrushPlane;
 use crate::halfedge::ops::edge_split::split_edge;

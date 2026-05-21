@@ -1,4 +1,6 @@
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
 use bevy_rerecast::prelude::*;
 use jackdaw_api::prelude::*;
 

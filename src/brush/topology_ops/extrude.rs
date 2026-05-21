@@ -11,10 +11,10 @@
 //! chained selection behavior: post-commit, `BrushSelection.faces` is updated
 //! to the new top face indices.
 
-use bevy::prelude::*;
-use bevy::ui::ui_transform::UiGlobalTransform;
-use bevy::window::PrimaryWindow;
+use bevy_ecs::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
+use bevy_ui::ui_transform::UiGlobalTransform;
+use bevy_window::PrimaryWindow;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::ops::extrude_face_region::extrude_face_region;
@@ -704,7 +704,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             Action::<BrushExtrudeOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::KeyE, Press::default())],
+            related!(
+                Bindings
+                    [IntoBindingBundle::into_binding_bundle((KeyCode::KeyE, Press::default(),))]
+            ),
         ));
     });
 }

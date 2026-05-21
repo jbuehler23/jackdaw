@@ -1,7 +1,5 @@
-use bevy::{
-    input::mouse::{MouseScrollUnit, MouseWheel},
-    prelude::*,
-};
+use bevy_ecs::prelude::*;
+use bevy_input::mouse::{MouseScrollUnit, MouseWheel};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 

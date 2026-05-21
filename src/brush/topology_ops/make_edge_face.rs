@@ -1,6 +1,6 @@
 //! `brush.mesh.make_edge_face` operator.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::VertKey;
 use jackdaw_geometry::halfedge::ops::contextual_create::{ContextualResult, contextual_create};

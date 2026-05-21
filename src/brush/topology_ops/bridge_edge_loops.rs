@@ -2,7 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::bridge_edge_loops::bridge_edge_loops;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};

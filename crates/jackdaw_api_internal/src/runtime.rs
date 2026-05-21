@@ -49,12 +49,11 @@
 use std::any::TypeId;
 use std::collections::HashMap;
 
-use bevy::ecs::intern::Interned;
-use bevy::ecs::schedule::{IntoScheduleConfigs, ScheduleLabel, Schedules, SystemSet};
-use bevy::ecs::system::ScheduleSystem;
-use bevy::ecs::world::World;
-use bevy::prelude::{AppTypeRegistry, Component};
-use bevy::reflect::GetTypeRegistration;
+use bevy_ecs::prelude::*;
+use bevy_ecs::schedule::ScheduleLabel;
+use bevy_ecs::system::ScheduleSystem;
+use bevy_ecs::{intern::Interned, system::IntoObserverSystem};
+use bevy_reflect::GetTypeRegistration;
 
 /// `SystemSet` marker for every system the game registers. Parameterised
 /// by the game's static name so multiple games can coexist without
@@ -86,7 +85,7 @@ pub struct GameBookkeeping {
 
 /// Registry mapping game name -> bookkeeping. Lives as a `World`
 /// resource so teardown can always find it.
-#[derive(Default, Debug, bevy::prelude::Resource)]
+#[derive(Default, Debug, Resource)]
 pub struct GameRegistry {
     games: HashMap<String, GameBookkeeping>,
 }
@@ -162,7 +161,7 @@ impl<'w> GameApp<'w> {
         let set = GameSystems(self.name);
         let configured = systems.in_set(set);
         let interned = schedule.clone().intern();
-        bevy::log::debug!(
+        bevy_log::debug!(
             "GameApp::add_systems called by `{}` into schedule {:?}",
             self.name,
             interned
@@ -183,7 +182,7 @@ impl<'w> GameApp<'w> {
 
     /// Insert a resource. Records the resource's `TypeId` so
     /// teardown can remove it.
-    pub fn insert_resource<R: bevy::prelude::Resource>(&mut self, res: R) -> &mut Self {
+    pub fn insert_resource<R: Resource>(&mut self, res: R) -> &mut Self {
         let id = TypeId::of::<R>();
         self.world.insert_resource(res);
         let entry = self
@@ -199,7 +198,7 @@ impl<'w> GameApp<'w> {
 
     /// Initialise a resource from `Default`. Same tracking as
     /// `insert_resource`.
-    pub fn init_resource<R: bevy::prelude::Resource + Default>(&mut self) -> &mut Self {
+    pub fn init_resource<R: Resource + Default>(&mut self) -> &mut Self {
         let id = TypeId::of::<R>();
         self.world.init_resource::<R>();
         let entry = self
@@ -262,7 +261,7 @@ impl<'w> GameApp<'w> {
         // `resource_scope` moves `Schedules` out of the World so
         // `remove_systems_in_set` gets disjoint `&mut World` and
         // `&mut Schedules` access.
-        use bevy::ecs::schedule::{ScheduleCleanupPolicy, Schedules};
+        use bevy_ecs::schedule::{ScheduleCleanupPolicy, Schedules};
         let name = self.name;
         let schedule_labels: Vec<_> = book.schedules.clone();
         self.world
@@ -274,12 +273,12 @@ impl<'w> GameApp<'w> {
                         world,
                         ScheduleCleanupPolicy::RemoveSystemsOnly,
                     ) {
-                        Ok(count) => bevy::log::debug!(
+                        Ok(count) => bevy_log::debug!(
                             "teardown: removed {count} systems from GameSystems({name}) \
                              in schedule {:?}",
                             label
                         ),
-                        Err(e) => bevy::log::warn!(
+                        Err(e) => bevy_log::warn!(
                             "teardown: remove_systems_in_set for GameSystems({name}) \
                              in schedule {:?} failed: {e:?}",
                             label
@@ -290,9 +289,7 @@ impl<'w> GameApp<'w> {
 
         // 2) Observer entities tagged with `GameRegistered(name)`.
         let mut to_despawn = Vec::new();
-        let mut q = self
-            .world
-            .query::<(bevy::prelude::Entity, &GameRegistered)>();
+        let mut q = self.world.query::<(Entity, &GameRegistered)>();
         for (entity, tag) in q.iter(self.world) {
             if tag.0 == name {
                 to_despawn.push(entity);
@@ -344,8 +341,8 @@ impl<'w> GameApp<'w> {
         observer: impl IntoObserverSystemBoxed<E, B, M>,
     ) -> &mut Self
     where
-        E: bevy::prelude::Event,
-        B: bevy::prelude::Bundle,
+        E: Event,
+        B: Bundle,
     {
         let tag = GameRegistered(self.name);
         let observer = observer.into_boxed_observer();
@@ -360,16 +357,16 @@ impl<'w> GameApp<'w> {
 /// (function) or a pre-built `Observer`. Monomorphised into the
 /// same path.
 pub trait IntoObserverSystemBoxed<E, B, M>: 'static {
-    fn into_boxed_observer(self) -> bevy::prelude::Observer;
+    fn into_boxed_observer(self) -> Observer;
 }
 
 impl<E, B, M, S> IntoObserverSystemBoxed<E, B, M> for S
 where
-    E: bevy::prelude::Event,
-    B: bevy::prelude::Bundle,
-    S: bevy::ecs::system::IntoObserverSystem<E, B, M> + 'static,
+    E: Event,
+    B: Bundle,
+    S: IntoObserverSystem<E, B, M> + 'static,
 {
-    fn into_boxed_observer(self) -> bevy::prelude::Observer {
-        bevy::prelude::Observer::new(self)
+    fn into_boxed_observer(self) -> Observer {
+        Observer::new(self)
     }
 }

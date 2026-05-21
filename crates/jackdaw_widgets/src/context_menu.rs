@@ -1,5 +1,7 @@
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
+use bevy_input::prelude::*;
 
 /// System set containing the context menu close systems.
 /// Order your context menu openers `.after(ContextMenuCloseSet)` to avoid
@@ -37,12 +39,10 @@ pub struct ContextMenuDismissAction;
 fn spawn_context_menu_input_context(mut commands: Commands) {
     commands.spawn((
         ContextMenuInputContext,
-        actions!(
-            ContextMenuInputContext[(
-                Action::<ContextMenuDismissAction>::new(),
-                bindings!((KeyCode::Escape, Press::default()))
-            )]
-        ),
+        related!(Actions<ContextMenuInputContext>[(
+            Action::<ContextMenuDismissAction>::new(),
+            related!(Bindings[IntoBindingBundle::into_binding_bundle((KeyCode::Escape, Press::default()))])
+        )]),
     ));
 }
 

@@ -5,8 +5,9 @@ mod loader;
 pub mod mesh_rebuild;
 pub mod types;
 
-use bevy::prelude::*;
+use bevy_app::prelude::*;
 
+use bevy_asset::AssetApp as _;
 // Re-export core types for consumer convenience
 pub use editor_meta::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 pub use types::{

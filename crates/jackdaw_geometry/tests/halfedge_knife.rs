@@ -12,7 +12,7 @@
 //! step; the operator code lives in `src/brush/topology_ops/knife.rs`
 //! in the editor crate.
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_geometry::halfedge::{
     EdgeKey, FaceKey, HalfedgeMesh, VertKey,
     ops::{edge_split::split_edge, face_poke::face_poke, face_split::split_face},

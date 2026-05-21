@@ -1,4 +1,4 @@
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_geometry::{
     AttributeStack, BrushTopology, EdgeFlag, MeshEdge, MeshLoop, MeshPoly, MeshVert,
 };

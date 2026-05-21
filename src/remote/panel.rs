@@ -1,4 +1,5 @@
-use bevy::{prelude::*, ui_widgets::observe};
+use bevy_ecs::prelude::*;
+use bevy_ui_widgets::observe;
 use jackdaw_feathers::{popover, tokens};
 
 use super::connection::{ConnectionManager, ConnectionState};

@@ -1,4 +1,6 @@
-use bevy::{picking::hover::Hovered, prelude::*, ui_widgets::observe};
+use bevy_ecs::prelude::*;
+use bevy_picking::hover::Hovered;
+use bevy_ui_widgets::observe;
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{self, ButtonOperatorCall, ButtonSize, ButtonVariant},
@@ -22,10 +24,12 @@ use crate::{
     hierarchy::{HierarchyPanel, HierarchyShowAllButton, HierarchyTreeContainer},
     inspector::Inspector,
     measure_tool::MeasureDistanceOp,
-    physics_tool::PhysicsActivateOp,
     remote::ConnectionManager,
     viewport::SceneViewport,
 };
+
+#[cfg(feature = "avian")]
+use crate::physics_tool::PhysicsActivateOp;
 
 /// Discriminator for the header tab kinds the editor knows how to host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -423,6 +427,25 @@ pub fn project_files_panel_content() -> impl Bundle {
 /// "center" leaf in one go. Public to the crate because it's spawned
 /// by the viewport plugin, not by `editor_layout` directly.
 pub(crate) fn viewport_with_toolbar() -> impl Bundle {
+    let children = {
+        #[cfg(feature = "navmesh")]
+        {
+            children![
+                toolbar(),
+                crate::navmesh::toolbar::navmesh_toolbar(),
+                crate::terrain::toolbar::terrain_toolbar(),
+                scene_view(),
+            ]
+        }
+        #[cfg(not(feature = "navmesh"))]
+        {
+            children![
+                toolbar(),
+                crate::terrain::toolbar::terrain_toolbar(),
+                scene_view(),
+            ]
+        }
+    };
     (
         EditorEntity,
         Node {
@@ -434,12 +457,7 @@ pub(crate) fn viewport_with_toolbar() -> impl Bundle {
             ..Default::default()
         },
         BackgroundColor(tokens::PANEL_BG),
-        children![
-            toolbar(),
-            crate::navmesh::toolbar::navmesh_toolbar(),
-            crate::terrain::toolbar::terrain_toolbar(),
-            scene_view(),
-        ],
+        children,
     )
 }
 
@@ -453,6 +471,52 @@ fn toolbar() -> impl Bundle {
     //
     // Sizing matches the Figma viewport-toolbar spec: 30px tall, 1px
     // border, top corners rounded against the panel below.
+    let children = {
+        #[cfg(feature = "avian")]
+        {
+            children![
+                toolbar_op_button::<GizmoModeTranslateOp>(Icon::Move3d),
+                toolbar_op_button::<GizmoModeRotateOp>(Icon::Rotate3d),
+                toolbar_op_button::<GizmoModeScaleOp>(Icon::Scale3d),
+                separator::separator(separator::SeparatorProps::vertical()),
+                // Gizmo space toggle. Active highlight = `Local`; default
+                // = `World`. Tooltip is the discoverability path.
+                toolbar_op_button::<GizmoSpaceToggleOp>(Icon::Globe),
+                separator::separator(separator::SeparatorProps::vertical()),
+                toolbar_op_button::<EditModeObjectOp>(Icon::MousePointer2),
+                toolbar_op_button::<ActivateDrawBrushModalOp>(Icon::Box),
+                toolbar_op_button::<MeasureDistanceOp>(Icon::RulerDimensionLine),
+                toolbar_op_button::<EditModeVertexOp>(Icon::CircleDot),
+                toolbar_op_button::<EditModeEdgeOp>(Icon::GitCommitHorizontal),
+                toolbar_op_button::<EditModeFaceOp>(Icon::Hexagon),
+                toolbar_op_button::<EditModeClipOp>(Icon::ScissorsLineDashed),
+                separator::separator(separator::SeparatorProps::vertical()),
+                toolbar_op_button::<PhysicsActivateOp>(Icon::Zap),
+            ]
+        }
+
+        #[cfg(not(feature = "avian"))]
+        {
+            children![
+                toolbar_op_button::<GizmoModeTranslateOp>(Icon::Move3d),
+                toolbar_op_button::<GizmoModeRotateOp>(Icon::Rotate3d),
+                toolbar_op_button::<GizmoModeScaleOp>(Icon::Scale3d),
+                separator::separator(separator::SeparatorProps::vertical()),
+                // Gizmo space toggle. Active highlight = `Local`; default
+                // = `World`. Tooltip is the discoverability path.
+                toolbar_op_button::<GizmoSpaceToggleOp>(Icon::Globe),
+                separator::separator(separator::SeparatorProps::vertical()),
+                toolbar_op_button::<EditModeObjectOp>(Icon::MousePointer2),
+                toolbar_op_button::<ActivateDrawBrushModalOp>(Icon::Box),
+                toolbar_op_button::<MeasureDistanceOp>(Icon::RulerDimensionLine),
+                toolbar_op_button::<EditModeVertexOp>(Icon::CircleDot),
+                toolbar_op_button::<EditModeEdgeOp>(Icon::GitCommitHorizontal),
+                toolbar_op_button::<EditModeFaceOp>(Icon::Hexagon),
+                toolbar_op_button::<EditModeClipOp>(Icon::ScissorsLineDashed),
+                separator::separator(separator::SeparatorProps::vertical()),
+            ]
+        }
+    };
     (
         Toolbar,
         EditorEntity,
@@ -480,25 +544,7 @@ fn toolbar() -> impl Bundle {
         },
         BackgroundColor(tokens::PANEL_HEADER_BG),
         BorderColor::all(tokens::TOOLBAR_BORDER),
-        children![
-            toolbar_op_button::<GizmoModeTranslateOp>(Icon::Move3d),
-            toolbar_op_button::<GizmoModeRotateOp>(Icon::Rotate3d),
-            toolbar_op_button::<GizmoModeScaleOp>(Icon::Scale3d),
-            separator::separator(separator::SeparatorProps::vertical()),
-            // Gizmo space toggle. Active highlight = `Local`; default
-            // = `World`. Tooltip is the discoverability path.
-            toolbar_op_button::<GizmoSpaceToggleOp>(Icon::Globe),
-            separator::separator(separator::SeparatorProps::vertical()),
-            toolbar_op_button::<EditModeObjectOp>(Icon::MousePointer2),
-            toolbar_op_button::<ActivateDrawBrushModalOp>(Icon::Box),
-            toolbar_op_button::<MeasureDistanceOp>(Icon::RulerDimensionLine),
-            toolbar_op_button::<EditModeVertexOp>(Icon::CircleDot),
-            toolbar_op_button::<EditModeEdgeOp>(Icon::GitCommitHorizontal),
-            toolbar_op_button::<EditModeFaceOp>(Icon::Hexagon),
-            toolbar_op_button::<EditModeClipOp>(Icon::ScissorsLineDashed),
-            separator::separator(separator::SeparatorProps::vertical()),
-            toolbar_op_button::<PhysicsActivateOp>(Icon::Zap),
-        ],
+        children,
     )
 }
 
@@ -741,10 +787,18 @@ pub fn update_toolbar_button_variants(
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Clip)
         } else if call.id == EditModeKnifeOp::ID {
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Knife)
-        } else if call.id == PhysicsActivateOp::ID {
-            *edit_mode == EditMode::Physics
         } else {
-            false
+            #[cfg(feature = "avian")]
+            if call.id == PhysicsActivateOp::ID {
+                *edit_mode == EditMode::Physics
+            } else {
+                false
+            }
+
+            #[cfg(not(feature = "avian"))]
+            {
+                false
+            }
         };
         // Inactive toolbar buttons fall back to `Ghost` (transparent)
         // so only the active one stands out as solid grey. Using
@@ -855,7 +909,7 @@ fn editor_status_bar() -> impl Bundle {
                     font_size: tokens::FONT_SM,
                     ..Default::default()
                 },
-                bevy::feathers::theme::ThemedText,
+                bevy_feathers::theme::ThemedText,
             ),
             (
                 status_bar::StatusBarCenter,

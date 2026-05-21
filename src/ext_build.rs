@@ -161,7 +161,7 @@ fn discover_sdk() -> Result<SdkPaths, BuildError> {
         // it before giving up so the first scaffold-then-build flow
         // just works.
         if let Some(checkout) = crate::new_project::jackdaw_dev_checkout() {
-            bevy::log::info!(
+            bevy_log::info!(
                 "Auto-building jackdaw_rustc_wrapper from dev checkout at {}",
                 checkout.display()
             );

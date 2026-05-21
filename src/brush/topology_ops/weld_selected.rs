@@ -3,7 +3,7 @@
 //! to "merge these specific verts into one". Different from "Merge by Distance"
 //! which only welds verts that are already coincident within a threshold.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::HalfedgeMesh;
 use jackdaw_geometry::halfedge::ops::remove_doubles::remove_doubles;

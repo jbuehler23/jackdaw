@@ -1,7 +1,7 @@
 //! Generic hover-tooltip primitive.
 //!
 //! Any UI entity that carries a [`Tooltip`] component plus
-//! [`bevy::picking::hover::Hovered`] gets a Blender-style popover
+//! [`bevy_picking::hover::Hovered`] gets a Blender-style popover
 //! after a short delay: bold title, optional wrapped description,
 //! optional dim footer (operator signature, type path, etc.).
 //!
@@ -18,7 +18,14 @@
 
 use std::time::Duration;
 
-use bevy::{picking::hover::Hovered, prelude::*, window::PrimaryWindow};
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_picking::hover::Hovered;
+use bevy_text::prelude::*;
+use bevy_time::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
+use bevy_window::{PrimaryWindow, prelude::*};
 
 use crate::{
     popover::{self, PopoverPlacement, PopoverProps},
@@ -195,7 +202,7 @@ fn tick_tooltip(
                     // confirm. `Pickable::IGNORE` makes the popover
                     // hit-test transparent so pointer events fall
                     // through to whatever is underneath.
-                    bevy::picking::Pickable::IGNORE,
+                    bevy_picking::Pickable::IGNORE,
                 ))
                 .id();
             spawn_title(&mut commands, popover_entity, tip);
@@ -237,7 +244,7 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
                 ..default()
             },
             TextColor(tokens::TEXT_PRIMARY),
-            bevy::picking::Pickable::IGNORE,
+            bevy_picking::Pickable::IGNORE,
             ChildOf(popover),
         ));
         return;
@@ -250,7 +257,7 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
                 column_gap: Val::Px(tokens::SPACING_MD),
                 ..default()
             },
-            bevy::picking::Pickable::IGNORE,
+            bevy_picking::Pickable::IGNORE,
             ChildOf(popover),
         ))
         .with_child((
@@ -261,7 +268,7 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
                 ..default()
             },
             TextColor(tokens::TEXT_PRIMARY),
-            bevy::picking::Pickable::IGNORE,
+            bevy_picking::Pickable::IGNORE,
         ))
         .with_child((
             Text::new(tip.keybind.clone()),
@@ -270,7 +277,7 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
                 ..default()
             },
             TextColor(tokens::TEXT_SECONDARY),
-            bevy::picking::Pickable::IGNORE,
+            bevy_picking::Pickable::IGNORE,
         ));
 }
 
@@ -287,7 +294,7 @@ fn spawn_body(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
                 ..default()
             },
             TextColor(tokens::TEXT_PRIMARY),
-            bevy::picking::Pickable::IGNORE,
+            bevy_picking::Pickable::IGNORE,
             ChildOf(popover),
         ));
     }
@@ -299,7 +306,7 @@ fn spawn_body(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
                 ..default()
             },
             TextColor(tokens::TEXT_SECONDARY),
-            bevy::picking::Pickable::IGNORE,
+            bevy_picking::Pickable::IGNORE,
             ChildOf(popover),
         ));
     }

@@ -18,9 +18,16 @@
 //!
 //! Stroke width is in screen pixels and does not scale with canvas zoom.
 
-use bevy::ecs::relationship::Relationship;
-use bevy::prelude::*;
-use bevy::ui::UiGlobalTransform;
+use bevy_asset::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_ecs::relationship::Relationship;
+use bevy_input::prelude::*;
+use bevy_math::prelude::*;
+use bevy_picking::prelude::*;
+use bevy_ui::UiGlobalTransform;
+use bevy_ui::prelude::*;
+use bevy_ui_render::prelude::*;
+use bevy_utils::prelude::*;
 use std::collections::HashSet;
 
 use crate::canvas::GraphCanvasViewport;
@@ -345,7 +352,7 @@ pub fn update_ghost_wire(
 /// alpha-switching logic this fades wires the user is about to delete.
 pub fn update_pending_remove_markers(
     mouse: Res<ButtonInput<MouseButton>>,
-    hover_map: Res<bevy::picking::hover::HoverMap>,
+    hover_map: Res<bevy_picking::hover::HoverMap>,
     terminal_views: Query<&GraphTerminalView>,
     connections: Query<(Entity, &Connection)>,
     marked: Query<Entity, With<PendingRemove>>,

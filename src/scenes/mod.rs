@@ -9,7 +9,9 @@ pub mod ui;
 
 use std::path::PathBuf;
 
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
 use jackdaw_jsn::format::JsnScene;
 
 use crate::commands::CommandHistory;
@@ -42,8 +44,8 @@ impl Plugin for ScenesPlugin {
 /// confirm-quit dialog and consume the event. Otherwise emit `AppExit::Success`
 /// so the normal X-click flow still works.
 pub fn intercept_window_close(
-    mut close_events: bevy::ecs::message::MessageReader<bevy::window::WindowCloseRequested>,
-    mut exit: bevy::ecs::message::MessageWriter<bevy::app::AppExit>,
+    mut close_events: bevy_ecs::message::MessageReader<bevy_window::WindowCloseRequested>,
+    mut exit: bevy_ecs::message::MessageWriter<bevy_app::AppExit>,
     scenes: Res<Scenes>,
     mut commands: Commands,
     mut pending: ResMut<confirm_dialog::PendingQuit>,
@@ -58,7 +60,7 @@ pub fn intercept_window_close(
 
     let any_dirty = scenes.tabs.iter().any(|t| t.dirty);
     if !any_dirty {
-        exit.write(bevy::app::AppExit::Success);
+        exit.write(bevy_app::AppExit::Success);
         return;
     }
 
@@ -188,7 +190,7 @@ pub struct ViewState {
     /// Optional projection matrix. `None` means use the editor's default
     /// perspective on restore. Stored as a `Mat4` so we don't have to
     /// reflect the entire `Projection` enum across tab swaps.
-    pub camera_projection: Option<bevy::math::Mat4>,
+    pub camera_projection: Option<bevy_math::Mat4>,
     pub edit_mode: crate::brush::EditMode,
     /// Object-level selection stored as stable IDs so it survives the
     /// despawn / respawn cycle of a tab swap. `BrushStableId` lives in
@@ -210,7 +212,7 @@ impl ViewState {
     pub fn with_default_camera() -> Self {
         Self {
             camera_transform: Transform::from_xyz(0.0, 4.0, 8.0)
-                .looking_at(bevy::math::Vec3::ZERO, bevy::math::Vec3::Y),
+                .looking_at(bevy_math::Vec3::ZERO, bevy_math::Vec3::Y),
             ..Self::default()
         }
     }

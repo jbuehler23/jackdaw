@@ -2,7 +2,7 @@
 //! Tests whether every vertex lies on or inside every face's plane (within EPSILON).
 //! O(verts * faces). For typical brush sizes this is sub-millisecond.
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 
 use crate::topology::BrushTopology;
 

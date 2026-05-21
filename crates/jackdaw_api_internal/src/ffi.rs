@@ -103,7 +103,7 @@ pub const REFLECT_REGISTER_SYMBOL: &[u8] = b"jackdaw_register_reflect_types_v1\0
 /// sound because both sides share `TypeRegistry`'s type layout
 /// through `libjackdaw_sdk.so` (via `bevy/dynamic_linking` plus
 /// jackdaw's rustc wrapper).
-pub type ReflectRegisterFn = unsafe extern "Rust" fn(&mut bevy::reflect::TypeRegistry);
+pub type ReflectRegisterFn = unsafe extern "Rust" fn(&mut bevy_reflect::TypeRegistry);
 
 /// Shape returned by every dylib extension's entry function.
 ///
@@ -161,6 +161,6 @@ pub struct GameEntry {
     pub bevy_version: *const c_char,
     pub profile: *const c_char,
     pub name: *const c_char,
-    pub build: unsafe extern "C" fn(*mut bevy::ecs::world::World),
-    pub teardown: unsafe extern "C" fn(*mut bevy::ecs::world::World),
+    pub build: unsafe extern "C" fn(*mut bevy_ecs::world::World),
+    pub teardown: unsafe extern "C" fn(*mut bevy_ecs::world::World),
 }

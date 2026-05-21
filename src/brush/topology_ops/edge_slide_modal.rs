@@ -10,10 +10,10 @@
 //! Coexists with the non-modal `brush.mesh.edge_slide` operator (which slides
 //! by a fixed amount) -- this is a separate entry point.
 
-use bevy::prelude::*;
-use bevy::ui::ui_transform::UiGlobalTransform;
-use bevy::window::PrimaryWindow;
+use bevy_ecs::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
+use bevy_ui::ui_transform::UiGlobalTransform;
+use bevy_window::PrimaryWindow;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::cycles::radial_walk;
@@ -74,10 +74,12 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             Action::<BrushEdgeSlideModalOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyE.with_mod_keys(ModKeys::SHIFT),
-                Press::default(),
-            )],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    KeyCode::KeyE.with_mod_keys(ModKeys::SHIFT),
+                    Press::default(),
+                ))]
+            ),
         ));
     });
 }

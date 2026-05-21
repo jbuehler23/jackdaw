@@ -5,7 +5,10 @@
 //! `Entity` fields which the JSN serializer rewrites to scene-local indices
 //! on save and resolves back to live entities on load.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_reflect::prelude::*;
+
 use serde::{Deserialize, Serialize};
 
 /// Root marker for a node graph. An entity with this component owns

@@ -6,7 +6,8 @@ pub mod toolbar;
 
 use std::collections::HashSet;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 
 pub use toolbar::TerrainToolbar;
 

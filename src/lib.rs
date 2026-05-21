@@ -46,10 +46,13 @@ pub mod material_browser;
 pub mod material_preview;
 pub mod measure_tool;
 pub mod modal_transform;
+#[cfg(feature = "navmesh")]
 pub mod navmesh;
 pub mod new_project;
 pub mod operator_tooltip;
+#[cfg(feature = "avian")]
 pub mod physics_brush_bridge;
+#[cfg(feature = "avian")]
 pub mod physics_tool;
 pub mod pie;
 pub mod prefab_picker;
@@ -77,16 +80,15 @@ pub mod viewport_select;
 pub mod viewport_util;
 pub mod workspace_dropdown;
 
-use bevy::{
-    app::PluginGroupBuilder,
-    ecs::system::SystemState,
-    feathers::{FeathersPlugins, dark_theme::create_dark_theme, theme::UiTheme},
-    input::mouse::{MouseScrollUnit, MouseWheel},
-    input_focus::InputDispatchPlugin,
-    picking::hover::HoverMap,
-    platform::collections::HashMap,
-    prelude::*,
-};
+use bevy_app::PluginGroupBuilder;
+use bevy_ecs::prelude::*;
+use bevy_ecs::system::SystemState;
+use bevy_feathers::{FeathersPlugins, dark_theme::create_dark_theme, theme::UiTheme};
+use bevy_input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy_input_focus::InputDispatchPlugin;
+use bevy_log::prelude::*;
+use bevy_picking::hover::HoverMap;
+use bevy_platform::collections::HashMap;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::{
     ToAnchorId as _,
@@ -111,6 +113,7 @@ pub mod prelude {
     // without direct deps on avian3d / bevy_enhanced_input.
     // Editor plugins assert presence rather than adding, so user
     // code can add the same plugins without conflict.
+    #[cfg(feature = "avian")]
     pub use avian3d::prelude::PhysicsPlugins;
     pub use bevy_enhanced_input::prelude::EnhancedInputPlugin;
 }
@@ -294,16 +297,22 @@ impl Plugin for EditorCorePlugin {
             draw_brush::DrawBrushPlugin,
             face_grid::FaceGridPlugin,
             alignment_guides::AlignmentGuidesPlugin,
+            #[cfg(feature = "navmesh")]
             navmesh::NavmeshPlugin,
             terrain::TerrainPlugin,
             remote::RemoteConnectionPlugin,
         ))
-        .add_plugins(jackdaw_avian_integration::PhysicsOverlaysPlugin::<
-            selection::Selected,
-        >::new())
-        .add_plugins(jackdaw_avian_integration::simulation::PhysicsSimulationPlugin)
-        .add_plugins(physics_brush_bridge::PhysicsBrushBridgePlugin)
-        .add_plugins(physics_tool::PhysicsToolPlugin)
+        .add_plugins(
+            #[cfg(feature = "avian")]
+            (
+                jackdaw_avian_integration::PhysicsOverlaysPlugin::<selection::Selected>::new(),
+                jackdaw_avian_integration::simulation::PhysicsSimulationPlugin,
+                physics_brush_bridge::PhysicsBrushBridgePlugin,
+                physics_tool::PhysicsToolPlugin,
+            ),
+            #[cfg(not(feature = "avian"))]
+            (),
+        )
         .add_plugins(operator_tooltip::OperatorTooltipPlugin)
         .add_plugins(jackdaw_node_graph::NodeGraphPlugin)
         .add_plugins(jackdaw_animation::AnimationPlugin)
@@ -320,7 +329,7 @@ impl Plugin for EditorCorePlugin {
         // the same shutdown behaviour.
         .add_systems(
             Last,
-            |mut events: bevy::ecs::message::MessageReader<AppExit>| {
+            |mut events: bevy_ecs::message::MessageReader<AppExit>| {
                 if let Some(exit) = events.read().next() {
                     let code = match exit {
                         AppExit::Success => 0,
@@ -340,8 +349,8 @@ impl Plugin for EditorCorePlugin {
         .configure_sets(
             PostUpdate,
             JackdawDrawSystems
-                .after(bevy::transform::TransformSystems::Propagate)
-                .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+                .after(bevy_transform::TransformSystems::Propagate)
+                .after(bevy_camera::visibility::VisibilitySystems::VisibilityPropagate)
                 .run_if(in_state(crate::AppState::Editor)),
         )
         .insert_resource(UiTheme(create_dark_theme()))
@@ -1154,11 +1163,11 @@ pub(crate) fn clip_delete_keyframes(
 }
 
 fn has_selected_keyframes(
-    input_focus: Res<bevy::input_focus::InputFocus>,
+    input_focus: Res<bevy_input_focus::InputFocus>,
     selection: Res<selection::Selection>,
     keyframes: Query<
         (),
-        bevy::ecs::query::Or<(
+        bevy_ecs::query::Or<(
             With<jackdaw_animation::Vec3Keyframe>,
             With<jackdaw_animation::QuatKeyframe>,
             With<jackdaw_animation::F32Keyframe>,
@@ -1172,7 +1181,7 @@ fn has_selected_keyframes(
 }
 
 fn timeline_with_clip(
-    input_focus: Res<bevy::input_focus::InputFocus>,
+    input_focus: Res<bevy_input_focus::InputFocus>,
     active: ActiveModalQuery,
     tree: Res<jackdaw_panels::tree::DockTree>,
     selected_clip: Res<jackdaw_animation::SelectedClip>,
@@ -1187,7 +1196,7 @@ fn timeline_with_clip(
 }
 
 fn timeline_paste_available(
-    input_focus: Res<bevy::input_focus::InputFocus>,
+    input_focus: Res<bevy_input_focus::InputFocus>,
     active: ActiveModalQuery,
     tree: Res<jackdaw_panels::tree::DockTree>,
     selected_clip: Res<jackdaw_animation::SelectedClip>,
@@ -1928,7 +1937,7 @@ fn discover_gltf_clips(
     sources: Query<(Entity, &jackdaw_jsn::GltfSource, Option<&Children>)>,
     existing_refs: Query<(), With<jackdaw_animation::GltfClipRef>>,
     asset_server: Res<AssetServer>,
-    gltfs: Res<Assets<bevy::gltf::Gltf>>,
+    gltfs: Res<Assets<bevy_gltf::Gltf>>,
     mut commands: Commands,
 ) {
     for (entity, source, children) in &sources {
@@ -1943,7 +1952,7 @@ fn discover_gltf_clips(
         }
 
         let asset_path = crate::entity_ops::to_asset_path(&source.path);
-        let handle: Handle<bevy::gltf::Gltf> = asset_server.load(asset_path);
+        let handle: Handle<bevy_gltf::Gltf> = asset_server.load(asset_path);
         let Some(gltf) = gltfs.get(&handle) else {
             continue;
         };
@@ -2129,7 +2138,9 @@ fn populate_menu(
                 op_entry::<view_ops::ViewToggleBrushWireframeOp>("Toggle Brush Wireframe"),
                 op_entry::<view_ops::ViewToggleBrushOutlineOp>("Toggle Brush Outline"),
                 op_entry::<view_ops::ViewToggleAlignmentGuidesOp>("Toggle Alignment Guides"),
+                #[cfg(feature = "avian")]
                 op_entry::<view_ops::ViewToggleColliderGizmosOp>("Toggle Collider Gizmos"),
+                #[cfg(feature = "avian")]
                 op_entry::<view_ops::ViewToggleHierarchyArrowsOp>("Toggle Hierarchy Arrows"),
                 op_entry::<view_ops::ViewTogglePerspOrthoOp>("Toggle Perspective / Orthographic"),
                 op_entry::<view_ops::ViewFrameSelectedOp>("Frame Selected"),

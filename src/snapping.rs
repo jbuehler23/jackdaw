@@ -1,7 +1,6 @@
-use bevy::{
-    input::mouse::{MouseScrollUnit, MouseWheel},
-    prelude::*,
-};
+use bevy_ecs::prelude::*;
+use bevy_input::mouse::{MouseScrollUnit, MouseWheel};
+
 use bevy_infinite_grid::{InfiniteGrid, InfiniteGridSettings};
 use jackdaw_api::op::{Operator, OperatorCommandsExt as _};
 

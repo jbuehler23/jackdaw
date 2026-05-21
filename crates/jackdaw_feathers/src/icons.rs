@@ -1,4 +1,11 @@
-use bevy::{asset::AssetId, prelude::*};
+use bevy_app::prelude::*;
+use bevy_asset::AssetId;
+use bevy_asset::prelude::*;
+use bevy_color::prelude::*;
+use bevy_derive::{Deref, DerefMut};
+use bevy_ecs::prelude::*;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
 pub use lucide_icons::Icon;
 
 /// Resource holding the loaded Lucide icon font handle.

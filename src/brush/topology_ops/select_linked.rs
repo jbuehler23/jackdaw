@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::FaceKey;
 use jackdaw_geometry::halfedge::select::linked_walk::linked_walk;

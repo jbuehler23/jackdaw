@@ -1,12 +1,11 @@
-use bevy::{
-    ecs::{
-        archetype::Archetype,
-        component::{ComponentId, Components},
-        reflect::{AppTypeRegistry, ReflectComponent},
-    },
+
+use bevy_ecs::{
+    archetype::Archetype,
+    component::{ComponentId, Components},
     prelude::*,
-    reflect::serde::TypedReflectDeserializer,
+    reflect::{AppTypeRegistry, ReflectComponent},
 };
+use bevy_reflect::serde::TypedReflectDeserializer;
 use jackdaw_feathers::{
     icons::{EditorFont, Icon, IconFont},
     panel_header, tokens,

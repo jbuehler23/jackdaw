@@ -1,14 +1,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use bevy::{
-    feathers::theme::ThemedText,
-    image::ImageLoaderSettings,
-    picking::hover::Hovered,
-    prelude::*,
-    tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
-    window::{PrimaryWindow, RawHandleWrapper},
-};
+use bevy_ecs::prelude::*;
+use bevy_feathers::theme::ThemedText;
+use bevy_image::ImageLoaderSettings;
+use bevy_picking::hover::Hovered;
+use bevy_tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
+use bevy_window::{PrimaryWindow, RawHandleWrapper};
 use jackdaw_feathers::{
     button::{ButtonOperatorCall, ButtonVariant, IconButtonProps, icon_button},
     icons,
@@ -230,7 +228,7 @@ impl TextureSlot {
                     if mat.max_parallax_layer_count == 0.0 {
                         mat.max_parallax_layer_count = 32.0;
                     }
-                    mat.parallax_mapping_method = bevy::pbr::ParallaxMappingMethod::Occlusion;
+                    mat.parallax_mapping_method = bevy_pbr::ParallaxMappingMethod::Occlusion;
                 } else {
                     mat.parallax_depth_scale = 0.0;
                     mat.max_parallax_layer_count = 0.0;
@@ -401,7 +399,7 @@ fn detect_and_create_materials(
             metallic: if has_mr { 1.0 } else { 0.0 },
             perceptual_roughness: if has_mr { 1.0 } else { 0.5 },
             parallax_depth_scale: if has_depth { 0.05 } else { 0.0 },
-            parallax_mapping_method: bevy::pbr::ParallaxMappingMethod::Occlusion,
+            parallax_mapping_method: bevy_pbr::ParallaxMappingMethod::Occlusion,
             max_parallax_layer_count: if has_depth { 32.0 } else { 0.0 },
             ..default()
         });
@@ -1726,7 +1724,7 @@ pub(crate) fn material_rescan(
 pub fn material_select_folder(
     _: In<OperatorParameters>,
     mut commands: Commands,
-    raw_handle: Query<&bevy::window::RawHandleWrapper, With<bevy::window::PrimaryWindow>>,
+    raw_handle: Query<&bevy_window::RawHandleWrapper, With<bevy_window::PrimaryWindow>>,
 ) -> OperatorResult {
     let mut dialog = AsyncFileDialog::new().set_title("Select materials directory");
     if let Ok(rh) = raw_handle.single() {
@@ -1737,7 +1735,7 @@ pub fn material_select_folder(
         dialog = dialog.set_parent(&handle);
     }
     let task =
-        bevy::tasks::AsyncComputeTaskPool::get().spawn(async move { dialog.pick_folder().await });
+        bevy_tasks::AsyncComputeTaskPool::get().spawn(async move { dialog.pick_folder().await });
     commands.insert_resource(MaterialBrowserFolderTask(task));
     OperatorResult::Finished
 }

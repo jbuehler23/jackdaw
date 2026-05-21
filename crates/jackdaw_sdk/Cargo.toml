@@ -14,7 +14,6 @@ repository = "https://github.com/jbuehler23/jackdaw"
 crate-type = ["lib", "dylib"]
 
 [dependencies]
-bevy.workspace = true
 jackdaw_api.workspace = true
 
 [lints]

@@ -1,6 +1,10 @@
-use bevy::feathers::FeathersPlugins;
-use bevy::input_focus::InputDispatchPlugin;
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_camera::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_feathers::FeathersPlugins;
+use bevy_input_focus::InputDispatchPlugin;
+use bevy_internal::DefaultPlugins;
+use bevy_log::prelude::*;
 use jackdaw_feathers::EditorFeathersPlugin;
 use jackdaw_feathers::picker::{
     PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text, picker_item,
@@ -89,7 +93,7 @@ fn on_select(input: In<SelectInput>, items: Query<&PickerItems<Searchable>>) -> 
 fn main() -> AppExit {
     App::new()
         // log errors instead of panicking
-        .set_error_handler(bevy::ecs::error::error)
+        .set_error_handler(bevy_ecs::error::error)
         .add_plugins((
             DefaultPlugins,
             // text edit enables InputDispatchPlugin unconditionally

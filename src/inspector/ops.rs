@@ -2,12 +2,14 @@
 //! and the small set of typed actions (`physics.enable` / `physics.disable`,
 //! `animation.toggle_keyframe`).
 
-use bevy::ecs::component::ComponentId;
-use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
-use bevy::prelude::*;
+use bevy_ecs::component::ComponentId;
+use bevy_ecs::prelude::*;
+use bevy_ecs::reflect::{AppTypeRegistry, ReflectComponent};
+use bevy_log::prelude::*;
 use jackdaw_api::prelude::*;
 
 use super::component_display::revert_component_to_baseline;
+#[cfg(feature = "avian")]
 use super::physics_display::{DisablePhysics, enable_physics};
 use crate::commands::{AddComponent, CommandHistory, EditorCommand};
 use crate::selection::Selection;
@@ -16,13 +18,14 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ComponentAddOp>()
         .register_operator::<ComponentRemoveOp>()
         .register_operator::<ComponentRevertBaselineOp>()
-        .register_operator::<PhysicsEnableOp>()
-        .register_operator::<PhysicsDisableOp>()
         .register_operator::<AnimationToggleKeyframeOp>()
         .register_operator::<super::brush_display::BrushFaceClearMaterialOp>()
         .register_operator::<super::brush_display::BrushFaceApplyTextureToAllOp>()
         .register_operator::<super::brush_display::BrushFaceSetUvScalePresetOp>()
         .register_operator::<super::brush_display::BrushClearAllMaterialsOp>();
+    #[cfg(feature = "avian")]
+    ctx.register_operator::<super::ops::DisablePhysicsOp>()
+        .register_operator::<super::ops::EnablePhysicsOp>();
 }
 
 /// Inspector operators all act on the inspected entity (the primary
@@ -195,6 +198,7 @@ pub(crate) fn component_revert_baseline(
 /// Add `RigidBody` and `AvianCollider` to the entity so it participates
 /// in the physics simulation. No-op if those components are already
 /// present.
+#[cfg(feature = "avian")]
 #[operator(
     id = "physics.enable",
     label = "Enable Physics",
@@ -220,6 +224,7 @@ pub(crate) fn physics_enable(
 
 /// Remove physics components from the entity, capturing the pre-disable
 /// state so undo restores them.
+#[cfg(feature = "avian")]
 #[operator(
     id = "physics.disable",
     label = "Disable Physics",

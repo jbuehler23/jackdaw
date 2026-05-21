@@ -1,7 +1,14 @@
 use std::collections::HashMap as StdHashMap;
 
-use bevy::input_focus::InputFocus;
-use bevy::prelude::*;
+use bevy_asset::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_input_focus::InputFocus;
+use bevy_picking::prelude::*;
+use bevy_text::prelude::*;
+use bevy_time::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 use jackdaw_feathers::text_edit::{
     self, EditorTextEdit, TextEditCommitEvent, TextEditConfig, TextEditProps,
 };

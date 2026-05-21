@@ -1,4 +1,7 @@
-use bevy::{feathers::theme::ThemedText, prelude::*};
+use bevy_ecs::prelude::*;
+use bevy_feathers::theme::ThemedText;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
 
 use crate::tokens;
 

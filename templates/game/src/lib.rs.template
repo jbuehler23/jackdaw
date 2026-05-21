@@ -38,7 +38,8 @@
 //! 6. Click **Stop**. Nothing is lost; the entity was authored, not
 //!    game-spawned.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 
 /// Spin-rate in radians per second. Attach to any scene entity in
 /// the inspector; `spin_cube` rotates every entity carrying it

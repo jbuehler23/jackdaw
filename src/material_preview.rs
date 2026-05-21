@@ -1,9 +1,7 @@
-use bevy::{
-    asset::{embedded_asset, load_embedded_asset},
-    camera::{RenderTarget, visibility::RenderLayers},
-    prelude::*,
-    render::render_resource::TextureFormat,
-};
+use bevy_asset::{embedded_asset, load_embedded_asset};
+use bevy_camera::{RenderTarget, visibility::RenderLayers};
+use bevy_ecs::prelude::*;
+use bevy_render::render_resource::TextureFormat;
 
 use crate::default_style;
 

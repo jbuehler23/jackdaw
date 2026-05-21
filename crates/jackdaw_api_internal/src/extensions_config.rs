@@ -4,7 +4,9 @@
 
 use std::{collections::BTreeMap, path::PathBuf};
 
-use bevy::{platform::collections::HashSet, prelude::*};
+use bevy_derive::{Deref, DerefMut};
+use bevy_ecs::prelude::*;
+use bevy_platform::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::paths::config_dir;

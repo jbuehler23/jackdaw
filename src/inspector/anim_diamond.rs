@@ -6,7 +6,8 @@
 //! need one entry in `ANIMATABLE_FIELDS` plus matching arms in
 //! `spawn_typed_keyframe` and `compile::build_curve_for_track`.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
 use jackdaw_animation::{
     AnimationTrack, Clip, F32Keyframe, QuatKeyframe, SelectedClip, TimelineCursor, TimelineDirty,
     Vec3Keyframe,

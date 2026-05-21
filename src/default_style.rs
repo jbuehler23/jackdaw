@@ -1,7 +1,5 @@
-use bevy::{
-    gizmos::config::{GizmoLineConfig, GizmoLineJoint, GizmoLineStyle},
-    prelude::Color,
-};
+use bevy_color::Color;
+use bevy_gizmos::config::{GizmoLineConfig, GizmoLineJoint, GizmoLineStyle};
 
 // -- Axis colors (Blender default theme, X = red, Y = green, Z = blue) --
 pub const AXIS_X: Color = Color::srgba(1.0, 0.2, 0.32, 0.6);

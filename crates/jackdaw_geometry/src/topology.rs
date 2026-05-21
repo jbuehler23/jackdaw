@@ -5,9 +5,9 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use bevy::math::{Vec2, Vec3};
-use bevy::prelude::*;
-use bevy::reflect::Reflect;
+use bevy_ecs::prelude::*;
+use bevy_math::{Vec2, Vec3};
+use bevy_reflect::Reflect;
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 

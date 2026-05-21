@@ -5,8 +5,9 @@
 use std::any::TypeId;
 use std::collections::HashSet;
 
-use bevy::prelude::*;
-use bevy::reflect::TypeRegistry;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
+use bevy_reflect::TypeRegistry;
 use jackdaw::inspector::component_picker::{
     PickableComponent, PickerDenylist, enumerate_pickable_components, fallback_category_for,
     populate_avian_picker_denylist,

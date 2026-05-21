@@ -1,4 +1,4 @@
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_geometry::halfedge::ops::bridge_edge_loops::bridge_edge_loops;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::edge_create::create_edge};
 

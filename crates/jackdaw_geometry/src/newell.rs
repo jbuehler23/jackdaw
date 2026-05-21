@@ -2,7 +2,7 @@
 //! Sums (yi + yi+1)(zi - zi+1) etc. across all edges; works for
 //! non-planar polygons and is stable on near-degenerate inputs.
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 
 pub fn newell_normal(ring: &[Vec3]) -> Vec3 {
     let n = ring.len();

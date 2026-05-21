@@ -6,9 +6,9 @@
 //! edit. Ctrl snaps to the translate grid increment. LMB commits; Esc / RMB
 //! cancels and restores the pre-modal mesh.
 
-use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy_ecs::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
+use bevy_window::PrimaryWindow;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::ops::inset_face::inset_face;
@@ -94,7 +94,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             Action::<BrushInsetOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::KeyI, Press::default())],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((KeyCode::KeyI, Press::default()))]
+            ),
         ));
     });
 }

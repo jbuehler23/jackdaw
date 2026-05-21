@@ -7,7 +7,8 @@ use std::sync::Arc;
 // (`JackdawExtension`, `ExtensionContext`, `WindowDescriptor`, …)
 // through a single unified prelude. No need for a separate
 // `use jackdaw_api::prelude::*;`.
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 
 pub struct {{crate_name | pascal_case}};
 

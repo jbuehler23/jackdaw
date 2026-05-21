@@ -1,5 +1,6 @@
-use bevy::mesh::{Indices, PrimitiveTopology};
-use bevy::prelude::*;
+use bevy_mesh::{Indices, PrimitiveTopology};
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 
 use super::{CHUNK_SIZE, TerrainChunk, TerrainDirtyChunks};
 

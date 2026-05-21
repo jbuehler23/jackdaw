@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use bevy::reflect::{TypeRegistry, UnnamedField};
-use bevy::{prelude::*, reflect::NamedField};
+use bevy_ecs::prelude::*;
+use bevy_reflect::{NamedField, TypeRegistry, UnnamedField};
 
 use crate::format::{JsnAssets, JsnEntity, JsnMetadata, JsnScene};
 
@@ -239,7 +239,7 @@ impl SceneJsnAst {
 // named fields to array indices when the JSON value is an array (e.g., Vec3
 // serializes as [x, y, z] but reflection paths use `translation.x`).
 
-use bevy::reflect::{EnumInfo, TypeInfo, TypeRegistration, VariantInfo};
+use bevy_reflect::{EnumInfo, TypeInfo, TypeRegistration, VariantInfo};
 
 /// Resolve a field name to an array index using type info.
 /// Returns `None` if the type doesn't have named fields or the name isn't found.

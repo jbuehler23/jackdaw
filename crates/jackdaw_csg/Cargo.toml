@@ -7,7 +7,9 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-bevy.workspace = true
+bevy_math.workspace = true
+bevy_pbr.workspace = true
+bevy_asset.workspace = true
 jackdaw_geometry.workspace = true
 # manifold-csg pulls in manifold3d (C++ via cmake). Build prereqs:
 # cmake, a C++ compiler, git. See the crate README for details.

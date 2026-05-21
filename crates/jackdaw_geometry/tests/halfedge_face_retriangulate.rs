@@ -7,7 +7,7 @@
 //! Steiner points and constraint edges, and verifies the resulting
 //! topology.
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_geometry::halfedge::{
     FaceKey, HalfedgeMesh, VertKey,
     ops::face_retriangulate::{RetriangulateError, face_retriangulate},

@@ -17,7 +17,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::ext_build::artifact_file_name;
@@ -112,11 +113,11 @@ fn start_watcher(
         let event = match res {
             Ok(e) => e,
             Err(e) => {
-                bevy::log::warn!("HotReload watcher error: {e}");
+                bevy_log::warn!("HotReload watcher error: {e}");
                 return;
             }
         };
-        bevy::log::trace!(
+        bevy_log::trace!(
             "HotReload event: kind={:?} paths={:?}",
             event.kind,
             event.paths

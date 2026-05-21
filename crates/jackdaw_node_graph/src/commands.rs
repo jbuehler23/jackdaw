@@ -4,7 +4,10 @@
 //! `jackdaw_commands::CommandHistory` can undo/redo it. Commands mutate
 //! the data layer; UI is kept in sync by systems in `crate::sync`.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
+use bevy_math::prelude::*;
+
 use jackdaw_commands::EditorCommand;
 
 use crate::graph::{Connection, GraphNode, Terminal, TerminalDirection};

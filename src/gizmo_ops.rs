@@ -8,7 +8,8 @@
 //! Default keybinds: R=rotate, T=scale, Escape=translate, X=space
 //! toggle.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 

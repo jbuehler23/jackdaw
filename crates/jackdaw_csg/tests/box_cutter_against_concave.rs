@@ -7,7 +7,7 @@
 //! `subtract_brush` path bails on this concave target; mesh-CSG should
 //! split the cube into the expected fragments.
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_csg::{CsgInput, brush_difference_split};
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::edge_bevel::edge_bevel};
 use jackdaw_jsn::Brush;

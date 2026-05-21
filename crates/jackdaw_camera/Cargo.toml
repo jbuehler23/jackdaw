@@ -7,7 +7,13 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-bevy.workspace = true
+bevy_ecs.workspace = true
+bevy_app.workspace = true
+bevy_input.workspace = true
+bevy_time.workspace = true
+bevy_camera.workspace = true
+bevy_transform.workspace = true
+bevy_math.workspace = true
 jackdaw_commands.workspace = true
 
 [lints]

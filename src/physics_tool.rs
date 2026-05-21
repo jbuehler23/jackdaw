@@ -391,7 +391,7 @@ fn physics_tool_drag(
             let grab_offset = entity_tf.translation - hit_point;
 
             // Capture starting positions of ALL selected RigidBody entities
-            let mut start_positions = bevy::platform::collections::HashMap::default();
+            let mut start_positions = bevy_platform::collections::HashMap::default();
             for &sel_entity in &selection.entities {
                 if rb_check.contains(sel_entity)
                     && let Ok(sel_tf) = transforms.get(sel_entity)
@@ -486,13 +486,13 @@ fn commit_physics_transforms(world: &mut World) {
         }
 
         let registry = registry_res.read();
-        let old_ser = bevy::reflect::serde::TypedReflectSerializer::with_processor(
+        let old_ser = bevy_reflect::serde::TypedReflectSerializer::with_processor(
             old_tf, &registry, &processor,
         );
         let Ok(old_json) = serde_json::to_value(&old_ser) else {
             continue;
         };
-        let new_ser = bevy::reflect::serde::TypedReflectSerializer::with_processor(
+        let new_ser = bevy_reflect::serde::TypedReflectSerializer::with_processor(
             &new_tf, &registry, &processor,
         );
         let Ok(new_json) = serde_json::to_value(&new_ser) else {

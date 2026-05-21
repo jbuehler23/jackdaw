@@ -30,7 +30,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use bevy::log::{info, warn};
+use bevy_log::{info, warn};
 
 /// Env var the parent process sets before respawning, signalling
 /// to the child "the game you're about to load was just rebuilt

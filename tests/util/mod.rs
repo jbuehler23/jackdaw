@@ -31,6 +31,7 @@ pub fn headless_app() -> App {
     // internal `debug_assert!`s for `PhysicsSchedulePlugin` and
     // `EnhancedInputPlugin` find what they expect.
     .add_plugins((
+        #[cfg(feature = "avian")]
         avian3d::prelude::PhysicsPlugins::default(),
         bevy_enhanced_input::prelude::EnhancedInputPlugin,
     ))

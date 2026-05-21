@@ -13,13 +13,13 @@ use crate::{
     snapping::SnapSettings,
     viewport::ViewportCursor,
 };
-use bevy::{
-    input_focus::InputFocus,
-    light::{NotShadowCaster, NotShadowReceiver},
-    mesh::{Indices, PrimitiveTopology},
-    picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
-    prelude::*,
-};
+use bevy_ecs::prelude::*;
+use bevy_input_focus::InputFocus;
+use bevy_light::{NotShadowCaster, NotShadowReceiver};
+use bevy_log::prelude::*;
+use bevy_mesh::{Indices, PrimitiveTopology};
+use bevy_picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility};
+
 use bevy_enhanced_input::prelude::Press;
 use jackdaw_geometry::{
     brush_planes_to_world, clean_degenerate_faces, compute_brush_geometry_from_planes,
@@ -62,74 +62,101 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.spawn((
         Action::<ConfirmDrawBrushOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(MouseButton::Left, Press::default()),],
+        related!(
+            Bindings[IntoBindingBundle::into_binding_bundle((MouseButton::Left, Press::default()))]
+        ),
     ));
     ctx.spawn((
         Action::<ActivateDrawBrushModalOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![
-            (MouseButton::Back, Press::default()),
-            (KeyCode::KeyB, Press::default()),
-        ],
+        related!(Bindings[
+            IntoBindingBundle::into_binding_bundle((MouseButton::Back, Press::default())),
+            IntoBindingBundle::into_binding_bundle((KeyCode::KeyB, Press::default())),
+        ]),
     ));
     ctx.spawn((
         Action::<BrushJoinOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::KeyJ, Press::default())],
+        related!(
+            Bindings[IntoBindingBundle::into_binding_bundle((KeyCode::KeyJ, Press::default()))]
+        ),
     ));
     ctx.spawn((
         Action::<BrushCsgSubtractOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(
-            KeyCode::KeyK.with_mod_keys(ModKeys::CONTROL),
-            Press::default(),
-        )],
+        related!(
+            Bindings[IntoBindingBundle::into_binding_bundle((
+                KeyCode::KeyK.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            ))]
+        ),
     ));
     ctx.spawn((
         Action::<BrushCsgIntersectOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(
-            KeyCode::KeyK.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
-            Press::default(),
-        )],
+        related!(
+            Bindings[IntoBindingBundle::into_binding_bundle((
+                KeyCode::KeyK.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
+                Press::default(),
+            ))]
+        ),
     ));
     ctx.spawn((
         Action::<BrushExtendFaceToBrushOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(
-            KeyCode::KeyE.with_mod_keys(ModKeys::CONTROL),
-            Press::default(),
-        )],
+        related!(
+            Bindings[IntoBindingBundle::into_binding_bundle((
+                KeyCode::KeyE.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            ))]
+        ),
     ));
     ctx.spawn((
         Action::<DrawBrushToggleModeOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Tab, Press::default())],
+        related!(
+            Bindings[IntoBindingBundle::into_binding_bundle((KeyCode::Tab, Press::default()))]
+        ),
     ));
     ctx.spawn((
         Action::<DrawBrushCommitPolygonOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Enter, Press::default())],
+        related!(
+            Bindings[IntoBindingBundle::into_binding_bundle((KeyCode::Enter, Press::default()))]
+        ),
     ));
     ctx.spawn((
         Action::<DrawBrushRemoveLastVertexOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Backspace, Press::default())],
+        related!(
+            Bindings
+                [IntoBindingBundle::into_binding_bundle((KeyCode::Backspace, Press::default()))]
+        ),
     ));
     ctx.spawn((
         Action::<DrawBrushCancelCutOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(MouseButton::Right, Press::default())],
+        related!(
+            Bindings
+                [IntoBindingBundle::into_binding_bundle((MouseButton::Right, Press::default()))]
+        ),
     ));
     ctx.spawn((
         Action::<StartDrawBrushAddAppendAction>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::KeyB.with_mod_keys(ModKeys::ALT), Press::default(),)],
+        related!(
+            Bindings[IntoBindingBundle::into_binding_bundle((
+                KeyCode::KeyB.with_mod_keys(ModKeys::ALT),
+                Press::default()
+            ))]
+        ),
     ));
     ctx.spawn((
         Action::<StartDrawBrushCutAction>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::KeyC, Press::default())],
+        related!(
+            Bindings[IntoBindingBundle::into_binding_bundle((KeyCode::KeyC, Press::default()))]
+        ),
     ));
     ctx.register_operator::<ActivateDrawBrushModalOp>()
         .register_operator::<AddBrushOp>()
@@ -1449,7 +1476,7 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
     };
 
     commands.queue(move |world: &mut World| {
-        use avian3d::parry::transformation::convex_hull;
+        use parry3d::transformation::convex_hull;
 
         let Some(brush) = world.get::<Brush>(target_entity) else {
             return;
@@ -2782,7 +2809,7 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
     let others: Vec<Entity> = selected_brushes[1..].to_vec();
 
     {
-        use avian3d::parry::transformation::convex_hull;
+        use parry3d::transformation::convex_hull;
 
         // Read primary brush data
         let Some(primary_brush) = world.get::<Brush>(primary_entity) else {

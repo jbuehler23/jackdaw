@@ -52,7 +52,7 @@ pub fn create_face_from_verts_with_material(
         material_idx,
         loop_first: LoopKey::default(),
         loop_count: n as u32,
-        normal_cache: bevy::math::Vec3::ZERO,
+        normal_cache: bevy_math::Vec3::ZERO,
     });
 
     // Allocate loops.
@@ -86,7 +86,7 @@ pub fn create_face_from_verts_with_material(
     mesh.faces[face].loop_first = loops[0];
 
     // Cache normal.
-    let positions: Vec<bevy::math::Vec3> = verts.iter().map(|&k| mesh.verts[k].co).collect();
+    let positions: Vec<bevy_math::Vec3> = verts.iter().map(|&k| mesh.verts[k].co).collect();
     mesh.faces[face].normal_cache = newell_normal(&positions);
 
     Ok(face)

@@ -1,12 +1,16 @@
-use bevy::{
-    asset::{embedded_asset, load_embedded_asset},
-    image::{ImageAddressMode, ImageFilterMode, ImageLoaderSettings},
-    math::Affine2,
-    mesh::{Indices, PrimitiveTopology},
-    prelude::*,
-};
-
 use crate::types::Brush;
+use bevy_app::prelude::*;
+use bevy_asset::{embedded_asset, load_embedded_asset, prelude::*};
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_image::{ImageAddressMode, ImageFilterMode, ImageLoaderSettings};
+use bevy_math::{Affine2, prelude::*};
+use bevy_mesh::{Indices, PrimitiveTopology, prelude::*};
+use bevy_pbr::prelude::*;
+use bevy_render::alpha::AlphaMode;
+use bevy_transform::prelude::*;
+use bevy_utils::prelude::*;
+
 use jackdaw_geometry::{
     compute_brush_geometry_from_planes, compute_face_tangent_axes, compute_face_uvs,
     triangulate_polygon,

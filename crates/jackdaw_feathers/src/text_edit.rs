@@ -1,11 +1,18 @@
-use bevy::input_focus::InputFocus;
-use bevy::picking::hover::Hovered;
-use bevy::prelude::*;
-use bevy::text::{FontFeatureTag, FontFeatures};
+use bevy_app::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_input::prelude::*;
+use bevy_input_focus::InputFocus;
+use bevy_picking::hover::Hovered;
+use bevy_text::prelude::*;
+use bevy_text::{FontFeatureTag, FontFeatures};
+use bevy_ui::prelude::*;
 use bevy_ui_text_input::actions::{TextInputAction, TextInputEdit};
 use bevy_ui_text_input::*;
+use bevy_utils::prelude::*;
 // Re-export key types from bevy_ui_text_input for consumers
 pub use bevy_ui_text_input::{TextInputBuffer, TextInputNode, TextInputQueue};
+use bevy_window::Window;
 
 use crate::cursor::{ActiveCursor, HoverCursor};
 use crate::icons::{EditorFont, IconFont};
@@ -405,30 +412,30 @@ fn setup_text_edit_input(
                 }]),
                 Interaction::None,
                 Hovered::default(),
-                HoverCursor(bevy::window::SystemCursorIcon::Text),
+                HoverCursor(bevy_window::SystemCursorIcon::Text),
             ))
             .observe(
-                |mut ev: On<bevy::picking::events::Pointer<bevy::picking::events::DragStart>>| {
+                |mut ev: On<bevy_picking::events::Pointer<bevy_picking::events::DragStart>>| {
                     ev.propagate(false);
                 },
             )
             .observe(
-                |mut ev: On<bevy::picking::events::Pointer<bevy::picking::events::Drag>>| {
+                |mut ev: On<bevy_picking::events::Pointer<bevy_picking::events::Drag>>| {
                     ev.propagate(false);
                 },
             )
             .observe(
-                |mut ev: On<bevy::picking::events::Pointer<bevy::picking::events::DragEnd>>| {
+                |mut ev: On<bevy_picking::events::Pointer<bevy_picking::events::DragEnd>>| {
                     ev.propagate(false);
                 },
             )
             .observe(
-                |mut ev: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>| {
+                |mut ev: On<bevy_picking::events::Pointer<bevy_picking::events::Click>>| {
                     ev.propagate(false);
                 },
             )
             .observe(
-                |mut ev: On<bevy::picking::events::Pointer<bevy::picking::events::Press>>| {
+                |mut ev: On<bevy_picking::events::Pointer<bevy_picking::events::Press>>| {
                     ev.propagate(false);
                 },
             )
@@ -463,7 +470,7 @@ fn setup_text_edit_input(
                     ZIndex(10),
                     Interaction::None,
                     Hovered::default(),
-                    HoverCursor(bevy::window::SystemCursorIcon::ColResize),
+                    HoverCursor(bevy_window::SystemCursorIcon::ColResize),
                 ))
                 .id();
             crate::utils::attach_or_despawn(&mut commands, wrapper_entity, hitbox);
@@ -925,7 +932,7 @@ fn handle_drag_value(
             hitbox.start_value = parse_numeric_value(&buffer.get_text(), suffix);
             commands
                 .entity(entity)
-                .insert(ActiveCursor(bevy::window::SystemCursorIcon::ColResize));
+                .insert(ActiveCursor(bevy_window::SystemCursorIcon::ColResize));
             commands.entity(child_of.parent()).insert(TextEditDragging);
         }
 

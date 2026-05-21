@@ -10,7 +10,12 @@
 //! Drag/move/resize operations mutate the tree only; the reconciler
 //! rebuilds the affected entity sub-tree on the next frame.
 
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 use jackdaw_feathers::tokens;
 
 use crate::area::{ActiveDockWindow, DockArea, DockAreaStyle, DockTab, DockTabContent, DockWindow};

@@ -8,20 +8,21 @@
 //!
 //! Run: `cargo run --example components_in_editor`
 
-use avian3d::prelude::PhysicsPlugins;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use bevy_enhanced_input::prelude::EnhancedInputPlugin;
 use jackdaw::prelude::*;
 
 fn main() -> AppExit {
     App::new()
         // log errors instead of panicking
-        .set_error_handler(bevy::ecs::error::error)
+        .set_error_handler(bevy_ecs::error::error)
         // Ambient plugins at the binary boundary. Editor crates
         // assert presence, so user plugins can add the same
         // plugins without a duplicate panic.
         .add_plugins((
             DefaultPlugins,
+            #[cfg(feature = "avian")]
             PhysicsPlugins::default(),
             EnhancedInputPlugin,
             EditorPlugins::default(),

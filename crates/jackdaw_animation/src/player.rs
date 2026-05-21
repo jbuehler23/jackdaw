@@ -3,10 +3,8 @@
 //! `AnimationTargetId`, `AnimatedBy`) based on engagement state.
 //! None of these are persisted.
 
-use bevy::animation::{
-    AnimatedBy, AnimationPlayer, AnimationTargetId, graph::AnimationGraphHandle,
-};
-use bevy::prelude::*;
+use bevy_animation::{AnimatedBy, AnimationPlayer, AnimationTargetId, graph::AnimationGraphHandle};
+use bevy_ecs::prelude::*;
 
 use crate::blend_graph::{AnimationBlendGraph, ClipNodeRef, OutputNode};
 use crate::clip::{Clip, GltfClipRef, SelectedClip};

@@ -146,7 +146,7 @@ pub mod prelude {
         WindowDescriptor, operator,
     };
 
-    /// Helper [`SystemParam`](bevy::ecs::system::SystemParam) for
+    /// Helper [`SystemParam`](bevy_ecs::system::SystemParam) for
     /// operators that need to read or cancel the active modal.
     pub use jackdaw_api_internal::lifecycle::ActiveModalQuery;
 
@@ -161,5 +161,5 @@ pub mod prelude {
 
     /// Re-exported so manual [`Operator`] impls don't need an extra
     /// bevy import.
-    pub use bevy::ecs::system::SystemId;
+    pub use bevy_ecs::system::SystemId;
 }

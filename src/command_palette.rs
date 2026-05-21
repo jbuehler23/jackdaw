@@ -1,4 +1,6 @@
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::{OperatorAction, OperatorEntity};
 use jackdaw_feathers::icons::EditorFont;
@@ -21,13 +23,16 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.entity_mut()
         .with_related::<ActionOf<CoreExtensionInputContext>>((
             Action::<ToggleCommandPaletteOp>::new(),
-            bindings![
-                (
+            related!(Bindings[
+                IntoBindingBundle::into_binding_bundle((
                     KeyCode::Space.with_mod_keys(ModKeys::CONTROL),
                     bevy_enhanced_input::prelude::Press::default()
-                ),
-                (KeyCode::F3, bevy_enhanced_input::prelude::Press::default())
-            ],
+                )),
+                IntoBindingBundle::into_binding_bundle((
+                    KeyCode::F3,
+                    bevy_enhanced_input::prelude::Press::default()
+                ))]
+            ),
         ));
 }
 

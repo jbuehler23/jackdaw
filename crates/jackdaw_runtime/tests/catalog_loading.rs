@@ -5,7 +5,8 @@
 
 use std::path::PathBuf;
 
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_internal::MinimalPlugins;
 use jackdaw_runtime::{JackdawCatalog, JackdawCatalogPath, JackdawPlugin};
 
 #[test]
@@ -34,10 +35,10 @@ fn project_catalog_populates_resource() {
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::transform::TransformPlugin);
-    app.add_plugins(bevy::asset::AssetPlugin::default());
-    app.add_plugins(bevy::scene::ScenePlugin);
-    app.add_plugins(bevy::image::ImagePlugin::default());
+    app.add_plugins(bevy_transform::TransformPlugin);
+    app.add_plugins(bevy_asset::AssetPlugin::default());
+    app.add_plugins(bevy_scene::ScenePlugin);
+    app.add_plugins(bevy_image::ImagePlugin::default());
     app.insert_resource(JackdawCatalogPath(catalog_path.clone()));
     app.add_plugins(JackdawPlugin);
 
@@ -62,9 +63,9 @@ fn project_catalog_populates_resource() {
 fn missing_catalog_leaves_resource_empty() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::transform::TransformPlugin);
-    app.add_plugins(bevy::asset::AssetPlugin::default());
-    app.add_plugins(bevy::scene::ScenePlugin);
+    app.add_plugins(bevy_transform::TransformPlugin);
+    app.add_plugins(bevy_asset::AssetPlugin::default());
+    app.add_plugins(bevy_scene::ScenePlugin);
     app.insert_resource(JackdawCatalogPath(PathBuf::from(
         "/definitely/does/not/exist/catalog.jsn",
     )));

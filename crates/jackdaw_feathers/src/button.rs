@@ -1,6 +1,12 @@
-use bevy::input_focus::InputFocus;
-use bevy::picking::hover::Hovered;
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_asset::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_input_focus::InputFocus;
+use bevy_picking::hover::Hovered;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 use jackdaw_jsn::PropertyValue;
 use lucide_icons::Icon;
 use std::borrow::Cow;
@@ -148,7 +154,7 @@ pub enum ButtonSize {
 
 impl ButtonVariant {
     pub fn bg_color(&self, hovered: bool) -> Srgba {
-        use bevy::color::palettes::tailwind;
+        use bevy_color::palettes::tailwind;
         match self {
             Self::Default => tailwind::ZINC_700,
             Self::Ghost | Self::ActiveAlt | Self::Disabled => TEXT_BODY_COLOR,
@@ -204,7 +210,7 @@ impl ButtonVariant {
         }
     }
     pub fn border_color(&self) -> Srgba {
-        use bevy::color::palettes::tailwind;
+        use bevy_color::palettes::tailwind;
         match self {
             Self::Default | Self::Ghost | Self::Disabled => tailwind::ZINC_700,
             Self::Primary | Self::Active => PRIMARY_COLOR,
@@ -398,7 +404,7 @@ pub(crate) fn button_base(
         variant,
         size,
         Hovered::default(),
-        HoverCursor(bevy::window::SystemCursorIcon::Pointer),
+        HoverCursor(bevy_window::SystemCursorIcon::Pointer),
         Node {
             width: if align_left {
                 percent(100)

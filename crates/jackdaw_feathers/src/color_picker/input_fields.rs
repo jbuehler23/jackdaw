@@ -1,7 +1,10 @@
-use bevy::input_focus::InputFocus;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_input_focus::InputFocus;
+use bevy_text::prelude::*;
+use bevy_ui::prelude::*;
 use bevy_ui_text_input::TextInputQueue;
 use bevy_ui_text_input::actions::{TextInputAction, TextInputEdit};
+use bevy_utils::prelude::*;
 
 use super::color_math::{parse_hex, rgb_to_hsv};
 use super::{

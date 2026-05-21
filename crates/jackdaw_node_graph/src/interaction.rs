@@ -14,10 +14,13 @@
 //! 3. `Pointer<DragEnd>` -> compute `(old, new)` diffs, queue a
 //!    [`MoveGraphNodesCmd`] on `CommandHistory`, reset gesture to `Idle`.
 
-use bevy::ecs::relationship::Relationship;
-use bevy::picking::events::{Click, Drag, DragEnd, DragStart, Pointer};
-use bevy::picking::pointer::PointerButton;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_ecs::relationship::Relationship;
+use bevy_input::prelude::*;
+use bevy_math::prelude::*;
+use bevy_picking::events::{Click, Drag, DragEnd, DragStart, Pointer};
+use bevy_picking::pointer::PointerButton;
+use bevy_ui::prelude::*;
 use jackdaw_commands::CommandHistory;
 use std::collections::HashMap;
 

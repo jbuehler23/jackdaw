@@ -9,7 +9,8 @@
 //! inline in the operator body. Escape goes through the global
 //! `modal.cancel` chain.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_jsn::Brush;
@@ -409,7 +410,7 @@ pub fn brush_face_drag(
                 if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
                     // HalfedgeMesh path: translate each selected face's ring vertices along the face normal.
                     let face_keys = halfedge.face_keys.clone();
-                    let start_positions: Vec<bevy::math::Vec3> =
+                    let start_positions: Vec<bevy_math::Vec3> =
                         if !start.topology.vertices.is_empty() {
                             start.topology.vertices.iter().map(|v| v.position).collect()
                         } else {
@@ -469,7 +470,7 @@ pub fn brush_face_drag(
                     }
                     // Sync brush.faces[i].plane and brush.topology.
                     let new_topology = halfedge.mesh.flatten_to_topology();
-                    let positions: Vec<bevy::math::Vec3> =
+                    let positions: Vec<bevy_math::Vec3> =
                         new_topology.vertices.iter().map(|v| v.position).collect();
                     for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
                         if face_idx < new_topology.polygons.len() {

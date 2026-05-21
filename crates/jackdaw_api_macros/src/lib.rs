@@ -183,8 +183,8 @@ pub fn operator(attr: TokenStream, item: TokenStream) -> TokenStream {
     let availability_impl = is_available.map(|path| {
         quote! {
             fn register_availability_check(
-                commands: &mut ::bevy::ecs::system::Commands,
-            ) -> ::core::option::Option<::bevy::ecs::system::SystemId<(), bool>> {
+                commands: &mut ::bevy_ecs::system::Commands,
+            ) -> ::core::option::Option<::bevy_ecs::system::SystemId<(), bool>> {
                 ::core::option::Option::Some(commands.register_system(#path))
             }
         }
@@ -193,8 +193,8 @@ pub fn operator(attr: TokenStream, item: TokenStream) -> TokenStream {
     let cancel_impl = cancel.map(|path| {
         quote! {
             fn register_cancel(
-                commands: &mut ::bevy::ecs::system::Commands,
-            ) -> ::core::option::Option<::bevy::ecs::system::SystemId<()>> {
+                commands: &mut ::bevy_ecs::system::Commands,
+            ) -> ::core::option::Option<::bevy_ecs::system::SystemId<()>> {
                 ::core::option::Option::Some(commands.register_system(#path))
             }
         }
@@ -221,7 +221,7 @@ pub fn operator(attr: TokenStream, item: TokenStream) -> TokenStream {
             #parameters_const
 
             fn register_execute(
-                commands: &mut ::bevy::ecs::system::Commands,
+                commands: &mut ::bevy_ecs::system::Commands,
             ) -> ::jackdaw_api::prelude::OperatorSystemId {
                 commands.register_system(#fn_name)
             }

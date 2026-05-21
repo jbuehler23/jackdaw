@@ -6,12 +6,12 @@ pub mod menu_bar;
 pub mod split_panel;
 pub mod tree_view;
 
-use bevy::app::{PluginGroup, PluginGroupBuilder};
+use bevy_app::{PluginGroup, PluginGroupBuilder};
 
 pub struct EditorWidgetsPlugins;
 
 impl PluginGroup for EditorWidgetsPlugins {
-    fn build(self) -> bevy::app::PluginGroupBuilder {
+    fn build(self) -> bevy_app::PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
             .add(split_panel::SplitPanelPlugin)
             .add(tree_view::TreeViewPlugin)

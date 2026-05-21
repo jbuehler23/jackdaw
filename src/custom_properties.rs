@@ -1,4 +1,5 @@
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 
 // Re-export types from jackdaw_jsn
 pub use jackdaw_jsn::{CustomProperties, PropertyValue};

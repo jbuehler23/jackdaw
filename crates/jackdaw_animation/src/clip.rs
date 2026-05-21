@@ -24,7 +24,9 @@
 //!
 //! [`compile_clips`]: crate::compile_clips
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_reflect::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Top-level component on a clip entity.

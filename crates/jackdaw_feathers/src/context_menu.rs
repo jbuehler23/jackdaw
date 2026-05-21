@@ -1,4 +1,7 @@
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_ui::prelude::*;
 use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuItem};
 
 use crate::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonVariant, button};

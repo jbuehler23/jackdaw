@@ -1,6 +1,7 @@
 //! `brush.mesh.connect_verts` operator.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::connect_verts::connect_verts;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey};

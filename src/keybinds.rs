@@ -1,4 +1,5 @@
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api_internal::paths::keybinds_path;
 use serde_json::{Map, Value};
 

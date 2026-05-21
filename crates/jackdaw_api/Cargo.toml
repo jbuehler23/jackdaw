@@ -21,16 +21,18 @@ repository = "https://github.com/jbuehler23/jackdaw"
 # the editor's.
 dynamic_linking = [
     "dep:jackdaw_dylib",
-    "bevy/dynamic_linking",
-    "bevy/experimental_bevy_feathers",
-    "bevy/serialize",
-    "bevy/debug",
-    "bevy/bevy_remote",
-    "bevy/file_watcher",
+    #"bevy/dynamic_linking",
+    "dep:bevy_feathers",
+    #"bevy/serialize",
+    #"bevy/debug",
+    #"bevy/bevy_remote",
+    #"bevy/file_watcher",
 ]
 
 [dependencies]
-bevy.workspace = true
+bevy_ecs.workspace = true
+bevy_feathers = { workspace = true, optional = true }
+
 bevy_enhanced_input.workspace = true
 jackdaw_api_internal.workspace = true
 jackdaw_api_macros.workspace = true

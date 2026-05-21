@@ -14,7 +14,7 @@ fn cuboid_round_trip_preserves_counts_and_positions() {
     // Vertex positions preserved (compare as sorted set; order may differ).
     let mut orig_pos: Vec<_> = original.vertices.iter().map(|v| v.position).collect();
     let mut flat_pos: Vec<_> = flattened.vertices.iter().map(|v| v.position).collect();
-    let cmp = |a: &bevy::math::Vec3, b: &bevy::math::Vec3| {
+    let cmp = |a: &bevy_math::Vec3, b: &bevy_math::Vec3| {
         a.x.partial_cmp(&b.x)
             .unwrap()
             .then(a.y.partial_cmp(&b.y).unwrap())

@@ -11,8 +11,14 @@
 //! * When a `GraphNode` is removed, despawn the UI entity that views it.
 //! * Same pattern for `Connection`.
 
-use bevy::ecs::relationship::Relationship;
-use bevy::prelude::*;
+use bevy_asset::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_ecs::relationship::Relationship;
+use bevy_log::prelude::*;
+use bevy_picking::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_ui_render::prelude::*;
+use bevy_utils::prelude::*;
 use std::collections::HashMap;
 
 use crate::canvas::{GraphCanvasViewport, GraphCanvasWorld};

@@ -1,6 +1,6 @@
 //! `brush.mesh.dissolve_faces` operator.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::dissolve_faces::dissolve_faces;
 use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh};

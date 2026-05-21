@@ -4,7 +4,8 @@
 //! defined alongside their state in [`super::brp_client`],
 //! [`super::build`], and [`super::save_load`].
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::prelude::*;
 
 use super::brp_client::NavmeshFetchOp;

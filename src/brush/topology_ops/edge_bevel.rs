@@ -6,9 +6,11 @@
 //! frame so the user sees the live chamfer as they drag. LMB commits; Esc /
 //! RMB cancels and restores the pre-modal mesh.
 
-use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy_ecs::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
+use bevy_input::prelude::*;
+use bevy_math::prelude::*;
+use bevy_window::PrimaryWindow;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::ops::edge_bevel::edge_bevel;
@@ -55,10 +57,12 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             Action::<BrushEdgeBevelOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyB.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    KeyCode::KeyB.with_mod_keys(ModKeys::CONTROL),
+                    Press::default(),
+                ))]
+            ),
         ));
     });
 }

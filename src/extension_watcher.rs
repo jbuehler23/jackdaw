@@ -23,7 +23,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_loader::{
     DEFAULT_EXTENSIONS_SUBDIR, DEFAULT_GAMES_SUBDIR, ENV_EXTENSIONS_PATH, ENV_GAMES_PATH,
 };

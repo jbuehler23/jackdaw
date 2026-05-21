@@ -1,12 +1,12 @@
 use anyhow::anyhow;
-use bevy::{
-    asset::RenderAssetUsages,
-    mesh::{Indices, PrimitiveTopology},
-    platform::collections::HashMap,
-    prelude::*,
-    remote::BrpRequest,
-    tasks::{AsyncComputeTaskPool, IoTaskPool, Task, futures_lite::future},
-};
+use bevy_asset::RenderAssetUsages;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
+use bevy_mesh::{Indices, PrimitiveTopology};
+use bevy_platform::collections::HashMap;
+use bevy_remote::BrpRequest;
+use bevy_tasks::{AsyncComputeTaskPool, IoTaskPool, Task, futures_lite::future};
+
 use bevy_rerecast::editor_integration::{
     brp::{
         BRP_GENERATE_EDITOR_INPUT, BRP_POLL_EDITOR_INPUT, GenerateEditorInputParams,

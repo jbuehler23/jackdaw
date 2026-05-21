@@ -1,6 +1,7 @@
 //! Operators for the terrain contextual toolbar and inspector.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api::prelude::*;
 
 use super::inspector::TerrainGenerateState;

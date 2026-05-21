@@ -32,8 +32,6 @@
 /// referencing those unqualified will need to disambiguate; globbing
 /// both is still the best UX since authors rarely touch the overlap.
 pub mod prelude {
-    // using the bevy-defined exports over the BEI-defined ones.
-    pub use bevy::prelude::{Cancel, Press, Release, *};
     pub use jackdaw_api::prelude::*;
 }
 
@@ -45,8 +43,3 @@ pub use jackdaw_api::{
     ExtensionContext, ExtensionKind, ExtensionPoint, HierarchyWindow, InspectorWindow,
     JackdawExtension, MenuEntryDescriptor, PanelContext, WindowDescriptor, jsn, op, pie, runtime,
 };
-
-/// Bevy root surface for extension code walking bevy paths beyond
-/// the prelude. Safe to glob: none of the explicit `jackdaw_api`
-/// re-exports above are items bevy defines at its root.
-pub use bevy::*;

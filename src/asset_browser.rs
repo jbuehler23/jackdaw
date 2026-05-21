@@ -1,15 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
 
-use bevy::{
-    asset::RenderAssetUsages,
-    image::{CompressedImageFormats, ImageSampler, ImageType},
-    picking::hover::Hovered,
-    prelude::*,
-    render::render_resource::{Extent3d, TextureDimension, TextureSampleType},
-    tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
-    window::{PrimaryWindow, RawHandleWrapper},
-};
+use bevy_asset::RenderAssetUsages;
+use bevy_ecs::prelude::*;
+use bevy_image::{CompressedImageFormats, ImageSampler, ImageType};
+use bevy_log::prelude::*;
+use bevy_picking::hover::Hovered;
+use bevy_render::render_resource::{Extent3d, TextureDimension, TextureSampleType};
+use bevy_tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
+use bevy_window::{PrimaryWindow, RawHandleWrapper};
 use jackdaw_feathers::button::ButtonOperatorCall;
 use jackdaw_feathers::text_edit::TextEditValue;
 use jackdaw_feathers::tooltip::Tooltip;
@@ -693,7 +692,7 @@ fn remove_incompatible_image_nodes(
     image_nodes: Query<(Entity, &ImageNode)>,
     images: Res<Assets<Image>>,
 ) {
-    use bevy::render::render_resource::TextureSampleType;
+    use bevy_render::render_resource::TextureSampleType;
     for (entity, image_node) in &image_nodes {
         if let Some(image) = images.get(&image_node.image) {
             let sample = image.texture_descriptor.format.sample_type(None, None);

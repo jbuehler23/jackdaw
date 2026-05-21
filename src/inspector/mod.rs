@@ -6,13 +6,19 @@ pub(crate) mod component_tooltip;
 mod custom_props_display;
 mod material_display;
 pub(crate) mod ops;
+#[cfg(feature = "avian")]
 pub(crate) mod physics_display;
 pub(crate) mod reflect_fields;
+// Editor display metadata as Bevy reflect custom attributes.
+// Newtypes live in `jackdaw_jsn`, re-exported here.
+pub use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 
 use crate::EditorEntity;
 
-use bevy::ecs::archetype::ArchetypeId;
-use bevy::prelude::*;
+use bevy_ecs::archetype::ArchetypeId;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
+use bevy_reflect::prelude::*;
 
 const MAX_REFLECT_DEPTH: usize = 4;
 
@@ -59,10 +65,6 @@ fn extract_module_group(module_path: Option<&str>) -> String {
         }
     }
 }
-
-// Editor display metadata as Bevy reflect custom attributes.
-// Newtypes live in `jackdaw_jsn`, re-exported here.
-pub use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 
 #[reflect_trait]
 pub trait Displayable {
@@ -133,7 +135,7 @@ impl Plugin for InspectorPlugin {
 /// Needed so that undo/redo and external edits are reflected in the UI without
 /// having to deselect and reselect the entity.
 fn refresh_name_field(world: &mut World) {
-    use bevy::input_focus::InputFocus;
+    use bevy_input_focus::InputFocus;
     use jackdaw_feathers::text_edit::{
         TextEditDragging, TextEditValue, TextInputQueue, set_text_input_value,
     };

@@ -1,4 +1,7 @@
-use bevy::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 
 use crate::tokens::TEXT_BODY_COLOR;
 

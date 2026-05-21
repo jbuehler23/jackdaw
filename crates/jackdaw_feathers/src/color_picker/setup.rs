@@ -1,5 +1,11 @@
-use bevy::picking::prelude::Pickable;
-use bevy::prelude::*;
+use bevy_asset::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_picking::prelude::Pickable;
+use bevy_ui::prelude::*;
+use bevy_ui_render::prelude::*;
+use bevy_utils::prelude::*;
 
 use super::color_math::hsv_to_rgb;
 use super::controls::{

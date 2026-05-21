@@ -1,6 +1,9 @@
-use bevy::picking::hover::Hovered;
-use bevy::prelude::*;
-use bevy::window::{CursorIcon, SystemCursorIcon};
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_picking::hover::Hovered;
+use bevy_ui::prelude::*;
+use bevy_window::prelude::*;
+use bevy_window::{CursorIcon, SystemCursorIcon};
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<ManagedCursor>()

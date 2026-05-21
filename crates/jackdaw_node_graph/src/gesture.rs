@@ -3,7 +3,8 @@
 //! Exposes the enum and a default-`Idle` resource. Pointer observers
 //! drive transitions (pan, node move, rect-select, connection drag).
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
 use std::collections::HashMap;
 
 /// Where a drag-to-connect gesture started.

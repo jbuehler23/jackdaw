@@ -1,4 +1,4 @@
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use bitflags::bitflags;
 use slotmap::{SlotMap, new_key_type};
 

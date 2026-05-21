@@ -1,5 +1,6 @@
 use anyhow::anyhow;
-use bevy::{remote::BrpRequest, tasks::IoTaskPool};
+use bevy_remote::BrpRequest;
+use bevy_tasks::IoTaskPool;
 
 /// Send a BRP JSON-RPC 2.0 request and return the result as a background task.
 ///
@@ -9,7 +10,7 @@ pub fn brp_request(
     endpoint: &str,
     method: &str,
     params: Option<serde_json::Value>,
-) -> bevy::tasks::Task<Result<serde_json::Value, anyhow::Error>> {
+) -> bevy_tasks::Task<Result<serde_json::Value, anyhow::Error>> {
     let req = BrpRequest {
         jsonrpc: String::from("2.0"),
         method: String::from(method),

@@ -1,7 +1,9 @@
 use std::{fs::File, path::PathBuf};
 
 use crate::prelude::*;
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
 use jackdaw_api_internal::lifecycle::OperatorEntity;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

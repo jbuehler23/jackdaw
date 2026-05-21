@@ -1,7 +1,14 @@
 use std::time::Duration;
 
-use bevy::color::palettes::tailwind;
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_asset::prelude::*;
+use bevy_color::palettes::tailwind;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_text::prelude::*;
+use bevy_time::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
 use lucide_icons::Icon;
 
 use crate::button::{ButtonClickEvent, ButtonVariant, IconButtonProps, icon_button};

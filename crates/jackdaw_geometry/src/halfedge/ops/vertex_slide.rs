@@ -33,7 +33,7 @@ pub fn vertex_slide(
     // Snapshot start positions and target positions FIRST (before mutating). If we mutate
     // a vert that's used as a target by another vert in the selection, we'd corrupt the
     // remaining slides.
-    let mut moves: Vec<(VertKey, bevy::math::Vec3)> = Vec::with_capacity(verts.len());
+    let mut moves: Vec<(VertKey, bevy_math::Vec3)> = Vec::with_capacity(verts.len());
     for &v in verts {
         let Some(vert) = mesh.verts.get(v) else {
             continue;

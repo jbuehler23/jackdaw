@@ -12,7 +12,7 @@
 
 use std::collections::HashSet;
 
-use bevy::ecs::reflect::AppTypeRegistry;
+use bevy_ecs::reflect::AppTypeRegistry;
 use jackdaw::inspector::component_picker::{
     PickableComponent, PickerDenylist, enumerate_pickable_components,
     populate_avian_picker_denylist,

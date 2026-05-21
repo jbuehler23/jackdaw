@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 
 /// Attach `child` as a child of `parent` at `Commands` flush time,
 /// cleanly despawning `child` if `parent` has gone away by then.

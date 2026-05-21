@@ -1,7 +1,12 @@
-use bevy::{
-    input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel},
-    prelude::*,
-};
+use bevy_app::prelude::*;
+use bevy_camera::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
+use bevy_input::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
+use bevy_transform::prelude::*;
+
 use jackdaw_commands::keybinds::{EditorAction, KeybindRegistry};
 
 pub struct JackdawCameraPlugin;

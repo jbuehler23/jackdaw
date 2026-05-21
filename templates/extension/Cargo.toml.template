@@ -13,7 +13,7 @@ publish = false
 crate-type = ["cdylib"]
 
 # `bevy` is a plain crates.io dep so bevy's derive macros find it
-# in the manifest and emit correct `::bevy::…` paths. When jackdaw
+# in the manifest and emit correct `::bevy_…` paths. When jackdaw
 # builds this project via **File > Extensions > Build from project
 # folder…** it sets `RUSTC_WRAPPER=jackdaw-rustc-wrapper`, which
 # rewrites `--extern bevy=` at the editor's `libjackdaw_sdk.so` so

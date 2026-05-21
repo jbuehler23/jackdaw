@@ -5,7 +5,8 @@
 //! path for grid resize lives alongside the modifier-gated scroll
 //! handler in [`crate::snapping`].
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 

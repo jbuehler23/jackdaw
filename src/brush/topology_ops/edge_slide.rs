@@ -1,6 +1,7 @@
 //! `brush.mesh.edge_slide` operator.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::edge_slide::edge_slide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};

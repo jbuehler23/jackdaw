@@ -4,7 +4,8 @@
 //!
 //! Runs once per brush at insertion time via the change-detection filter.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_geometry::compute_brush_topology;
 use jackdaw_jsn::Brush;
 
@@ -32,7 +33,7 @@ pub fn migrate_legacy_brush_topology(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::app::App;
+    use bevy_app::App;
     use jackdaw_geometry::topology::BrushTopology;
     use jackdaw_jsn::Brush;
 

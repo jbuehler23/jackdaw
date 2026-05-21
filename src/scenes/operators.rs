@@ -1,9 +1,11 @@
 //! Multi-scene operators. Each is a Bevy system that mutates the
 //! `Scenes` resource and (where appropriate) triggers a tab swap.
 
-use bevy::input::ButtonInput;
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
+use bevy_input::ButtonInput;
+use bevy_log::prelude::*;
 use jackdaw_api::prelude::*;
 
 use crate::scene_io::{SceneDirtyState, SceneFilePath};
@@ -33,34 +35,42 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         w.spawn((
             Action::<SceneNewOp>::new(),
             ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyT.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    KeyCode::KeyT.with_mod_keys(ModKeys::CONTROL),
+                    Press::default(),
+                ))]
+            ),
         ));
         w.spawn((
             Action::<SceneCloseOp>::new(),
             ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyW.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    KeyCode::KeyW.with_mod_keys(ModKeys::CONTROL),
+                    Press::default(),
+                ))]
+            ),
         ));
         w.spawn((
             Action::<SceneCycleNextOp>::new(),
             ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::Tab.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    KeyCode::Tab.with_mod_keys(ModKeys::CONTROL),
+                    Press::default(),
+                ))]
+            ),
         ));
         w.spawn((
             Action::<SceneCyclePrevOp>::new(),
             ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::Tab.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
-                Press::default(),
-            )],
+            related!(
+                Bindings[IntoBindingBundle::into_binding_bundle((
+                    KeyCode::Tab.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
+                    Press::default(),
+                ))]
+            ),
         ));
     });
 }

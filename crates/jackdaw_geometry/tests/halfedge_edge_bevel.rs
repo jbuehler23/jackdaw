@@ -1,4 +1,4 @@
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_geometry::halfedge::{
     HalfedgeMesh,
     ops::edge_bevel::{BevelError, edge_bevel},

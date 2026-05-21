@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use crate::EditorEntity;
 use crate::project::ProjectRoot;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_feathers::icons::{EditorFont, Icon, IconFont, icon};
 use jackdaw_feathers::picker::{
     Matchable, PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text, picker_item,

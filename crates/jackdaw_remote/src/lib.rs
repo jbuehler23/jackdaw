@@ -2,10 +2,9 @@ mod methods;
 pub mod scene_snapshot;
 pub mod schema;
 
-use bevy::{
-    prelude::*,
-    remote::{RemotePlugin, http::RemoteHttpPlugin},
-};
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_remote::{RemotePlugin, http::RemoteHttpPlugin};
 use methods::jackdaw_app_info_handler;
 use scene_snapshot::scene_snapshot_handler;
 
@@ -90,7 +89,7 @@ impl Plugin for JackdawRemotePlugin {
         // If RemotePlugin was already added by the game before us,
         // inject our custom methods via the RemoteMethods resource.
         // We check if our method is already registered by attempting to get it.
-        use bevy::remote::RemoteMethods;
+        use bevy_remote::RemoteMethods;
 
         let world = app.world_mut();
 
@@ -108,14 +107,14 @@ impl Plugin for JackdawRemotePlugin {
             let system_id = world.register_system(jackdaw_app_info_handler);
             world.resource_mut::<RemoteMethods>().insert(
                 "jackdaw/app_info",
-                bevy::remote::RemoteMethodSystemId::Instant(system_id),
+                bevy_remote::RemoteMethodSystemId::Instant(system_id),
             );
         }
         if needs_scene_snapshot {
             let system_id = world.register_system(scene_snapshot_handler);
             world.resource_mut::<RemoteMethods>().insert(
                 "jackdaw/scene_snapshot",
-                bevy::remote::RemoteMethodSystemId::Instant(system_id),
+                bevy_remote::RemoteMethodSystemId::Instant(system_id),
             );
         }
     }

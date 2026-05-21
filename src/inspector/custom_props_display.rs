@@ -1,10 +1,10 @@
 use crate::commands::{CommandHistory, EditorCommand};
 use crate::custom_properties::{CustomProperties, PropertyValue, SetCustomProperties};
 
-use bevy::ecs::system::SystemState;
-use bevy::picking::hover::Hovered;
-use bevy::prelude::*;
-use bevy::ui_widgets::observe;
+use bevy_ecs::prelude::*;
+use bevy_ecs::system::SystemState;
+use bevy_picking::hover::Hovered;
+use bevy_ui_widgets::observe;
 use jackdaw_feathers::combobox::{ComboBoxSelectedIndex, combobox_with_selected};
 use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_feathers::{

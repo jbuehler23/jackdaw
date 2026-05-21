@@ -20,7 +20,7 @@ fn load_icon_png() -> Option<Icon> {
     let image = match image::load_from_memory(WINDOW_ICON_PNG) {
         Ok(image) => image.into_rgba8(),
         Err(error) => {
-            bevy::log::warn_once!(
+            bevy_log::warn_once!(
                 "jackdaw: failed to decode embedded window icon PNG: {:?}",
                 error
             );
@@ -33,7 +33,7 @@ fn load_icon_png() -> Option<Icon> {
     let icon = match Icon::from_rgba(rgba, width, height) {
         Ok(icon) => icon,
         Err(error) => {
-            bevy::log::warn_once!(
+            bevy_log::warn_once!(
                 "jackdaw: failed to create window icon from embedded PNG: {:?}",
                 error
             );
@@ -55,7 +55,7 @@ fn apply_window_icon_on_window_created(
         WINIT_WINDOWS.with(|windows_cell| {
             let winit_windows = windows_cell.borrow();
             let Some(backend_window) = winit_windows.get_window(event.window) else {
-                bevy::log::warn_once!(
+                bevy_log::warn_once!(
                     "jackdaw: winit backend window missing when applying decoration icon ({:?}); ignoring",
                     event.window,
                 );

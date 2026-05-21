@@ -3,7 +3,7 @@
 //! via `brush_difference_split`. Same call path as the editor's
 //! operator; verifies the round-trip survives without panic.
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_csg::{BooleanOp, CsgInput, brush_boolean, brush_difference_split};
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::edge_bevel::edge_bevel};
 use jackdaw_jsn::{Brush, BrushFaceData};
@@ -141,7 +141,7 @@ fn material_handles_propagate_across_bevel_subtract() {
     // Sentinel uv_scale on the original +X face of the cube should
     // survive both the bevel and the subtract on the +X plane.
     let mut bevel = beveled_cube(1.0, 0.2);
-    bevel.faces[0].uv_scale = bevy::math::Vec2::new(11.0, 17.0);
+    bevel.faces[0].uv_scale = bevy_math::Vec2::new(11.0, 17.0);
     // Subtract a cube whose +X face overlaps but doesn't cover the
     // bevel's +X plane. The +X face of bevel should still exist on the
     // result with the sentinel uv_scale.
@@ -158,7 +158,7 @@ fn material_handles_propagate_across_bevel_subtract() {
     });
     let plus_x = found.expect("+X face should survive on at least one fragment");
     assert!(
-        (plus_x.uv_scale - bevy::math::Vec2::new(11.0, 17.0)).length() < 1e-3,
+        (plus_x.uv_scale - bevy_math::Vec2::new(11.0, 17.0)).length() < 1e-3,
         "sentinel uv_scale should propagate; got {:?}",
         plus_x.uv_scale
     );

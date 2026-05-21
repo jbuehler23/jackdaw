@@ -8,7 +8,7 @@
 //!   - N wall edges (`old[i]` -> `new[i]`)
 //!   - N side-quad faces (CCW from outside): \[`old[i]`, `old[i+1]`, `new[i+1]`, `new[i]`\]
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 
 use crate::halfedge::cycles::{disk_insert_edge, radial_insert_loop};
 use crate::halfedge::types::*;

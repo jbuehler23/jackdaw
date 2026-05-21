@@ -3,7 +3,7 @@
 //! Projects the 3D ring onto its plane (via `compute_face_tangent_axes`),
 //! runs earcut in 2D, returns triangles indexed back into the original ring.
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 
 use crate::compute_face_tangent_axes;
 

@@ -16,9 +16,12 @@ use std::sync::Arc;
 use crate::extensions_config::init_extension;
 use crate::operator::cancel_active_modal;
 use crate::{TopLevelMenu, prelude::*};
-use bevy::ecs::component::ComponentId;
-use bevy::ecs::system::{SystemId, SystemParam};
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_derive::{Deref, DerefMut};
+use bevy_ecs::component::ComponentId;
+use bevy_ecs::prelude::*;
+use bevy_ecs::system::{SystemId, SystemParam};
+use bevy_log::prelude::*;
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<ExtensionCatalog>()

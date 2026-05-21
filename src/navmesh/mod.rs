@@ -5,7 +5,9 @@ pub mod save_load;
 pub mod toolbar;
 mod visualization;
 
-use bevy::prelude::*;
+use bevy_app::prelude::*;
+use bevy_derive::{Deref, DerefMut};
+use bevy_ecs::prelude::*;
 use bevy_rerecast::{TriMeshFromBevyMesh as _, prelude::*, rerecast::TriMesh};
 
 use crate::EditorEntity;

@@ -6,8 +6,14 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use bevy::prelude::*;
-use bevy::reflect::TypePath;
+use bevy_app::prelude::*;
+use bevy_asset::Assets;
+use bevy_ecs::prelude::*;
+use bevy_internal::MinimalPlugins;
+use bevy_math::prelude::*;
+use bevy_reflect::TypePath;
+use bevy_reflect::prelude::*;
+use bevy_transform::prelude::*;
 use jackdaw_jsn::format::{JsnAssets, JsnEntity, JsnHeader, JsnMetadata, JsnScene};
 use jackdaw_runtime::{JackdawPlugin, JackdawScene, JackdawSceneRoot};
 use serde_json::json;
@@ -30,9 +36,9 @@ struct InsertObservation(Arc<Mutex<Vec<Vec3>>>);
 fn on_insert_observer_sees_propagated_global_transform() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::transform::TransformPlugin);
-    app.add_plugins(bevy::asset::AssetPlugin::default());
-    app.add_plugins(bevy::scene::ScenePlugin);
+    app.add_plugins(bevy_transform::TransformPlugin);
+    app.add_plugins(bevy_asset::AssetPlugin::default());
+    app.add_plugins(bevy_scene::ScenePlugin);
     app.add_plugins(JackdawPlugin);
     app.register_type::<PlayerSpawn>();
 

@@ -5,7 +5,8 @@
 //! build node UI, populate the "Add Node" context menu, and validate
 //! connection compatibility.
 
-use bevy::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::graph::TerminalDirection;

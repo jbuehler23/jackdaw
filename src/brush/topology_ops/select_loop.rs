@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::select::loop_walk::loop_walk;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};

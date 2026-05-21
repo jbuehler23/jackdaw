@@ -3,7 +3,7 @@
     reason = "diagnostic test prints geometry to stdout for inspection"
 )]
 
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_geometry::halfedge::{
     HalfedgeMesh,
     ops::{dissolve_verts::dissolve_verts, subdivide::subdivide},

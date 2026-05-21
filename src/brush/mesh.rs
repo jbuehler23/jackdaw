@@ -1,11 +1,9 @@
-use bevy::{
-    asset::{embedded_asset, load_embedded_asset},
-    image::{ImageAddressMode, ImageFilterMode, ImageLoaderSettings},
-    light::{NotShadowCaster, NotShadowReceiver},
-    math::Affine2,
-    mesh::{Indices, PrimitiveTopology},
-    prelude::*,
-};
+use bevy_asset::{embedded_asset, load_embedded_asset};
+use bevy_ecs::prelude::*;
+use bevy_image::{ImageAddressMode, ImageFilterMode, ImageLoaderSettings};
+use bevy_light::{NotShadowCaster, NotShadowReceiver};
+use bevy_math::Affine2;
+use bevy_mesh::{Indices, PrimitiveTopology};
 
 use super::{BrushFaceEntity, BrushMaterialPalette, BrushMeshCache, BrushPreview};
 use crate::default_style;

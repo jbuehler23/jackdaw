@@ -3,7 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_feathers::{
     file_browser,
     icons::{Icon, IconFont},
@@ -165,7 +166,7 @@ fn refresh_project_tree(
 
 /// Handle directory expansion: lazily populate children.
 fn handle_directory_expand(
-    event: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>,
+    event: On<bevy_picking::events::Pointer<bevy_picking::events::Click>>,
     toggle_query: Query<&ChildOf, With<TreeNodeExpandToggle>>,
     content_query: Query<&ChildOf, With<TreeRowContent>>,
     mut tree_nodes: Query<(

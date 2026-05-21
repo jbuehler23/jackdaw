@@ -2953,7 +2953,7 @@ pub(crate) fn do_handoff(world: &mut World, bin: &Path, project_root: &Path) {
     match spawn_result {
         Ok(_child) => {
             info!("Static editor spawned; exiting launcher");
-            world.write_message(bevy::app::AppExit::Success);
+            world.write_message(bevy_app::AppExit::Success);
         }
         Err(e) => {
             warn!(

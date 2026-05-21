@@ -17,8 +17,8 @@
 
 use std::any::TypeId;
 
-use bevy::reflect::std_traits::ReflectDefault;
-use bevy::reflect::{
+use bevy_reflect::std_traits::ReflectDefault;
+use bevy_reflect::{
     DynamicEnum, DynamicStruct, DynamicTuple, DynamicTupleStruct, DynamicVariant, PartialReflect,
     Reflect, TypeInfo, TypeRegistry, VariantInfo,
 };
@@ -102,6 +102,6 @@ pub fn build_reflective_default(
 
     // Materialise a typed `Box<dyn Reflect>` from the dynamic
     // form via `FromReflect`.
-    let reflect_from_reflect = registration.data::<bevy::reflect::ReflectFromReflect>()?;
+    let reflect_from_reflect = registration.data::<bevy_reflect::ReflectFromReflect>()?;
     reflect_from_reflect.from_reflect(dynamic.as_ref())
 }

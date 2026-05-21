@@ -1,9 +1,12 @@
-use bevy::{
-    ecs::{query::QueryFilter, spawn::SpawnableList},
-    feathers::cursor::{CursorIconPlugin, EntityCursor, OverrideCursor},
-    prelude::*,
-    window::SystemCursorIcon,
-};
+use bevy_app::prelude::*;
+use bevy_color::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_ecs::{query::QueryFilter, spawn::SpawnableList};
+use bevy_feathers::cursor::{CursorIconPlugin, EntityCursor, OverrideCursor};
+use bevy_picking::prelude::*;
+use bevy_ui::prelude::*;
+use bevy_utils::prelude::*;
+use bevy_window::SystemCursorIcon;
 
 const HANDLE_SIZE: f32 = 3.0;
 const HANDLE_HOVER_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.12);

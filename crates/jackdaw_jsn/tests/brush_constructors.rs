@@ -1,4 +1,4 @@
-use bevy::math::Vec3;
+use bevy_math::Vec3;
 use jackdaw_geometry::compute_brush_topology;
 use jackdaw_jsn::{Brush, BrushTopology};
 

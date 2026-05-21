@@ -3,7 +3,7 @@
 //! produced an unwanted result, or as a prerequisite for CSG (which only
 //! supports convex inputs in this PR).
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::HalfedgeMesh;
 use jackdaw_geometry::{compute_brush_geometry_from_planes, compute_brush_topology};

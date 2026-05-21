@@ -1,6 +1,6 @@
 //! `brush.face.uv.texel_density` operator.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::Brush;
 

@@ -23,7 +23,7 @@
 //! buttons); those stay editor-private because they depend on the
 //! editor's scene representation.
 
-use bevy::prelude::*;
+use bevy_state::prelude::*;
 
 /// Three-state transport controlled by the editor's Play / Pause /
 /// Stop buttons.

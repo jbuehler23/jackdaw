@@ -1,6 +1,6 @@
 //! `brush.mesh.vertex_slide` operator.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::vertex_slide::vertex_slide;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey};

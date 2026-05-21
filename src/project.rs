@@ -3,7 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use jackdaw_api_internal::paths::recent_file_path;
 use jackdaw_jsn::format::{JsnHeader, JsnProject, JsnProjectConfig};
 use serde::{Deserialize, Serialize};

@@ -2,16 +2,18 @@
 //! Keybindings in Jackdaw use `bevy_enhanced_input` (BEI), so before reading this example,
 //! you should take a look at its documentation at <https://docs.rs/bevy_enhanced_input/latest/bevy_enhanced_input/>.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_app::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw::prelude::*;
 
 fn main() -> AppExit {
     App::new()
         // log errors instead of panicking
-        .set_error_handler(bevy::ecs::error::error)
+        .set_error_handler(bevy_ecs::error::error)
         .add_plugins((
             DefaultPlugins,
+            #[cfg(feature = "avian")]
             PhysicsPlugins::default(),
             EnhancedInputPlugin,
             EditorPlugins::default()
