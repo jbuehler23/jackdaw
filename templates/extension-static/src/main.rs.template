@@ -23,8 +23,10 @@ fn main() -> AppExit {
             DefaultPlugins,
             EnhancedInputPlugin,
             PhysicsPlugins::default(),
-            EditorPlugins::default()
-                .set(ExtensionPlugin::default().with_extension::<{{crate_name}}::{{crate_name | pascal_case}}>()),
+            EditorPlugins::default().set(
+                ExtensionPlugin::default()
+                    .with_extension::<{{crate_name}}::{{crate_name | pascal_case}}>(),
+            ),
         ))
         .run()
 }
