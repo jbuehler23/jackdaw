@@ -171,13 +171,18 @@ pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target
         );
     }
 
+    let display_name = target_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("PrefabRoot")
+        .to_string();
     let synthetic_components = {
         let mut map: HashMap<String, serde_json::Value> = HashMap::new();
         map.insert(PREFAB_TYPE.to_string(), serde_json::Value::Null);
         map.insert(PREFAB_ENTITY_ID_TYPE.to_string(), serde_json::json!(0));
         map.insert(
             "bevy_ecs::name::Name".to_string(),
-            serde_json::Value::String("PrefabRoot".to_string()),
+            serde_json::Value::String(display_name.clone()),
         );
         map.insert(
             "bevy_transform::components::transform::Transform".to_string(),
@@ -268,6 +273,11 @@ pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target
                 "scale": [1.0, 1.0, 1.0],
             }),
         );
+        ast.insert_component(
+            instance_key,
+            "bevy_camera::visibility::Visibility",
+            serde_json::Value::String("Inherited".to_string()),
+        );
 
         for (i, scene_entity) in entities.iter().enumerate() {
             let Some(key) = ast.key_for_entity(*scene_entity) else {
@@ -289,10 +299,27 @@ pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target
                 );
                 continue;
             };
-            if top_root_set.contains(scene_entity)
-                && let Some(node) = ast.nodes.get_mut(key)
-            {
-                node.parent = Some(instance_key);
+            if top_root_set.contains(scene_entity) {
+                // Rewrite this top-root's Transform.translation into the
+                // instance's local frame so its world position survives
+                // reparenting. Only translation is adjusted; rotated /
+                // scaled selections will shift slightly because we don't
+                // run the full parent inverse-transform here.
+                let transform_path = "bevy_transform::components::transform::Transform";
+                let current = ast.get_component_at(key, transform_path).cloned();
+                let next = match current {
+                    Some(value) => shift_translation_value(value, -centroid),
+                    None => serde_json::json!({
+                        "translation": [-centroid.x, -centroid.y, -centroid.z],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0],
+                    }),
+                };
+                ast.replace_component(key, transform_path, next);
+
+                if let Some(node) = ast.nodes.get_mut(key) {
+                    node.parent = Some(instance_key);
+                }
             }
             ast.insert_component(
                 key,
@@ -301,6 +328,57 @@ pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target
             );
         }
     }
+}
+
+/// Shift the `translation` field of a Transform JSON value by `offset`.
+/// Accepts either the array form (`[x, y, z]`) or the struct form
+/// (`{ "x": .., "y": .., "z": .. }`). Returns the value untouched if no
+/// recognised translation shape is present.
+fn shift_translation_value(
+    mut value: serde_json::Value,
+    offset: bevy::math::Vec3,
+) -> serde_json::Value {
+    let serde_json::Value::Object(ref mut map) = value else {
+        return value;
+    };
+    let Some(translation) = map.get_mut("translation") else {
+        return value;
+    };
+    match translation {
+        serde_json::Value::Array(arr) if arr.len() >= 3 => {
+            let x = arr[0].as_f64().unwrap_or(0.0) as f32 + offset.x;
+            let y = arr[1].as_f64().unwrap_or(0.0) as f32 + offset.y;
+            let z = arr[2].as_f64().unwrap_or(0.0) as f32 + offset.z;
+            arr[0] = serde_json::json!(x);
+            arr[1] = serde_json::json!(y);
+            arr[2] = serde_json::json!(z);
+        }
+        serde_json::Value::Object(t_map) => {
+            for (axis, delta) in [("x", offset.x), ("y", offset.y), ("z", offset.z)] {
+                let current = t_map
+                    .get(axis)
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0) as f32;
+                t_map.insert(axis.to_string(), serde_json::json!(current + delta));
+            }
+        }
+        _ => {}
+    }
+    value
+}
+
+/// Convenience wrapper that mutates a Transform entry inside a
+/// `JsnEntity`'s component map in place. No-op if the entity has no
+/// Transform component yet.
+fn shift_transform_translation(
+    components: &mut HashMap<String, serde_json::Value>,
+    offset: bevy::math::Vec3,
+) {
+    let key = "bevy_transform::components::transform::Transform";
+    let Some(value) = components.remove(key) else {
+        return;
+    };
+    components.insert(key.to_string(), shift_translation_value(value, offset));
 }
 
 /// Remove a prefab instance wrapper, leaving its inherited children as
@@ -405,12 +483,17 @@ pub fn save_scene_as_prefab(world: &mut World, target_path: &Path) {
             .map(|&r| (r, prefab_ast.descendants_of(r)))
             .collect();
 
+        let synthetic_name = target_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("prefab")
+            .to_string();
         let mut synthetic_components: StdHashMap<String, serde_json::Value> = StdHashMap::new();
         synthetic_components.insert(PREFAB_TYPE.to_string(), serde_json::Value::Null);
         synthetic_components.insert(PREFAB_ENTITY_ID_TYPE.to_string(), serde_json::json!(0));
         synthetic_components.insert(
             "bevy_ecs::name::Name".to_string(),
-            serde_json::Value::String("prefab".to_string()),
+            serde_json::Value::String(synthetic_name),
         );
         synthetic_components.insert(
             "bevy_transform::components::transform::Transform".to_string(),
@@ -419,6 +502,10 @@ pub fn save_scene_as_prefab(world: &mut World, target_path: &Path) {
                 "rotation": [0.0, 0.0, 0.0, 1.0],
                 "scale": [1.0, 1.0, 1.0],
             }),
+        );
+        synthetic_components.insert(
+            "bevy_camera::visibility::Visibility".to_string(),
+            serde_json::Value::String("Inherited".to_string()),
         );
         let synthetic_node = JsnEntityNode {
             parent: None,

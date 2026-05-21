@@ -2085,13 +2085,13 @@ fn save_as_prefab_from_selection_always_wraps_in_prefab_root() {
         root_components
             .get("bevy_ecs::name::Name")
             .and_then(|v| v.as_str()),
-        Some("PrefabRoot"),
-        "synthetic root is named PrefabRoot"
+        Some("solo"),
+        "synthetic root is named after the target file stem (solo.jsn -> 'solo')"
     );
     assert_eq!(
         scene[1]["parent"].as_u64(),
         Some(0),
-        "child parented under PrefabRoot"
+        "child parented under synthetic root"
     );
     assert_eq!(
         scene[1]["components"]["jackdaw::prefab::components::PrefabEntityId"].as_u64(),
@@ -2212,5 +2212,141 @@ fn unbundle_instance_promotes_children_and_strips_markers() {
         ast.get_component_at(source_key, "jackdaw::prefab::components::PrefabEntityId")
             .is_none(),
         "PrefabEntityId stripped from promoted child"
+    );
+}
+
+#[test]
+fn save_as_prefab_preserves_world_positions_of_selection() {
+    // After Save Selection as Prefab, the visual positions of the
+    // selected entities in the source scene must NOT change. The
+    // instance entity sits at the selection centroid and each child's
+    // local Transform is shifted by `-centroid` to compensate.
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("p.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    let e1 = app
+        .world_mut()
+        .spawn((
+            bevy::prelude::Name::new("a"),
+            bevy::prelude::Transform::from_xyz(2.0, 0.0, 0.0),
+        ))
+        .id();
+    let e2 = app
+        .world_mut()
+        .spawn((
+            bevy::prelude::Name::new("b"),
+            bevy::prelude::Transform::from_xyz(4.0, 0.0, 0.0),
+        ))
+        .id();
+
+    // Force GlobalTransform population so the centroid read uses the
+    // production GlobalTransform path. The Transform fallback would
+    // give the same answer for these top-level entities, but exercising
+    // the GlobalTransform branch is the goal here.
+    app.update();
+
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let k1 = ast.create_node(e1, None);
+        let k2 = ast.create_node(e2, None);
+        ast.insert_component(
+            k1,
+            "bevy_transform::components::transform::Transform",
+            serde_json::json!({
+                "translation": [2.0, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0, 1.0],
+                "scale": [1.0, 1.0, 1.0],
+            }),
+        );
+        ast.insert_component(
+            k2,
+            "bevy_transform::components::transform::Transform",
+            serde_json::json!({
+                "translation": [4.0, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0, 1.0],
+                "scale": [1.0, 1.0, 1.0],
+            }),
+        );
+    }
+
+    jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[e1, e2], &target);
+
+    // Centroid is (3, 0, 0). Instance Transform.x should equal the
+    // centroid; each child's local Transform.x should be its original
+    // world X minus 3.0 so the world position survives reparenting.
+    let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
+    let instance_key = ast
+        .entities_with_component("jackdaw::prefab::components::IsA")
+        .next()
+        .unwrap();
+    let instance_tx = ast
+        .get_component_at(
+            instance_key,
+            "bevy_transform::components::transform::Transform",
+        )
+        .unwrap();
+    let instance_translation = instance_tx["translation"].as_array().unwrap();
+    assert!(
+        (instance_translation[0].as_f64().unwrap() - 3.0).abs() < 1e-4,
+        "instance Transform.x is the centroid (3.0); got {instance_translation:?}"
+    );
+
+    let e1_key = ast.key_for_entity(e1).unwrap();
+    let e1_tx = ast
+        .get_component_at(e1_key, "bevy_transform::components::transform::Transform")
+        .unwrap();
+    let e1_translation = e1_tx["translation"].as_array().unwrap();
+    assert!(
+        (e1_translation[0].as_f64().unwrap() - (-1.0)).abs() < 1e-4,
+        "e1 local Transform.x is centroid-relative (-1.0); got {e1_translation:?}"
+    );
+
+    let e2_key = ast.key_for_entity(e2).unwrap();
+    let e2_tx = ast
+        .get_component_at(e2_key, "bevy_transform::components::transform::Transform")
+        .unwrap();
+    let e2_translation = e2_tx["translation"].as_array().unwrap();
+    assert!(
+        (e2_translation[0].as_f64().unwrap() - 1.0).abs() < 1e-4,
+        "e2 local Transform.x is centroid-relative (1.0); got {e2_translation:?}"
+    );
+}
+
+#[test]
+fn save_as_prefab_synthetic_root_has_visibility() {
+    // Bevy's hierarchy propagation requires Visibility on every entity
+    // in a render parent chain. Without it, children log B0004 warnings
+    // and render at the wrong world position because the parent's
+    // GlobalTransform stays at identity.
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("v.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    let e = app.world_mut().spawn(bevy::prelude::Name::new("a")).id();
+
+    jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[e], &target);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    let root_components = &value["scene"][0]["components"];
+    assert!(
+        root_components
+            .get("bevy_camera::visibility::Visibility")
+            .is_some(),
+        "synthetic PrefabRoot carries Visibility for hierarchy propagation; got {root_components:?}"
+    );
+
+    // The in-place instance entity in the source AST also needs
+    // Visibility for the same reason.
+    let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
+    let instance_key = ast
+        .entities_with_component("jackdaw::prefab::components::IsA")
+        .next()
+        .unwrap();
+    assert!(
+        ast.get_component_at(instance_key, "bevy_camera::visibility::Visibility")
+            .is_some(),
+        "in-place instance entity carries Visibility for hierarchy propagation"
     );
 }
