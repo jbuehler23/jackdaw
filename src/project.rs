@@ -4,7 +4,7 @@ use std::{
 };
 
 use bevy::prelude::*;
-use jackdaw_api_internal::paths::recent_file_path;
+use jackdaw_api_internal::paths::{last_new_project_location_path, recent_file_path};
 use jackdaw_jsn::format::{JsnHeader, JsnProject, JsnProjectConfig};
 use serde::{Deserialize, Serialize};
 
@@ -67,6 +67,28 @@ pub fn save_recent_projects(projects: &RecentProjects) {
     if let Ok(data) = serde_json::to_string_pretty(projects) {
         let _ = std::fs::write(&path, data);
     }
+}
+
+/// Remembered parent directory used the last time the user created
+/// a project from the launcher. `None` if never set or unreadable.
+pub fn read_last_new_project_location() -> Option<PathBuf> {
+    let path = last_new_project_location_path()?;
+    let data = std::fs::read_to_string(&path).ok()?;
+    let trimmed = data.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(trimmed))
+}
+
+pub fn save_last_new_project_location(location: &Path) {
+    let Some(path) = last_new_project_location_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, location.to_string_lossy().as_bytes());
 }
 
 pub fn read_last_project() -> Option<PathBuf> {
