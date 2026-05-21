@@ -219,6 +219,9 @@ struct NewProjectLogText;
 struct NewProjectCancelButton;
 
 #[derive(Component)]
+struct NewProjectCancelButtonLabel;
+
+#[derive(Component)]
 struct NewProjectCreateButton;
 
 #[derive(Component)]
@@ -2138,7 +2141,8 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
             },
             BackgroundColor(tokens::TOOLBAR_BG),
             children![(
-                Text::new("Cancel"),
+                NewProjectCancelButtonLabel,
+                Text::new("Back"),
                 TextFont {
                     font: editor_font.clone(),
                     font_size: tokens::FONT_MD,
@@ -2474,12 +2478,23 @@ fn on_create_new_project(
 fn poll_new_project_tasks(
     mut commands: Commands,
     mut state: ResMut<NewProjectState>,
-    mut location_texts: Query<&mut Text, With<NewProjectLocationText>>,
+    mut location_texts: Query<
+        &mut Text,
+        (
+            With<NewProjectLocationText>,
+            Without<NewProjectCancelButtonLabel>,
+        ),
+    >,
     mut status_texts: Query<
         &mut Text,
-        (With<NewProjectStatusText>, Without<NewProjectLocationText>),
+        (
+            With<NewProjectStatusText>,
+            Without<NewProjectLocationText>,
+            Without<NewProjectCancelButtonLabel>,
+        ),
     >,
     mut reset_buttons: Query<&mut Node, With<NewProjectResetLocationButton>>,
+    mut cancel_labels: Query<&mut Text, With<NewProjectCancelButtonLabel>>,
     mut scaffold_logs: Query<&mut ScrollingLog, With<NewProjectScaffoldLog>>,
 ) {
     // Folder picker.
@@ -2697,6 +2712,16 @@ fn poll_new_project_tasks(
     for mut text in status_texts.iter_mut() {
         if text.0 != desired_status {
             text.0 = desired_status.clone();
+        }
+    }
+    let desired_cancel = if state.scaffold.handle().is_some() || state.build_cancel.is_some() {
+        "Cancel"
+    } else {
+        "Back"
+    };
+    for mut text in cancel_labels.iter_mut() {
+        if text.0 != desired_cancel {
+            text.0 = desired_cancel.to_string();
         }
     }
 }
