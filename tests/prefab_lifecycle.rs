@@ -2350,3 +2350,85 @@ fn save_as_prefab_synthetic_root_has_visibility() {
         "in-place instance entity carries Visibility for hierarchy propagation"
     );
 }
+
+#[test]
+fn load_scene_from_jsn_backfills_transform_require_chain() {
+    use jackdaw_jsn::format::JsnEntity;
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    let mut app = make_app_for_prefab_tests();
+    let entity = JsnEntity {
+        parent: None,
+        components: {
+            let mut m = HashMap::new();
+            m.insert(
+                "bevy_transform::components::transform::Transform".to_string(),
+                serde_json::json!({
+                    "translation": [1.0, 2.0, 3.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "scale": [1.0, 1.0, 1.0],
+                }),
+            );
+            m
+        },
+    };
+    let spawned = jackdaw::scene_io::load_scene_from_jsn(
+        app.world_mut(),
+        &[entity],
+        Path::new("."),
+        &HashMap::new(),
+    );
+    assert_eq!(spawned.len(), 1);
+    let e = spawned[0];
+    assert!(app.world().get::<bevy::prelude::Transform>(e).is_some());
+    assert!(
+        app.world()
+            .get::<bevy::prelude::GlobalTransform>(e)
+            .is_some(),
+        "spawn path backfills GlobalTransform when Transform is reflected in",
+    );
+    assert!(
+        app.world()
+            .get::<bevy::transform::components::TransformTreeChanged>(e)
+            .is_some(),
+        "spawn path backfills TransformTreeChanged when Transform is reflected in",
+    );
+}
+
+#[test]
+fn load_scene_from_jsn_backfills_visibility_require_chain() {
+    use bevy::camera::visibility::{InheritedVisibility, ViewVisibility, Visibility};
+    use jackdaw_jsn::format::JsnEntity;
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    let mut app = make_app_for_prefab_tests();
+    let entity = JsnEntity {
+        parent: None,
+        components: {
+            let mut m = HashMap::new();
+            m.insert(
+                "bevy_camera::visibility::Visibility".to_string(),
+                serde_json::Value::String("Inherited".to_string()),
+            );
+            m
+        },
+    };
+    let spawned = jackdaw::scene_io::load_scene_from_jsn(
+        app.world_mut(),
+        &[entity],
+        Path::new("."),
+        &HashMap::new(),
+    );
+    let e = spawned[0];
+    assert!(app.world().get::<Visibility>(e).is_some());
+    assert!(
+        app.world().get::<InheritedVisibility>(e).is_some(),
+        "spawn path backfills InheritedVisibility when Visibility is reflected in",
+    );
+    assert!(
+        app.world().get::<ViewVisibility>(e).is_some(),
+        "spawn path backfills ViewVisibility when Visibility is reflected in",
+    );
+}

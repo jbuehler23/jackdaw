@@ -1638,6 +1638,34 @@ pub fn load_scene_from_jsn(
     }
     drop(registry_guard);
 
+    // Bevy's `insert_reflect` adds one component at a time and does not
+    // fire the `#[require(...)]` chain. So `Transform` lands without its
+    // required `GlobalTransform` / `TransformTreeChanged`, and `Visibility`
+    // lands without `InheritedVisibility` / `ViewVisibility`. Hierarchy
+    // propagation then logs B0004 warnings and children render at wrong
+    // world positions because the parent's `GlobalTransform` never updates.
+    // Backfill the require chain defensively; the derived components are
+    // all `Default`-constructible and recomputed next frame.
+    for &entity in &spawned {
+        let mut ent = world.entity_mut(entity);
+        if ent.contains::<Transform>() {
+            if !ent.contains::<GlobalTransform>() {
+                ent.insert(GlobalTransform::default());
+            }
+            if !ent.contains::<bevy::transform::components::TransformTreeChanged>() {
+                ent.insert(bevy::transform::components::TransformTreeChanged);
+            }
+        }
+        if ent.contains::<Visibility>() {
+            if !ent.contains::<InheritedVisibility>() {
+                ent.insert(InheritedVisibility::default());
+            }
+            if !ent.contains::<ViewVisibility>() {
+                ent.insert(ViewVisibility::default());
+            }
+        }
+    }
+
     // Post-load: re-trigger GLTF loading for GltfSource entities
     let gltf_entities: Vec<(Entity, String, usize)> = spawned
         .iter()
