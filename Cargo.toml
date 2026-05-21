@@ -37,6 +37,8 @@ default-run = "jackdaw"
 
 [features]
 default = []
+navmesh = ["dep:bevy_rerecast"]
+
 hot-reload = ["dep:bevy_simple_subsecond_system"]
 # Experimental dylib-based extension flow. Enables Bevy's
 # `dynamic_linking` plus jackdaw's `bevy_dylib`-style facade so
@@ -118,7 +120,7 @@ serde.workspace = true
 serde_json.workspace = true
 avian3d.workspace = true
 rfd.workspace = true
-bevy_rerecast.workspace = true
+bevy_rerecast = { workspace = true, optional = true }
 ehttp.workspace = true
 bincode.workspace = true
 base64.workspace = true
@@ -178,7 +180,7 @@ jackdaw_dylib = { version = "0.4.1", path = "crates/jackdaw_dylib" }
 jackdaw_loader = { version = "0.4.1", path = "crates/jackdaw_loader" }
 jackdaw_sdk = { version = "0.4.1", path = "crates/jackdaw_sdk" }
 jackdaw_rustc_wrapper = { version = "0.4.1", path = "crates/jackdaw_rustc_wrapper" }
-bevy_enhanced_input = "0.24"
+bevy_enhanced_input = "0.25"
 rfd = "0.15"
 bevy_rerecast = { version = "0.4", default-features = true }
 ehttp = { version = "0.5", default-features = false, features = [
@@ -322,3 +324,9 @@ doc-scrape-examples = true
 name = "modal"
 path = "examples/extension/modal.rs"
 doc-scrape-examples = true
+
+[[example]]
+name = "navmesh_server"
+path = "examples/navmesh_server.rs"
+doc-scrape-examples = true
+required-features = ["navmesh"]

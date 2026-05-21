@@ -12,6 +12,7 @@
 
 use jackdaw::asset_browser::AssetSelectFolderOp;
 use jackdaw::material_browser::MaterialSelectFolderOp;
+#[cfg(feature = "navmesh")]
 use jackdaw::navmesh::save_load::{NavmeshLoadOp, NavmeshSaveOp};
 use jackdaw::scene_ops::{SceneOpenOp, SceneSaveAsOp, SceneSaveOp};
 use jackdaw_api::prelude::*;
@@ -55,7 +56,9 @@ const SMOKE_SKIP_LIST: &[SkipOp] = &[
     ),
     SkipOp::new::<AssetSelectFolderOp>("spawns native folder picker"),
     SkipOp::new::<MaterialSelectFolderOp>("spawns native folder picker"),
+    #[cfg(feature = "navmesh")]
     SkipOp::new::<NavmeshSaveOp>("spawns native file-save dialog"),
+    #[cfg(feature = "navmesh")]
     SkipOp::new::<NavmeshLoadOp>("spawns native file-open dialog"),
 ];
 

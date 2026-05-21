@@ -46,6 +46,7 @@ pub mod material_browser;
 pub mod material_preview;
 pub mod measure_tool;
 pub mod modal_transform;
+#[cfg(feature = "navmesh")]
 pub mod navmesh;
 pub mod new_project;
 pub mod operator_tooltip;
@@ -294,6 +295,7 @@ impl Plugin for EditorCorePlugin {
             draw_brush::DrawBrushPlugin,
             face_grid::FaceGridPlugin,
             alignment_guides::AlignmentGuidesPlugin,
+            #[cfg(feature = "navmesh")]
             navmesh::NavmeshPlugin,
             terrain::TerrainPlugin,
             remote::RemoteConnectionPlugin,

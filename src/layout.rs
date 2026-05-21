@@ -423,6 +423,25 @@ pub fn project_files_panel_content() -> impl Bundle {
 /// "center" leaf in one go. Public to the crate because it's spawned
 /// by the viewport plugin, not by `editor_layout` directly.
 pub(crate) fn viewport_with_toolbar() -> impl Bundle {
+    let children = {
+        #[cfg(feature = "navmesh")]
+        {
+            children![
+                toolbar(),
+                crate::navmesh::toolbar::navmesh_toolbar(),
+                crate::terrain::toolbar::terrain_toolbar(),
+                scene_view(),
+            ]
+        }
+        #[cfg(not(feature = "navmesh"))]
+        {
+            children![
+                toolbar(),
+                crate::terrain::toolbar::terrain_toolbar(),
+                scene_view(),
+            ]
+        }
+    };
     (
         EditorEntity,
         Node {
@@ -434,12 +453,7 @@ pub(crate) fn viewport_with_toolbar() -> impl Bundle {
             ..Default::default()
         },
         BackgroundColor(tokens::PANEL_BG),
-        children![
-            toolbar(),
-            crate::navmesh::toolbar::navmesh_toolbar(),
-            crate::terrain::toolbar::terrain_toolbar(),
-            scene_view(),
-        ],
+        children,
     )
 }
 

@@ -11,10 +11,12 @@ use jackdaw_feathers::picker::{
 };
 use jackdaw_feathers::tooltip::Tooltip;
 
+#[cfg(feature = "navmesh")]
+use crate::entity_ops::EntityAddNavmeshOp;
 use crate::entity_ops::{
     EntityAddCameraOp, EntityAddCubeOp, EntityAddDirectionalLightOp, EntityAddEmptyOp,
-    EntityAddNavmeshOp, EntityAddPointLightOp, EntityAddPrefabOp, EntityAddSphereOp,
-    EntityAddSpotLightOp, EntityAddTerrainOp,
+    EntityAddPointLightOp, EntityAddPrefabOp, EntityAddSphereOp, EntityAddSpotLightOp,
+    EntityAddTerrainOp,
 };
 
 /// Marker for the scene-tree Add Entity button.
@@ -107,6 +109,7 @@ fn builtin_groups() -> Vec<AddMenuItem> {
             label: "Empty".into(),
             category: cameras_entities,
         },
+        #[cfg(feature = "navmesh")]
         AddMenuItem {
             action: op_action::<EntityAddNavmeshOp>(),
             label: "Navmesh Region".into(),

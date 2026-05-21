@@ -234,6 +234,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::brush::topology_ops::reconvexify::add_to_extension(ctx);
         crate::gizmos::add_to_extension(ctx);
         crate::terrain::sculpt::add_to_extension(ctx);
+        #[cfg(feature = "navmesh")]
         crate::navmesh::ops::add_to_extension(ctx);
         crate::pie::add_to_extension(ctx);
         crate::terrain::ops::add_to_extension(ctx);

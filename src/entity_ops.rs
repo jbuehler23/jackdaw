@@ -1122,9 +1122,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<EntityAddSpotLightOp>()
         .register_operator::<EntityAddCameraOp>()
         .register_operator::<EntityAddEmptyOp>()
-        .register_operator::<EntityAddNavmeshOp>()
         .register_operator::<EntityAddTerrainOp>()
         .register_operator::<EntityAddPrefabOp>();
+    #[cfg(feature = "navmesh")]
+    ctx.register_operator::<EntityAddNavmeshOp>();
 
     let ext = ctx.id();
     ctx.entity_mut().world_scope(|world| {
@@ -1377,6 +1378,7 @@ pub(crate) fn entity_add_empty(
     OperatorResult::Finished
 }
 
+#[cfg(feature = "navmesh")]
 #[operator(id = "entity.add.navmesh", label = "Navmesh")]
 pub(crate) fn entity_add_navmesh(
     _: In<OperatorParameters>,
