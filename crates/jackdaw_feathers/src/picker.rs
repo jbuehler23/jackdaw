@@ -328,7 +328,10 @@ impl<T: Pickable> PickerProps<T> {
                 Node {
                     max_height: percent(100),
                     width: percent(100),
-                    padding: px(tokens::SPACING_LG).all(),
+                    padding: px(tokens::SPACING_LG)
+                        .all()
+                        // Avoid overlapping menu bar
+                        .with_top(px(tokens::SPACING_LG * 4.0)),
                     justify_content: JustifyContent::Center,
                     ..default()
                 },
