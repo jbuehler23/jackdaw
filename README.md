@@ -53,6 +53,8 @@ https://github.com/user-attachments/assets/56834720-599e-4461-b712-fff7b85fb128
 - **Extensible** register custom components, add inspector panels, integrate with your game
 
 ## Usage
+Install cmake, via package manager, or VisualStudio on Windows
+
 
 Standalone install:
 ```sh

@@ -18,10 +18,12 @@ use jackdaw::prelude::*;
 
 fn main() -> AppExit {
     App::new()
-        .add_plugins(DefaultPlugins)
-        .add_plugins(EditorPlugins::default())
-        .add_plugins(
-            ExtensionPlugin::new().with_extension::<{{crate_name}}::{{crate_name | pascal_case}}>(),
-        )
+        .add_plugins((
+            DefaultPlugins,
+            EnhancedInputPlugin,
+            PhysicsPlugins::default(),
+            EditorPlugins::default()
+                .set(ExtensionPlugin::default().with_extension::<{{crate_name}}::{{crate_name | pascal_case}}>()),
+        ))
         .run()
 }

@@ -4751,6 +4751,7 @@ name = "jackdaw_node_graph"
 version = "0.4.1"
 dependencies = [
  "bevy",
+ "bevy_enhanced_input",
  "bevy_monitors",
  "jackdaw_commands",
  "jackdaw_feathers",

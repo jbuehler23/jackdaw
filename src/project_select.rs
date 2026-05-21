@@ -324,175 +324,271 @@ fn spawn_project_selector(
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
+                flex_direction: FlexDirection::Column,
                 ..Default::default()
             },
             BackgroundColor(tokens::WINDOW_BG),
         ))
-        .with_children(|parent| {
-            // Card container
-            parent
-                .spawn(Node {
-                    flex_direction: FlexDirection::Column,
+        .with_children(|root| {
+            // Launcher header mirrors the editor chrome: compact title on the
+            // left, version metadata on the right, and no centered splash card.
+            root.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(44.0),
                     align_items: AlignItems::Center,
-                    padding: UiRect::all(Val::Px(32.0)),
-                    row_gap: Val::Px(24.0),
-                    min_width: Val::Px(420.0),
-                    max_width: Val::Px(520.0),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(8.0)),
+                    justify_content: JustifyContent::SpaceBetween,
+                    padding: UiRect::axes(Val::Px(14.0), Val::Px(0.0)),
+                    border: UiRect::bottom(Val::Px(1.0)),
                     ..Default::default()
-                })
-                .insert(BackgroundColor(tokens::PANEL_BG))
-                .insert(BorderColor::all(tokens::BORDER_SUBTLE))
-                .with_children(|card| {
-                    // Title
-                    card.spawn((
-                        Text::new("jackdaw"),
-                        TextFont {
-                            font: font.clone(),
-                            font_size: 28.0,
-                            ..Default::default()
-                        },
-                        TextColor(tokens::TEXT_PRIMARY),
-                    ));
-
-                    // Subtitle
-                    card.spawn((
-                        Text::new("Select a project to open"),
-                        TextFont {
-                            font: font.clone(),
-                            font_size: tokens::FONT_LG,
-                            ..Default::default()
-                        },
-                        TextColor(tokens::TEXT_SECONDARY),
-                    ));
-
-                    // CWD option (if it looks like a project)
-                    if cwd_has_project {
-                        let cwd_name = cwd
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| cwd.to_string_lossy().to_string());
-                        let cwd_clone = cwd.clone();
-                        spawn_project_row(
-                            card,
-                            &cwd_name,
-                            &cwd.to_string_lossy(),
-                            font.clone(),
-                            icon_font_handle.clone(),
-                            cwd_clone,
-                            true,
-                        );
-                    }
-
-                    // Recent projects
-                    if !recent.projects.is_empty() {
-                        card.spawn((
-                            Text::new("Recent Projects"),
-                            TextFont {
-                                font: font.clone(),
-                                font_size: tokens::FONT_MD,
-                                ..Default::default()
-                            },
-                            TextColor(tokens::TEXT_SECONDARY),
-                            Node {
-                                margin: UiRect::top(Val::Px(8.0)),
-                                ..Default::default()
-                            },
-                        ));
-
-                        for entry in &recent.projects {
-                            // Skip CWD if already shown above
-                            if cwd_has_project && entry.path == cwd {
-                                continue;
-                            }
-                            spawn_project_row(
-                                card,
-                                &entry.name,
-                                &entry.path.to_string_lossy(),
-                                font.clone(),
-                                icon_font_handle.clone(),
-                                entry.path.clone(),
-                                false,
-                            );
-                        }
-                    }
-
-                    // New Extension / New Game row
-                    let new_row = card
-                        .spawn(Node {
+                },
+                BackgroundColor(tokens::PANEL_HEADER_BG),
+                BorderColor::all(tokens::BORDER_SUBTLE),
+                children![
+                    (
+                        Node {
                             flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
                             column_gap: Val::Px(8.0),
-                            margin: UiRect::top(Val::Px(8.0)),
                             ..Default::default()
-                        })
-                        .id();
-                    spawn_new_project_button(
-                        card,
-                        new_row,
-                        "+ New Extension",
-                        font.clone(),
-                        TemplatePreset::Extension,
-                    );
-                    spawn_new_project_button(
-                        card,
-                        new_row,
-                        "+ New Game",
-                        font.clone(),
-                        TemplatePreset::Game,
-                    );
-                    spawn_new_project_button(
-                        card,
-                        new_row,
-                        "+ From URL...",
-                        font.clone(),
-                        TemplatePreset::Custom(String::new()),
-                    );
-
-                    // Browse button
-                    let browse_entity = card
-                        .spawn((
-                            Node {
-                                padding: UiRect::axes(Val::Px(20.0), Val::Px(10.0)),
-                                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
-                                margin: UiRect::top(Val::Px(4.0)),
-                                justify_content: JustifyContent::Center,
-                                ..Default::default()
-                            },
-                            BackgroundColor(tokens::SELECTED_BG),
-                            children![(
-                                Text::new("Open existing project..."),
+                        },
+                        children![
+                            (
+                                Text::new(String::from(Icon::Boxes.unicode())),
+                                TextFont {
+                                    font: icon_font_handle.clone(),
+                                    font_size: tokens::ICON_MD,
+                                    ..Default::default()
+                                },
+                                TextColor(tokens::DOC_TAB_TOOL_ACCENT),
+                            ),
+                            (
+                                Text::new("jackdaw"),
                                 TextFont {
                                     font: font.clone(),
                                     font_size: tokens::FONT_LG,
                                     ..Default::default()
                                 },
                                 TextColor(tokens::TEXT_PRIMARY),
-                            )],
-                        ))
-                        .id();
+                            ),
+                        ],
+                    ),
+                    (
+                        Text::new(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                        TextFont {
+                            font: font.clone(),
+                            font_size: tokens::FONT_SM,
+                            ..Default::default()
+                        },
+                        TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
+                    ),
+                ],
+            ));
 
-                    // Hover effects for browse button
-                    card.commands().entity(browse_entity).observe(
-                        |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
-                            if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                                bg.0 = tokens::SELECTED_BORDER;
-                            }
+            root.spawn(Node {
+                width: Val::Percent(100.0),
+                flex_grow: 1.0,
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                padding: UiRect::all(Val::Px(8.0)),
+                ..Default::default()
+            })
+            .with_children(|content| {
+                // Left rail owns project-creation actions. Keeping these
+                // separate from the project list makes the launcher read like
+                // the rest of the editor: tools on the side, content adjacent.
+                content
+                    .spawn((
+                        Node {
+                            width: Val::Px(300.0),
+                            height: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(8.0),
+                            padding: UiRect::all(Val::Px(10.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
+                            ..Default::default()
                         },
-                    );
-                    card.commands().entity(browse_entity).observe(
-                        |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-                            if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                                bg.0 = tokens::SELECTED_BG;
-                            }
+                        BackgroundColor(tokens::PANEL_BG),
+                        BorderColor::all(tokens::BORDER_SUBTLE),
+                    ))
+                    .with_children(|sidebar| {
+                        spawn_launcher_section_label(sidebar, "Start", font.clone());
+
+                        spawn_new_project_button(
+                            sidebar,
+                            "New Game",
+                            Icon::Gamepad2,
+                            font.clone(),
+                            icon_font_handle.clone(),
+                            TemplatePreset::Game,
+                            true,
+                        );
+                        spawn_new_project_button(
+                            sidebar,
+                            "New Extension",
+                            Icon::PackagePlus,
+                            font.clone(),
+                            icon_font_handle.clone(),
+                            TemplatePreset::Extension,
+                            false,
+                        );
+                        spawn_new_project_button(
+                            sidebar,
+                            "From URL",
+                            Icon::Link,
+                            font.clone(),
+                            icon_font_handle.clone(),
+                            TemplatePreset::Custom(String::new()),
+                            false,
+                        );
+
+                        let browse_entity = spawn_launcher_action_button(
+                            sidebar,
+                            "Open Folder",
+                            Icon::FolderOpen,
+                            font.clone(),
+                            icon_font_handle.clone(),
+                            tokens::TOOLBAR_BG,
+                            tokens::HOVER_BG,
+                        );
+                        sidebar
+                            .commands()
+                            .entity(browse_entity)
+                            .observe(spawn_browse_dialog);
+
+                        sidebar.spawn((
+                            Node {
+                                flex_grow: 1.0,
+                                ..Default::default()
+                            },
+                            Pickable::IGNORE,
+                        ));
+
+                        sidebar.spawn((
+                            Text::new("Source checkout"),
+                            TextFont {
+                                font: font.clone(),
+                                font_size: tokens::FONT_SM,
+                                ..Default::default()
+                            },
+                            TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
+                        ));
+                        sidebar.spawn((
+                            Text::new(cwd.to_string_lossy().to_string()),
+                            TextFont {
+                                font: font.clone(),
+                                font_size: tokens::FONT_XS,
+                                ..Default::default()
+                            },
+                            TextColor(tokens::TEXT_SECONDARY),
+                            Node {
+                                max_width: Val::Px(260.0),
+                                overflow: Overflow::clip(),
+                                ..Default::default()
+                            },
+                        ));
+                    });
+
+                // Main panel lists openable projects. The current checkout is
+                // promoted above recents so local development builds are one
+                // click from the launcher.
+                content
+                    .spawn((
+                        Node {
+                            flex_grow: 1.0,
+                            height: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Column,
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
+                            overflow: Overflow::clip(),
+                            ..Default::default()
                         },
-                    );
-                    card.commands()
-                        .entity(browse_entity)
-                        .observe(spawn_browse_dialog);
-                });
+                        BackgroundColor(tokens::PANEL_BG),
+                        BorderColor::all(tokens::BORDER_SUBTLE),
+                    ))
+                    .with_children(|projects| {
+                        projects.spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                height: Val::Px(34.0),
+                                align_items: AlignItems::Center,
+                                padding: UiRect::axes(Val::Px(12.0), Val::Px(0.0)),
+                                border: UiRect::bottom(Val::Px(1.0)),
+                                ..Default::default()
+                            },
+                            BackgroundColor(tokens::PANEL_HEADER_BG),
+                            BorderColor::all(tokens::BORDER_SUBTLE),
+                            children![(
+                                Text::new("Projects"),
+                                TextFont {
+                                    font: font.clone(),
+                                    font_size: tokens::FONT_MD,
+                                    ..Default::default()
+                                },
+                                TextColor(tokens::TEXT_PRIMARY),
+                            )],
+                        ));
+
+                        projects
+                            .spawn(Node {
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(6.0),
+                                padding: UiRect::all(Val::Px(10.0)),
+                                width: Val::Percent(100.0),
+                                flex_grow: 1.0,
+                                ..Default::default()
+                            })
+                            .with_children(|list| {
+                                if cwd_has_project {
+                                    let cwd_name = cwd
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().to_string())
+                                        .unwrap_or_else(|| cwd.to_string_lossy().to_string());
+                                    spawn_launcher_section_label(
+                                        list,
+                                        "Current Directory",
+                                        font.clone(),
+                                    );
+                                    spawn_project_row(
+                                        list,
+                                        &cwd_name,
+                                        &cwd.to_string_lossy(),
+                                        font.clone(),
+                                        icon_font_handle.clone(),
+                                        cwd.clone(),
+                                        true,
+                                    );
+                                }
+
+                                spawn_launcher_section_label(list, "Recent", font.clone());
+                                let mut shown_recent = 0usize;
+                                for entry in &recent.projects {
+                                    if cwd_has_project && entry.path == cwd {
+                                        continue;
+                                    }
+                                    spawn_project_row(
+                                        list,
+                                        &entry.name,
+                                        &entry.path.to_string_lossy(),
+                                        font.clone(),
+                                        icon_font_handle.clone(),
+                                        entry.path.clone(),
+                                        false,
+                                    );
+                                    shown_recent += 1;
+                                }
+
+                                if shown_recent == 0 {
+                                    spawn_empty_recent_state(
+                                        list,
+                                        font.clone(),
+                                        icon_font_handle.clone(),
+                                    );
+                                }
+                            });
+                    });
+            });
         });
 }
 
@@ -505,22 +601,52 @@ fn spawn_project_row(
     project_path: PathBuf,
     is_cwd: bool,
 ) {
-    // Outer row: info column on left, optional X button on right
+    // Rows use the same dense panel styling as editor lists: icon, primary
+    // label, path, and an optional remove action for persisted recents.
     let row_entity = parent
         .spawn((
             Node {
                 flex_direction: FlexDirection::Row,
                 width: Val::Percent(100.0),
-                padding: UiRect::all(Val::Px(10.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+                min_height: Val::Px(46.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
                 align_items: AlignItems::Center,
+                column_gap: Val::Px(10.0),
                 ..Default::default()
             },
-            BackgroundColor(tokens::TOOLBAR_BG),
+            BackgroundColor(tokens::INPUT_BG),
+            BorderColor::all(tokens::BORDER_SUBTLE),
         ))
         .id();
 
-    // Left side: info column (flex_grow so it fills space)
+    let project_icon = parent
+        .commands()
+        .spawn((
+            Node {
+                width: Val::Px(26.0),
+                height: Val::Px(26.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+                ..Default::default()
+            },
+            BackgroundColor(tokens::DOC_TAB_ACTIVE_BG),
+            children![(
+                Text::new(String::from(Icon::Folder.unicode())),
+                TextFont {
+                    font: icon_font.clone(),
+                    font_size: tokens::ICON_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::DIR_ICON_COLOR),
+            )],
+            Pickable::IGNORE,
+        ))
+        .id();
+    parent.commands().entity(row_entity).add_child(project_icon);
+
     let info_column = parent
         .commands()
         .spawn((
@@ -528,6 +654,7 @@ fn spawn_project_row(
                 flex_direction: FlexDirection::Column,
                 flex_grow: 1.0,
                 row_gap: Val::Px(2.0),
+                overflow: Overflow::clip(),
                 ..Default::default()
             },
             children![
@@ -543,7 +670,7 @@ fn spawn_project_row(
                             Text::new(name.to_string()),
                             TextFont {
                                 font: font.clone(),
-                                font_size: tokens::FONT_LG,
+                                font_size: tokens::FONT_MD,
                                 ..Default::default()
                             },
                             TextColor(tokens::TEXT_PRIMARY),
@@ -559,6 +686,11 @@ fn spawn_project_row(
                         ..Default::default()
                     },
                     TextColor(tokens::TEXT_SECONDARY),
+                    Node {
+                        max_width: Val::Percent(100.0),
+                        overflow: Overflow::clip(),
+                        ..Default::default()
+                    },
                 ),
             ],
             Pickable::IGNORE,
@@ -567,7 +699,6 @@ fn spawn_project_row(
 
     parent.commands().entity(row_entity).add_child(info_column);
 
-    // Right side: X button (only for recent projects, not CWD)
     if !is_cwd {
         let remove_path = project_path.clone();
         let x_button = parent
@@ -578,7 +709,6 @@ fn spawn_project_row(
             ))
             .id();
 
-        // X button click: remove from recent + despawn row
         parent.commands().entity(x_button).observe(
             move |mut click: On<Pointer<Click>>, mut commands: Commands| {
                 click.propagate(false);
@@ -591,7 +721,6 @@ fn spawn_project_row(
         parent.commands().entity(row_entity).add_child(x_button);
     }
 
-    // Hover effects on the row
     parent.commands().entity(row_entity).observe(
         |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
             if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
@@ -602,12 +731,11 @@ fn spawn_project_row(
     parent.commands().entity(row_entity).observe(
         |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
             if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                bg.0 = tokens::TOOLBAR_BG;
+                bg.0 = tokens::INPUT_BG;
             }
         },
     );
 
-    // Click: select project
     parent.commands().entity(row_entity).observe(
         move |_: On<Pointer<Click>>, mut commands: Commands| {
             let path = project_path.clone();
@@ -859,62 +987,171 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
     }
 }
 
-/// Spawn a pill-style button inside the "+ New Extension / + New
-/// Game" row. Clicking opens the New Project modal with the given
-/// preset already selected.
-fn spawn_new_project_button(
-    card: &mut ChildSpawnerCommands,
-    parent: Entity,
+fn spawn_launcher_section_label(
+    parent: &mut ChildSpawnerCommands,
     label: &str,
     font: Handle<Font>,
-    preset: TemplatePreset,
 ) {
-    let button = card
-        .commands()
-        .spawn((
-            Node {
-                padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
-                justify_content: JustifyContent::Center,
-                ..Default::default()
-            },
-            BackgroundColor(tokens::TOOLBAR_BG),
-            children![(
-                Text::new(label.to_string()),
+    parent.spawn((
+        Text::new(label.to_string()),
+        TextFont {
+            font,
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
+        Node {
+            margin: UiRect::top(Val::Px(4.0)),
+            ..Default::default()
+        },
+        Pickable::IGNORE,
+    ));
+}
+
+fn spawn_empty_recent_state(
+    parent: &mut ChildSpawnerCommands,
+    font: Handle<Font>,
+    icon_font: Handle<Font>,
+) {
+    // Empty-state copy is intentionally terse; the left rail already exposes
+    // the creation and browse affordances.
+    parent.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            min_height: Val::Px(90.0),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            row_gap: Val::Px(6.0),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
+            ..Default::default()
+        },
+        BackgroundColor(tokens::TOOLBAR_BG),
+        BorderColor::all(tokens::BORDER_SUBTLE),
+        children![
+            (
+                Text::new(String::from(Icon::FolderOpen.unicode())),
+                TextFont {
+                    font: icon_font,
+                    font_size: tokens::ICON_LG,
+                    ..Default::default()
+                },
+                TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
+            ),
+            (
+                Text::new("No recent projects"),
                 TextFont {
                     font,
                     font_size: tokens::FONT_MD,
                     ..Default::default()
                 },
-                TextColor(tokens::TEXT_PRIMARY),
-            )],
+                TextColor(tokens::TEXT_SECONDARY),
+            ),
+        ],
+        Pickable::IGNORE,
+    ));
+}
+
+fn spawn_launcher_action_button(
+    parent: &mut ChildSpawnerCommands,
+    label: &str,
+    icon: Icon,
+    font: Handle<Font>,
+    icon_font: Handle<Font>,
+    idle_bg: Color,
+    hover_bg: Color,
+) -> Entity {
+    // Shared launcher button primitive for actions that need an icon + label
+    // but do not fit the generic icon-only button component.
+    let button = parent
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Px(34.0),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(0.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
+                ..Default::default()
+            },
+            BackgroundColor(idle_bg),
+            BorderColor::all(tokens::BORDER_SUBTLE),
+            children![
+                (
+                    Text::new(String::from(icon.unicode())),
+                    TextFont {
+                        font: icon_font,
+                        font_size: tokens::ICON_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_PRIMARY),
+                ),
+                (
+                    Text::new(label.to_string()),
+                    TextFont {
+                        font,
+                        font_size: tokens::FONT_MD,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_PRIMARY),
+                ),
+            ],
         ))
         .id();
 
-    card.commands().entity(parent).add_child(button);
-
-    card.commands().entity(button).observe(
-        |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
+    parent.commands().entity(button).observe(
+        move |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
             if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                bg.0 = tokens::HOVER_BG;
+                bg.0 = hover_bg;
             }
         },
     );
-    card.commands().entity(button).observe(
-        |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
+    parent.commands().entity(button).observe(
+        move |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
             if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                bg.0 = tokens::TOOLBAR_BG;
+                bg.0 = idle_bg;
             }
         },
     );
-    card.commands()
-        .entity(button)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+
+    button
+}
+
+/// Spawn a launcher action that opens the New Project modal with the
+/// given preset already selected.
+fn spawn_new_project_button(
+    parent: &mut ChildSpawnerCommands,
+    label: &str,
+    icon: Icon,
+    font: Handle<Font>,
+    icon_font: Handle<Font>,
+    preset: TemplatePreset,
+    primary: bool,
+) {
+    let idle_bg = if primary {
+        tokens::SELECTED_BG
+    } else {
+        tokens::TOOLBAR_BG
+    };
+    let hover_bg = if primary {
+        tokens::SELECTED_BORDER
+    } else {
+        tokens::HOVER_BG
+    };
+    let button =
+        spawn_launcher_action_button(parent, label, icon, font, icon_font, idle_bg, hover_bg);
+
+    parent.commands().entity(button).observe(
+        move |_: On<Pointer<Click>>, mut commands: Commands| {
             let preset = preset.clone();
             commands.queue(move |world: &mut World| {
                 open_new_project_modal(world, preset);
             });
-        });
+        },
+    );
 }
 
 /// Spawn one segment of the Static/Dylib selector. `initial` picks
@@ -1152,7 +1389,7 @@ pub fn open_project_progress_modal(world: &mut World, project_name: &str) {
                 align_items: AlignItems::Center,
                 ..Default::default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+            BackgroundColor(tokens::DIALOG_BACKDROP),
             GlobalZIndex(100),
         ))
         .id();
@@ -1305,10 +1542,17 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         .resource::<jackdaw_feathers::icons::IconFont>()
         .0
         .clone();
-    let (heading, name_placeholder) = match preset {
+    let (heading, name_placeholder) = match &preset {
         TemplatePreset::Extension => ("New Extension", "my_extension"),
         TemplatePreset::Game => ("New Game", "my_game"),
         TemplatePreset::Custom(_) => ("New Project", "my_project"),
+    };
+    // Match the modal heading icon to the sidebar action that opened it, so the
+    // creation flow keeps a stable visual anchor.
+    let heading_icon = match &preset {
+        TemplatePreset::Extension => Icon::PackagePlus,
+        TemplatePreset::Game => Icon::Gamepad2,
+        TemplatePreset::Custom(_) => Icon::Link,
     };
 
     // Full-window scrim that catches clicks behind the modal.
@@ -1330,17 +1574,16 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         ))
         .id();
 
-    // Modal card.
     let card = world
         .spawn((
             Node {
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(12.0),
-                padding: UiRect::all(Val::Px(24.0)),
-                min_width: Val::Px(420.0),
-                max_width: Val::Px(520.0),
+                row_gap: Val::Px(10.0),
+                padding: UiRect::all(Val::Px(18.0)),
+                min_width: Val::Px(560.0),
+                max_width: Val::Px(680.0),
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(8.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
                 ..Default::default()
             },
             BackgroundColor(tokens::PANEL_BG),
@@ -1349,15 +1592,34 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         ))
         .id();
 
-    // Heading
     world.spawn((
-        Text::new(heading.to_string()),
-        TextFont {
-            font: editor_font.clone(),
-            font_size: 24.0,
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(8.0),
+            padding: UiRect::bottom(Val::Px(4.0)),
             ..Default::default()
         },
-        TextColor(tokens::TEXT_PRIMARY),
+        children![
+            (
+                Text::new(String::from(heading_icon.unicode())),
+                TextFont {
+                    font: icon_font.clone(),
+                    font_size: tokens::ICON_MD,
+                    ..Default::default()
+                },
+                TextColor(tokens::DOC_TAB_TOOL_ACCENT),
+            ),
+            (
+                Text::new(heading.to_string()),
+                TextFont {
+                    font: editor_font.clone(),
+                    font_size: tokens::FONT_XS,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_PRIMARY),
+            ),
+        ],
         ChildOf(card),
     ));
 

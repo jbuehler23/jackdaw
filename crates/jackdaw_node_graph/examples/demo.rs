@@ -15,6 +15,7 @@
 
 use bevy::prelude::*;
 
+use bevy_enhanced_input::prelude::EnhancedInputPlugin;
 use jackdaw_feathers::{
     EditorFeathersPlugin,
     text_edit::{self, TextEditProps, TextEditValue},
@@ -27,6 +28,7 @@ use jackdaw_node_graph::{
 fn main() -> AppExit {
     App::new()
         .add_plugins(DefaultPlugins)
+        .add_plugins(EnhancedInputPlugin)
         .add_plugins(EditorFeathersPlugin)
         .add_plugins(NodeGraphPlugin)
         .add_systems(Startup, setup)
