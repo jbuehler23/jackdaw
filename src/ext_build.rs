@@ -27,8 +27,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
+use std::{hint, thread};
 
 use crate::new_project::TemplateLinkage;
 use crate::sdk_paths::SdkPaths;
@@ -482,7 +482,7 @@ fn run_cargo_with_progress(
                         .unwrap_or_default();
                     return Err(BuildError::Cancelled { stderr_tail: tail });
                 }
-                std::thread::sleep(Duration::from_millis(50));
+                hint::spin_loop();
             }
             Err(e) => return Err(BuildError::BuildSpawn(e)),
         }

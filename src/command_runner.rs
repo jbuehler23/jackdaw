@@ -9,6 +9,7 @@
 //! Pipe drainage runs on dedicated threads so the child cannot
 //! deadlock on its own writes when a pipe buffer fills.
 
+use std::hint;
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -143,7 +144,7 @@ pub fn run(cmd: &mut Command, io: &CommandIo) -> Result<CommandRecord, CommandEr
     let mut cancelled = false;
     let status = loop {
         // Don't busy wait (try_wait is non-blocking).
-        std::thread::sleep(Duration::from_millis(50));
+        hint::spin_loop();
         if !cancelled && io.cancel.load(Ordering::Acquire) {
             let _ = child.kill();
             info!("Cancelled!");
