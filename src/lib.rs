@@ -50,7 +50,9 @@ pub mod modal_transform;
 pub mod navmesh;
 pub mod new_project;
 pub mod operator_tooltip;
+#[cfg(feature = "avian")]
 pub mod physics_brush_bridge;
+#[cfg(feature = "avian")]
 pub mod physics_tool;
 pub mod pie;
 pub mod prefab_picker;
@@ -112,6 +114,7 @@ pub mod prelude {
     // without direct deps on avian3d / bevy_enhanced_input.
     // Editor plugins assert presence rather than adding, so user
     // code can add the same plugins without conflict.
+    #[cfg(feature = "avian")]
     pub use avian3d::prelude::PhysicsPlugins;
     pub use bevy_enhanced_input::prelude::EnhancedInputPlugin;
 }
@@ -300,12 +303,17 @@ impl Plugin for EditorCorePlugin {
             terrain::TerrainPlugin,
             remote::RemoteConnectionPlugin,
         ))
-        .add_plugins(jackdaw_avian_integration::PhysicsOverlaysPlugin::<
-            selection::Selected,
-        >::new())
-        .add_plugins(jackdaw_avian_integration::simulation::PhysicsSimulationPlugin)
-        .add_plugins(physics_brush_bridge::PhysicsBrushBridgePlugin)
-        .add_plugins(physics_tool::PhysicsToolPlugin)
+        .add_plugins(
+            #[cfg(feature = "avian")]
+            (
+                jackdaw_avian_integration::PhysicsOverlaysPlugin::<selection::Selected>::new(),
+                jackdaw_avian_integration::simulation::PhysicsSimulationPlugin,
+                physics_brush_bridge::PhysicsBrushBridgePlugin,
+                physics_tool::PhysicsToolPlugin,
+            ),
+            #[cfg(not(feature = "avian"))]
+            (),
+        )
         .add_plugins(operator_tooltip::OperatorTooltipPlugin)
         .add_plugins(jackdaw_node_graph::NodeGraphPlugin)
         .add_plugins(jackdaw_animation::AnimationPlugin)
@@ -2131,7 +2139,9 @@ fn populate_menu(
                 op_entry::<view_ops::ViewToggleBrushWireframeOp>("Toggle Brush Wireframe"),
                 op_entry::<view_ops::ViewToggleBrushOutlineOp>("Toggle Brush Outline"),
                 op_entry::<view_ops::ViewToggleAlignmentGuidesOp>("Toggle Alignment Guides"),
+                #[cfg(feature = "avian")]
                 op_entry::<view_ops::ViewToggleColliderGizmosOp>("Toggle Collider Gizmos"),
+                #[cfg(feature = "avian")]
                 op_entry::<view_ops::ViewToggleHierarchyArrowsOp>("Toggle Hierarchy Arrows"),
                 op_entry::<view_ops::ViewTogglePerspOrthoOp>("Toggle Perspective / Orthographic"),
                 op_entry::<view_ops::ViewFrameSelectedOp>("Frame Selected"),

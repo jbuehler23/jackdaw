@@ -1449,7 +1449,7 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
     };
 
     commands.queue(move |world: &mut World| {
-        use avian3d::parry::transformation::convex_hull;
+        use parry3d::transformation::convex_hull;
 
         let Some(brush) = world.get::<Brush>(target_entity) else {
             return;
@@ -2782,7 +2782,7 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
     let others: Vec<Entity> = selected_brushes[1..].to_vec();
 
     {
-        use avian3d::parry::transformation::convex_hull;
+        use parry3d::transformation::convex_hull;
 
         // Read primary brush data
         let Some(primary_brush) = world.get::<Brush>(primary_entity) else {

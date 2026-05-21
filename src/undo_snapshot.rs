@@ -14,6 +14,7 @@ use std::any::Any;
 
 use bevy::prelude::*;
 use jackdaw_api_internal::snapshot::{ActiveSnapshotter, SceneSnapshot, SceneSnapshotter};
+#[cfg(feature = "avian")]
 use jackdaw_avian_integration::PhysicsOverlayConfig;
 use jackdaw_jsn::SceneJsnAst;
 
@@ -88,6 +89,7 @@ struct EditorStateSnapshot {
     snap_settings: SnapSettings,
     view_mode: ViewModeSettings,
     overlays: OverlaySettings,
+    #[cfg(feature = "avian")]
     physics_overlays: PhysicsOverlayConfig,
     /// Active `BrushGroup` for group-edit mode. The entity id is
     /// validated against the live world on `apply` because
@@ -105,6 +107,7 @@ impl EditorStateSnapshot {
             snap_settings: world.resource::<SnapSettings>().clone(),
             view_mode: world.resource::<ViewModeSettings>().clone(),
             overlays: world.resource::<OverlaySettings>().clone(),
+            #[cfg(feature = "avian")]
             physics_overlays: world.resource::<PhysicsOverlayConfig>().clone(),
             active_group: world.resource::<GroupEditState>().active_group,
         }
@@ -117,7 +120,10 @@ impl EditorStateSnapshot {
         *world.resource_mut::<SnapSettings>() = self.snap_settings.clone();
         *world.resource_mut::<ViewModeSettings>() = self.view_mode.clone();
         *world.resource_mut::<OverlaySettings>() = self.overlays.clone();
-        *world.resource_mut::<PhysicsOverlayConfig>() = self.physics_overlays.clone();
+        #[cfg(feature = "avian")]
+        {
+            *world.resource_mut::<PhysicsOverlayConfig>() = self.physics_overlays.clone();
+        }
         let valid_group = self.active_group.filter(|e| world.get_entity(*e).is_ok());
         world.resource_mut::<GroupEditState>().active_group = valid_group;
     }

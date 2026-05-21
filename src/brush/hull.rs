@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use avian3d::parry::transformation::convex_hull;
 use bevy::prelude::*;
+use parry3d::transformation::convex_hull;
 
 use jackdaw_geometry::{EPSILON, compute_brush_topology, sort_face_vertices_by_winding};
 use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};

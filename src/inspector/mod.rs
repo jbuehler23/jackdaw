@@ -6,6 +6,7 @@ pub(crate) mod component_tooltip;
 mod custom_props_display;
 mod material_display;
 pub(crate) mod ops;
+#[cfg(feature = "avian")]
 pub(crate) mod physics_display;
 pub(crate) mod reflect_fields;
 

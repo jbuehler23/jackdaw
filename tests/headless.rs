@@ -81,6 +81,7 @@ fn snapshot_notices_editor_state_changes() {
     use jackdaw::view_modes::ViewModeSettings;
     use jackdaw::viewport_overlays::OverlaySettings;
     use jackdaw_api_internal::snapshot::ActiveSnapshotter;
+    #[cfg(feature = "avian")]
     use jackdaw_avian_integration::PhysicsOverlayConfig;
 
     let mut app = util::headless_app();
@@ -98,7 +99,10 @@ fn snapshot_notices_editor_state_changes() {
     *world.resource_mut::<GizmoSpace>() = GizmoSpace::Local;
     world.resource_mut::<SnapSettings>().grid_power = 3;
     world.resource_mut::<OverlaySettings>().show_bounding_boxes = true;
-    world.resource_mut::<PhysicsOverlayConfig>().show_colliders = false;
+    #[cfg(feature = "avian")]
+    {
+        world.resource_mut::<PhysicsOverlayConfig>().show_colliders = false;
+    }
 
     let after = world
         .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));

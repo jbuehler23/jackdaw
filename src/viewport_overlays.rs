@@ -5,10 +5,10 @@ use crate::entity_ops::EmptyEntity;
 use crate::selection::Selected;
 use crate::viewport::{AxisIndicator, SceneViewport};
 use crate::{JackdawDrawSystems, default_style};
-use avian3d::parry::transformation::convex_hull;
 use bevy::prelude::*;
 use bevy::ui::widget::ViewportNode;
 use jackdaw_jsn::BrushGroup;
+use parry3d::transformation::convex_hull;
 
 #[derive(Component)]
 struct AxisLabel;

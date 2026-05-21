@@ -36,8 +36,10 @@ include = [
 default-run = "jackdaw"
 
 [features]
-default = []
+default = ["navmesh", "avian"]
 navmesh = ["dep:bevy_rerecast"]
+avian = ["dep:avian3d", "dep:jackdaw_avian_integration"]
+dynamic_linking = ["bevy/dynamic_linking"]
 
 hot-reload = ["dep:bevy_simple_subsecond_system"]
 # Experimental dylib-based extension flow. Enables Bevy's
@@ -83,7 +85,8 @@ jackdaw_terrain.workspace = true
 jackdaw_remote.workspace = true
 jackdaw_node_graph.workspace = true
 jackdaw_animation.workspace = true
-jackdaw_avian_integration.workspace = true
+jackdaw_avian_integration = { workspace = true, optional = true }
+parry3d.workspace = true
 jackdaw_panels.workspace = true
 jackdaw_api.workspace = true
 # The editor crate uses `jackdaw_api` the same way third-party
@@ -118,7 +121,7 @@ jackdaw_rustc_wrapper.workspace = true
 bevy_enhanced_input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-avian3d.workspace = true
+avian3d = { workspace = true, optional = true }
 rfd.workspace = true
 bevy_rerecast = { workspace = true, optional = true }
 ehttp.workspace = true
@@ -180,6 +183,9 @@ jackdaw_dylib = { version = "0.4.1", path = "crates/jackdaw_dylib" }
 jackdaw_loader = { version = "0.4.1", path = "crates/jackdaw_loader" }
 jackdaw_sdk = { version = "0.4.1", path = "crates/jackdaw_sdk" }
 jackdaw_rustc_wrapper = { version = "0.4.1", path = "crates/jackdaw_rustc_wrapper" }
+# TODO: This is only used for its `convex_hull` method, which is a bit of a waste
+# find out how to handle that with e.g. manifold, or vendor the function in question
+parry3d = "0.26"
 bevy_enhanced_input = "0.25"
 rfd = "0.15"
 bevy_rerecast = { version = "0.4", default-features = true }

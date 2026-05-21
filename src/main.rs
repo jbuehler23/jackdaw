@@ -102,6 +102,7 @@ fn main() -> AppExit {
         // assert presence, so user `MyGamePlugin`s can add the
         // same plugins without conflict.
         .add_plugins((
+            #[cfg(feature = "avian")]
             avian3d::prelude::PhysicsPlugins::default(),
             bevy_enhanced_input::prelude::EnhancedInputPlugin,
         ))

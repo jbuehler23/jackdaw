@@ -4536,6 +4536,7 @@ dependencies = [
  "jackdaw_terrain",
  "jackdaw_widgets",
  "notify",
+ "parry3d",
  "pathdiff",
  "regex",
  "rfd",

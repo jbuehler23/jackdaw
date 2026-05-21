@@ -8,7 +8,6 @@
 //!
 //! Run: `cargo run --example components_in_editor`
 
-use avian3d::prelude::PhysicsPlugins;
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::EnhancedInputPlugin;
 use jackdaw::prelude::*;
@@ -22,6 +21,7 @@ fn main() -> AppExit {
         // plugins without a duplicate panic.
         .add_plugins((
             DefaultPlugins,
+            #[cfg(feature = "avian")]
             PhysicsPlugins::default(),
             EnhancedInputPlugin,
             EditorPlugins::default(),

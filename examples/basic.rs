@@ -8,6 +8,7 @@ fn main() -> AppExit {
         .add_plugins((
             DefaultPlugins,
             EnhancedInputPlugin,
+            #[cfg(feature = "avian")]
             PhysicsPlugins::default(),
             EditorPlugins::default(),
         ))

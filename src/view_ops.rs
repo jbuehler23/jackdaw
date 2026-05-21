@@ -25,12 +25,14 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ViewToggleBrushWireframeOp>()
         .register_operator::<ViewToggleBrushOutlineOp>()
         .register_operator::<ViewToggleAlignmentGuidesOp>()
-        .register_operator::<ViewToggleColliderGizmosOp>()
-        .register_operator::<ViewToggleHierarchyArrowsOp>()
         .register_operator::<ViewSetAxisOp>()
         .register_operator::<ViewTogglePerspOrthoOp>()
         .register_operator::<ViewFrameSelectedOp>()
         .register_operator::<ViewFrameAllOp>();
+
+    #[cfg(feature = "avian")]
+    ctx.register_operator::<ViewToggleColliderGizmosOp>()
+        .register_operator::<ViewToggleHierarchyArrowsOp>();
 
     let ext = ctx.id();
     ctx.entity_mut().world_scope(|world| {
@@ -130,6 +132,7 @@ pub(crate) fn view_toggle_alignment_guides(
     OperatorResult::Finished
 }
 
+#[cfg(feature = "avian")]
 #[operator(id = "view.toggle_collider_gizmos", label = "Toggle Collider Gizmos")]
 pub(crate) fn view_toggle_collider_gizmos(
     _: In<OperatorParameters>,
@@ -139,6 +142,7 @@ pub(crate) fn view_toggle_collider_gizmos(
     OperatorResult::Finished
 }
 
+#[cfg(feature = "avian")]
 #[operator(id = "view.toggle_hierarchy_arrows", label = "Toggle Hierarchy Arrows")]
 pub(crate) fn view_toggle_hierarchy_arrows(
     _: In<OperatorParameters>,

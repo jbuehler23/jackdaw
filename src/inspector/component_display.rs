@@ -29,7 +29,9 @@ use std::collections::HashSet;
 
 use bevy_monitors::prelude::{Addition, Monitor, NotifyAdded};
 
+#[cfg(feature = "avian")]
 use jackdaw_avian_integration::AvianCollider;
+#[cfg(feature = "avian")]
 use jackdaw_geometry::is_convex_topology;
 use jackdaw_runtime::EditorCategory;
 
@@ -237,13 +239,24 @@ pub(crate) fn build_inspector_displays(
     // for most when iterating on physics; ordering it alphabetically
     // (where it'd sit under `RigidBody` in the Avian3d group) buries
     // it under runtime-state components.
-    let group_pin_priority = |type_path: &str| -> u8 {
-        if type_path == "jackdaw_avian_integration::AvianCollider" {
-            0
-        } else {
-            1
+
+    let group_pin_priority = {
+        #[cfg(feature = "avian")]
+        {
+            |type_path: &str| -> u8 {
+                if type_path == "jackdaw_avian_integration::AvianCollider" {
+                    0
+                } else {
+                    1
+                }
+            }
+        }
+        #[cfg(not(feature = "avian"))]
+        {
+            |_: &str| -> u8 { 1 }
         }
     };
+
     comp_list.sort_by(|a, b| {
         let a_custom = custom_groups.contains(&a.1);
         let b_custom = custom_groups.contains(&b.1);
@@ -397,6 +410,7 @@ pub(crate) fn build_inspector_displays(
                     // forces TriMesh regardless of the user's AvianCollider setting. Show a
                     // read-only note so the change is visible in the inspector.
                     // CONVEX_FUNCTIONAL: different behavior is intentional (mirrors collider-type choice in physics_brush_bridge)
+                    #[cfg(feature = "avian")]
                     if entity_ref.contains::<AvianCollider>()
                         && let Some(brush) = entity_ref.get::<crate::brush::Brush>()
                         && !is_convex_topology(&brush.topology)
