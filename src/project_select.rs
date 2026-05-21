@@ -186,7 +186,7 @@ struct BuildAfterScaffoldCheckbox;
 struct NewProjectProgressContainer;
 
 /// Marker on the scaffold live-log scrolling panel so the refresh
-/// system can find it among any other ScrollingLog instances.
+/// system can find it among any other [`ScrollingLog`] instances.
 #[derive(Component)]
 struct NewProjectScaffoldLog;
 
@@ -282,6 +282,10 @@ struct NewProjectState {
         Task<Result<PathBuf, crate::ext_build::BuildError>>,
         TemplateLinkage,
     )>,
+    /// Cancel flag for the in-flight `build_task`. Flipped by
+    /// `on_cancel_new_project` when a build is running; the worker
+    /// polls it and surfaces `BuildError::Cancelled` on exit.
+    build_cancel: Option<Arc<AtomicBool>>,
     /// Artifact waiting to be installed by `apply_pending_install`
     /// (runs in `Last`, not `Update`, so modifications to the
     /// `Update` schedule by the game's `GameApp::add_systems` don't
@@ -941,15 +945,20 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
 
     let root_for_task = root;
     let progress_for_task = std::sync::Arc::clone(&progress);
+    let build_cancel = Arc::new(AtomicBool::new(false));
+    let cancel_for_task = Arc::clone(&build_cancel);
     // Non-cdylib projects took the early-out in `enter_project_with`.
     let task = AsyncComputeTaskPool::get().spawn(async move {
         crate::ext_build::build_extension_project_with_progress(
             &root_for_task,
             Some(progress_for_task),
             TemplateLinkage::Dylib,
+            Some(cancel_for_task),
         )
     });
-    world.resource_mut::<NewProjectState>().build_task = Some((task, TemplateLinkage::Dylib));
+    let mut state = world.resource_mut::<NewProjectState>();
+    state.build_task = Some((task, TemplateLinkage::Dylib));
+    state.build_cancel = Some(build_cancel);
 }
 
 /// Apply the project-root state change and flip `AppState` to
@@ -2166,6 +2175,13 @@ fn on_cancel_new_project(_: On<Pointer<Click>>, mut commands: Commands) {
             handle.cancel.store(true, Ordering::Release);
             state.scaffold.cancelling = true;
             state.status = Some("Cancelling…".into());
+        } else if let Some(cancel) = state.build_cancel.as_ref() {
+            // Build-time cancel: the cargo poller in
+            // `run_cargo_with_progress` checks this flag every 50ms
+            // and kills the child. The build-task completion handler
+            // then sees `BuildError::Cancelled` and tears down state.
+            cancel.store(true, Ordering::Release);
+            state.status = Some("Cancelling build…".into());
         } else {
             close_new_project_modal(world);
         }
@@ -2582,14 +2598,18 @@ fn poll_new_project_tasks(
 
                         let project_for_task = project_path;
                         let progress_for_task = std::sync::Arc::clone(&progress);
+                        let build_cancel = Arc::new(AtomicBool::new(false));
+                        let cancel_for_task = Arc::clone(&build_cancel);
                         let task = AsyncComputeTaskPool::get().spawn(async move {
                             crate::ext_build::build_extension_project_with_progress(
                                 &project_for_task,
                                 Some(progress_for_task),
                                 linkage,
+                                Some(cancel_for_task),
                             )
                         });
                         state.build_task = Some((task, linkage));
+                        state.build_cancel = Some(build_cancel);
                     }
                 }
             }
@@ -2615,6 +2635,7 @@ fn poll_new_project_tasks(
     {
         let linkage = *build_linkage;
         state.build_task = None;
+        state.build_cancel = None;
         match result {
             Ok(artifact_or_project) => match linkage {
                 TemplateLinkage::Dylib => {
@@ -2629,6 +2650,13 @@ fn poll_new_project_tasks(
                     state.pending_project = None;
                 }
             },
+            Err(crate::ext_build::BuildError::Cancelled { .. }) => {
+                info!("Build cancelled");
+                state.status = Some("Cancelled.".into());
+                state.pending_project = None;
+                state.build_progress = None;
+                state.build_progress_snapshot = None;
+            }
             Err(err) => {
                 warn!("Build failed: {err}");
                 state.status = Some(format!(
@@ -2964,10 +2992,13 @@ fn drive_static_editor_build(world: &mut World) {
                 });
             let progress_for_task = std::sync::Arc::clone(&progress);
             let root_for_task = root.clone();
+            let build_cancel = Arc::new(AtomicBool::new(false));
+            let cancel_for_task = Arc::clone(&build_cancel);
             let task = AsyncComputeTaskPool::get().spawn(async move {
                 crate::ext_build::build_static_editor_with_progress(
                     &root_for_task,
                     Some(progress_for_task),
+                    Some(cancel_for_task),
                 )
             });
 
@@ -2975,6 +3006,7 @@ fn drive_static_editor_build(world: &mut World) {
                 let mut state = world.resource_mut::<NewProjectState>();
                 state.static_editor.task = Some(task);
                 state.static_editor.auto_reload = auto_reload;
+                state.build_cancel = Some(build_cancel);
                 if state.build_progress.is_none() {
                     state.build_progress = Some(std::sync::Arc::clone(&progress));
                     state.build_progress_snapshot =
@@ -3005,6 +3037,7 @@ fn drive_static_editor_build(world: &mut World) {
         let auto_reload = {
             let mut state = world.resource_mut::<NewProjectState>();
             state.static_editor.task = None;
+            state.build_cancel = None;
             state.static_editor.auto_reload
         };
 
@@ -3023,6 +3056,17 @@ fn drive_static_editor_build(world: &mut World) {
                     bin,
                     auto_reload,
                 };
+            }
+            Err(crate::ext_build::BuildError::Cancelled { .. }) => {
+                info!("Static editor build cancelled");
+                world
+                    .resource_mut::<crate::build_status::BuildStatus>()
+                    .state = BuildState::Idle;
+                let mut state = world.resource_mut::<NewProjectState>();
+                state.status = Some("Cancelled.".into());
+                state.build_progress = None;
+                state.build_progress_snapshot = None;
+                state.pending_project = None;
             }
             Err(err) => {
                 warn!("Static editor build failed: {err}");

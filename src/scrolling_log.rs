@@ -6,7 +6,7 @@
 //! propagates the change into the inner text child and snaps
 //! [`ScrollPosition`] to the bottom on the next layout pass. When
 //! `auto_hide_when_empty` is set, the panel collapses entirely
-//! (Display::None) so consumers don't have to manage visibility.
+//! ([`Display::None`]) so consumers don't have to manage visibility.
 
 use bevy::prelude::*;
 
