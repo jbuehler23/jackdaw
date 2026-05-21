@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
 use parry3d::transformation::convex_hull;
 
 use jackdaw_geometry::{EPSILON, compute_brush_topology, sort_face_vertices_by_winding};

@@ -1,5 +1,6 @@
-use bevy_ecs::prelude::*;
 use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
 use jackdaw_feathers::status_bar::{StatusBarCenter, StatusBarLeft, StatusBarRight};
 
 use crate::{

@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
 use jackdaw_jsn::format::JsnScene;
 
 use crate::commands::CommandHistory;

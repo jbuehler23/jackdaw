@@ -8,6 +8,7 @@
 
 use bevy_ecs::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
+use bevy_input::prelude::*;
 use bevy_window::PrimaryWindow;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;

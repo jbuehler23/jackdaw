@@ -8,9 +8,10 @@
 //! full `rfd::FileDialog` sub-flow for that case is deferred to a
 //! follow-up task.
 
-use bevy_picking::events::{Click, Pointer};
-use bevy_ecs::prelude::*;
 use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::prelude::*;
+use bevy_picking::events::{Click, Pointer};
 use jackdaw_feathers::{icons::EditorFont, tokens};
 
 /// Holds the pending tab index when the user tried to close a dirty tab
