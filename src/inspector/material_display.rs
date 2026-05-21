@@ -3,6 +3,7 @@ use jackdaw_feathers::{
     text_edit::{self, TextEditCommitEvent, TextEditProps},
     tokens,
 };
+use jackdaw_localization::LocalizedText;
 
 /// Marker for material field UI entities
 #[derive(Component)]
@@ -46,7 +47,7 @@ fn spawn_material_fields(world: &mut World, body_entity: Entity, source_entity: 
         mat_data
     else {
         world.spawn((
-            Text::new("(material not loaded)"),
+            LocalizedText::new("material-not-loaded"),
             TextFont {
                 font_size: tokens::FONT_SM,
                 ..Default::default()

@@ -1,4 +1,5 @@
 use bevy::{feathers::theme::ThemedText, prelude::*};
+use jackdaw_localization::LocalizedText;
 
 use crate::tokens;
 
@@ -36,7 +37,7 @@ pub fn status_bar() -> impl Bundle {
         children![
             (
                 StatusBarLeft,
-                Text::new("Ready"),
+                LocalizedText::new("ready"),
                 TextFont {
                     font_size: tokens::FONT_SM,
                     ..Default::default()
