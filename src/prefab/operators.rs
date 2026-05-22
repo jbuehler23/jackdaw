@@ -1567,7 +1567,7 @@ pub fn save_prefab_to_disk(world: &mut World, prefab_path: &Path) -> std::io::Re
     id = "prefab.save",
     label = "Save Prefab",
     description = "Write the active prefab tab's AST out to its source file.",
-    allows_undo = false
+    allows_undo = true
 )]
 pub fn prefab_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
@@ -1596,7 +1596,7 @@ pub fn prefab_save(_: In<OperatorParameters>, mut commands: Commands) -> Operato
     id = "prefab.spawn_instance",
     label = "Spawn Prefab Instance",
     description = "Drop a new instance of the given prefab into the active scene at a world position.",
-    allows_undo = false,
+    allows_undo = true,
     params(
         path(String, doc = "Path to the prefab `.jsn` to instantiate."),
         pos_x(f64, doc = "World-space X position."),
@@ -1637,7 +1637,7 @@ pub fn prefab_spawn_instance(
     id = "prefab.revert_field",
     label = "Revert Field to Prefab",
     description = "Restore one field on a prefab-instance entity to its inherited prefab value.",
-    allows_undo = false,
+    allows_undo = true,
     params(
         entity_key(i64, doc = "AST key of the instance entity."),
         type_path(String, doc = "Fully-qualified component type path."),
@@ -1672,7 +1672,7 @@ pub fn prefab_revert_field(
     id = "prefab.revert_component",
     label = "Revert Component to Prefab",
     description = "Restore the component on a prefab-instance entity to its inherited prefab value.",
-    allows_undo = false,
+    allows_undo = true,
     params(
         entity_key(i64, doc = "AST key of the instance entity."),
         type_path(String, doc = "Fully-qualified component type path."),
@@ -1701,7 +1701,7 @@ pub fn prefab_revert_component(
     id = "prefab.revert_all",
     label = "Revert All Overrides",
     description = "Remove every per-instance override on a prefab-instance subtree.",
-    allows_undo = false,
+    allows_undo = true,
     params(instance_root(i64, doc = "AST key of the instance root."),)
 )]
 pub fn prefab_revert_all(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
@@ -1722,7 +1722,7 @@ pub fn prefab_revert_all(params: In<OperatorParameters>, mut commands: Commands)
     id = "prefab.apply_to_source",
     label = "Apply Field to Prefab Source",
     description = "Push one overridden field into the prefab source so every instance picks it up.",
-    allows_undo = false,
+    allows_undo = true,
     params(
         instance_root(i64, doc = "AST key of the prefab-instance root."),
         entity_id(i64, doc = "PrefabEntityId of the target entity inside the prefab."),
@@ -1781,7 +1781,7 @@ pub fn prefab_apply_to_source(
     id = "prefab.bulk_apply_in_scene",
     label = "Bulk Apply Field in Scene",
     description = "Copy one overridden field to every other prefab instance in the scene that shares the same source.",
-    allows_undo = false,
+    allows_undo = true,
     params(
         source_path(String, doc = "Prefab source path to match instances against."),
         type_path(String, doc = "Fully-qualified component type path."),
@@ -1833,7 +1833,7 @@ pub fn prefab_bulk_apply_in_scene(
     id = "prefab.save_as_variant_entity",
     label = "Save Instance as Variant",
     description = "Write a prefab-instance entity out as a new variant prefab file inheriting from the original.",
-    allows_undo = false,
+    allows_undo = true,
     params(
         instance_root_entity(i64, doc = "Bits of the instance-root Entity."),
         target_path(String, doc = "Path to write the new variant file to."),
@@ -1865,7 +1865,7 @@ pub fn prefab_save_as_variant_entity(
     id = "prefab.unpack_child",
     label = "Unpack Prefab Child",
     description = "Detach an inherited prefab child and re-parent it under another scene entity.",
-    allows_undo = false,
+    allows_undo = true,
     params(
         child_key(i64, doc = "AST key of the inherited child."),
         drop_target_key(i64, doc = "AST key of the entity to re-parent under."),
@@ -1895,7 +1895,7 @@ pub fn prefab_unpack_child(
     id = "prefab.unbundle_instance",
     label = "Unbundle Prefab Instance",
     description = "Remove the prefab instance wrapper, leaving its inherited children as standalone entities.",
-    allows_undo = false,
+    allows_undo = true,
     params(instance_key(i64, doc = "AST key of the instance entity to unbundle."),)
 )]
 pub fn prefab_unbundle_instance(
@@ -1921,7 +1921,7 @@ pub fn prefab_unbundle_instance(
     id = "prefab.repair_self_cycles",
     label = "Repair Self-Cycling Prefabs",
     description = "Walk every cached prefab and strip IsA components that reference the prefab itself.",
-    allows_undo = false
+    allows_undo = true
 )]
 pub fn prefab_repair_self_cycles(
     _: In<OperatorParameters>,

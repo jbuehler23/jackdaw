@@ -894,6 +894,10 @@ fn on_tree_row_dropped(
                 if let Some((child_key, target_key)) = keys {
                     let _ = world
                         .operator("prefab.unpack_child")
+                        .settings(CallOperatorSettings {
+                            creates_history_entry: true,
+                            ..default()
+                        })
                         .param("child_key", child_key as i64)
                         .param("drop_target_key", target_key as i64)
                         .call();
@@ -1218,6 +1222,15 @@ fn on_context_menu_action(
                 if roots.is_empty() {
                     return;
                 }
+                info!(
+                    "hierarchy.save_prefab: target_entity={:?}, selection_len={}, roots_len={}",
+                    target_entity,
+                    world
+                        .resource::<crate::selection::Selection>()
+                        .entities
+                        .len(),
+                    roots.len(),
+                );
                 let default_name = roots
                     .first()
                     .and_then(|e| world.get::<Name>(*e).map(|n| n.as_str().to_string()))
@@ -1263,6 +1276,10 @@ fn on_context_menu_action(
                 let Some(key) = key else { return };
                 let _ = world
                     .operator("prefab.revert_all")
+                    .settings(CallOperatorSettings {
+                        creates_history_entry: true,
+                        ..default()
+                    })
                     .param("instance_root", key as i64)
                     .call();
             });
@@ -1310,6 +1327,10 @@ fn on_context_menu_action(
                 let Some(key) = key else { return };
                 let _ = world
                     .operator("prefab.unbundle_instance")
+                    .settings(CallOperatorSettings {
+                        creates_history_entry: true,
+                        ..default()
+                    })
                     .param("instance_key", key as i64)
                     .call();
             });
@@ -1769,7 +1790,14 @@ fn on_prefab_dialog_action(
         PrefabSaveMode::Scene => PrefabSaveSceneAsPrefabOp::ID,
         PrefabSaveMode::Variant => PrefabSaveAsVariantOp::ID,
     };
-    commands.operator(op_id).param("name", name).call();
+    commands
+        .operator(op_id)
+        .settings(CallOperatorSettings {
+            creates_history_entry: true,
+            ..default()
+        })
+        .param("name", name)
+        .call();
 }
 
 /// Save the entities listed in `PendingPrefabSave` as a new prefab file
@@ -1779,7 +1807,7 @@ fn on_prefab_dialog_action(
     id = "prefab.save_as_prefab",
     label = "Save as Prefab",
     description = "Write the pending entity roots out as a new prefab file.",
-    allows_undo = false,
+    allows_undo = true,
     params(name(String, doc = "File name (without extension)."))
 )]
 pub fn prefab_save_as_prefab(
@@ -1800,6 +1828,11 @@ pub fn prefab_save_as_prefab(
             Some(root) => root.root.join("assets/prefabs").join(format!("{name}.jsn")),
             None => std::path::PathBuf::from(format!("{name}.jsn")),
         };
+        info!(
+            "prefab.save_as_prefab: bundling {} root(s) into {}",
+            roots.len(),
+            target.display()
+        );
         crate::prefab::operators::save_as_prefab_from_selection(world, &roots, &target);
         let mut pending = world.resource_mut::<PendingPrefabSave>();
         pending.roots.clear();
@@ -1817,7 +1850,7 @@ pub fn prefab_save_as_prefab(
     id = "prefab.save_scene_as_prefab",
     label = "Save Scene as Prefab",
     description = "Write the active scene tab out as a new prefab file and convert the tab into a prefab tab.",
-    allows_undo = false,
+    allows_undo = true,
     params(name(String, doc = "File name (without extension)."))
 )]
 pub fn prefab_save_scene_as_prefab(
@@ -1854,7 +1887,7 @@ pub fn prefab_save_scene_as_prefab(
     id = "prefab.save_as_variant",
     label = "Save as Variant",
     description = "Write the pending instance out as a variant prefab.",
-    allows_undo = false,
+    allows_undo = true,
     params(name(String, doc = "File name (without extension)."))
 )]
 pub fn prefab_save_as_variant(

@@ -951,6 +951,10 @@ pub(crate) fn spawn_component_display(
                             let revert_path = prefab_type_path.clone();
                             commands
                                 .operator("prefab.revert_component")
+                                .settings(CallOperatorSettings {
+                                    creates_history_entry: true,
+                                    ..default()
+                                })
                                 .param("entity_key", entity_key as i64)
                                 .param("type_path", revert_path)
                                 .call();
@@ -1332,6 +1336,10 @@ pub(crate) fn decorate_prefab_field_rows(
                 // whether anything actually changes.
                 commands
                     .operator("prefab.revert_field")
+                    .settings(CallOperatorSettings {
+                        creates_history_entry: true,
+                        ..default()
+                    })
                     .param("entity_key", entity_key as i64)
                     .param("type_path", type_path)
                     .param("field_path", field_path)

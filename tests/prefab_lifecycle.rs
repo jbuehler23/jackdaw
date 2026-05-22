@@ -3070,3 +3070,255 @@ fn snapshot_install_plus_reload_keeps_inherited_child_visible() {
         assert_eq!(name.as_str(), "child", "inherited Name carries through");
     }
 }
+
+#[test]
+fn snapshot_round_trip_undoes_spawn_instance() {
+    // What `Ctrl+Z` does on a prefab-spawn operator boils down to:
+    // capture a snapshot, run the spawn, then apply the captured
+    // snapshot back. This test exercises that round-trip directly,
+    // bypassing the operator framework so the harness stays minimal.
+    use bevy::math::Vec3;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+    let prefab_json = serde_json::json!({
+        "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
+        "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
+        "assets": {},
+        "editor": null,
+        "scene": [{
+            "components": {
+                "jackdaw::prefab::components::Prefab": null,
+                "jackdaw::prefab::components::PrefabEntityId": 0,
+                "bevy_ecs::name::Name": "p",
+                "bevy_transform::components::transform::Transform": {
+                    "translation": [0.0, 0.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "scale": [1.0, 1.0, 1.0]
+                },
+                "bevy_camera::visibility::Visibility": "Inherited"
+            }
+        }]
+    });
+    std::fs::write(
+        &prefab_path,
+        serde_json::to_string_pretty(&prefab_json).unwrap(),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+
+    // Capture the "before" snapshot AST.
+    let before_ast = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+    {
+        let world = app.world_mut();
+        let mut q = world.query::<&jackdaw::prefab::IsA>();
+        assert_eq!(q.iter(world).count(), 0, "no instances before spawn");
+    }
+
+    // Run the spawn.
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(7.0, 0.0, 0.0),
+    );
+    {
+        let world = app.world_mut();
+        let mut q = world.query::<&jackdaw::prefab::IsA>();
+        assert_eq!(q.iter(world).count(), 1, "instance spawned");
+    }
+
+    // Apply the before-snapshot — what SnapshotDiff::undo does.
+    jackdaw::scene_io::apply_ast_to_world(app.world_mut(), &before_ast);
+    {
+        let world = app.world_mut();
+        let mut q = world.query::<&jackdaw::prefab::IsA>();
+        assert_eq!(
+            q.iter(world).count(),
+            0,
+            "instance removed after applying the before-snapshot (undo)"
+        );
+    }
+}
+
+#[test]
+fn save_3_brushes_as_prefab_produces_3_inherited_children() {
+    // Reproduces user-reported bug: selecting 3 brushes and saving as a
+    // prefab should produce ONE instance entity with THREE inherited
+    // children, not one inherited child + three top-level brushes.
+
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("p_boxes.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    let mut entities = Vec::new();
+    for i in 0..3 {
+        let entity = app
+            .world_mut()
+            .spawn((
+                bevy::prelude::Name::new("Brush"),
+                bevy::prelude::Transform::from_xyz(i as f32 * 2.0, 0.0, 0.0),
+                bevy::camera::visibility::Visibility::Inherited,
+            ))
+            .id();
+        {
+            let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+            let key = ast.create_node(entity, None);
+            ast.insert_component(
+                key,
+                "bevy_ecs::name::Name",
+                serde_json::Value::String("Brush".to_string()),
+            );
+            ast.insert_component(
+                key,
+                "bevy_transform::components::transform::Transform",
+                serde_json::json!({
+                    "translation": [i as f32 * 2.0, 0.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "scale": [1.0, 1.0, 1.0],
+                }),
+            );
+        }
+        entities.push(entity);
+    }
+    app.update();
+
+    jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &entities, &target);
+
+    // The prefab file on disk should contain the synthetic root +
+    // three child entries.
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    let scene = value["scene"].as_array().unwrap();
+    assert_eq!(
+        scene.len(),
+        4,
+        "prefab file has synthetic root + 3 children; got {} entries",
+        scene.len()
+    );
+
+    // After the save, the live world should have:
+    //  - one IsA-bearing instance entity
+    //  - three inherited Brush children (PrefabEntityId set, ChildOf the instance)
+    //  - zero authored top-level Brushes left over
+    let world = app.world_mut();
+    let mut isa_q = world.query::<&jackdaw::prefab::IsA>();
+    let isa_count = isa_q.iter(world).count();
+    assert_eq!(isa_count, 1, "exactly one instance after save");
+
+    let mut child_q = world.query::<(
+        &jackdaw::prefab::PrefabEntityId,
+        Option<&bevy::ecs::hierarchy::ChildOf>,
+        &bevy::prelude::Name,
+    )>();
+    let mut inherited_under_instance = 0;
+    let mut top_level_brushes = 0;
+    for (_peid, child_of, name) in child_q.iter(world) {
+        if name.as_str() != "Brush" {
+            continue;
+        }
+        if child_of.is_some() {
+            inherited_under_instance += 1;
+        } else {
+            top_level_brushes += 1;
+        }
+    }
+    assert_eq!(
+        inherited_under_instance, 3,
+        "three inherited brush children under the instance; got {inherited_under_instance}"
+    );
+    assert_eq!(
+        top_level_brushes, 0,
+        "zero authored top-level brushes left over; got {top_level_brushes}"
+    );
+}
+
+#[test]
+fn save_3_brushes_survives_snapshot_capture_and_install() {
+    // The operator framework calls `build_snapshot_ast` twice (before
+    // and after) and installs each as the live AST. The prefabify pass
+    // reduces inherited descendants to override entries. After all of
+    // this, the world must still have the same 3 inherited children
+    // under the instance — not lose any to the prefabify+install
+    // round-trip.
+
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("p_boxes.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    let mut entities = Vec::new();
+    for i in 0..3 {
+        let entity = app
+            .world_mut()
+            .spawn((
+                bevy::prelude::Name::new("Brush"),
+                bevy::prelude::Transform::from_xyz(i as f32 * 2.0, 0.0, 0.0),
+                bevy::camera::visibility::Visibility::Inherited,
+            ))
+            .id();
+        {
+            let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+            let key = ast.create_node(entity, None);
+            ast.insert_component(
+                key,
+                "bevy_ecs::name::Name",
+                serde_json::Value::String("Brush".to_string()),
+            );
+            ast.insert_component(
+                key,
+                "bevy_transform::components::transform::Transform",
+                serde_json::json!({
+                    "translation": [i as f32 * 2.0, 0.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "scale": [1.0, 1.0, 1.0],
+                }),
+            );
+        }
+        entities.push(entity);
+    }
+    app.update();
+
+    // Simulate the operator framework: before-snapshot capture (which
+    // installs as live AST), then the actual save, then after-snapshot
+    // (also installs as live), then a reload triggered by cache change.
+    let _before = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+
+    jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &entities, &target);
+
+    let _after = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+
+    // The cache-driven driver respawn (next-frame side effect of cache
+    // mutation in save_as_prefab_from_selection):
+    jackdaw::prefab::watcher::reload_all_instances(app.world_mut());
+
+    // Assertions: one instance, three inherited children, zero top-level brushes.
+    let world = app.world_mut();
+    let mut isa_q = world.query::<&jackdaw::prefab::IsA>();
+    assert_eq!(isa_q.iter(world).count(), 1, "exactly one instance");
+
+    let mut child_q = world.query::<(
+        &jackdaw::prefab::PrefabEntityId,
+        Option<&bevy::ecs::hierarchy::ChildOf>,
+        &bevy::prelude::Name,
+    )>();
+    let mut inherited_under_instance = 0;
+    let mut top_level_brushes = 0;
+    for (_peid, child_of, name) in child_q.iter(world) {
+        if name.as_str() != "Brush" {
+            continue;
+        }
+        if child_of.is_some() {
+            inherited_under_instance += 1;
+        } else {
+            top_level_brushes += 1;
+        }
+    }
+    assert_eq!(
+        inherited_under_instance, 3,
+        "three inherited brushes under instance after snapshot+respawn; got {inherited_under_instance}"
+    );
+    assert_eq!(
+        top_level_brushes, 0,
+        "zero top-level brushes after snapshot+respawn; got {top_level_brushes}"
+    );
+}

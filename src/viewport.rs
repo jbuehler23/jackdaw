@@ -527,6 +527,10 @@ fn handle_viewport_drop(
     if let Some(prefab_path) = prefab_drag {
         commands
             .operator("prefab.spawn_instance")
+            .settings(CallOperatorSettings {
+                creates_history_entry: true,
+                ..default()
+            })
             .param("path", prefab_path.to_string_lossy().into_owned())
             .param("pos_x", snapped_pos.x as f64)
             .param("pos_y", snapped_pos.y as f64)
