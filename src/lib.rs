@@ -34,6 +34,7 @@ use std::{collections::BTreeMap, marker::PhantomData};
 
 pub use inspector::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 pub mod core_extension;
+pub mod dock_ops;
 pub mod document_ops;
 pub mod ext_build;
 mod extension_lifecycle;
@@ -313,6 +314,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(extensions_dialog::ExtensionsDialogPlugin)
         .add_plugins(hot_reload::HotReloadPlugin)
         .add_plugins(pie::PiePlugin)
+        .add_plugins(dock_ops::DockOpsPlugin)
         // Force-exit on `AppExit`: bypass wgpu device cleanup
         // and AsyncComputeTaskPool shutdown that otherwise hang
         // the process after window close. Hosted here so every

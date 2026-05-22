@@ -1,4 +1,3 @@
-use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use jackdaw_feathers::{icons::IconFont, tokens};
 use lucide_icons::Icon;
@@ -22,9 +21,7 @@ pub struct DockTabPlugin;
 
 impl Plugin for DockTabPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (handle_dock_tab_clicks, show_close_on_hover))
-            .add_observer(on_close_button_click)
-            .add_observer(on_tab_middle_click);
+        app.add_systems(Update, (handle_dock_tab_clicks, show_close_on_hover));
     }
 }
 
@@ -321,28 +318,3 @@ fn show_close_on_hover(
     }
 }
 
-fn on_close_button_click(
-    trigger: On<Pointer<Click>>,
-    close_buttons: Query<&crate::area::DockTabCloseButton>,
-    mut tree: ResMut<DockTree>,
-) {
-    let entity = trigger.event_target();
-    let Ok(close_btn) = close_buttons.get(entity) else {
-        return;
-    };
-    tree.remove_tab(close_btn.tab_id);
-}
-
-fn on_tab_middle_click(
-    trigger: On<Pointer<Click>>,
-    tabs: Query<&DockTab>,
-    mut tree: ResMut<DockTree>,
-) {
-    if trigger.event().button != PointerButton::Middle {
-        return;
-    }
-    let Ok(tab) = tabs.get(trigger.event_target()) else {
-        return;
-    };
-    tree.remove_tab(tab.tab_id);
-}
