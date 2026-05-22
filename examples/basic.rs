@@ -3,7 +3,14 @@ use jackdaw::prelude::*;
 
 fn main() -> AppExit {
     App::new()
-        .add_plugins((DefaultPlugins, EditorPlugins::default()))
+        // log errors instead of panicking
+        .set_error_handler(bevy::ecs::error::error)
+        .add_plugins((
+            DefaultPlugins,
+            EnhancedInputPlugin,
+            PhysicsPlugins::default(),
+            EditorPlugins::default(),
+        ))
         .add_systems(Startup, spawn_scene)
         .run()
 }

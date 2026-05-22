@@ -9,6 +9,8 @@ fn main() -> AppExit {
         .set_error_handler(bevy::ecs::error::error)
         .add_plugins((
             DefaultPlugins,
+            PhysicsPlugins::default(),
+            EnhancedInputPlugin,
             EditorPlugins::default()
                 // Extensions can be statically registered using `with_extension`.
                 .set(ExtensionPlugin::default().with_extension::<MinimalExampleExtension>()),
