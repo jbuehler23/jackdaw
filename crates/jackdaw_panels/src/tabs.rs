@@ -317,4 +317,3 @@ fn show_close_on_hover(
         }
     }
 }
-

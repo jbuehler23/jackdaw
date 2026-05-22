@@ -24,7 +24,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     label = "Close Tab",
     description = "Close the specified docked tab.",
     allows_undo = false,
-    params(tab_id(i64, doc = "TabId of the tab to close.")),
+    params(tab_id(i64, doc = "TabId of the tab to close."))
 )]
 pub(crate) fn dock_close_tab(
     In(params): In<OperatorParameters>,
@@ -52,11 +52,7 @@ fn on_close_button_click(
         .call();
 }
 
-fn on_tab_middle_click(
-    trigger: On<Pointer<Click>>,
-    tabs: Query<&DockTab>,
-    mut commands: Commands,
-) {
+fn on_tab_middle_click(trigger: On<Pointer<Click>>, tabs: Query<&DockTab>, mut commands: Commands) {
     if trigger.event().button != PointerButton::Middle {
         return;
     }
