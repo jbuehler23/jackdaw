@@ -92,15 +92,9 @@ pub(crate) fn brush_loop_cut(
     // doesn't cancel the modal (the bounds check in window_to_viewport_cursor
     // returns None when the cursor leaves the UI node, which previously caused
     // the modal to cancel mid-drag).
-    let Ok(window) = primary_window.single() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok((camera, cam_tf)) = camera_query.single() else {
-        return OperatorResult::Cancelled;
-    };
+    let window = primary_window.single()?;
+    let cursor_pos = window.cursor_position()?;
+    let (camera, cam_tf) = camera_query.single()?;
 
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {
@@ -108,32 +102,16 @@ pub(crate) fn brush_loop_cut(
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
             return OperatorResult::Cancelled;
         }
-        let Some(brush_entity) = selection.entity else {
-            return OperatorResult::Cancelled;
-        };
-        let Some(&(a, b)) = selection.edges.first() else {
-            return OperatorResult::Cancelled;
-        };
+        let brush_entity = selection.entity?;
+        let &(a, b) = selection.edges.first()?;
 
-        let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-            return OperatorResult::Cancelled;
-        };
-        let Ok(halfedge) = halfedge_q.get(brush_entity) else {
-            return OperatorResult::Cancelled;
-        };
+        let brush_before = brushes.get(brush_entity).cloned()?;
+        let halfedge = halfedge_q.get(brush_entity)?;
 
         // Resolve cache pair -> EdgeKey.
-        let va: VertKey = match halfedge.vert_keys.get(a) {
-            Some(&k) => k,
-            None => return OperatorResult::Cancelled,
-        };
-        let vb: VertKey = match halfedge.vert_keys.get(b) {
-            Some(&k) => k,
-            None => return OperatorResult::Cancelled,
-        };
-        let Some(edge_key) = find_edge_between(&halfedge.mesh, va, vb) else {
-            return OperatorResult::Cancelled;
-        };
+        let va: VertKey = *halfedge.vert_keys.get(a)?;
+        let vb: VertKey = *halfedge.vert_keys.get(b)?;
+        let edge_key = find_edge_between(&halfedge.mesh, va, vb)?;
 
         // Project the start edge's canonical endpoints to window space so each
         // subsequent frame can compute t directly from cursor position.

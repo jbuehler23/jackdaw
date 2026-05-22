@@ -22,12 +22,8 @@ pub(crate) fn brush_select_invert(
     mut selection: ResMut<BrushSelection>,
     halfedge_q: Query<&BrushHalfedge>,
 ) -> OperatorResult {
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(halfedge) = halfedge_q.get(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
+    let halfedge = halfedge_q.get(brush_entity)?;
 
     match *edit_mode {
         EditMode::BrushEdit(BrushEditMode::Vertex) => {

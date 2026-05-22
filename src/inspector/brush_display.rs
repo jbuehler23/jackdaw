@@ -874,12 +874,8 @@ pub(crate) fn brush_face_clear_material(
     mut history: ResMut<CommandHistory>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(brush_entity) = brush_selection.entity else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = brush_selection.entity?;
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     let old = brush.clone();
     for &face_idx in &brush_selection.faces {
@@ -912,12 +908,8 @@ pub(crate) fn brush_face_apply_texture_to_all(
     mut history: ResMut<CommandHistory>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(brush_entity) = brush_selection.entity else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = brush_selection.entity?;
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     let source_idx = brush_selection.faces[0];
     if source_idx >= brush.faces.len() {
@@ -958,12 +950,8 @@ pub(crate) fn brush_face_set_uv_scale_preset(
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     let scale_value = params.as_float("scale").unwrap_or(1.0) as f32;
-    let Some(brush_entity) = brush_selection.entity else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = brush_selection.entity?;
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     let old = brush.clone();
     let scale = Vec2::splat(scale_value);

@@ -91,38 +91,24 @@ pub(crate) fn brush_vertex_bevel(
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
 ) -> OperatorResult {
-    let Ok(window) = primary_window.single() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return OperatorResult::Cancelled;
-    };
+    let window = primary_window.single()?;
+    let cursor_pos = window.cursor_position()?;
 
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
             return OperatorResult::Cancelled;
         }
-        let Some(brush_entity) = selection.entity else {
-            return OperatorResult::Cancelled;
-        };
+        let brush_entity = selection.entity?;
         if selection.vertices.len() != 1 {
             return OperatorResult::Cancelled;
         }
 
-        let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-            return OperatorResult::Cancelled;
-        };
-        let Ok(halfedge) = halfedge_q.get(brush_entity) else {
-            return OperatorResult::Cancelled;
-        };
+        let brush_before = brushes.get(brush_entity).cloned()?;
+        let halfedge = halfedge_q.get(brush_entity)?;
 
-        let Some(&vert_idx) = selection.vertices.first() else {
-            return OperatorResult::Cancelled;
-        };
-        let Some(&vert_key) = halfedge.vert_keys.get(vert_idx) else {
-            return OperatorResult::Cancelled;
-        };
+        let &vert_idx = selection.vertices.first()?;
+        let &vert_key = halfedge.vert_keys.get(vert_idx)?;
 
         let mesh_snapshot = halfedge.mesh.clone();
         let max_width = compute_max_bevel_width(&mesh_snapshot, vert_key);

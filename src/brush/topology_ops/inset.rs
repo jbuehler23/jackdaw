@@ -129,31 +129,21 @@ pub(crate) fn brush_inset(
 ) -> OperatorResult {
     // Cursor position in window space (raw, so dragging outside the panel does
     // not abort the modal the way a bounds-clipped viewport cursor would).
-    let Ok(window) = primary_window.single() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return OperatorResult::Cancelled;
-    };
+    let window = primary_window.single()?;
+    let cursor_pos = window.cursor_position()?;
 
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
             return OperatorResult::Cancelled;
         }
-        let Some(brush_entity) = selection.entity else {
-            return OperatorResult::Cancelled;
-        };
+        let brush_entity = selection.entity?;
         if selection.faces.is_empty() {
             return OperatorResult::Cancelled;
         }
 
-        let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-            return OperatorResult::Cancelled;
-        };
-        let Ok(halfedge) = halfedge_q.get(brush_entity) else {
-            return OperatorResult::Cancelled;
-        };
+        let brush_before = brushes.get(brush_entity).cloned()?;
+        let halfedge = halfedge_q.get(brush_entity)?;
 
         // Collect FaceKeys for every selected face index.
         let mut face_keys: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());

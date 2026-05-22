@@ -809,21 +809,13 @@ pub(crate) fn viewport_focus_selected(
     selected_transforms: Query<&GlobalTransform, With<Selected>>,
     mut camera_query: Query<&mut Transform, With<JackdawCameraSettings>>,
 ) -> OperatorResult {
-    let Some(primary) = selection.primary() else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(global_tf) = selected_transforms.get(primary) else {
-        return OperatorResult::Cancelled;
-    };
+    let primary = selection.primary()?;
+    let global_tf = selected_transforms.get(primary)?;
     let target = global_tf.translation();
     let scale = global_tf.compute_transform().scale;
     let dist = f32::max(scale.length() * 3.0, 5.0);
-    let Some(camera_entity) = active.camera else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(mut transform) = camera_query.get_mut(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let camera_entity = active.camera?;
+    let mut transform = camera_query.get_mut(camera_entity)?;
     let forward = transform.forward().as_vec3();
     transform.translation = target - forward * dist;
     *transform = transform.looking_at(target, Vec3::Y);
@@ -847,15 +839,9 @@ pub(crate) fn viewport_bookmark_save(
     active: Res<ActiveViewport>,
     mut cameras: Query<(&Transform, &mut ViewportConfig), With<JackdawCameraSettings>>,
 ) -> OperatorResult {
-    let Some(slot) = slot_param(&params) else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(camera_entity) = active.camera else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok((transform, mut config)) = cameras.get_mut(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let slot = slot_param(&params)?;
+    let camera_entity = active.camera?;
+    let (transform, mut config) = cameras.get_mut(camera_entity)?;
     config.bookmarks[slot] = Some(CameraBookmark {
         transform: *transform,
     });
@@ -875,18 +861,10 @@ pub(crate) fn viewport_bookmark_load(
     active: Res<ActiveViewport>,
     mut cameras: Query<(&mut Transform, &ViewportConfig), With<JackdawCameraSettings>>,
 ) -> OperatorResult {
-    let Some(slot) = slot_param(&params) else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(camera_entity) = active.camera else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok((mut transform, config)) = cameras.get_mut(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(bookmark) = config.bookmarks[slot] else {
-        return OperatorResult::Cancelled;
-    };
+    let slot = slot_param(&params)?;
+    let camera_entity = active.camera?;
+    let (mut transform, config) = cameras.get_mut(camera_entity)?;
+    let bookmark = config.bookmarks[slot]?;
     *transform = bookmark.transform;
     OperatorResult::Finished
 }

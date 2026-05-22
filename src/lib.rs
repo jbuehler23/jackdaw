@@ -2173,9 +2173,7 @@ pub(crate) fn window_open(
     registry: Res<jackdaw_panels::WindowRegistry>,
     mut commands: bevy::prelude::Commands,
 ) -> OperatorResult {
-    let Some(window_id) = params.as_str("window_id").map(str::to_string) else {
-        return OperatorResult::Cancelled;
-    };
+    let window_id = params.as_str("window_id").map(str::to_string)?;
     // Reject unknown ids up front so callers get `Cancelled` rather
     // than a silent no-op + `Finished`. Lets the menu/tooltip pipeline
     // distinguish "user opened a window" from "user clicked a stale
