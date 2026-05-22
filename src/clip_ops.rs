@@ -6,7 +6,7 @@
 //! Default keybinds: LMB places a point, Tab cycles mode, Enter
 //! applies, Escape clears.
 
-use bevy::{prelude::*, ui::ui_transform::UiGlobalTransform, window::PrimaryWindow};
+use bevy::{prelude::*, ui::ui_transform::UiGlobalTransform};
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::{Brush, BrushFaceData, BrushGroup, BrushPlane};
@@ -136,7 +136,7 @@ fn can_clear(
 )]
 pub(crate) fn clip_place_point(
     _: In<OperatorParameters>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
+    cursor: crate::viewport::UiCursorPos,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     active: Res<ActiveViewport>,
@@ -160,10 +160,7 @@ pub(crate) fn clip_place_point(
     let Ok(cache) = brush_caches.get(brush_entity) else {
         return OperatorResult::Cancelled;
     };
-    let Ok(window) = primary_window.single() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = cursor.get() else {
         return OperatorResult::Cancelled;
     };
     let Some(camera_entity) = active.camera else {
