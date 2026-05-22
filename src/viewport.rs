@@ -139,6 +139,7 @@ pub(crate) struct ViewportCursor<'w, 's> {
         With<SceneViewport>,
     >,
     active: Res<'w, ActiveViewport>,
+    ui_scale: Res<'w, UiScale>,
 }
 
 impl ViewportCursor<'_, '_> {
@@ -197,6 +198,36 @@ impl ViewportCursor<'_, '_> {
         } else {
             None
         }
+    }
+
+    /// Cursor position in ui-logical pixels
+    pub fn cursor(&self) -> Option<Vec2> {
+        let window = self.windows.single().ok()?;
+        let raw = window.cursor_position()?;
+        Some(raw / self.ui_scale.0)
+    }
+}
+
+/// Cursor position in ui-logical pixels, the space `Val::Px` and
+/// [`crate::viewport_util::ViewportRemap`] operate in. Use this anywhere the
+/// cursor will be compared against UI nodes or fed into viewport-coordinate
+/// math, instead of calling `Window::cursor_position()` directly.
+///
+/// Systems that already take [`ViewportCursor`] can use
+/// [`ViewportCursor::cursor`] instead and drop this parameter.
+#[derive(SystemParam)]
+pub(crate) struct UiCursorPos<'w, 's> {
+    windows: Query<'w, 's, &'static Window>,
+    ui_scale: Res<'w, UiScale>,
+}
+
+impl UiCursorPos<'_, '_> {
+    /// Ui-logical cursor position, or `None` if the cursor is outside
+    /// the window / there's no primary window.
+    pub fn get(&self) -> Option<Vec2> {
+        let window = self.windows.single().ok()?;
+        let raw = window.cursor_position()?;
+        Some(raw / self.ui_scale.0)
     }
 }
 
@@ -472,7 +503,7 @@ fn handle_viewport_drop(
     event: On<Pointer<DragDrop>>,
     file_items: Query<&FileBrowserItem>,
     parents: Query<&ChildOf>,
-    windows: Query<&Window>,
+    cursor: UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     active: Res<ActiveViewport>,
@@ -495,10 +526,7 @@ fn handle_viewport_drop(
     }
 
     // Drop targets the viewport currently under the cursor (multi-viewport).
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = cursor.get() else {
         return;
     };
     let Some(camera_entity) = active.camera else {
