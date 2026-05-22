@@ -57,7 +57,7 @@ pub(crate) fn toggle_command_palette(
     let operators = match world.run_system_cached(get_operators) {
         Ok(ops) => ops,
         Err(e) => {
-            error!("Couldn't get the avilable operators: {e}");
+            error!("Couldn't get the available operators: {e}");
             return OperatorResult::Finished;
         }
     };
