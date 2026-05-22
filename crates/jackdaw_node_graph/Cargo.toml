@@ -10,6 +10,7 @@ include = ["src/**/*", "Cargo.toml", "LICENSE*"]
 [dependencies]
 bevy.workspace = true
 bevy_monitors.workspace = true
+bevy_enhanced_input.workspace = true
 jackdaw_widgets.workspace = true
 jackdaw_feathers.workspace = true
 jackdaw_commands.workspace = true

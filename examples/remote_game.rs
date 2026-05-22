@@ -14,6 +14,8 @@ use jackdaw_remote::prelude::*;
 
 fn main() -> AppExit {
     App::new()
+        // log errors instead of panicking
+        .set_error_handler(bevy::ecs::error::error)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Jackdaw Remote Test Game".to_string(),

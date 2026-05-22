@@ -290,6 +290,7 @@ impl<T: Pickable> PickerProps<T> {
                     border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
                     row_gap: px(tokens::SPACING_MD),
                     width: px(600),
+                    max_height: percent(100),
                     ..default()
                 },
                 BorderColor::all(tokens::BORDER_COLOR),
@@ -325,9 +326,12 @@ impl<T: Pickable> PickerProps<T> {
             .entity(ctx.entity)
             .insert((
                 Node {
-                    height: percent(100),
+                    max_height: percent(100),
                     width: percent(100),
-                    align_items: AlignItems::Center,
+                    padding: px(tokens::SPACING_LG)
+                        .all()
+                        // Avoid overlapping menu bar
+                        .with_top(px(tokens::SPACING_LG * 4.0)),
                     justify_content: JustifyContent::Center,
                     ..default()
                 },

@@ -11,6 +11,8 @@ use bevy_rerecast::{Mesh3dBackendPlugin, debug::DetailNavmeshGizmo, prelude::*};
 
 fn main() -> AppExit {
     App::new()
+        // log errors instead of panicking
+        .set_error_handler(bevy::ecs::error::error)
         .add_plugins(DefaultPlugins)
         .add_plugins((RemotePlugin::default(), RemoteHttpPlugin::default()))
         .add_plugins((NavmeshPlugins::default(), Mesh3dBackendPlugin::default()))
