@@ -3551,7 +3551,9 @@ pub(crate) fn brush_extend_face_to_brush(
     let (primary, face_index, targets) =
         if *edit_mode == crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face) {
             // Face mode path: primary is the brush being edited, face is the selected face
-            let primary = brush_selection.entity.filter(|&e| brush_query.contains(e))?;
+            let primary = brush_selection
+                .entity
+                .filter(|&e| brush_query.contains(e))?;
             let &face_index = brush_selection.faces.last()?;
             let targets: Vec<Entity> = selection
                 .entities
