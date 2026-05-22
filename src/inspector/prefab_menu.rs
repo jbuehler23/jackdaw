@@ -40,6 +40,12 @@ pub const APPLY_FIELD_TO_SOURCE: &str = "inspector.prefab.apply_field_to_source"
 /// time, so a single-slot resource is enough.
 #[derive(Resource, Default)]
 pub(crate) struct PrefabMenuTarget {
+    /// ECS entity the row belongs to. Used to dispatch prefab operators
+    /// that resolve their AST keys post-snapshot-install.
+    pub(crate) entity: Option<Entity>,
+    /// ECS entity of the prefab instance root the row's entity sits
+    /// inside. Used for the same reason as `entity`.
+    pub(crate) instance_entity: Option<Entity>,
     pub(crate) entity_key: Option<usize>,
     pub(crate) instance_root: Option<usize>,
     pub(crate) prefab_entity_id: Option<u32>,
@@ -61,7 +67,8 @@ fn on_prefab_menu_action(
 ) {
     match event.action.as_str() {
         REVERT_COMPONENT => {
-            let (Some(entity_key), Some(type_path)) = (target.entity_key, target.type_path.clone())
+            let (Some(entity), Some(entity_key), Some(type_path)) =
+                (target.entity, target.entity_key, target.type_path.clone())
             else {
                 return;
             };
@@ -71,13 +78,13 @@ fn on_prefab_menu_action(
                     creates_history_entry: true,
                     ..default()
                 })
-                .param("entity_key", entity_key as i64)
+                .param("entity", entity)
                 .param("type_path", type_path)
                 .call();
             commands.queue(move |world: &mut World| rebuild_inspectors_for_key(world, entity_key));
         }
         APPLY_TO_SOURCE => {
-            let Some(instance_root) = target.instance_root else {
+            let Some(instance_entity) = target.instance_entity else {
                 return;
             };
             let Some(prefab_entity_id) = target.prefab_entity_id else {
@@ -92,7 +99,7 @@ fn on_prefab_menu_action(
             commands.queue(move |world: &mut World| {
                 apply_component_to_source(
                     world,
-                    instance_root,
+                    instance_entity,
                     entity_key,
                     prefab_entity_id,
                     &type_path,
@@ -113,6 +120,9 @@ fn on_prefab_menu_action(
             });
         }
         REVERT_FIELD => {
+            let Some(entity) = target.entity else {
+                return;
+            };
             let Some(entity_key) = target.entity_key else {
                 return;
             };
@@ -128,14 +138,14 @@ fn on_prefab_menu_action(
                     creates_history_entry: true,
                     ..default()
                 })
-                .param("entity_key", entity_key as i64)
+                .param("entity", entity)
                 .param("type_path", type_path)
                 .param("field_path", field_path)
                 .call();
             commands.queue(move |world: &mut World| rebuild_inspectors_for_key(world, entity_key));
         }
         APPLY_FIELD_TO_SOURCE => {
-            let Some(instance_root) = target.instance_root else {
+            let Some(instance_entity) = target.instance_entity else {
                 return;
             };
             let Some(prefab_entity_id) = target.prefab_entity_id else {
@@ -172,7 +182,7 @@ fn on_prefab_menu_action(
                         creates_history_entry: true,
                         ..default()
                     })
-                    .param("instance_root", instance_root as i64)
+                    .param("instance_entity", instance_entity)
                     .param("entity_id", prefab_entity_id as i64)
                     .param("type_path", type_path.clone())
                     .param("field_path", field_path.clone())
@@ -201,7 +211,7 @@ fn on_prefab_menu_action(
 /// so the operator framework owns history / telemetry.
 fn apply_component_to_source(
     world: &mut World,
-    instance_root: usize,
+    instance_entity: Entity,
     entity_key: usize,
     prefab_entity_id: u32,
     type_path: &str,
@@ -226,7 +236,7 @@ fn apply_component_to_source(
         };
         let _ = world
             .operator("prefab.apply_to_source")
-            .param("instance_root", instance_root as i64)
+            .param("instance_entity", instance_entity)
             .param("entity_id", prefab_entity_id as i64)
             .param("type_path", type_path.to_string())
             .param("field_path", field_path)

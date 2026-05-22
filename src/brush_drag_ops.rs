@@ -21,8 +21,7 @@ use crate::brush::{
     BrushDragState, BrushEditMode, BrushFaceEntity, BrushMeshCache, BrushSelection, EdgeDragState,
     EditMode, VertexDragState, rebuild_brush_from_vertices,
 };
-use crate::commands::CommandHistory;
-use crate::draw_brush::{CreateBrushCommand, DrawBrushState, brush_data_from_entity};
+use crate::draw_brush::DrawBrushState;
 use crate::keybind_focus::KeybindFocus;
 use crate::modal_transform::ModalTransformState;
 use crate::selection::{Selected, Selection};
@@ -680,13 +679,12 @@ fn spawn_extruded_brush(
         let mut selection = world.resource_mut::<Selection>();
         selection.entities = vec![entity];
         world.entity_mut(entity).insert(Selected);
-
-        let cmd = CreateBrushCommand {
-            data: brush_data_from_entity(world, entity),
-        };
-        world
-            .resource_mut::<CommandHistory>()
-            .push_executed(Box::new(cmd));
+        // The enclosing `brush.face.drag` modal operator has
+        // `allows_undo = true`; the framework's snapshot captures the
+        // brush spawn as part of the modal's SnapshotDiff. Pushing a
+        // manual `CreateBrushCommand` here would create a second undo
+        // entry for the same logical operation, forcing the user to
+        // Ctrl+Z twice to undo one Extend gesture.
     });
 }
 

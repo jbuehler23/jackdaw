@@ -1639,7 +1639,7 @@ pub fn prefab_spawn_instance(
     description = "Restore one field on a prefab-instance entity to its inherited prefab value.",
     allows_undo = true,
     params(
-        entity_key(i64, doc = "AST key of the instance entity."),
+        entity(Entity, doc = "ECS entity of the instance entity."),
         type_path(String, doc = "Fully-qualified component type path."),
         field_path(String, doc = "Dotted field path within the component."),
     )
@@ -1648,8 +1648,8 @@ pub fn prefab_revert_field(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity_key) = params.as_int("entity_key") else {
-        warn!("prefab.revert_field: missing `entity_key` param");
+    let Some(entity) = params.as_entity("entity") else {
+        warn!("prefab.revert_field: missing `entity` param");
         return OperatorResult::Cancelled;
     };
     let Some(type_path) = params.as_str("type_path").map(str::to_string) else {
@@ -1661,7 +1661,15 @@ pub fn prefab_revert_field(
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        revert_field(world, entity_key as usize, &type_path, &field_path);
+        // Resolve the AST key INSIDE the operator. The framework's
+        // before-snapshot capture rebuilds the live AST which reshuffles
+        // node indices, so a pre-resolved key would be stale.
+        let key = world.resource::<SceneJsnAst>().key_for_entity(entity);
+        let Some(key) = key else {
+            warn!("prefab.revert_field: entity {entity:?} is not in the live AST");
+            return;
+        };
+        revert_field(world, key, &type_path, &field_path);
     });
     OperatorResult::Finished
 }
@@ -1674,7 +1682,7 @@ pub fn prefab_revert_field(
     description = "Restore the component on a prefab-instance entity to its inherited prefab value.",
     allows_undo = true,
     params(
-        entity_key(i64, doc = "AST key of the instance entity."),
+        entity(Entity, doc = "ECS entity of the instance entity."),
         type_path(String, doc = "Fully-qualified component type path."),
     )
 )]
@@ -1682,8 +1690,8 @@ pub fn prefab_revert_component(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity_key) = params.as_int("entity_key") else {
-        warn!("prefab.revert_component: missing `entity_key` param");
+    let Some(entity) = params.as_entity("entity") else {
+        warn!("prefab.revert_component: missing `entity` param");
         return OperatorResult::Cancelled;
     };
     let Some(type_path) = params.as_str("type_path").map(str::to_string) else {
@@ -1691,7 +1699,14 @@ pub fn prefab_revert_component(
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        revert_component(world, entity_key as usize, &type_path);
+        // Resolve the AST key INSIDE the operator (see prefab.revert_field
+        // for the rationale).
+        let key = world.resource::<SceneJsnAst>().key_for_entity(entity);
+        let Some(key) = key else {
+            warn!("prefab.revert_component: entity {entity:?} is not in the live AST");
+            return;
+        };
+        revert_component(world, key, &type_path);
     });
     OperatorResult::Finished
 }
@@ -1702,15 +1717,24 @@ pub fn prefab_revert_component(
     label = "Revert All Overrides",
     description = "Remove every per-instance override on a prefab-instance subtree.",
     allows_undo = true,
-    params(instance_root(i64, doc = "AST key of the instance root."),)
+    params(instance_entity(Entity, doc = "ECS entity of the instance root."),)
 )]
 pub fn prefab_revert_all(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    let Some(instance_root) = params.as_int("instance_root") else {
-        warn!("prefab.revert_all: missing `instance_root` param");
+    let Some(instance_entity) = params.as_entity("instance_entity") else {
+        warn!("prefab.revert_all: missing `instance_entity` param");
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        revert_all(world, instance_root as usize);
+        // Resolve the AST key INSIDE the operator (see prefab.revert_field
+        // for the rationale).
+        let key = world
+            .resource::<SceneJsnAst>()
+            .key_for_entity(instance_entity);
+        let Some(key) = key else {
+            warn!("prefab.revert_all: entity {instance_entity:?} is not in the live AST");
+            return;
+        };
+        revert_all(world, key);
     });
     OperatorResult::Finished
 }
@@ -1724,7 +1748,7 @@ pub fn prefab_revert_all(params: In<OperatorParameters>, mut commands: Commands)
     description = "Push one overridden field into the prefab source so every instance picks it up.",
     allows_undo = true,
     params(
-        instance_root(i64, doc = "AST key of the prefab-instance root."),
+        instance_entity(Entity, doc = "ECS entity of the prefab-instance root."),
         entity_id(i64, doc = "PrefabEntityId of the target entity inside the prefab."),
         type_path(String, doc = "Fully-qualified component type path."),
         field_path(String, doc = "Dotted field path within the component."),
@@ -1735,8 +1759,8 @@ pub fn prefab_apply_to_source(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(instance_root) = params.as_int("instance_root") else {
-        warn!("prefab.apply_to_source: missing `instance_root` param");
+    let Some(instance_entity) = params.as_entity("instance_entity") else {
+        warn!("prefab.apply_to_source: missing `instance_entity` param");
         return OperatorResult::Cancelled;
     };
     let Some(entity_id) = params.as_int("entity_id") else {
@@ -1763,9 +1787,18 @@ pub fn prefab_apply_to_source(
         }
     };
     commands.queue(move |world: &mut World| {
+        // Resolve the AST key INSIDE the operator (see prefab.revert_field
+        // for the rationale).
+        let instance_root = world
+            .resource::<SceneJsnAst>()
+            .key_for_entity(instance_entity);
+        let Some(instance_root) = instance_root else {
+            warn!("prefab.apply_to_source: entity {instance_entity:?} is not in the live AST");
+            return;
+        };
         apply_to_prefab_source(
             world,
-            instance_root as usize,
+            instance_root,
             entity_id as u32,
             &type_path,
             &field_path,
@@ -1867,24 +1900,41 @@ pub fn prefab_save_as_variant_entity(
     description = "Detach an inherited prefab child and re-parent it under another scene entity.",
     allows_undo = true,
     params(
-        child_key(i64, doc = "AST key of the inherited child."),
-        drop_target_key(i64, doc = "AST key of the entity to re-parent under."),
+        child_entity(Entity, doc = "ECS entity of the inherited child."),
+        drop_target_entity(Entity, doc = "ECS entity to re-parent under."),
     )
 )]
 pub fn prefab_unpack_child(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(child_key) = params.as_int("child_key") else {
-        warn!("prefab.unpack_child: missing `child_key` param");
+    let Some(child_entity) = params.as_entity("child_entity") else {
+        warn!("prefab.unpack_child: missing `child_entity` param");
         return OperatorResult::Cancelled;
     };
-    let Some(drop_target_key) = params.as_int("drop_target_key") else {
-        warn!("prefab.unpack_child: missing `drop_target_key` param");
+    let Some(drop_target_entity) = params.as_entity("drop_target_entity") else {
+        warn!("prefab.unpack_child: missing `drop_target_entity` param");
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        unpack_child(world, child_key as usize, drop_target_key as usize);
+        // Resolve both AST keys INSIDE the operator (see prefab.revert_field
+        // for the rationale).
+        let (child_key, drop_target_key) = {
+            let ast = world.resource::<SceneJsnAst>();
+            (
+                ast.key_for_entity(child_entity),
+                ast.key_for_entity(drop_target_entity),
+            )
+        };
+        let Some(child_key) = child_key else {
+            warn!("prefab.unpack_child: entity {child_entity:?} is not in the live AST");
+            return;
+        };
+        let Some(drop_target_key) = drop_target_key else {
+            warn!("prefab.unpack_child: entity {drop_target_entity:?} is not in the live AST");
+            return;
+        };
+        unpack_child(world, child_key, drop_target_key);
     });
     OperatorResult::Finished
 }
@@ -1896,18 +1946,31 @@ pub fn prefab_unpack_child(
     label = "Unbundle Prefab Instance",
     description = "Remove the prefab instance wrapper, leaving its inherited children as standalone entities.",
     allows_undo = true,
-    params(instance_key(i64, doc = "AST key of the instance entity to unbundle."),)
+    params(instance_entity(Entity, doc = "ECS entity of the instance to unbundle."),)
 )]
 pub fn prefab_unbundle_instance(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(instance_key) = params.as_int("instance_key") else {
-        warn!("prefab.unbundle_instance: missing `instance_key` param");
+    let Some(instance_entity) = params.as_entity("instance_entity") else {
+        warn!("prefab.unbundle_instance: missing `instance_entity` param");
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        unbundle_instance(world, instance_key as usize);
+        // Resolve the AST key INSIDE the operator. Dispatching with a
+        // pre-resolved key is unsafe: the framework's before-snapshot
+        // capture rebuilds the live AST (prefabify_inherited_descendants
+        // reshuffles node indices), so a key fetched before the operator
+        // started can point at a different node by the time we read it.
+        // Looking it up here uses the post-install live AST.
+        let key = world
+            .resource::<SceneJsnAst>()
+            .key_for_entity(instance_entity);
+        let Some(key) = key else {
+            warn!("prefab.unbundle_instance: entity {instance_entity:?} is not in the live AST");
+            return;
+        };
+        unbundle_instance(world, key);
     });
     OperatorResult::Finished
 }

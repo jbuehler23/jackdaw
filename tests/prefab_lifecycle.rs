@@ -1502,6 +1502,12 @@ fn revert_component_operator_runs_through_dispatch() {
             .next()
             .expect("instance key")
     };
+    let instance_entity = {
+        let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
+        ast.nodes[instance_key]
+            .ecs_entity
+            .expect("instance ECS entity")
+    };
     {
         let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
         ast.insert_component(
@@ -1515,7 +1521,7 @@ fn revert_component_operator_runs_through_dispatch() {
     let _ = app
         .world_mut()
         .operator("prefab.revert_component")
-        .param("entity_key", instance_key as i64)
+        .param("entity", instance_entity)
         .param("type_path", "bevy_ecs::name::Name".to_string())
         .call()
         .expect("operator dispatch resolves");
@@ -3320,5 +3326,620 @@ fn save_3_brushes_survives_snapshot_capture_and_install() {
     assert_eq!(
         top_level_brushes, 0,
         "zero top-level brushes after snapshot+respawn; got {top_level_brushes}"
+    );
+}
+
+#[test]
+fn spawn_instance_undo_via_framework_snapshot_round_trip_removes_instance() {
+    // Reproduce the "drag prefab in, undo, instance still there" bug by
+    // simulating the operator framework's snapshot path:
+    //   1) capture before-snapshot via the snapshotter
+    //   2) run spawn_instance
+    //   3) capture after-snapshot
+    //   4) apply before-snapshot (what SnapshotDiff::undo does)
+    //   5) assert no instance entities remain
+    use bevy::math::Vec3;
+    use bevy::prelude::Mut;
+    use jackdaw_api_internal::snapshot::ActiveSnapshotter;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+    let prefab_json = serde_json::json!({
+        "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
+        "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
+        "assets": {},
+        "editor": null,
+        "scene": [
+            {
+                "components": {
+                    "jackdaw::prefab::components::Prefab": null,
+                    "jackdaw::prefab::components::PrefabEntityId": 0,
+                    "bevy_ecs::name::Name": "p",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [0.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            },
+            {
+                "parent": 0,
+                "components": {
+                    "jackdaw::prefab::components::PrefabEntityId": 1,
+                    "bevy_ecs::name::Name": "child",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [0.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            }
+        ]
+    });
+    std::fs::write(
+        &prefab_path,
+        serde_json::to_string_pretty(&prefab_json).unwrap(),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    // The JsnAstSnapshotter captures editor state alongside the AST;
+    // initialize the resources it reads so its capture/apply don't panic.
+    app.init_resource::<jackdaw::brush::EditMode>();
+    app.init_resource::<jackdaw::gizmos::GizmoMode>();
+    app.init_resource::<jackdaw::gizmos::GizmoSpace>();
+    app.init_resource::<jackdaw::snapping::SnapSettings>();
+    app.init_resource::<jackdaw::view_modes::ViewModeSettings>();
+    app.init_resource::<jackdaw::viewport_overlays::OverlaySettings>();
+    app.init_resource::<jackdaw_avian_integration::PhysicsOverlayConfig>();
+    app.init_resource::<jackdaw::viewport_select::GroupEditState>();
+
+    app.world_mut().insert_resource(ActiveSnapshotter(Box::new(
+        jackdaw::undo_snapshot::JsnAstSnapshotter,
+    )));
+
+    let before = app
+        .world_mut()
+        .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));
+
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(7.0, 0.0, 0.0),
+    );
+    {
+        let world = app.world_mut();
+        let mut q = world.query::<&jackdaw::prefab::IsA>();
+        assert_eq!(q.iter(world).count(), 1, "instance present after spawn");
+    }
+
+    let after = app
+        .world_mut()
+        .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));
+    assert!(
+        !before.equals(&*after),
+        "before and after snapshots should differ"
+    );
+
+    before.apply(app.world_mut());
+
+    let world = app.world_mut();
+    let mut q = world.query::<&jackdaw::prefab::IsA>();
+    let count = q.iter(world).count();
+    assert_eq!(
+        count, 0,
+        "undo (snapshot apply) removed the instance; {count} still present"
+    );
+}
+
+#[test]
+fn reload_all_instances_preserves_command_history() {
+    // Regression for the "drag prefab in, undo doesn't remove it"
+    // bug. `reload_all_instances` used to call `clear_scene_entities`,
+    // which truncates the undo stack. That ran on the next frame
+    // after spawn_instance (cache-driven driver), wiping the
+    // SnapshotDiff the operator framework had just pushed.
+    use bevy::math::Vec3;
+    use jackdaw_commands::{CommandHistory, EditorCommand};
+
+    struct NoopCommand;
+    impl EditorCommand for NoopCommand {
+        fn execute(&mut self, _world: &mut bevy::prelude::World) {}
+        fn undo(&mut self, _world: &mut bevy::prelude::World) {}
+        fn description(&self) -> &str {
+            "noop"
+        }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+    let prefab_json = serde_json::json!({
+        "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
+        "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
+        "assets": {},
+        "editor": null,
+        "scene": [{
+            "components": {
+                "jackdaw::prefab::components::Prefab": null,
+                "jackdaw::prefab::components::PrefabEntityId": 0,
+                "bevy_ecs::name::Name": "p",
+                "bevy_transform::components::transform::Transform": {
+                    "translation": [0.0, 0.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "scale": [1.0, 1.0, 1.0]
+                },
+                "bevy_camera::visibility::Visibility": "Inherited"
+            }
+        }]
+    });
+    std::fs::write(
+        &prefab_path,
+        serde_json::to_string_pretty(&prefab_json).unwrap(),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+
+    // Push a canary command before any prefab work.
+    app.world_mut()
+        .resource_mut::<CommandHistory>()
+        .push_executed(Box::new(NoopCommand));
+    let before = app.world().resource::<CommandHistory>().undo_stack.len();
+    assert_eq!(before, 1, "canary present before reload");
+
+    // spawn_instance internally calls reload_all_instances.
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(0.0, 0.0, 0.0),
+    );
+
+    let after = app.world().resource::<CommandHistory>().undo_stack.len();
+    assert_eq!(
+        after, 1,
+        "undo stack preserved across reload_all_instances; got {after}"
+    );
+}
+
+#[test]
+fn unbundle_resolves_key_from_entity_after_snapshot_install() {
+    // The framework's before-snapshot capture during operator dispatch
+    // rewrites the live AST (build_snapshot_ast installs the captured
+    // snapshot, with prefabify_inherited_descendants reshuffling node
+    // indices). A key fetched before the operator runs would therefore
+    // be stale by the time the operator's body reads the live AST.
+    // The fix is to pass the ECS Entity and look the key up inside
+    // the operator. This test exercises that flow.
+    use bevy::math::Vec3;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+    let prefab_json = serde_json::json!({
+        "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
+        "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
+        "assets": {},
+        "editor": null,
+        "scene": [{
+            "components": {
+                "jackdaw::prefab::components::Prefab": null,
+                "jackdaw::prefab::components::PrefabEntityId": 0,
+                "bevy_ecs::name::Name": "p",
+                "bevy_transform::components::transform::Transform": {
+                    "translation": [0.0, 0.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "scale": [1.0, 1.0, 1.0]
+                },
+                "bevy_camera::visibility::Visibility": "Inherited"
+            }
+        }]
+    });
+    std::fs::write(
+        &prefab_path,
+        serde_json::to_string_pretty(&prefab_json).unwrap(),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(0.0, 0.0, 0.0),
+    );
+
+    // Find the instance entity.
+    let instance_entity = {
+        let world = app.world_mut();
+        let mut q = world.query::<(bevy::prelude::Entity, &jackdaw::prefab::IsA)>();
+        q.iter(world)
+            .next()
+            .map(|(e, _)| e)
+            .expect("instance exists after spawn")
+    };
+
+    // Simulate the framework's before-snapshot install (reshuffles the
+    // live AST). After this, the key the dispatch site would have
+    // looked up may no longer point at the instance node.
+    let _ = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+
+    // Now look up the key fresh, using the Entity. This is what the
+    // operator's body does internally. It must resolve to the instance.
+    let key = app
+        .world()
+        .resource::<jackdaw_jsn::SceneJsnAst>()
+        .key_for_entity(instance_entity);
+    let Some(key) = key else {
+        panic!("entity {instance_entity:?} not in post-install AST");
+    };
+    let has_isa = app
+        .world()
+        .resource::<jackdaw_jsn::SceneJsnAst>()
+        .get_component_at(key, "jackdaw::prefab::components::IsA")
+        .is_some();
+    assert!(
+        has_isa,
+        "key resolved from entity post-install points at an IsA node"
+    );
+
+    // And the underlying unbundle works.
+    jackdaw::prefab::operators::unbundle_instance(app.world_mut(), key);
+    let world = app.world_mut();
+    let mut isa_q = world.query::<&jackdaw::prefab::IsA>();
+    assert_eq!(isa_q.iter(world).count(), 0, "instance removed by unbundle");
+}
+
+#[test]
+fn apply_ast_with_override_entries_resolves_inherited_components() {
+    // Snapshots captured via `build_snapshot_ast` reduce inherited
+    // descendants to sparse override entries (just PrefabEntityId).
+    // When such a snapshot is applied (e.g. on undo of unbundle), the
+    // resolver must fill in the prefab baseline so the spawned ECS
+    // entities have their Name / Transform / Brush data, not just an
+    // empty `PrefabEntityId`.
+    use bevy::math::Vec3;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+    let prefab_json = serde_json::json!({
+        "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
+        "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
+        "assets": {},
+        "editor": null,
+        "scene": [
+            {
+                "components": {
+                    "jackdaw::prefab::components::Prefab": null,
+                    "jackdaw::prefab::components::PrefabEntityId": 0,
+                    "bevy_ecs::name::Name": "p",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [0.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            },
+            {
+                "parent": 0,
+                "components": {
+                    "jackdaw::prefab::components::PrefabEntityId": 1,
+                    "bevy_ecs::name::Name": "child",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [5.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            }
+        ]
+    });
+    std::fs::write(
+        &prefab_path,
+        serde_json::to_string_pretty(&prefab_json).unwrap(),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(0.0, 0.0, 0.0),
+    );
+
+    // Capture a snapshot — this prefabifies the inherited brush into
+    // an override entry with just PrefabEntityId.
+    let snapshot_ast = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+
+    // Confirm the snapshot does carry a sparse override (the test
+    // is meaningful only if prefabify ran).
+    let override_node = snapshot_ast.nodes.iter().find(|n| {
+        n.components
+            .contains_key("jackdaw::prefab::components::PrefabEntityId")
+            && !n
+                .components
+                .contains_key("jackdaw::prefab::components::IsA")
+    });
+    assert!(
+        override_node.is_some(),
+        "snapshot contains a sparse override entry for the inherited child"
+    );
+    assert!(
+        !override_node
+            .unwrap()
+            .components
+            .contains_key("bevy_ecs::name::Name"),
+        "sparse override omits the Name (matches prefab baseline)"
+    );
+
+    // Despawn everything, then re-apply the snapshot. This is the
+    // path SnapshotDiff::undo takes.
+    jackdaw::scene_io::apply_ast_to_world(app.world_mut(), &snapshot_ast);
+
+    // Verify the inherited child is back in the world WITH its
+    // inherited Name + Transform (resolved from the prefab cache).
+    let world = app.world_mut();
+    let mut q = world.query::<(
+        &jackdaw::prefab::PrefabEntityId,
+        &bevy::prelude::Name,
+        &bevy::prelude::Transform,
+    )>();
+    let inherited: Vec<_> = q.iter(world).filter(|(id, _, _)| id.0 == 1).collect();
+    assert_eq!(
+        inherited.len(),
+        1,
+        "exactly one inherited descendant for PrefabEntityId(1)"
+    );
+    let (_, name, transform) = inherited[0];
+    assert_eq!(
+        name.as_str(),
+        "child",
+        "inherited Name resolved from prefab; got {name}"
+    );
+    assert!(
+        (transform.translation.x - 5.0).abs() < 1e-4,
+        "inherited Transform.x resolved from prefab (5.0); got {}",
+        transform.translation.x
+    );
+}
+
+#[test]
+fn snapshot_round_trip_redo_brings_back_instance() {
+    // Verify the redo path: capture before, spawn, capture after,
+    // apply before (undo), apply after (redo). Redo must restore the
+    // instance + inherited descendants with full components.
+    use bevy::math::Vec3;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+    let prefab_json = serde_json::json!({
+        "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
+        "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
+        "assets": {},
+        "editor": null,
+        "scene": [
+            {
+                "components": {
+                    "jackdaw::prefab::components::Prefab": null,
+                    "jackdaw::prefab::components::PrefabEntityId": 0,
+                    "bevy_ecs::name::Name": "p",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [0.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            },
+            {
+                "parent": 0,
+                "components": {
+                    "jackdaw::prefab::components::PrefabEntityId": 1,
+                    "bevy_ecs::name::Name": "child",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [7.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            }
+        ]
+    });
+    std::fs::write(
+        &prefab_path,
+        serde_json::to_string_pretty(&prefab_json).unwrap(),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+
+    let before = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(0.0, 0.0, 0.0),
+    );
+
+    let after = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+
+    // Undo
+    jackdaw::scene_io::apply_ast_to_world(app.world_mut(), &before);
+    {
+        let world = app.world_mut();
+        let mut q = world.query::<&jackdaw::prefab::IsA>();
+        assert_eq!(q.iter(world).count(), 0, "instance removed after undo");
+    }
+
+    // Redo
+    jackdaw::scene_io::apply_ast_to_world(app.world_mut(), &after);
+    {
+        let world = app.world_mut();
+        let mut q = world.query::<&jackdaw::prefab::IsA>();
+        assert_eq!(q.iter(world).count(), 1, "instance restored after redo");
+    }
+
+    let world = app.world_mut();
+    let mut q = world.query::<(
+        &jackdaw::prefab::PrefabEntityId,
+        &bevy::prelude::Name,
+        &bevy::prelude::Transform,
+    )>();
+    let inherited: Vec<_> = q.iter(world).filter(|(id, _, _)| id.0 == 1).collect();
+    assert_eq!(inherited.len(), 1, "inherited child restored after redo");
+    let (_, name, transform) = inherited[0];
+    assert_eq!(name.as_str(), "child");
+    assert!((transform.translation.x - 7.0).abs() < 1e-4);
+}
+
+#[test]
+fn typed_command_and_snapshot_diff_interleave_cleanly_on_undo() {
+    // Verify that a typed EditorCommand (manual push_executed) and a
+    // SnapshotDiff (framework-pushed) coexist on the same undo stack
+    // and each Ctrl+Z peels off the right one.
+    use bevy::math::Vec3;
+    use jackdaw_commands::{CommandHistory, EditorCommand};
+
+    struct Counter(std::sync::Arc<std::sync::atomic::AtomicU32>);
+    impl EditorCommand for Counter {
+        fn execute(&mut self, _world: &mut bevy::prelude::World) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn undo(&mut self, _world: &mut bevy::prelude::World) {
+            self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn description(&self) -> &str {
+            "counter"
+        }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+    let prefab_json = serde_json::json!({
+        "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
+        "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
+        "assets": {},
+        "editor": null,
+        "scene": [{
+            "components": {
+                "jackdaw::prefab::components::Prefab": null,
+                "jackdaw::prefab::components::PrefabEntityId": 0,
+                "bevy_ecs::name::Name": "p",
+                "bevy_transform::components::transform::Transform": {
+                    "translation": [0.0, 0.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "scale": [1.0, 1.0, 1.0]
+                },
+                "bevy_camera::visibility::Visibility": "Inherited"
+            }
+        }]
+    });
+    std::fs::write(
+        &prefab_path,
+        serde_json::to_string_pretty(&prefab_json).unwrap(),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+    // Sequence:
+    //   1) Counter to 1 (typed push_executed-only)
+    //   2) Capture before-snapshot
+    //   3) Spawn instance
+    //   4) Capture after-snapshot, push SnapshotDiff
+    // Stack: [Counter, SnapshotDiff]
+    //
+    // Then:
+    //   Ctrl+Z → pop SnapshotDiff → instance removed, counter still 1
+    //   Ctrl+Z → pop Counter → counter back to 0
+
+    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    app.world_mut()
+        .resource_mut::<CommandHistory>()
+        .push_executed(Box::new(Counter(counter.clone())));
+
+    // Initialize editor-state resources the snapshotter expects.
+    app.init_resource::<jackdaw::brush::EditMode>();
+    app.init_resource::<jackdaw::gizmos::GizmoMode>();
+    app.init_resource::<jackdaw::gizmos::GizmoSpace>();
+    app.init_resource::<jackdaw::snapping::SnapSettings>();
+    app.init_resource::<jackdaw::view_modes::ViewModeSettings>();
+    app.init_resource::<jackdaw::viewport_overlays::OverlaySettings>();
+    app.init_resource::<jackdaw_avian_integration::PhysicsOverlayConfig>();
+    app.init_resource::<jackdaw::viewport_select::GroupEditState>();
+    app.world_mut()
+        .insert_resource(jackdaw_api_internal::snapshot::ActiveSnapshotter(Box::new(
+            jackdaw::undo_snapshot::JsnAstSnapshotter,
+        )));
+
+    use bevy::prelude::Mut;
+    use jackdaw_api_internal::snapshot::{ActiveSnapshotter, SceneSnapshot};
+
+    let before: Box<dyn SceneSnapshot> = app
+        .world_mut()
+        .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(0.0, 0.0, 0.0),
+    );
+    let after: Box<dyn SceneSnapshot> = app
+        .world_mut()
+        .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));
+
+    struct SnapshotDiffTest {
+        before: Box<dyn SceneSnapshot>,
+        after: Box<dyn SceneSnapshot>,
+    }
+    impl EditorCommand for SnapshotDiffTest {
+        fn execute(&mut self, world: &mut bevy::prelude::World) {
+            self.after.apply(world);
+        }
+        fn undo(&mut self, world: &mut bevy::prelude::World) {
+            self.before.apply(world);
+        }
+        fn description(&self) -> &str {
+            "snapshot"
+        }
+    }
+    app.world_mut()
+        .resource_mut::<CommandHistory>()
+        .push_executed(Box::new(SnapshotDiffTest { before, after }));
+
+    assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
+    {
+        let world = app.world_mut();
+        let mut q = world.query::<&jackdaw::prefab::IsA>();
+        assert_eq!(q.iter(world).count(), 1, "instance present pre-undo");
+    }
+
+    // First undo: pops SnapshotDiff → instance removed, counter unchanged
+    app.world_mut()
+        .resource_scope(|world, mut history: bevy::prelude::Mut<CommandHistory>| {
+            history.undo(world);
+        });
+    assert_eq!(
+        counter.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "counter unchanged after first undo (typed cmd not yet popped)"
+    );
+    {
+        let world = app.world_mut();
+        let mut q = world.query::<&jackdaw::prefab::IsA>();
+        assert_eq!(q.iter(world).count(), 0, "instance removed by first undo");
+    }
+
+    // Second undo: pops Counter → counter back to 0
+    app.world_mut()
+        .resource_scope(|world, mut history: bevy::prelude::Mut<CommandHistory>| {
+            history.undo(world);
+        });
+    assert_eq!(
+        counter.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "counter reverted by second undo"
     );
 }

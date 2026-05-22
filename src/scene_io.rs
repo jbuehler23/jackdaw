@@ -2183,7 +2183,29 @@ pub fn apply_ast_to_world(world: &mut World, ast: &jackdaw_jsn::SceneJsnAst) {
         error!("apply_ast_to_world: despawn_scene_entities failed: {err}");
     }
 
-    let scene = ast.to_jsn_scene(JsnMetadata::default());
+    // Resolve prefab IsA references before spawning. Snapshots produced
+    // via `build_snapshot_ast` go through `prefabify_inherited_descendants`,
+    // which reduces inherited descendants to sparse override entries
+    // (just `PrefabEntityId`, no Name / Transform / Brush data). The
+    // resolver inherits the missing components from each prefab's
+    // baseline so the spawn produces fully-realized entities. Without
+    // this, an undo that restores a state containing prefab instances
+    // would spawn the children as empty entities (instance shows up in
+    // the outliner but no geometry renders).
+    let resolved_ast = world
+        .get_resource::<crate::prefab::PrefabAstCache>()
+        .map_or_else(
+            || ast.clone(),
+            |cache| {
+                crate::prefab::resolver::resolve_scene(ast, cache).unwrap_or_else(|e| {
+                    bevy::log::warn!(
+                        "apply_ast_to_world: resolver failed: {e}; spawning unresolved"
+                    );
+                    ast.clone()
+                })
+            },
+        );
+    let scene = resolved_ast.to_jsn_scene(JsnMetadata::default());
     let parent_path = world
         .get_resource::<crate::project::ProjectRoot>()
         .map(|p| p.root.clone())
@@ -2191,8 +2213,24 @@ pub fn apply_ast_to_world(world: &mut World, ast: &jackdaw_jsn::SceneJsnAst) {
     let local_assets = load_inline_assets(world, &scene.assets, &parent_path);
     let spawned = load_scene_from_jsn(world, &scene.scene, &parent_path, &local_assets);
 
-    *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() =
-        jackdaw_jsn::SceneJsnAst::from_jsn_scene(&scene, &spawned);
+    // Install the UNRESOLVED ast as live, with the authored nodes
+    // rebound to their freshly-spawned ECS entities. Inherited
+    // descendants spawned by the resolver live ECS-only until edited,
+    // matching reload_all_instances semantics.
+    {
+        let authored_count = ast.nodes.len();
+        let mut new_ast = ast.clone();
+        for (i, node) in new_ast.nodes.iter_mut().enumerate().take(authored_count) {
+            node.ecs_entity = spawned.get(i).copied();
+        }
+        new_ast.ecs_to_jsn = new_ast
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| n.ecs_entity.map(|e| (e, i)))
+            .collect();
+        *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = new_ast;
+    }
 
     // Restore selection by stable id. Update `Selection.entities`
     // BEFORE inserting `Selected` so `add_component_displays` (an

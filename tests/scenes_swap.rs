@@ -892,3 +892,84 @@ fn open_regular_scene_file_sets_tab_kind_scene() {
     let tab = scenes.tabs.last().expect("tab pushed");
     assert!(matches!(tab.kind, jackdaw::scenes::TabKind::Scene));
 }
+
+#[test]
+fn each_tab_has_its_own_undo_stack() {
+    // Pushing history entries in tab A then swapping to tab B must
+    // leave tab B's history empty. Swapping back to A must restore
+    // A's stack.
+    use bevy::prelude::*;
+
+    struct CounterCommand;
+    impl jackdaw::commands::EditorCommand for CounterCommand {
+        fn execute(&mut self, _world: &mut World) {}
+        fn undo(&mut self, _world: &mut World) {}
+        fn description(&self) -> &str {
+            "counter"
+        }
+    }
+
+    let mut app = make_app_with_n_tabs(2);
+
+    // Tab A active. Push two entries.
+    app.world_mut()
+        .resource_mut::<jackdaw::commands::CommandHistory>()
+        .push_executed(Box::new(CounterCommand));
+    app.world_mut()
+        .resource_mut::<jackdaw::commands::CommandHistory>()
+        .push_executed(Box::new(CounterCommand));
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        2,
+        "tab A has 2 entries"
+    );
+
+    // Swap to tab B. Live history should be tab B's (empty).
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        0,
+        "tab B has its own empty undo stack"
+    );
+
+    // Push an entry in tab B.
+    app.world_mut()
+        .resource_mut::<jackdaw::commands::CommandHistory>()
+        .push_executed(Box::new(CounterCommand));
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        1,
+        "tab B has 1 entry"
+    );
+
+    // Swap back to tab A. Its 2-entry stack is restored.
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        2,
+        "tab A's 2-entry stack is restored after swap-back"
+    );
+
+    // And swapping back to B still has its 1 entry.
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        1,
+        "tab B's stack persists across the round-trip"
+    );
+}

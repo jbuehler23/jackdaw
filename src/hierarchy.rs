@@ -885,21 +885,22 @@ fn on_tree_row_dropped(
             let dragged_instance = find_instance_root(world, dragged);
             let target_instance = find_instance_root(world, target);
             if dragged_instance.is_some() && dragged_instance != target_instance {
-                let keys = {
+                // The operator resolves AST keys from these entities
+                // inside its queued closure (after the framework's
+                // before-snapshot install reshuffles indices).
+                let both_in_ast = {
                     let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-                    let child_key = ast.key_for_entity(dragged);
-                    let target_key = ast.key_for_entity(target);
-                    child_key.zip(target_key)
+                    ast.key_for_entity(dragged).is_some() && ast.key_for_entity(target).is_some()
                 };
-                if let Some((child_key, target_key)) = keys {
+                if both_in_ast {
                     let _ = world
                         .operator("prefab.unpack_child")
                         .settings(CallOperatorSettings {
                             creates_history_entry: true,
                             ..default()
                         })
-                        .param("child_key", child_key as i64)
-                        .param("drop_target_key", target_key as i64)
+                        .param("child_entity", dragged)
+                        .param("drop_target_entity", target)
                         .call();
                     let old_parent = world.get::<ChildOf>(dragged).map(|c| c.0);
                     let mut cmd = ReparentEntity {
@@ -1269,18 +1270,23 @@ fn on_context_menu_action(
                 return;
             };
             commands.queue(move |world: &mut World| {
-                let key = {
-                    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-                    ast.key_for_entity(target)
-                };
-                let Some(key) = key else { return };
+                // The operator resolves the AST key from this entity
+                // inside its queued closure (after the framework's
+                // before-snapshot install reshuffles indices).
+                if world
+                    .resource::<jackdaw_jsn::SceneJsnAst>()
+                    .key_for_entity(target)
+                    .is_none()
+                {
+                    return;
+                }
                 let _ = world
                     .operator("prefab.revert_all")
                     .settings(CallOperatorSettings {
                         creates_history_entry: true,
                         ..default()
                     })
-                    .param("instance_root", key as i64)
+                    .param("instance_entity", target)
                     .call();
             });
         }
@@ -1320,18 +1326,13 @@ fn on_context_menu_action(
                 return;
             };
             commands.queue(move |world: &mut World| {
-                let key = {
-                    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-                    ast.key_for_entity(target)
-                };
-                let Some(key) = key else { return };
                 let _ = world
                     .operator("prefab.unbundle_instance")
                     .settings(CallOperatorSettings {
                         creates_history_entry: true,
                         ..default()
                     })
-                    .param("instance_key", key as i64)
+                    .param("instance_entity", target)
                     .call();
             });
         }

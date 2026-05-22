@@ -189,7 +189,25 @@ pub fn reload_all_instances(world: &mut World) {
         }
     };
     let jsn = crate::scene_io::jsn_scene_from_ast(&resolved);
-    crate::scene_io::clear_scene_entities(world);
+    // Inline the despawn + ast/tree/selection clears, but PRESERVE
+    // `CommandHistory`. `clear_scene_entities` truncates the undo
+    // stack (intended for scene-file loads); we don't want that here
+    // because the operator framework relies on pushing a SnapshotDiff
+    // AFTER reload_all_instances finishes, and a fresh push to a
+    // history that just got cleared still works, but any history
+    // accumulated BEFORE the call (e.g. from prior operators or
+    // saved-state) would be lost on every prefab reload.
+    world.resource_mut::<jackdaw_jsn::SceneJsnAst>().clear();
+    world
+        .resource_mut::<crate::selection::Selection>()
+        .entities
+        .clear();
+    if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
+        bevy::log::error!("reload_all_instances: clear_all_tree_rows failed: {err}");
+    }
+    if let Err(err) = crate::scene_io::despawn_scene_entities(world) {
+        bevy::log::error!("reload_all_instances: despawn_scene_entities failed: {err}");
+    }
     let parent = std::path::Path::new(".");
     let local = std::collections::HashMap::new();
     let spawned = crate::scene_io::load_scene_from_jsn(world, &jsn.scene, parent, &local);
@@ -210,21 +228,9 @@ pub fn reload_all_instances(world: &mut World) {
         .collect();
     *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = new_ast;
 
-    // `clear_scene_entities` truncated the command history to 0, so the
-    // dirty-state baselines now reference a stack that no longer exists.
-    // Re-anchor them on the cleared stack: without this, the status bar
-    // and the per-tab dirty dot keep showing unsaved work even though the
-    // user just saved (regression observed when scene.save on a prefab
-    // tab bumps the cache epoch and this driver fires on the next frame).
-    if let Some(mut ds) = world.get_resource_mut::<crate::scene_io::SceneDirtyState>() {
-        ds.undo_len_at_save = 0;
-    }
-    if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
-        let active = scenes.active;
-        if let Some(tab) = scenes.tabs.get_mut(active) {
-            tab.history_depth_at_last_check = 0;
-        }
-    }
+    // History is preserved across the inline despawn above, so the
+    // dirty-state baselines stay valid and the status bar / per-tab
+    // dirty dot keep tracking the correct undo depth.
 
     // Force-rebuild the outliner. The observer-driven row creation can
     // fire from a transient archetype during `insert_reflect` (Add<Transform>

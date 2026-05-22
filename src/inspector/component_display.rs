@@ -51,6 +51,10 @@ use jackdaw_jsn::SceneJsnAst;
 pub(crate) struct PrefabInstanceCtx {
     pub(crate) entity_key: usize,
     pub(crate) instance_root: usize,
+    /// ECS entity for the prefab-instance root. Prefab operators
+    /// resolve their AST keys post-snapshot-install, so dispatch sites
+    /// pass this Entity rather than the (stale) `instance_root` key.
+    pub(crate) instance_entity: Entity,
     pub(crate) prefab_path: std::path::PathBuf,
     pub(crate) prefab_entity_id: u32,
     pub(crate) has_cached_prefab: bool,
@@ -61,6 +65,11 @@ pub(crate) struct PrefabInstanceCtx {
 /// Filled = override; hollow = inherited from prefab.
 #[derive(Component, Clone)]
 pub(crate) struct PrefabFieldOverrideDot {
+    /// ECS entity the row belongs to. The dispatcher passes this through
+    /// to `prefab.revert_field`, which resolves the AST key inside the
+    /// operator (the live AST is rebuilt during the framework's
+    /// before-snapshot capture, so any pre-resolved key is stale).
+    pub(crate) entity: Entity,
     pub(crate) entity_key: usize,
     pub(crate) type_path: String,
     pub(crate) field_path: String,
@@ -247,9 +256,11 @@ pub(crate) fn build_inspector_displays(
         }
         let (path, prefab_entity_id) = crate::prefab::overrides::resolve_inheritance(ast, key)?;
         let instance_root = ast.ancestor_with_component(key, "jackdaw::prefab::components::IsA")?;
+        let instance_entity = ast.nodes.get(instance_root).and_then(|n| n.ecs_entity)?;
         Some(PrefabInstanceCtx {
             entity_key: key,
             instance_root,
+            instance_entity,
             has_cached_prefab: cache.get(&path).is_some(),
             prefab_path: path,
             prefab_entity_id,
@@ -928,12 +939,8 @@ pub(crate) fn spawn_component_display(
         // entity's AST key, so it skips the tooltip wiring.
         if is_overridden {
             let revert_type_path = type_path_owned.clone();
-            let prefab_revert_ctx = if revert_through_prefab {
-                prefab_ctx.clone()
-            } else {
-                None
-            };
-            if let Some(ctx) = prefab_revert_ctx {
+            let revert_through_new_prefab = revert_through_prefab && prefab_ctx.is_some();
+            if revert_through_new_prefab {
                 let prefab_type_path = revert_type_path.clone();
                 commands.spawn((
                     Text::new(String::from(Icon::RotateCcw.unicode())),
@@ -947,7 +954,6 @@ pub(crate) fn spawn_component_display(
                     ChildOf(header),
                     bevy::ui_widgets::observe(
                         move |_: On<Pointer<Click>>, mut commands: Commands| {
-                            let entity_key = ctx.entity_key;
                             let revert_path = prefab_type_path.clone();
                             commands
                                 .operator("prefab.revert_component")
@@ -955,7 +961,7 @@ pub(crate) fn spawn_component_display(
                                     creates_history_entry: true,
                                     ..default()
                                 })
-                                .param("entity_key", entity_key as i64)
+                                .param("entity", entity_param)
                                 .param("type_path", revert_path)
                                 .call();
                             commands.queue(move |world: &mut World| {
@@ -1047,6 +1053,8 @@ pub(crate) fn spawn_component_display(
                 {
                     ec.despawn();
                 }
+                target.entity = Some(entity);
+                target.instance_entity = Some(menu_ctx.instance_entity);
                 target.entity_key = Some(menu_ctx.entity_key);
                 target.instance_root = Some(menu_ctx.instance_root);
                 target.prefab_entity_id = Some(menu_ctx.prefab_entity_id);
@@ -1235,9 +1243,16 @@ pub(crate) fn decorate_prefab_field_rows(
         let inheritance = crate::prefab::overrides::resolve_inheritance(&ast, key);
         let instance_root_key =
             ast.ancestor_with_component(key, "jackdaw::prefab::components::IsA");
-        if let (Some((prefab_path, prefab_entity_id)), Some(instance_root_key)) =
-            (inheritance, instance_root_key)
+        let instance_entity = instance_root_key
+            .and_then(|k| ast.nodes.get(k))
+            .and_then(|n| n.ecs_entity);
+        if let (
+            Some((prefab_path, prefab_entity_id)),
+            Some(instance_root_key),
+            Some(instance_entity),
+        ) = (inheritance, instance_root_key, instance_entity)
         {
+            let row_entity_param = row.source_entity;
             let row_type_path = row.type_path.clone();
             let row_field_path = row.field_path.clone();
             commands.entity(row_entity).observe(
@@ -1259,6 +1274,8 @@ pub(crate) fn decorate_prefab_field_rows(
                     {
                         ec.despawn();
                     }
+                    target.entity = Some(row_entity_param);
+                    target.instance_entity = Some(instance_entity);
                     target.entity_key = Some(key);
                     target.instance_root = Some(instance_root_key);
                     target.prefab_entity_id = Some(prefab_entity_id);
@@ -1301,6 +1318,7 @@ pub(crate) fn decorate_prefab_field_rows(
         let dot = commands
             .spawn((
                 PrefabFieldOverrideDot {
+                    entity: row.source_entity,
                     entity_key: key,
                     type_path: row.type_path.clone(),
                     field_path: row.field_path.clone(),
@@ -1325,7 +1343,7 @@ pub(crate) fn decorate_prefab_field_rows(
                 let Ok(dot_data) = dots.get(click.event_target()) else {
                     return;
                 };
-                let entity_key = dot_data.entity_key;
+                let entity = dot_data.entity;
                 let type_path = dot_data.type_path.clone();
                 let field_path = dot_data.field_path.clone();
                 // `revert_field` is a no-op when the current value
@@ -1340,16 +1358,12 @@ pub(crate) fn decorate_prefab_field_rows(
                         creates_history_entry: true,
                         ..default()
                     })
-                    .param("entity_key", entity_key as i64)
+                    .param("entity", entity)
                     .param("type_path", type_path)
                     .param("field_path", field_path)
                     .call();
                 commands.queue(move |world: &mut World| {
-                    let ast = world.resource::<SceneJsnAst>();
-                    let source = ast.nodes.get(entity_key).and_then(|n| n.ecs_entity);
-                    if let Some(entity) = source
-                        && let Ok(mut ec) = world.get_entity_mut(entity)
-                    {
+                    if let Ok(mut ec) = world.get_entity_mut(entity) {
                         ec.insert(InspectorDirty);
                     }
                 });
