@@ -2183,22 +2183,12 @@ fn on_cancel_new_project(_: On<Pointer<Click>>, mut commands: Commands) {
     commands.queue(|world: &mut World| {
         let mut state = world.resource_mut::<NewProjectState>();
         if let Some(handle) = state.scaffold.handle() {
-            // Cooperative cancel: flip the flag the worker polls and
-            // keep the modal open showing "Cancelling…". The poller's
-            // Err(Cancelled) arm will switch the status to
-            // "Cancelled." once the worker unwinds (the worker kills
-            // the child + drainer threads join + final Err returns),
-            // leaving the user free to tweak inputs and retry.
             handle.cancel.store(true, Ordering::Release);
             if let ScaffoldState::Running(h) = std::mem::take(&mut state.scaffold) {
                 state.scaffold = ScaffoldState::Cancelling(h);
             }
             state.status = Some("Cancelling…".into());
         } else if let Some(cancel) = state.build_cancel.as_ref() {
-            // Build-time cancel: the cargo poller in
-            // `run_cargo_with_progress` checks this flag every 50ms
-            // and kills the child. The build-task completion handler
-            // then sees `BuildError::Cancelled` and tears down state.
             cancel.store(true, Ordering::Release);
             state.status = Some("Cancelling build…".into());
         } else {
