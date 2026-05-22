@@ -180,10 +180,7 @@ pub(crate) fn handle_viewport_click(
         return;
     }
 
-    let Ok(window) = vp.windows.single() else {
-        return;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = vp.cursor() else {
         return;
     };
 
@@ -192,22 +189,14 @@ pub(crate) fn handle_viewport_click(
     let Some((vp_computed, vp_tf)) = vp.viewport() else {
         return;
     };
-    let scale = vp_computed.inverse_scale_factor();
-    let vp_pos = vp_tf.translation * scale;
-    let vp_size = vp_computed.size() * scale;
-    let vp_top_left = vp_pos - vp_size / 2.0;
-    let local_cursor = cursor_pos - vp_top_left;
-
-    // Clear input focus so keyboard shortcuts (G/R/S) work after viewport click
-    input_focus.0 = None;
-
     let Some((camera, cam_tf)) = vp.camera() else {
         return;
     };
+    let map = crate::viewport_util::ViewportRemap::new(camera, vp_computed, vp_tf);
+    let local_cursor = (cursor_pos - map.top_left) * map.remap;
 
-    // Remap from UI-logical space to camera render-target space
-    let target_size = camera.logical_viewport_size().unwrap_or(vp_size);
-    let local_cursor = local_cursor * target_size / vp_size;
+    // Clear input focus so keyboard shortcuts (G/R/S) work after viewport click
+    input_focus.0 = None;
 
     // Try mesh raycast first for accurate geometry-based selection
     let mut best_entity = None;
@@ -357,10 +346,7 @@ fn box_select_pending_trigger(
     {
         return;
     }
-    let Ok(window) = vp.windows.single() else {
-        return;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = vp.cursor() else {
         return;
     };
 
@@ -429,10 +415,7 @@ fn box_select_promote_pending(
         box_state.pending = None;
         return;
     }
-    let Ok(window) = vp.windows.single() else {
-        return;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = vp.cursor() else {
         return;
     };
     if cursor_dragged_past_threshold(start, cursor_pos) {
@@ -461,8 +444,7 @@ pub fn box_select(
     mut commands: Commands,
     active: ActiveModalQuery,
 ) -> OperatorResult {
-    let window = vp.windows.single()?;
-    let cursor_pos = window.cursor_position()?;
+    let cursor_pos = vp.cursor()?;
 
     if !active.is_modal_running() {
         // Honour the press-down position recorded by

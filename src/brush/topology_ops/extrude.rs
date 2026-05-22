@@ -13,7 +13,6 @@
 
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
-use bevy::window::PrimaryWindow;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
@@ -244,16 +243,15 @@ pub(crate) fn brush_extrude(
     mut modal_state: ResMut<ExtrudeModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
+    cursor: crate::viewport::UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
 ) -> OperatorResult {
-    // Raw window-space cursor; dragging outside the viewport panel should not
+    // Ui-logical cursor; dragging outside the viewport panel should not
     // cancel the modal (matches inset / loop_cut behavior).
-    let window = primary_window.single()?;
-    let cursor_pos = window.cursor_position()?;
+    let cursor_pos = cursor.get()?;
 
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {

@@ -138,7 +138,7 @@ pub(crate) fn handle_gizmo_hover(
     selection: Res<Selection>,
     transforms: Query<&GlobalTransform, With<Selected>>,
     camera_query: Query<(&Camera, &GlobalTransform, &Projection), With<MainViewportCamera>>,
-    windows: Query<&Window>,
+    cursor: crate::viewport::UiCursorPos,
     mode: Res<GizmoMode>,
     space: Res<GizmoSpace>,
     mut hover: ResMut<GizmoHoverState>,
@@ -177,11 +177,8 @@ pub(crate) fn handle_gizmo_hover(
     let Ok((camera, cam_tf, projection)) = camera_query.get(camera_entity) else {
         return;
     };
-    let Ok(window) = windows.single() else {
-        return;
-    };
 
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = cursor.get() else {
         return;
     };
 
@@ -293,7 +290,6 @@ pub fn gizmo_drag(
     selection: Res<Selection>,
     mut transforms: Query<(&GlobalTransform, &mut Transform), With<Selected>>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    windows: Query<&Window>,
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -305,10 +301,10 @@ pub fn gizmo_drag(
     mut history: ResMut<CommandHistory>,
     snap_settings: Res<SnapSettings>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    cursor: crate::viewport::UiCursorPos,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
 ) -> OperatorResult {
-    let window = windows.single()?;
-    let cursor_pos = window.cursor_position()?;
+    let cursor_pos = cursor.get()?;
     // First-frame: pick the active (hovered) viewport. Subsequent
     // frames: use the captured one so the drag stays attached even
     // if the cursor strays into a different viewport.

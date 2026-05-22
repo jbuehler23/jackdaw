@@ -30,7 +30,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ViewSetAxisOp>()
         .register_operator::<ViewTogglePerspOrthoOp>()
         .register_operator::<ViewFrameSelectedOp>()
-        .register_operator::<ViewFrameAllOp>();
+        .register_operator::<ViewFrameAllOp>()
+        .register_operator::<ViewUiZoomInOp>()
+        .register_operator::<ViewUiZoomOutOp>()
+        .register_operator::<ViewUiZoomResetOp>();
 
     let ext = ctx.id();
     ctx.entity_mut().world_scope(|world| {
@@ -56,6 +59,42 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
             Action::<ViewFrameAllOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
             bindings![(KeyCode::Home, Press::default())],
+        ));
+        world.spawn((
+            Action::<ViewUiZoomInOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            bindings![
+                (
+                    KeyCode::Equal.with_mod_keys(ModKeys::CONTROL),
+                    Press::default(),
+                ),
+                (
+                    KeyCode::NumpadAdd.with_mod_keys(ModKeys::CONTROL),
+                    Press::default(),
+                ),
+            ],
+        ));
+        world.spawn((
+            Action::<ViewUiZoomOutOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            bindings![
+                (
+                    KeyCode::Minus.with_mod_keys(ModKeys::CONTROL),
+                    Press::default(),
+                ),
+                (
+                    KeyCode::NumpadSubtract.with_mod_keys(ModKeys::CONTROL),
+                    Press::default(),
+                ),
+            ],
+        ));
+        world.spawn((
+            Action::<ViewUiZoomResetOp>::new(),
+            ActionOf::<CoreExtensionInputContext>::new(ext),
+            bindings![(
+                KeyCode::Digit0.with_mod_keys(ModKeys::CONTROL),
+                Press::default(),
+            )],
         ));
     });
 }
@@ -145,6 +184,53 @@ pub(crate) fn view_toggle_hierarchy_arrows(
     mut config: ResMut<jackdaw_avian_integration::PhysicsOverlayConfig>,
 ) -> OperatorResult {
     config.show_hierarchy_arrows = !config.show_hierarchy_arrows;
+    OperatorResult::Finished
+}
+
+const UI_SCALE_MIN: f32 = 0.5;
+const UI_SCALE_MAX: f32 = 3.0;
+const UI_SCALE_STEP: f32 = 1.1;
+const UI_SCALE_DEFAULT: f32 = 1.0;
+
+#[operator(
+    id = "view.ui_zoom_in",
+    label = "Zoom UI In",
+    description = "Make the editor UI larger.",
+    allows_undo = false
+)]
+pub(crate) fn view_ui_zoom_in(
+    _: In<OperatorParameters>,
+    mut ui_scale: ResMut<bevy::ui::UiScale>,
+) -> OperatorResult {
+    ui_scale.0 = (ui_scale.0 * UI_SCALE_STEP).min(UI_SCALE_MAX);
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "view.ui_zoom_out",
+    label = "Zoom UI Out",
+    description = "Make the editor UI smaller.",
+    allows_undo = false
+)]
+pub(crate) fn view_ui_zoom_out(
+    _: In<OperatorParameters>,
+    mut ui_scale: ResMut<bevy::ui::UiScale>,
+) -> OperatorResult {
+    ui_scale.0 = (ui_scale.0 / UI_SCALE_STEP).max(UI_SCALE_MIN);
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "view.ui_zoom_reset",
+    label = "Reset UI Zoom",
+    description = "Restore the editor UI to its default size.",
+    allows_undo = false
+)]
+pub(crate) fn view_ui_zoom_reset(
+    _: In<OperatorParameters>,
+    mut ui_scale: ResMut<bevy::ui::UiScale>,
+) -> OperatorResult {
+    ui_scale.0 = UI_SCALE_DEFAULT;
     OperatorResult::Finished
 }
 
