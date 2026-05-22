@@ -200,12 +200,8 @@ pub fn terrain_sculpt(
     let TerrainEditMode::Sculpt(tool) = *edit_mode else {
         return OperatorResult::Cancelled;
     };
-    let Some(target) = sculpt_state.target else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok((mut terrain, mut dirty)) = terrain_query.get_mut(target) else {
-        return OperatorResult::Cancelled;
-    };
+    let target = sculpt_state.target?;
+    let (mut terrain, mut dirty) = terrain_query.get_mut(target)?;
 
     if modal.is_none() {
         sculpt_state.active = true;

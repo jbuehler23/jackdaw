@@ -1758,12 +1758,8 @@ pub(crate) fn material_browse_texture_slot(
     mut pending: ResMut<PendingTextureSlot>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(slot) = pending.slot.take() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(material_handle) = pending.material_handle.take() else {
-        return OperatorResult::Cancelled;
-    };
+    let slot = pending.slot.take()?;
+    let material_handle = pending.material_handle.take()?;
     commands.trigger(BrowseTextureSlot {
         slot,
         material_handle,
@@ -1787,12 +1783,8 @@ pub(crate) fn material_clear_texture_slot(
     mut pending: ResMut<PendingTextureSlot>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(slot) = pending.slot.take() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(material_handle) = pending.material_handle.take() else {
-        return OperatorResult::Cancelled;
-    };
+    let slot = pending.slot.take()?;
+    let material_handle = pending.material_handle.take()?;
     commands.trigger(ClearTextureSlot {
         slot,
         material_handle,

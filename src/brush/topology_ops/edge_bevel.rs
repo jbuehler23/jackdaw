@@ -91,31 +91,21 @@ pub(crate) fn brush_edge_bevel(
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
 ) -> OperatorResult {
-    let Ok(window) = primary_window.single() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return OperatorResult::Cancelled;
-    };
+    let window = primary_window.single()?;
+    let cursor_pos = window.cursor_position()?;
 
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
             return OperatorResult::Cancelled;
         }
-        let Some(brush_entity) = selection.entity else {
-            return OperatorResult::Cancelled;
-        };
+        let brush_entity = selection.entity?;
         if selection.edges.is_empty() {
             return OperatorResult::Cancelled;
         }
 
-        let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-            return OperatorResult::Cancelled;
-        };
-        let Ok(halfedge) = halfedge_q.get(brush_entity) else {
-            return OperatorResult::Cancelled;
-        };
+        let brush_before = brushes.get(brush_entity).cloned()?;
+        let halfedge = halfedge_q.get(brush_entity)?;
 
         // Resolve HalfedgeMesh EdgeKeys for every selected cache edge pair.
         let mut edge_keys: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());

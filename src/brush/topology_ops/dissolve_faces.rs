@@ -28,22 +28,16 @@ pub(crate) fn brush_dissolve_faces(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return OperatorResult::Cancelled;
     }
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
     if selection.faces.is_empty() {
         return OperatorResult::Cancelled;
     }
 
     // Snapshot before mutation for undo.
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_before = brushes.get(brush_entity).cloned()?;
 
     // Map cache face indices to HalfedgeMesh FaceKeys via face_keys parallel array.
-    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
     let mut mesh_faces: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());
     for &face_idx in &selection.faces {
         if let Some(&fk) = halfedge.face_keys.get(face_idx) {
@@ -55,9 +49,7 @@ pub(crate) fn brush_dissolve_faces(
     }
 
     // Run dissolve_faces on the selected faces.
-    let Ok(_) = dissolve_faces(&mut halfedge.mesh, &mesh_faces) else {
-        return OperatorResult::Cancelled;
-    };
+    dissolve_faces(&mut halfedge.mesh, &mesh_faces)?;
 
     // Re-cache all face normals.
     let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
@@ -76,9 +68,7 @@ pub(crate) fn brush_dissolve_faces(
 
     // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
     let new_topology = halfedge.mesh.flatten_to_topology();
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     // Dissolve_faces removes faces. Truncate brush.faces if the topology
     // now has fewer faces than before.

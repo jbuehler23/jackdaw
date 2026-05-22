@@ -40,22 +40,16 @@ pub(crate) fn brush_make_edge_face(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
         return OperatorResult::Cancelled;
     }
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
     if selection.vertices.len() < 2 {
         return OperatorResult::Cancelled;
     }
 
     // Snapshot before mutation for undo.
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_before = brushes.get(brush_entity).cloned()?;
 
     // Map cache vertex indices to HalfedgeMesh VertKeys via vert_keys parallel array.
-    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
     let mut vert_keys: Vec<VertKey> = Vec::with_capacity(selection.vertices.len());
     for &vert_idx in &selection.vertices {
         if let Some(&vk) = halfedge.vert_keys.get(vert_idx) {
@@ -121,9 +115,7 @@ pub(crate) fn brush_make_edge_face(
 
     // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
     let new_topology = halfedge.mesh.flatten_to_topology();
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     // Make_edge_face may add new faces. Extend brush.faces with copies of the last
     // existing face data as a default; material_idx from the parent face is
