@@ -87,6 +87,7 @@ pub(crate) fn brush_loop_cut(
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
 ) -> OperatorResult {
     // --- Cursor position ---
+    let (camera, cam_tf) = camera_query.single()?;
     let cursor_pos = cursor.get()?;
 
     // --- First invoke: snapshot and enter modal ---
