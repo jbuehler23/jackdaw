@@ -148,41 +148,18 @@ pub(crate) fn clip_place_point(
     snap_settings: Res<crate::snapping::SnapSettings>,
     mut clip_state: ResMut<ClipState>,
 ) -> OperatorResult {
-    let Some(brush_entity) = brush_selection.entity else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(brush_global) = brush_transforms.get(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(brush) = brushes.get(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(cache) = brush_caches.get(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(window) = primary_window.single() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(camera_entity) = active.camera else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(viewport_entity) = active.ui_node else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok((camera, cam_tf)) = camera_query.get(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(viewport_cursor) =
-        window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, &viewport_query)
-    else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(ray) = camera.viewport_to_world(cam_tf, viewport_cursor) else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = brush_selection.entity?;
+    let brush_global = brush_transforms.get(brush_entity)?;
+    let brush = brushes.get(brush_entity)?;
+    let cache = brush_caches.get(brush_entity)?;
+    let window = primary_window.single()?;
+    let cursor_pos = window.cursor_position()?;
+    let camera_entity = active.camera?;
+    let viewport_entity = active.ui_node?;
+    let (camera, cam_tf) = camera_query.get(camera_entity)?;
+    let viewport_cursor =
+        window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, &viewport_query)?;
+    let ray = camera.viewport_to_world(cam_tf, viewport_cursor)?;
 
     let (_, brush_rot, brush_trans) = brush_global.to_scale_rotation_translation();
     let mut best_t = f32::MAX;
@@ -213,9 +190,7 @@ pub(crate) fn clip_place_point(
         }
     }
 
-    let Some(local_hit) = best_point else {
-        return OperatorResult::Cancelled;
-    };
+    let local_hit = best_point?;
 
     let world_point = brush_global.transform_point(local_hit);
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
@@ -282,18 +257,10 @@ pub(crate) fn clip_apply(
     mut history: ResMut<CommandHistory>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(brush_entity) = brush_selection.entity else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(plane) = clip_state.preview_plane.clone() else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(brush_global) = brush_transforms.get(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = brush_selection.entity?;
+    let mut brush = brushes.get_mut(brush_entity)?;
+    let plane = clip_state.preview_plane.clone()?;
+    let brush_global = brush_transforms.get(brush_entity)?;
 
     // Dispatch: brushes with populated topology (the common case after the
     // topology migration) take the HalfedgeMesh bisect_plane path. Brushes with

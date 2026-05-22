@@ -30,12 +30,8 @@ pub(crate) fn brush_reconvexify(
     mut halfedge_q: Query<&mut BrushHalfedge>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
+    let brush_before = brushes.get(brush_entity).cloned()?;
 
     // Collect current vertex positions from the brush's topology.
     // The plane-intersection fallback is a safety net for malformed
@@ -74,22 +70,18 @@ pub(crate) fn brush_reconvexify(
 
     // Run Quickhull-based rebuild. Pass the same positions as both old and new:
     // we want the convex hull of the existing vertices, preserving UV data.
-    let Some((mut new_brush, _old_to_new)) = rebuild_brush_from_vertices(
+    let (mut new_brush, _old_to_new) = rebuild_brush_from_vertices(
         &brush_before,
         &current_positions,
         &old_face_polygons,
         &current_positions,
-    ) else {
-        return OperatorResult::Cancelled;
-    };
+    )?;
 
     // Populate topology on the new brush by deriving it from its hull planes.
     new_brush.topology = compute_brush_topology(&new_brush.faces);
 
     // Apply the new brush.
-    let Ok(mut brush_mut) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut brush_mut = brushes.get_mut(brush_entity)?;
     *brush_mut = new_brush.clone();
 
     // If an HalfedgeMesh is present (brush is in vertex/edge/face edit mode),

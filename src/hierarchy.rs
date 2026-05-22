@@ -877,12 +877,8 @@ pub(crate) fn hierarchy_open_context_menu(
     computed_nodes: Query<(&ComputedNode, &UiGlobalTransform), With<TreeRowContent>>,
     extension_add_entries: Query<&jackdaw_api_internal::lifecycle::RegisteredMenuEntry>,
 ) -> OperatorResult {
-    let Ok(window) = windows.single() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return OperatorResult::Cancelled;
-    };
+    let window = windows.single()?;
+    let cursor_pos = window.cursor_position()?;
 
     // Close any existing context menu
     if let Some(menu) = state.menu_entity.take()
@@ -910,9 +906,7 @@ pub(crate) fn hierarchy_open_context_menu(
         }
     }
 
-    let Some(target) = target_source else {
-        return OperatorResult::Cancelled;
-    };
+    let target = target_source?;
 
     // If the right-clicked entity isn't selected, select it
     if !selection.is_selected(target) {
@@ -1292,18 +1286,14 @@ pub fn rename_begin(
         };
     }
 
-    let Some(source) = resolve_rename_target(&params, &selection) else {
-        return OperatorResult::Cancelled;
-    };
-    let Some((label_entity, content_entity)) = find_rename_targets(
+    let source = resolve_rename_target(&params, &selection)?;
+    let (label_entity, content_entity) = find_rename_targets(
         source,
         &tree_index,
         &tree_nodes,
         &content_query,
         &label_query,
-    ) else {
-        return OperatorResult::Cancelled;
-    };
+    )?;
 
     commands.entity(label_entity).insert(TreeRowInlineRename);
     commands

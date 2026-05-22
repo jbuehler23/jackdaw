@@ -32,19 +32,13 @@ pub(crate) fn brush_weld_selected(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
         return OperatorResult::Cancelled;
     }
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
     if selection.vertices.len() < 2 {
         return OperatorResult::Cancelled;
     }
 
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_before = brushes.get(brush_entity).cloned()?;
+    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
 
     // Map cache vertex indices to HalfedgeMesh VertKeys.
     let mut vert_keys = Vec::with_capacity(selection.vertices.len());
@@ -94,9 +88,7 @@ pub(crate) fn brush_weld_selected(
 
     // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
     let new_topology = halfedge.mesh.flatten_to_topology();
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     let new_face_count = new_topology.polygons.len();
     if brush.faces.len() > new_face_count {

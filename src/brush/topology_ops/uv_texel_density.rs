@@ -29,18 +29,12 @@ pub(crate) fn brush_uv_texel_density(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return OperatorResult::Cancelled;
     }
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
     if selection.faces.is_empty() {
         return OperatorResult::Cancelled;
     }
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_before = brushes.get(brush_entity).cloned()?;
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     let scale = DEFAULT_TEXEL_DENSITY / ASSUMED_TEXTURE_PIXELS;
 

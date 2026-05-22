@@ -461,12 +461,8 @@ pub fn box_select(
     mut commands: Commands,
     active: ActiveModalQuery,
 ) -> OperatorResult {
-    let Ok(window) = vp.windows.single() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return OperatorResult::Cancelled;
-    };
+    let window = vp.windows.single()?;
+    let cursor_pos = window.cursor_position()?;
 
     if !active.is_modal_running() {
         // Honour the press-down position recorded by

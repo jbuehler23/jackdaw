@@ -236,12 +236,8 @@ pub(crate) fn view_set_axis(
     // standard top-down orientation (X right, Z down on screen).
     let up = if axis == 1 { Vec3::Z * -sign } else { Vec3::Y };
 
-    let Some(camera_entity) = active.camera else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok((mut transform, mut projection, grid_link)) = cameras.get_mut(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let camera_entity = active.camera?;
+    let (mut transform, mut projection, grid_link) = cameras.get_mut(camera_entity)?;
 
     transform.translation = dir * ORTHO_DISTANCE;
     *transform = transform.looking_at(Vec3::ZERO, up);
@@ -295,12 +291,8 @@ pub(crate) fn view_toggle_persp_ortho(
         ),
     >,
 ) -> OperatorResult {
-    let Some(camera_entity) = active.camera else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok((mut projection, grid_link)) = cameras.get_mut(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let camera_entity = active.camera?;
+    let (mut projection, grid_link) = cameras.get_mut(camera_entity)?;
     let now_persp = matches!(projection.as_ref(), Projection::Orthographic(_));
     *projection = if now_persp {
         perspective_default()
@@ -337,18 +329,10 @@ pub(crate) fn view_frame_selected(
     selected_transforms: Query<&GlobalTransform, With<Selected>>,
     mut cameras: Query<&mut Transform, With<MainViewportCamera>>,
 ) -> OperatorResult {
-    let Some(camera_entity) = active.camera else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(primary) = selection.primary() else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(global_tf) = selected_transforms.get(primary) else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(mut transform) = cameras.get_mut(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let camera_entity = active.camera?;
+    let primary = selection.primary()?;
+    let global_tf = selected_transforms.get(primary)?;
+    let mut transform = cameras.get_mut(camera_entity)?;
 
     let target = global_tf.translation();
     let scale = global_tf.compute_transform().scale;
@@ -374,12 +358,8 @@ pub(crate) fn view_frame_all(
     scene_entities: Query<&GlobalTransform, (With<Name>, Without<crate::EditorEntity>)>,
     mut cameras: Query<&mut Transform, With<MainViewportCamera>>,
 ) -> OperatorResult {
-    let Some(camera_entity) = active.camera else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(mut transform) = cameras.get_mut(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let camera_entity = active.camera?;
+    let mut transform = cameras.get_mut(camera_entity)?;
 
     // Compute scene AABB from all named non-editor entities. Empty
     // scenes fall back to (origin, 10-unit cube).
