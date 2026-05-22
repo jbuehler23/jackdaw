@@ -178,6 +178,12 @@ struct NewProjectCreateButton;
 #[derive(Component)]
 struct NewProjectBrowseButton;
 
+/// Tiny "reset to default" affordance shown next to the Browse
+/// button when the remembered location differs from
+/// [`default_projects_dir`]. Hidden otherwise.
+#[derive(Component)]
+struct NewProjectResetLocationButton;
+
 /// One of the two segmented buttons that pick between the Static
 /// and Dylib template variants. The enum value is stored on the
 /// component so the click observer knows which linkage to apply
@@ -1519,7 +1525,9 @@ pub fn open_project_progress_modal(world: &mut World, project_name: &str) {
 pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
     close_new_project_modal(world);
 
-    let location = default_projects_dir();
+    let location = project::read_last_new_project_location()
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(default_projects_dir);
     let initial_linkage = TemplateLinkage::default();
     {
         let mut state = world.resource_mut::<NewProjectState>();
@@ -1697,6 +1705,8 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         ))
         .id();
     world.entity_mut(browse).observe(on_browse_new_location);
+
+    spawn_reset_location_button(world, location_row, &editor_font, &location);
 
     // Linkage selector only appears for the Extension and Game
     // presets; Custom pastes its own URL.
@@ -2111,6 +2121,45 @@ fn on_browse_new_location(
     });
 }
 
+fn spawn_reset_location_button(
+    world: &mut World,
+    location_row: Entity,
+    editor_font: &Handle<Font>,
+    location: &Path,
+) {
+    let hidden = location == default_projects_dir();
+    let reset = world
+        .spawn((
+            NewProjectResetLocationButton,
+            Node {
+                padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+                display: if hidden { Display::None } else { Display::Flex },
+                ..Default::default()
+            },
+            BackgroundColor(Color::NONE),
+            children![(
+                Text::new("Reset"),
+                TextFont {
+                    font: editor_font.clone(),
+                    font_size: tokens::FONT_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+            )],
+            ChildOf(location_row),
+        ))
+        .id();
+    world.entity_mut(reset).observe(on_reset_new_location);
+}
+
+fn on_reset_new_location(_: On<Pointer<Click>>, mut commands: Commands) {
+    commands.queue(|world: &mut World| {
+        let default_project_location = default_projects_dir();
+        world.resource_mut::<NewProjectState>().location = default_project_location;
+    });
+}
+
 /// Observer for the Browse button on the local template path field.
 /// Opens a folder picker; on completion, writes the picked path into
 /// the `NewProjectLocalTemplateInput` text field via `TextInputQueue`.
@@ -2314,6 +2363,7 @@ fn poll_new_project_tasks(
         &mut Text,
         (With<NewProjectStatusText>, Without<NewProjectLocationText>),
     >,
+    mut reset_buttons: Query<&mut Node, With<NewProjectResetLocationButton>>,
 ) {
     // Folder picker.
     if let Some(task) = state.folder_task.as_mut()
@@ -2333,6 +2383,7 @@ fn poll_new_project_tasks(
         match result {
             Ok(project_path) => {
                 info!("Scaffolded project at {}", project_path.display());
+                project::save_last_new_project_location(&state.location);
                 let project_name = project_path
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -2482,6 +2533,16 @@ fn poll_new_project_tasks(
     for mut text in location_texts.iter_mut() {
         if text.0 != desired_location {
             text.0 = desired_location.clone();
+        }
+    }
+    let reset_display = if state.location == default_projects_dir() {
+        Display::None
+    } else {
+        Display::Flex
+    };
+    for mut node in reset_buttons.iter_mut() {
+        if node.display != reset_display {
+            node.display = reset_display;
         }
     }
     let desired_status = state.status.as_deref().unwrap_or("").to_string();
