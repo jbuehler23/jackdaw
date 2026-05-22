@@ -22,11 +22,15 @@ use jackdaw::prelude::*;
 
 fn main() -> AppExit {
     App::new()
-        .add_plugins(DefaultPlugins)
-        .add_plugins(
+        // log errors instead of panicking
+        .set_error_handler(bevy::ecs::error::error)
+        .add_plugins((
+            DefaultPlugins,
+            PhysicsPlugins::default(),
+            EnhancedInputPlugin,
             EditorPlugins::default()
                 .set(ExtensionPlugin::new().with_extension::<MyGameExtension>()),
-        )
+        ))
         .run()
 }
 

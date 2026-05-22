@@ -12,6 +12,8 @@ fn main() -> AppExit {
         .set_error_handler(bevy::ecs::error::error)
         .add_plugins((
             DefaultPlugins,
+            PhysicsPlugins::default(),
+            EnhancedInputPlugin,
             EditorPlugins::default()
                 .set(ExtensionPlugin::default().with_extension::<KeybindingExampleExtension>()),
         ))

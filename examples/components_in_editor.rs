@@ -15,6 +15,8 @@ use jackdaw::prelude::*;
 
 fn main() -> AppExit {
     App::new()
+        // log errors instead of panicking
+        .set_error_handler(bevy::ecs::error::error)
         // Ambient plugins at the binary boundary. Editor crates
         // assert presence, so user plugins can add the same
         // plugins without a duplicate panic.
@@ -22,8 +24,8 @@ fn main() -> AppExit {
             DefaultPlugins,
             PhysicsPlugins::default(),
             EnhancedInputPlugin,
+            EditorPlugins::default(),
         ))
-        .add_plugins(EditorPlugins::default())
         .add_systems(Startup, spawn_scene)
         .run()
 }
