@@ -6,3 +6,5 @@
 *.mp4
 # Claude Code
 .claude/
+# jsn
+.jsn/project.jsn
