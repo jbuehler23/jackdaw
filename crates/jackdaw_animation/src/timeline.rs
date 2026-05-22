@@ -12,6 +12,7 @@
 
 use bevy::prelude::*;
 use bevy::ui::ComputedNode;
+use bevy::ui::UiScale;
 use bevy::ui::ui_transform::UiGlobalTransform;
 use jackdaw_feathers::button::{
     ButtonClickEvent, ButtonProps, ButtonSize, ButtonVariant, IconButtonProps, button, icon_button,
@@ -1050,13 +1051,14 @@ pub fn handle_scrubber_click(
     mut hint: ResMut<TimelineSnapHint>,
     keys: Res<ButtonInput<KeyCode>>,
     mut seek: MessageWriter<crate::player::AnimationSeek>,
+    ui_scale: Res<UiScale>,
 ) {
     let Ok((scrubber, computed, global_tf)) = scrubbers.get(event.event_target()) else {
         return;
     };
     let duration = clip_display_duration(scrubber.clip, &clips);
     let raw_time = scrubber_time_for_cursor(
-        event.pointer_location.position.x,
+        event.pointer_location.position.x / ui_scale.0,
         computed,
         global_tf,
         duration,
@@ -1092,13 +1094,14 @@ pub fn handle_scrubber_drag(
     mut hint: ResMut<TimelineSnapHint>,
     keys: Res<ButtonInput<KeyCode>>,
     mut seek: MessageWriter<crate::player::AnimationSeek>,
+    ui_scale: Res<UiScale>,
 ) {
     let Ok((scrubber, computed, global_tf)) = scrubbers.get(event.event_target()) else {
         return;
     };
     let duration = clip_display_duration(scrubber.clip, &clips);
     let raw_time = scrubber_time_for_cursor(
-        event.pointer_location.position.x,
+        event.pointer_location.position.x / ui_scale.0,
         computed,
         global_tf,
         duration,

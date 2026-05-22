@@ -166,8 +166,7 @@ pub fn brush_face_drag(
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
 ) -> OperatorResult {
-    let window = vp.windows.single()?;
-    let cursor_pos = window.cursor_position()?;
+    let cursor_pos = vp.cursor()?;
     // First invoke uses the hovered viewport; subsequent invokes use
     // the captured one so the drag stays bound to its origin panel.
     let (camera_entity, viewport_entity) = if modal.is_none() {
@@ -734,9 +733,7 @@ pub fn brush_vertex_drag(
     mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
     snap_settings: Res<SnapSettings>,
 ) -> OperatorResult {
-    let brush_entity = brush_selection.entity?;
-    let window = vp.windows.single()?;
-    let cursor_pos = window.cursor_position()?;
+    let cursor_pos = vp.cursor()?;
     let (camera_entity, viewport_entity) = if modal.is_none() {
         let camera_entity = vp.camera_entity()?;
         let viewport_entity = vp.viewport_entity()?;
@@ -1117,9 +1114,7 @@ pub fn brush_edge_drag(
     mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
     snap_settings: Res<SnapSettings>,
 ) -> OperatorResult {
-    let brush_entity = brush_selection.entity?;
-    let window = vp.windows.single()?;
-    let cursor_pos = window.cursor_position()?;
+    let cursor_pos = vp.cursor()?;
     let (camera_entity, viewport_entity) = if modal.is_none() {
         let camera_entity = vp.camera_entity()?;
         let viewport_entity = vp.viewport_entity()?;
