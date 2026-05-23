@@ -181,3 +181,45 @@ fn walk_dot_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a ser
     }
     Some(cursor)
 }
+
+/// Returns `(dot_path, leaf)` pairs for every scalar leaf in `scene`
+/// that differs from `prefab`'s value at the same path. Object
+/// branches recurse so a single Vec3 axis difference produces
+/// `translation.x` rather than a full Vec3 blob. When `prefab` is
+/// `None` (the component itself was added on the instance), every
+/// leaf is reported.
+pub fn collect_overridden_paths(scene: &Value, prefab: Option<&Value>) -> Vec<(String, Value)> {
+    let mut out = Vec::new();
+    walk_leaves(scene, prefab, String::new(), &mut out);
+    out
+}
+
+fn walk_leaves(
+    scene: &Value,
+    prefab: Option<&Value>,
+    path: String,
+    out: &mut Vec<(String, Value)>,
+) {
+    match scene {
+        Value::Object(scene_map) => {
+            let prefab_map = prefab.and_then(Value::as_object);
+            for (key, child) in scene_map {
+                let next_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                walk_leaves(child, prefab_map.and_then(|m| m.get(key)), next_path, out);
+            }
+        }
+        leaf => {
+            let differs = match prefab {
+                Some(p) => p != leaf,
+                None => true,
+            };
+            if differs && !path.is_empty() {
+                out.push((path, leaf.clone()));
+            }
+        }
+    }
+}

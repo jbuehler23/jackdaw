@@ -223,7 +223,7 @@ fn apply_component_to_source(
         };
         let cache = world.resource::<PrefabAstCache>();
         let prefab_value = resolve_prefab_value(ast, cache, entity_key, type_path);
-        collect_overridden_paths(scene_value, prefab_value.as_ref())
+        crate::prefab::overrides::collect_overridden_paths(scene_value, prefab_value.as_ref())
     };
 
     for (field_path, value) in deltas {
@@ -260,7 +260,7 @@ fn bulk_apply_component_to_scene(world: &mut World, entity_key: usize, type_path
         let cache = world.resource::<PrefabAstCache>();
         let prefab_value = resolve_prefab_value(ast, cache, entity_key, type_path);
         (
-            collect_overridden_paths(scene_value, prefab_value.as_ref()),
+            crate::prefab::overrides::collect_overridden_paths(scene_value, prefab_value.as_ref()),
             path,
         )
     };
@@ -317,54 +317,6 @@ fn resolve_prefab_value(
     prefab_ast.get_component_at(prefab_key, type_path).cloned()
 }
 
-/// Walk `scene_value` and emit `(dot_path, leaf)` pairs for every
-/// scalar / non-object leaf that differs from `prefab_value`'s value at
-/// the same path. Object branches recurse; scalar branches compare
-/// directly. When `prefab_value` is None (the component itself was
-/// added on the instance), every leaf is reported.
-fn collect_overridden_paths(
-    scene_value: &serde_json::Value,
-    prefab_value: Option<&serde_json::Value>,
-) -> Vec<(String, serde_json::Value)> {
-    let mut out: Vec<(String, serde_json::Value)> = Vec::new();
-    walk(scene_value, prefab_value, String::new(), &mut out);
-    out
-}
-
-fn walk(
-    scene: &serde_json::Value,
-    prefab: Option<&serde_json::Value>,
-    path: String,
-    out: &mut Vec<(String, serde_json::Value)>,
-) {
-    match scene {
-        serde_json::Value::Object(scene_map) => {
-            // Recurse field-by-field so a single Vec3 axis difference
-            // produces `translation.x` rather than a full Vec3 blob.
-            let prefab_map = prefab.and_then(serde_json::Value::as_object);
-            for (key, scene_child) in scene_map {
-                let next_path = if path.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{path}.{key}")
-                };
-                let prefab_child = prefab_map.and_then(|m| m.get(key));
-                walk(scene_child, prefab_child, next_path, out);
-            }
-        }
-        leaf => {
-            let prefab_leaf = prefab;
-            let differs = match prefab_leaf {
-                Some(p) => p != leaf,
-                None => true,
-            };
-            if differs && !path.is_empty() {
-                out.push((path, leaf.clone()));
-            }
-        }
-    }
-}
-
 fn rebuild_inspectors_for_key(world: &mut World, entity_key: usize) {
     let ast = world.resource::<SceneJsnAst>();
     let entity = ast.nodes.get(entity_key).and_then(|node| node.ecs_entity);
@@ -384,7 +336,7 @@ mod tests {
     fn flat_leaf_difference_emits_dotted_path() {
         let scene = json!({ "translation": { "x": 1.0, "y": 0.0, "z": 0.0 } });
         let prefab = json!({ "translation": { "x": 0.0, "y": 0.0, "z": 0.0 } });
-        let out = collect_overridden_paths(&scene, Some(&prefab));
+        let out = crate::prefab::overrides::collect_overridden_paths(&scene, Some(&prefab));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0, "translation.x");
         assert_eq!(out[0].1, json!(1.0));
@@ -394,14 +346,14 @@ mod tests {
     fn equal_values_emit_nothing() {
         let scene = json!({ "translation": { "x": 0.0 } });
         let prefab = json!({ "translation": { "x": 0.0 } });
-        let out = collect_overridden_paths(&scene, Some(&prefab));
+        let out = crate::prefab::overrides::collect_overridden_paths(&scene, Some(&prefab));
         assert!(out.is_empty());
     }
 
     #[test]
     fn missing_prefab_treats_every_leaf_as_override() {
         let scene = json!({ "a": 1, "b": { "c": 2 } });
-        let out = collect_overridden_paths(&scene, None);
+        let out = crate::prefab::overrides::collect_overridden_paths(&scene, None);
         let names: Vec<&str> = out.iter().map(|(p, _)| p.as_str()).collect();
         assert!(names.contains(&"a"));
         assert!(names.contains(&"b.c"));

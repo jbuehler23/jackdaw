@@ -16,6 +16,88 @@ const PREFAB_TYPE: &str = "jackdaw::prefab::components::Prefab";
 const PREFAB_ENTITY_ID_TYPE: &str = "jackdaw::prefab::components::PrefabEntityId";
 const ISA_TYPE: &str = "jackdaw::prefab::components::IsA";
 
+fn require_str(params: &OperatorParameters, key: &str, op_id: &str) -> Option<String> {
+    let value = params.as_str(key).map(str::to_string);
+    if value.is_none() {
+        warn!("{op_id}: missing `{key}` param");
+    }
+    value
+}
+
+fn require_entity(params: &OperatorParameters, key: &str, op_id: &str) -> Option<Entity> {
+    let value = params.as_entity(key);
+    if value.is_none() {
+        warn!("{op_id}: missing `{key}` param");
+    }
+    value
+}
+
+fn require_int(params: &OperatorParameters, key: &str, op_id: &str) -> Option<i64> {
+    let value = params.as_int(key);
+    if value.is_none() {
+        warn!("{op_id}: missing `{key}` param");
+    }
+    value
+}
+
+fn require_float(params: &OperatorParameters, key: &str, op_id: &str) -> Option<f64> {
+    let value = params.as_float(key);
+    if value.is_none() {
+        warn!("{op_id}: missing `{key}` param");
+    }
+    value
+}
+
+fn resolve_ast_key(world: &World, entity: Entity, op_id: &str) -> Option<usize> {
+    let key = world.resource::<SceneJsnAst>().key_for_entity(entity);
+    if key.is_none() {
+        warn!("{op_id}: entity {entity:?} is not in the live AST");
+    }
+    key
+}
+
+/// Resolve the live scene AST against the prefab cache. Logs the
+/// caller's name and returns `None` on resolver failure.
+fn resolve_live_scene(world: &World, op_id: &str) -> Option<SceneJsnAst> {
+    let unresolved = world.resource::<SceneJsnAst>().clone();
+    let cache = world.resource::<PrefabAstCache>();
+    match crate::prefab::resolver::resolve_scene(&unresolved, cache) {
+        Ok(a) => Some(a),
+        Err(err) => {
+            warn!("{op_id}: resolver failed: {err}");
+            None
+        }
+    }
+}
+
+fn make_jsn_scene(entries: Vec<JsnEntity>) -> JsnScene {
+    JsnScene {
+        jsn: JsnHeader::default(),
+        metadata: JsnMetadata::default(),
+        assets: JsnAssets::default(),
+        editor: None,
+        scene: entries,
+    }
+}
+
+fn write_jsn_scene(target_path: &Path, jsn: &JsnScene, op_id: &str) -> bool {
+    if let Some(parent) = target_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let text = match serde_json::to_string_pretty(jsn) {
+        Ok(t) => t,
+        Err(err) => {
+            warn!("{op_id}: serialize failed: {err}");
+            return false;
+        }
+    };
+    if let Err(err) = std::fs::write(target_path, text) {
+        warn!("{op_id}: failed to write {}: {err}", target_path.display());
+        return false;
+    }
+    true
+}
+
 fn collect_descendants(world: &World, root: Entity, out: &mut Vec<Entity>) {
     let Some(children) = world.get::<Children>(root) else {
         return;
@@ -266,31 +348,8 @@ fn write_prefab_file(
     final_entities.push(synthetic_entry);
     final_entities.extend(prefab_entities);
 
-    let prefab_jsn = JsnScene {
-        jsn: JsnHeader::default(),
-        metadata: JsnMetadata::default(),
-        assets: JsnAssets::default(),
-        editor: None,
-        scene: final_entities,
-    };
-    if let Some(parent) = target_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let text = match serde_json::to_string_pretty(&prefab_jsn) {
-        Ok(t) => t,
-        Err(err) => {
-            warn!("save_as_prefab_from_selection: serialize failed: {err}");
-            return false;
-        }
-    };
-    if let Err(err) = std::fs::write(target_path, &text) {
-        warn!(
-            "save_as_prefab_from_selection: failed to write {}: {err}",
-            target_path.display()
-        );
-        return false;
-    }
-    true
+    let prefab_jsn = make_jsn_scene(final_entities);
+    write_jsn_scene(target_path, &prefab_jsn, "save_as_prefab_from_selection")
 }
 
 /// Components for the synthetic prefab root entry at index 0:
@@ -328,18 +387,10 @@ fn synthetic_root_components(display_name: String) -> HashMap<String, serde_json
 /// source scene. Other instances of the same prefab pick up the new
 /// baseline on the next cache-driven respawn.
 fn propagate_instance_to_prefab(world: &mut World, instance_key: usize, target_path: &Path) {
-    // Resolve the source AST so the snapshot reflects merged overrides
-    // and materialised inherited descendants.
-    let resolved = {
-        let unresolved = world.resource::<SceneJsnAst>().clone();
-        let cache = world.resource::<PrefabAstCache>();
-        match crate::prefab::resolver::resolve_scene(&unresolved, cache) {
-            Ok(r) => r,
-            Err(err) => {
-                warn!("propagate_instance_to_prefab: resolver failed: {err}");
-                return;
-            }
-        }
+    // Resolve so the snapshot reflects merged overrides and
+    // materialised inherited descendants.
+    let Some(resolved) = resolve_live_scene(world, "propagate_instance_to_prefab") else {
+        return;
     };
 
     // `resolve_scene` appends descendants to the clone, so authored
@@ -405,28 +456,8 @@ fn propagate_instance_to_prefab(world: &mut World, instance_key: usize, target_p
     final_entities.push(synthetic_entry);
     final_entities.extend(prefab_entries);
 
-    let prefab_jsn = JsnScene {
-        jsn: JsnHeader::default(),
-        metadata: JsnMetadata::default(),
-        assets: JsnAssets::default(),
-        editor: None,
-        scene: final_entities,
-    };
-    if let Some(parent) = target_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let text = match serde_json::to_string_pretty(&prefab_jsn) {
-        Ok(t) => t,
-        Err(err) => {
-            warn!("propagate_instance_to_prefab: serialize failed: {err}");
-            return;
-        }
-    };
-    if let Err(err) = std::fs::write(target_path, &text) {
-        warn!(
-            "propagate_instance_to_prefab: failed to write {}: {err}",
-            target_path.display()
-        );
+    let prefab_jsn = make_jsn_scene(final_entities);
+    if !write_jsn_scene(target_path, &prefab_jsn, "propagate_instance_to_prefab") {
         return;
     }
 
@@ -523,41 +554,26 @@ fn shift_transform_translation(
 /// Local-only children of the instance (AST nodes with no
 /// `PrefabEntityId`) are reparented unchanged.
 pub fn unbundle_instance(world: &mut World, instance_root_key: usize) {
-    // Validate target + capture the parent slot and prefab source path.
-    let (instance_parent, prefab_path, instance_world_transform) = {
+    let (instance_parent, instance_world_transform) = {
         let ast = world.resource::<SceneJsnAst>();
-        let Some(isa_value) = ast.get_component_at(instance_root_key, ISA_TYPE) else {
+        if ast.get_component_at(instance_root_key, ISA_TYPE).is_none() {
             warn!("unbundle_instance: target is not an IsA instance");
             return;
-        };
+        }
         let parent = ast.nodes.get(instance_root_key).and_then(|n| n.parent);
-        let source = isa_value
-            .get("source")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from);
         let placement = ast
             .get_component_at(
                 instance_root_key,
                 "bevy_transform::components::transform::Transform",
             )
             .cloned();
-        (parent, source, placement)
+        (parent, placement)
     };
 
-    // Resolve the source AST so we can read the full component set of
-    // every inherited descendant. The resolver merges prefab values +
-    // any local overrides; the merged values are what we promote to
-    // authored entries.
-    let resolved = {
-        let unresolved = world.resource::<SceneJsnAst>().clone();
-        let cache = world.resource::<PrefabAstCache>();
-        match crate::prefab::resolver::resolve_scene(&unresolved, cache) {
-            Ok(r) => r,
-            Err(err) => {
-                warn!("unbundle_instance: resolver failed: {err}");
-                return;
-            }
-        }
+    // Resolve so each inherited descendant carries its merged
+    // component set; those become the authored entries we promote.
+    let Some(resolved) = resolve_live_scene(world, "unbundle_instance") else {
+        return;
     };
 
     // Snapshot the instance's promoted children before we mutate the
@@ -595,11 +611,9 @@ pub fn unbundle_instance(world: &mut World, instance_root_key: usize) {
             ))
         });
 
-    let _ = prefab_path; // path captured but not currently load-bearing; kept for future hooks
-
-    // Now mutate the source AST: insert authored nodes for each
-    // promoted descendant, reparent local-only children, then remove
-    // the instance node.
+    // Mutate the source AST: insert authored nodes for each promoted
+    // descendant, reparent local-only children, then remove the
+    // instance node.
     {
         let mut ast = world.resource_mut::<SceneJsnAst>();
 
@@ -722,11 +736,9 @@ pub fn save_scene_as_prefab(world: &mut World, target_path: &Path) {
             }
         }
     } else {
-        // Synthetic root pattern: serialised prefabs (matching
-        // `save_as_prefab_from_selection`) keep the synthetic root at
-        // index 0, so prepend rather than append.
+        // Serialised prefabs keep a synthetic root at index 0, so
+        // prepend rather than append.
         use jackdaw_jsn::ast::JsnEntityNode;
-        use std::collections::HashMap as StdHashMap;
 
         let descendants_per_root: Vec<(usize, Vec<usize>)> = roots
             .iter()
@@ -738,28 +750,9 @@ pub fn save_scene_as_prefab(world: &mut World, target_path: &Path) {
             .and_then(|s| s.to_str())
             .unwrap_or("prefab")
             .to_string();
-        let mut synthetic_components: StdHashMap<String, serde_json::Value> = StdHashMap::new();
-        synthetic_components.insert(PREFAB_TYPE.to_string(), serde_json::Value::Null);
-        synthetic_components.insert(PREFAB_ENTITY_ID_TYPE.to_string(), serde_json::json!(0));
-        synthetic_components.insert(
-            "bevy_ecs::name::Name".to_string(),
-            serde_json::Value::String(synthetic_name),
-        );
-        synthetic_components.insert(
-            "bevy_transform::components::transform::Transform".to_string(),
-            serde_json::json!({
-                "translation": [0.0, 0.0, 0.0],
-                "rotation": [0.0, 0.0, 0.0, 1.0],
-                "scale": [1.0, 1.0, 1.0],
-            }),
-        );
-        synthetic_components.insert(
-            "bevy_camera::visibility::Visibility".to_string(),
-            serde_json::Value::String("Inherited".to_string()),
-        );
         let synthetic_node = JsnEntityNode {
             parent: None,
-            components: synthetic_components,
+            components: synthetic_root_components(synthetic_name),
             derived_components: Default::default(),
             ecs_entity: None,
         };
@@ -1161,23 +1154,8 @@ pub fn save_as_variant(world: &mut World, instance_root: Entity, target_path: &P
         }
     }
 
-    // Write to disk.
     let variant_jsn = crate::scene_io::jsn_scene_from_ast(&variant_ast);
-    if let Some(parent) = target_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let text = match serde_json::to_string_pretty(&variant_jsn) {
-        Ok(t) => t,
-        Err(err) => {
-            warn!("save_as_variant: serialize failed: {err}");
-            return;
-        }
-    };
-    if let Err(err) = std::fs::write(target_path, text) {
-        warn!(
-            "save_as_variant: failed to write {}: {err}",
-            target_path.display()
-        );
+    if !write_jsn_scene(target_path, &variant_jsn, "save_as_variant") {
         return;
     }
 
@@ -1468,7 +1446,10 @@ pub fn apply_all_overrides_to_source(world: &mut World, instance_root_key: usize
                 })
                 .map(|(type_path, scene_value)| {
                     let prefab_value = prefab_ast.get_component_at(prefab_match, type_path);
-                    let leaves = collect_overridden_leaves(scene_value, prefab_value);
+                    let leaves = crate::prefab::overrides::collect_overridden_paths(
+                        scene_value,
+                        prefab_value,
+                    );
                     (type_path.clone(), leaves)
                 })
                 .filter(|(_, leaves)| !leaves.is_empty())
@@ -1487,49 +1468,6 @@ pub fn apply_all_overrides_to_source(world: &mut World, instance_root_key: usize
                     &field_path,
                     value,
                 );
-            }
-        }
-    }
-}
-
-/// Returns `(dot_path, leaf)` pairs for every scalar / non-object leaf
-/// in `scene` that differs from `prefab`'s value at the same path.
-/// Mirrors the `collect_overridden_paths` helper in
-/// `src/inspector/prefab_menu.rs` but exposed for reuse.
-fn collect_overridden_leaves(
-    scene: &serde_json::Value,
-    prefab: Option<&serde_json::Value>,
-) -> Vec<(String, serde_json::Value)> {
-    let mut out = Vec::new();
-    walk_leaves(scene, prefab, String::new(), &mut out);
-    out
-}
-
-fn walk_leaves(
-    scene: &serde_json::Value,
-    prefab: Option<&serde_json::Value>,
-    path: String,
-    out: &mut Vec<(String, serde_json::Value)>,
-) {
-    match scene {
-        serde_json::Value::Object(scene_map) => {
-            let prefab_map = prefab.and_then(serde_json::Value::as_object);
-            for (key, child) in scene_map {
-                let next_path = if path.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{path}.{key}")
-                };
-                walk_leaves(child, prefab_map.and_then(|m| m.get(key)), next_path, out);
-            }
-        }
-        leaf => {
-            let differs = match prefab {
-                Some(p) => p != leaf,
-                None => true,
-            };
-            if differs && !path.is_empty() {
-                out.push((path, leaf.clone()));
             }
         }
     }
@@ -1604,20 +1542,17 @@ pub fn prefab_spawn_instance(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(path) = params.as_str("path").map(str::to_string) else {
-        warn!("prefab.spawn_instance: missing `path` param");
+    let op = "prefab.spawn_instance";
+    let Some(path) = require_str(&params, "path", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(x) = params.as_float("pos_x") else {
-        warn!("prefab.spawn_instance: missing `pos_x` param");
+    let Some(x) = require_float(&params, "pos_x", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(y) = params.as_float("pos_y") else {
-        warn!("prefab.spawn_instance: missing `pos_y` param");
+    let Some(y) = require_float(&params, "pos_y", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(z) = params.as_float("pos_z") else {
-        warn!("prefab.spawn_instance: missing `pos_z` param");
+    let Some(z) = require_float(&params, "pos_z", op) else {
         return OperatorResult::Cancelled;
     };
     let pos = bevy::math::Vec3::new(x as f32, y as f32, z as f32);
@@ -1644,25 +1579,21 @@ pub fn prefab_revert_field(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = params.as_entity("entity") else {
-        warn!("prefab.revert_field: missing `entity` param");
+    let op = "prefab.revert_field";
+    let Some(entity) = require_entity(&params, "entity", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(type_path) = params.as_str("type_path").map(str::to_string) else {
-        warn!("prefab.revert_field: missing `type_path` param");
+    let Some(type_path) = require_str(&params, "type_path", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(field_path) = params.as_str("field_path").map(str::to_string) else {
-        warn!("prefab.revert_field: missing `field_path` param");
+    let Some(field_path) = require_str(&params, "field_path", op) else {
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        // Resolve the AST key INSIDE the operator. The framework's
+        // Resolve the AST key inside the operator. The framework's
         // before-snapshot capture rebuilds the live AST which reshuffles
         // node indices, so a pre-resolved key would be stale.
-        let key = world.resource::<SceneJsnAst>().key_for_entity(entity);
-        let Some(key) = key else {
-            warn!("prefab.revert_field: entity {entity:?} is not in the live AST");
+        let Some(key) = resolve_ast_key(world, entity, op) else {
             return;
         };
         revert_field(world, key, &type_path, &field_path);
@@ -1686,20 +1617,15 @@ pub fn prefab_revert_component(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = params.as_entity("entity") else {
-        warn!("prefab.revert_component: missing `entity` param");
+    let op = "prefab.revert_component";
+    let Some(entity) = require_entity(&params, "entity", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(type_path) = params.as_str("type_path").map(str::to_string) else {
-        warn!("prefab.revert_component: missing `type_path` param");
+    let Some(type_path) = require_str(&params, "type_path", op) else {
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        // Resolve the AST key INSIDE the operator (see prefab.revert_field
-        // for the rationale).
-        let key = world.resource::<SceneJsnAst>().key_for_entity(entity);
-        let Some(key) = key else {
-            warn!("prefab.revert_component: entity {entity:?} is not in the live AST");
+        let Some(key) = resolve_ast_key(world, entity, op) else {
             return;
         };
         revert_component(world, key, &type_path);
@@ -1716,18 +1642,12 @@ pub fn prefab_revert_component(
     params(instance_entity(Entity, doc = "ECS entity of the instance root."),)
 )]
 pub fn prefab_revert_all(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    let Some(instance_entity) = params.as_entity("instance_entity") else {
-        warn!("prefab.revert_all: missing `instance_entity` param");
+    let op = "prefab.revert_all";
+    let Some(instance_entity) = require_entity(&params, "instance_entity", op) else {
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        // Resolve the AST key INSIDE the operator (see prefab.revert_field
-        // for the rationale).
-        let key = world
-            .resource::<SceneJsnAst>()
-            .key_for_entity(instance_entity);
-        let Some(key) = key else {
-            warn!("prefab.revert_all: entity {instance_entity:?} is not in the live AST");
+        let Some(key) = resolve_ast_key(world, instance_entity, op) else {
             return;
         };
         revert_all(world, key);
@@ -1755,41 +1675,31 @@ pub fn prefab_apply_to_source(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(instance_entity) = params.as_entity("instance_entity") else {
-        warn!("prefab.apply_to_source: missing `instance_entity` param");
+    let op = "prefab.apply_to_source";
+    let Some(instance_entity) = require_entity(&params, "instance_entity", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(entity_id) = params.as_int("entity_id") else {
-        warn!("prefab.apply_to_source: missing `entity_id` param");
+    let Some(entity_id) = require_int(&params, "entity_id", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(type_path) = params.as_str("type_path").map(str::to_string) else {
-        warn!("prefab.apply_to_source: missing `type_path` param");
+    let Some(type_path) = require_str(&params, "type_path", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(field_path) = params.as_str("field_path").map(str::to_string) else {
-        warn!("prefab.apply_to_source: missing `field_path` param");
+    let Some(field_path) = require_str(&params, "field_path", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(value_json) = params.as_str("value_json").map(str::to_string) else {
-        warn!("prefab.apply_to_source: missing `value_json` param");
+    let Some(value_json) = require_str(&params, "value_json", op) else {
         return OperatorResult::Cancelled;
     };
     let value: serde_json::Value = match serde_json::from_str(&value_json) {
         Ok(v) => v,
         Err(err) => {
-            warn!("prefab.apply_to_source: bad `value_json`: {err}");
+            warn!("{op}: bad `value_json`: {err}");
             return OperatorResult::Cancelled;
         }
     };
     commands.queue(move |world: &mut World| {
-        // Resolve the AST key INSIDE the operator (see prefab.revert_field
-        // for the rationale).
-        let instance_root = world
-            .resource::<SceneJsnAst>()
-            .key_for_entity(instance_entity);
-        let Some(instance_root) = instance_root else {
-            warn!("prefab.apply_to_source: entity {instance_entity:?} is not in the live AST");
+        let Some(instance_root) = resolve_ast_key(world, instance_entity, op) else {
             return;
         };
         apply_to_prefab_source(
@@ -1822,26 +1732,23 @@ pub fn prefab_bulk_apply_in_scene(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(source_path) = params.as_str("source_path").map(str::to_string) else {
-        warn!("prefab.bulk_apply_in_scene: missing `source_path` param");
+    let op = "prefab.bulk_apply_in_scene";
+    let Some(source_path) = require_str(&params, "source_path", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(type_path) = params.as_str("type_path").map(str::to_string) else {
-        warn!("prefab.bulk_apply_in_scene: missing `type_path` param");
+    let Some(type_path) = require_str(&params, "type_path", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(field_path) = params.as_str("field_path").map(str::to_string) else {
-        warn!("prefab.bulk_apply_in_scene: missing `field_path` param");
+    let Some(field_path) = require_str(&params, "field_path", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(value_json) = params.as_str("value_json").map(str::to_string) else {
-        warn!("prefab.bulk_apply_in_scene: missing `value_json` param");
+    let Some(value_json) = require_str(&params, "value_json", op) else {
         return OperatorResult::Cancelled;
     };
     let value: serde_json::Value = match serde_json::from_str(&value_json) {
         Ok(v) => v,
         Err(err) => {
-            warn!("prefab.bulk_apply_in_scene: bad `value_json`: {err}");
+            warn!("{op}: bad `value_json`: {err}");
             return OperatorResult::Cancelled;
         }
     };
@@ -1872,12 +1779,11 @@ pub fn prefab_save_as_variant_entity(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(bits) = params.as_int("instance_root_entity") else {
-        warn!("prefab.save_as_variant_entity: missing `instance_root_entity` param");
+    let op = "prefab.save_as_variant_entity";
+    let Some(bits) = require_int(&params, "instance_root_entity", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(target_path) = params.as_str("target_path").map(str::to_string) else {
-        warn!("prefab.save_as_variant_entity: missing `target_path` param");
+    let Some(target_path) = require_str(&params, "target_path", op) else {
         return OperatorResult::Cancelled;
     };
     let entity = Entity::from_bits(bits as u64);
@@ -1904,30 +1810,18 @@ pub fn prefab_unpack_child(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(child_entity) = params.as_entity("child_entity") else {
-        warn!("prefab.unpack_child: missing `child_entity` param");
+    let op = "prefab.unpack_child";
+    let Some(child_entity) = require_entity(&params, "child_entity", op) else {
         return OperatorResult::Cancelled;
     };
-    let Some(drop_target_entity) = params.as_entity("drop_target_entity") else {
-        warn!("prefab.unpack_child: missing `drop_target_entity` param");
+    let Some(drop_target_entity) = require_entity(&params, "drop_target_entity", op) else {
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        // Resolve both AST keys INSIDE the operator (see prefab.revert_field
-        // for the rationale).
-        let (child_key, drop_target_key) = {
-            let ast = world.resource::<SceneJsnAst>();
-            (
-                ast.key_for_entity(child_entity),
-                ast.key_for_entity(drop_target_entity),
-            )
-        };
-        let Some(child_key) = child_key else {
-            warn!("prefab.unpack_child: entity {child_entity:?} is not in the live AST");
+        let Some(child_key) = resolve_ast_key(world, child_entity, op) else {
             return;
         };
-        let Some(drop_target_key) = drop_target_key else {
-            warn!("prefab.unpack_child: entity {drop_target_entity:?} is not in the live AST");
+        let Some(drop_target_key) = resolve_ast_key(world, drop_target_entity, op) else {
             return;
         };
         unpack_child(world, child_key, drop_target_key);
@@ -1948,18 +1842,12 @@ pub fn prefab_unbundle_instance(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(instance_entity) = params.as_entity("instance_entity") else {
-        warn!("prefab.unbundle_instance: missing `instance_entity` param");
+    let op = "prefab.unbundle_instance";
+    let Some(instance_entity) = require_entity(&params, "instance_entity", op) else {
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        // Resolve the AST key inside the operator (see
-        // prefab.revert_field for the rationale).
-        let key = world
-            .resource::<SceneJsnAst>()
-            .key_for_entity(instance_entity);
-        let Some(key) = key else {
-            warn!("prefab.unbundle_instance: entity {instance_entity:?} is not in the live AST");
+        let Some(key) = resolve_ast_key(world, instance_entity, op) else {
             return;
         };
         unbundle_instance(world, key);
