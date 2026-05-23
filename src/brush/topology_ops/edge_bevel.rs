@@ -7,7 +7,6 @@
 //! RMB cancels and restores the pre-modal mesh.
 
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
@@ -87,12 +86,11 @@ pub(crate) fn brush_edge_bevel(
     mut modal_state: ResMut<EdgeBevelModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
+    cursor: crate::viewport::UiCursorPos,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
 ) -> OperatorResult {
-    let window = primary_window.single()?;
-    let cursor_pos = window.cursor_position()?;
+    let cursor_pos = cursor.get()?;
 
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {

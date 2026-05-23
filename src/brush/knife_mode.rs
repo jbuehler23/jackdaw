@@ -64,7 +64,6 @@
 
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
-use bevy::window::PrimaryWindow;
 use jackdaw_geometry::halfedge::ops::edge_split::split_edge;
 use jackdaw_geometry::halfedge::ops::face_poke::face_poke;
 use jackdaw_geometry::halfedge::ops::face_split::split_face;
@@ -243,7 +242,7 @@ pub(super) fn handle_knife_mode(
     edit_mode: Res<EditMode>,
     active: Res<ActiveViewport>,
     selection: Res<BrushSelection>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
+    cursor: crate::viewport::UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     brush_caches: Query<&BrushMeshCache>,
@@ -287,11 +286,7 @@ pub(super) fn handle_knife_mode(
     // Cursor / camera / viewport plumbing. We use the hovered viewport
     // (via `ActiveViewport`) so knife mode works in multi-viewport
     // layouts the same way clip mode does.
-    let Ok(window) = primary_window.single() else {
-        knife.hover_snap = None;
-        return;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = cursor.get() else {
         knife.hover_snap = None;
         return;
     };

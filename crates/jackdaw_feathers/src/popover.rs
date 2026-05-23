@@ -1,6 +1,6 @@
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::ui::UiGlobalTransform;
+use bevy::ui::{UiGlobalTransform, UiScale};
 use bevy::window::PrimaryWindow;
 use lucide_icons::Icon;
 
@@ -252,9 +252,12 @@ fn handle_popover_position(
     >,
     anchors: Query<(&ComputedNode, &UiGlobalTransform)>,
     window: Single<&Window, With<PrimaryWindow>>,
+    ui_scale: Res<UiScale>,
 ) {
     let window = window.into_inner();
-    let window_size = Vec2::new(window.width(), window.height());
+
+    // Convert to UI coordinates
+    let window_size = Vec2::new(window.width(), window.height()) / ui_scale.0;
 
     for (
         anchor_ref,
@@ -276,7 +279,7 @@ fn handle_popover_position(
         }
 
         let (anchor_top_left, anchor_size) = if let Some(pos) = anchor_ref.position {
-            (pos, Vec2::ZERO)
+            (pos / ui_scale.0, Vec2::ZERO)
         } else {
             let scale = anchor_computed.inverse_scale_factor();
             let anchor_center = anchor_transform.translation * scale;
