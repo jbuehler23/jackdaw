@@ -45,16 +45,12 @@ fn dispatch_button_operator_call(
         .map(|(k, v)| (k.to_string(), v.clone()))
         .collect();
     commands.queue(move |world: &mut World| {
-        // If the target is a modal operator, cancel any in-flight
-        // modal first. Lets the user switch tools (Draw Brush,
-        // Measure Distance, brush-element drags, terrain sculpt, ...)
-        // by clicking another toolbar button without reaching for
-        // Escape, and keeps the second dispatch from failing with
-        // `ModalAlreadyActive`. Extensions that wire their own
-        // operators to buttons inherit this behavior for free.
-        if let Ok(true) = world.operator(id.clone()).is_modal() {
-            let _ = world.operator("modal.cancel").call();
-        }
+        // Treat every toolbar button as a peer of any active tool: cancel
+        // whatever modal is running first, then dispatch. Without this,
+        // clicking Object Mode (or any other non-modal mode button) while
+        // Draw Brush / Measure / etc. owns the modal slot is silently
+        // blocked by their `is_available` checks.
+        let _ = world.operator("modal.cancel").call();
 
         let mut call = world.operator(id.clone()).settings(CallOperatorSettings {
             execution_context: ExecutionContext::Invoke,

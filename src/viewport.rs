@@ -234,7 +234,7 @@ impl UiCursorPos<'_, '_> {
 /// Read-only guard resources checked by many interaction systems before acting.
 /// If any guard is active, the system should bail early.
 #[derive(SystemParam)]
-pub(crate) struct InteractionGuards<'w> {
+pub(crate) struct InteractionGuards<'w, 's> {
     pub gizmo_drag: Res<'w, crate::gizmos::GizmoDragState>,
     pub gizmo_hover: Res<'w, crate::gizmos::GizmoHoverState>,
     pub modal: Res<'w, crate::modal_transform::ModalTransformState>,
@@ -242,6 +242,18 @@ pub(crate) struct InteractionGuards<'w> {
     pub draw_state: Res<'w, crate::draw_brush::DrawBrushState>,
     pub edit_mode: Res<'w, crate::brush::EditMode>,
     pub terrain_edit_mode: Res<'w, crate::terrain::TerrainEditMode>,
+    pub active_modal: ActiveModalQuery<'w, 's>,
+}
+
+impl InteractionGuards<'_, '_> {
+    pub fn is_any_interaction_active(&self) -> bool {
+        self.gizmo_drag.active
+            || self.modal.active.is_some()
+            || self.viewport_drag.active.is_some()
+            || self.draw_state.active.is_some()
+            || matches!(*self.edit_mode, crate::brush::EditMode::BrushEdit(_))
+            || self.active_modal.is_modal_running()
+    }
 }
 
 /// Tracks whether a right-click fly session started inside the viewport.

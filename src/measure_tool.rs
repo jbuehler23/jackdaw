@@ -100,12 +100,30 @@ pub(crate) fn measure_distance(
     vp: crate::viewport::ViewportCursor,
     mut ray_cast: MeshRayCast,
 ) -> OperatorResult {
+    if !state.initialized {
+        // Viewport capture is deferred so the modal can start from a
+        // toolbar button click where the cursor is over the toolbar.
+        state.initialized = true;
+        state.active = true;
+        state.has_start = false;
+        return OperatorResult::Running;
+    }
+
+    if !state.active {
+        // Confirm triggered finish, clean up and exit the modal.
+        state.initialized = false;
+        state.has_start = false;
+        state.camera = None;
+        state.viewport = None;
+        return OperatorResult::Finished;
+    }
+
     // Capture the viewport the modal was started on; subsequent
     // frames stick to it even if the cursor strays elsewhere.
     let camera_entity = state.camera.or_else(|| vp.camera_entity());
     let viewport_entity = state.viewport.or_else(|| vp.viewport_entity());
     let (Some(camera_entity), Some(viewport_entity)) = (camera_entity, viewport_entity) else {
-        return OperatorResult::Cancelled;
+        return OperatorResult::Running;
     };
     if state.camera.is_none() {
         state.camera = Some(camera_entity);
@@ -113,7 +131,9 @@ pub(crate) fn measure_distance(
     if state.viewport.is_none() {
         state.viewport = Some(viewport_entity);
     }
-    let (camera, cam_tf) = vp.camera_for(camera_entity)?;
+    let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
+        return OperatorResult::Running;
+    };
 
     // Try to get a world-space point under the cursor.
     let current_point = vp.cursor().and_then(|cursor_pos| {
@@ -125,26 +145,6 @@ pub(crate) fn measure_distance(
                 .unwrap_or(cam_tf.translation() + *ray.direction * 10.0),
         )
     });
-
-    if !state.initialized {
-        // First invocation: enter modal mode. Nothing is drawn until the first
-        // confirm click sets the start point.
-        let fallback = cam_tf.translation() + cam_tf.forward().as_vec3() * 5.0;
-        state.initialized = true;
-        state.active = true;
-        state.has_start = false;
-        state.end_point = current_point.unwrap_or(fallback);
-        return OperatorResult::Running;
-    }
-
-    if !state.active {
-        // Confirm triggered finish; clean up and exit modal.
-        state.initialized = false;
-        state.has_start = false;
-        state.camera = None;
-        state.viewport = None;
-        return OperatorResult::Finished;
-    }
 
     // Track cursor while waiting for the first click or while measuring.
     if let Some(point) = current_point {
@@ -162,15 +162,20 @@ fn cancel_measure_distance(mut state: ResMut<MeasureToolState>) {
     state.viewport = None;
 }
 
-fn measure_tool_active(state: Res<MeasureToolState>) -> bool {
-    state.active
+/// Without the viewport check the toolbar click that activates the
+/// modal would also be picked up as the first confirm.
+fn confirm_measure_available(
+    state: Res<MeasureToolState>,
+    vp: crate::viewport::ViewportCursor,
+) -> bool {
+    state.active && vp.viewport_entity().is_some()
 }
 
 #[operator(
     id = "tools.measure_distance.confirm",
     label = "Confirm Measurement",
     description = "First click sets the start point, second click finishes",
-    is_available = measure_tool_active,
+    is_available = confirm_measure_available,
     allows_undo = false,
 )]
 fn confirm_measure_distance(
