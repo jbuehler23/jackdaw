@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     convert::Infallible,
-    ops::{ControlFlow, FromResidual, Try},
+    ops::{ControlFlow, FromResidual, Residual, Try},
 };
 
 use bevy::ecs::system::{SystemId, SystemState};
@@ -303,6 +303,10 @@ impl<E> FromResidual<Result<Infallible, E>> for OperatorResult {
     fn from_residual(_: Result<Infallible, E>) -> Self {
         OperatorResult::Cancelled
     }
+}
+
+impl Residual<()> for OperatorCancelled {
+    type TryType = OperatorResult;
 }
 
 /// Extension trait on [`World`] for calling operators by id.

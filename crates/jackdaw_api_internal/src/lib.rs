@@ -1,4 +1,5 @@
 #![feature(try_trait_v2)]
+#![feature(try_trait_v2_residual)]
 //! Public API for Jackdaw editor extensions.
 //!
 //! Extensions are entities. An extension entity holds an [`lifecycle::Extension`]
