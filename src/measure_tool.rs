@@ -267,7 +267,7 @@ fn ensure_measure_label(
             MeasureLabel,
             crate::EditorEntity,
             crate::NonSerializable,
-            Text::new(""),
+            Text::default(),
             TextFont {
                 font_size: tokens::TEXT_SIZE,
                 ..default()

@@ -19,6 +19,7 @@ use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
 use jackdaw_feathers::icons::{EditorFont, Icon, IconFont};
 use jackdaw_feathers::tokens;
+use jackdaw_localization::LocalizedText;
 use jackdaw_panels::workspace::{WorkspaceChanged, WorkspaceRegistry, WorkspaceTab};
 use jackdaw_panels::workspace_tabs::{AddWorkspaceButton, WorkspaceTabLabel};
 
@@ -84,7 +85,7 @@ pub fn workspace_dropdown_trigger(
         children![
             (
                 WorkspaceDropdownTriggerLabel,
-                Text::new(""),
+                Text::default(),
                 TextFont {
                     font: editor_font,
                     font_size: tokens::FONT_SM,
@@ -377,7 +378,7 @@ fn spawn_popover_add_row(
         label_font.font = handle;
     }
     world.spawn((
-        Text::new("New Workspace".to_string()),
+        LocalizedText::new("new-workspace"),
         label_font,
         TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
         Pickable::IGNORE,

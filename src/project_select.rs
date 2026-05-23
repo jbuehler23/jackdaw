@@ -11,6 +11,7 @@ use jackdaw_feathers::{
     text_edit::{TextEditProps, TextEditValue, text_edit},
     tokens,
 };
+use jackdaw_localization::LocalizedText;
 use rfd::{AsyncFileDialog, FileHandle};
 
 use crate::{
@@ -472,7 +473,7 @@ fn spawn_project_selector(
                         ));
 
                         sidebar.spawn((
-                            Text::new("Source checkout"),
+                            LocalizedText::new("source-checkout"),
                             TextFont {
                                 font: font.clone(),
                                 font_size: tokens::FONT_SM,
@@ -1473,7 +1474,7 @@ pub fn open_project_progress_modal(world: &mut World, project_name: &str) {
 
     world.spawn((
         NewProjectProgressCrateLabel,
-        Text::new("Preparing build...".to_string()),
+        LocalizedText::new("preparing-build"),
         TextFont {
             font: editor_font.clone(),
             font_size: tokens::FONT_SM,

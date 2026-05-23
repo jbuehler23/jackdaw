@@ -19,6 +19,7 @@ use jackdaw_feathers::button::{
 };
 use jackdaw_feathers::icons::IconFont;
 use jackdaw_feathers::tokens;
+use jackdaw_localization::LocalizedText;
 use lucide_icons::Icon;
 
 use crate::blend_graph::AnimationBlendGraph;
@@ -359,7 +360,7 @@ fn spawn_placeholder(commands: &mut Commands, parent: Entity) {
         .id();
 
     commands.spawn((
-        Text::new("No animation clip on selection. Pick a named entity and create one."),
+        LocalizedText::new("no-animation-clip-on-selection"),
         TextColor(tokens::TEXT_MUTED_COLOR.into()),
         TextFont {
             font_size: tokens::FONT_SM,

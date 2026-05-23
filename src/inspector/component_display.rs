@@ -20,6 +20,7 @@ use jackdaw_feathers::{
     icons::{EditorFont, Icon, IconFont},
     tokens,
 };
+use jackdaw_localization::LocalizedText;
 use jackdaw_widgets::collapsible::{
     CollapsibleBody, CollapsibleHeader, CollapsibleSection, ToggleCollapsible,
 };
@@ -445,7 +446,7 @@ pub(crate) fn build_inspector_displays(
 
         // Fallback: no reflection data
         commands.spawn((
-            Text::new("(read-only)"),
+            LocalizedText::new("read-only"),
             TextFont {
                 font_size: tokens::FONT_SM,
                 ..Default::default()

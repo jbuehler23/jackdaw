@@ -17,6 +17,7 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::UiGlobalTransform;
 use jackdaw_commands::CommandHistory;
+use jackdaw_localization::LocalizedText;
 
 use crate::canvas::{GraphCanvasViewport, GraphCanvasWorld};
 use crate::commands::AddGraphNodeCmd;
@@ -150,7 +151,7 @@ pub fn spawn_popover(
         BackgroundColor(HEADER_BG),
         ChildOf(popover_entity),
         children![(
-            Text::new("Add Node"),
+            LocalizedText::new("add-node"),
             TextFont {
                 font_size: 12.0,
                 ..default()
