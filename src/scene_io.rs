@@ -16,6 +16,7 @@ use bevy::{
     prelude::*,
     reflect::serde::{TypedReflectDeserializer, TypedReflectSerializer},
     tasks::{AsyncComputeTaskPool, IoTaskPool, Task, futures_lite::future},
+    transform::components::TransformTreeChanged,
     window::{PrimaryWindow, RawHandleWrapper},
 };
 use jackdaw_jsn::format::{JsnAssets, JsnEntity, JsnHeader, JsnMetadata, JsnScene};
@@ -1596,12 +1597,11 @@ pub fn load_scene_from_jsn(
 
     // Second pass: deserialize extensible components via reflection with processor.
     //
-    // We defer `ChildOf` insertion to AFTER components + the require-chain
-    // post-pass land. Bevy validates parent-has-required-component on
-    // `on_insert` for `InheritedVisibility` / `GlobalTransform`; if a
-    // child gets its derived components before its parent has them, the
-    // validator logs a B0004 warning even though the eventual state is
-    // fine. Wiring `ChildOf` last avoids the order dependency entirely.
+    // `ChildOf` is inserted last, after components + require-chain
+    // backfill. Bevy's `validate_parent_has_component` on `on_insert`
+    // for `InheritedVisibility` / `GlobalTransform` would otherwise
+    // log spurious B0004 warnings when children get their derived
+    // components before parents do.
     let registry_guard = registry.read();
     for (i, jsn) in entities.iter().enumerate() {
         for (type_path, value) in &jsn.components {
@@ -1636,22 +1636,17 @@ pub fn load_scene_from_jsn(
     }
     drop(registry_guard);
 
-    // Bevy's `insert_reflect` adds one component at a time and does not
-    // fire the `#[require(...)]` chain. So `Transform` lands without its
-    // required `GlobalTransform` / `TransformTreeChanged`, and `Visibility`
-    // lands without `InheritedVisibility` / `ViewVisibility`. Hierarchy
-    // propagation then logs B0004 warnings and children render at wrong
-    // world positions because the parent's `GlobalTransform` never updates.
-    // Backfill the require chain defensively; the derived components are
-    // all `Default`-constructible and recomputed next frame.
+    // `insert_reflect` doesn't fire `#[require(...)]`. Backfill the
+    // hierarchy-propagation chain so Bevy doesn't B0004-warn and
+    // children render at correct world positions.
     for &entity in &spawned {
         let mut ent = world.entity_mut(entity);
         if ent.contains::<Transform>() {
             if !ent.contains::<GlobalTransform>() {
                 ent.insert(GlobalTransform::default());
             }
-            if !ent.contains::<bevy::transform::components::TransformTreeChanged>() {
-                ent.insert(bevy::transform::components::TransformTreeChanged);
+            if !ent.contains::<TransformTreeChanged>() {
+                ent.insert(TransformTreeChanged);
             }
         }
         if ent.contains::<Visibility>() {
@@ -1664,10 +1659,8 @@ pub fn load_scene_from_jsn(
         }
     }
 
-    // Final pass: wire ChildOf relationships now that every entity has
-    // its full component set. Inserting earlier would let Bevy's
-    // validate_parent_has_component hook fire on still-incomplete
-    // parents and emit spurious B0004 warnings.
+    // Wire ChildOf relationships now that every entity has its full
+    // component set (see the ChildOf-last comment above).
     for (i, jsn) in entities.iter().enumerate() {
         if let Some(parent_idx) = jsn.parent
             && let Some(&parent_entity) = spawned.get(parent_idx)
@@ -1980,12 +1973,9 @@ pub fn build_snapshot_ast(world: &mut World) -> jackdaw_jsn::SceneJsnAst {
         }
     };
 
-    // Install the freshly captured AST as the live source of truth.
-    // Operators mutate ECS directly for live preview during a drag; the
-    // AST resource lags until snapshot capture reconciles it. Without
-    // this install, a subsequent reload (e.g. dragging in another
-    // prefab instance) reads the stale pre-edit AST and erases the
-    // user's work. Cheap: this is a single resource swap.
+    // Reconcile the live `SceneJsnAst` with the captured snapshot.
+    // Operators mutate ECS directly during a drag; without this swap,
+    // a later reload reads the stale pre-edit AST and erases the work.
     *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast.clone();
     ast
 }
@@ -2039,12 +2029,10 @@ fn build_snapshot_ast_inner(world: &mut World) -> Result<jackdaw_jsn::SceneJsnAs
 
     let mut ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &scene_entities);
 
-    // Inherited descendants of prefab instances were serialized as full
-    // entities by `build_scene_snapshot`. The data model wants them as
-    // override entries instead (`PrefabEntityId(N)` + only the components
-    // that diverge from the prefab baseline). Reduce them in place so
-    // the snapshot reflects the data model, and so the live `SceneJsnAst`
-    // we install at the call site does the same.
+    // Inherited descendants belong in the AST as sparse override
+    // entries (PrefabEntityId + only diverged fields), not as full
+    // authored entities. Reduce them so the snapshot and the live
+    // `SceneJsnAst` we install both reflect the data model.
     if let Some(cache) = world.get_resource::<crate::prefab::PrefabAstCache>() {
         prefabify_inherited_descendants(&mut ast, cache);
     }
@@ -2052,15 +2040,10 @@ fn build_snapshot_ast_inner(world: &mut World) -> Result<jackdaw_jsn::SceneJsnAs
     Ok(ast)
 }
 
-/// Reduce ECS-only inherited descendants of prefab instances to override
-/// entries. After `build_scene_snapshot` walks the live world it produces
-/// a full `JsnEntity` per entity (including ones materialised by the
-/// resolver from prefab files). Those don't belong in the source AST as
-/// authored entities; they belong as sparse-delta override nodes under
-/// the instance. This function walks the snapshot AST, finds each
-/// inherited descendant by `PrefabEntityId + no IsA + IsA-bearing ancestor`,
-/// looks up the matching entry in the prefab cache, and strips any
-/// components on the snapshot node that match the prefab baseline.
+/// Reduce inherited descendants of prefab instances (snapshot nodes
+/// with `PrefabEntityId`, no `IsA`, and an `IsA`-bearing ancestor) to
+/// sparse override entries by stripping components that match the
+/// matching prefab entry's baseline.
 fn prefabify_inherited_descendants(
     ast: &mut jackdaw_jsn::SceneJsnAst,
     cache: &crate::prefab::PrefabAstCache,
@@ -2094,9 +2077,8 @@ fn prefabify_inherited_descendants(
             cursor = ast.nodes[p_idx].parent;
         }
         let Some(source) = isa_source else {
-            // Has `PrefabEntityId` but no IsA ancestor — treat as
-            // authored. This shouldn't normally happen, but if it does
-            // we just leave the node alone.
+            // PrefabEntityId without an IsA ancestor: treat as authored
+            // and leave the node alone.
             continue;
         };
         let Some(prefab) = cache.get(&source) else {
@@ -2119,32 +2101,18 @@ fn prefabify_inherited_descendants(
         };
         let prefab_entry = &prefab.nodes[prefab_entry_idx];
 
-        // Strip components that match the prefab baseline. Keep
-        // PrefabEntityId always so the resolver still recognises the
-        // node as an override target.
-        let current: Vec<(String, serde_json::Value)> = ast.nodes[idx]
-            .components
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        ast.nodes[idx].components.clear();
-        ast.nodes[idx].components.insert(
-            PREFAB_ENTITY_ID_TYPE.to_string(),
-            serde_json::Value::from(peid),
-        );
-        for (type_path, value) in current {
+        // Strip components matching the prefab baseline; keep
+        // PrefabEntityId so the resolver still recognises the
+        // override target.
+        ast.nodes[idx].components.retain(|type_path, value| {
             if type_path == PREFAB_ENTITY_ID_TYPE {
-                continue;
+                return true;
             }
-            match prefab_entry.components.get(&type_path) {
-                Some(base) if base == &value => {
-                    // Identical to the prefab baseline; omit.
-                }
-                _ => {
-                    ast.nodes[idx].components.insert(type_path, value);
-                }
+            match prefab_entry.components.get(type_path) {
+                Some(base) => base != value,
+                None => true,
             }
-        }
+        });
     }
 }
 
@@ -2183,28 +2151,17 @@ pub fn apply_ast_to_world(world: &mut World, ast: &jackdaw_jsn::SceneJsnAst) {
         error!("apply_ast_to_world: despawn_scene_entities failed: {err}");
     }
 
-    // Resolve prefab IsA references before spawning. Snapshots produced
-    // via `build_snapshot_ast` go through `prefabify_inherited_descendants`,
-    // which reduces inherited descendants to sparse override entries
-    // (just `PrefabEntityId`, no Name / Transform / Brush data). The
-    // resolver inherits the missing components from each prefab's
-    // baseline so the spawn produces fully-realized entities. Without
-    // this, an undo that restores a state containing prefab instances
-    // would spawn the children as empty entities (instance shows up in
-    // the outliner but no geometry renders).
-    let resolved_ast = world
-        .get_resource::<crate::prefab::PrefabAstCache>()
-        .map_or_else(
-            || ast.clone(),
-            |cache| {
-                crate::prefab::resolver::resolve_scene(ast, cache).unwrap_or_else(|e| {
-                    bevy::log::warn!(
-                        "apply_ast_to_world: resolver failed: {e}; spawning unresolved"
-                    );
-                    ast.clone()
-                })
-            },
-        );
+    // Resolve prefab IsA references before spawning. Snapshots store
+    // inherited descendants as sparse override entries (PrefabEntityId
+    // only, components matching the baseline stripped); the resolver
+    // fills them back in so the spawn produces complete entities.
+    let resolved_ast = match world.get_resource::<crate::prefab::PrefabAstCache>() {
+        Some(cache) => crate::prefab::resolver::resolve_scene(ast, cache).unwrap_or_else(|e| {
+            bevy::log::warn!("apply_ast_to_world: resolver failed: {e}; spawning unresolved");
+            ast.clone()
+        }),
+        None => ast.clone(),
+    };
     let scene = resolved_ast.to_jsn_scene(JsnMetadata::default());
     let parent_path = world
         .get_resource::<crate::project::ProjectRoot>()
@@ -2213,24 +2170,20 @@ pub fn apply_ast_to_world(world: &mut World, ast: &jackdaw_jsn::SceneJsnAst) {
     let local_assets = load_inline_assets(world, &scene.assets, &parent_path);
     let spawned = load_scene_from_jsn(world, &scene.scene, &parent_path, &local_assets);
 
-    // Install the UNRESOLVED ast as live, with the authored nodes
-    // rebound to their freshly-spawned ECS entities. Inherited
-    // descendants spawned by the resolver live ECS-only until edited,
-    // matching reload_all_instances semantics.
-    {
-        let authored_count = ast.nodes.len();
-        let mut new_ast = ast.clone();
-        for (i, node) in new_ast.nodes.iter_mut().enumerate().take(authored_count) {
-            node.ecs_entity = spawned.get(i).copied();
-        }
-        new_ast.ecs_to_jsn = new_ast
-            .nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, n)| n.ecs_entity.map(|e| (e, i)))
-            .collect();
-        *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = new_ast;
+    // Install the unresolved ast as live, with authored nodes rebound
+    // to their freshly-spawned ECS entities. Inherited descendants live
+    // ECS-only until edited, same as `reload_all_instances`.
+    let mut new_ast = ast.clone();
+    for (i, node) in new_ast.nodes.iter_mut().enumerate() {
+        node.ecs_entity = spawned.get(i).copied();
     }
+    new_ast.ecs_to_jsn = new_ast
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| n.ecs_entity.map(|e| (e, i)))
+        .collect();
+    *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = new_ast;
 
     // Restore selection by stable id. Update `Selection.entities`
     // BEFORE inserting `Selected` so `add_component_displays` (an

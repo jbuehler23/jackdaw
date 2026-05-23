@@ -3134,7 +3134,7 @@ fn snapshot_round_trip_undoes_spawn_instance() {
         assert_eq!(q.iter(world).count(), 1, "instance spawned");
     }
 
-    // Apply the before-snapshot — what SnapshotDiff::undo does.
+    // Apply the before-snapshot (what SnapshotDiff::undo does).
     jackdaw::scene_io::apply_ast_to_world(app.world_mut(), &before_ast);
     {
         let world = app.world_mut();
@@ -3245,7 +3245,7 @@ fn save_3_brushes_survives_snapshot_capture_and_install() {
     // and after) and installs each as the live AST. The prefabify pass
     // reduces inherited descendants to override entries. After all of
     // this, the world must still have the same 3 inherited children
-    // under the instance — not lose any to the prefabify+install
+    // under the instance, not lose any to the prefabify+install
     // round-trip.
 
     let tmp = tempfile::tempdir().unwrap();
@@ -3648,7 +3648,7 @@ fn apply_ast_with_override_entries_resolves_inherited_components() {
         Vec3::new(0.0, 0.0, 0.0),
     );
 
-    // Capture a snapshot — this prefabifies the inherited brush into
+    // Capture a snapshot. This prefabifies the inherited brush into
     // an override entry with just PrefabEntityId.
     let snapshot_ast = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
 

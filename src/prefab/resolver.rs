@@ -223,38 +223,38 @@ fn merge_prefab_under_instance(
             continue;
         };
 
-        // First: inherit every prefab component that the override
-        // doesn't already provide. This is what makes sparse override
-        // entries work — the snapshot capture strips any component
-        // that matches the prefab baseline, so the override carries
-        // only the diverged fields; the resolver fills in the rest.
-        // Without this, spawning produces entities with just
-        // `PrefabEntityId` and nothing else.
+        // Inherit every prefab component the override doesn't already
+        // provide. Snapshot capture strips components matching the
+        // baseline; without this fill-in, an override spawns as an
+        // entity carrying just `PrefabEntityId`.
         let inherited_pairs: Vec<(String, serde_json::Value)> = prefab
             .components_at(prefab_match)
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .map(|m| {
+                m.iter()
+                    .filter(|(k, _)| k.as_str() != PREFAB_ENTITY_ID_TYPE && k.as_str() != ISA_TYPE)
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
             .unwrap_or_default();
         for (type_path, base_value) in &inherited_pairs {
-            if type_path == PREFAB_ENTITY_ID_TYPE || type_path == ISA_TYPE {
-                continue;
-            }
             if ast.get_component_at(ok, type_path).is_none() {
                 ast.insert_component(ok, type_path, base_value.clone());
             }
         }
 
-        // Second: for any component the override DOES provide, merge
-        // it onto the inherited base as a sparse delta. This preserves
-        // the "override only what differs" semantics for field-level
-        // diffs (e.g. Transform with just `translation` overridden).
+        // For any component the override does provide, merge it onto
+        // the inherited base as a sparse delta. Preserves field-level
+        // diff semantics (e.g. Transform with only `translation`).
         let component_pairs: Vec<(String, serde_json::Value)> = ast
             .components_at(ok)
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .map(|m| {
+                m.iter()
+                    .filter(|(k, _)| k.as_str() != PREFAB_ENTITY_ID_TYPE && k.as_str() != ISA_TYPE)
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
             .unwrap_or_default();
         for (type_path, delta_value) in component_pairs {
-            if type_path == PREFAB_ENTITY_ID_TYPE || type_path == ISA_TYPE {
-                continue;
-            }
             if let Some(inherited) = prefab.get_component_at(prefab_match, &type_path).cloned()
                 && inherited != delta_value
             {

@@ -23,8 +23,8 @@ use crate::{
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct TransformGizmoGroup;
 
-/// Bundles viewport-pick params so `gizmo_drag` can stay under Bevy's
-/// system-param ceiling while still accepting `Commands`.
+/// Bundles viewport-pick params used by `gizmo_drag` (the system has
+/// many params; bundling keeps it under Bevy's system-param ceiling).
 #[derive(SystemParam)]
 struct GizmoViewportCtx<'w, 's> {
     active_viewport: Res<'w, crate::viewport::ActiveViewport>,
@@ -397,12 +397,9 @@ pub fn gizmo_drag(
     }
 
     if mouse.just_released(MouseButton::Left) {
-        // The operator framework handles undo for us: it captured a
-        // before-snapshot when the modal started and will capture an
-        // after-snapshot now that we're returning Finished, pushing a
-        // `SnapshotDiff` to history if anything changed. The snapshot
-        // walks the live ECS and rebuilds the AST, so the dragged
-        // Transform is captured automatically.
+        // Undo is handled by the framework: the modal captured a
+        // before-snapshot on start; returning Finished triggers an
+        // after-snapshot + SnapshotDiff push.
         clear_gizmo_drag_state(&mut drag_state, &mut cursor_query);
         return OperatorResult::Finished;
     }

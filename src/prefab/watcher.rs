@@ -189,14 +189,10 @@ pub fn reload_all_instances(world: &mut World) {
         }
     };
     let jsn = crate::scene_io::jsn_scene_from_ast(&resolved);
-    // Inline the despawn + ast/tree/selection clears, but PRESERVE
-    // `CommandHistory`. `clear_scene_entities` truncates the undo
-    // stack (intended for scene-file loads); we don't want that here
-    // because the operator framework relies on pushing a SnapshotDiff
-    // AFTER reload_all_instances finishes, and a fresh push to a
-    // history that just got cleared still works, but any history
-    // accumulated BEFORE the call (e.g. from prior operators or
-    // saved-state) would be lost on every prefab reload.
+    // Inlined despawn + clear that preserves `CommandHistory`.
+    // `clear_scene_entities` truncates the undo stack (intended for
+    // scene-file loads); prefab reloads must not lose history pushed
+    // before this point or undo of preceding operators breaks.
     world.resource_mut::<jackdaw_jsn::SceneJsnAst>().clear();
     world
         .resource_mut::<crate::selection::Selection>()
@@ -232,11 +228,10 @@ pub fn reload_all_instances(world: &mut World) {
     // dirty-state baselines stay valid and the status bar / per-tab
     // dirty dot keep tracking the correct undo depth.
 
-    // Force-rebuild the outliner. The observer-driven row creation can
-    // fire from a transient archetype during `insert_reflect` (Add<Transform>
-    // dispatches before IsA / Name land), causing classify_entity to pick
-    // the wrong category and pin the wrong icon. Clear + rebuild guarantees
-    // every row is classified against the final, fully-populated archetype.
+    // Rebuild the outliner from scratch. Observer-driven row creation
+    // can fire mid-`insert_reflect` (Add<Transform> before IsA / Name
+    // land) and pin the wrong category icon; a clean rebuild classifies
+    // every row against the final archetype.
     if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
         bevy::log::warn!("reload_all_instances: clear_all_tree_rows failed: {err}");
     }

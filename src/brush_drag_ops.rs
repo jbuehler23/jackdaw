@@ -679,12 +679,9 @@ fn spawn_extruded_brush(
         let mut selection = world.resource_mut::<Selection>();
         selection.entities = vec![entity];
         world.entity_mut(entity).insert(Selected);
-        // The enclosing `brush.face.drag` modal operator has
-        // `allows_undo = true`; the framework's snapshot captures the
-        // brush spawn as part of the modal's SnapshotDiff. Pushing a
-        // manual `CreateBrushCommand` here would create a second undo
-        // entry for the same logical operation, forcing the user to
-        // Ctrl+Z twice to undo one Extend gesture.
+        // No manual undo push: the enclosing `brush.face.drag` modal
+        // has `allows_undo = true` and its SnapshotDiff captures the
+        // spawn.
     });
 }
 

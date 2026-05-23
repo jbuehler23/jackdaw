@@ -392,10 +392,8 @@ fn viewport_drag_finish(
     };
 
     if let Ok(transform) = transforms.get(active.entity) {
-        // The modal mutated the ECS Transform directly during the
-        // drag; `push_executed_synced` runs the AST-sync hook before
-        // pushing so a later reload doesn't restore the original
-        // position.
+        // Modal mutated ECS directly during the drag; the synced push
+        // runs the AST-sync hook so reloads see the new Transform.
         jackdaw_commands::push_executed_synced(
             Box::new(SetTransform {
                 entity: active.entity,

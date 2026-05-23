@@ -92,8 +92,8 @@ fn normalize_selection_roots(world: &World, roots: &[Entity]) -> Vec<Entity> {
 /// from the selection snapshot, the selection is removed from the
 /// source scene's AST and ECS, and a fresh instance is spawned at the
 /// selection's centroid via `spawn_instance`. The resolver then
-/// materialises the inherited children — same shape as a drag-spawn
-/// instance.
+/// materialises the inherited children; result has the same shape as
+/// a drag-spawn instance.
 pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target_path: &Path) {
     let normalized = normalize_selection_roots(world, roots);
     if normalized.is_empty() {
@@ -342,29 +342,25 @@ fn propagate_instance_to_prefab(world: &mut World, instance_key: usize, target_p
         }
     };
 
-    // Find the resolved index for the instance. Since resolve_scene
-    // returns a clone with descendants appended (not inserted), the
-    // authored indices line up with the unresolved AST.
-    let resolved_instance_idx = instance_key;
+    // `resolve_scene` appends descendants to the clone, so authored
+    // indices line up with the unresolved AST.
 
-    // Walk the resolved AST under the instance to collect descendant
-    // indices in BFS order. These become the prefab's child entries.
+    // Walk the resolved AST under the instance, collecting descendant
+    // indices in BFS order to use as prefab child entries.
     let mut descendants: Vec<usize> = Vec::new();
-    let mut stack: Vec<usize> = vec![resolved_instance_idx];
+    let mut stack: Vec<usize> = vec![instance_key];
     while let Some(idx) = stack.pop() {
-        let children: Vec<usize> = resolved.children_of(idx).collect();
-        for child in children {
+        for child in resolved.children_of(idx).collect::<Vec<_>>() {
             descendants.push(child);
             stack.push(child);
         }
     }
 
-    // Build the child entries from the resolved AST. Strip prefab
-    // markers (they get rewritten with fresh sequential IDs) and remap
-    // parent indices to the prefab's index space: instance -> 0,
-    // descendants -> 1..N.
+    // Strip prefab markers (rewritten below with fresh sequential
+    // IDs) and remap parents to prefab index space (instance -> 0,
+    // descendants -> 1..N).
     let mut old_to_new: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
-    old_to_new.insert(resolved_instance_idx, 0);
+    old_to_new.insert(instance_key, 0);
     for (i, &d) in descendants.iter().enumerate() {
         old_to_new.insert(d, i + 1);
     }
@@ -1957,12 +1953,8 @@ pub fn prefab_unbundle_instance(
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        // Resolve the AST key INSIDE the operator. Dispatching with a
-        // pre-resolved key is unsafe: the framework's before-snapshot
-        // capture rebuilds the live AST (prefabify_inherited_descendants
-        // reshuffles node indices), so a key fetched before the operator
-        // started can point at a different node by the time we read it.
-        // Looking it up here uses the post-install live AST.
+        // Resolve the AST key inside the operator (see
+        // prefab.revert_field for the rationale).
         let key = world
             .resource::<SceneJsnAst>()
             .key_for_entity(instance_entity);
