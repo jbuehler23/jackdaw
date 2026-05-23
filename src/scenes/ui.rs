@@ -209,7 +209,8 @@ fn spawn_scene_tab(
             move |click: On<Pointer<Click>>,
                   mut commands: Commands,
                   mut state: ResMut<ContextMenuState>,
-                  windows: Query<&Window>| {
+                  windows: Query<&Window>,
+                  ui_scale: Res<bevy::ui::UiScale>| {
                 match click.event().button {
                     PointerButton::Primary => {
                         commands.queue(move |world: &mut World| {
@@ -226,7 +227,8 @@ fn spawn_scene_tab(
                             .single()
                             .ok()
                             .and_then(bevy::prelude::Window::cursor_position)
-                            .unwrap_or_default();
+                            .unwrap_or_default()
+                            / ui_scale.0;
                         if let Some(menu) = state.menu_entity.take()
                             && let Ok(mut ec) = commands.get_entity(menu)
                         {

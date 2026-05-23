@@ -302,7 +302,7 @@ pub(crate) fn draw_brush_commit_polygon(
     }
     active.polygon_vertices = hull;
     let viewport_cursor = (|| {
-        let cursor_pos = vp.windows.single().ok()?.cursor_position()?;
+        let cursor_pos = vp.cursor()?;
         let camera_entity = active.camera.or_else(|| vp.camera_entity())?;
         let viewport_entity = active.viewport.or_else(|| vp.viewport_entity())?;
         let (camera, _) = vp.camera_for(camera_entity)?;
@@ -368,8 +368,7 @@ fn confirm_draw_brush(
     let active = draw_state.active.as_mut()?;
 
     // Verify cursor is in viewport
-    let window = vp.windows.single()?;
-    let cursor_pos = window.cursor_position()?;
+    let cursor_pos = vp.cursor()?;
     let camera_entity = active.camera.or_else(|| vp.camera_entity());
     let viewport_entity = active.viewport.or_else(|| vp.viewport_entity());
     let (Some(camera_entity), Some(viewport_entity)) = (camera_entity, viewport_entity) else {
@@ -3624,8 +3623,7 @@ fn find_hovered_face_on_brush(
     ray_cast: &mut MeshRayCast,
     brush_faces: &Query<&BrushFaceEntity>,
 ) -> Option<usize> {
-    let window = vp.windows.single().ok()?;
-    let cursor_pos = window.cursor_position()?;
+    let cursor_pos = vp.cursor()?;
     let camera_entity = vp.camera_entity()?;
     let viewport_entity = vp.viewport_entity()?;
     let (camera, cam_tf) = vp.camera_for(camera_entity)?;

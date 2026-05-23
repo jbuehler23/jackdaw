@@ -411,12 +411,7 @@ pub(super) fn brush_face_hover(
         super::HoverIntent::PushPull
     };
 
-    let Ok(window) = vp.windows.single() else {
-        hover.entity = None;
-        hover.face_index = None;
-        return;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = vp.cursor() else {
         hover.entity = None;
         hover.face_index = None;
         return;
