@@ -3943,3 +3943,138 @@ fn typed_command_and_snapshot_diff_interleave_cleanly_on_undo() {
         "counter reverted by second undo"
     );
 }
+
+#[test]
+fn scene_save_reopen_round_trip_preserves_instance_and_override() {
+    // Full user flow: spawn instance, edit a child Transform, serialize
+    // the scene, simulate a reload, verify the instance is back with
+    // the inherited child carrying the OVERRIDE value (not the prefab
+    // baseline). This is what `Ctrl+S` then close+reopen would do.
+    use bevy::math::Vec3;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+    let prefab_json = serde_json::json!({
+        "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
+        "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
+        "assets": {},
+        "editor": null,
+        "scene": [
+            {
+                "components": {
+                    "jackdaw::prefab::components::Prefab": null,
+                    "jackdaw::prefab::components::PrefabEntityId": 0,
+                    "bevy_ecs::name::Name": "p",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [0.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            },
+            {
+                "parent": 0,
+                "components": {
+                    "jackdaw::prefab::components::PrefabEntityId": 1,
+                    "bevy_ecs::name::Name": "child",
+                    "bevy_transform::components::transform::Transform": {
+                        "translation": [1.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    },
+                    "bevy_camera::visibility::Visibility": "Inherited"
+                }
+            }
+        ]
+    });
+    std::fs::write(
+        &prefab_path,
+        serde_json::to_string_pretty(&prefab_json).unwrap(),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        Vec3::new(10.0, 0.0, 0.0),
+    );
+
+    let child_entity = {
+        let world = app.world_mut();
+        let mut q = world.query::<(bevy::prelude::Entity, &jackdaw::prefab::PrefabEntityId)>();
+        q.iter(world)
+            .find(|(_, id)| id.0 == 1)
+            .map(|(e, _)| e)
+            .expect("inherited child exists")
+    };
+    if let Some(mut t) = app
+        .world_mut()
+        .get_mut::<bevy::prelude::Transform>(child_entity)
+    {
+        t.translation.x = 99.0;
+    }
+
+    // "Save": serialize the world to a SceneJsnAst (prefabified).
+    let snapshot_ast = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+
+    // Verify the on-disk shape: an override entry with the edit only.
+    let scene_jsn = snapshot_ast.to_jsn_scene(jackdaw_jsn::format::JsnMetadata::default());
+    let override_entry = scene_jsn
+        .scene
+        .iter()
+        .find(|e| {
+            e.components
+                .get("jackdaw::prefab::components::PrefabEntityId")
+                .and_then(serde_json::Value::as_u64)
+                == Some(1)
+                && !e
+                    .components
+                    .contains_key("jackdaw::prefab::components::IsA")
+        })
+        .expect("override entry on disk for the edited child");
+    let tx = override_entry
+        .components
+        .get("bevy_transform::components::transform::Transform")
+        .expect("override carries the Transform diff");
+    assert!(
+        (tx["translation"][0].as_f64().unwrap() - 99.0).abs() < 1e-4,
+        "on-disk override stores the edited translation X (99.0)"
+    );
+
+    // "Reopen": fresh app, apply the AST (mimics finish_load_scene).
+    let mut app2 = make_app_for_prefab_tests();
+    // Re-prime the prefab cache (loading from disk would do this).
+    {
+        let scene_text = std::fs::read_to_string(&prefab_path).unwrap();
+        let scene: jackdaw_jsn::format::JsnScene = serde_json::from_str(&scene_text).unwrap();
+        app2.world_mut()
+            .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+            .insert(
+                &prefab_path,
+                jackdaw_jsn::SceneJsnAst::from_jsn_scene(&scene, &[]),
+            );
+    }
+    jackdaw::scene_io::apply_ast_to_world(app2.world_mut(), &snapshot_ast);
+
+    let world = app2.world_mut();
+    let mut isa_q = world.query::<&jackdaw::prefab::IsA>();
+    assert_eq!(isa_q.iter(world).count(), 1, "one instance restored");
+
+    let mut q = world.query::<(
+        &jackdaw::prefab::PrefabEntityId,
+        &bevy::prelude::Name,
+        &bevy::prelude::Transform,
+    )>();
+    let (_, name, transform) = q
+        .iter(world)
+        .find(|(id, _, _)| id.0 == 1)
+        .expect("inherited child restored on reopen");
+    assert_eq!(name.as_str(), "child", "Name inherited from prefab");
+    assert!(
+        (transform.translation.x - 99.0).abs() < 1e-4,
+        "edited Transform.x preserved across save/reopen (99.0); got {}",
+        transform.translation.x
+    );
+}
