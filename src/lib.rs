@@ -33,6 +33,7 @@ pub mod keybinds;
 use std::{collections::BTreeMap, marker::PhantomData};
 
 pub use inspector::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
+
 pub mod core_extension;
 pub mod dock_ops;
 pub mod document_ops;
@@ -257,23 +258,28 @@ impl Plugin for EditorCorePlugin {
             EditorFeathersPlugin,
         ));
         app.add_plugins((
-            jackdaw_jsn::JsnPlugin {
-                runtime_mesh_rebuild: false,
-            },
-            project_select::ProjectSelectPlugin,
-            inspector::InspectorPlugin,
-            hierarchy::HierarchyPlugin,
-            viewport::ViewportPlugin,
-            gizmos::TransformGizmosPlugin,
-            commands::CommandHistoryPlugin,
-            selection::SelectionPlugin,
-            entity_ops::EntityOpsPlugin,
-            scene_io::SceneIoPlugin,
-            scenes::ScenesPlugin,
-            workspace_dropdown::WorkspaceDropdownPlugin,
-            asset_browser::AssetBrowserPlugin,
-            viewport_select::ViewportSelectPlugin,
-            snapping::SnappingPlugin,
+            (
+                jackdaw_jsn::JsnPlugin {
+                    runtime_mesh_rebuild: false,
+                },
+                project_select::ProjectSelectPlugin,
+                inspector::InspectorPlugin,
+                hierarchy::HierarchyPlugin,
+                viewport::ViewportPlugin,
+                gizmos::TransformGizmosPlugin,
+                commands::CommandHistoryPlugin,
+            ),
+            (
+                selection::SelectionPlugin,
+                entity_ops::EntityOpsPlugin,
+                scene_io::SceneIoPlugin,
+                scenes::ScenesPlugin,
+                workspace_dropdown::WorkspaceDropdownPlugin,
+                asset_browser::AssetBrowserPlugin,
+                viewport_select::ViewportSelectPlugin,
+                snapping::SnappingPlugin,
+                jackdaw_localization::LocalizationPlugin,
+            ),
         ))
         .add_plugins(keybinds::KeybindsPlugin)
         .add_plugins(keybind_settings::KeybindSettingsPlugin)

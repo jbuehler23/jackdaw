@@ -8,6 +8,7 @@ use jackdaw_feathers::{
     tokens,
     tree_view::tree_container_drop_observers,
 };
+use jackdaw_localization::LocalizedText;
 
 use crate::{
     EditorEntity,
@@ -637,7 +638,7 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
                         TextColor(tokens::TEXT_PRIMARY),
                     ),
                     (
-                        Text::new("Add Entity"),
+                        LocalizedText::new("add-entity"),
                         TextFont {
                             font_size: tokens::TEXT_SIZE,
                             weight: FontWeight::MEDIUM,
@@ -663,7 +664,7 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
             ),
             (
                 crate::status_bar::SceneStatsText,
-                Text::new(""),
+                Text::default(),
                 TextFont {
                     font_size: tokens::FONT_SM,
                     ..Default::default()
@@ -850,7 +851,7 @@ fn editor_status_bar() -> impl Bundle {
         children![
             (
                 status_bar::StatusBarLeft,
-                Text::new("Ready"),
+                LocalizedText::new("ready"),
                 TextFont {
                     font_size: tokens::FONT_SM,
                     ..Default::default()
@@ -859,7 +860,7 @@ fn editor_status_bar() -> impl Bundle {
             ),
             (
                 status_bar::StatusBarCenter,
-                Text::new(""),
+                Text::default(),
                 TextFont {
                     font_size: tokens::FONT_SM,
                     ..Default::default()
@@ -877,7 +878,7 @@ fn editor_status_bar() -> impl Bundle {
                 children![
                     (
                         status_bar::StatusBarRight,
-                        Text::new(""),
+                        Text::default(),
                         TextFont {
                             font_size: tokens::FONT_SM,
                             ..Default::default()
@@ -959,7 +960,7 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
                                 TextColor(tokens::TEXT_PRIMARY),
                             ),
                             (
-                                Text::new("Add Component"),
+                                LocalizedText::new("add-component"),
                                 TextFont {
                                     font_size: tokens::TEXT_SIZE,
                                     weight: FontWeight::MEDIUM,
