@@ -302,7 +302,7 @@ fn sync_selection_disable_state(
 fn physics_tool_drag(
     edit_mode: Res<EditMode>,
     mouse: Res<ButtonInput<MouseButton>>,
-    windows: Query<&Window>,
+    cursor: crate::viewport::UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<crate::viewport::MainViewportCamera>>,
     viewport_query: Query<
         (&ComputedNode, &UiGlobalTransform),
@@ -323,8 +323,7 @@ fn physics_tool_drag(
         return;
     }
 
-    let Ok(window) = windows.single() else { return };
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = cursor.get() else {
         return;
     };
 

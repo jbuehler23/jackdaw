@@ -304,9 +304,7 @@ fn switch_brush_edit_mode(
         _ => {
             // Entering from Object / Physics requires a selected
             // brush; otherwise the op is a no-op.
-            let Some(entity) = selection.primary().filter(|&e| brushes.contains(e)) else {
-                return OperatorResult::Cancelled;
-            };
+            let entity = selection.primary().filter(|&e| brushes.contains(e))?;
             *edit_mode = EditMode::BrushEdit(target);
             brush_selection.entity = Some(entity);
             brush_selection.faces.clear();

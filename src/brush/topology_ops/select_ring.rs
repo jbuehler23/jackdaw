@@ -28,15 +28,11 @@ pub(crate) fn brush_select_ring(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
         return OperatorResult::Cancelled;
     }
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
     if selection.edges.is_empty() {
         return OperatorResult::Cancelled;
     }
-    let Ok(halfedge) = halfedge_q.get(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let halfedge = halfedge_q.get(brush_entity)?;
 
     // Map each selected cache edge (a, b) to its HalfedgeMesh EdgeKey.
     let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());

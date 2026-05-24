@@ -29,16 +29,12 @@ pub(crate) fn brush_bridge_edge_loops(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
         return OperatorResult::Cancelled;
     }
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
     if selection.edges.len() < 2 {
         return OperatorResult::Cancelled;
     }
 
-    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
 
     // Map cache edge pairs (a, b) -> HalfedgeMesh EdgeKeys via vert_keys.
     let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
@@ -65,9 +61,7 @@ pub(crate) fn brush_bridge_edge_loops(
     let edges_a = &components[0];
     let edges_b = &components[1];
 
-    let Ok(result) = bridge_edge_loops(&mut halfedge.mesh, edges_a, edges_b) else {
-        return OperatorResult::Cancelled;
-    };
+    let result = bridge_edge_loops(&mut halfedge.mesh, edges_a, edges_b)?;
 
     // Snapshot the material_idx of each newly created face so we can resolve
     // post-flatten topology face indices. `flatten_to_topology` stable-sorts by
@@ -98,9 +92,7 @@ pub(crate) fn brush_bridge_edge_loops(
 
     // Flatten + sync planes + grow brush.faces.
     let new_topology = halfedge.mesh.flatten_to_topology();
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut brush = brushes.get_mut(brush_entity)?;
     let new_face_count = new_topology.polygons.len();
     while brush.faces.len() < new_face_count {
         let template = brush.faces.last().cloned().unwrap_or_default();

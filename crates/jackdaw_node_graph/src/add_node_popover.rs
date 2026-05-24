@@ -17,6 +17,7 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::UiGlobalTransform;
 use jackdaw_commands::CommandHistory;
+use jackdaw_localization::LocalizedText;
 
 use crate::canvas::{GraphCanvasViewport, GraphCanvasWorld};
 use crate::commands::AddGraphNodeCmd;
@@ -57,7 +58,7 @@ const HEADER_TEXT: Color = Color::srgb(0.6, 0.62, 0.68);
 const ENTRY_TEXT: Color = Color::srgb(0.88, 0.89, 0.92);
 const ENTRY_HOVER_BG: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
 
-/// Open the popover at `position` (screen pixels) for `graph`.
+/// Open the popover at `position` (UI-logical pixels) for `graph`.
 ///
 /// `spawn_position` is the cursor's canvas-space position where the picked
 /// node should be inserted. Previously-open popovers (and their backdrops)
@@ -75,7 +76,7 @@ pub fn spawn_popover(
     existing: &Query<Entity, With<AddNodePopover>>,
     existing_backdrops: &Query<Entity, With<AddNodeBackdrop>>,
     graph: Entity,
-    screen_position: Vec2,
+    position: Vec2,
     spawn_position: Vec2,
 ) {
     // Close any existing popover + backdrop first.
@@ -122,8 +123,8 @@ pub fn spawn_popover(
         },
         Node {
             position_type: PositionType::Absolute,
-            left: Val::Px(screen_position.x),
-            top: Val::Px(screen_position.y),
+            left: Val::Px(position.x),
+            top: Val::Px(position.y),
             width: Val::Px(POPOVER_WIDTH),
             max_height: Val::Px(POPOVER_MAX_HEIGHT),
             flex_direction: FlexDirection::Column,
@@ -150,7 +151,7 @@ pub fn spawn_popover(
         BackgroundColor(HEADER_BG),
         ChildOf(popover_entity),
         children![(
-            Text::new("Add Node"),
+            LocalizedText::new("add-node"),
             TextFont {
                 font_size: 12.0,
                 ..default()
@@ -355,6 +356,7 @@ pub fn on_canvas_right_click(
     existing: Query<Entity, With<AddNodePopover>>,
     existing_backdrops: Query<Entity, With<AddNodeBackdrop>>,
     mut commands: Commands,
+    ui_scale: Res<bevy::ui::UiScale>,
 ) {
     if event.button != PointerButton::Secondary {
         return;
@@ -373,7 +375,7 @@ pub fn on_canvas_right_click(
         &existing,
         &existing_backdrops,
         viewport.graph,
-        cursor,
+        cursor / ui_scale.0,
         spawn_pos,
     );
 }
@@ -390,6 +392,7 @@ pub fn handle_tab_quick_add(
     existing: Query<Entity, With<AddNodePopover>>,
     existing_backdrops: Query<Entity, With<AddNodeBackdrop>>,
     mut commands: Commands,
+    ui_scale: Res<bevy::ui::UiScale>,
 ) {
     if !keys.just_pressed(KeyCode::Tab) {
         return;
@@ -426,7 +429,7 @@ pub fn handle_tab_quick_add(
         &existing,
         &existing_backdrops,
         graph,
-        cursor,
+        cursor / ui_scale.0,
         spawn_pos,
     );
 }

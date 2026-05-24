@@ -32,7 +32,9 @@ pub mod keybinds;
 use std::{collections::BTreeMap, marker::PhantomData};
 
 pub use inspector::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
+
 pub mod core_extension;
+pub mod dock_ops;
 pub mod document_ops;
 pub mod ext_build;
 mod extension_lifecycle;
@@ -256,23 +258,28 @@ impl Plugin for EditorCorePlugin {
             EditorFeathersPlugin,
         ));
         app.add_plugins((
-            jackdaw_jsn::JsnPlugin {
-                runtime_mesh_rebuild: false,
-            },
-            project_select::ProjectSelectPlugin,
-            inspector::InspectorPlugin,
-            hierarchy::HierarchyPlugin,
-            viewport::ViewportPlugin,
-            gizmos::TransformGizmosPlugin,
-            commands::CommandHistoryPlugin,
-            selection::SelectionPlugin,
-            entity_ops::EntityOpsPlugin,
-            scene_io::SceneIoPlugin,
-            scenes::ScenesPlugin,
-            workspace_dropdown::WorkspaceDropdownPlugin,
-            asset_browser::AssetBrowserPlugin,
-            viewport_select::ViewportSelectPlugin,
-            snapping::SnappingPlugin,
+            (
+                jackdaw_jsn::JsnPlugin {
+                    runtime_mesh_rebuild: false,
+                },
+                project_select::ProjectSelectPlugin,
+                inspector::InspectorPlugin,
+                hierarchy::HierarchyPlugin,
+                viewport::ViewportPlugin,
+                gizmos::TransformGizmosPlugin,
+                commands::CommandHistoryPlugin,
+            ),
+            (
+                selection::SelectionPlugin,
+                entity_ops::EntityOpsPlugin,
+                scene_io::SceneIoPlugin,
+                scenes::ScenesPlugin,
+                workspace_dropdown::WorkspaceDropdownPlugin,
+                asset_browser::AssetBrowserPlugin,
+                viewport_select::ViewportSelectPlugin,
+                snapping::SnappingPlugin,
+                jackdaw_localization::LocalizationPlugin,
+            ),
         ))
         .add_plugins(prefab::PrefabPlugin)
         .add_plugins(prefab::watcher::PrefabWatcherPlugin)
@@ -315,6 +322,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(extensions_dialog::ExtensionsDialogPlugin)
         .add_plugins(hot_reload::HotReloadPlugin)
         .add_plugins(pie::PiePlugin)
+        .add_plugins(dock_ops::DockOpsPlugin)
         // Force-exit on `AppExit`: bypass wgpu device cleanup
         // and AsyncComputeTaskPool shutdown that otherwise hang
         // the process after window close. Hosted here so every
@@ -2136,6 +2144,10 @@ fn populate_menu(
                 op_entry::<view_ops::ViewTogglePerspOrthoOp>("Toggle Perspective / Orthographic"),
                 op_entry::<view_ops::ViewFrameSelectedOp>("Frame Selected"),
                 op_entry::<view_ops::ViewFrameAllOp>("Frame All"),
+                separator(),
+                op_entry::<view_ops::ViewUiZoomInOp>("Zoom UI In"),
+                op_entry::<view_ops::ViewUiZoomOutOp>("Zoom UI Out"),
+                op_entry::<view_ops::ViewUiZoomResetOp>("Reset UI Zoom"),
             ],
         ),
         (TopLevelMenu::Add, add_menu),
@@ -2171,9 +2183,7 @@ pub(crate) fn window_open(
     registry: Res<jackdaw_panels::WindowRegistry>,
     mut commands: bevy::prelude::Commands,
 ) -> OperatorResult {
-    let Some(window_id) = params.as_str("window_id").map(str::to_string) else {
-        return OperatorResult::Cancelled;
-    };
+    let window_id = params.as_str("window_id").map(str::to_string)?;
     // Reject unknown ids up front so callers get `Cancelled` rather
     // than a silent no-op + `Finished`. Lets the menu/tooltip pipeline
     // distinguish "user opened a window" from "user clicked a stale

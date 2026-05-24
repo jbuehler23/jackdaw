@@ -1,0 +1,4 @@
+# Locale files may be in YAML as in this example, or in RON
+locale: en-US
+resources:
+    - embedded://jackdaw_localization/locales/en-US/main.ftl

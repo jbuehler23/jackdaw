@@ -27,19 +27,13 @@ pub(crate) fn brush_subdivide(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
         return OperatorResult::Cancelled;
     }
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
     if selection.edges.is_empty() {
         return OperatorResult::Cancelled;
     }
 
-    // Snapshot before mutation for undo.
-
     // Map each selected cache-edge (a, b) to a HalfedgeMesh EdgeKey via vert_keys.
-    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
     let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
     for &(a, b) in &selection.edges {
         let Some(&va) = halfedge.vert_keys.get(a) else {
@@ -57,9 +51,7 @@ pub(crate) fn brush_subdivide(
     }
 
     // Run the HalfedgeMesh op.
-    let Ok(subdivide_result) = subdivide(&mut halfedge.mesh, &mesh_edges) else {
-        return OperatorResult::Cancelled;
-    };
+    let subdivide_result = subdivide(&mut halfedge.mesh, &mesh_edges)?;
 
     // Capture the topology vertex index pair for each new cross-cut edge so we
     // can write them into `BrushSelection.edges` after the flatten/re-lift
@@ -108,9 +100,7 @@ pub(crate) fn brush_subdivide(
 
     // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
     let new_topology = halfedge.mesh.flatten_to_topology();
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     // Subdivide may add new faces. Extend brush.faces with copies of the last
     // existing face data as a default; material_idx from the parent face is

@@ -986,7 +986,7 @@ pub(crate) fn hierarchy_open_context_menu(
     _: In<OperatorParameters>,
     mut commands: Commands,
     mut state: ResMut<ContextMenuState>,
-    windows: Query<&Window>,
+    cursor: crate::viewport::UiCursorPos,
     selection: Res<Selection>,
     tree_row_contents: Query<(Entity, &ChildOf), With<TreeRowContent>>,
     tree_nodes: Query<&TreeNode>,
@@ -994,12 +994,7 @@ pub(crate) fn hierarchy_open_context_menu(
     extension_add_entries: Query<&jackdaw_api_internal::lifecycle::RegisteredMenuEntry>,
     q_isa: Query<(), With<crate::prefab::IsA>>,
 ) -> OperatorResult {
-    let Ok(window) = windows.single() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return OperatorResult::Cancelled;
-    };
+    let cursor_pos = cursor.get()?;
 
     // Close any existing context menu
     if let Some(menu) = state.menu_entity.take()
@@ -1014,9 +1009,10 @@ pub(crate) fn hierarchy_open_context_menu(
         let Ok((computed, global_transform)) = computed_nodes.get(content_entity) else {
             continue;
         };
-        let size = computed.size();
+        let inv_scale = computed.inverse_scale_factor();
+        let size = computed.size() * inv_scale;
         let (_, _, translation) = global_transform.to_scale_angle_translation();
-        let pos = translation;
+        let pos = translation * inv_scale;
         let half = size / 2.0;
         let rect = Rect::from_center_half_size(pos, half);
         if rect.contains(cursor_pos)
@@ -1027,9 +1023,7 @@ pub(crate) fn hierarchy_open_context_menu(
         }
     }
 
-    let Some(target) = target_source else {
-        return OperatorResult::Cancelled;
-    };
+    let target = target_source?;
 
     // If the right-clicked entity isn't selected, select it
     if !selection.is_selected(target) {
@@ -1565,18 +1559,14 @@ pub fn rename_begin(
         };
     }
 
-    let Some(source) = resolve_rename_target(&params, &selection) else {
-        return OperatorResult::Cancelled;
-    };
-    let Some((label_entity, content_entity)) = find_rename_targets(
+    let source = resolve_rename_target(&params, &selection)?;
+    let (label_entity, content_entity) = find_rename_targets(
         source,
         &tree_index,
         &tree_nodes,
         &content_query,
         &label_query,
-    ) else {
-        return OperatorResult::Cancelled;
-    };
+    )?;
 
     commands.entity(label_entity).insert(TreeRowInlineRename);
     commands

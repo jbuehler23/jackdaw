@@ -86,8 +86,7 @@ fn terrain_brush_hit(
     let selected = selection.primary()?;
     let (terrain_entity, terrain, terrain_tf) = terrain_query.get(selected).ok()?;
 
-    let window = vp.windows.single().ok()?;
-    let cursor_pos = window.cursor_position()?;
+    let cursor_pos = vp.cursor()?;
 
     let camera_entity = vp.camera_entity()?;
     let viewport_entity = vp.viewport_entity()?;
@@ -200,12 +199,8 @@ pub fn terrain_sculpt(
     let TerrainEditMode::Sculpt(tool) = *edit_mode else {
         return OperatorResult::Cancelled;
     };
-    let Some(target) = sculpt_state.target else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok((mut terrain, mut dirty)) = terrain_query.get_mut(target) else {
-        return OperatorResult::Cancelled;
-    };
+    let target = sculpt_state.target?;
+    let (mut terrain, mut dirty) = terrain_query.get_mut(target)?;
 
     if modal.is_none() {
         sculpt_state.active = true;

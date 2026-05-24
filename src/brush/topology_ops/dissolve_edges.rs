@@ -26,19 +26,13 @@ pub(crate) fn brush_dissolve_edges(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
         return OperatorResult::Cancelled;
     }
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
     if selection.edges.is_empty() {
         return OperatorResult::Cancelled;
     }
 
-    // Snapshot before mutation for undo.
-
     // Map each selected cache-edge (a, b) to a HalfedgeMesh EdgeKey via vert_keys.
-    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
     let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
     for &(a, b) in &selection.edges {
         let Some(&va) = halfedge.vert_keys.get(a) else {
@@ -56,9 +50,7 @@ pub(crate) fn brush_dissolve_edges(
     }
 
     // Run dissolve_edges on the selected edges.
-    let Ok(_) = dissolve_edges(&mut halfedge.mesh, &mesh_edges) else {
-        return OperatorResult::Cancelled;
-    };
+    dissolve_edges(&mut halfedge.mesh, &mesh_edges)?;
 
     // Re-cache all face normals.
     let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
@@ -77,9 +69,7 @@ pub(crate) fn brush_dissolve_edges(
 
     // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
     let new_topology = halfedge.mesh.flatten_to_topology();
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     // Dissolve_edges removes faces. Truncate brush.faces if the topology
     // now has fewer faces than before.

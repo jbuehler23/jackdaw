@@ -30,15 +30,11 @@ pub(crate) fn brush_select_linked(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return OperatorResult::Cancelled;
     }
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
     if selection.faces.is_empty() {
         return OperatorResult::Cancelled;
     }
-    let Ok(halfedge) = halfedge_q.get(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let halfedge = halfedge_q.get(brush_entity)?;
 
     // Map each selected cache face index to its HalfedgeMesh FaceKey.
     let mut mesh_faces: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());

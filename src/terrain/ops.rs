@@ -163,12 +163,8 @@ pub(crate) fn terrain_generate(
     gen_state: Res<TerrainGenerateState>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
-    let Some(entity) = selection.primary() else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok((mut terrain, mut dirty)) = terrains.get_mut(entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let entity = selection.primary()?;
+    let (mut terrain, mut dirty) = terrains.get_mut(entity)?;
 
     let old_heights = terrain.heights.clone();
     let new_heights = jackdaw_terrain::generate_heightmap(terrain.resolution, &gen_state.settings);
@@ -204,12 +200,8 @@ pub(crate) fn terrain_erode(
     gen_state: Res<TerrainGenerateState>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
-    let Some(entity) = selection.primary() else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok((mut terrain, mut dirty)) = terrains.get_mut(entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let entity = selection.primary()?;
+    let (mut terrain, mut dirty) = terrains.get_mut(entity)?;
 
     let old_heights = terrain.heights.clone();
     let mut new_heights = terrain.heights.clone();

@@ -118,7 +118,7 @@ fn snap_toggle(
 fn viewport_drag_detect(
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    windows: Query<&Window>,
+    cursor: crate::viewport::UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     active_viewport: Res<crate::viewport::ActiveViewport>,
@@ -183,10 +183,7 @@ fn viewport_drag_detect(
         return;
     };
 
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = cursor.get() else {
         return;
     };
     // Drag-start is hover-routed: the click happens in whichever
@@ -256,7 +253,7 @@ fn viewport_drag_detect(
 
 fn viewport_drag_update(
     mouse: Res<ButtonInput<MouseButton>>,
-    windows: Query<&Window>,
+    cursor: crate::viewport::UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -281,10 +278,7 @@ fn viewport_drag_update(
         return;
     }
 
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = cursor.get() else {
         return;
     };
 

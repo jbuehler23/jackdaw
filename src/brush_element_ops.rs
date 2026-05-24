@@ -86,12 +86,8 @@ pub(crate) fn brush_delete_element(
     let EditMode::BrushEdit(mode) = *edit_mode else {
         return OperatorResult::Cancelled;
     };
-    let Some(brush_entity) = brush_selection.entity else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = brush_selection.entity?;
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     match mode {
         BrushEditMode::Vertex => {
@@ -233,15 +229,9 @@ fn nudge_brush_element(
     let EditMode::BrushEdit(mode) = *edit_mode else {
         return OperatorResult::Cancelled;
     };
-    let Some(brush_entity) = brush_selection.entity else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(cache) = brush_caches.get(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = brush_selection.entity?;
+    let cache = brush_caches.get(brush_entity)?;
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     let affected: HashSet<usize> = match mode {
         BrushEditMode::Vertex if !brush_selection.vertices.is_empty() => {
@@ -268,11 +258,8 @@ fn nudge_brush_element(
             new_verts[vi] += offset;
         }
     }
-    let Some((new_brush, old_to_new)) =
-        rebuild_brush_from_vertices(&brush, &cache.vertices, &cache.face_polygons, &new_verts)
-    else {
-        return OperatorResult::Cancelled;
-    };
+    let (new_brush, old_to_new) =
+        rebuild_brush_from_vertices(&brush, &cache.vertices, &cache.face_polygons, &new_verts)?;
     *brush = new_brush;
 
     match mode {

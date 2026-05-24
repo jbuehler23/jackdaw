@@ -7,7 +7,6 @@
 //! RMB cancels and restores the pre-modal mesh.
 
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
@@ -85,35 +84,24 @@ pub(crate) fn brush_edge_bevel(
     mut modal_state: ResMut<EdgeBevelModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
+    cursor: crate::viewport::UiCursorPos,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
 ) -> OperatorResult {
-    let Ok(window) = primary_window.single() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return OperatorResult::Cancelled;
-    };
+    let cursor_pos = cursor.get()?;
 
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
             return OperatorResult::Cancelled;
         }
-        let Some(brush_entity) = selection.entity else {
-            return OperatorResult::Cancelled;
-        };
+        let brush_entity = selection.entity?;
         if selection.edges.is_empty() {
             return OperatorResult::Cancelled;
         }
 
-        let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-            return OperatorResult::Cancelled;
-        };
-        let Ok(halfedge) = halfedge_q.get(brush_entity) else {
-            return OperatorResult::Cancelled;
-        };
+        let brush_before = brushes.get(brush_entity).cloned()?;
+        let halfedge = halfedge_q.get(brush_entity)?;
 
         // Resolve HalfedgeMesh EdgeKeys for every selected cache edge pair.
         let mut edge_keys: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());

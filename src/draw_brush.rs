@@ -273,9 +273,7 @@ pub(crate) fn draw_brush_toggle_mode(
     _: In<OperatorParameters>,
     mut draw_state: ResMut<DrawBrushState>,
 ) -> OperatorResult {
-    let Some(ref mut active) = draw_state.active else {
-        return OperatorResult::Cancelled;
-    };
+    let active = draw_state.active.as_mut()?;
     active.mode = match active.mode {
         DrawMode::Add => DrawMode::Cut,
         DrawMode::Cut => DrawMode::Add,
@@ -297,16 +295,14 @@ pub(crate) fn draw_brush_commit_polygon(
     mut draw_state: ResMut<DrawBrushState>,
     vp: ViewportCursor,
 ) -> OperatorResult {
-    let Some(ref mut active) = draw_state.active else {
-        return OperatorResult::Cancelled;
-    };
+    let active = draw_state.active.as_mut()?;
     let hull = convex_hull_on_plane(&active.polygon_vertices, &active.plane);
     if hull.len() < 3 {
         return OperatorResult::Cancelled;
     }
     active.polygon_vertices = hull;
     let viewport_cursor = (|| {
-        let cursor_pos = vp.windows.single().ok()?.cursor_position()?;
+        let cursor_pos = vp.cursor()?;
         let camera_entity = active.camera.or_else(|| vp.camera_entity())?;
         let viewport_entity = active.viewport.or_else(|| vp.viewport_entity())?;
         let (camera, _) = vp.camera_for(camera_entity)?;
@@ -331,9 +327,7 @@ pub(crate) fn draw_brush_remove_last_vertex(
     _: In<OperatorParameters>,
     mut draw_state: ResMut<DrawBrushState>,
 ) -> OperatorResult {
-    let Some(ref mut active) = draw_state.active else {
-        return OperatorResult::Cancelled;
-    };
+    let active = draw_state.active.as_mut()?;
     active.polygon_vertices.pop();
     if active.polygon_vertices.is_empty() {
         active.phase = DrawPhase::PlacingFirstCorner;
@@ -371,28 +365,17 @@ fn confirm_draw_brush(
     vp: ViewportCursor,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(ref mut active) = draw_state.active else {
-        return OperatorResult::Cancelled;
-    };
+    let active = draw_state.active.as_mut()?;
 
     // Verify cursor is in viewport
-    let Ok(window) = vp.windows.single() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return OperatorResult::Cancelled;
-    };
+    let cursor_pos = vp.cursor()?;
     let camera_entity = active.camera.or_else(|| vp.camera_entity());
     let viewport_entity = active.viewport.or_else(|| vp.viewport_entity());
     let (Some(camera_entity), Some(viewport_entity)) = (camera_entity, viewport_entity) else {
         return OperatorResult::Cancelled;
     };
-    let Some((camera, _)) = vp.camera_for(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(viewport_cursor) = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos) else {
-        return OperatorResult::Cancelled;
-    };
+    let (camera, _) = vp.camera_for(camera_entity)?;
+    let viewport_cursor = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)?;
 
     match active.phase {
         DrawPhase::PlacingFirstCorner => {
@@ -3570,12 +3553,10 @@ pub(crate) fn brush_extend_face_to_brush(
     let (primary, face_index, targets) =
         if *edit_mode == crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face) {
             // Face mode path: primary is the brush being edited, face is the selected face
-            let Some(primary) = brush_selection.entity.filter(|&e| brush_query.contains(e)) else {
-                return OperatorResult::Cancelled;
-            };
-            let Some(&face_index) = brush_selection.faces.last() else {
-                return OperatorResult::Cancelled;
-            };
+            let primary = brush_selection
+                .entity
+                .filter(|&e| brush_query.contains(e))?;
+            let &face_index = brush_selection.faces.last()?;
             let targets: Vec<Entity> = selection
                 .entities
                 .iter()
@@ -3598,9 +3579,7 @@ pub(crate) fn brush_extend_face_to_brush(
                 return OperatorResult::Cancelled;
             }
 
-            let Some(primary) = selection.primary().filter(|e| brush_query.contains(*e)) else {
-                return OperatorResult::Cancelled;
-            };
+            let primary = selection.primary().filter(|e| brush_query.contains(*e))?;
             let targets: Vec<Entity> = selected_brushes
                 .into_iter()
                 .filter(|&e| e != primary)
@@ -3617,9 +3596,7 @@ pub(crate) fn brush_extend_face_to_brush(
                     }
                 });
 
-            let Some(face_index) = face_index else {
-                return OperatorResult::Cancelled;
-            };
+            let face_index = face_index?;
             (primary, face_index, targets)
         } else {
             return OperatorResult::Cancelled;
@@ -3649,8 +3626,7 @@ fn find_hovered_face_on_brush(
     ray_cast: &mut MeshRayCast,
     brush_faces: &Query<&BrushFaceEntity>,
 ) -> Option<usize> {
-    let window = vp.windows.single().ok()?;
-    let cursor_pos = window.cursor_position()?;
+    let cursor_pos = vp.cursor()?;
     let camera_entity = vp.camera_entity()?;
     let viewport_entity = vp.viewport_entity()?;
     let (camera, cam_tf) = vp.camera_for(camera_entity)?;

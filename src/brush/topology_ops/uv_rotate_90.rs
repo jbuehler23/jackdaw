@@ -22,15 +22,11 @@ pub(crate) fn brush_uv_rotate_90(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return OperatorResult::Cancelled;
     }
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
     if selection.faces.is_empty() {
         return OperatorResult::Cancelled;
     }
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     for &face_idx in &selection.faces {
         if let Some(face) = brush.faces.get_mut(face_idx) {

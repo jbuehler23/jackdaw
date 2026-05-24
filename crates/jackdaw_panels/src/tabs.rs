@@ -21,8 +21,7 @@ pub struct DockTabPlugin;
 
 impl Plugin for DockTabPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (handle_dock_tab_clicks, show_close_on_hover))
-            .add_observer(on_close_button_click);
+        app.add_systems(Update, (handle_dock_tab_clicks, show_close_on_hover));
     }
 }
 
@@ -317,16 +316,4 @@ fn show_close_on_hover(
             }
         }
     }
-}
-
-fn on_close_button_click(
-    trigger: On<Pointer<Click>>,
-    close_buttons: Query<&crate::area::DockTabCloseButton>,
-    mut tree: ResMut<DockTree>,
-) {
-    let entity = trigger.event_target();
-    let Ok(close_btn) = close_buttons.get(entity) else {
-        return;
-    };
-    tree.remove_tab(close_btn.tab_id);
 }

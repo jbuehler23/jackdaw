@@ -245,6 +245,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::viewport::add_to_extension(ctx);
         crate::command_palette::add_to_extension(ctx);
         crate::document_ops::add_to_extension(ctx);
+        crate::dock_ops::add_to_extension(ctx);
     }
 
     fn register_input_context(&self, app: &mut App) {

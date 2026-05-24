@@ -1709,9 +1709,7 @@ pub(crate) fn asset_cycle_array_layer(
     params: In<OperatorParameters>,
     mut preview: ResMut<AssetPreviewState>,
 ) -> OperatorResult {
-    let Some(info) = preview.selected_info.as_ref() else {
-        return OperatorResult::Cancelled;
-    };
+    let info = preview.selected_info.as_ref()?;
     if info.layer_count == 0 {
         return OperatorResult::Cancelled;
     }

@@ -2,7 +2,6 @@
 
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
-use bevy::window::PrimaryWindow;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
@@ -79,26 +78,19 @@ pub(crate) fn brush_loop_cut(
     mut preview_lines: ResMut<LoopCutPreviewLines>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
+    cursor: crate::viewport::UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
 ) -> OperatorResult {
     // --- Cursor position ---
-    // Use raw window-space cursor so dragging outside the viewport panel
+    // Use raw UI-space cursor so dragging outside the viewport panel
     // doesn't cancel the modal (the bounds check in window_to_viewport_cursor
     // returns None when the cursor leaves the UI node, which previously caused
     // the modal to cancel mid-drag).
-    let Ok(window) = primary_window.single() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok((camera, cam_tf)) = camera_query.single() else {
-        return OperatorResult::Cancelled;
-    };
+    let (camera, cam_tf) = camera_query.single()?;
+    let cursor_pos = cursor.get()?;
 
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {
@@ -106,32 +98,16 @@ pub(crate) fn brush_loop_cut(
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
             return OperatorResult::Cancelled;
         }
-        let Some(brush_entity) = selection.entity else {
-            return OperatorResult::Cancelled;
-        };
-        let Some(&(a, b)) = selection.edges.first() else {
-            return OperatorResult::Cancelled;
-        };
+        let brush_entity = selection.entity?;
+        let &(a, b) = selection.edges.first()?;
 
-        let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-            return OperatorResult::Cancelled;
-        };
-        let Ok(halfedge) = halfedge_q.get(brush_entity) else {
-            return OperatorResult::Cancelled;
-        };
+        let brush_before = brushes.get(brush_entity).cloned()?;
+        let halfedge = halfedge_q.get(brush_entity)?;
 
         // Resolve cache pair -> EdgeKey.
-        let va: VertKey = match halfedge.vert_keys.get(a) {
-            Some(&k) => k,
-            None => return OperatorResult::Cancelled,
-        };
-        let vb: VertKey = match halfedge.vert_keys.get(b) {
-            Some(&k) => k,
-            None => return OperatorResult::Cancelled,
-        };
-        let Some(edge_key) = find_edge_between(&halfedge.mesh, va, vb) else {
-            return OperatorResult::Cancelled;
-        };
+        let va: VertKey = *halfedge.vert_keys.get(a)?;
+        let vb: VertKey = *halfedge.vert_keys.get(b)?;
+        let edge_key = find_edge_between(&halfedge.mesh, va, vb)?;
 
         // Project the start edge's canonical endpoints to window space so each
         // subsequent frame can compute t directly from cursor position.
