@@ -18,7 +18,6 @@ pub mod default_style;
 pub mod draw_brush;
 pub mod edit_mode_ops;
 pub mod entity_ops;
-pub mod entity_templates;
 pub mod face_grid;
 pub mod gizmo_ops;
 pub mod gizmos;
@@ -42,6 +41,7 @@ mod extension_lifecycle;
 pub mod extension_resolution;
 pub mod extension_watcher;
 pub mod extensions_dialog;
+pub mod file_ops;
 pub mod hot_reload;
 pub mod layout;
 pub mod material_browser;
@@ -54,7 +54,7 @@ pub mod operator_tooltip;
 pub mod physics_brush_bridge;
 pub mod physics_tool;
 pub mod pie;
-pub mod prefab_picker;
+pub mod prefab;
 pub mod project;
 pub mod project_files;
 pub mod project_select;
@@ -281,6 +281,9 @@ impl Plugin for EditorCorePlugin {
                 jackdaw_localization::LocalizationPlugin,
             ),
         ))
+        .add_plugins(prefab::PrefabPlugin)
+        .add_plugins(prefab::watcher::PrefabWatcherPlugin)
+        .add_plugins(file_ops::FileOpsPlugin)
         .add_plugins(keybinds::KeybindsPlugin)
         .add_plugins(keybind_settings::KeybindSettingsPlugin)
         .add_plugins((
@@ -290,7 +293,6 @@ impl Plugin for EditorCorePlugin {
             project_files::ProjectFilesPlugin,
             modal_transform::ModalTransformPlugin,
             custom_properties::CustomPropertiesPlugin,
-            entity_templates::EntityTemplatesPlugin,
             brush::BrushPlugin,
             material_preview::MaterialPreviewPlugin,
             undo_snapshot::plugin,
@@ -2102,7 +2104,7 @@ fn populate_menu(
                 separator(),
                 op_entry::<crate::scenes::operators::SceneCloseOp>("Close Tab"),
                 separator(),
-                op_entry::<scene_ops::SceneSaveSelectionAsTemplateOp>("Save Selection as Template"),
+                op_entry::<scene_ops::SceneSaveSelectionAsPrefabOp>("Save Selection as Prefab"),
                 separator(),
                 op_entry::<app_ops::AppOpenKeybindsOp>("Keybinds..."),
                 op_entry::<app_ops::AppOpenExtensionsOp>("Extensions..."),

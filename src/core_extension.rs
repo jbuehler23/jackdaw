@@ -197,6 +197,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::transform_ops::add_to_extension(ctx);
         crate::physics_tool::add_to_extension(ctx);
         crate::hierarchy::add_to_extension(ctx);
+        crate::file_ops::add_to_extension(ctx);
         crate::viewport_select::add_to_extension(ctx);
         crate::clip_ops::add_to_extension(ctx);
         crate::brush_element_ops::add_to_extension(ctx);
@@ -232,6 +233,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::brush::topology_ops::uv_texel_density::add_to_extension(ctx);
         crate::brush::topology_ops::uv_align_to_edge::add_to_extension(ctx);
         crate::brush::topology_ops::reconvexify::add_to_extension(ctx);
+        crate::brush::knife_mode::add_to_extension(ctx);
         crate::gizmos::add_to_extension(ctx);
         crate::terrain::sculpt::add_to_extension(ctx);
         crate::navmesh::ops::add_to_extension(ctx);

@@ -236,6 +236,7 @@ redundant_closure_for_method_calls = "warn"
 [dev-dependencies]
 bevy = { workspace = true, features = ["dynamic_linking"] }
 jackdaw_runtime.workspace = true
+tempfile = "3"
 # Pulled in so cargo builds the fixture cdylib as part of the
 # workspace test-target graph. `tests/dylib_loading.rs` dlopens the
 # resulting `.so` by path - it doesn't reference the rlib side.

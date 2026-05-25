@@ -25,8 +25,10 @@
 //! user is actually pointing at.
 //!
 //! LMB click commits the current snap target into the path. Enter
-//! bisects each adjacent pair of points as a single `SetBrush` undo
-//! entry. Esc or RMB cancels the in-progress path.
+//! dispatches the `brush.knife.commit` operator, which bisects each
+//! adjacent pair of points and is captured by the framework as a
+//! single snapshot-diff undo entry. Esc or RMB cancels the in-progress
+//! path.
 //!
 //! Commit handling: the path is applied to the `HalfedgeMesh` using
 //! **topology mutations only** (no CDT). The pipeline mirrors how
@@ -64,16 +66,14 @@
 
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
+use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::edge_split::split_edge;
 use jackdaw_geometry::halfedge::ops::face_poke::face_poke;
 use jackdaw_geometry::halfedge::ops::face_split::split_face;
 use jackdaw_geometry::halfedge::{EdgeKey, FaceKey, HalfedgeMesh, LoopKey, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{
-    BrushEditMode, BrushHalfedge, BrushMeshCache, BrushSelection, EditMode, SetBrush,
-};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushMeshCache, BrushSelection, EditMode};
 use crate::default_style;
 use crate::face_grid::BrushOutlineSelectedGizmoGroup;
 use crate::viewport::{ActiveViewport, MainViewportCamera, SceneViewport};
@@ -230,6 +230,35 @@ impl KnifeMode {
     }
 }
 
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<BrushKnifeCommitOp>();
+}
+
+/// Commit the queued knife path. Dispatched by `handle_knife_mode` on
+/// Enter so the snapshot-based undo path captures the cut alongside
+/// every other edit, instead of pushing a standalone `SetBrush` command.
+#[operator(
+    id = "brush.knife.commit",
+    label = "Knife: Commit Cut",
+    allows_undo = true
+)]
+pub(crate) fn brush_knife_commit(
+    _: In<OperatorParameters>,
+    knife: Res<KnifeMode>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(brush_entity) = knife.brush_entity else {
+        return OperatorResult::Cancelled;
+    };
+    if knife.path.len() < 2 {
+        return OperatorResult::Cancelled;
+    }
+    commands.queue(move |world: &mut World| {
+        commit_path(world, brush_entity);
+    });
+    OperatorResult::Finished
+}
+
 /// Per-frame cursor handling: refresh `KnifeMode.hover_snap` from the
 /// current cursor position, handle LMB (place point), RMB (cancel),
 /// and Enter (commit).
@@ -249,9 +278,7 @@ pub(super) fn handle_knife_mode(
     brush_transforms: Query<&GlobalTransform>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
-    mut brushes: Query<&mut Brush>,
-    mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
+    mut commands: Commands,
     mut knife: ResMut<KnifeMode>,
     snap_settings: Res<crate::snapping::SnapSettings>,
     keybind_focus: crate::keybind_focus::KeybindFocus,
@@ -442,15 +469,18 @@ pub(super) fn handle_knife_mode(
         return;
     }
 
-    // Commit on Enter when there's something to apply.
+    // Commit on Enter when there's something to apply. Dispatching via
+    // the operator framework so the cut is captured by the snapshot-based
+    // undo path alongside every other edit, instead of pushing a
+    // standalone `SetBrush` command from inside this system.
     if keyboard.just_pressed(KeyCode::Enter) && knife.path.len() >= 2 {
-        commit_path(
-            brush_entity,
-            &mut knife,
-            &mut brushes,
-            &mut halfedge_q,
-            &mut history,
-        );
+        commands
+            .operator(BrushKnifeCommitOp::ID)
+            .settings(CallOperatorSettings {
+                creates_history_entry: true,
+                ..default()
+            })
+            .call();
         return;
     }
 
@@ -1296,8 +1326,9 @@ fn canonical_edge(a: usize, b: usize) -> (usize, usize) {
 }
 
 /// Run the queued path as a single knife commit, using only topology
-/// mutations on the `HalfedgeMesh` (no CDT). Wraps the whole thing in a
-/// single `SetBrush` undo entry.
+/// mutations on the `HalfedgeMesh` (no CDT). Invoked from the
+/// `brush.knife.commit` operator's queued closure so the framework
+/// captures the cut in a single snapshot-based undo entry.
 ///
 /// Pipeline:
 ///
@@ -1316,26 +1347,27 @@ fn canonical_edge(a: usize, b: usize) -> (usize, usize) {
 ///    face's `material_idx`, so per-slot `BrushFaceData` (UV axes,
 ///    material handle, etc.) is copied from `start_brush` keyed by
 ///    `material_idx`.
-fn commit_path(
-    brush_entity: Entity,
-    knife: &mut KnifeMode,
-    brushes: &mut Query<&mut Brush>,
-    halfedge_q: &mut Query<&mut BrushHalfedge>,
-    history: &mut ResMut<CommandHistory>,
-) {
-    let Ok(start_brush) = brushes.get(brush_entity).cloned() else {
-        knife.path.clear();
+//
+// Takes `&mut World` rather than a `Query` triple because the operator
+// framework needs to drive the cut as a queued closure: the brush
+// snapshot, the halfedge mutations, and the final brush sync each touch
+// different components in sequence, and exclusive world access lets us
+// drop one mutable borrow before grabbing the next without smuggling
+// queries through the operator system signature.
+fn commit_path(world: &mut World, brush_entity: Entity) {
+    let Some(start_brush) = world.get::<Brush>(brush_entity).cloned() else {
+        world.resource_mut::<KnifeMode>().path.clear();
         return;
     };
-    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
-        knife.path.clear();
+    let Some(halfedge_ref) = world.get::<BrushHalfedge>(brush_entity) else {
+        world.resource_mut::<KnifeMode>().path.clear();
         return;
     };
     // Snapshot the live HalfedgeMesh so a catastrophe in either resolve
     // or chord (panic-equivalent return path) restores it exactly.
-    let start_mesh = halfedge.mesh.clone();
-    let start_vert_keys = halfedge.vert_keys.clone();
-    let start_face_keys = halfedge.face_keys.clone();
+    let start_mesh = halfedge_ref.mesh.clone();
+    let start_vert_keys = halfedge_ref.vert_keys.clone();
+    let start_face_keys = halfedge_ref.face_keys.clone();
 
     // --- First, resolve each path point to a live VertKey. -------------
     //
@@ -1343,42 +1375,50 @@ fn commit_path(
     // snap kind, perform exactly one topology mutation (or none if the
     // click resolved to an existing vert) and record the resulting
     // VertKey. PathPoint reclicks inherit the prior resolved vert.
-    let path_points: Vec<KnifePathPoint> = knife.path.clone();
+    let path_points: Vec<KnifePathPoint> = world.resource::<KnifeMode>().path.clone();
     if path_points.len() < 2 {
-        knife.path.clear();
+        world.resource_mut::<KnifeMode>().path.clear();
         return;
     }
     let mut path_verts: Vec<VertKey> = Vec::with_capacity(path_points.len());
     let mut resolve_failed = false;
-    for (i, point) in path_points.iter().enumerate() {
-        // PathPoint reclicks: inherit the resolved VertKey from the
-        // source click. This is "no new geometry" by construction.
-        if let Some(src_idx) = point.source_path_idx
-            && src_idx < i
-            && let Some(&v) = path_verts.get(src_idx)
-        {
-            path_verts.push(v);
-            continue;
-        }
-        match resolve_path_point(&mut halfedge.mesh, point, &start_brush) {
-            Ok(v) => path_verts.push(v),
-            Err(reason) => {
-                warn!(
-                    "Knife: path point {} resolve failed ({}); aborting commit",
-                    i, reason
-                );
-                resolve_failed = true;
-                break;
+    {
+        let Some(mut halfedge) = world.get_mut::<BrushHalfedge>(brush_entity) else {
+            world.resource_mut::<KnifeMode>().path.clear();
+            return;
+        };
+        for (i, point) in path_points.iter().enumerate() {
+            // PathPoint reclicks: inherit the resolved VertKey from the
+            // source click. This is "no new geometry" by construction.
+            if let Some(src_idx) = point.source_path_idx
+                && src_idx < i
+                && let Some(&v) = path_verts.get(src_idx)
+            {
+                path_verts.push(v);
+                continue;
+            }
+            match resolve_path_point(&mut halfedge.mesh, point, &start_brush) {
+                Ok(v) => path_verts.push(v),
+                Err(reason) => {
+                    warn!(
+                        "Knife: path point {} resolve failed ({}); aborting commit",
+                        i, reason
+                    );
+                    resolve_failed = true;
+                    break;
+                }
             }
         }
     }
 
     if resolve_failed {
         // Restore the snapshot and bail out without pushing to history.
-        halfedge.mesh = start_mesh;
-        halfedge.vert_keys = start_vert_keys;
-        halfedge.face_keys = start_face_keys;
-        knife.path.clear();
+        if let Some(mut halfedge) = world.get_mut::<BrushHalfedge>(brush_entity) {
+            halfedge.mesh = start_mesh;
+            halfedge.vert_keys = start_vert_keys;
+            halfedge.face_keys = start_face_keys;
+        }
+        world.resource_mut::<KnifeMode>().path.clear();
         return;
     }
 
@@ -1393,35 +1433,41 @@ fn commit_path(
     // would yield a degenerate face, or collapsed endpoints) is logged
     // and skipped but doesn't abort the commit.
     let mut applied_segments = 0usize;
-    for i in 0..path_verts.len().saturating_sub(1) {
-        let va = path_verts[i];
-        let vb = path_verts[i + 1];
-        if va == vb {
-            debug!(
-                "Knife: segment {} -> {} collapsed (same vert); skipping",
-                i,
-                i + 1
-            );
-            continue;
-        }
-        match chord_between_verts(&mut halfedge.mesh, va, vb) {
-            Ok(applied) => {
-                if applied {
-                    applied_segments += 1;
-                } else {
-                    debug!(
-                        "Knife: segment {} -> {} no-op (chord already exists)",
-                        i,
-                        i + 1
-                    );
-                }
+    {
+        let Some(mut halfedge) = world.get_mut::<BrushHalfedge>(brush_entity) else {
+            world.resource_mut::<KnifeMode>().path.clear();
+            return;
+        };
+        for i in 0..path_verts.len().saturating_sub(1) {
+            let va = path_verts[i];
+            let vb = path_verts[i + 1];
+            if va == vb {
+                debug!(
+                    "Knife: segment {} -> {} collapsed (same vert); skipping",
+                    i,
+                    i + 1
+                );
+                continue;
             }
-            Err(reason) => warn!(
-                "Knife: segment {} -> {} chord failed: {}; skipping",
-                i,
-                i + 1,
-                reason
-            ),
+            match chord_between_verts(&mut halfedge.mesh, va, vb) {
+                Ok(applied) => {
+                    if applied {
+                        applied_segments += 1;
+                    } else {
+                        debug!(
+                            "Knife: segment {} -> {} no-op (chord already exists)",
+                            i,
+                            i + 1
+                        );
+                    }
+                }
+                Err(reason) => warn!(
+                    "Knife: segment {} -> {} chord failed: {}; skipping",
+                    i,
+                    i + 1,
+                    reason
+                ),
+            }
         }
     }
 
@@ -1430,15 +1476,32 @@ fn commit_path(
     // commit those if any path point introduced new geometry.
     // Detect "did anything change" by comparing mesh sizes; if not,
     // restore and bail.
-    let mesh_unchanged = halfedge.mesh.vert_count() == start_mesh.vert_count()
-        && halfedge.mesh.edge_count() == start_mesh.edge_count()
-        && halfedge.mesh.face_count() == start_mesh.face_count();
+    let (mesh_unchanged, slot_to_src_material, new_topology) = {
+        let Some(halfedge) = world.get::<BrushHalfedge>(brush_entity) else {
+            world.resource_mut::<KnifeMode>().path.clear();
+            return;
+        };
+        let mesh_unchanged = halfedge.mesh.vert_count() == start_mesh.vert_count()
+            && halfedge.mesh.edge_count() == start_mesh.edge_count()
+            && halfedge.mesh.face_count() == start_mesh.face_count();
+        let mut slot_to_src_material: Vec<u32> = halfedge
+            .mesh
+            .faces
+            .iter()
+            .map(|(_, f)| f.material_idx)
+            .collect();
+        slot_to_src_material.sort();
+        let new_topology = halfedge.mesh.flatten_to_topology();
+        (mesh_unchanged, slot_to_src_material, new_topology)
+    };
     if mesh_unchanged && applied_segments == 0 {
         debug!("Knife: commit applied no changes; restoring snapshot");
-        halfedge.mesh = start_mesh;
-        halfedge.vert_keys = start_vert_keys;
-        halfedge.face_keys = start_face_keys;
-        knife.path.clear();
+        if let Some(mut halfedge) = world.get_mut::<BrushHalfedge>(brush_entity) {
+            halfedge.mesh = start_mesh;
+            halfedge.vert_keys = start_vert_keys;
+            halfedge.face_keys = start_face_keys;
+        }
+        world.resource_mut::<KnifeMode>().path.clear();
         return;
     }
 
@@ -1451,22 +1514,6 @@ fn commit_path(
     // from `start_brush.faces[material_idx]`. UV axes copy verbatim:
     // sub-faces are coplanar with their parent, so the parent's tangent
     // basis is correct for every sub-face.
-    let mut slot_to_src_material: Vec<u32> = halfedge
-        .mesh
-        .faces
-        .iter()
-        .map(|(_, f)| f.material_idx)
-        .collect();
-    slot_to_src_material.sort();
-
-    let new_topology = halfedge.mesh.flatten_to_topology();
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        // Restore the snapshot if we somehow lost the Brush component
-        // (effectively impossible during normal commit; defensive).
-        knife.path.clear();
-        return;
-    };
-
     let mut new_faces: Vec<jackdaw_geometry::BrushFaceData> =
         Vec::with_capacity(new_topology.polygons.len());
     for &src_material in &slot_to_src_material {
@@ -1479,10 +1526,9 @@ fn commit_path(
             .unwrap_or_default();
         new_faces.push(src);
     }
-    brush.faces = new_faces;
 
     let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
-    for (idx, face_data) in brush.faces.iter_mut().enumerate() {
+    for (idx, face_data) in new_faces.iter_mut().enumerate() {
         if idx < new_topology.polygons.len() {
             let normal = new_topology.face_normal_with(&positions, idx);
             let v0_idx =
@@ -1492,11 +1538,22 @@ fn commit_path(
             face_data.plane.distance = distance;
         }
     }
-    brush.topology = new_topology;
+
+    let new_brush = {
+        let Some(mut brush_mut) = world.get_mut::<Brush>(brush_entity) else {
+            // Defensive: if the Brush component vanished mid-commit (should
+            // not happen during normal use), just clear the path.
+            world.resource_mut::<KnifeMode>().path.clear();
+            return;
+        };
+        brush_mut.faces = new_faces;
+        brush_mut.topology = new_topology;
+        brush_mut.clone()
+    };
 
     // Re-lift HalfedgeMesh so vert_keys / face_keys stay consistent with
     // the flattened brush topology.
-    let new_mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let new_mesh = HalfedgeMesh::lift_from_topology(&new_brush.topology);
     let new_vert_keys: Vec<_> = new_mesh.verts.keys().collect();
     let mut new_face_keys: Vec<FaceKey> = vec![FaceKey::default(); new_mesh.faces.len()];
     for (k, f) in new_mesh.faces.iter() {
@@ -1505,18 +1562,20 @@ fn commit_path(
             new_face_keys[slot] = k;
         }
     }
-    halfedge.mesh = new_mesh;
-    halfedge.vert_keys = new_vert_keys;
-    halfedge.face_keys = new_face_keys;
+    if let Some(mut halfedge) = world.get_mut::<BrushHalfedge>(brush_entity) {
+        halfedge.mesh = new_mesh;
+        halfedge.vert_keys = new_vert_keys;
+        halfedge.face_keys = new_face_keys;
+    }
 
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: start_brush,
-        new: brush.clone(),
-        label: "Knife".to_string(),
-    }));
+    // Push the brush state through to the scene AST so subsequent prefab
+    // reloads see the cut. Previously the `SetBrush::execute` path did
+    // this via `apply_brush`; the operator-driven path lacks that hook,
+    // so the sync has to happen explicitly before the framework captures
+    // the after-snapshot.
+    crate::brush::sync_brush_to_ast(world, brush_entity, &new_brush);
 
-    knife.path.clear();
+    world.resource_mut::<KnifeMode>().path.clear();
 }
 
 /// Plane / position tolerance used when matching a click position

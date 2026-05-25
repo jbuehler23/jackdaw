@@ -8,8 +8,7 @@ use jackdaw_geometry::halfedge::ops::bridge_edge_loops::bridge_edge_loops;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 /// Connect two selected edge loops with a quad strip. The selection must
 /// contain edges forming exactly two distinct connected loops with the same
@@ -26,7 +25,6 @@ pub(crate) fn brush_bridge_edge_loops(
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
         return OperatorResult::Cancelled;
@@ -36,7 +34,6 @@ pub(crate) fn brush_bridge_edge_loops(
         return OperatorResult::Cancelled;
     }
 
-    let brush_before = brushes.get(brush_entity).cloned()?;
     let mut halfedge = halfedge_q.get_mut(brush_entity)?;
 
     // Map cache edge pairs (a, b) -> HalfedgeMesh EdgeKeys via vert_keys.
@@ -126,13 +123,6 @@ pub(crate) fn brush_bridge_edge_loops(
     halfedge.mesh = new_mesh;
     halfedge.vert_keys = new_vert_keys;
     halfedge.face_keys = new_face_keys;
-
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "Bridge Edge Loops".to_string(),
-    }));
 
     // Resolve the post-flatten topology face index for each new bridge face by
     // counting faces with strictly smaller material_idx in the post-op mesh

@@ -9,8 +9,7 @@ use jackdaw_geometry::halfedge::ops::loop_cut::loop_cut;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
 use crate::viewport::{MainViewportCamera, SceneViewport};
@@ -75,7 +74,6 @@ pub(crate) fn brush_loop_cut(
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
     brush_transforms: Query<&GlobalTransform>,
-    mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<LoopCutModalState>,
     mut preview_lines: ResMut<LoopCutPreviewLines>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -184,11 +182,10 @@ pub(crate) fn brush_loop_cut(
             clear_modal(&mut modal_state, &mut preview_lines);
             return OperatorResult::Cancelled;
         };
-        let Some(ref start_brush) = modal_state.start_brush else {
+        if modal_state.start_brush.is_none() {
             clear_modal(&mut modal_state, &mut preview_lines);
             return OperatorResult::Cancelled;
-        };
-        let brush_before = start_brush.clone();
+        }
         let t = modal_state.current_t;
 
         let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
@@ -293,13 +290,6 @@ pub(crate) fn brush_loop_cut(
         halfedge.face_keys = new_face_keys;
 
         // Push undo entry.
-        history.push_executed(Box::new(SetBrush {
-            entity: brush_entity,
-            old: brush_before,
-            new: brush.clone(),
-            label: "Loop Cut".to_string(),
-        }));
-
         // Chain selection: write the newly created loop ring edges into
         // `BrushSelection.edges` so a follow-up gesture (loop cut again,
         // edge slide, etc.) can operate on the new ring immediately.

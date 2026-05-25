@@ -36,11 +36,95 @@ use jackdaw_runtime::EditorCategory;
 
 use super::{
     AddComponentButton, ComponentDisplay, ComponentDisplayBody, ComponentName, ComponentPicker,
-    Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch, InspectorTarget,
-    ReflectDisplayable, brush_display, component_tooltip::ReflectedTypeTooltip,
+    Inspector, InspectorDirty, InspectorFieldRow, InspectorGroupSection, InspectorSearch,
+    InspectorTarget, ReflectDisplayable, brush_display, component_tooltip::ReflectedTypeTooltip,
     custom_props_display, extract_module_group, material_display, reflect_fields,
 };
+use crate::prefab::PrefabAstCache;
 use bevy::picking::hover::Hovered;
+use jackdaw_jsn::SceneJsnAst;
+
+/// Resolved prefab-instance context for a component being inspected. When
+/// present, override info comes from the prefab AST + cache and the
+/// header's revert / right-click actions route to the new prefab
+/// operators rather than the legacy baseline path.
+#[derive(Clone)]
+pub(crate) struct PrefabInstanceCtx {
+    pub(crate) entity_key: usize,
+    pub(crate) instance_root: usize,
+    /// ECS entity for the prefab-instance root. Prefab operators
+    /// resolve their AST keys post-snapshot-install, so dispatch sites
+    /// pass this Entity rather than the (stale) `instance_root` key.
+    pub(crate) instance_entity: Entity,
+    pub(crate) prefab_path: std::path::PathBuf,
+    pub(crate) prefab_entity_id: u32,
+    pub(crate) has_cached_prefab: bool,
+}
+
+/// Marker on the override-status dot rendered next to a prefab-instance
+/// field row. Carries the data needed to call `revert_field` on click.
+/// Filled = override; hollow = inherited from prefab.
+#[derive(Component, Clone)]
+pub(crate) struct PrefabFieldOverrideDot {
+    /// ECS entity the row belongs to. The dispatcher passes this through
+    /// to `prefab.revert_field`, which resolves the AST key inside the
+    /// operator (the live AST is rebuilt during the framework's
+    /// before-snapshot capture, so any pre-resolved key is stale).
+    pub(crate) entity: Entity,
+    pub(crate) entity_key: usize,
+    pub(crate) type_path: String,
+    pub(crate) field_path: String,
+}
+
+/// Compute the set of component type paths to treat as "AST-tracked"
+/// for inspector filtering. For ECS-only inherited descendants of a
+/// prefab instance (entity has `PrefabEntityId` but no AST node), the
+/// AST has nothing to anchor on; fall back to the matching entry in the
+/// prefab cache so the inspector still has a baseline component set to
+/// render against.
+fn inspector_type_paths_for(
+    ast: &SceneJsnAst,
+    prefab_cache: &PrefabAstCache,
+    source_entity: Entity,
+    entity_ref: bevy::ecs::world::EntityRef,
+    child_of_query: &Query<&bevy::ecs::hierarchy::ChildOf>,
+    isa_query: &Query<&crate::prefab::IsA>,
+) -> HashSet<String> {
+    if let Some(node) = ast.node_for_entity(source_entity) {
+        return node.components.keys().cloned().collect();
+    }
+    let Some(peid) = entity_ref.get::<crate::prefab::PrefabEntityId>() else {
+        return HashSet::new();
+    };
+    // Walk up ChildOf to find the nearest ancestor with IsA.
+    let mut current = source_entity;
+    let isa_source = loop {
+        let Ok(child_of) = child_of_query.get(current) else {
+            return HashSet::new();
+        };
+        let parent = child_of.0;
+        if let Ok(isa) = isa_query.get(parent) {
+            break isa.source.clone();
+        }
+        current = parent;
+    };
+    let Some(prefab) = prefab_cache.get(&isa_source) else {
+        return HashSet::new();
+    };
+    let prefab_entity_id_type = "jackdaw::prefab::components::PrefabEntityId";
+    for node in &prefab.nodes {
+        let matches = node
+            .components
+            .get(prefab_entity_id_type)
+            .and_then(serde_json::Value::as_u64)
+            .map(|u| u as u32)
+            == Some(peid.0);
+        if matches {
+            return node.components.keys().cloned().collect();
+        }
+    }
+    HashSet::new()
+}
 
 pub(crate) fn add_component_displays(
     _: On<Add, Selected>,
@@ -55,6 +139,9 @@ pub(crate) fn add_component_displays(
     editor_font: Res<EditorFont>,
     materials: Res<Assets<StandardMaterial>>,
     ast: Res<jackdaw_jsn::SceneJsnAst>,
+    prefab_cache: Res<PrefabAstCache>,
+    child_of_query: Query<&bevy::ecs::hierarchy::ChildOf>,
+    isa_query: Query<&crate::prefab::IsA>,
 ) {
     let Some(primary) = selection.primary() else {
         return;
@@ -66,11 +153,14 @@ pub(crate) fn add_component_displays(
     let source_entity = entity_ref.entity();
     let sel_count = selection.entities.len();
 
-    // Collect AST-tracked component type paths
-    let jsn_type_paths: HashSet<String> = ast
-        .node_for_entity(source_entity)
-        .map(|node| node.components.keys().cloned().collect())
-        .unwrap_or_default();
+    let jsn_type_paths = inspector_type_paths_for(
+        &ast,
+        &prefab_cache,
+        source_entity,
+        entity_ref,
+        &child_of_query,
+        &isa_query,
+    );
 
     // Build the same component panel into every Inspector instance.
     // Multi-instance dock layouts can host more than one inspector
@@ -91,6 +181,8 @@ pub(crate) fn add_component_displays(
             false,
             &materials,
             &jsn_type_paths,
+            Some(&ast),
+            Some(&prefab_cache),
         );
 
         // Set up monitoring: watch the selected entity for InspectorDirty
@@ -102,6 +194,10 @@ pub(crate) fn add_component_displays(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "inspector rebuild needs the full system param set; bundling into a struct would just push the problem one frame down"
+)]
 pub(crate) fn build_inspector_displays(
     commands: &mut Commands,
     components: &Components,
@@ -117,6 +213,8 @@ pub(crate) fn build_inspector_displays(
     _read_only: bool,
     materials: &Assets<StandardMaterial>,
     jsn_type_paths: &HashSet<String>,
+    scene_ast: Option<&SceneJsnAst>,
+    prefab_cache: Option<&PrefabAstCache>,
 ) {
     // Show multi-selection header when multiple entities are selected
     if selection_count > 1 {
@@ -147,6 +245,28 @@ pub(crate) fn build_inspector_displays(
 
     // Check for prefab baseline (override tracking)
     let baseline = entity_ref.get::<jackdaw_jsn::JsnPrefabBaseline>().cloned();
+
+    // Prefab-instance context: if this entity sits inside an IsA
+    // subtree, override info comes from the prefab AST + cache and the
+    // revert / right-click actions route to the new prefab operators.
+    let prefab_ctx: Option<PrefabInstanceCtx> = scene_ast.and_then(|ast| {
+        let cache = prefab_cache?;
+        let key = ast.key_for_entity(source_entity)?;
+        if !crate::prefab::overrides::is_inside_prefab_instance(ast, key) {
+            return None;
+        }
+        let (path, prefab_entity_id) = crate::prefab::overrides::resolve_inheritance(ast, key)?;
+        let instance_root = ast.ancestor_with_component(key, "jackdaw::prefab::components::IsA")?;
+        let instance_entity = ast.nodes.get(instance_root).and_then(|n| n.ecs_entity)?;
+        Some(PrefabInstanceCtx {
+            entity_key: key,
+            instance_root,
+            instance_entity,
+            has_cached_prefab: cache.get(&path).is_some(),
+            prefab_path: path,
+            prefab_entity_id,
+        })
+    });
 
     // (short_name, module_group, component_id, full_type_path)
     let mut custom_groups = std::collections::HashSet::new();
@@ -310,7 +430,7 @@ pub(crate) fn build_inspector_displays(
         let component_id = *component_id;
 
         // Detect override: compare current component value vs baseline
-        let is_overridden = baseline.as_ref().is_some_and(|bl| {
+        let is_overridden_baseline = baseline.as_ref().is_some_and(|bl| {
             let type_id = components
                 .get_info(component_id)
                 .and_then(ComponentInfo::type_id);
@@ -330,6 +450,33 @@ pub(crate) fn build_inspector_displays(
             false
         });
 
+        let is_overridden_prefab = prefab_ctx.as_ref().is_some_and(|ctx| {
+            if !ctx.has_cached_prefab {
+                return false;
+            }
+            let (Some(ast), Some(cache)) = (scene_ast, prefab_cache) else {
+                return false;
+            };
+            crate::prefab::overrides::field_is_overridden(
+                ast,
+                cache,
+                ctx.entity_key,
+                type_path,
+                None,
+            )
+        });
+
+        let is_overridden = is_overridden_baseline || is_overridden_prefab;
+
+        // Forward the prefab context whenever the entity sits inside a
+        // prefab instance so the right-click menu can offer Revert /
+        // Apply on every component. The revert ICON's routing still
+        // checks `is_overridden_prefab` below so the legacy
+        // `JsnPrefabBaseline` path keeps using its existing operator
+        // when both systems coexist.
+        let spec_prefab_ctx = prefab_ctx.clone();
+        let revert_through_prefab = is_overridden_prefab;
+
         let (display_entity, body_entity) = spawn_component_display(
             commands,
             ComponentDisplaySpec {
@@ -338,6 +485,8 @@ pub(crate) fn build_inspector_displays(
                 entity: source_entity,
                 component: Some(component_id),
                 is_overridden,
+                prefab_ctx: spec_prefab_ctx,
+                revert_through_prefab,
                 icon_font: &icon_font.0,
                 editor_font: &editor_font.0,
             },
@@ -523,6 +672,9 @@ pub(crate) fn on_inspector_dirty(
     >,
     materials: Res<Assets<StandardMaterial>>,
     ast: Res<jackdaw_jsn::SceneJsnAst>,
+    prefab_cache: Res<PrefabAstCache>,
+    child_of_query: Query<&bevy::ecs::hierarchy::ChildOf>,
+    isa_query: Query<&crate::prefab::IsA>,
 ) {
     // Multi-instance: rebuild every Inspector tab in lockstep. Each
     // inspector entity carries its own `InspectorTarget`; the dirty
@@ -562,10 +714,14 @@ pub(crate) fn on_inspector_dirty(
         };
         let sel_count = selection.entities.len();
 
-        let jsn_type_paths: HashSet<String> = ast
-            .node_for_entity(source_entity)
-            .map(|node| node.components.keys().cloned().collect())
-            .unwrap_or_default();
+        let jsn_type_paths = inspector_type_paths_for(
+            &ast,
+            &prefab_cache,
+            source_entity,
+            entity_ref,
+            &child_of_query,
+            &isa_query,
+        );
 
         build_inspector_displays(
             &mut commands,
@@ -582,6 +738,8 @@ pub(crate) fn on_inspector_dirty(
             false,
             &materials,
             &jsn_type_paths,
+            Some(&ast),
+            Some(&prefab_cache),
         );
     }
 
@@ -606,6 +764,15 @@ pub(crate) struct ComponentDisplaySpec<'a> {
     pub entity: Entity,
     pub component: Option<ComponentId>,
     pub is_overridden: bool,
+    /// When `Some`, the entity sits inside a prefab instance. Drives
+    /// the right-click menu for every component on the entity.
+    pub prefab_ctx: Option<PrefabInstanceCtx>,
+    /// When true, the revert icon (if shown) routes through the new
+    /// prefab operators (`prefab::operators::revert_component`) rather
+    /// than the legacy `ComponentRevertBaselineOp` path. False forces
+    /// the legacy path even if `prefab_ctx` is present, which preserves
+    /// pre-existing baseline overrides.
+    pub revert_through_prefab: bool,
     pub icon_font: &'a Handle<Font>,
     pub editor_font: &'a Handle<Font>,
 }
@@ -620,6 +787,8 @@ pub(crate) fn spawn_component_display(
         entity,
         component,
         is_overridden,
+        prefab_ctx,
+        revert_through_prefab,
         icon_font,
         editor_font,
     } = spec;
@@ -763,34 +932,73 @@ pub(crate) fn spawn_component_display(
         let entity_param = entity;
 
         // Revert button (only shown for overridden prefab components).
-        // `Hovered + ButtonOperatorCall` are tooltip data sources for
-        // the rich operator popover; the click observer below handles
-        // dispatch because this is a raw `Text` spawn (not a feathers
-        // button, so it doesn't fire `ButtonClickEvent`).
+        // Two code paths share the visual: the legacy
+        // `JsnPrefabBaseline` system dispatches through
+        // `ComponentRevertBaselineOp` (and uses `ButtonOperatorCall`
+        // for the rich tooltip popover); the new prefab system calls
+        // `prefab::operators::revert_component` directly with the
+        // entity's AST key, so it skips the tooltip wiring.
         if is_overridden {
             let revert_type_path = type_path_owned.clone();
-            let bo_call = ButtonOperatorCall::new(super::ops::ComponentRevertBaselineOp::ID)
-                .with_param("entity", entity_param)
-                .with_param("type_path", revert_type_path.clone());
-            commands.spawn((
-                Text::new(String::from(Icon::RotateCcw.unicode())),
-                TextFont {
-                    font: font.clone(),
-                    font_size: tokens::FONT_SM,
-                    ..Default::default()
-                },
-                TextColor(default_style::INSPECTOR_OVERRIDE),
-                Hovered::default(),
-                bo_call,
-                ChildOf(header),
-                bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-                    commands
-                        .operator(super::ops::ComponentRevertBaselineOp::ID)
-                        .param("entity", entity_param)
-                        .param("type_path", revert_type_path.clone())
-                        .call();
-                }),
-            ));
+            let revert_through_new_prefab = revert_through_prefab && prefab_ctx.is_some();
+            if revert_through_new_prefab {
+                let prefab_type_path = revert_type_path.clone();
+                commands.spawn((
+                    Text::new(String::from(Icon::RotateCcw.unicode())),
+                    TextFont {
+                        font: font.clone(),
+                        font_size: tokens::FONT_SM,
+                        ..Default::default()
+                    },
+                    TextColor(default_style::INSPECTOR_OVERRIDE),
+                    Hovered::default(),
+                    ChildOf(header),
+                    bevy::ui_widgets::observe(
+                        move |_: On<Pointer<Click>>, mut commands: Commands| {
+                            let revert_path = prefab_type_path.clone();
+                            commands
+                                .operator("prefab.revert_component")
+                                .settings(CallOperatorSettings {
+                                    creates_history_entry: true,
+                                    ..default()
+                                })
+                                .param("entity", entity_param)
+                                .param("type_path", revert_path)
+                                .call();
+                            commands.queue(move |world: &mut World| {
+                                if let Ok(mut ec) = world.get_entity_mut(entity_param) {
+                                    ec.insert(InspectorDirty);
+                                }
+                            });
+                        },
+                    ),
+                ));
+            } else {
+                let bo_call = ButtonOperatorCall::new(super::ops::ComponentRevertBaselineOp::ID)
+                    .with_param("entity", entity_param)
+                    .with_param("type_path", revert_type_path.clone());
+                commands.spawn((
+                    Text::new(String::from(Icon::RotateCcw.unicode())),
+                    TextFont {
+                        font: font.clone(),
+                        font_size: tokens::FONT_SM,
+                        ..Default::default()
+                    },
+                    TextColor(default_style::INSPECTOR_OVERRIDE),
+                    Hovered::default(),
+                    bo_call,
+                    ChildOf(header),
+                    bevy::ui_widgets::observe(
+                        move |_: On<Pointer<Click>>, mut commands: Commands| {
+                            commands
+                                .operator(super::ops::ComponentRevertBaselineOp::ID)
+                                .param("entity", entity_param)
+                                .param("type_path", revert_type_path.clone())
+                                .call();
+                        },
+                    ),
+                ));
+            }
         }
 
         // Remove component button (X icon). See revert button for the
@@ -818,6 +1026,62 @@ pub(crate) fn spawn_component_display(
                     .call();
             }),
         ));
+    }
+
+    // Right-click context menu on prefab-instance component headers.
+    // Wires the "Revert Component" / "Apply Component to Prefab Source"
+    // actions; both route through `prefab_menu::on_prefab_menu_action`,
+    // which reads the captured target context from
+    // `prefab_menu::PrefabMenuTarget`.
+    if let Some(menu_ctx) = prefab_ctx.clone() {
+        let menu_type_path = type_path.to_string();
+        commands.entity(header).observe(
+            move |click: On<Pointer<Click>>,
+                  mut commands: Commands,
+                  windows: Query<&Window>,
+                  mut state: ResMut<jackdaw_widgets::context_menu::ContextMenuState>,
+                  mut target: ResMut<super::prefab_menu::PrefabMenuTarget>| {
+                if click.event().button != PointerButton::Secondary {
+                    return;
+                }
+                let cursor_pos = windows
+                    .single()
+                    .ok()
+                    .and_then(bevy::prelude::Window::cursor_position)
+                    .unwrap_or_default();
+                if let Some(existing) = state.menu_entity.take()
+                    && let Ok(mut ec) = commands.get_entity(existing)
+                {
+                    ec.despawn();
+                }
+                target.entity = Some(entity);
+                target.instance_entity = Some(menu_ctx.instance_entity);
+                target.entity_key = Some(menu_ctx.entity_key);
+                target.instance_root = Some(menu_ctx.instance_root);
+                target.prefab_entity_id = Some(menu_ctx.prefab_entity_id);
+                target.prefab_path = Some(menu_ctx.prefab_path.clone());
+                target.type_path = Some(menu_type_path.clone());
+                target.field_path = None;
+                let items: [(&str, &str); 3] = [
+                    (super::prefab_menu::REVERT_COMPONENT, "Revert Component"),
+                    (
+                        super::prefab_menu::APPLY_TO_SOURCE,
+                        "Apply Component to Prefab Source",
+                    ),
+                    (
+                        super::prefab_menu::BULK_APPLY,
+                        "Apply to All Instances in Scene",
+                    ),
+                ];
+                let menu = jackdaw_feathers::context_menu::spawn_context_menu(
+                    &mut commands,
+                    cursor_pos,
+                    None,
+                    &items,
+                );
+                state.menu_entity = Some(menu);
+            },
+        );
     }
 
     // Hover effect on header
@@ -939,4 +1203,198 @@ pub(crate) fn revert_component_to_baseline(
 
     // Trigger inspector rebuild
     world.entity_mut(entity).insert(InspectorDirty);
+}
+
+/// Filled / hollow palette for the per-field override dot. Filled uses
+/// the same amber as `tokens::CATEGORY_PREFAB` so the dot reads in the
+/// same visual register as other prefab-related affordances.
+fn override_dot_color(overridden: bool) -> Color {
+    if overridden {
+        jackdaw_feathers::tokens::CATEGORY_PREFAB
+    } else {
+        Color::srgba(0.55, 0.55, 0.55, 0.45)
+    }
+}
+
+/// For every newly-spawned `InspectorFieldRow` whose source entity lives
+/// inside a prefab instance subtree, attach a small dot showing whether
+/// the field is overridden on this instance. Clicking the dot reverts
+/// the field via `revert_field`. Rows whose entity is not part of a
+/// prefab instance get no dot.
+pub(crate) fn decorate_prefab_field_rows(
+    new_rows: Query<(Entity, &InspectorFieldRow), Added<InspectorFieldRow>>,
+    ast: Res<SceneJsnAst>,
+    prefab_cache: Res<PrefabAstCache>,
+    mut commands: Commands,
+) {
+    for (row_entity, row) in &new_rows {
+        let Some(key) = ast.key_for_entity(row.source_entity) else {
+            continue;
+        };
+        if !crate::prefab::overrides::is_inside_prefab_instance(&ast, key) {
+            continue;
+        }
+        let overridden = crate::prefab::overrides::field_is_overridden(
+            &ast,
+            &prefab_cache,
+            key,
+            &row.type_path,
+            Some(&row.field_path),
+        );
+        let inheritance = crate::prefab::overrides::resolve_inheritance(&ast, key);
+        let instance_root_key =
+            ast.ancestor_with_component(key, "jackdaw::prefab::components::IsA");
+        let instance_entity = instance_root_key
+            .and_then(|k| ast.nodes.get(k))
+            .and_then(|n| n.ecs_entity);
+        if let (
+            Some((prefab_path, prefab_entity_id)),
+            Some(instance_root_key),
+            Some(instance_entity),
+        ) = (inheritance, instance_root_key, instance_entity)
+        {
+            let row_entity_param = row.source_entity;
+            let row_type_path = row.type_path.clone();
+            let row_field_path = row.field_path.clone();
+            commands.entity(row_entity).observe(
+                move |click: On<Pointer<Click>>,
+                      mut commands: Commands,
+                      windows: Query<&Window>,
+                      mut state: ResMut<jackdaw_widgets::context_menu::ContextMenuState>,
+                      mut target: ResMut<super::prefab_menu::PrefabMenuTarget>| {
+                    if click.event().button != PointerButton::Secondary {
+                        return;
+                    }
+                    let cursor_pos = windows
+                        .single()
+                        .ok()
+                        .and_then(bevy::prelude::Window::cursor_position)
+                        .unwrap_or_default();
+                    if let Some(existing) = state.menu_entity.take()
+                        && let Ok(mut ec) = commands.get_entity(existing)
+                    {
+                        ec.despawn();
+                    }
+                    target.entity = Some(row_entity_param);
+                    target.instance_entity = Some(instance_entity);
+                    target.entity_key = Some(key);
+                    target.instance_root = Some(instance_root_key);
+                    target.prefab_entity_id = Some(prefab_entity_id);
+                    target.prefab_path = Some(prefab_path.clone());
+                    target.type_path = Some(row_type_path.clone());
+                    target.field_path = Some(row_field_path.clone());
+                    let items: [(&str, &str); 2] = [
+                        (super::prefab_menu::REVERT_FIELD, "Revert Field"),
+                        (
+                            super::prefab_menu::APPLY_FIELD_TO_SOURCE,
+                            "Apply Field to Prefab Source",
+                        ),
+                    ];
+                    let menu = jackdaw_feathers::context_menu::spawn_context_menu(
+                        &mut commands,
+                        cursor_pos,
+                        None,
+                        &items,
+                    );
+                    state.menu_entity = Some(menu);
+                },
+            );
+        }
+
+        // Absolutely-positioned wrapper so the dot anchors to the row's
+        // right edge without disturbing the row's flex layout. Same
+        // approach `anim_diamond::decorate_animatable_fields` uses for
+        // its corner button. The dot itself is the wrapper's only
+        // child; sharing the wrapper keeps a single entity-level click
+        // observer driving the revert.
+        let wrapper = commands
+            .spawn(Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(2.0),
+                right: Val::Px(20.0),
+                ..default()
+            })
+            .id();
+
+        let dot = commands
+            .spawn((
+                PrefabFieldOverrideDot {
+                    entity: row.source_entity,
+                    entity_key: key,
+                    type_path: row.type_path.clone(),
+                    field_path: row.field_path.clone(),
+                },
+                Node {
+                    width: Val::Px(8.0),
+                    height: Val::Px(8.0),
+                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    ..default()
+                },
+                BackgroundColor(override_dot_color(overridden)),
+            ))
+            .id();
+
+        commands.entity(dot).observe(
+            move |click: On<Pointer<Click>>,
+                  dots: Query<&PrefabFieldOverrideDot>,
+                  mut commands: Commands| {
+                if click.event().button != PointerButton::Primary {
+                    return;
+                }
+                let Ok(dot_data) = dots.get(click.event_target()) else {
+                    return;
+                };
+                let entity = dot_data.entity;
+                let type_path = dot_data.type_path.clone();
+                let field_path = dot_data.field_path.clone();
+                // `revert_field` is a no-op when the current value
+                // already matches the prefab, so a click on a hollow
+                // dot is harmless. The visual short-circuit still lives
+                // in `refresh_prefab_field_dots` (which paints the
+                // color); the operator is the source of truth for
+                // whether anything actually changes.
+                commands
+                    .operator("prefab.revert_field")
+                    .settings(CallOperatorSettings {
+                        creates_history_entry: true,
+                        ..default()
+                    })
+                    .param("entity", entity)
+                    .param("type_path", type_path)
+                    .param("field_path", field_path)
+                    .call();
+                commands.queue(move |world: &mut World| {
+                    if let Ok(mut ec) = world.get_entity_mut(entity) {
+                        ec.insert(InspectorDirty);
+                    }
+                });
+            },
+        );
+
+        jackdaw_feathers::utils::attach_or_despawn(&mut commands, wrapper, dot);
+        jackdaw_feathers::utils::attach_or_despawn(&mut commands, row_entity, wrapper);
+    }
+}
+
+/// Repaint every existing override dot whenever the scene AST changes.
+/// Runs only on `ast.is_changed()` ticks so the per-frame cost is one
+/// resource-changed check when nothing is editing.
+pub(crate) fn refresh_prefab_field_dots(
+    ast: Res<SceneJsnAst>,
+    prefab_cache: Res<PrefabAstCache>,
+    mut dots: Query<(&PrefabFieldOverrideDot, &mut BackgroundColor)>,
+) {
+    if !ast.is_changed() && !prefab_cache.is_changed() {
+        return;
+    }
+    for (dot, mut bg) in &mut dots {
+        let overridden = crate::prefab::overrides::field_is_overridden(
+            &ast,
+            &prefab_cache,
+            dot.entity_key,
+            &dot.type_path,
+            Some(&dot.field_path),
+        );
+        bg.0 = override_dot_color(overridden);
+    }
 }
