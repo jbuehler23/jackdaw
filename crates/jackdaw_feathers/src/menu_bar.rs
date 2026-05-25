@@ -17,7 +17,8 @@ pub fn plugin(app: &mut App) {
     app.add_observer(on_dropdown_item_click)
         .add_observer(on_menu_bar_item_click)
         .add_observer(on_menu_bar_item_over)
-        .add_observer(on_menu_bar_item_out);
+        .add_observer(on_menu_bar_item_out)
+        .add_systems(Update, sync_menu_bar_item_backgrounds);
 }
 
 /// When a dropdown item is clicked, fire the [`MenuAction`]; unless the
@@ -48,6 +49,7 @@ fn on_menu_bar_item_click(
     items: Query<(&MenuBarItem, &ComputedNode, &UiGlobalTransform)>,
     item_check: Query<Entity, With<MenuBarItem>>,
     parents: Query<&ChildOf>,
+    mut bg_query: Query<(Entity, &mut BackgroundColor), With<MenuBarItem>>,
 ) {
     let Some(entity) = find_ancestor(click.event_target(), &item_check, &parents) else {
         return;
@@ -58,18 +60,49 @@ fn on_menu_bar_item_click(
 
     click.propagate(false);
 
-    // Close existing dropdown
+    open_menu_dropdown(&mut commands, &mut state, entity, item, computed, global_tf);
+    apply_menu_bar_item_backgrounds(state.open_menu, &mut bg_query);
+}
+
+fn on_menu_bar_item_over(
+    hover: On<Pointer<Over>>,
+    mut commands: Commands,
+    mut state: ResMut<MenuBarState>,
+    items: Query<(&MenuBarItem, &ComputedNode, &UiGlobalTransform)>,
+    item_check: Query<Entity, With<MenuBarItem>>,
+    parents: Query<&ChildOf>,
+    mut bg_query: Query<(Entity, &mut BackgroundColor), With<MenuBarItem>>,
+) {
+    let Some(entity) = find_ancestor(hover.event_target(), &item_check, &parents) else {
+        return;
+    };
+    // Hover only switches menus after the user has opened one with a click.
+    if state.open_menu.is_none() {
+        return;
+    }
+    if state.open_menu == Some(entity) {
+        return;
+    }
+    let Ok((item, computed, global_tf)) = items.get(entity) else {
+        return;
+    };
+
+    open_menu_dropdown(&mut commands, &mut state, entity, item, computed, global_tf);
+    apply_menu_bar_item_backgrounds(state.open_menu, &mut bg_query);
+}
+
+fn open_menu_dropdown(
+    commands: &mut Commands,
+    state: &mut MenuBarState,
+    entity: Entity,
+    item: &MenuBarItem,
+    computed: &ComputedNode,
+    global_tf: &UiGlobalTransform,
+) {
     if let Some(dropdown) = state.dropdown_entity.take() {
         commands.entity(dropdown).despawn();
     }
 
-    if state.open_menu == Some(entity) {
-        // Toggle off
-        state.open_menu = None;
-        return;
-    }
-
-    // Open dropdown
     state.open_menu = Some(entity);
 
     let (_, _, mut pos) = global_tf.to_scale_angle_translation();
@@ -78,33 +111,50 @@ fn on_menu_bar_item_click(
     let x = pos.x - size.x / 2.0;
     let y = pos.y + size.y / 2.0;
 
-    let dropdown = spawn_dropdown(&mut commands, x, y, &item.actions);
+    let dropdown = spawn_dropdown(commands, x, y, &item.actions);
     state.dropdown_entity = Some(dropdown);
-}
-
-fn on_menu_bar_item_over(
-    hover: On<Pointer<Over>>,
-    items: Query<Entity, With<MenuBarItem>>,
-    parents: Query<&ChildOf>,
-    mut bg_query: Query<&mut BackgroundColor>,
-) {
-    if let Some(entity) = find_ancestor(hover.event_target(), &items, &parents)
-        && let Ok(mut bg) = bg_query.get_mut(entity)
-    {
-        bg.0 = tokens::HOVER_BG;
-    }
 }
 
 fn on_menu_bar_item_out(
     out: On<Pointer<Out>>,
+    state: Res<MenuBarState>,
     items: Query<Entity, With<MenuBarItem>>,
     parents: Query<&ChildOf>,
     mut bg_query: Query<&mut BackgroundColor>,
 ) {
-    if let Some(entity) = find_ancestor(out.event_target(), &items, &parents)
-        && let Ok(mut bg) = bg_query.get_mut(entity)
-    {
-        bg.0 = Color::NONE;
+    let Some(entity) = find_ancestor(out.event_target(), &items, &parents) else {
+        return;
+    };
+    if state.open_menu == Some(entity) {
+        return;
+    }
+    let Ok(mut bg) = bg_query.get_mut(entity) else {
+        return;
+    };
+    bg.0 = Color::NONE;
+}
+
+// Keep the top-level menu highlight tied to the open menu state. This covers
+// closures that happen outside pointer-out events, such as action dispatch or Escape.
+fn sync_menu_bar_item_backgrounds(
+    state: Res<MenuBarState>,
+    mut items: Query<(Entity, &mut BackgroundColor), With<MenuBarItem>>,
+) {
+    if state.is_changed() {
+        apply_menu_bar_item_backgrounds(state.open_menu, &mut items);
+    }
+}
+
+fn apply_menu_bar_item_backgrounds(
+    open_menu: Option<Entity>,
+    items: &mut Query<(Entity, &mut BackgroundColor), With<MenuBarItem>>,
+) {
+    for (entity, mut bg) in items.iter_mut() {
+        bg.0 = if open_menu == Some(entity) {
+            tokens::HOVER_BG
+        } else {
+            Color::NONE
+        };
     }
 }
 
