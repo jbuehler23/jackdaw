@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy::ui::UiGlobalTransform;
+use bevy::ui::{UiGlobalTransform, UiScale};
 use jackdaw_feathers::tokens;
 
 use crate::area::{DockArea, DockTab};
@@ -82,6 +82,7 @@ fn on_tab_drag_start(
     tabs: Query<&DockTab>,
     mut drag_state: ResMut<DockDragState>,
     registry: Res<crate::WindowRegistry>,
+    ui_scale: Res<UiScale>,
 ) {
     let entity = trigger.event_target();
     let Ok(tab) = tabs.get(entity) else { return };
@@ -99,7 +100,7 @@ fn on_tab_drag_start(
         start_pos: Vec2::new(
             trigger.event().pointer_location.position.x,
             trigger.event().pointer_location.position.y,
-        ),
+        ) / ui_scale.0,
     };
 }
 
@@ -108,6 +109,7 @@ fn on_sidebar_icon_drag_start(
     icons: Query<&DockSidebarIcon>,
     mut drag_state: ResMut<DockDragState>,
     registry: Res<crate::WindowRegistry>,
+    ui_scale: Res<UiScale>,
 ) {
     let entity = trigger.event_target();
     let Ok(icon) = icons.get(entity) else { return };
@@ -125,7 +127,7 @@ fn on_sidebar_icon_drag_start(
         start_pos: Vec2::new(
             trigger.event().pointer_location.position.x,
             trigger.event().pointer_location.position.y,
-        ),
+        ) / ui_scale.0,
     };
 }
 
@@ -138,6 +140,7 @@ fn on_grip_drag_start(
     bindings: Query<&crate::reconcile::LeafBinding>,
     mut drag_state: ResMut<DockDragState>,
     registry: Res<crate::WindowRegistry>,
+    ui_scale: Res<UiScale>,
 ) {
     let entity = trigger.event_target();
     if grips.get(entity).is_err() {
@@ -189,7 +192,7 @@ fn on_grip_drag_start(
         start_pos: Vec2::new(
             trigger.event().pointer_location.position.x,
             trigger.event().pointer_location.position.y,
-        ),
+        ) / ui_scale.0,
     };
 }
 
@@ -211,12 +214,13 @@ fn on_drag_move(
     >,
     node_query: Query<(&ComputedNode, &UiGlobalTransform)>,
     parent_query: Query<&ChildOf>,
+    ui_scale: Res<UiScale>,
 ) {
     let drag_event = trigger.event();
-    let cursor = Vec2::new(
+    let cursor_pos_ui = Vec2::new(
         drag_event.pointer_location.position.x,
         drag_event.pointer_location.position.y,
-    );
+    ) / ui_scale.0;
 
     match &*drag_state {
         DockDragState::PendingDrag {
@@ -226,7 +230,7 @@ fn on_drag_move(
             window_name,
             start_pos,
         } => {
-            if cursor.distance(*start_pos) < DRAG_THRESHOLD {
+            if cursor_pos_ui.distance(*start_pos) < DRAG_THRESHOLD {
                 return;
             }
 
@@ -242,8 +246,8 @@ fn on_drag_move(
                     DragGhost,
                     Node {
                         position_type: PositionType::Absolute,
-                        left: Val::Px(cursor.x - 40.0),
-                        top: Val::Px(cursor.y - 12.0),
+                        left: Val::Px(cursor_pos_ui.x - 40.0),
+                        top: Val::Px(cursor_pos_ui.y - 12.0),
                         padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
                         border: UiRect::all(Val::Px(1.0)),
                         border_radius: BorderRadius::all(Val::Px(4.0)),
@@ -270,7 +274,7 @@ fn on_drag_move(
                 window_name,
                 source_area: source_area.unwrap_or(Entity::PLACEHOLDER),
                 ghost_entity: ghost,
-                cursor_pos: cursor,
+                cursor_pos: cursor_pos_ui,
                 drop_target: None,
                 overlay_entity: None,
             };
@@ -287,8 +291,8 @@ fn on_drag_move(
 
             commands.entity(ghost).insert(Node {
                 position_type: PositionType::Absolute,
-                left: Val::Px(cursor.x - 40.0),
-                top: Val::Px(cursor.y - 12.0),
+                left: Val::Px(cursor_pos_ui.x - 40.0),
+                top: Val::Px(cursor_pos_ui.y - 12.0),
                 padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(4.0)),
@@ -308,9 +312,9 @@ fn on_drag_move(
                     node_query
                         .get(parent.0)
                         .is_ok_and(|(parent_computed, parent_transform)| {
-                            logical_rect(parent_computed, parent_transform).contains(cursor)
+                            logical_rect(parent_computed, parent_transform).contains(cursor_pos_ui)
                         });
-                if !row_rect.contains(cursor) && !parent_contains {
+                if !row_rect.contains(cursor_pos_ui) && !parent_contains {
                     continue;
                 }
                 let mut closest_child: Option<(Vec2, Vec2, usize, f32)> = None;
@@ -321,7 +325,7 @@ fn on_drag_move(
                     let (_scale, _angle, center) = ui_transform.to_scale_angle_translation();
                     let child_center = center.trunc() * computed.inverse_scale_factor();
                     let child_size = child_computed.size() * child_computed.inverse_scale_factor();
-                    let distance = child_center.distance_squared(cursor);
+                    let distance = child_center.distance_squared(cursor_pos_ui);
                     if closest_child.is_none_or(|(_, _, _, closest_dist)| distance < closest_dist) {
                         closest_child = Some((child_center, child_size, index, distance));
                     }
@@ -329,7 +333,7 @@ fn on_drag_move(
                 let Some((child_center, child_size, mut index, _)) = closest_child else {
                     continue;
                 };
-                let (is_far_side, is_vertical) = is_far_side(cursor, child_center, node);
+                let (is_far_side, is_vertical) = is_far_side(cursor_pos_ui, child_center, node);
                 if is_far_side {
                     index += 1;
                 }
@@ -390,11 +394,11 @@ fn on_drag_move(
             if new_target.is_none() {
                 for (area_entity, computed, ui_transform) in &areas {
                     let area_rect = logical_rect(computed, ui_transform);
-                    if !area_rect.contains(cursor) {
+                    if !area_rect.contains(cursor_pos_ui) {
                         continue;
                     }
 
-                    if let Some(edge) = cursor_edge(area_rect, cursor) {
+                    if let Some(edge) = cursor_edge(area_rect, cursor_pos_ui) {
                         new_target = Some(DropTarget::AreaEdge {
                             area: area_entity,
                             edge,
@@ -457,7 +461,7 @@ fn on_drag_move(
             {
                 *drop_target = new_target;
                 *overlay_entity = new_overlay;
-                *cursor_pos = cursor;
+                *cursor_pos = cursor_pos_ui;
             }
 
             trigger.propagate(false);

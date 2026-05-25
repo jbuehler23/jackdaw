@@ -1536,7 +1536,7 @@ pub fn material_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
                                     margin: UiRect::vertical(Val::Px(tokens::SPACING_MD)),
                                     ..Default::default()
                                 },
-                                Text::new(""),
+                                Text::default(),
                                 TextFont {
                                     font_size: tokens::FONT_SM,
                                     ..Default::default()
@@ -1758,12 +1758,8 @@ pub(crate) fn material_browse_texture_slot(
     mut pending: ResMut<PendingTextureSlot>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(slot) = pending.slot.take() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(material_handle) = pending.material_handle.take() else {
-        return OperatorResult::Cancelled;
-    };
+    let slot = pending.slot.take()?;
+    let material_handle = pending.material_handle.take()?;
     commands.trigger(BrowseTextureSlot {
         slot,
         material_handle,
@@ -1787,12 +1783,8 @@ pub(crate) fn material_clear_texture_slot(
     mut pending: ResMut<PendingTextureSlot>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(slot) = pending.slot.take() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(material_handle) = pending.material_handle.take() else {
-        return OperatorResult::Cancelled;
-    };
+    let slot = pending.slot.take()?;
+    let material_handle = pending.material_handle.take()?;
     commands.trigger(ClearTextureSlot {
         slot,
         material_handle,

@@ -98,12 +98,8 @@ pub(crate) fn component_add(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = params.as_entity("entity") else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(type_path) = params.as_str("type_path").map(str::to_string) else {
-        return OperatorResult::Cancelled;
-    };
+    let entity = params.as_entity("entity")?;
+    let type_path = params.as_str("type_path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
         let Some((component_id, type_id)) = component_id_for_path(world, &type_path) else {
             warn!(
@@ -139,12 +135,8 @@ pub(crate) fn component_remove(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = params.as_entity("entity") else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(type_path) = params.as_str("type_path").map(str::to_string) else {
-        return OperatorResult::Cancelled;
-    };
+    let entity = params.as_entity("entity")?;
+    let type_path = params.as_str("type_path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
         let Some((component_id, _)) = component_id_for_path(world, &type_path) else {
             return;
@@ -173,12 +165,8 @@ pub(crate) fn component_revert_baseline(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = params.as_entity("entity") else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(type_path) = params.as_str("type_path").map(str::to_string) else {
-        return OperatorResult::Cancelled;
-    };
+    let entity = params.as_entity("entity")?;
+    let type_path = params.as_str("type_path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
         let Some((component_id, _)) = component_id_for_path(world, &type_path) else {
             return;
@@ -206,9 +194,7 @@ pub(crate) fn physics_enable(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = params.as_entity("entity") else {
-        return OperatorResult::Cancelled;
-    };
+    let entity = params.as_entity("entity")?;
     commands.queue(move |world: &mut World| {
         enable_physics(world, entity);
         if let Ok(mut ec) = world.get_entity_mut(entity) {
@@ -231,9 +217,7 @@ pub(crate) fn physics_disable(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = params.as_entity("entity") else {
-        return OperatorResult::Cancelled;
-    };
+    let entity = params.as_entity("entity")?;
     commands.queue(move |world: &mut World| {
         let mut cmd: Box<dyn EditorCommand> = Box::new(DisablePhysics::from_world(world, entity));
         cmd.execute(world);
@@ -263,15 +247,9 @@ pub(crate) fn animation_toggle_keyframe(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = params.as_entity("entity") else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(type_path) = params.as_str("component_type_path").map(str::to_string) else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(field_path) = params.as_str("field_path").map(str::to_string) else {
-        return OperatorResult::Cancelled;
-    };
+    let entity = params.as_entity("entity")?;
+    let type_path = params.as_str("component_type_path").map(str::to_string)?;
+    let field_path = params.as_str("field_path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
         world
             .run_system_cached_with(

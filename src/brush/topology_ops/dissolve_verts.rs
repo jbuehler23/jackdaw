@@ -28,22 +28,16 @@ pub(crate) fn brush_dissolve_verts(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
         return OperatorResult::Cancelled;
     }
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
     if selection.vertices.is_empty() {
         return OperatorResult::Cancelled;
     }
 
     // Snapshot before mutation for undo.
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_before = brushes.get(brush_entity).cloned()?;
 
     // Map cache vertex indices to HalfedgeMesh VertKeys via vert_keys parallel array.
-    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
     let mut vert_keys: Vec<VertKey> = Vec::with_capacity(selection.vertices.len());
     for &vert_idx in &selection.vertices {
         if let Some(&vk) = halfedge.vert_keys.get(vert_idx) {
@@ -55,9 +49,7 @@ pub(crate) fn brush_dissolve_verts(
     }
 
     // Run dissolve_verts on the selected vertices.
-    let Ok(_) = dissolve_verts(&mut halfedge.mesh, &vert_keys) else {
-        return OperatorResult::Cancelled;
-    };
+    dissolve_verts(&mut halfedge.mesh, &vert_keys)?;
 
     // Re-cache all face normals.
     let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
@@ -76,9 +68,7 @@ pub(crate) fn brush_dissolve_verts(
 
     // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
     let new_topology = halfedge.mesh.flatten_to_topology();
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     // Collect the HalfedgeMesh's material_idxes sorted in ascending order: this matches
     // the ordering that flatten_to_topology uses for new_topology.polygons.

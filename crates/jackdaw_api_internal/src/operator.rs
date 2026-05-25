@@ -1,4 +1,9 @@
-use std::{borrow::Cow, collections::BTreeMap};
+use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    convert::Infallible,
+    ops::{ControlFlow, FromResidual, Residual, Try},
+};
 
 use bevy::ecs::system::{SystemId, SystemState};
 use bevy::prelude::*;
@@ -255,6 +260,53 @@ impl OperatorResult {
     pub fn is_finished(&self) -> bool {
         matches!(self, OperatorResult::Finished)
     }
+}
+
+pub struct OperatorCancelled;
+
+/// `?`-operator support for operators.
+///
+/// Inside a function returning `OperatorResult`, `?` works on:
+/// - `Option<T>`, `None` becomes [`OperatorResult::Cancelled`].
+/// - `Result<T, E>`, `Err(_)` becomes [`OperatorResult::Cancelled`].
+/// - `OperatorResult`, `Cancelled` propagates; `Finished` / `Running`
+///   continue (the value is discarded).
+impl Try for OperatorResult {
+    type Output = ();
+    type Residual = OperatorCancelled;
+
+    fn from_output((): ()) -> Self {
+        OperatorResult::Finished
+    }
+
+    fn branch(self) -> ControlFlow<Self::Residual, ()> {
+        match self {
+            OperatorResult::Finished | OperatorResult::Running => ControlFlow::Continue(()),
+            OperatorResult::Cancelled => ControlFlow::Break(OperatorCancelled),
+        }
+    }
+}
+
+impl FromResidual<OperatorCancelled> for OperatorResult {
+    fn from_residual(_: OperatorCancelled) -> Self {
+        OperatorResult::Cancelled
+    }
+}
+
+impl FromResidual<Option<Infallible>> for OperatorResult {
+    fn from_residual(_: Option<Infallible>) -> Self {
+        OperatorResult::Cancelled
+    }
+}
+
+impl<E> FromResidual<Result<Infallible, E>> for OperatorResult {
+    fn from_residual(_: Result<Infallible, E>) -> Self {
+        OperatorResult::Cancelled
+    }
+}
+
+impl Residual<()> for OperatorCancelled {
+    type TryType = OperatorResult;
 }
 
 /// Extension trait on [`World`] for calling operators by id.

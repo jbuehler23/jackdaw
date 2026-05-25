@@ -139,6 +139,7 @@ pub(crate) struct ViewportCursor<'w, 's> {
         With<SceneViewport>,
     >,
     active: Res<'w, ActiveViewport>,
+    ui_scale: Res<'w, UiScale>,
 }
 
 impl ViewportCursor<'_, '_> {
@@ -197,6 +198,36 @@ impl ViewportCursor<'_, '_> {
         } else {
             None
         }
+    }
+
+    /// Cursor position in ui-logical pixels
+    pub fn cursor(&self) -> Option<Vec2> {
+        let window = self.windows.single().ok()?;
+        let raw = window.cursor_position()?;
+        Some(raw / self.ui_scale.0)
+    }
+}
+
+/// Cursor position in ui-logical pixels, the space `Val::Px` and
+/// [`crate::viewport_util::ViewportRemap`] operate in. Use this anywhere the
+/// cursor will be compared against UI nodes or fed into viewport-coordinate
+/// math, instead of calling `Window::cursor_position()` directly.
+///
+/// Systems that already take [`ViewportCursor`] can use
+/// [`ViewportCursor::cursor`] instead and drop this parameter.
+#[derive(SystemParam)]
+pub(crate) struct UiCursorPos<'w, 's> {
+    windows: Query<'w, 's, &'static Window>,
+    ui_scale: Res<'w, UiScale>,
+}
+
+impl UiCursorPos<'_, '_> {
+    /// Ui-logical cursor position, or `None` if the cursor is outside
+    /// the window / there's no primary window.
+    pub fn get(&self) -> Option<Vec2> {
+        let window = self.windows.single().ok()?;
+        let raw = window.cursor_position()?;
+        Some(raw / self.ui_scale.0)
     }
 }
 
@@ -472,7 +503,7 @@ fn handle_viewport_drop(
     event: On<Pointer<DragDrop>>,
     file_items: Query<&FileBrowserItem>,
     parents: Query<&ChildOf>,
-    windows: Query<&Window>,
+    cursor: UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     active: Res<ActiveViewport>,
@@ -495,10 +526,7 @@ fn handle_viewport_drop(
     }
 
     // Drop targets the viewport currently under the cursor (multi-viewport).
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = cursor.get() else {
         return;
     };
     let Some(camera_entity) = active.camera else {
@@ -781,21 +809,13 @@ pub(crate) fn viewport_focus_selected(
     selected_transforms: Query<&GlobalTransform, With<Selected>>,
     mut camera_query: Query<&mut Transform, With<JackdawCameraSettings>>,
 ) -> OperatorResult {
-    let Some(primary) = selection.primary() else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(global_tf) = selected_transforms.get(primary) else {
-        return OperatorResult::Cancelled;
-    };
+    let primary = selection.primary()?;
+    let global_tf = selected_transforms.get(primary)?;
     let target = global_tf.translation();
     let scale = global_tf.compute_transform().scale;
     let dist = f32::max(scale.length() * 3.0, 5.0);
-    let Some(camera_entity) = active.camera else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok(mut transform) = camera_query.get_mut(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let camera_entity = active.camera?;
+    let mut transform = camera_query.get_mut(camera_entity)?;
     let forward = transform.forward().as_vec3();
     transform.translation = target - forward * dist;
     *transform = transform.looking_at(target, Vec3::Y);
@@ -819,15 +839,9 @@ pub(crate) fn viewport_bookmark_save(
     active: Res<ActiveViewport>,
     mut cameras: Query<(&Transform, &mut ViewportConfig), With<JackdawCameraSettings>>,
 ) -> OperatorResult {
-    let Some(slot) = slot_param(&params) else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(camera_entity) = active.camera else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok((transform, mut config)) = cameras.get_mut(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let slot = slot_param(&params)?;
+    let camera_entity = active.camera?;
+    let (transform, mut config) = cameras.get_mut(camera_entity)?;
     config.bookmarks[slot] = Some(CameraBookmark {
         transform: *transform,
     });
@@ -847,18 +861,10 @@ pub(crate) fn viewport_bookmark_load(
     active: Res<ActiveViewport>,
     mut cameras: Query<(&mut Transform, &ViewportConfig), With<JackdawCameraSettings>>,
 ) -> OperatorResult {
-    let Some(slot) = slot_param(&params) else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(camera_entity) = active.camera else {
-        return OperatorResult::Cancelled;
-    };
-    let Ok((mut transform, config)) = cameras.get_mut(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(bookmark) = config.bookmarks[slot] else {
-        return OperatorResult::Cancelled;
-    };
+    let slot = slot_param(&params)?;
+    let camera_entity = active.camera?;
+    let (mut transform, config) = cameras.get_mut(camera_entity)?;
+    let bookmark = config.bookmarks[slot]?;
     *transform = bookmark.transform;
     OperatorResult::Finished
 }

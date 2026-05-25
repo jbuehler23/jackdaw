@@ -138,7 +138,7 @@ pub(crate) fn handle_gizmo_hover(
     selection: Res<Selection>,
     transforms: Query<&GlobalTransform, With<Selected>>,
     camera_query: Query<(&Camera, &GlobalTransform, &Projection), With<MainViewportCamera>>,
-    windows: Query<&Window>,
+    cursor: crate::viewport::UiCursorPos,
     mode: Res<GizmoMode>,
     space: Res<GizmoSpace>,
     mut hover: ResMut<GizmoHoverState>,
@@ -177,11 +177,8 @@ pub(crate) fn handle_gizmo_hover(
     let Ok((camera, cam_tf, projection)) = camera_query.get(camera_entity) else {
         return;
     };
-    let Ok(window) = windows.single() else {
-        return;
-    };
 
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = cursor.get() else {
         return;
     };
 
@@ -293,7 +290,6 @@ pub fn gizmo_drag(
     selection: Res<Selection>,
     mut transforms: Query<(&GlobalTransform, &mut Transform), With<Selected>>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
-    windows: Query<&Window>,
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -305,24 +301,16 @@ pub fn gizmo_drag(
     mut history: ResMut<CommandHistory>,
     snap_settings: Res<SnapSettings>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    cursor: crate::viewport::UiCursorPos,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
 ) -> OperatorResult {
-    let Ok(window) = windows.single() else {
-        return OperatorResult::Cancelled;
-    };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return OperatorResult::Cancelled;
-    };
+    let cursor_pos = cursor.get()?;
     // First-frame: pick the active (hovered) viewport. Subsequent
     // frames: use the captured one so the drag stays attached even
     // if the cursor strays into a different viewport.
     let (camera_entity, viewport_entity) = if modal.is_none() {
-        let Some(camera_entity) = active_viewport.camera else {
-            return OperatorResult::Cancelled;
-        };
-        let Some(viewport_entity) = active_viewport.ui_node else {
-            return OperatorResult::Cancelled;
-        };
+        let camera_entity = active_viewport.camera?;
+        let viewport_entity = active_viewport.ui_node?;
         (camera_entity, viewport_entity)
     } else {
         let Some(camera_entity) = drag_state.camera else {
@@ -333,9 +321,7 @@ pub fn gizmo_drag(
         };
         (camera_entity, viewport_entity)
     };
-    let Ok((camera, cam_tf)) = camera_query.get(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let (camera, cam_tf) = camera_query.get(camera_entity)?;
     // Bounds-check on the first frame so a press that misses the
     // viewport doesn't grab the gizmo. Once the modal is running the
     // cursor belongs to the drag, so accept positions outside the
@@ -344,34 +330,20 @@ pub fn gizmo_drag(
     // operator cancels, and the cancel handler restores the start
     // transform, which the user sees as a snap-back.
     let viewport_cursor = if modal.is_none() {
-        let Some(c) =
-            window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, &viewport_query)
-        else {
-            return OperatorResult::Cancelled;
-        };
-        c
+        window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, &viewport_query)?
     } else {
-        let Some(c) = window_to_viewport_cursor_for_unbounded(
+        window_to_viewport_cursor_for_unbounded(
             cursor_pos,
             camera,
             viewport_entity,
             &viewport_query,
-        ) else {
-            return OperatorResult::Cancelled;
-        };
-        c
+        )?
     };
 
     if modal.is_none() {
-        let Some(primary) = selection.primary() else {
-            return OperatorResult::Cancelled;
-        };
-        let Some(axis) = hover.hovered_axis else {
-            return OperatorResult::Cancelled;
-        };
-        let Ok((_, transform)) = transforms.get(primary) else {
-            return OperatorResult::Cancelled;
-        };
+        let primary = selection.primary()?;
+        let axis = hover.hovered_axis?;
+        let (_, transform) = transforms.get(primary)?;
         drag_state.active = true;
         drag_state.axis = Some(axis);
         drag_state.drag_start_screen = viewport_cursor;
