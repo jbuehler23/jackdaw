@@ -4780,6 +4780,7 @@ dependencies = [
  "jackdaw_geometry",
  "jackdaw_jsn",
  "manifold-csg",
+ "manifold-csg-sys",
 ]
 
 [[package]]
