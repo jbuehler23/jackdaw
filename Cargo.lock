@@ -4690,6 +4690,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "tempfile",
  "test_fixture_extension",
  "winit",
 ]
@@ -4779,6 +4780,7 @@ dependencies = [
  "jackdaw_geometry",
  "jackdaw_jsn",
  "manifold-csg",
+ "manifold-csg-sys",
 ]
 
 [[package]]

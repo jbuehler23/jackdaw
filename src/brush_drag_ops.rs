@@ -19,10 +19,9 @@ use crate::brush::interaction::{
 };
 use crate::brush::{
     BrushDragState, BrushEditMode, BrushFaceEntity, BrushMeshCache, BrushSelection, EdgeDragState,
-    EditMode, SetBrush, VertexDragState, rebuild_brush_from_vertices,
+    EditMode, VertexDragState, rebuild_brush_from_vertices,
 };
-use crate::commands::CommandHistory;
-use crate::draw_brush::{CreateBrushCommand, DrawBrushState, brush_data_from_entity};
+use crate::draw_brush::DrawBrushState;
 use crate::keybind_focus::KeybindFocus;
 use crate::modal_transform::ModalTransformState;
 use crate::selection::{Selected, Selection};
@@ -130,7 +129,7 @@ pub(crate) fn face_drag_invoke_trigger(
             .operator(BrushFaceDragOp::ID)
             .settings(CallOperatorSettings {
                 execution_context: ExecutionContext::Invoke,
-                creates_history_entry: false,
+                creates_history_entry: true,
             })
             .call();
     });
@@ -145,7 +144,6 @@ pub(crate) fn face_drag_invoke_trigger(
                    mode as a quick action; the drag-end / cancel restores Object \
                    mode in that case.",
     modal = true,
-    allows_undo = false,
     cancel = cancel_face_drag,
 )]
 pub fn brush_face_drag(
@@ -161,7 +159,6 @@ pub fn brush_face_drag(
     mut brush_selection: ResMut<BrushSelection>,
     mut brushes: Query<(&mut Brush, &GlobalTransform)>,
     mut drag_state: ResMut<BrushDragState>,
-    mut history: ResMut<CommandHistory>,
     mut commands: Commands,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
@@ -289,19 +286,7 @@ pub fn brush_face_drag(
     if mouse.just_released(MouseButton::Left) {
         if drag_state.active {
             match drag_state.extrude_mode {
-                FaceExtrudeMode::Merge => {
-                    if let Some(brush_entity) = brush_selection.entity
-                        && let Some(ref start) = drag_state.start_brush
-                        && let Ok((brush, _)) = brushes.get(brush_entity)
-                    {
-                        history.push_executed(Box::new(SetBrush {
-                            entity: brush_entity,
-                            old: start.clone(),
-                            new: brush.clone(),
-                            label: "Move brush face".to_string(),
-                        }));
-                    }
-                }
+                FaceExtrudeMode::Merge => {}
                 FaceExtrudeMode::Extend => {
                     if drag_state.extend_depth.abs() > MIN_EXTRUDE_DEPTH {
                         spawn_extruded_brush(
@@ -667,13 +652,9 @@ fn spawn_extruded_brush(
         let mut selection = world.resource_mut::<Selection>();
         selection.entities = vec![entity];
         world.entity_mut(entity).insert(Selected);
-
-        let cmd = CreateBrushCommand {
-            data: brush_data_from_entity(world, entity),
-        };
-        world
-            .resource_mut::<CommandHistory>()
-            .push_executed(Box::new(cmd));
+        // No manual undo push: the enclosing `brush.face.drag` modal
+        // has `allows_undo = true` and its SnapshotDiff captures the
+        // spawn.
     });
 }
 
@@ -701,7 +682,7 @@ pub(crate) fn vertex_drag_invoke_trigger(
             .operator(BrushVertexDragOp::ID)
             .settings(CallOperatorSettings {
                 execution_context: ExecutionContext::Invoke,
-                creates_history_entry: false,
+                creates_history_entry: true,
             })
             .call();
     });
@@ -714,7 +695,6 @@ pub(crate) fn vertex_drag_invoke_trigger(
                    it. Modal: X / Y / Z toggle axis constraints during the drag, \
                    LMB release commits, Escape or right-click cancels.",
     modal = true,
-    allows_undo = false,
     cancel = cancel_vertex_drag,
 )]
 pub fn brush_vertex_drag(
@@ -728,7 +708,6 @@ pub fn brush_vertex_drag(
     brush_caches: Query<&BrushMeshCache>,
     mut brushes: Query<&mut Brush>,
     mut drag_state: ResMut<VertexDragState>,
-    mut history: ResMut<CommandHistory>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
     snap_settings: Res<SnapSettings>,
@@ -873,22 +852,6 @@ pub fn brush_vertex_drag(
     }
 
     if mouse.just_released(MouseButton::Left) {
-        if drag_state.active
-            && let Some(ref start) = drag_state.start_brush
-            && let Ok(brush) = brushes.get(brush_entity)
-        {
-            let label = if drag_state.split_vertex.is_some() {
-                "Split brush vertex"
-            } else {
-                "Move brush vertex"
-            };
-            history.push_executed(Box::new(SetBrush {
-                entity: brush_entity,
-                old: start.clone(),
-                new: brush.clone(),
-                label: label.to_string(),
-            }));
-        }
         clear_vertex_drag_state(&mut drag_state);
         return OperatorResult::Finished;
     }
@@ -1083,7 +1046,7 @@ pub(crate) fn edge_drag_invoke_trigger(
             .operator(BrushEdgeDragOp::ID)
             .settings(CallOperatorSettings {
                 execution_context: ExecutionContext::Invoke,
-                creates_history_entry: false,
+                creates_history_entry: true,
             })
             .call();
     });
@@ -1096,7 +1059,6 @@ pub(crate) fn edge_drag_invoke_trigger(
                    constraints, LMB release commits, Escape or right-click \
                    cancels.",
     modal = true,
-    allows_undo = false,
     cancel = cancel_edge_drag,
 )]
 pub fn brush_edge_drag(
@@ -1110,7 +1072,6 @@ pub fn brush_edge_drag(
     brush_caches: Query<&BrushMeshCache>,
     mut brushes: Query<&mut Brush>,
     mut drag_state: ResMut<EdgeDragState>,
-    mut history: ResMut<CommandHistory>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
     snap_settings: Res<SnapSettings>,
@@ -1215,17 +1176,6 @@ pub fn brush_edge_drag(
     }
 
     if mouse.just_released(MouseButton::Left) {
-        if drag_state.active
-            && let Some(ref start) = drag_state.start_brush
-            && let Ok(brush) = brushes.get(brush_entity)
-        {
-            history.push_executed(Box::new(SetBrush {
-                entity: brush_entity,
-                old: start.clone(),
-                new: brush.clone(),
-                label: "Move brush edge".to_string(),
-            }));
-        }
         clear_edge_drag_state(&mut drag_state);
         return OperatorResult::Finished;
     }

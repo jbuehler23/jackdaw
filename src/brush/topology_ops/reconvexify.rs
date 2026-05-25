@@ -10,8 +10,7 @@ use jackdaw_geometry::{compute_brush_geometry_from_planes, compute_brush_topolog
 use jackdaw_jsn::Brush;
 
 use crate::brush::hull::rebuild_brush_from_vertices;
-use crate::brush::{BrushHalfedge, BrushSelection, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushHalfedge, BrushSelection};
 
 /// Snap the selected brush back to the convex hull of its current vertices.
 /// Useful when concave editing produced an unwanted result, or as a
@@ -28,7 +27,6 @@ pub(crate) fn brush_reconvexify(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     let brush_entity = selection.entity?;
     let brush_before = brushes.get(brush_entity).cloned()?;
@@ -100,13 +98,6 @@ pub(crate) fn brush_reconvexify(
         halfedge.vert_keys = new_vert_keys;
         halfedge.face_keys = new_face_keys;
     }
-
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: new_brush,
-        label: "Reconvexify".to_string(),
-    }));
 
     OperatorResult::Finished
 }

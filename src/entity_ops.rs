@@ -1420,11 +1420,12 @@ pub(crate) fn entity_add_terrain(
 #[operator(id = "entity.add.prefab", label = "Prefab")]
 pub(crate) fn entity_add_prefab(
     _: In<OperatorParameters>,
-    mut commands: Commands,
+    mut _commands: Commands,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        crate::prefab_picker::open_prefab_picker(world);
-    });
+    warn!(
+        "entity.add.prefab: drag a prefab from the Asset Browser onto the viewport \
+         to spawn an instance"
+    );
     OperatorResult::Finished
 }
 

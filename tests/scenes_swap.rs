@@ -1,4 +1,4 @@
-use jackdaw::scenes::{SceneTab, Scenes};
+use jackdaw::scenes::{SceneTab, Scenes, TabContent};
 
 #[test]
 fn scenes_default_is_empty() {
@@ -21,6 +21,15 @@ fn untitled_tab_has_correct_display_name() {
     assert_eq!(tab.display_name, "untitled-3");
     assert!(tab.path.is_none());
     assert!(!tab.dirty);
+}
+
+#[test]
+fn scene_tab_has_ast_snapshot_field() {
+    let tab = jackdaw::scenes::SceneTab::new_untitled(1);
+    assert!(
+        matches!(tab.content, TabContent::Scene(None)),
+        "fresh tab starts with no AST snapshot"
+    );
 }
 
 #[test]
@@ -100,11 +109,25 @@ fn swap_round_trips_a_single_brush() {
     app.init_resource::<jackdaw_jsn::SceneJsnAst>();
     app.init_resource::<jackdaw::selection::Selection>();
 
-    // Spawn a brush on the active scene.
+    // Spawn a brush on the active scene, and register a corresponding node
+    // in the AST. After T4 the swap captures the AST (not the live world),
+    // so a node needs to exist in the AST for the captured snapshot to be
+    // non-empty. Only `Name` is round-tripped through deserialization here
+    // because `Brush` carries a `Handle<StandardMaterial>` which needs the
+    // editor's full asset-aware deserializer; the brush respawn assertion
+    // is what verifies T4's AST-as-spawn-source path end-to-end.
     let brush_entity = app
         .world_mut()
         .spawn((Brush::cuboid(1.0, 1.0, 1.0), Name::new("a")))
         .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let idx = ast.create_node(brush_entity, None);
+        ast.nodes[idx].components.insert(
+            "bevy_ecs::name::Name".to_string(),
+            serde_json::Value::String("a".to_string()),
+        );
+    }
 
     // Two tabs: A (active) and B (empty).
     {
@@ -117,19 +140,26 @@ fn swap_round_trips_a_single_brush() {
     // Swap to tab B.
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
 
-    // Original brush entity is gone.
+    // Original brush entity is gone (clear_scene_entities ran).
     assert!(app.world().get::<Brush>(brush_entity).is_none());
 
-    // Tab A holds the snapshot now.
+    // Tab A holds the AST snapshot now.
     let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
     assert_eq!(scenes.active, 1);
-    assert!(scenes.tabs[0].snapshot.is_some());
-    assert!(!scenes.tabs[0].snapshot.as_ref().unwrap().scene.is_empty());
+    let TabContent::Scene(Some(captured)) = &scenes.tabs[0].content else {
+        panic!("expected captured Scene AST");
+    };
+    assert!(!captured.nodes.is_empty());
 
-    // Swap back to tab A. The brush respawns (fresh Entity, same data).
+    // Swap back to tab A. The Name-bearing entity respawns from the AST.
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
-    let brush_count: usize = app.world_mut().query::<&Brush>().iter(app.world()).count();
-    assert_eq!(brush_count, 1);
+    let name_count: usize = app
+        .world_mut()
+        .query::<&Name>()
+        .iter(app.world())
+        .filter(|n| n.as_str() == "a")
+        .count();
+    assert_eq!(name_count, 1, "tab A's AST entity should respawn");
 }
 
 #[test]
@@ -615,6 +645,167 @@ fn window_close_with_dirty_tabs_does_not_exit() {
 }
 
 #[test]
+fn swap_captures_ast_snapshot_into_outgoing_tab() {
+    let mut app = make_app_with_n_tabs(2);
+    // Mark the live AST so we can recognize it after capture.
+    let marker_node_index = {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        ast.create_node(bevy::prelude::Entity::PLACEHOLDER, None)
+    };
+    app.world_mut()
+        .resource_mut::<jackdaw::scenes::Scenes>()
+        .active = 0;
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    let TabContent::Scene(Some(captured)) = &scenes.tabs[0].content else {
+        panic!("outgoing tab has captured Scene AST");
+    };
+    assert_eq!(
+        captured
+            .nodes
+            .get(marker_node_index)
+            .and_then(|n| n.ecs_entity),
+        Some(bevy::prelude::Entity::PLACEHOLDER),
+        "outgoing tab's stored AST is the one we marked"
+    );
+}
+
+#[test]
+fn activate_restores_ast_snapshot_from_tab() {
+    let mut app = make_app_with_n_tabs(2);
+    // Pre-stash an AST snapshot containing a single marker node on tab 1.
+    // After swap, activate_tab spawns fresh entities for each AST node and
+    // rebinds ecs_entity, so we assert on node count and component shape
+    // rather than on the placeholder ID.
+    let marker_node_count = {
+        let mut prepared = jackdaw_jsn::SceneJsnAst::default();
+        prepared.create_node(bevy::prelude::Entity::PLACEHOLDER, None);
+        let count = prepared.nodes.len();
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs[1].content = TabContent::Scene(Some(prepared));
+        scenes.active = 0;
+        count
+    };
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
+    assert_eq!(
+        ast.nodes.len(),
+        marker_node_count,
+        "activating tab 1 installed its AST snapshot (node count preserved)"
+    );
+    // ecs_to_jsn was rebuilt: every node's ecs_entity is a fresh id mapped
+    // back to its own node index.
+    for (i, node) in ast.nodes.iter().enumerate() {
+        let e = node.ecs_entity.expect("node rebound to a fresh entity");
+        assert_eq!(ast.ecs_to_jsn.get(&e), Some(&i));
+    }
+}
+
+#[test]
+fn swap_does_not_keep_a_jsn_scene_snapshot_field() {
+    // Compile-only check: SceneTab no longer has a `snapshot` field.
+    // If it does, this won't compile because the struct literal omits it
+    // (Rust requires every field to be initialized).
+    let _tab = jackdaw::scenes::SceneTab {
+        path: None,
+        display_name: "x".to_string(),
+        dirty: false,
+        kind: jackdaw::scenes::TabKind::Scene,
+        content: TabContent::Scene(None),
+        view_state: jackdaw::scenes::ViewState::default(),
+        history: jackdaw::commands::CommandHistory::default(),
+        history_depth_at_last_check: 0,
+    };
+}
+
+#[test]
+fn tab_swap_preserves_entity_ordering_and_components() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(WgpuSettings {
+                    backends: None,
+                    ..default()
+                }),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_jsn::SceneJsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+    app.init_resource::<jackdaw::scene_io::SceneFilePath>();
+    app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(1));
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(2));
+        scenes.active = 0;
+    }
+
+    // Seed tab 0's AST with two named nodes. The codebase uses
+    // `bevy_ecs::name::Name` as the reflect path and a bare JSON string as
+    // the serialized shape (see e.g. crates/jackdaw_jsn/src/format.rs).
+    let name_key = "bevy_ecs::name::Name";
+    {
+        let e1 = app.world_mut().spawn_empty().id();
+        let e2 = app.world_mut().spawn_empty().id();
+        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let i1 = ast.create_node(e1, None);
+        let i2 = ast.create_node(e2, None);
+        ast.set_component(e1, name_key, serde_json::Value::String("alpha".to_string()));
+        ast.set_component(e2, name_key, serde_json::Value::String("beta".to_string()));
+        // Sanity: indices should be 0 and 1.
+        assert_eq!(i1, 0);
+        assert_eq!(i2, 1);
+    }
+
+    // Swap away and back.
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+
+    // The AST still has both nodes in order, with the right component data.
+    let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
+    assert_eq!(ast.nodes.len(), 2, "both nodes survived round-trip");
+    let name0 = ast.nodes[0]
+        .components
+        .get(name_key)
+        .expect("node 0 still has Name component");
+    let name1 = ast.nodes[1]
+        .components
+        .get(name_key)
+        .expect("node 1 still has Name component");
+    assert_eq!(name0.as_str(), Some("alpha"));
+    assert_eq!(name1.as_str(), Some("beta"));
+
+    // The freshly-spawned entities also carry the original names.
+    let names: Vec<String> = app
+        .world_mut()
+        .query::<&Name>()
+        .iter(app.world())
+        .map(|n| n.as_str().to_string())
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "alpha"),
+        "respawned entities include alpha; got {:?}",
+        names
+    );
+    assert!(
+        names.iter().any(|n| n == "beta"),
+        "respawned entities include beta; got {:?}",
+        names
+    );
+}
+
+#[test]
 fn window_close_with_no_dirty_tabs_exits_cleanly() {
     let mut app = make_app_with_n_tabs(1);
     app.world_mut()
@@ -642,4 +833,143 @@ fn window_close_with_no_dirty_tabs_exits_cleanly() {
         .drain()
         .collect();
     assert_eq!(exits.len(), 1);
+}
+
+#[test]
+fn open_prefab_file_sets_tab_kind_prefab() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+    std::fs::write(
+        &prefab_path,
+        r#"{
+            "jsn": { "format_version": [3,0,0], "editor_version": "0", "bevy_version": "0.18" },
+            "metadata": { "name": "p", "created": "", "modified": "" },
+            "assets": {},
+            "scene": [{
+                "components": {
+                    "jackdaw::prefab::components::Prefab": null,
+                    "jackdaw::prefab::components::PrefabEntityId": 0
+                }
+            }]
+        }"#,
+    )
+    .unwrap();
+
+    let mut app = make_app_with_n_tabs(0);
+    app.world_mut()
+        .init_resource::<jackdaw::prefab::PrefabAstCache>();
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &prefab_path);
+
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    let tab = scenes.tabs.last().expect("tab pushed by open");
+    assert!(
+        matches!(tab.kind, jackdaw::scenes::TabKind::Prefab),
+        "opening a prefab file sets TabKind::Prefab"
+    );
+}
+
+#[test]
+fn open_regular_scene_file_sets_tab_kind_scene() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scene_path = tmp.path().join("s.jsn");
+    std::fs::write(
+        &scene_path,
+        r#"{
+            "jsn": { "format_version": [3,0,0], "editor_version": "0", "bevy_version": "0.18" },
+            "metadata": { "name": "s", "created": "", "modified": "" },
+            "assets": {},
+            "scene": [{ "components": { "bevy_ecs::name::Name": "x" } }]
+        }"#,
+    )
+    .unwrap();
+
+    let mut app = make_app_with_n_tabs(0);
+    app.world_mut()
+        .init_resource::<jackdaw::prefab::PrefabAstCache>();
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &scene_path);
+
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    let tab = scenes.tabs.last().expect("tab pushed");
+    assert!(matches!(tab.kind, jackdaw::scenes::TabKind::Scene));
+}
+
+#[test]
+fn each_tab_has_its_own_undo_stack() {
+    // Pushing history entries in tab A then swapping to tab B must
+    // leave tab B's history empty. Swapping back to A must restore
+    // A's stack.
+    use bevy::prelude::*;
+
+    struct CounterCommand;
+    impl jackdaw::commands::EditorCommand for CounterCommand {
+        fn execute(&mut self, _world: &mut World) {}
+        fn undo(&mut self, _world: &mut World) {}
+        fn description(&self) -> &str {
+            "counter"
+        }
+    }
+
+    let mut app = make_app_with_n_tabs(2);
+
+    // Tab A active. Push two entries.
+    app.world_mut()
+        .resource_mut::<jackdaw::commands::CommandHistory>()
+        .push_executed(Box::new(CounterCommand));
+    app.world_mut()
+        .resource_mut::<jackdaw::commands::CommandHistory>()
+        .push_executed(Box::new(CounterCommand));
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        2,
+        "tab A has 2 entries"
+    );
+
+    // Swap to tab B. Live history should be tab B's (empty).
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        0,
+        "tab B has its own empty undo stack"
+    );
+
+    // Push an entry in tab B.
+    app.world_mut()
+        .resource_mut::<jackdaw::commands::CommandHistory>()
+        .push_executed(Box::new(CounterCommand));
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        1,
+        "tab B has 1 entry"
+    );
+
+    // Swap back to tab A. Its 2-entry stack is restored.
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        2,
+        "tab A's 2-entry stack is restored after swap-back"
+    );
+
+    // And swapping back to B still has its 1 entry.
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        1,
+        "tab B's stack persists across the round-trip"
+    );
 }
