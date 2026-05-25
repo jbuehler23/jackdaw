@@ -132,6 +132,7 @@ ctrlc = "3"
 bevy_simple_subsecond_system = { version = "0.2", optional = true }
 winit.workspace = true
 image.workspace = true
+jackdaw_localization = { version = "0.4.1", path = "crates/jackdaw_localization" }
 
 [workspace.dependencies]
 bevy = { version = "0.18", features = [
@@ -156,6 +157,7 @@ jackdaw_remote = { version = "0.4.1", path = "crates/jackdaw_remote" }
 jackdaw_node_graph = { version = "0.4.1", path = "crates/jackdaw_node_graph" }
 jackdaw_animation = { version = "0.4.1", path = "crates/jackdaw_animation" }
 jackdaw_fuzzy = { version = "0.4.1", path = "crates/jackdaw_fuzzy" }
+jackdaw_localization = { version = "0.4.1", path = "crates/jackdaw_localization" }
 noise = "0.9"
 rand = "0.9"
 serde = "1"
@@ -195,6 +197,10 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 winit = "0.30.13"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+fluent_content = "0.0.5"
+bevy_fluent = { git = "https://github.com/ThierryBerger/bevy_fluent.git", branch = "asset_path_resolve" }
+unic-langid = { version = "0.9", features = ["macros"] }
+sys-locale = "0.2"
 
 # Idiomatic Bevy code often triggers these lints, and the CI workflow treats them as errors.
 [workspace.lints.clippy]

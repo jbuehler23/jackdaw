@@ -100,11 +100,6 @@ pub(crate) fn measure_distance(
     vp: crate::viewport::ViewportCursor,
     mut ray_cast: MeshRayCast,
 ) -> OperatorResult {
-    // Outside `AppState::Editor` (e.g. headless tests, project-select
-    // screen) the window or main viewport camera don't exist yet.
-    let Ok(window) = vp.windows.single() else {
-        return OperatorResult::Cancelled;
-    };
     // Capture the viewport the modal was started on; subsequent
     // frames stick to it even if the cursor strays elsewhere.
     let camera_entity = state.camera.or_else(|| vp.camera_entity());
@@ -118,12 +113,10 @@ pub(crate) fn measure_distance(
     if state.viewport.is_none() {
         state.viewport = Some(viewport_entity);
     }
-    let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let (camera, cam_tf) = vp.camera_for(camera_entity)?;
 
     // Try to get a world-space point under the cursor.
-    let current_point = window.cursor_position().and_then(|cursor_pos| {
+    let current_point = vp.cursor().and_then(|cursor_pos| {
         let vp_cursor = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)?;
         let ray = camera.viewport_to_world(cam_tf, vp_cursor).ok()?;
         Some(
@@ -274,7 +267,7 @@ fn ensure_measure_label(
             MeasureLabel,
             crate::EditorEntity,
             crate::NonSerializable,
-            Text::new(""),
+            Text::default(),
             TextFont {
                 font_size: tokens::TEXT_SIZE,
                 ..default()

@@ -444,9 +444,7 @@ pub fn box_select(
     mut commands: Commands,
     active: ActiveModalQuery,
 ) -> OperatorResult {
-    let Some(cursor_pos) = vp.cursor() else {
-        return OperatorResult::Cancelled;
-    };
+    let cursor_pos = vp.cursor()?;
 
     if !active.is_modal_running() {
         // Honour the press-down position recorded by

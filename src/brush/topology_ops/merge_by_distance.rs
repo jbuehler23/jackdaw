@@ -34,24 +34,16 @@ pub(crate) fn brush_merge_by_distance(
     }
 
     // Get the currently edited brush entity.
-    let Some(brush_entity) = selection.entity else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_entity = selection.entity?;
 
     // Snapshot before mutation for undo.
-    let Ok(brush_before) = brushes.get(brush_entity).cloned() else {
-        return OperatorResult::Cancelled;
-    };
+    let brush_before = brushes.get(brush_entity).cloned()?;
 
     // Get mutable HalfedgeMesh and run remove_doubles.
-    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
 
     // Run remove_doubles on the whole mesh.
-    let Ok(_) = remove_doubles(&mut halfedge.mesh, DEFAULT_MERGE_DISTANCE) else {
-        return OperatorResult::Cancelled;
-    };
+    remove_doubles(&mut halfedge.mesh, DEFAULT_MERGE_DISTANCE)?;
 
     // Re-cache all face normals.
     let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
@@ -70,9 +62,7 @@ pub(crate) fn brush_merge_by_distance(
 
     // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
     let new_topology = halfedge.mesh.flatten_to_topology();
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return OperatorResult::Cancelled;
-    };
+    let mut brush = brushes.get_mut(brush_entity)?;
 
     // remove_doubles may drop degenerate faces. Truncate brush.faces
     // if the topology now has fewer faces than before.
