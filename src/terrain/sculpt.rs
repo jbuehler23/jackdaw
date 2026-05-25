@@ -86,8 +86,7 @@ fn terrain_brush_hit(
     let selected = selection.primary()?;
     let (terrain_entity, terrain, terrain_tf) = terrain_query.get(selected).ok()?;
 
-    let window = vp.windows.single().ok()?;
-    let cursor_pos = window.cursor_position()?;
+    let cursor_pos = vp.cursor()?;
 
     let camera_entity = vp.camera_entity()?;
     let viewport_entity = vp.viewport_entity()?;
