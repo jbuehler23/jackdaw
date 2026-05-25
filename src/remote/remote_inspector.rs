@@ -236,6 +236,8 @@ pub fn build_remote_inspector_displays(
         true, // read_only
         &materials,
         &empty_jsn_paths,
+        None,
+        None,
     );
 
     // Spawn JSON fallback section for unregistered components
@@ -351,6 +353,8 @@ fn spawn_fallback_section(
                 entity: source_entity,
                 component: None,
                 is_overridden: false,
+                prefab_ctx: None,
+                revert_through_prefab: false,
                 icon_font: &icon_font.0,
                 editor_font: &editor_font.0,
             },

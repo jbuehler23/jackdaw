@@ -77,6 +77,65 @@ pub(super) fn setup_default_materials(
     });
 }
 
+/// Keep each brush's `Transform.translation` at the geometric centroid
+/// of its local vertices. After concave edits (vertex drag, extrude,
+/// inset, etc.) the topology vertices drift in local space while the
+/// entity Transform stays put, leaving the gizmo (and ray-cast AABB)
+/// far from the visible mesh. This system shifts the local vertices
+/// back so their centroid is at the origin, then translates the entity
+/// Transform by the equivalent world-space offset so the rendered
+/// position stays the same.
+///
+/// Skipped while a vertex / edge / face drag is active so mid-drag
+/// world coordinates remain stable.
+pub fn recenter_brush_origins(
+    mut brushes: Query<
+        (
+            &mut super::Brush,
+            &mut Transform,
+            Option<&mut crate::brush::BrushHalfedge>,
+        ),
+        Or<(Changed<super::Brush>, Changed<crate::brush::BrushHalfedge>)>,
+    >,
+    vertex_drag: Res<super::VertexDragState>,
+    edge_drag: Res<super::EdgeDragState>,
+    face_drag: Res<super::BrushDragState>,
+) {
+    if vertex_drag.active || edge_drag.active || face_drag.active {
+        return;
+    }
+    for (mut brush, mut transform, halfedge) in &mut brushes {
+        // Prefer the live halfedge mesh when present (Vertex / Edge /
+        // Face mode), since `brush.topology` may not yet reflect the
+        // in-flight halfedge edits.
+        let verts: Vec<bevy::math::Vec3> = if let Some(ref he) = halfedge {
+            he.mesh.verts.values().map(|v| v.co).collect()
+        } else {
+            brush.topology.vertices.iter().map(|v| v.position).collect()
+        };
+        if verts.is_empty() {
+            continue;
+        }
+        let centroid = verts.iter().copied().sum::<bevy::math::Vec3>() / verts.len() as f32;
+        // Skip when the centroid drift is too small to matter; this
+        // also stops the system from re-triggering itself once the
+        // brush is centered.
+        if centroid.length_squared() < 1e-6 {
+            continue;
+        }
+        for v in &mut brush.topology.vertices {
+            v.position -= centroid;
+        }
+        if let Some(mut he) = halfedge {
+            for (_, vert) in he.mesh.verts.iter_mut() {
+                vert.co -= centroid;
+            }
+        }
+        let world_offset = transform.rotation * (centroid * transform.scale);
+        transform.translation += world_offset;
+    }
+}
+
 pub fn regenerate_brush_meshes(
     mut commands: Commands,
     changed_brushes: Query<

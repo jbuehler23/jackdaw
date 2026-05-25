@@ -12,6 +12,11 @@ jackdaw_geometry.workspace = true
 # manifold-csg pulls in manifold3d (C++ via cmake). Build prereqs:
 # cmake, a C++ compiler, git. See the crate README for details.
 manifold-csg = { version = "0.1", default-features = false, features = ["parallel"] }
+# Pin the FFI crate: `manifold-csg 0.1.8` has a too-loose constraint on
+# `manifold-csg-sys` and resolves against 3.5.x, which renamed several
+# FFI symbols and breaks the build. Constrain transitively to the last
+# compatible sys version. Drop once `manifold-csg` upgrades.
+manifold-csg-sys = "=3.4.107"
 
 [dev-dependencies]
 jackdaw_jsn.workspace = true

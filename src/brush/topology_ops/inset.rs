@@ -14,8 +14,7 @@ use jackdaw_geometry::halfedge::ops::inset_face::inset_face;
 use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
 
@@ -118,7 +117,6 @@ pub(crate) fn brush_inset(
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<InsetModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -225,10 +223,6 @@ pub(crate) fn brush_inset(
             *modal_state = InsetModalState::default();
             return OperatorResult::Cancelled;
         };
-        let Some(start_brush) = modal_state.start_brush.clone() else {
-            *modal_state = InsetModalState::default();
-            return OperatorResult::Cancelled;
-        };
 
         // Zero-amount commit: treat as cancel so we don't write a no-op undo.
         // The live brush should already be back to the snapshot in this case
@@ -259,13 +253,6 @@ pub(crate) fn brush_inset(
         if !inner_indices.is_empty() {
             selection.faces = inner_indices;
         }
-
-        history.push_executed(Box::new(SetBrush {
-            entity: brush_entity,
-            old: start_brush,
-            new: brush,
-            label: "Inset".to_string(),
-        }));
 
         *modal_state = InsetModalState::default();
         return OperatorResult::Finished;

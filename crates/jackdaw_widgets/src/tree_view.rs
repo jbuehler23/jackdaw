@@ -55,6 +55,11 @@ pub enum EntityCategory {
     Light,
     Mesh,
     Scene,
+    Prefab,
+    /// Entity inherited from a prefab (carries `PrefabEntityId` but no
+    /// `IsA`). Drawn with a faint tinge to signal it's a materialized
+    /// child of an instance rather than authored directly.
+    Inherited,
     #[default]
     Entity,
 }

@@ -20,8 +20,7 @@ use jackdaw_geometry::halfedge::ops::extrude_face_region::extrude_face_region;
 use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
 use crate::viewport::{MainViewportCamera, SceneViewport};
@@ -77,7 +76,6 @@ pub(crate) fn brush_extrude_region(
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return OperatorResult::Cancelled;
@@ -86,9 +84,6 @@ pub(crate) fn brush_extrude_region(
     if selection.faces.is_empty() {
         return OperatorResult::Cancelled;
     }
-
-    // Snapshot before mutation for undo.
-    let brush_before = brushes.get(brush_entity).cloned()?;
 
     // Map cache face indices to HalfedgeMesh FaceKeys via face_keys parallel array.
     let mut halfedge = halfedge_q.get_mut(brush_entity)?;
@@ -177,13 +172,6 @@ pub(crate) fn brush_extrude_region(
     halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "Extrude Region".to_string(),
-    }));
-
     // Chain selection: write the new top face(s) into `BrushSelection.faces`
     // so a follow-up gesture (drag-along-normal, inset, extrude again) can
     // operate on the freshly created top ring immediately.
@@ -239,7 +227,6 @@ pub(crate) fn brush_extrude(
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
     brush_transforms: Query<&GlobalTransform>,
-    mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<ExtrudeModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -344,10 +331,6 @@ pub(crate) fn brush_extrude(
             *modal_state = ExtrudeModalState::default();
             return OperatorResult::Cancelled;
         };
-        let Some(start_brush) = modal_state.start_brush.clone() else {
-            *modal_state = ExtrudeModalState::default();
-            return OperatorResult::Cancelled;
-        };
 
         // Degenerate zero-amount commit: treat as no-op cancel so we don't
         // record a useless undo entry. The live brush should already be back
@@ -375,13 +358,6 @@ pub(crate) fn brush_extrude(
         if !new_top_indices.is_empty() {
             selection.faces = new_top_indices;
         }
-
-        history.push_executed(Box::new(SetBrush {
-            entity: brush_entity,
-            old: start_brush,
-            new: brush,
-            label: "Extrude".to_string(),
-        }));
 
         *modal_state = ExtrudeModalState::default();
         return OperatorResult::Finished;
