@@ -22,24 +22,37 @@ pub struct TreeRowStyle {
     pub icon_font: Handle<Font>,
 }
 
-/// Returns the display color for an entity category.
-pub fn category_color(category: EntityCategory) -> Color {
+/// Returns the display color for an entity category. When `inherited`
+/// is true, the muted `CATEGORY_INHERITED` color wins; this is how
+/// resolver-materialised descendants of a prefab instance get drawn
+/// faintly regardless of their underlying category (Mesh, Light, etc.).
+pub fn category_color(category: EntityCategory, inherited: bool) -> Color {
+    if inherited {
+        return tokens::CATEGORY_INHERITED;
+    }
     match category {
         EntityCategory::Camera => tokens::CATEGORY_CAMERA,
         EntityCategory::Light => tokens::CATEGORY_LIGHT,
         EntityCategory::Mesh => tokens::CATEGORY_MESH,
         EntityCategory::Scene => tokens::CATEGORY_SCENE,
+        EntityCategory::Prefab => tokens::CATEGORY_PREFAB,
+        EntityCategory::Inherited => tokens::CATEGORY_INHERITED,
         EntityCategory::Entity => tokens::CATEGORY_ENTITY,
     }
 }
 
-/// Creates a tree row bundle for displaying an entity in the hierarchy
+/// Creates a tree row bundle for displaying an entity in the hierarchy.
+/// `inherited` flips the dot color to the muted "inherited from prefab"
+/// tone while leaving the icon character to reflect the underlying
+/// category (Lightbulb for an inherited light, Video for an inherited
+/// camera, etc.).
 pub fn tree_row(
     label: &str,
     has_children: bool,
     selected: bool,
     source: Entity,
     category: EntityCategory,
+    inherited: bool,
     style: &TreeRowStyle,
 ) -> impl Bundle {
     (
@@ -55,7 +68,15 @@ pub fn tree_row(
         },
         children![
             // The clickable row content
-            tree_row_content(label, has_children, selected, source, category, style),
+            tree_row_content(
+                label,
+                has_children,
+                selected,
+                source,
+                category,
+                inherited,
+                style
+            ),
             // Container for child rows (initially empty, populated lazily)
             (
                 TreeRowChildren,
@@ -125,6 +146,7 @@ fn tree_row_content(
     selected: bool,
     source: Entity,
     category: EntityCategory,
+    inherited: bool,
     style: &TreeRowStyle,
 ) -> impl Bundle {
     let bg = if selected {
@@ -155,7 +177,7 @@ fn tree_row_content(
             // Expand toggle (chevron)
             expand_toggle(has_children, &style.icon_font),
             // Category icon
-            category_dot(category, &style.icon_font),
+            category_dot(category, inherited, &style.icon_font),
             // Label
             (
                 TreeRowLabel,
@@ -394,13 +416,22 @@ fn visibility_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle {
     )
 }
 
-/// Icon indicating entity category (matches Figma reference).
-fn category_dot(category: EntityCategory, icon_font: &Handle<Font>) -> impl Bundle {
-    let color = category_color(category);
+/// Icon indicating entity category (matches Figma reference). When
+/// `inherited` is true the row is drawn in the muted prefab-inherited
+/// color, but the icon still reflects the underlying category so an
+/// inherited light still looks like a light, an inherited camera still
+/// looks like a camera.
+fn category_dot(
+    category: EntityCategory,
+    inherited: bool,
+    icon_font: &Handle<Font>,
+) -> impl Bundle {
+    let color = category_color(category, inherited);
     let icon_char = match category {
         EntityCategory::Camera => Icon::Video,
         EntityCategory::Light => Icon::Lightbulb,
-        EntityCategory::Mesh | EntityCategory::Scene => Icon::Box,
+        EntityCategory::Prefab => Icon::Package,
+        EntityCategory::Inherited | EntityCategory::Mesh | EntityCategory::Scene => Icon::Box,
         EntityCategory::Entity => Icon::Dot,
     };
     (

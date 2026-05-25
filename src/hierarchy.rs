@@ -29,13 +29,39 @@ use crate::{
 use jackdaw_feathers::dialog::{DialogActionEvent, DialogChildrenSlot};
 use jackdaw_jsn::BrushGroup;
 
-/// Stores the default name for the template save dialog.
+/// Stores the default name for the prefab save dialog.
 #[derive(Resource, Default)]
-struct PendingTemplateDefaultName(String);
+struct PendingPrefabDefaultName(String);
 
-/// Marker for the template name text input inside the dialog.
+/// Distinguishes between "save subtree as new prefab file" and
+/// "save instance + its overrides as a variant of the current prefab".
+#[derive(Default, Clone, Copy)]
+pub enum PrefabSaveMode {
+    /// Save the selected entities as a new prefab file; the source
+    /// becomes an `IsA` instance in the current scene. Source tab is
+    /// unchanged.
+    #[default]
+    Prefab,
+    /// Save the entire active scene tab as a prefab file. The tab
+    /// itself converts to a Prefab tab (`TabKind::Prefab`,
+    /// `TabContent::Prefab(path)`, Package icon, Ctrl+S goes through
+    /// the prefab save branch).
+    Scene,
+    /// Save the current instance + its overrides as a variant of the
+    /// underlying prefab.
+    Variant,
+}
+
+/// Tracks which entities to package when the prefab save dialog is confirmed.
+#[derive(Resource, Default)]
+pub struct PendingPrefabSave {
+    pub roots: Vec<Entity>,
+    pub mode: PrefabSaveMode,
+}
+
+/// Marker for the prefab name text input inside the dialog.
 #[derive(Component)]
-struct TemplateNameInput;
+struct PrefabNameInput;
 
 /// Marker for the hierarchy panel
 #[derive(Component)]
@@ -66,7 +92,8 @@ pub struct HierarchyPlugin;
 impl Plugin for HierarchyPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ContextMenuState>()
-            .init_resource::<PendingTemplateDefaultName>()
+            .init_resource::<PendingPrefabDefaultName>()
+            .init_resource::<PendingPrefabSave>()
             .init_resource::<HierarchyShowAll>()
             .add_systems(Startup, setup_tree_node_expanded_watcher)
             .add_systems(OnEnter(crate::AppState::Editor), setup_name_watcher)
@@ -75,7 +102,7 @@ impl Plugin for HierarchyPlugin {
                 (
                     apply_hierarchy_filter,
                     auto_focus_inline_rename,
-                    populate_template_dialog,
+                    populate_prefab_dialog,
                     toggle_show_all_button,
                     update_show_all_button_appearance,
                     on_show_all_changed,
@@ -105,13 +132,20 @@ impl Plugin for HierarchyPlugin {
             .add_observer(on_tree_row_renamed)
             .add_observer(on_context_menu_action)
             .add_observer(on_visibility_toggled)
-            .add_observer(on_template_dialog_action)
+            .add_observer(on_prefab_dialog_action)
             .add_observer(on_entity_hidden);
     }
 }
 
 /// Classify a scene entity by its primary component for tree display.
+/// Returns the underlying category (Brush mesh, Camera, Light, etc.)
+/// regardless of whether the entity is inherited from a prefab. Inherited
+/// status is conveyed separately via [`is_inherited_descendant`] so the
+/// outliner can pair the right icon with a muted color.
 fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
+    if world.get::<crate::prefab::IsA>(entity).is_some() {
+        return EntityCategory::Prefab;
+    }
     if world.get::<BrushGroup>(entity).is_some() {
         return EntityCategory::Mesh;
     }
@@ -133,6 +167,14 @@ fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
     EntityCategory::Entity
 }
 
+/// True when this entity is an inherited descendant of a prefab instance
+/// (`PrefabEntityId` present, `IsA` absent). The outliner mutes such
+/// rows so they're visually distinguishable from authored entities.
+fn is_inherited_descendant(world: &World, entity: Entity) -> bool {
+    world.get::<crate::prefab::IsA>(entity).is_none()
+        && world.get::<crate::prefab::PrefabEntityId>(entity).is_some()
+}
+
 /// Check if an entity has any non-editor children.
 fn has_visible_children(world: &World, entity: Entity) -> bool {
     let Some(children) = world.get::<Children>(entity) else {
@@ -141,6 +183,25 @@ fn has_visible_children(world: &World, entity: Entity) -> bool {
     children.iter().any(|child| {
         world.get::<EditorEntity>(child).is_none() && world.get::<EditorHidden>(child).is_none()
     })
+}
+
+/// Returns true if `entity` has `PrefabEntityId` but NOT `IsA` -- meaning
+/// it's an entity materialized from a prefab, not an instance root.
+fn is_inherited_entity(world: &World, entity: Entity) -> bool {
+    world.get::<crate::prefab::PrefabEntityId>(entity).is_some()
+        && world.get::<crate::prefab::IsA>(entity).is_none()
+}
+
+/// Walks up from `entity` through `ChildOf` until it finds an ancestor
+/// with `IsA`. Returns the instance root, or `None` if not inside an
+/// instance.
+fn find_instance_root(world: &World, mut entity: Entity) -> Option<Entity> {
+    loop {
+        if world.get::<crate::prefab::IsA>(entity).is_some() {
+            return Some(entity);
+        }
+        entity = world.get::<ChildOf>(entity)?.0;
+    }
 }
 
 /// Snapshot of every `HierarchyTreeContainer` in the world. Cached
@@ -188,12 +249,21 @@ fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: En
         .unwrap_or_else(|| format!("Entity {source}"));
     let has_children = has_visible_children(world, source);
     let category = classify_entity(world, source);
+    let inherited = is_inherited_descendant(world, source);
     let icon_font = world.resource::<IconFont>().0.clone();
     let style = TreeRowStyle { icon_font };
 
     let tree_row_entity = world
         .spawn((
-            tree_row(&label, has_children, false, source, category, &style),
+            tree_row(
+                &label,
+                has_children,
+                false,
+                source,
+                category,
+                inherited,
+                &style,
+            ),
             ChildOf(parent_container),
         ))
         .id();
@@ -219,7 +289,7 @@ fn rebuild_hierarchy_on_container_added(
     }
 }
 
-fn rebuild_hierarchy(world: &mut World) -> Result {
+pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
     fn rebuild_hierarchy_inner(
         world: &mut World,
         containers: &mut QueryState<Entity, With<HierarchyTreeContainer>>,
@@ -805,15 +875,56 @@ fn on_tree_row_dropped(
         current = parent;
     }
 
-    let old_parent = parent_query.get(dragged).ok().map(|c| c.0);
-
-    let mut cmd = ReparentEntity {
-        entity: dragged,
-        old_parent,
-        new_parent: Some(target),
-    };
-
     commands.queue(move |world: &mut World| {
+        // Inherited entities dropped outside their instance subtree get
+        // unpacked: the AST adds a standalone copy under the drop target
+        // and the source instance's `IsA.deleted` list grows by the
+        // child's `PrefabEntityId`. The live ECS entity still needs to
+        // be reparented for the visual to match.
+        if is_inherited_entity(world, dragged) {
+            let dragged_instance = find_instance_root(world, dragged);
+            let target_instance = find_instance_root(world, target);
+            if dragged_instance.is_some() && dragged_instance != target_instance {
+                // The operator resolves AST keys from these entities
+                // inside its queued closure (after the framework's
+                // before-snapshot install reshuffles indices).
+                let both_in_ast = {
+                    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
+                    ast.key_for_entity(dragged).is_some() && ast.key_for_entity(target).is_some()
+                };
+                if both_in_ast {
+                    let _ = world
+                        .operator("prefab.unpack_child")
+                        .settings(CallOperatorSettings {
+                            creates_history_entry: true,
+                            ..default()
+                        })
+                        .param("child_entity", dragged)
+                        .param("drop_target_entity", target)
+                        .call();
+                    let old_parent = world.get::<ChildOf>(dragged).map(|c| c.0);
+                    let mut cmd = ReparentEntity {
+                        entity: dragged,
+                        old_parent,
+                        new_parent: Some(target),
+                    };
+                    cmd.execute(world);
+                    world
+                        .resource_mut::<CommandHistory>()
+                        .undo_stack
+                        .push(Box::new(cmd));
+                    world.resource_mut::<CommandHistory>().redo_stack.clear();
+                    return;
+                }
+            }
+        }
+
+        let old_parent = world.get::<ChildOf>(dragged).map(|c| c.0);
+        let mut cmd = ReparentEntity {
+            entity: dragged,
+            old_parent,
+            new_parent: Some(target),
+        };
         cmd.execute(world);
         world
             .resource_mut::<CommandHistory>()
@@ -844,6 +955,11 @@ fn on_tree_row_dropped_on_root(
     };
 
     commands.queue(move |world: &mut World| {
+        // `unpack_child` requires a drop-target key, so a true unpack to
+        // the project root has no operator yet. For now, dragging an
+        // inherited entity to the empty root just deparents it in the
+        // ECS; the AST instance keeps owning it, so the next scene
+        // re-resolve will reanchor it under its instance root.
         cmd.execute(world);
         world
             .resource_mut::<CommandHistory>()
@@ -876,6 +992,7 @@ pub(crate) fn hierarchy_open_context_menu(
     tree_nodes: Query<&TreeNode>,
     computed_nodes: Query<(&ComputedNode, &UiGlobalTransform), With<TreeRowContent>>,
     extension_add_entries: Query<&jackdaw_api_internal::lifecycle::RegisteredMenuEntry>,
+    q_isa: Query<(), With<crate::prefab::IsA>>,
 ) -> OperatorResult {
     let cursor_pos = cursor.get()?;
 
@@ -944,14 +1061,51 @@ pub(crate) fn hierarchy_open_context_menu(
         ),
         ("hierarchy.delete".into(), "Delete             Del".into()),
         (
-            "hierarchy.save_template".into(),
-            "Save as Template...".into(),
+            "hierarchy.save_prefab".into(),
+            "Save Selection as Prefab...".into(),
+        ),
+        (
+            "hierarchy.save_scene_as_prefab".into(),
+            "Save Scene as Prefab...".into(),
         ),
         ("hierarchy.add_cube".into(), "Add Child Cube".into()),
         ("hierarchy.add_sphere".into(), "Add Child Sphere".into()),
         ("hierarchy.add_light".into(), "Add Child Light".into()),
         ("hierarchy.add_empty".into(), "Add Child Empty".into()),
     ];
+
+    // If the right-clicked target is a prefab instance root (has IsA),
+    // expose prefab-instance specific actions above the generic ones.
+    if q_isa.get(target).is_ok() {
+        owned_items.insert(
+            0,
+            (
+                "hierarchy.prefab.revert_all".into(),
+                "Revert All Overrides".into(),
+            ),
+        );
+        owned_items.insert(
+            1,
+            (
+                "hierarchy.prefab.save_as_variant".into(),
+                "Save as Variant...".into(),
+            ),
+        );
+        owned_items.insert(
+            2,
+            (
+                "hierarchy.prefab.apply_all_to_source".into(),
+                "Apply All Changes to Prefab Source".into(),
+            ),
+        );
+        owned_items.insert(
+            3,
+            (
+                "hierarchy.prefab.unbundle_instance".into(),
+                "Unbundle Prefab Instance".into(),
+            ),
+        );
+    }
 
     // Append extension-contributed Add entries from the same source the
     // toolbar Add menu and the Add Entity picker use. One
@@ -1023,73 +1177,158 @@ fn on_context_menu_action(
                 entity_ops::delete_selected(world);
             });
         }
-        "hierarchy.add_cube" => {
-            if let Some(parent) = target_entity {
-                commands.queue(move |world: &mut World| {
-                    entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::Cube);
-                    // Reparent the newly created entity under the target
-                    let selection = world.resource::<Selection>();
-                    if let Some(new_entity) = selection.primary() {
-                        world.entity_mut(new_entity).insert(ChildOf(parent));
-                    }
-                });
-            }
-        }
-        "hierarchy.add_sphere" => {
-            if let Some(parent) = target_entity {
-                commands.queue(move |world: &mut World| {
-                    entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::Sphere);
-                    let selection = world.resource::<Selection>();
-                    if let Some(new_entity) = selection.primary() {
-                        world.entity_mut(new_entity).insert(ChildOf(parent));
-                    }
-                });
-            }
-        }
-        "hierarchy.add_light" => {
-            if let Some(parent) = target_entity {
-                commands.queue(move |world: &mut World| {
-                    entity_ops::create_entity_in_world(
-                        world,
-                        entity_ops::EntityTemplate::PointLight,
-                    );
-                    let selection = world.resource::<Selection>();
-                    if let Some(new_entity) = selection.primary() {
-                        world.entity_mut(new_entity).insert(ChildOf(parent));
-                    }
-                });
-            }
-        }
-        "hierarchy.add_empty" => {
-            if let Some(parent) = target_entity {
-                commands.queue(move |world: &mut World| {
-                    entity_ops::create_entity_in_world(world, entity_ops::EntityTemplate::Empty);
-                    let selection = world.resource::<Selection>();
-                    if let Some(new_entity) = selection.primary() {
-                        world.entity_mut(new_entity).insert(ChildOf(parent));
-                    }
-                });
-            }
-        }
-        "hierarchy.save_template" => {
-            if let Some(target) = target_entity {
-                // Store the target entity and open a dialog for template name
-                commands.queue(move |world: &mut World| {
+        "hierarchy.add_cube" => add_child_entity(
+            &mut commands,
+            target_entity,
+            entity_ops::EntityTemplate::Cube,
+        ),
+        "hierarchy.add_sphere" => add_child_entity(
+            &mut commands,
+            target_entity,
+            entity_ops::EntityTemplate::Sphere,
+        ),
+        "hierarchy.add_light" => add_child_entity(
+            &mut commands,
+            target_entity,
+            entity_ops::EntityTemplate::PointLight,
+        ),
+        "hierarchy.add_empty" => add_child_entity(
+            &mut commands,
+            target_entity,
+            entity_ops::EntityTemplate::Empty,
+        ),
+        "hierarchy.save_prefab" => {
+            commands.queue(move |world: &mut World| {
+                // Prefer the right-clicked entity. The current Selection
+                // is only used when the user right-clicked an entity that
+                // IS part of the selection (multi-select save). When the
+                // right-click lands on something outside the selection,
+                // the user expects that row to be the target -- otherwise
+                // they'd silently save the wrong entity tree.
+                let selection: Vec<Entity> = world
+                    .resource::<crate::selection::Selection>()
+                    .entities
+                    .clone();
+                let roots = match target_entity {
+                    Some(target) if selection.contains(&target) => selection,
+                    Some(target) => vec![target],
+                    None => selection,
+                };
+                if roots.is_empty() {
+                    return;
+                }
+                info!(
+                    "hierarchy.save_prefab: target_entity={:?}, selection_len={}, roots_len={}",
+                    target_entity,
                     world
-                        .resource_mut::<crate::entity_templates::PendingTemplateSave>()
-                        .entity = Some(target);
-                    // Get the entity name as default template name
-                    let default_name = world
-                        .get::<Name>(target)
-                        .map(|n| n.as_str().to_string())
-                        .unwrap_or_else(|| "template".to_string());
-                    world.resource_mut::<PendingTemplateDefaultName>().0 = default_name;
-                });
-                commands.trigger(jackdaw_feathers::dialog::OpenDialogEvent::new(
-                    "Save as Template",
-                    "Save",
-                ));
-            }
+                        .resource::<crate::selection::Selection>()
+                        .entities
+                        .len(),
+                    roots.len(),
+                );
+                let default_name = roots
+                    .first()
+                    .and_then(|e| world.get::<Name>(*e).map(|n| n.as_str().to_string()))
+                    .unwrap_or_else(|| "prefab".to_string());
+                world.resource_mut::<PendingPrefabSave>().roots = roots;
+                world.resource_mut::<PendingPrefabSave>().mode = PrefabSaveMode::Prefab;
+                world.resource_mut::<PendingPrefabDefaultName>().0 = default_name;
+            });
+            commands.trigger(jackdaw_feathers::dialog::OpenDialogEvent::new(
+                "Save as Prefab",
+                "Save",
+            ));
+        }
+        "hierarchy.save_scene_as_prefab" => {
+            commands.queue(move |world: &mut World| {
+                let scenes = world.resource::<crate::scenes::Scenes>();
+                let active = scenes.active;
+                let default_name = scenes
+                    .tabs
+                    .get(active)
+                    .map(|t| t.display_name.trim().to_string())
+                    .filter(|s| !s.is_empty() && !s.starts_with("untitled"))
+                    .unwrap_or_else(|| "prefab".to_string());
+
+                world.resource_mut::<PendingPrefabSave>().roots = Vec::new();
+                world.resource_mut::<PendingPrefabSave>().mode = PrefabSaveMode::Scene;
+                world.resource_mut::<PendingPrefabDefaultName>().0 = default_name;
+            });
+            commands.trigger(jackdaw_feathers::dialog::OpenDialogEvent::new(
+                "Save Scene as Prefab",
+                "Save",
+            ));
+        }
+        "hierarchy.prefab.revert_all" => {
+            let Some(target) = target_entity else {
+                return;
+            };
+            commands.queue(move |world: &mut World| {
+                // The operator resolves the AST key from this entity
+                // inside its queued closure (after the framework's
+                // before-snapshot install reshuffles indices).
+                if world
+                    .resource::<jackdaw_jsn::SceneJsnAst>()
+                    .key_for_entity(target)
+                    .is_none()
+                {
+                    return;
+                }
+                let _ = world
+                    .operator("prefab.revert_all")
+                    .settings(CallOperatorSettings {
+                        creates_history_entry: true,
+                        ..default()
+                    })
+                    .param("instance_entity", target)
+                    .call();
+            });
+        }
+        "hierarchy.prefab.save_as_variant" => {
+            let Some(target) = target_entity else {
+                return;
+            };
+            commands.queue(move |world: &mut World| {
+                let default_name = world
+                    .get::<Name>(target)
+                    .map(|n| format!("{}_variant", n.as_str()))
+                    .unwrap_or_else(|| "variant".to_string());
+                world.resource_mut::<PendingPrefabSave>().roots = vec![target];
+                world.resource_mut::<PendingPrefabSave>().mode = PrefabSaveMode::Variant;
+                world.resource_mut::<PendingPrefabDefaultName>().0 = default_name;
+            });
+            commands.trigger(jackdaw_feathers::dialog::OpenDialogEvent::new(
+                "Save as Variant",
+                "Save",
+            ));
+        }
+        "hierarchy.prefab.apply_all_to_source" => {
+            let Some(target) = target_entity else {
+                return;
+            };
+            commands.queue(move |world: &mut World| {
+                let key = {
+                    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
+                    ast.key_for_entity(target)
+                };
+                let Some(key) = key else { return };
+                crate::prefab::operators::apply_all_overrides_to_source(world, key);
+            });
+        }
+        "hierarchy.prefab.unbundle_instance" => {
+            let Some(target) = target_entity else {
+                return;
+            };
+            commands.queue(move |world: &mut World| {
+                let _ = world
+                    .operator("prefab.unbundle_instance")
+                    .settings(CallOperatorSettings {
+                        creates_history_entry: true,
+                        ..default()
+                    })
+                    .param("instance_entity", target)
+                    .call();
+            });
         }
         action if action.starts_with(OP_PREFIX) => {
             // Extension-contributed Add entry. Dispatch through the same
@@ -1109,6 +1348,26 @@ fn on_context_menu_action(
         }
         _ => {}
     }
+}
+
+/// Spawn an entity from `template` and reparent it under `parent` (if
+/// provided). Goes through the AST-aware `set_parent` so the live
+/// `SceneJsnAst` stays in sync with the ECS hierarchy.
+fn add_child_entity(
+    commands: &mut Commands,
+    parent: Option<Entity>,
+    template: entity_ops::EntityTemplate,
+) {
+    let Some(parent) = parent else {
+        return;
+    };
+    commands.queue(move |world: &mut World| {
+        entity_ops::create_entity_in_world(world, template);
+        let selection = world.resource::<Selection>();
+        if let Some(new_entity) = selection.primary() {
+            crate::commands::set_parent(world, new_entity, Some(parent));
+        }
+    });
 }
 
 /// Toggle entity visibility when the eye icon is clicked.
@@ -1151,7 +1410,21 @@ fn on_visibility_toggled(
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<RenameBeginOp>()
-        .register_operator::<HierarchyOpenContextMenuOp>();
+        .register_operator::<HierarchyOpenContextMenuOp>()
+        .register_operator::<PrefabSaveAsPrefabOp>()
+        .register_operator::<PrefabSaveSceneAsPrefabOp>()
+        .register_operator::<PrefabSaveAsVariantOp>()
+        .register_operator::<crate::prefab::operators::PrefabSaveOp>()
+        .register_operator::<crate::prefab::operators::PrefabSpawnInstanceOp>()
+        .register_operator::<crate::prefab::operators::PrefabRevertFieldOp>()
+        .register_operator::<crate::prefab::operators::PrefabRevertComponentOp>()
+        .register_operator::<crate::prefab::operators::PrefabRevertAllOp>()
+        .register_operator::<crate::prefab::operators::PrefabApplyToSourceOp>()
+        .register_operator::<crate::prefab::operators::PrefabBulkApplyInSceneOp>()
+        .register_operator::<crate::prefab::operators::PrefabSaveAsVariantEntityOp>()
+        .register_operator::<crate::prefab::operators::PrefabUnpackChildOp>()
+        .register_operator::<crate::prefab::operators::PrefabUnbundleInstanceOp>()
+        .register_operator::<crate::prefab::operators::PrefabRepairSelfCyclesOp>();
     let ext = ctx.id();
     ctx.spawn((
         Action::<HierarchyOpenContextMenuOp>::new(),
@@ -1443,65 +1716,195 @@ fn on_tree_row_renamed(event: On<TreeRowRenamed>, mut commands: Commands, names:
     });
 }
 
-/// When the template dialog opens, populate its children slot with a name input.
-fn populate_template_dialog(
+/// When the prefab dialog opens, populate its children slot with a name input.
+/// The slot is spawned without a `Children` component (Bevy only adds it on
+/// first parenting), so this query MUST NOT require `&Children` -- it would
+/// never match a fresh slot.
+fn populate_prefab_dialog(
     mut commands: Commands,
-    pending: Res<crate::entity_templates::PendingTemplateSave>,
-    default_name: Res<PendingTemplateDefaultName>,
-    slots: Query<(Entity, &Children), (With<DialogChildrenSlot>, Changed<Children>)>,
-    existing_inputs: Query<(), With<TemplateNameInput>>,
+    pending: Res<PendingPrefabSave>,
+    default_name: Res<PendingPrefabDefaultName>,
+    slots: Query<Entity, With<DialogChildrenSlot>>,
+    existing_inputs: Query<(), With<PrefabNameInput>>,
 ) {
-    // Only act when there's a pending template save
-    if pending.entity.is_none() {
+    // `Scene` mode targets the whole active tab, so an empty
+    // `pending.roots` is meaningful there. Every other mode needs at
+    // least one pending root to display the dialog for.
+    if pending.roots.is_empty() && !matches!(pending.mode, PrefabSaveMode::Scene) {
         return;
     }
-    // Don't re-populate if we already have an input
+    // Idempotent: once the input exists, subsequent ticks bail here.
     if !existing_inputs.is_empty() {
         return;
     }
-    for (slot_entity, children) in &slots {
-        if children.is_empty() {
-            commands.spawn((
-                TemplateNameInput,
-                text_edit::text_edit(
-                    TextEditProps::default()
-                        .with_placeholder("Template name...")
-                        .with_default_value(default_name.0.clone())
-                        .allow_empty(),
-                ),
-                ChildOf(slot_entity),
-            ));
-        }
+    for slot_entity in &slots {
+        commands.spawn((
+            PrefabNameInput,
+            text_edit::text_edit(
+                TextEditProps::default()
+                    .with_placeholder("Prefab name...")
+                    .with_default_value(default_name.0.clone())
+                    .allow_empty(),
+            ),
+            ChildOf(slot_entity),
+        ));
     }
 }
 
-/// When the dialog's action button is clicked, save the template.
-fn on_template_dialog_action(
+/// When the dialog's action button is clicked, dispatch the matching
+/// prefab save operator. Routing through the operator system gives the
+/// save a log entry, an extension-API surface, and a consistent
+/// invocation path with the rest of the editor.
+fn on_prefab_dialog_action(
     _event: On<DialogActionEvent>,
     mut commands: Commands,
-    pending: Res<crate::entity_templates::PendingTemplateSave>,
-    name_inputs: Query<&TextEditValue, With<TemplateNameInput>>,
+    pending: Res<PendingPrefabSave>,
+    name_inputs: Query<&TextEditValue, With<PrefabNameInput>>,
 ) {
-    let Some(_entity) = pending.entity else {
+    // `Scene` mode operates on the active tab's whole AST, so an empty
+    // `pending.roots` is expected. Every other mode needs at least one
+    // pending root to package.
+    if pending.roots.is_empty() && !matches!(pending.mode, PrefabSaveMode::Scene) {
         return;
-    };
-
+    }
     let name = name_inputs
         .iter()
         .next()
         .map(|input| input.0.trim().to_string())
         .unwrap_or_default();
-
     if name.is_empty() {
+        warn!("save prefab cancelled: name is empty");
         return;
     }
+    let op_id = match pending.mode {
+        PrefabSaveMode::Prefab => PrefabSaveAsPrefabOp::ID,
+        PrefabSaveMode::Scene => PrefabSaveSceneAsPrefabOp::ID,
+        PrefabSaveMode::Variant => PrefabSaveAsVariantOp::ID,
+    };
+    commands
+        .operator(op_id)
+        .settings(CallOperatorSettings {
+            creates_history_entry: true,
+            ..default()
+        })
+        .param("name", name)
+        .call();
+}
+
+/// Save the entities listed in `PendingPrefabSave` as a new prefab file
+/// at `assets/prefabs/<name>.jsn` (project-relative). Clears the
+/// pending state after running.
+#[operator(
+    id = "prefab.save_as_prefab",
+    label = "Save as Prefab",
+    description = "Write the pending entity roots out as a new prefab file.",
+    allows_undo = true,
+    params(name(String, doc = "File name (without extension)."))
+)]
+pub fn prefab_save_as_prefab(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(name) = params.as_str("name").map(str::to_string) else {
+        warn!("prefab.save_as_prefab: missing `name` param");
+        return OperatorResult::Cancelled;
+    };
+    commands.queue(move |world: &mut World| {
+        let roots = world.resource::<PendingPrefabSave>().roots.clone();
+        if roots.is_empty() {
+            warn!("prefab.save_as_prefab: no pending roots");
+            return;
+        }
+        let target = match world.get_resource::<crate::project::ProjectRoot>() {
+            Some(root) => root.root.join("assets/prefabs").join(format!("{name}.jsn")),
+            None => std::path::PathBuf::from(format!("{name}.jsn")),
+        };
+        info!(
+            "prefab.save_as_prefab: bundling {} root(s) into {}",
+            roots.len(),
+            target.display()
+        );
+        crate::prefab::operators::save_as_prefab_from_selection(world, &roots, &target);
+        let mut pending = world.resource_mut::<PendingPrefabSave>();
+        pending.roots.clear();
+        pending.mode = PrefabSaveMode::Prefab;
+    });
+    OperatorResult::Finished
+}
+
+/// Save the entire active scene tab as a prefab file and convert
+/// the tab itself into a prefab tab. The active tab's
+/// `TabContent` switches to `Prefab(path)`, `TabKind` becomes
+/// `Prefab`, and Ctrl+S routes through the prefab save branch from
+/// that point on.
+#[operator(
+    id = "prefab.save_scene_as_prefab",
+    label = "Save Scene as Prefab",
+    description = "Write the active scene tab out as a new prefab file and convert the tab into a prefab tab.",
+    allows_undo = true,
+    params(name(String, doc = "File name (without extension)."))
+)]
+pub fn prefab_save_scene_as_prefab(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let name = params
+        .as_str("name")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            warn!("prefab.save_scene_as_prefab: no name provided; defaulting to 'prefab'");
+            "prefab".to_string()
+        });
 
     commands.queue(move |world: &mut World| {
-        crate::entity_templates::save_entity_template(world, &name);
-        world
-            .resource_mut::<crate::entity_templates::PendingTemplateSave>()
-            .entity = None;
+        let target = match world.get_resource::<crate::project::ProjectRoot>() {
+            Some(root) => root.root.join("assets/prefabs").join(format!("{name}.jsn")),
+            None => std::path::PathBuf::from(format!("{name}.jsn")),
+        };
+        crate::prefab::operators::save_scene_as_prefab(world, &target);
+        let mut pending = world.resource_mut::<PendingPrefabSave>();
+        pending.roots.clear();
+        pending.mode = PrefabSaveMode::Prefab;
     });
+    OperatorResult::Finished
+}
+
+/// Save the first entity in `PendingPrefabSave` as a variant prefab
+/// file at `assets/prefabs/<name>.jsn`. The new prefab carries both
+/// `Prefab` and `IsA` (pointing at the original prefab) plus any
+/// instance overrides.
+#[operator(
+    id = "prefab.save_as_variant",
+    label = "Save as Variant",
+    description = "Write the pending instance out as a variant prefab.",
+    allows_undo = true,
+    params(name(String, doc = "File name (without extension)."))
+)]
+pub fn prefab_save_as_variant(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(name) = params.as_str("name").map(str::to_string) else {
+        warn!("prefab.save_as_variant: missing `name` param");
+        return OperatorResult::Cancelled;
+    };
+    commands.queue(move |world: &mut World| {
+        let root = world.resource::<PendingPrefabSave>().roots.first().copied();
+        let Some(root) = root else {
+            warn!("prefab.save_as_variant: no pending root");
+            return;
+        };
+        let target = match world.get_resource::<crate::project::ProjectRoot>() {
+            Some(p) => p.root.join("assets/prefabs").join(format!("{name}.jsn")),
+            None => std::path::PathBuf::from(format!("{name}.jsn")),
+        };
+        crate::prefab::operators::save_as_variant(world, root, &target);
+        let mut pending = world.resource_mut::<PendingPrefabSave>();
+        pending.roots.clear();
+        pending.mode = PrefabSaveMode::Prefab;
+    });
+    OperatorResult::Finished
 }
 
 /// Toggle the show-all state when the button is pressed.

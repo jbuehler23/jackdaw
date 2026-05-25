@@ -4,8 +4,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushSelection, EditMode};
 
 /// Snap U and V axes to the closest world-axis pair for the face's normal.
 /// Useful for Hammer / Quake-style brushwork where adjacent brushes with the
@@ -21,7 +20,6 @@ pub(crate) fn brush_uv_world_aligned(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return OperatorResult::Cancelled;
@@ -30,7 +28,6 @@ pub(crate) fn brush_uv_world_aligned(
     if selection.faces.is_empty() {
         return OperatorResult::Cancelled;
     }
-    let brush_before = brushes.get(brush_entity).cloned()?;
     let mut brush = brushes.get_mut(brush_entity)?;
 
     for &face_idx in &selection.faces {
@@ -66,12 +63,6 @@ pub(crate) fn brush_uv_world_aligned(
         face.uv_v_axis = v;
     }
 
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "World-Align UVs".to_string(),
-    }));
     OperatorResult::Finished
 }
 

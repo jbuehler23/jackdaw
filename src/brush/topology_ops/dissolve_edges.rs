@@ -6,8 +6,7 @@ use jackdaw_geometry::halfedge::ops::dissolve_edges::dissolve_edges;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 /// Remove the selected edges and merge each pair of adjacent faces into one.
 /// Boundary or non-manifold edges are skipped silently. Available in Edge mode.
@@ -23,7 +22,6 @@ pub(crate) fn brush_dissolve_edges(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
         return OperatorResult::Cancelled;
@@ -32,9 +30,6 @@ pub(crate) fn brush_dissolve_edges(
     if selection.edges.is_empty() {
         return OperatorResult::Cancelled;
     }
-
-    // Snapshot before mutation for undo.
-    let brush_before = brushes.get(brush_entity).cloned()?;
 
     // Map each selected cache-edge (a, b) to a HalfedgeMesh EdgeKey via vert_keys.
     let mut halfedge = halfedge_q.get_mut(brush_entity)?;
@@ -118,13 +113,6 @@ pub(crate) fn brush_dissolve_edges(
     halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "Dissolve Edges".to_string(),
-    }));
-
     OperatorResult::Finished
 }
 

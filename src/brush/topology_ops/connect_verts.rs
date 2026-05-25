@@ -6,8 +6,7 @@ use jackdaw_geometry::halfedge::ops::connect_verts::connect_verts;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 /// Connect selected verts in the same face with new edges, splitting the face.
 /// Operates on the current vertex selection. Available in Vertex mode with 2+ verts selected.
@@ -23,7 +22,6 @@ pub(crate) fn brush_connect_verts(
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
         return OperatorResult::Cancelled;
@@ -32,9 +30,6 @@ pub(crate) fn brush_connect_verts(
     if selection.vertices.len() < 2 {
         return OperatorResult::Cancelled;
     }
-
-    // Snapshot before mutation for undo.
-    let brush_before = brushes.get(brush_entity).cloned()?;
 
     // Map cache vertex indices to HalfedgeMesh VertKeys via vert_keys parallel array.
     let mut halfedge = halfedge_q.get_mut(brush_entity)?;
@@ -140,13 +135,6 @@ pub(crate) fn brush_connect_verts(
     halfedge.face_keys = new_face_keys;
 
     // Push undo entry.
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "Connect Vertex Path".to_string(),
-    }));
-
     // Chain selection: write the newly created connecting edges into
     // `BrushSelection.edges` so the user can immediately act on them
     // (e.g. switch to Edge mode and loop-cut / slide).

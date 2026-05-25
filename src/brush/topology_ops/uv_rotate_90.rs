@@ -4,8 +4,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushSelection, EditMode};
 
 /// Rotate the U and V axes 90 degrees counter-clockwise on each selected face.
 #[operator(
@@ -19,7 +18,6 @@ pub(crate) fn brush_uv_rotate_90(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-    mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return OperatorResult::Cancelled;
@@ -28,7 +26,6 @@ pub(crate) fn brush_uv_rotate_90(
     if selection.faces.is_empty() {
         return OperatorResult::Cancelled;
     }
-    let brush_before = brushes.get(brush_entity).cloned()?;
     let mut brush = brushes.get_mut(brush_entity)?;
 
     for &face_idx in &selection.faces {
@@ -40,12 +37,6 @@ pub(crate) fn brush_uv_rotate_90(
         }
     }
 
-    history.push_executed(Box::new(SetBrush {
-        entity: brush_entity,
-        old: brush_before,
-        new: brush.clone(),
-        label: "Rotate UV 90 deg".to_string(),
-    }));
     OperatorResult::Finished
 }
 

@@ -14,8 +14,7 @@ use jackdaw_geometry::halfedge::ops::edge_bevel::edge_bevel;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
+use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
 
@@ -82,7 +81,6 @@ pub(crate) fn brush_edge_bevel(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-    mut history: ResMut<CommandHistory>,
     mut modal_state: ResMut<EdgeBevelModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -174,15 +172,6 @@ pub(crate) fn brush_edge_bevel(
 
     // Commit on LMB.
     if mouse.just_pressed(MouseButton::Left) {
-        let Some(brush_entity) = modal_state.brush_entity else {
-            *modal_state = EdgeBevelModalState::default();
-            return OperatorResult::Cancelled;
-        };
-        let Some(start_brush) = modal_state.start_brush.clone() else {
-            *modal_state = EdgeBevelModalState::default();
-            return OperatorResult::Cancelled;
-        };
-
         // Zero-width commit: treat as cancel so we don't write a no-op undo.
         // The live brush should already be back to the snapshot in this case
         // (apply_live_bevel resets to the snapshot when width is sub-threshold).
@@ -191,18 +180,6 @@ pub(crate) fn brush_edge_bevel(
             *modal_state = EdgeBevelModalState::default();
             return OperatorResult::Cancelled;
         }
-
-        let Ok(brush) = brushes.get(brush_entity).cloned() else {
-            *modal_state = EdgeBevelModalState::default();
-            return OperatorResult::Cancelled;
-        };
-
-        history.push_executed(Box::new(SetBrush {
-            entity: brush_entity,
-            old: start_brush,
-            new: brush,
-            label: "Edge Bevel".to_string(),
-        }));
 
         *modal_state = EdgeBevelModalState::default();
         return OperatorResult::Finished;

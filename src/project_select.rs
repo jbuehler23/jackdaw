@@ -1022,13 +1022,7 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
         .project
         .last_active_tab;
 
-    if last_open_tabs.is_empty() {
-        // Legacy convention: auto-load assets/scene.jsn if present.
-        let scene_path = root.join("assets").join("scene.jsn");
-        if scene_path.is_file() {
-            crate::scene_io::load_scene_from_file(world, &scene_path);
-        }
-    } else {
+    if !last_open_tabs.is_empty() {
         for rel in &last_open_tabs {
             let abs = root.join(rel);
             if !abs.is_file() {
@@ -1042,6 +1036,19 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
         if tab_count > 0 {
             let target = last_active.min(tab_count - 1);
             crate::scenes::swap::swap_active_tab(world, target);
+        }
+    }
+
+    // If we ended up with zero tabs (no persisted list, or every
+    // persisted entry was missing on disk), fall back to either the
+    // legacy `assets/scene.jsn` or an empty untitled scene so the user
+    // never lands in the editor with no scene.
+    if world.resource::<crate::scenes::Scenes>().tabs.is_empty() {
+        let scene_path = root.join("assets").join("scene.jsn");
+        if scene_path.is_file() {
+            crate::scene_io::load_scene_from_file(world, &scene_path);
+        } else {
+            crate::scenes::operators::scene_new_system(world);
         }
     }
 }
@@ -1636,7 +1643,8 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         ))
         .id();
 
-    let card = world
+    // Modal card root
+    let card_root = world
         .spawn((
             Node {
                 flex_direction: FlexDirection::Column,
@@ -1644,8 +1652,10 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
                 padding: UiRect::all(Val::Px(18.0)),
                 min_width: Val::Px(560.0),
                 max_width: Val::Px(680.0),
+                max_height: Val::Percent(90.0),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
+                overflow: Overflow::clip(),
                 ..Default::default()
             },
             BackgroundColor(tokens::PANEL_BG),
@@ -1653,7 +1663,29 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
             ChildOf(scrim),
         ))
         .id();
+    // Inner scroll container.
+    let card = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(12.0),
+                padding: UiRect::all(Val::Px(24.0)),
+                min_width: Val::Px(420.0),
+                max_width: Val::Px(520.0),
+                overflow: Overflow::scroll_y(),
+                ..Default::default()
+            },
+            ScrollPosition::default(),
+            bevy::picking::hover::Hovered::default(),
+            ChildOf(card_root),
+        ))
+        .id();
+    world.spawn((
+        jackdaw_feathers::scroll::scrollbar(card),
+        ChildOf(card_root),
+    ));
 
+    // Heading
     world.spawn((
         Node {
             flex_direction: FlexDirection::Row,

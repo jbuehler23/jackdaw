@@ -137,6 +137,7 @@ pub(crate) fn handle_viewport_click(
     keyboard: Res<ButtonInput<KeyCode>>,
     vp: ViewportCursor,
     scene_entities: Query<(Entity, &GlobalTransform), (Without<EditorEntity>, With<Transform>)>,
+    editor_entities: Query<(), With<EditorEntity>>,
     parents: Query<&ChildOf>,
     brush_groups: Query<(), With<BrushGroup>>,
     guards: InteractionGuards,
@@ -202,10 +203,18 @@ pub(crate) fn handle_viewport_click(
     let mut best_entity = None;
 
     if let Ok(ray) = camera.viewport_to_world(cam_tf, local_cursor) {
-        let settings = MeshRayCastSettings::default().with_visibility(RayCastVisibility::Any);
+        // Filter out editor-internal mesh entities (material preview
+        // spheres, gizmo meshes, draw previews, etc). These have
+        // `EditorEntity` and live on non-viewport render layers, but
+        // `MeshRayCast` doesn't filter by render layer, so without
+        // this guard the picker hits invisible meshes at world origin
+        // and short-circuits before reaching the actual scene.
+        let editor_filter = |entity: Entity| !editor_entities.contains(entity);
+        let settings = MeshRayCastSettings::default()
+            .with_visibility(RayCastVisibility::Any)
+            .with_filter(&editor_filter);
         let hits = ray_cast.cast_ray(ray, &settings);
 
-        // Find the first hit that resolves to a scene entity (skip editor entities)
         for (hit_entity, _) in hits {
             if let Some(ancestor) = find_selectable_ancestor(
                 *hit_entity,
@@ -218,7 +227,6 @@ pub(crate) fn handle_viewport_click(
                 break;
             }
         }
-
         // If we'd select a different entity, but the current selection is also
         // under the cursor (overlapping geometry), keep the current selection.
         // This prevents re-selecting the original after Ctrl+D duplication.

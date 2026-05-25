@@ -7,6 +7,7 @@ mod custom_props_display;
 mod material_display;
 pub(crate) mod ops;
 pub(crate) mod physics_display;
+pub(crate) mod prefab_menu;
 pub(crate) mod reflect_fields;
 
 use crate::EditorEntity;
@@ -100,6 +101,7 @@ impl Plugin for InspectorPlugin {
 
         app.register_type_data::<Name, ReflectDisplayable>()
             .add_plugins(component_tooltip::plugin)
+            .add_plugins(prefab_menu::plugin)
             .add_observer(component_display::remove_component_displays)
             .add_observer(component_display::add_component_displays)
             .add_observer(component_display::on_inspector_dirty)
@@ -121,6 +123,8 @@ impl Plugin for InspectorPlugin {
                     component_display::filter_inspector_components,
                     anim_diamond::decorate_animatable_fields,
                     anim_diamond::update_anim_diamond_highlights,
+                    component_display::decorate_prefab_field_rows,
+                    component_display::refresh_prefab_field_dots,
                     refresh_name_field,
                     flag_inspector_dirty_on_archetype_change,
                 )
