@@ -155,6 +155,15 @@ impl EditorCommand for SetBrush {
     fn description(&self) -> &str {
         &self.label
     }
+
+    fn sync_after_external_execute(&self, world: &mut World) {
+        // Brush element drags (face / edge / vertex push, knife cut,
+        // bridge, etc.) mutate the ECS `Brush` directly during the
+        // operation. By the time the command reaches the history, the
+        // ECS already holds `self.new`; the AST still needs syncing
+        // so a later reload doesn't restore the pre-drag state.
+        sync_brush_to_ast(world, self.entity, &self.new);
+    }
 }
 
 /// Replace `entity`'s `Brush` with `target` and keep dependent components in
@@ -285,6 +294,8 @@ impl Plugin for BrushPlugin {
                 Update,
                 (
                     mesh::sync_brush_preview,
+                    ApplyDeferred,
+                    mesh::recenter_brush_origins,
                     ApplyDeferred,
                     mesh::regenerate_brush_meshes,
                     ApplyDeferred,

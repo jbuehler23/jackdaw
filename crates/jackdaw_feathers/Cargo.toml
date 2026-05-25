@@ -16,6 +16,7 @@ jackdaw_fuzzy.workspace = true
 jackdaw_jsn.workspace = true
 jackdaw_widgets.workspace = true
 lucide-icons.workspace = true
+jackdaw_localization.workspace = true
 
 [lints]
 workspace = true

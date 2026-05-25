@@ -205,6 +205,10 @@ pub const CATEGORY_LIGHT: Color = Color::srgba(1.0, 0.882, 0.0, 1.0);
 pub const CATEGORY_MESH: Color = Color::srgba(0.710, 0.537, 0.294, 1.0);
 /// Scene root dot color (cyan)
 pub const CATEGORY_SCENE: Color = Color::srgba(0.0, 0.667, 0.733, 1.0);
+/// Prefab instance dot color (warm amber)
+pub const CATEGORY_PREFAB: Color = Color::srgb(0.95, 0.7, 0.3);
+/// Inherited-from-prefab entity dot color (muted amber, signals "not authored here")
+pub const CATEGORY_INHERITED: Color = Color::srgba(0.65, 0.55, 0.42, 0.75);
 /// Generic entity dot color (green)
 pub const CATEGORY_ENTITY: Color = Color::srgba(0.259, 0.725, 0.514, 1.0);
 

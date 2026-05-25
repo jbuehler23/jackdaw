@@ -6,10 +6,20 @@ use crate::{icons::IconFont, tokens};
 
 /// Spawn a file browser item (grid cell).
 pub fn file_browser_item(item: &FileBrowserItem, icon_font: &IconFont) -> impl Bundle {
+    file_browser_item_with_icon(item, icon_font, None)
+}
+
+/// Spawn a file browser item (grid cell) with an optional icon override for
+/// non-directory entries. Directories always use `Icon::Folder`.
+pub fn file_browser_item_with_icon(
+    item: &FileBrowserItem,
+    icon_font: &IconFont,
+    icon_override: Option<Icon>,
+) -> impl Bundle {
     let icon = if item.is_directory {
         Icon::Folder
     } else {
-        file_icon(&item.file_name)
+        icon_override.unwrap_or_else(|| file_icon(&item.file_name))
     };
     let icon_color = if item.is_directory {
         tokens::DIR_ICON_COLOR
@@ -56,10 +66,20 @@ pub fn file_browser_item(item: &FileBrowserItem, icon_font: &IconFont) -> impl B
 
 /// Spawn a file browser item for list view mode.
 pub fn file_browser_list_item(item: &FileBrowserItem, icon_font: &IconFont) -> impl Bundle {
+    file_browser_list_item_with_icon(item, icon_font, None)
+}
+
+/// Spawn a file browser item for list view mode with an optional icon
+/// override for non-directory entries. Directories always use `Icon::Folder`.
+pub fn file_browser_list_item_with_icon(
+    item: &FileBrowserItem,
+    icon_font: &IconFont,
+    icon_override: Option<Icon>,
+) -> impl Bundle {
     let icon = if item.is_directory {
         Icon::Folder
     } else {
-        file_icon(&item.file_name)
+        icon_override.unwrap_or_else(|| file_icon(&item.file_name))
     };
     let icon_color = if item.is_directory {
         tokens::DIR_ICON_COLOR

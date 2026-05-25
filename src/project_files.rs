@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
 
 use bevy::prelude::*;
+use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     file_browser,
     icons::{Icon, IconFont},
@@ -21,13 +22,40 @@ pub struct ProjectFilesPlugin;
 impl Plugin for ProjectFilesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ProjectFilesState>()
+            .init_resource::<PendingProjectFilesAction>()
             .add_systems(OnEnter(crate::AppState::Editor), setup_project_files)
             .add_systems(
                 Update,
                 (check_project_watcher, refresh_project_tree)
                     .run_if(in_state(crate::AppState::Editor)),
             )
-            .add_observer(handle_directory_expand);
+            .add_observer(handle_directory_expand)
+            .add_observer(on_project_files_context_action);
+    }
+}
+
+/// Records the path the project files context menu was opened on so
+/// the action observer can resolve the click.
+#[derive(Resource, Default)]
+struct PendingProjectFilesAction {
+    path: PathBuf,
+}
+
+fn on_project_files_context_action(
+    event: On<jackdaw_widgets::context_menu::ContextMenuAction>,
+    mut commands: Commands,
+    pending: Res<PendingProjectFilesAction>,
+    mut state: ResMut<jackdaw_widgets::context_menu::ContextMenuState>,
+) {
+    if event.action != "project_files.delete" {
+        return;
+    }
+    let path = pending.path.to_string_lossy().into_owned();
+    commands.operator("file.delete").param("path", path).call();
+    if let Some(menu) = state.menu_entity.take()
+        && let Ok(mut ec) = commands.get_entity(menu)
+    {
+        ec.despawn();
     }
 }
 
@@ -335,6 +363,38 @@ fn spawn_file_tree_row(
             if let Ok(mut bg) = bg.get_mut(out.event_target()) {
                 bg.0 = Color::NONE;
             }
+        },
+    );
+
+    // Right-click: open a per-row context menu with a Delete entry.
+    let rmb_path = path.to_path_buf();
+    commands.entity(content).observe(
+        move |click: On<Pointer<Click>>,
+              mut commands: Commands,
+              windows: Query<&Window>,
+              mut state: ResMut<jackdaw_widgets::context_menu::ContextMenuState>| {
+            if click.event().button != PointerButton::Secondary {
+                return;
+            }
+            let cursor_pos = windows
+                .single()
+                .ok()
+                .and_then(bevy::prelude::Window::cursor_position)
+                .unwrap_or_default();
+            if let Some(existing) = state.menu_entity.take()
+                && let Ok(mut ec) = commands.get_entity(existing)
+            {
+                ec.despawn();
+            }
+            let path_owned = rmb_path.clone();
+            let menu = jackdaw_feathers::context_menu::spawn_context_menu(
+                &mut commands,
+                cursor_pos,
+                None,
+                &[("project_files.delete", "Delete")],
+            );
+            state.menu_entity = Some(menu);
+            commands.insert_resource(PendingProjectFilesAction { path: path_owned });
         },
     );
 

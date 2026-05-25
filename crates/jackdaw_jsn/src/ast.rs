@@ -150,23 +150,23 @@ impl SceneJsnAst {
     }
 
     /// Remove a node by ECS entity. Returns the removed node for undo.
+    /// Orphaned children (their parent pointed at the removed node) are
+    /// promoted to roots, not silently reparented to node 0.
     pub fn remove_node(&mut self, entity: Entity) -> Option<JsnEntityNode> {
         let idx = self.ecs_to_jsn.remove(&entity)?;
         if idx < self.nodes.len() {
             let node = self.nodes.remove(idx);
-            // Re-index all entries after the removed one
             for entry in self.ecs_to_jsn.values_mut() {
                 if *entry > idx {
                     *entry -= 1;
                 }
             }
-            // Fix parent references
             for node in &mut self.nodes {
-                if let Some(ref mut parent) = node.parent {
-                    if *parent == idx {
-                        *parent = 0; // orphan -- will need proper handling
-                    } else if *parent > idx {
-                        *parent -= 1;
+                if let Some(parent) = node.parent {
+                    if parent == idx {
+                        node.parent = None;
+                    } else if parent > idx {
+                        node.parent = Some(parent - 1);
                     }
                 }
             }
@@ -230,6 +230,153 @@ impl SceneJsnAst {
             typed_json_path_set(component, field_path, value, registration, registry);
         }
         self.mark_dirty(entity);
+    }
+
+    // -- Index-keyed structural accessors -------------------------------
+
+    /// Add a new top-level node. Returns its index.
+    pub fn add_root(&mut self) -> usize {
+        let idx = self.nodes.len();
+        self.nodes.push(JsnEntityNode {
+            parent: None,
+            components: HashMap::new(),
+            derived_components: HashSet::new(),
+            ecs_entity: None,
+        });
+        idx
+    }
+
+    /// Add a new child node under `parent`. Returns its index.
+    pub fn add_child(&mut self, parent: usize) -> usize {
+        let idx = self.nodes.len();
+        self.nodes.push(JsnEntityNode {
+            parent: Some(parent),
+            components: HashMap::new(),
+            derived_components: HashSet::new(),
+            ecs_entity: None,
+        });
+        idx
+    }
+
+    pub fn insert_component(&mut self, key: usize, type_path: &str, value: serde_json::Value) {
+        if let Some(node) = self.nodes.get_mut(key) {
+            node.components.insert(type_path.to_string(), value);
+        }
+    }
+
+    pub fn replace_component(&mut self, key: usize, type_path: &str, value: serde_json::Value) {
+        self.insert_component(key, type_path, value);
+    }
+
+    pub fn get_component_at(&self, key: usize, type_path: &str) -> Option<&serde_json::Value> {
+        self.nodes
+            .get(key)
+            .and_then(|n| n.components.get(type_path))
+    }
+
+    pub fn components_at(&self, key: usize) -> Option<&HashMap<String, serde_json::Value>> {
+        self.nodes.get(key).map(|n| &n.components)
+    }
+
+    pub fn entities_with_component<'a>(
+        &'a self,
+        type_path: &'a str,
+    ) -> impl Iterator<Item = usize> + 'a {
+        self.nodes.iter().enumerate().filter_map(move |(i, n)| {
+            if n.components.contains_key(type_path) {
+                Some(i)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn roots(&self) -> impl Iterator<Item = usize> + '_ {
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| if n.parent.is_none() { Some(i) } else { None })
+    }
+
+    pub fn children_of(&self, parent: usize) -> impl Iterator<Item = usize> + '_ {
+        self.nodes.iter().enumerate().filter_map(move |(i, n)| {
+            if n.parent == Some(parent) {
+                Some(i)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Depth-first descendants of `root`, EXCLUDING the root itself.
+    pub fn descendants_of(&self, root: usize) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut stack = vec![root];
+        while let Some(cur) = stack.pop() {
+            for child in self.children_of(cur) {
+                out.push(child);
+                stack.push(child);
+            }
+        }
+        out
+    }
+
+    /// Clone a node and its descendants from `other` into `self` under `parent`.
+    /// Returns the new index of the cloned root.
+    pub fn clone_node_into(
+        &mut self,
+        other: &SceneJsnAst,
+        src_root: usize,
+        parent: usize,
+    ) -> usize {
+        let mut idx_map: HashMap<usize, usize> = HashMap::new();
+        let mut queue: Vec<usize> = vec![src_root];
+        while let Some(src_idx) = queue.first().copied() {
+            queue.remove(0);
+            let Some(src_node) = other.nodes.get(src_idx) else {
+                continue;
+            };
+            let dst_parent = if src_idx == src_root {
+                Some(parent)
+            } else {
+                src_node.parent.and_then(|p| idx_map.get(&p).copied())
+            };
+            let dst_idx = self.nodes.len();
+            self.nodes.push(JsnEntityNode {
+                parent: dst_parent,
+                components: src_node.components.clone(),
+                derived_components: src_node.derived_components.clone(),
+                ecs_entity: None,
+            });
+            idx_map.insert(src_idx, dst_idx);
+            for child in other.children_of(src_idx) {
+                queue.push(child);
+            }
+        }
+        idx_map[&src_root]
+    }
+
+    pub fn key_for_entity(&self, entity: Entity) -> Option<usize> {
+        self.ecs_to_jsn.get(&entity).copied()
+    }
+
+    /// Remove a component from a node. No-op if the node or component is missing.
+    pub fn remove_component(&mut self, key: usize, type_path: &str) {
+        if let Some(node) = self.nodes.get_mut(key) {
+            node.components.remove(type_path);
+        }
+    }
+
+    /// Walk up the parent chain from `key` (inclusive) until a node carrying
+    /// `type_path` is found; returns its index, or None if none exists.
+    pub fn ancestor_with_component(&self, key: usize, type_path: &str) -> Option<usize> {
+        let mut current = key;
+        loop {
+            if self.nodes.get(current)?.components.contains_key(type_path) {
+                return Some(current);
+            }
+            current = self.nodes.get(current)?.parent?;
+        }
     }
 }
 

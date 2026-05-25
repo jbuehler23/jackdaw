@@ -1063,6 +1063,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_fluent"
+version = "0.14.0"
+source = "git+https://github.com/ThierryBerger/bevy_fluent.git?branch=asset_path_resolve#84fbf955b4028bfedc9b4778f957c24dad550ae6"
+dependencies = [
+ "bevy",
+ "fluent",
+ "fluent-langneg",
+ "fluent_content",
+ "futures-lite",
+ "indexmap",
+ "intl-memoizer",
+ "ron",
+ "serde",
+ "serde_yaml",
+ "thiserror 1.0.69",
+ "tracing",
+ "unic-langid",
+ "uuid",
+]
+
+[[package]]
 name = "bevy_gilrs"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2115,7 +2136,7 @@ dependencies = [
  "cosmic-text 0.16.0",
  "serde",
  "smallvec",
- "sys-locale",
+ "sys-locale 0.3.2",
  "thiserror 2.0.18",
  "tracing",
  "wgpu-types 27.0.1",
@@ -2269,7 +2290,7 @@ dependencies = [
  "cosmic-text 0.16.0",
  "cosmic_undo_2",
  "once_cell",
- "sys-locale",
+ "sys-locale 0.3.2",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -2941,10 +2962,10 @@ dependencies = [
  "rangemap",
  "rustc-hash 1.1.0",
  "rustybuzz",
- "self_cell",
+ "self_cell 1.2.2",
  "smol_str",
  "swash",
- "sys-locale",
+ "sys-locale 0.3.2",
  "ttf-parser 0.21.1",
  "unicode-bidi",
  "unicode-linebreak",
@@ -2965,11 +2986,11 @@ dependencies = [
  "log",
  "rangemap",
  "rustc-hash 1.1.0",
- "self_cell",
+ "self_cell 1.2.2",
  "skrifa 0.39.0",
  "smol_str",
  "swash",
- "sys-locale",
+ "sys-locale 0.3.2",
  "unicode-bidi",
  "unicode-linebreak",
  "unicode-script",
@@ -3651,6 +3672,64 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+]
+
+[[package]]
+name = "fluent"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb74634707bebd0ce645a981148e8fb8c7bccd4c33c652aeffd28bf2f96d555a"
+dependencies = [
+ "fluent-bundle",
+ "unic-langid",
+]
+
+[[package]]
+name = "fluent-bundle"
+version = "0.15.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fe0a21ee80050c678013f82edf4b705fe2f26f1f9877593d13198612503f493"
+dependencies = [
+ "fluent-langneg",
+ "fluent-syntax",
+ "intl-memoizer",
+ "intl_pluralrules",
+ "rustc-hash 1.1.0",
+ "self_cell 0.10.3",
+ "smallvec",
+ "unic-langid",
+]
+
+[[package]]
+name = "fluent-langneg"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7eebbe59450baee8282d71676f3bfed5689aeab00b27545e83e5f14b1195e8b0"
+dependencies = [
+ "unic-langid",
+]
+
+[[package]]
+name = "fluent-syntax"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a530c4694a6a8d528794ee9bbd8ba0122e779629ac908d15ad5a7ae7763a33d"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "fluent_content"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38dc4630a89c85160410fd062826b505218a0ca68121f92d9fbd9a0e71c1a148"
+dependencies = [
+ "fluent",
+ "fluent-langneg",
+ "intl-memoizer",
+ "thiserror 1.0.69",
+ "tracing",
+ "unic-langid",
 ]
 
 [[package]]
@@ -4495,6 +4574,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9c13ae9d91148fcb4aab6654c4c2a7d02a15395ea9e23f65170f175f8b269ce"
 
 [[package]]
+name = "intl-memoizer"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "310da2e345f5eb861e7a07ee182262e94975051db9e4223e909ba90f392f163f"
+dependencies = [
+ "type-map",
+ "unic-langid",
+]
+
+[[package]]
+name = "intl_pluralrules"
+version = "7.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "078ea7b7c29a2b4df841a7f6ac8775ff6074020c6776d48491ce2268e068f972"
+dependencies = [
+ "unic-langid",
+]
+
+[[package]]
 name = "inventory"
 version = "0.3.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4577,6 +4675,7 @@ dependencies = [
  "jackdaw_geometry",
  "jackdaw_jsn",
  "jackdaw_loader",
+ "jackdaw_localization",
  "jackdaw_node_graph",
  "jackdaw_panels",
  "jackdaw_remote",
@@ -4591,6 +4690,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "tempfile",
  "test_fixture_extension",
  "winit",
 ]
@@ -4603,6 +4703,7 @@ dependencies = [
  "jackdaw_commands",
  "jackdaw_feathers",
  "jackdaw_jsn",
+ "jackdaw_localization",
  "jackdaw_node_graph",
  "lucide-icons",
  "serde",
@@ -4679,6 +4780,7 @@ dependencies = [
  "jackdaw_geometry",
  "jackdaw_jsn",
  "manifold-csg",
+ "manifold-csg-sys",
 ]
 
 [[package]]
@@ -4700,6 +4802,7 @@ dependencies = [
  "bevy_ui_text_input",
  "jackdaw_fuzzy",
  "jackdaw_jsn",
+ "jackdaw_localization",
  "jackdaw_widgets",
  "lucide-icons",
 ]
@@ -4746,6 +4849,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "jackdaw_localization"
+version = "0.4.1"
+dependencies = [
+ "bevy",
+ "bevy_fluent",
+ "fluent_content",
+ "sys-locale 0.2.4",
+ "unic-langid",
+]
+
+[[package]]
 name = "jackdaw_node_graph"
 version = "0.4.1"
 dependencies = [
@@ -4755,6 +4869,7 @@ dependencies = [
  "jackdaw_commands",
  "jackdaw_feathers",
  "jackdaw_jsn",
+ "jackdaw_localization",
  "jackdaw_widgets",
  "serde",
 ]
@@ -6215,6 +6330,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-macro-hack"
+version = "0.5.20+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc375e1527247fe1a97d8b7156678dfe7c1af2fc075c9a4db3690ecd2a148068"
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6742,6 +6863,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ryu"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
 name = "safe_arch"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6782,6 +6909,15 @@ dependencies = [
  "memmap2",
  "smithay-client-toolkit",
  "tiny-skia",
+]
+
+[[package]]
+name = "self_cell"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e14e4d63b804dc0c7ec4a1e52bcb63f02c7ac94476755aa579edac21e01f915d"
+dependencies = [
+ "self_cell 1.2.2",
 ]
 
 [[package]]
@@ -6872,6 +7008,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_yaml"
+version = "0.9.34+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6881,6 +7030,12 @@ dependencies = [
  "cpufeatures 0.2.17",
  "digest",
 ]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sharded-slab"
@@ -7186,6 +7341,19 @@ dependencies = [
 
 [[package]]
 name = "sys-locale"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8a11bd9c338fdba09f7881ab41551932ad42e405f61d01e8406baea71c07aee"
+dependencies = [
+ "js-sys",
+ "libc",
+ "wasm-bindgen",
+ "web-sys",
+ "windows-sys 0.45.0",
+]
+
+[[package]]
+name = "sys-locale"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
@@ -7365,6 +7533,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8323304221c2a851516f22236c5722a72eaa19749016521d6dff0824447d96d"
 dependencies = [
  "displaydoc",
+ "serde_core",
  "zerovec",
 ]
 
@@ -7625,6 +7794,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
 
 [[package]]
+name = "type-map"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb30dbbd9036155e74adad6812e9898d03ec374946234fbcebd5dfc7b9187b90"
+dependencies = [
+ "rustc-hash 2.1.2",
+]
+
+[[package]]
 name = "typeid"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7651,6 +7829,50 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "unic-langid"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a28ba52c9b05311f4f6e62d5d9d46f094bd6e84cb8df7b3ef952748d752a7d05"
+dependencies = [
+ "unic-langid-impl",
+ "unic-langid-macros",
+]
+
+[[package]]
+name = "unic-langid-impl"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce1bf08044d4b7a94028c93786f8566047edc11110595914de93362559bc658"
+dependencies = [
+ "serde",
+ "tinystr",
+]
+
+[[package]]
+name = "unic-langid-macros"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5957eb82e346d7add14182a3315a7e298f04e1ba4baac36f7f0dbfedba5fc25"
+dependencies = [
+ "proc-macro-hack",
+ "tinystr",
+ "unic-langid-impl",
+ "unic-langid-macros-impl",
+]
+
+[[package]]
+name = "unic-langid-macros-impl"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1249a628de3ad34b821ecb1001355bca3940bcb2f88558f1a8bd82e977f75b5"
+dependencies = [
+ "proc-macro-hack",
+ "quote",
+ "syn 2.0.117",
+ "unic-langid-impl",
 ]
 
 [[package]]
@@ -7712,6 +7934,12 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"
@@ -7781,6 +8009,7 @@ dependencies = [
  "getrandom 0.4.2",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 
@@ -9261,6 +9490,7 @@ version = "0.11.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90f911cbc359ab6af17377d242225f4d75119aec87ea711a880987b18cd7b239"
 dependencies = [
+ "serde",
  "yoke",
  "zerofrom",
  "zerovec-derive",
