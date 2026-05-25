@@ -1583,7 +1583,8 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         ))
         .id();
 
-    let card = world
+    // Modal card root
+    let card_root = world
         .spawn((
             Node {
                 flex_direction: FlexDirection::Column,
@@ -1591,8 +1592,10 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
                 padding: UiRect::all(Val::Px(18.0)),
                 min_width: Val::Px(560.0),
                 max_width: Val::Px(680.0),
+                max_height: Val::Percent(90.0),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
+                overflow: Overflow::clip(),
                 ..Default::default()
             },
             BackgroundColor(tokens::PANEL_BG),
@@ -1600,7 +1603,29 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
             ChildOf(scrim),
         ))
         .id();
+    // Inner scroll container.
+    let card = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(12.0),
+                padding: UiRect::all(Val::Px(24.0)),
+                min_width: Val::Px(420.0),
+                max_width: Val::Px(520.0),
+                overflow: Overflow::scroll_y(),
+                ..Default::default()
+            },
+            ScrollPosition::default(),
+            bevy::picking::hover::Hovered::default(),
+            ChildOf(card_root),
+        ))
+        .id();
+    world.spawn((
+        jackdaw_feathers::scroll::scrollbar(card),
+        ChildOf(card_root),
+    ));
 
+    // Heading
     world.spawn((
         Node {
             flex_direction: FlexDirection::Row,
