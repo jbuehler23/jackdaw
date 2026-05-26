@@ -110,11 +110,18 @@ pub(crate) fn face_drag_invoke_trigger(
     keybind_focus: KeybindFocus,
     modal: Res<ModalTransformState>,
     draw_state: Res<DrawBrushState>,
+    vp: ViewportCursor,
     mut commands: Commands,
 ) {
     if !mouse.just_pressed(MouseButton::Left) || drag_state.active || drag_state.pending.is_some() {
         return;
     }
+
+    // Only trigger when inside the viewport
+    if vp.viewport_entity().is_none() {
+        return;
+    }
+
     let in_face_edit = matches!(*edit_mode, EditMode::BrushEdit(BrushEditMode::Face));
     let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
@@ -667,6 +674,7 @@ pub(crate) fn vertex_drag_invoke_trigger(
     edit_mode: Res<EditMode>,
     drag_state: Res<VertexDragState>,
     keybind_focus: KeybindFocus,
+    vp: ViewportCursor,
     mut commands: Commands,
 ) {
     if !mouse.just_pressed(MouseButton::Left)
@@ -674,6 +682,7 @@ pub(crate) fn vertex_drag_invoke_trigger(
         || drag_state.active
         || drag_state.pending.is_some()
         || keybind_focus.is_typing()
+        || vp.viewport_entity().is_none()
     {
         return;
     }
@@ -1031,6 +1040,7 @@ pub(crate) fn edge_drag_invoke_trigger(
     edit_mode: Res<EditMode>,
     drag_state: Res<EdgeDragState>,
     keybind_focus: KeybindFocus,
+    vp: ViewportCursor,
     mut commands: Commands,
 ) {
     if !mouse.just_pressed(MouseButton::Left)
@@ -1038,6 +1048,7 @@ pub(crate) fn edge_drag_invoke_trigger(
         || drag_state.active
         || drag_state.pending.is_some()
         || keybind_focus.is_typing()
+        || vp.viewport_entity().is_none()
     {
         return;
     }

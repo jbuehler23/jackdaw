@@ -156,22 +156,11 @@ pub(crate) fn handle_viewport_click(
     let just_finished_draw = *was_drawing && !drawing_now;
     *was_drawing = drawing_now;
 
-    // Don't select during gizmo drag, modal ops, viewport drag,
-    // brush edit mode, draw mode, or terrain sculpt mode. Physics
-    // mode IS allowed: the user needs to click-select entities to
-    // drag them in the physics tool.
-    //
-    // Plain LMB-down still fires here for the immediate click case;
-    // if the user starts dragging, `box_select_promote_pending`
-    // dispatches `BoxSelectOp` which then overrides whatever
-    // selection this handler set on press.
+    // Physics mode is intentionally not blocked: the user needs to
+    // click-select entities to drag them in the physics tool.
     if !mouse.just_pressed(MouseButton::Left)
-        || guards.gizmo_drag.active
+        || guards.is_any_interaction_active()
         || guards.gizmo_hover.hovered_axis.is_some()
-        || guards.modal.active.is_some()
-        || guards.viewport_drag.active.is_some()
-        || matches!(*guards.edit_mode, crate::brush::EditMode::BrushEdit(_))
-        || drawing_now
         || just_finished_draw
         || matches!(
             *guards.terrain_edit_mode,
@@ -337,20 +326,14 @@ fn box_select_pending_trigger(
     face_entities: Query<(Entity, &BrushFaceEntity, &GlobalTransform)>,
     brush_caches: Query<&BrushMeshCache>,
 ) {
+    // `gizmo_drag.active` doesn't flip until next frame because the
+    // gizmo invoke-trigger queues its dispatch — `gizmo_hover` covers
+    // the same-frame case.
     if box_state.active
         || box_state.pending.is_some()
         || !mouse.just_pressed(MouseButton::Left)
-        || guards.gizmo_drag.active
-        // The gizmo invoke-trigger queues the drag operator via
-        // `commands.queue`, so `gizmo_drag.active` doesn't flip until
-        // after this Update frame ends. Without checking the hover
-        // state here the press both arms a pending box-select and
-        // starts the gizmo drag, so the marquee draws while the user
-        // is dragging the gizmo.
+        || guards.is_any_interaction_active()
         || guards.gizmo_hover.hovered_axis.is_some()
-        || matches!(*guards.edit_mode, crate::brush::EditMode::BrushEdit(_))
-        || guards.draw_state.active.is_some()
-        || guards.modal.active.is_some()
     {
         return;
     }
@@ -409,17 +392,10 @@ fn box_select_promote_pending(
         box_state.pending = None;
         return;
     }
-    // A modal that started in the same frame as the press (gizmo
-    // drag, viewport drag, transform shortcut, draw brush) won't have
-    // shown up in the trigger system's guard check, but it has by
-    // now. Drop the pending press so we don't dispatch a competing
-    // box-select on top of the active gesture.
-    if guards.gizmo_drag.active
-        || guards.viewport_drag.active.is_some()
-        || guards.modal.active.is_some()
-        || guards.draw_state.active.is_some()
-        || matches!(*guards.edit_mode, crate::brush::EditMode::BrushEdit(_))
-    {
+    // An interaction that started in the same frame as the press
+    // wouldn't have shown up in the trigger's guard check, but has by
+    // now. Drop the pending press so we don't fight it.
+    if guards.is_any_interaction_active() {
         box_state.pending = None;
         return;
     }
