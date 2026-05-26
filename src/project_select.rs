@@ -1,4 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, Mutex};
 
 use bevy::{
     prelude::*,
@@ -16,10 +19,47 @@ use rfd::{AsyncFileDialog, FileHandle};
 
 use crate::{
     AppState,
-    new_project::{ScaffoldError, TemplateLinkage, TemplatePreset, scaffold_project},
+    command_runner::{CommandIo, LogChunk},
+    new_project::{self, ScaffoldError, TemplateLinkage, TemplatePreset, scaffold_project},
     project::{self, ProjectRoot},
     scene_io,
+    scrolling_log::{self, ScrollingLog},
 };
+
+#[derive(Default)]
+enum ScaffoldState {
+    #[default]
+    Idle,
+    Running(ScaffoldHandle),
+    /// User clicked Cancel; waiting for the task to unwind.
+    Cancelling(ScaffoldHandle),
+}
+
+impl ScaffoldState {
+    fn handle(&self) -> Option<&ScaffoldHandle> {
+        match self {
+            Self::Running(h) | Self::Cancelling(h) => Some(h),
+            Self::Idle => None,
+        }
+    }
+
+    fn handle_mut(&mut self) -> Option<&mut ScaffoldHandle> {
+        match self {
+            Self::Running(h) | Self::Cancelling(h) => Some(h),
+            Self::Idle => None,
+        }
+    }
+}
+
+struct ScaffoldHandle {
+    task: Task<Result<PathBuf, ScaffoldError>>,
+    cancel: Arc<AtomicBool>,
+    /// `mpsc::Receiver` is `Send` but `!Sync`; wrapping it in `Mutex`
+    /// makes the whole handle storable in the (Send+Sync) Bevy
+    /// `Resource`. Only one drainer/consumer pair exists per handle,
+    /// so lock contention is irrelevant.
+    log_rx: Mutex<Receiver<LogChunk>>,
+}
 
 pub struct ProjectSelectPlugin;
 
@@ -156,6 +196,11 @@ struct BuildAfterScaffoldCheckbox;
 #[derive(Component)]
 struct NewProjectProgressContainer;
 
+/// Marker on the scaffold live-log scrolling panel so the refresh
+/// system can find it among any other [`ScrollingLog`] instances.
+#[derive(Component)]
+struct NewProjectScaffoldLog;
+
 /// Wraps the "currently compiling `<crate>`" label.
 #[derive(Component)]
 struct NewProjectProgressCrateLabel;
@@ -172,6 +217,9 @@ struct NewProjectLogText;
 
 #[derive(Component)]
 struct NewProjectCancelButton;
+
+#[derive(Component)]
+struct NewProjectCancelButtonLabel;
 
 #[derive(Component)]
 struct NewProjectCreateButton;
@@ -233,8 +281,10 @@ struct NewProjectState {
     location: PathBuf,
     /// In-flight folder picker (rfd).
     folder_task: Option<Task<Option<FileHandle>>>,
-    /// In-flight scaffold (bevy-cli subprocess).
-    scaffold_task: Option<Task<Result<PathBuf, ScaffoldError>>>,
+    /// In-flight scaffold (bevy-cli / cargo-generate subprocess).
+    scaffold: ScaffoldState,
+    /// Accumulated subprocess outputs.
+    scaffold_log: String,
     /// In-flight initial build after scaffold. Queued immediately
     /// after the scaffold task succeeds so the user lands in the
     /// editor with the game/extension dylib already installed.
@@ -247,6 +297,10 @@ struct NewProjectState {
         Task<Result<PathBuf, crate::ext_build::BuildError>>,
         TemplateLinkage,
     )>,
+    /// Cancel flag for the in-flight `build_task`. Flipped by
+    /// `on_cancel_new_project` when a build is running; the worker
+    /// polls it and surfaces `BuildError::Cancelled` on exit.
+    build_cancel: Option<Arc<AtomicBool>>,
     /// Artifact waiting to be installed by `apply_pending_install`
     /// (runs in `Last`, not `Update`, so modifications to the
     /// `Update` schedule by the game's `GameApp::add_systems` don't
@@ -906,15 +960,20 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
 
     let root_for_task = root;
     let progress_for_task = std::sync::Arc::clone(&progress);
+    let build_cancel = Arc::new(AtomicBool::new(false));
+    let cancel_for_task = Arc::clone(&build_cancel);
     // Non-cdylib projects took the early-out in `enter_project_with`.
     let task = AsyncComputeTaskPool::get().spawn(async move {
         crate::ext_build::build_extension_project_with_progress(
             &root_for_task,
             Some(progress_for_task),
             TemplateLinkage::Dylib,
+            Some(cancel_for_task),
         )
     });
-    world.resource_mut::<NewProjectState>().build_task = Some((task, TemplateLinkage::Dylib));
+    let mut state = world.resource_mut::<NewProjectState>();
+    state.build_task = Some((task, TemplateLinkage::Dylib));
+    state.build_cancel = Some(build_cancel);
 }
 
 /// Apply the project-root state change and flip `AppState` to
@@ -1363,7 +1422,8 @@ pub fn close_new_project_modal(world: &mut World) {
     state.preset = None;
     state.linkage = TemplateLinkage::default();
     state.folder_task = None;
-    state.scaffold_task = None;
+    state.scaffold = ScaffoldState::default();
+    state.scaffold_log.clear();
     state.status = None;
     // `pending_static_open` is already drained by
     // `apply_pending_static_open` on the happy path, and isn't set
@@ -2008,6 +2068,23 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
         ChildOf(card),
     ));
 
+    // Scaffold live-log panel: auto-hides until the first line
+    // arrives, then sticks to the bottom as new output streams in.
+    let scaffold_log = scrolling_log::spawn(
+        world,
+        card,
+        scrolling_log::ScrollingLogProps {
+            margin: UiRect::top(Val::Px(8.0)),
+            font: editor_font.clone(),
+            font_size: tokens::FONT_SM,
+            text_color: tokens::TEXT_SECONDARY,
+            background: tokens::PANEL_BG,
+            auto_hide_when_empty: true,
+            ..Default::default()
+        },
+    );
+    world.entity_mut(scaffold_log).insert(NewProjectScaffoldLog);
+
     // Build-progress UI (hidden until a build is in flight).
     let progress_container = world
         .spawn((
@@ -2096,7 +2173,8 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
             },
             BackgroundColor(tokens::TOOLBAR_BG),
             children![(
-                Text::new("Cancel"),
+                NewProjectCancelButtonLabel,
+                Text::new("Back"),
                 TextFont {
                     font: editor_font.clone(),
                     font_size: tokens::FONT_MD,
@@ -2134,7 +2212,21 @@ pub fn open_new_project_modal(world: &mut World, preset: TemplatePreset) {
 }
 
 fn on_cancel_new_project(_: On<Pointer<Click>>, mut commands: Commands) {
-    commands.queue(close_new_project_modal);
+    commands.queue(|world: &mut World| {
+        let mut state = world.resource_mut::<NewProjectState>();
+        if let Some(handle) = state.scaffold.handle() {
+            handle.cancel.store(true, Ordering::Release);
+            if let ScaffoldState::Running(h) = std::mem::take(&mut state.scaffold) {
+                state.scaffold = ScaffoldState::Cancelling(h);
+            }
+            state.status = Some("Cancelling…".into());
+        } else if let Some(cancel) = state.build_cancel.as_ref() {
+            cancel.store(true, Ordering::Release);
+            state.status = Some("Cancelling build…".into());
+        } else {
+            close_new_project_modal(world);
+        }
+    });
 }
 
 fn on_browse_new_location(
@@ -2313,7 +2405,7 @@ fn on_create_new_project(
             if state.preset.is_none() {
                 return;
             }
-            if state.scaffold_task.is_some() {
+            if state.scaffold.handle().is_some() {
                 return; // already running
             }
             // Force `build_after_scaffold = false` for static-
@@ -2373,7 +2465,19 @@ fn on_create_new_project(
             Some(branch_from_input.clone())
         };
 
-        world.resource_mut::<NewProjectState>().status = Some(format!("Scaffolding `{name}`..."));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (log_tx, log_rx) = channel::<LogChunk>();
+        let io = CommandIo {
+            cancel: cancel.clone(),
+            log_tx,
+        };
+
+        {
+            let mut state = world.resource_mut::<NewProjectState>();
+            state.status = Some(format!("Scaffolding `{name}`..."));
+            state.scaffold_log.clear();
+            state.scaffold = ScaffoldState::Idle;
+        }
 
         let task = AsyncComputeTaskPool::get().spawn(async move {
             scaffold_project(
@@ -2382,21 +2486,38 @@ fn on_create_new_project(
                 &url_for_task,
                 branch_for_task.as_deref(),
                 linkage,
+                &io,
             )
         });
-        world.resource_mut::<NewProjectState>().scaffold_task = Some(task);
+        world.resource_mut::<NewProjectState>().scaffold = ScaffoldState::Running(ScaffoldHandle {
+            task,
+            cancel,
+            log_rx: Mutex::new(log_rx),
+        });
     });
 }
 
 fn poll_new_project_tasks(
     mut commands: Commands,
     mut state: ResMut<NewProjectState>,
-    mut location_texts: Query<&mut Text, With<NewProjectLocationText>>,
+    mut location_texts: Query<
+        &mut Text,
+        (
+            With<NewProjectLocationText>,
+            Without<NewProjectCancelButtonLabel>,
+        ),
+    >,
     mut status_texts: Query<
         &mut Text,
-        (With<NewProjectStatusText>, Without<NewProjectLocationText>),
+        (
+            With<NewProjectStatusText>,
+            Without<NewProjectLocationText>,
+            Without<NewProjectCancelButtonLabel>,
+        ),
     >,
     mut reset_buttons: Query<&mut Node, With<NewProjectResetLocationButton>>,
+    mut cancel_labels: Query<&mut Text, With<NewProjectCancelButtonLabel>>,
+    mut scaffold_logs: Query<&mut ScrollingLog, With<NewProjectScaffoldLog>>,
 ) {
     // Folder picker.
     if let Some(task) = state.folder_task.as_mut()
@@ -2408,11 +2529,27 @@ fn poll_new_project_tasks(
         }
     }
 
-    // Scaffold.
-    if let Some(task) = state.scaffold_task.as_mut()
-        && let Some(result) = future::block_on(future::poll_once(task))
-    {
-        state.scaffold_task = None;
+    let drained: Vec<LogChunk> = state
+        .scaffold
+        .handle()
+        .map(|h| h.log_rx.lock().unwrap().try_iter().collect())
+        .unwrap_or_default();
+    for chunk in drained {
+        state.scaffold_log.push_str(chunk.line());
+        state.scaffold_log.push('\n');
+    }
+    for mut log in &mut scaffold_logs {
+        if log.content != state.scaffold_log {
+            log.content = state.scaffold_log.clone();
+        }
+    }
+
+    let scaffold_result = state
+        .scaffold
+        .handle_mut()
+        .and_then(|h| future::block_on(future::poll_once(&mut h.task)));
+    if let Some(result) = scaffold_result {
+        state.scaffold = ScaffoldState::Idle;
         match result {
             Ok(project_path) => {
                 info!("Scaffolded project at {}", project_path.display());
@@ -2446,7 +2583,6 @@ fn poll_new_project_tasks(
                         );
                     });
                     state.pending_project = None;
-                    state.scaffold_task = None;
                     state.status = None;
                     return;
                 }
@@ -2507,16 +2643,24 @@ fn poll_new_project_tasks(
 
                         let project_for_task = project_path;
                         let progress_for_task = std::sync::Arc::clone(&progress);
+                        let build_cancel = Arc::new(AtomicBool::new(false));
+                        let cancel_for_task = Arc::clone(&build_cancel);
                         let task = AsyncComputeTaskPool::get().spawn(async move {
                             crate::ext_build::build_extension_project_with_progress(
                                 &project_for_task,
                                 Some(progress_for_task),
                                 linkage,
+                                Some(cancel_for_task),
                             )
                         });
                         state.build_task = Some((task, linkage));
+                        state.build_cancel = Some(build_cancel);
                     }
                 }
+            }
+            Err(err) if new_project::is_cancelled(&err) => {
+                info!("Scaffold cancelled");
+                state.status = Some("Cancelled.".into());
             }
             Err(err) => {
                 warn!("Scaffold failed: {err}");
@@ -2536,6 +2680,7 @@ fn poll_new_project_tasks(
     {
         let linkage = *build_linkage;
         state.build_task = None;
+        state.build_cancel = None;
         match result {
             Ok(artifact_or_project) => match linkage {
                 TemplateLinkage::Dylib => {
@@ -2550,6 +2695,13 @@ fn poll_new_project_tasks(
                     state.pending_project = None;
                 }
             },
+            Err(crate::ext_build::BuildError::Cancelled { .. }) => {
+                info!("Build cancelled");
+                state.status = Some("Cancelled.".into());
+                state.pending_project = None;
+                state.build_progress = None;
+                state.build_progress_snapshot = None;
+            }
             Err(err) => {
                 warn!("Build failed: {err}");
                 state.status = Some(format!(
@@ -2582,6 +2734,16 @@ fn poll_new_project_tasks(
     for mut text in status_texts.iter_mut() {
         if text.0 != desired_status {
             text.0 = desired_status.clone();
+        }
+    }
+    let desired_cancel = if state.scaffold.handle().is_some() || state.build_cancel.is_some() {
+        "Cancel"
+    } else {
+        "Back"
+    };
+    for mut text in cancel_labels.iter_mut() {
+        if text.0 != desired_cancel {
+            text.0 = desired_cancel.to_string();
         }
     }
 }
@@ -2885,10 +3047,13 @@ fn drive_static_editor_build(world: &mut World) {
                 });
             let progress_for_task = std::sync::Arc::clone(&progress);
             let root_for_task = root.clone();
+            let build_cancel = Arc::new(AtomicBool::new(false));
+            let cancel_for_task = Arc::clone(&build_cancel);
             let task = AsyncComputeTaskPool::get().spawn(async move {
                 crate::ext_build::build_static_editor_with_progress(
                     &root_for_task,
                     Some(progress_for_task),
+                    Some(cancel_for_task),
                 )
             });
 
@@ -2896,6 +3061,7 @@ fn drive_static_editor_build(world: &mut World) {
                 let mut state = world.resource_mut::<NewProjectState>();
                 state.static_editor.task = Some(task);
                 state.static_editor.auto_reload = auto_reload;
+                state.build_cancel = Some(build_cancel);
                 if state.build_progress.is_none() {
                     state.build_progress = Some(std::sync::Arc::clone(&progress));
                     state.build_progress_snapshot =
@@ -2926,6 +3092,7 @@ fn drive_static_editor_build(world: &mut World) {
         let auto_reload = {
             let mut state = world.resource_mut::<NewProjectState>();
             state.static_editor.task = None;
+            state.build_cancel = None;
             state.static_editor.auto_reload
         };
 
@@ -2944,6 +3111,17 @@ fn drive_static_editor_build(world: &mut World) {
                     bin,
                     auto_reload,
                 };
+            }
+            Err(crate::ext_build::BuildError::Cancelled { .. }) => {
+                info!("Static editor build cancelled");
+                world
+                    .resource_mut::<crate::build_status::BuildStatus>()
+                    .state = BuildState::Idle;
+                let mut state = world.resource_mut::<NewProjectState>();
+                state.status = Some("Cancelled.".into());
+                state.build_progress = None;
+                state.build_progress_snapshot = None;
+                state.pending_project = None;
             }
             Err(err) => {
                 warn!("Static editor build failed: {err}");
