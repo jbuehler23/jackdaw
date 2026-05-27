@@ -11,6 +11,8 @@ use jackdaw::prelude::*;
 mod window_icon;
 
 fn main() -> AppExit {
+    jackdaw::ui_log::init_logging();
+
     // Install a SIGINT/SIGTERM handler before anything else gets a
     // chance to. Something in the dep tree (wgpu, gilrs, or one of
     // their transitive deps) installs its own `ctrlc` handler that
@@ -73,6 +75,8 @@ fn main() -> AppExit {
         .set_error_handler(error_handler)
         .add_plugins(
             DefaultPlugins
+                .build()
+                .disable::<bevy::log::LogPlugin>()
                 .set(AssetPlugin {
                     file_path: project_root.join("assets").to_string_lossy().to_string(),
                     ..default()

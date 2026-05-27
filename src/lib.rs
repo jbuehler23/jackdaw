@@ -72,6 +72,7 @@ pub mod snapping;
 pub mod status_bar;
 pub mod terrain;
 pub mod transform_ops;
+pub mod ui_log;
 pub mod undo_snapshot;
 pub mod view_modes;
 pub mod view_ops;
@@ -325,6 +326,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(extensions_dialog::ExtensionsDialogPlugin)
         .add_plugins(hot_reload::HotReloadPlugin)
         .add_plugins(pie::PiePlugin)
+        .add_plugins(ui_log::UiLogPlugin)
         .add_plugins(dock_ops::DockOpsPlugin)
         // Force-exit on `AppExit`: bypass wgpu device cleanup
         // and AsyncComputeTaskPool shutdown that otherwise hang
