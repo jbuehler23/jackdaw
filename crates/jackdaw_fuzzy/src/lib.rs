@@ -121,7 +121,7 @@ impl<T: Matchable> FuzzyMatcher<T> {
     pub fn from_items(items: impl IntoIterator<Item = T>) -> Self {
         Self {
             items: items.into_iter().collect::<Vec<_>>(),
-            pattern: Pattern::parse("", CaseMatching::Smart, Normalization::Smart),
+            pattern: Pattern::parse("", CaseMatching::Ignore, Normalization::Smart),
             matcher: Matcher::new(Config::DEFAULT),
         }
     }
@@ -137,7 +137,7 @@ impl<T: Matchable> FuzzyMatcher<T> {
     /// Updates the pattern that items are matched against
     pub fn update_pattern(&mut self, pattern: &str) {
         self.pattern
-            .reparse(pattern, CaseMatching::Smart, Normalization::Smart);
+            .reparse(pattern, CaseMatching::Ignore, Normalization::Smart);
     }
 
     /// Adds an item to the item list
