@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy::text::{FontFeatureTag, FontFeatures};
 use bevy_ui_text_input::actions::{TextInputAction, TextInputEdit};
 use bevy_ui_text_input::*;
+use cosmic_text::{Edit, Motion, Selection};
 // Re-export key types from bevy_ui_text_input for consumers
 pub use bevy_ui_text_input::{TextInputBuffer, TextInputNode, TextInputQueue};
 
@@ -23,6 +24,7 @@ pub fn plugin(app: &mut App) {
             Update,
             (
                 handle_focus_style,
+                handle_ctrl_word_delete,
                 handle_numeric_increment,
                 (handle_unfocus, handle_clamp_on_unfocus).chain(),
                 handle_drag_value,
@@ -841,6 +843,60 @@ fn handle_clamp_on_unfocus(
 
     let value = text.parse().unwrap_or(0.0);
     update_input_value(&mut queue, value, *variant, range);
+}
+
+// Ideally this would be handled by bevy_ui_text_input instead
+fn handle_ctrl_word_delete(
+    focus: Res<InputFocus>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    buffers: Query<&TextInputBuffer, With<EditorTextEdit>>,
+    mut queues: Query<&mut TextInputQueue, With<EditorTextEdit>>,
+) {
+    let Some(focused_entity) = focus.0 else {
+        return;
+    };
+
+    let ctrl_pressed =
+        keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+    #[cfg(target_os = "macos")]
+    let ctrl_pressed = ctrl_pressed
+        || keyboard.pressed(KeyCode::SuperLeft)
+        || keyboard.pressed(KeyCode::SuperRight);
+
+    if !ctrl_pressed {
+        return;
+    }
+
+    let Ok(buffer) = buffers.get(focused_entity) else {
+        return;
+    };
+    let Ok(mut queue) = queues.get_mut(focused_entity) else {
+        return;
+    };
+
+    let has_selection = buffer.editor.selection() != Selection::None;
+
+    if keyboard.just_pressed(KeyCode::Backspace) {
+        if !has_selection {
+            queue.add(TextInputAction::Edit(TextInputEdit::Motion(
+                Motion::PreviousWord,
+                true,
+            )));
+        }
+        queue.add(TextInputAction::Edit(TextInputEdit::Backspace));
+        return;
+    }
+
+    if keyboard.just_pressed(KeyCode::Delete) {
+        if !has_selection {
+            queue.add(TextInputAction::Edit(TextInputEdit::Motion(
+                Motion::NextWord,
+                true,
+            )));
+        }
+        queue.add(TextInputAction::Edit(TextInputEdit::Delete));
+        return;
+    }
 }
 
 fn handle_numeric_increment(
