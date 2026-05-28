@@ -1,7 +1,7 @@
 use bevy::input_focus::InputFocus;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::text::{FontFeatureTag, FontFeatures};
+use bevy::text::{FontFeatureTag, FontFeatures, LineHeight};
 use bevy_ui_text_input::actions::{TextInputAction, TextInputEdit};
 use bevy_ui_text_input::*;
 use cosmic_text::{Edit, Motion, Selection};
@@ -575,6 +575,8 @@ fn setup_text_edit_input(
             .map(|s| format!("{}{}", config.placeholder, s))
             .unwrap_or_else(|| config.placeholder.clone());
 
+        let line_height_px = (TEXT_SIZE * 1.4).round();
+
         let mut text_input = commands.spawn((
             EditorTextEdit,
             config.variant,
@@ -591,6 +593,7 @@ fn setup_text_edit_input(
                 font_features: tabular_figures.clone(),
                 ..default()
             },
+            LineHeight::Px(line_height_px),
             TextColor(TEXT_BODY_COLOR.into()),
             TextInputStyle {
                 cursor_color: TEXT_BODY_COLOR.into(),
@@ -605,7 +608,7 @@ fn setup_text_edit_input(
             },
             Node {
                 flex_grow: 1.0,
-                height: percent(100),
+                height: px(line_height_px),
                 justify_content: JustifyContent::Center,
                 overflow: Overflow::clip(),
                 ..default()
@@ -849,6 +852,7 @@ fn handle_clamp_on_unfocus(
 fn handle_ctrl_word_delete(
     focus: Res<InputFocus>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    global_state: Res<TextInputGlobalState>,
     buffers: Query<&TextInputBuffer, With<EditorTextEdit>>,
     mut queues: Query<&mut TextInputQueue, With<EditorTextEdit>>,
 ) {
@@ -856,14 +860,7 @@ fn handle_ctrl_word_delete(
         return;
     };
 
-    let ctrl_pressed =
-        keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
-    #[cfg(target_os = "macos")]
-    let ctrl_pressed = ctrl_pressed
-        || keyboard.pressed(KeyCode::SuperLeft)
-        || keyboard.pressed(KeyCode::SuperRight);
-
-    if !ctrl_pressed {
+    if !global_state.command {
         return;
     }
 
