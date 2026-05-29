@@ -1,0 +1,13 @@
+2026-05-29T19:58:11.386007Z  INFO bevy_diagnostic::system_information_diagnostics_plugin::internal: SystemInfo { os: "Windows 11 Pro", kernel: "26200", cpu: "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S", core_count: "16", memory: "23.6 GiB" }
+2026-05-29T19:58:11.390690Z  INFO bevy_app::terminal_ctrl_c_handler: Skipping installing `Ctrl+C` handler as one was already installed. Please call `TerminalCtrlCHandlerPlugin::gracefully_exit` in your own `Ctrl+C` handler if you want Bevy to gracefully exit on `Ctrl+C`.
+2026-05-29T19:58:11.611609Z  INFO bevy_render::renderer: AdapterInfo { name: "AMD Radeon(TM) 8060S Graphics", vendor: 4098, device: 5510, device_type: IntegratedGpu, driver: "AMD proprietary driver", driver_info: "25.30 (LLPC)", backend: Vulkan }
+2026-05-29T19:58:11.921025Z  INFO jackdaw_loader: Dylib loader: no dylibs found
+2026-05-29T19:58:11.973938Z  INFO bevy_render::batching::gpu_preprocessing: GPU preprocessing is fully supported on this device.
+2026-05-29T19:58:11.987693Z  INFO bevy_winit::system: Creating new window jackdaw (0v0)
+2026-05-29T19:58:12.057338Z  INFO jackdaw_api_internal::lifecycle: Loading extension: jackdaw.inspector
+2026-05-29T19:58:12.058461Z  INFO jackdaw_api_internal::lifecycle: Loading extension: jackdaw.terminal
+2026-05-29T19:58:12.058795Z  INFO jackdaw_api_internal::lifecycle: Loading extension: jackdaw.viewport_panel
+2026-05-29T19:58:12.059080Z  INFO jackdaw_api_internal::lifecycle: Loading extension: jackdaw.core_windows
+2026-05-29T19:58:12.059294Z  INFO jackdaw_api_internal::lifecycle: Loading extension: jackdaw.core
+2026-05-29T19:58:12.115768Z  INFO jackdaw_api_internal::lifecycle: Loading extension: jackdaw.asset_browser
+2026-05-29T19:58:12.116719Z  INFO jackdaw_api_internal::lifecycle: Loading extension: jackdaw.timeline
