@@ -1089,25 +1089,11 @@ impl Default for KeybindRegistry {
         bindings.insert(A::CameraDown, rmb(K::KeyQ));
         bindings.insert(A::CameraUp, rmb(K::KeyE));
 
-        // -- Camera bookmarks (Ctrl+N to save, N to load) -------------
-        bindings.insert(A::SaveBookmark1, b(K::Digit1, true, false, false));
-        bindings.insert(A::SaveBookmark2, b(K::Digit2, true, false, false));
-        bindings.insert(A::SaveBookmark3, b(K::Digit3, true, false, false));
-        bindings.insert(A::SaveBookmark4, b(K::Digit4, true, false, false));
-        bindings.insert(A::SaveBookmark5, b(K::Digit5, true, false, false));
-        bindings.insert(A::SaveBookmark6, b(K::Digit6, true, false, false));
-        bindings.insert(A::SaveBookmark7, b(K::Digit7, true, false, false));
-        bindings.insert(A::SaveBookmark8, b(K::Digit8, true, false, false));
-        bindings.insert(A::SaveBookmark9, b(K::Digit9, true, false, false));
-        bindings.insert(A::LoadBookmark1, k(K::Digit1));
-        bindings.insert(A::LoadBookmark2, k(K::Digit2));
-        bindings.insert(A::LoadBookmark3, k(K::Digit3));
-        bindings.insert(A::LoadBookmark4, k(K::Digit4));
-        bindings.insert(A::LoadBookmark5, k(K::Digit5));
-        bindings.insert(A::LoadBookmark6, k(K::Digit6));
-        bindings.insert(A::LoadBookmark7, k(K::Digit7));
-        bindings.insert(A::LoadBookmark8, k(K::Digit8));
-        bindings.insert(A::LoadBookmark9, k(K::Digit9));
+        // Camera bookmarks (save/load slots 1..=9) are intentionally left
+        // unbound by default. They remain remappable in the keybind settings
+        // and are reachable from the camera bookmark menu. Leaving them
+        // unbound keeps the bare number keys free for the edit-mode shortcuts
+        // (Vertex/Edge/Face/Clip on 1..=4).
 
         // -- Modal transform (disabled, keybinds ready) ----------------
         bindings.insert(A::ModalGrab, k(K::KeyG));

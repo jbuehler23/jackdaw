@@ -126,25 +126,32 @@ fn camera_system(
             }
         }
 
+        // Fly only while RMB is held. The camera-movement bindings default
+        // to RMB chords, but holding RMB is enforced here at the system level
+        // so a stale or hand-edited keybind file that maps plain WASDQE can
+        // never let the camera fly without RMB, which would clash with the
+        // Q/W/E/R tool shortcuts.
         let mut movement = Vec3::ZERO;
 
-        if keybinds.key_chord_pressed(EditorAction::CameraForward, &keyboard, &mouse) {
-            movement += transform.forward().as_vec3();
-        }
-        if keybinds.key_chord_pressed(EditorAction::CameraBackward, &keyboard, &mouse) {
-            movement -= transform.forward().as_vec3();
-        }
-        if keybinds.key_chord_pressed(EditorAction::CameraLeft, &keyboard, &mouse) {
-            movement -= transform.right().as_vec3();
-        }
-        if keybinds.key_chord_pressed(EditorAction::CameraRight, &keyboard, &mouse) {
-            movement += transform.right().as_vec3();
-        }
-        if keybinds.key_chord_pressed(EditorAction::CameraUp, &keyboard, &mouse) {
-            movement += Vec3::Y;
-        }
-        if keybinds.key_chord_pressed(EditorAction::CameraDown, &keyboard, &mouse) {
-            movement -= Vec3::Y;
+        if right_held {
+            if keybinds.key_chord_pressed(EditorAction::CameraForward, &keyboard, &mouse) {
+                movement += transform.forward().as_vec3();
+            }
+            if keybinds.key_chord_pressed(EditorAction::CameraBackward, &keyboard, &mouse) {
+                movement -= transform.forward().as_vec3();
+            }
+            if keybinds.key_chord_pressed(EditorAction::CameraLeft, &keyboard, &mouse) {
+                movement -= transform.right().as_vec3();
+            }
+            if keybinds.key_chord_pressed(EditorAction::CameraRight, &keyboard, &mouse) {
+                movement += transform.right().as_vec3();
+            }
+            if keybinds.key_chord_pressed(EditorAction::CameraUp, &keyboard, &mouse) {
+                movement += Vec3::Y;
+            }
+            if keybinds.key_chord_pressed(EditorAction::CameraDown, &keyboard, &mouse) {
+                movement -= Vec3::Y;
+            }
         }
 
         if movement != Vec3::ZERO {
