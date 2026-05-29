@@ -1,9 +1,10 @@
 use bevy::input_focus::InputFocus;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::text::{FontFeatureTag, FontFeatures};
+use bevy::text::{FontFeatureTag, FontFeatures, LineHeight};
 use bevy_ui_text_input::actions::{TextInputAction, TextInputEdit};
 use bevy_ui_text_input::*;
+use cosmic_text::{Edit, Motion, Selection};
 // Re-export key types from bevy_ui_text_input for consumers
 pub use bevy_ui_text_input::{TextInputBuffer, TextInputNode, TextInputQueue};
 
@@ -23,6 +24,7 @@ pub fn plugin(app: &mut App) {
             Update,
             (
                 handle_focus_style,
+                handle_ctrl_word_delete,
                 handle_numeric_increment,
                 (handle_unfocus, handle_clamp_on_unfocus).chain(),
                 handle_drag_value,
@@ -573,6 +575,8 @@ fn setup_text_edit_input(
             .map(|s| format!("{}{}", config.placeholder, s))
             .unwrap_or_else(|| config.placeholder.clone());
 
+        let line_height_px = (TEXT_SIZE * 1.4).round();
+
         let mut text_input = commands.spawn((
             EditorTextEdit,
             config.variant,
@@ -589,6 +593,7 @@ fn setup_text_edit_input(
                 font_features: tabular_figures.clone(),
                 ..default()
             },
+            LineHeight::Px(line_height_px),
             TextColor(TEXT_BODY_COLOR.into()),
             TextInputStyle {
                 cursor_color: TEXT_BODY_COLOR.into(),
@@ -603,7 +608,7 @@ fn setup_text_edit_input(
             },
             Node {
                 flex_grow: 1.0,
-                height: percent(100),
+                height: px(line_height_px),
                 justify_content: JustifyContent::Center,
                 overflow: Overflow::clip(),
                 ..default()
@@ -841,6 +846,53 @@ fn handle_clamp_on_unfocus(
 
     let value = text.parse().unwrap_or(0.0);
     update_input_value(&mut queue, value, *variant, range);
+}
+
+// Ideally this would be handled by bevy_ui_text_input instead
+fn handle_ctrl_word_delete(
+    focus: Res<InputFocus>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    global_state: Res<TextInputGlobalState>,
+    buffers: Query<&TextInputBuffer, With<EditorTextEdit>>,
+    mut queues: Query<&mut TextInputQueue, With<EditorTextEdit>>,
+) {
+    let Some(focused_entity) = focus.0 else {
+        return;
+    };
+
+    if !global_state.command {
+        return;
+    }
+
+    let Ok(buffer) = buffers.get(focused_entity) else {
+        return;
+    };
+    let Ok(mut queue) = queues.get_mut(focused_entity) else {
+        return;
+    };
+
+    let has_selection = buffer.editor.selection() != Selection::None;
+
+    if keyboard.just_pressed(KeyCode::Backspace) {
+        if !has_selection {
+            queue.add(TextInputAction::Edit(TextInputEdit::Motion(
+                Motion::PreviousWord,
+                true,
+            )));
+        }
+        queue.add(TextInputAction::Edit(TextInputEdit::Backspace));
+        return;
+    }
+
+    if keyboard.just_pressed(KeyCode::Delete) {
+        if !has_selection {
+            queue.add(TextInputAction::Edit(TextInputEdit::Motion(
+                Motion::NextWord,
+                true,
+            )));
+        }
+        queue.add(TextInputAction::Edit(TextInputEdit::Delete));
+    }
 }
 
 fn handle_numeric_increment(

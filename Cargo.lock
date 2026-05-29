@@ -4800,6 +4800,7 @@ dependencies = [
  "bevy_easings",
  "bevy_monitors",
  "bevy_ui_text_input",
+ "cosmic-text 0.16.0",
  "jackdaw_fuzzy",
  "jackdaw_jsn",
  "jackdaw_localization",
