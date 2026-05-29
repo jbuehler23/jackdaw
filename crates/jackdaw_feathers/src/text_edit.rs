@@ -944,7 +944,7 @@ fn handle_drag_value(
     windows: Query<&Window>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut override_cursor: ResMut<OverrideCursor>,
-    mut drag_hitboxes: Query<(Entity, &mut DragHitbox, &Interaction, &ChildOf)>,
+    mut drag_hitboxes: Query<(&mut DragHitbox, &Interaction, &ChildOf)>,
     wrappers: Query<&TextEditWrapper>,
     mut text_edits: Query<
         (
@@ -960,7 +960,7 @@ fn handle_drag_value(
     let Ok(window) = windows.single() else { return };
     let cursor_pos = window.cursor_position();
 
-    for (_entity, mut hitbox, interaction, child_of) in &mut drag_hitboxes {
+    for (mut hitbox, interaction, child_of) in &mut drag_hitboxes {
         let Ok(wrapper) = wrappers.get(child_of.parent()) else {
             continue;
         };
@@ -999,9 +999,11 @@ fn handle_drag_value(
                 });
             }
             hitbox.dragging = false;
-            if override_cursor.0 == Some(EntityCursor::System(
-                bevy::window::SystemCursorIcon::ColResize,
-            )) {
+            if override_cursor.0
+                == Some(EntityCursor::System(
+                    bevy::window::SystemCursorIcon::ColResize,
+                ))
+            {
                 override_cursor.0 = None;
             }
         }
