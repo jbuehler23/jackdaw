@@ -5253,6 +5253,7 @@ dependencies = [
  "tempfile",
  "test_fixture_extension",
  "time",
+ "webbrowser",
  "winit",
 ]
 
@@ -10210,6 +10211,22 @@ dependencies = [
  "pastey",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "webbrowser"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fc95580916af1e68ff6a7be07446fc5db73ebf71cf092de939bbf5f7e189f72"
+dependencies = [
+ "core-foundation 0.10.1",
+ "jni 0.22.4",
+ "log",
+ "ndk-context",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "url",
  "web-sys",
 ]
 

@@ -11,7 +11,7 @@ use crate::tokens::{
     TEXT_SIZE, TEXT_SIZE_SM,
 };
 
-use crate::cursor::HoverCursor;
+use crate::cursor::EntityCursor;
 
 #[derive(EntityEvent)]
 pub struct ButtonClickEvent {
@@ -398,7 +398,7 @@ pub(crate) fn button_base(
         variant,
         size,
         Hovered::default(),
-        HoverCursor(bevy::window::SystemCursorIcon::Pointer),
+        EntityCursor::System(bevy::window::SystemCursorIcon::Pointer),
         Node {
             width: if align_left {
                 percent(100)

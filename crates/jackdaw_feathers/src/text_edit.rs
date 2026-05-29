@@ -8,7 +8,7 @@ use cosmic_text::{Edit, Motion, Selection};
 // Re-export key types from bevy_ui_text_input for consumers
 pub use bevy_ui_text_input::{TextInputBuffer, TextInputNode, TextInputQueue};
 
-use crate::cursor::{ActiveCursor, HoverCursor};
+use crate::cursor::{EntityCursor, OverrideCursor};
 use crate::icons::{EditorFont, IconFont};
 use crate::tokens::{
     self, AXIS_LABEL_BG, BORDER_COLOR, ELEVATED_BG, PRIMARY_COLOR, SHADOW_COLOR_LIGHT,
@@ -407,7 +407,7 @@ fn setup_text_edit_input(
                 }]),
                 Interaction::None,
                 Hovered::default(),
-                HoverCursor(bevy::window::SystemCursorIcon::Text),
+                EntityCursor::System(bevy::window::SystemCursorIcon::Text),
             ))
             .observe(
                 |mut ev: On<bevy::picking::events::Pointer<bevy::picking::events::DragStart>>| {
@@ -465,7 +465,7 @@ fn setup_text_edit_input(
                     ZIndex(10),
                     Interaction::None,
                     Hovered::default(),
-                    HoverCursor(bevy::window::SystemCursorIcon::ColResize),
+                    EntityCursor::System(bevy::window::SystemCursorIcon::ColResize),
                 ))
                 .id();
             crate::utils::attach_or_despawn(&mut commands, wrapper_entity, hitbox);
@@ -943,6 +943,7 @@ fn handle_drag_value(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    mut override_cursor: ResMut<OverrideCursor>,
     mut drag_hitboxes: Query<(Entity, &mut DragHitbox, &Interaction, &ChildOf)>,
     wrappers: Query<&TextEditWrapper>,
     mut text_edits: Query<
@@ -959,7 +960,7 @@ fn handle_drag_value(
     let Ok(window) = windows.single() else { return };
     let cursor_pos = window.cursor_position();
 
-    for (entity, mut hitbox, interaction, child_of) in &mut drag_hitboxes {
+    for (_entity, mut hitbox, interaction, child_of) in &mut drag_hitboxes {
         let Ok(wrapper) = wrappers.get(child_of.parent()) else {
             continue;
         };
@@ -975,9 +976,9 @@ fn handle_drag_value(
             hitbox.dragging = true;
             hitbox.start_x = pos.x;
             hitbox.start_value = parse_numeric_value(&buffer.get_text(), suffix);
-            commands
-                .entity(entity)
-                .insert(ActiveCursor(bevy::window::SystemCursorIcon::ColResize));
+            override_cursor.0 = Some(EntityCursor::System(
+                bevy::window::SystemCursorIcon::ColResize,
+            ));
             commands.entity(child_of.parent()).insert(TextEditDragging);
         }
 
@@ -998,11 +999,11 @@ fn handle_drag_value(
                 });
             }
             hitbox.dragging = false;
-            commands.queue(move |world: &mut World| {
-                if let Ok(mut ec) = world.get_entity_mut(entity) {
-                    ec.remove::<ActiveCursor>();
-                }
-            });
+            if override_cursor.0 == Some(EntityCursor::System(
+                bevy::window::SystemCursorIcon::ColResize,
+            )) {
+                override_cursor.0 = None;
+            }
         }
 
         if hitbox.dragging

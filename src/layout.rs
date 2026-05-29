@@ -110,58 +110,41 @@ pub struct HierarchyFilter;
 #[derive(Component)]
 pub struct Toolbar;
 
+/// Root UI node for the editor shell (flush with the OS window client area).
+#[derive(Component)]
+pub struct EditorLayoutRoot;
+
 pub fn editor_layout(
     icon_font: &IconFont,
     editor_font: &jackdaw_feathers::icons::EditorFont,
+    brand_icon: Handle<Image>,
 ) -> impl Bundle {
     (
         EditorEntity,
-        // Outer shell: dark background with padding (Figma: 10px padding, bg #171717)
+        EditorLayoutRoot,
+        crate::window_chrome::WindowShellRoot,
         BackgroundColor(tokens::WINDOW_BG),
         Node {
             width: percent(100),
             height: percent(100),
             flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Center,
-            padding: UiRect::all(px(tokens::PANEL_GAP)),
             ..Default::default()
         },
-        children![(
-            // Inner container: the editor workspace with rounded corners and border.
-            EditorEntity,
-            Node {
-                width: percent(100),
-                flex_grow: 1.0,
-                min_height: px(0.0),
-                flex_direction: FlexDirection::Column,
-                border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::all(px(8.0)),
-                overflow: Overflow::clip(),
-                ..Default::default()
-            },
-            BackgroundColor(tokens::WINDOW_BG),
-            BorderColor::all(tokens::BORDER_SUBTLE),
-            children![
-                // Integrated window header: menu bar + scene tabs +
-                // workspace dropdown + transport. Scene tabs live in
-                // the header alongside the menu (where workspace tabs
-                // used to sit); workspaces are exposed as a dropdown
-                // next to the Play pill.
-                window_header(icon_font.0.clone(), editor_font.0.clone()),
-                // Content container (flex grow). Holds both workspaces.
-                // Figma: Editor (Rows) has padding: 0px 4px
-                (
-                    EditorEntity,
-                    Node {
-                        width: percent(100),
-                        flex_grow: 1.0,
-                        min_height: px(0.0),
-                        flex_direction: FlexDirection::Column,
-                        padding: UiRect::horizontal(px(tokens::PANEL_GAP)),
-                        row_gap: px(tokens::PANEL_GAP),
-                        ..Default::default()
-                    },
-                    children![
+        children![
+            window_header(icon_font.0.clone(), editor_font.0.clone(), brand_icon),
+            (
+                EditorEntity,
+                Node {
+                    width: percent(100),
+                    flex_grow: 1.0,
+                    min_height: px(0.0),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::horizontal(px(tokens::PANEL_GAP)),
+                    row_gap: px(tokens::PANEL_GAP),
+                    overflow: Overflow::clip(),
+                    ..Default::default()
+                },
+                children![
                     // Scene document (visible by default).
                     //
                     // The dock tree is materialised by `jackdaw_panels`'
@@ -220,24 +203,60 @@ pub fn editor_layout(
                                 )),
                             ),
                         ),
-                    )
+                    ),
+                    editor_status_bar(),
                 ],
-                ),
-                // Status bar (fixed height) with connection indicator
-                editor_status_bar()
-            ],
-        )],
+            ),
+            #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
+            crate::window_chrome::resize_edge_overlay(),
+        ],
     )
 }
 
-/// Integrated window header. Two groups separated by a flexible spacer:
-/// the **left group** owns the menu bar and the document tab strip (so
-/// tabs sit right after the `Add` menu, matching the Figma mock), and
-/// the **right group** owns the Scene View combobox and the Play/Pause
-/// pill. A flex-grow spacer between them absorbs the slack, so resizing
-/// the dropdown label (e.g. `Scene View v` -> `Animation View v`) can't
-/// shift the tabs.
-fn window_header(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bundle {
+/// Integrated window header: menu bar, scene tabs, workspace transport,
+/// OS caption buttons, and a drag region between the left and right groups.
+#[cfg(target_os = "macos")]
+fn window_header(
+    icon_font: Handle<Font>,
+    editor_font: Handle<Font>,
+    brand_icon: Handle<Image>,
+) -> impl Bundle {
+    window_header_row(children![
+        crate::window_chrome::window_controls(icon_font),
+        window_header_brand_link(brand_icon),
+        window_header_menu_and_tabs(),
+        crate::window_chrome::drag_region(),
+        window_header_right_controls(icon_font, editor_font),
+    ])
+}
+
+#[cfg(not(target_os = "macos"))]
+fn window_header(
+    icon_font: Handle<Font>,
+    editor_font: Handle<Font>,
+    brand_icon: Handle<Image>,
+) -> impl Bundle {
+    window_header_row(children![
+        window_header_brand_link(brand_icon),
+        window_header_menu_and_tabs(),
+        crate::window_chrome::drag_region(),
+        window_header_right_controls_with_caption(icon_font, editor_font),
+    ])
+}
+
+fn window_header_brand_link(brand_icon: Handle<Image>) -> impl Bundle {
+    (
+        EditorEntity,
+        Node {
+            padding: UiRect::left(px(tokens::SPACING_MD)),
+            flex_shrink: 0.0,
+            ..default()
+        },
+        children![crate::repo_link::brand_link_button(brand_icon)],
+    )
+}
+
+fn window_header_row(children: impl Bundle) -> impl Bundle {
     (
         EditorEntity,
         Node {
@@ -246,72 +265,85 @@ fn window_header(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bun
             width: percent(100),
             height: px(36.0),
             flex_shrink: 0.0,
-            border_radius: BorderRadius::top(Val::Px(7.0)),
             ..Default::default()
         },
         BackgroundColor(tokens::WINDOW_BG),
+        children,
+    )
+}
+
+fn window_header_menu_and_tabs() -> impl Bundle {
+    (
+        EditorEntity,
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            height: percent(100),
+            column_gap: px(tokens::SPACING_LG),
+            flex_shrink: 1.0,
+            min_width: px(0.0),
+            ..Default::default()
+        },
         children![
-            // Left: menu bar + scene tab strip. The strip carries the
-            // scene tabs that drive what's being edited (formerly the
-            // workspace tab strip, which is now a dropdown on the right).
-            // `flex_shrink: 1` + `min_width: 0` let the whole left group
-            // (and therefore the scene tab strip inside it) compress
-            // when many tabs are open, instead of pushing into the
-            // right-side workspace dropdown.
+            menu_bar::menu_bar_shell(),
             (
+                crate::scenes::ui::SceneTabStrip,
                 EditorEntity,
                 Node {
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
                     height: percent(100),
-                    column_gap: px(tokens::SPACING_LG),
+                    column_gap: px(4.0),
                     flex_shrink: 1.0,
-                    min_width: px(0.0),
                     flex_grow: 1.0,
+                    min_width: px(0.0),
+                    overflow: Overflow::scroll_x(),
                     ..Default::default()
                 },
-                children![
-                    menu_bar::menu_bar_shell(),
-                    (
-                        crate::scenes::ui::SceneTabStrip,
-                        EditorEntity,
-                        Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            height: percent(100),
-                            column_gap: px(4.0),
-                            flex_shrink: 1.0,
-                            flex_grow: 1.0,
-                            min_width: px(0.0),
-                            overflow: Overflow::scroll_x(),
-                            ..Default::default()
-                        },
-                        ScrollPosition::default(),
-                    ),
-                ],
+                ScrollPosition::default(),
             ),
-            // Right: Workspace switcher dropdown + Play/Pause transport.
-            // `flex_shrink: 0` pins the right-side controls so the
-            // scene tab strip on the left is what gives ground when
-            // space gets tight.
-            (
-                EditorEntity,
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    padding: UiRect::horizontal(px(tokens::SPACING_MD)),
-                    column_gap: px(8.0),
-                    flex_shrink: 0.0,
-                    ..Default::default()
-                },
-                children![
-                    crate::workspace_dropdown::workspace_dropdown_trigger(
-                        editor_font,
-                        icon_font.clone(),
-                    ),
-                    play_pause_controls(icon_font),
-                ],
-            ),
+        ],
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn window_header_right_controls(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bundle {
+    (
+        EditorEntity,
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            padding: UiRect::horizontal(px(tokens::SPACING_MD)),
+            column_gap: px(8.0),
+            flex_shrink: 0.0,
+            ..Default::default()
+        },
+        children![
+            crate::workspace_dropdown::workspace_dropdown_trigger(editor_font, icon_font.clone()),
+            play_pause_controls(icon_font),
+        ],
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn window_header_right_controls_with_caption(
+    icon_font: Handle<Font>,
+    editor_font: Handle<Font>,
+) -> impl Bundle {
+    (
+        EditorEntity,
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            padding: UiRect::horizontal(px(tokens::SPACING_MD)),
+            column_gap: px(8.0),
+            flex_shrink: 0.0,
+            ..Default::default()
+        },
+        children![
+            crate::workspace_dropdown::workspace_dropdown_trigger(editor_font, icon_font.clone()),
+            play_pause_controls(icon_font.clone()),
+            crate::window_chrome::window_controls(icon_font),
         ],
     )
 }

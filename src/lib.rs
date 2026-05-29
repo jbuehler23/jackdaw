@@ -87,6 +87,8 @@ pub mod viewport;
 pub mod viewport_overlays;
 pub mod viewport_select;
 pub mod viewport_util;
+pub mod repo_link;
+pub mod window_chrome;
 pub mod workspace_dropdown;
 
 use bevy::{
@@ -328,6 +330,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(operator_tooltip::OperatorTooltipPlugin)
         .add_plugins(jackdaw_node_graph::NodeGraphPlugin)
         .add_plugins(jackdaw_animation::AnimationPlugin)
+        .add_plugins((repo_link::RepoLinkPlugin, window_chrome::WindowChromePlugin))
         .add_plugins(jackdaw_panels::DockPlugin)
         .add_plugins(jackdaw_api_internal::ExtensionLoaderPlugin)
         .add_plugins(extension_watcher::ExtensionWatcherPlugin)
@@ -587,9 +590,14 @@ fn spawn_layout(
     mut commands: Commands,
     icon_font: Res<jackdaw_feathers::icons::IconFont>,
     editor_font: Res<jackdaw_feathers::icons::EditorFont>,
+    brand_icon: Res<repo_link::JackdawBrandIcon>,
 ) {
     commands.spawn((Camera2d, EditorEntity));
-    commands.spawn(layout::editor_layout(&icon_font, &editor_font));
+    commands.spawn(layout::editor_layout(
+        &icon_font,
+        &editor_font,
+        brand_icon.0.clone(),
+    ));
 }
 
 /// Spawn a new keyframe clip on the same target as the currently-

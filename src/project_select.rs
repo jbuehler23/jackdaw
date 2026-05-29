@@ -24,6 +24,8 @@ use crate::{
     project::{self, ProjectRoot},
     scene_io,
     scrolling_log::{self, ScrollingLog},
+    repo_link::{JackdawBrandIcon, brand_link_button},
+    window_chrome::WindowShellRoot,
 };
 
 #[derive(Default)]
@@ -349,6 +351,7 @@ fn spawn_project_selector(
     mut commands: Commands,
     editor_font: Res<EditorFont>,
     icon_font: Res<jackdaw_feathers::icons::IconFont>,
+    brand_icon: Res<JackdawBrandIcon>,
     pending: Option<Res<PendingAutoOpen>>,
 ) {
     // UI camera for the project selector screen. Spawned BEFORE the
@@ -372,6 +375,7 @@ fn spawn_project_selector(
     let recent = project::read_recent_projects();
     let font = editor_font.0.clone();
     let icon_font_handle = icon_font.0.clone();
+    let brand_icon_handle = brand_icon.0.clone();
 
     // Detect CWD project candidate
     let cwd = std::env::current_dir().unwrap_or_default();
@@ -382,6 +386,7 @@ fn spawn_project_selector(
     commands
         .spawn((
             ProjectSelectorRoot,
+            WindowShellRoot,
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
@@ -393,58 +398,72 @@ fn spawn_project_selector(
         .with_children(|root| {
             // Launcher header mirrors the editor chrome: compact title on the
             // left, version metadata on the right, and no centered splash card.
-            root.spawn((
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Px(44.0),
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::SpaceBetween,
-                    padding: UiRect::axes(Val::Px(14.0), Val::Px(0.0)),
-                    border: UiRect::bottom(Val::Px(1.0)),
-                    ..Default::default()
-                },
-                BackgroundColor(tokens::PANEL_HEADER_BG),
-                BorderColor::all(tokens::BORDER_SUBTLE),
-                children![
-                    (
-                        Node {
+            root
+                .spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(44.0),
+                        align_items: AlignItems::Center,
+                        padding: UiRect::axes(Val::Px(14.0), Val::Px(0.0)),
+                        column_gap: Val::Px(8.0),
+                        border: UiRect::bottom(Val::Px(1.0)),
+                        ..Default::default()
+                    },
+                    BackgroundColor(tokens::PANEL_HEADER_BG),
+                    BorderColor::all(tokens::BORDER_SUBTLE),
+                ))
+                .with_children(|header| {
+                    #[cfg(target_os = "macos")]
+                    header.spawn(crate::window_chrome::window_controls(
+                        icon_font_handle.clone(),
+                    ));
+                    header
+                        .spawn((
+                            Node {
+                                flex_direction: FlexDirection::Row,
+                                align_items: AlignItems::Center,
+                                column_gap: Val::Px(8.0),
+                                flex_shrink: 0.0,
+                                ..Default::default()
+                            },
+                            children![
+                                brand_link_button(brand_icon_handle),
+                                (
+                                    Text::new("jackdaw"),
+                                    TextFont {
+                                        font: font.clone(),
+                                        font_size: tokens::FONT_LG,
+                                        ..Default::default()
+                                    },
+                                    TextColor(tokens::TEXT_PRIMARY),
+                                ),
+                            ],
+                        ));
+                    header.spawn(crate::window_chrome::drag_region());
+                    header
+                        .spawn(Node {
                             flex_direction: FlexDirection::Row,
                             align_items: AlignItems::Center,
                             column_gap: Val::Px(8.0),
+                            flex_shrink: 0.0,
                             ..Default::default()
-                        },
-                        children![
-                            (
-                                Text::new(String::from(Icon::Boxes.unicode())),
-                                TextFont {
-                                    font: icon_font_handle.clone(),
-                                    font_size: tokens::ICON_MD,
-                                    ..Default::default()
-                                },
-                                TextColor(tokens::DOC_TAB_TOOL_ACCENT),
-                            ),
-                            (
-                                Text::new("jackdaw"),
+                        })
+                        .with_children(|trailing| {
+                            trailing.spawn((
+                                Text::new(format!("v{}", env!("CARGO_PKG_VERSION"))),
                                 TextFont {
                                     font: font.clone(),
-                                    font_size: tokens::FONT_LG,
+                                    font_size: tokens::FONT_SM,
                                     ..Default::default()
                                 },
-                                TextColor(tokens::TEXT_PRIMARY),
-                            ),
-                        ],
-                    ),
-                    (
-                        Text::new(format!("v{}", env!("CARGO_PKG_VERSION"))),
-                        TextFont {
-                            font: font.clone(),
-                            font_size: tokens::FONT_SM,
-                            ..Default::default()
-                        },
-                        TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
-                    ),
-                ],
-            ));
+                                TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
+                            ));
+                            #[cfg(not(target_os = "macos"))]
+                            trailing.spawn(crate::window_chrome::window_controls(
+                                icon_font_handle.clone(),
+                            ));
+                        });
+                });
 
             root.spawn(Node {
                 width: Val::Percent(100.0),
@@ -650,6 +669,8 @@ fn spawn_project_selector(
                             });
                     });
             });
+            #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
+            root.spawn(crate::window_chrome::resize_edge_overlay());
         });
 }
 

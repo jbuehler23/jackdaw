@@ -150,6 +150,7 @@ winit.workspace = true
 image.workspace = true
 time.workspace = true
 jackdaw_localization = { version = "0.4.1", path = "crates/jackdaw_localization" }
+webbrowser.workspace = true
 
 [workspace.dependencies]
 bevy = { version = "0.18", features = [
@@ -223,6 +224,7 @@ time = { version = "0.3.47", default-features = false, features = [
     "local-offset",
     "formatting",
 ] }
+webbrowser = "1"
 fluent_content = "0.0.5"
 bevy_fluent = { git = "https://github.com/ThierryBerger/bevy_fluent.git", branch = "asset_path_resolve" }
 unic-langid = { version = "0.9", features = ["macros"] }

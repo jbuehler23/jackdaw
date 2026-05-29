@@ -94,6 +94,7 @@ fn main() -> AppExit {
                 .set(WindowPlugin {
                     exit_condition: ExitCondition::DontExit,
                     close_when_requested: false,
+                    primary_window: Some(jackdaw::window_chrome::borderless_primary_window()),
                     ..default()
                 }),
         )

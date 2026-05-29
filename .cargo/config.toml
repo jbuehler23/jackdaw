@@ -1,13 +1,47 @@
-# Active workspace cargo config. For local-build alternatives see
-# `.cargo/config_fast_builds.toml` (Mold/LLD speed-ups) and
-# `.cargo/config_ci.toml` (cranelift backend for CI).
+# Active workspace cargo config for fast local dev builds.
 #
-# This file targets correctness on Windows: the MSVC linker has a
-# hard 65,535 PE export cap, which `jackdaw_sdk`'s aggregate of
-# `bevy + jackdaw_api` exceeds. `rust-lld` does not share that cap,
-# so we route Windows builds through it. Linux and macOS use their
-# default linker (or the user's override in a different config).
+# Requires nightly (see rust-toolchain.toml) and the Cranelift codegen backend:
+#   rustup component add rustc-codegen-cranelift-preview
+#
+# More linker options: `.cargo/config_fast_builds.toml`
+# CI replaces this file with `.cargo/config_ci.toml` (Cranelift + wild linker on Linux).
+#
+# Windows uses `rust-lld` because the MSVC linker has a 65,535 PE export cap that
+# `jackdaw_sdk`'s aggregate of `bevy + jackdaw_api` can exceed.
+
+[unstable]
+codegen-backend = true
+
+[profile.dev]
+codegen-backend = "cranelift"
+
+[profile.dev.package."*"]
+codegen-backend = "cranelift"
+
+[profile.release]
+codegen-backend = "llvm"
+
+[profile.test.package."*"]
+opt-level = 1
 
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld"
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+rustflags = [
+    "-C", "link-arg=-fuse-ld=lld",
+    "-Zthreads=0",
+]
+rustdocflags = ["-Clinker=rust-lld"]
+
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = [
+    "-Clink-arg=-fuse-ld=lld",
+    "-Zshare-generics=y",
+    "-Zthreads=0",
+]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-Zthreads=0"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-Zthreads=0"]
