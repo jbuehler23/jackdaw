@@ -1,5 +1,6 @@
 //! Borderless primary window with in-app caption buttons and drag regions.
 
+use bevy::feathers::cursor::EntityCursor;
 use bevy::math::CompassOctant;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -7,7 +8,6 @@ use bevy::window::{PrimaryWindow, SystemCursorIcon, Window, WindowCloseRequested
 use bevy::winit::WINIT_WINDOWS;
 use jackdaw_feathers::{
     button::{ButtonClickEvent, ButtonSize, ButtonVariant, IconButtonProps, icon_button},
-    cursor::EntityCursor,
     icons::Icon,
 };
 

@@ -1,11 +1,11 @@
 //! Clickable Jackdaw brand icon that opens the repository in the system browser.
 
 use bevy::asset::{embedded_asset, load_embedded_asset};
+use bevy::feathers::cursor::EntityCursor;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::window::SystemCursorIcon;
 use jackdaw_feathers::button::{ButtonClickEvent, ButtonSize, ButtonVariant, EditorButton};
-use jackdaw_feathers::cursor::EntityCursor;
 use jackdaw_feathers::tokens::BORDER_RADIUS_MD;
 
 use crate::EditorEntity;

@@ -5,7 +5,6 @@ pub mod collapsible;
 pub mod color_picker;
 pub mod combobox;
 pub mod context_menu;
-pub mod cursor;
 pub mod dialog;
 pub mod file_browser;
 pub mod icons;
@@ -42,7 +41,6 @@ impl Plugin for EditorFeathersPlugin {
             jackdaw_widgets::EditorWidgetsPlugins,
             split_panel::SplitPanelPlugin,
             icons::IconFontPlugin,
-            cursor::plugin,
             button::plugin,
             checkbox::plugin,
             popover::plugin,

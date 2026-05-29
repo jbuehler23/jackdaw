@@ -1,3 +1,4 @@
+use bevy::feathers::cursor::EntityCursor;
 use bevy::input_focus::InputFocus;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -10,8 +11,6 @@ use crate::tokens::{
     BORDER_RADIUS_MD, PRIMARY_COLOR, TEXT_BODY_COLOR, TEXT_DISPLAY_COLOR, TEXT_MUTED_COLOR,
     TEXT_SIZE, TEXT_SIZE_SM,
 };
-
-use crate::cursor::EntityCursor;
 
 #[derive(EntityEvent)]
 pub struct ButtonClickEvent {

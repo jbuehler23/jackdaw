@@ -1,3 +1,4 @@
+use bevy::feathers::cursor::{EntityCursor, OverrideCursor};
 use bevy::input_focus::InputFocus;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -8,7 +9,6 @@ use cosmic_text::{Edit, Motion, Selection};
 // Re-export key types from bevy_ui_text_input for consumers
 pub use bevy_ui_text_input::{TextInputBuffer, TextInputNode, TextInputQueue};
 
-use crate::cursor::{EntityCursor, OverrideCursor};
 use crate::icons::{EditorFont, IconFont};
 use crate::tokens::{
     self, AXIS_LABEL_BG, BORDER_COLOR, ELEVATED_BG, PRIMARY_COLOR, SHADOW_COLOR_LIGHT,
