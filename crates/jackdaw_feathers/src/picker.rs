@@ -702,8 +702,8 @@ fn picker_navigation_repeat_interval(repeat_index: u32) -> f32 {
         return PICKER_NAV_INITIAL_DELAY;
     }
     let ramp = ((repeat_index - 1) as f32 / PICKER_NAV_REPEAT_RAMP).min(1.0);
-    return PICKER_NAV_REPEAT_INTERVAL_BASE
-        + (PICKER_NAV_REPEAT_INTERVAL_MIN - PICKER_NAV_REPEAT_INTERVAL_BASE) * ramp;
+    PICKER_NAV_REPEAT_INTERVAL_BASE
+        + (PICKER_NAV_REPEAT_INTERVAL_MIN - PICKER_NAV_REPEAT_INTERVAL_BASE) * ramp
 }
 
 fn picker_navigation_should_tick(
@@ -729,7 +729,7 @@ fn picker_navigation_should_tick(
         picker_navigation_repeat_interval(repeat.repeat_index),
         TimerMode::Once,
     );
-    return true;
+    true
 }
 
 fn display_ordered_picker_items(
@@ -747,7 +747,7 @@ fn display_ordered_picker_items(
     for child in child_entities.iter() {
         items.extend(display_ordered_picker_items(child, children, picker_items));
     }
-    return items;
+    items
 }
 
 fn picker_host_from_focus(
@@ -761,7 +761,7 @@ fn picker_host_from_focus(
             return Some((picker_entity, with_list.0));
         }
     }
-    return None;
+    None
 }
 
 fn picker_keyboard_navigation(

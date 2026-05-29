@@ -892,7 +892,6 @@ fn handle_ctrl_word_delete(
             )));
         }
         queue.add(TextInputAction::Edit(TextInputEdit::Delete));
-        return;
     }
 }
 
