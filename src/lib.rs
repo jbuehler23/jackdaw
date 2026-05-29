@@ -67,6 +67,7 @@ pub mod project_files;
 pub mod project_select;
 pub mod reflect_default;
 pub mod remote;
+pub mod repo_link;
 pub mod restart;
 pub mod scene_io;
 pub mod scene_ops;
@@ -87,7 +88,6 @@ pub mod viewport;
 pub mod viewport_overlays;
 pub mod viewport_select;
 pub mod viewport_util;
-pub mod repo_link;
 pub mod window_chrome;
 pub mod workspace_dropdown;
 
