@@ -6,13 +6,11 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::window::SystemCursorIcon;
 use jackdaw_feathers::button::{ButtonClickEvent, ButtonSize, ButtonVariant, EditorButton};
-use jackdaw_feathers::tokens::BORDER_RADIUS_MD;
+use jackdaw_feathers::tokens::{BORDER_RADIUS_MD, ICON_MD};
 
 use crate::EditorEntity;
 
 pub const JACKDAW_REPO_URL: &str = "https://github.com/jbuehler23/jackdaw";
-
-const BRAND_ICON_SIZE_PX: f32 = 18.0;
 
 #[derive(Resource, Clone)]
 pub struct JackdawBrandIcon(pub Handle<Image>);
@@ -43,12 +41,12 @@ pub fn brand_link_button(image: Handle<Image>) -> impl Bundle {
         Button,
         EditorButton,
         variant,
-        ButtonSize::IconSM,
+        ButtonSize::Icon,
         Hovered::default(),
         EntityCursor::System(SystemCursorIcon::Pointer),
         Node {
-            width: ButtonSize::IconSM.width(),
-            height: ButtonSize::IconSM.height(),
+            width: ButtonSize::Icon.width(),
+            height: ButtonSize::Icon.height(),
             padding: UiRect::ZERO,
             border: UiRect::all(variant.border()),
             border_radius: BorderRadius::all(px(BORDER_RADIUS_MD)),
@@ -71,8 +69,8 @@ pub fn brand_link_button(image: Handle<Image>) -> impl Bundle {
         children![(
             ImageNode::new(image),
             Node {
-                width: Val::Px(BRAND_ICON_SIZE_PX),
-                height: Val::Px(BRAND_ICON_SIZE_PX),
+                width: Val::Px(ICON_MD),
+                height: Val::Px(ICON_MD),
                 ..default()
             },
         )],
