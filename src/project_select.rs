@@ -595,6 +595,9 @@ fn spawn_project_selector(
                                 align_items: AlignItems::Center,
                                 padding: UiRect::axes(Val::Px(12.0), Val::Px(0.0)),
                                 border: UiRect::bottom(Val::Px(1.0)),
+                                border_radius: BorderRadius::top(Val::Px(
+                                    tokens::BORDER_RADIUS_LG,
+                                )),
                                 ..Default::default()
                             },
                             BackgroundColor(tokens::PANEL_HEADER_BG),
