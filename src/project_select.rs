@@ -402,7 +402,7 @@ fn spawn_project_selector(
                 .spawn((
                     Node {
                         width: Val::Percent(100.0),
-                        height: Val::Px(44.0),
+                        height: Val::Px(tokens::WINDOW_HEADER_HEIGHT),
                         align_items: AlignItems::Center,
                         padding: UiRect::axes(Val::Px(14.0), Val::Px(0.0)),
                         column_gap: Val::Px(8.0),

@@ -263,7 +263,7 @@ fn window_header_row(children: impl Bundle) -> impl Bundle {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             width: percent(100),
-            height: px(36.0),
+            height: px(tokens::WINDOW_HEADER_HEIGHT),
             flex_shrink: 0.0,
             ..Default::default()
         },
