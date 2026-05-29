@@ -697,6 +697,7 @@ fn capture_keybind_recording(
             ctrl,
             shift,
             alt,
+            mouse: None,
         };
 
         // If we're in conflict confirmation mode, check if user pressed the same key

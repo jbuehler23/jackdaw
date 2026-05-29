@@ -1,5 +1,6 @@
 //! Main crate for the Jackdaw editor.
 //! Usage of this crate is meant for headless operation. If you want to interact with the jackdaw API for extensions, use the `jackdaw_api` crate instead.
+pub mod active_tool;
 pub mod add_entity_picker;
 pub mod alignment_guides;
 pub mod app_ops;
@@ -69,6 +70,7 @@ pub mod selection;
 pub mod snapping;
 pub mod status_bar;
 pub mod terrain;
+pub mod tool_ops;
 pub mod transform_ops;
 pub mod undo_snapshot;
 pub mod view_modes;

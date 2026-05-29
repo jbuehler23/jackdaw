@@ -126,29 +126,24 @@ fn camera_system(
             }
         }
 
-        // WASD + QE fly movement: only active while right-mouse is held. This frees
-        // E/Q (and W/A/S/D) for tool keybinds (extrude, edge-slide, etc.) when the
-        // user is not actively flying the camera. Mirrors Unreal/Unity convention.
         let mut movement = Vec3::ZERO;
 
-        let fly_active = right_held && !ctrl && !alt;
-
-        if fly_active && keybinds.key_pressed(EditorAction::CameraForward, &keyboard) {
+        if keybinds.key_chord_pressed(EditorAction::CameraForward, &keyboard, &mouse) {
             movement += transform.forward().as_vec3();
         }
-        if fly_active && keybinds.key_pressed(EditorAction::CameraBackward, &keyboard) {
+        if keybinds.key_chord_pressed(EditorAction::CameraBackward, &keyboard, &mouse) {
             movement -= transform.forward().as_vec3();
         }
-        if fly_active && keybinds.key_pressed(EditorAction::CameraLeft, &keyboard) {
+        if keybinds.key_chord_pressed(EditorAction::CameraLeft, &keyboard, &mouse) {
             movement -= transform.right().as_vec3();
         }
-        if fly_active && keybinds.key_pressed(EditorAction::CameraRight, &keyboard) {
+        if keybinds.key_chord_pressed(EditorAction::CameraRight, &keyboard, &mouse) {
             movement += transform.right().as_vec3();
         }
-        if fly_active && keybinds.key_pressed(EditorAction::CameraUp, &keyboard) {
+        if keybinds.key_chord_pressed(EditorAction::CameraUp, &keyboard, &mouse) {
             movement += Vec3::Y;
         }
-        if fly_active && keybinds.key_pressed(EditorAction::CameraDown, &keyboard) {
+        if keybinds.key_chord_pressed(EditorAction::CameraDown, &keyboard, &mouse) {
             movement -= Vec3::Y;
         }
 
@@ -156,5 +151,46 @@ fn camera_system(
             let speed_mult = if shift { settings.run_multiplier } else { 1.0 };
             transform.translation += movement.normalize() * settings.speed * speed_mult * dt;
         }
+    }
+}
+
+#[cfg(test)]
+mod fly_chord_tests {
+    use super::*;
+    use bevy::input::ButtonInput;
+    use jackdaw_commands::keybinds::{EditorAction, KeybindRegistry};
+
+    fn keyboard_with(keys: &[KeyCode]) -> ButtonInput<KeyCode> {
+        let mut k = ButtonInput::<KeyCode>::default();
+        for &c in keys {
+            k.press(c);
+        }
+        k
+    }
+    fn mouse_with(btns: &[MouseButton]) -> ButtonInput<MouseButton> {
+        let mut m = ButtonInput::<MouseButton>::default();
+        for &b in btns {
+            m.press(b);
+        }
+        m
+    }
+
+    #[test]
+    fn forward_chord_requires_rmb() {
+        let kb = KeybindRegistry::default();
+        let keyboard = keyboard_with(&[KeyCode::KeyW]);
+        let no_mouse = mouse_with(&[]);
+        let rmb = mouse_with(&[MouseButton::Right]);
+
+        assert!(!kb.key_chord_pressed(EditorAction::CameraForward, &keyboard, &no_mouse));
+        assert!(kb.key_chord_pressed(EditorAction::CameraForward, &keyboard, &rmb));
+    }
+
+    #[test]
+    fn forward_chord_composes_with_shift_for_run_speed() {
+        let kb = KeybindRegistry::default();
+        let keyboard = keyboard_with(&[KeyCode::KeyW, KeyCode::ShiftLeft]);
+        let rmb = mouse_with(&[MouseButton::Right]);
+        assert!(kb.key_chord_pressed(EditorAction::CameraForward, &keyboard, &rmb));
     }
 }

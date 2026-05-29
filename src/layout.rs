@@ -12,19 +12,20 @@ use jackdaw_localization::LocalizedText;
 
 use crate::{
     EditorEntity,
+    active_tool::ActiveTool,
     brush::{BrushEditMode, EditMode},
     draw_brush::ActivateDrawBrushModalOp,
     edit_mode_ops::{
-        EditModeClipOp, EditModeEdgeOp, EditModeFaceOp, EditModeKnifeOp, EditModeObjectOp,
-        EditModeVertexOp,
+        EditModeClipOp, EditModeEdgeOp, EditModeFaceOp, EditModeKnifeOp, EditModeVertexOp,
     },
-    gizmo_ops::{GizmoModeRotateOp, GizmoModeScaleOp, GizmoModeTranslateOp, GizmoSpaceToggleOp},
-    gizmos::{GizmoMode, GizmoSpace},
+    gizmo_ops::GizmoSpaceToggleOp,
+    gizmos::GizmoSpace,
     hierarchy::{HierarchyPanel, HierarchyShowAllButton, HierarchyTreeContainer},
     inspector::Inspector,
     measure_tool::MeasureDistanceOp,
     physics_tool::PhysicsActivateOp,
     remote::ConnectionManager,
+    tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
 };
 
@@ -482,15 +483,15 @@ fn toolbar() -> impl Bundle {
         BackgroundColor(tokens::PANEL_HEADER_BG),
         BorderColor::all(tokens::TOOLBAR_BORDER),
         children![
-            toolbar_op_button::<GizmoModeTranslateOp>(Icon::Move3d),
-            toolbar_op_button::<GizmoModeRotateOp>(Icon::Rotate3d),
-            toolbar_op_button::<GizmoModeScaleOp>(Icon::Scale3d),
+            toolbar_op_button::<ToolSelectOp>(Icon::MousePointer),
+            toolbar_op_button::<ToolTranslateOp>(Icon::Move3d),
+            toolbar_op_button::<ToolRotateOp>(Icon::Rotate3d),
+            toolbar_op_button::<ToolScaleOp>(Icon::Scale3d),
             separator::separator(separator::SeparatorProps::vertical()),
             // Gizmo space toggle. Active highlight = `Local`; default
             // = `World`. Tooltip is the discoverability path.
             toolbar_op_button::<GizmoSpaceToggleOp>(Icon::Globe),
             separator::separator(separator::SeparatorProps::vertical()),
-            toolbar_op_button::<EditModeObjectOp>(Icon::MousePointer2),
             toolbar_op_button::<ActivateDrawBrushModalOp>(Icon::Box),
             toolbar_op_button::<MeasureDistanceOp>(Icon::RulerDimensionLine),
             toolbar_op_button::<EditModeVertexOp>(Icon::CircleDot),
@@ -708,7 +709,7 @@ fn scene_view() -> impl Bundle {
 /// loop is O(toolbar buttons), trivially cheap.
 pub fn update_toolbar_button_variants(
     edit_mode: Res<EditMode>,
-    gizmo_mode: Res<GizmoMode>,
+    active_tool: Res<ActiveTool>,
     gizmo_space: Res<GizmoSpace>,
     active_modal: ActiveModalQuery,
     mut buttons: Query<(&ButtonOperatorCall, &mut ButtonVariant)>,
@@ -722,16 +723,16 @@ pub fn update_toolbar_button_variants(
         // pick this up automatically through the fall-through arm.
         let active = if modal_running {
             active_modal.is_operator(&call.id)
-        } else if call.id == GizmoModeTranslateOp::ID {
-            *gizmo_mode == GizmoMode::Translate
-        } else if call.id == GizmoModeRotateOp::ID {
-            *gizmo_mode == GizmoMode::Rotate
-        } else if call.id == GizmoModeScaleOp::ID {
-            *gizmo_mode == GizmoMode::Scale
+        } else if call.id == ToolTranslateOp::ID {
+            *active_tool == ActiveTool::Translate
+        } else if call.id == ToolRotateOp::ID {
+            *active_tool == ActiveTool::Rotate
+        } else if call.id == ToolScaleOp::ID {
+            *active_tool == ActiveTool::Scale
         } else if call.id == GizmoSpaceToggleOp::ID {
             *gizmo_space == GizmoSpace::Local
-        } else if call.id == EditModeObjectOp::ID {
-            *edit_mode == EditMode::Object
+        } else if call.id == ToolSelectOp::ID {
+            *active_tool == ActiveTool::Select
         } else if call.id == EditModeVertexOp::ID {
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
         } else if call.id == EditModeEdgeOp::ID {

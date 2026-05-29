@@ -6,8 +6,9 @@ use bevy::{
 };
 
 use crate::{
+    active_tool::ActiveTool,
     commands::SetTransform,
-    gizmos::{GizmoAxis, GizmoDragState, GizmoHoverState, GizmoMode},
+    gizmos::{GizmoAxis, GizmoDragState, GizmoHoverState},
     selection::Selection,
     snapping::SnapSettings,
     viewport::{MainViewportCamera, SceneViewport},
@@ -98,7 +99,7 @@ impl Plugin for ModalTransformPlugin {
 
 fn snap_toggle(
     mouse: Res<ButtonInput<MouseButton>>,
-    mode: Res<GizmoMode>,
+    mode: Res<ActiveTool>,
     modal: Res<ModalTransformState>,
     mut snap_settings: ResMut<SnapSettings>,
 ) {
@@ -108,9 +109,10 @@ fn snap_toggle(
 
     if mouse.just_pressed(MouseButton::Middle) {
         match *mode {
-            GizmoMode::Translate => snap_settings.translate_snap = !snap_settings.translate_snap,
-            GizmoMode::Rotate => snap_settings.rotate_snap = !snap_settings.rotate_snap,
-            GizmoMode::Scale => snap_settings.scale_snap = !snap_settings.scale_snap,
+            ActiveTool::Select => {}
+            ActiveTool::Translate => snap_settings.translate_snap = !snap_settings.translate_snap,
+            ActiveTool::Rotate => snap_settings.rotate_snap = !snap_settings.rotate_snap,
+            ActiveTool::Scale => snap_settings.scale_snap = !snap_settings.scale_snap,
         }
     }
 }

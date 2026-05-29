@@ -188,6 +188,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::view_ops::add_to_extension(ctx);
         crate::grid_ops::add_to_extension(ctx);
         crate::gizmo_ops::add_to_extension(ctx);
+        crate::tool_ops::add_to_extension(ctx);
         crate::edit_mode_ops::add_to_extension(ctx);
         crate::entity_ops::add_to_extension(ctx);
         crate::transform_ops::add_to_extension(ctx);

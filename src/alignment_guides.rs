@@ -1,8 +1,9 @@
 use bevy::prelude::*;
 
+use crate::active_tool::ActiveTool;
 use crate::brush::BrushMeshCache;
 use crate::default_style;
-use crate::gizmos::{GizmoDragState, GizmoMode};
+use crate::gizmos::GizmoDragState;
 use crate::modal_transform::{ModalOp, ModalTransformState, ViewportDragState};
 use crate::selection::Selected;
 use crate::viewport_overlays::{self, OverlaySettings};
@@ -54,11 +55,11 @@ pub struct AlignmentGuideState {
 /// Returns true if a translation drag is currently active.
 fn is_translate_drag_active(
     gizmo_drag: &GizmoDragState,
-    gizmo_mode: &GizmoMode,
+    active_tool: &ActiveTool,
     modal_state: &ModalTransformState,
     viewport_drag: &ViewportDragState,
 ) -> bool {
-    if gizmo_drag.active && *gizmo_mode == GizmoMode::Translate {
+    if gizmo_drag.active && *active_tool == ActiveTool::Translate {
         return true;
     }
     if let Some(ref active) = modal_state.active
@@ -72,14 +73,14 @@ fn is_translate_drag_active(
 /// Returns the entity being dragged and its current world position.
 fn dragged_entity_position(
     gizmo_drag: &GizmoDragState,
-    gizmo_mode: &GizmoMode,
+    active_tool: &ActiveTool,
     modal_state: &ModalTransformState,
     viewport_drag: &ViewportDragState,
     transforms: &Query<&GlobalTransform>,
 ) -> Option<(Entity, Vec3)> {
     // Gizmo translate
     if gizmo_drag.active
-        && *gizmo_mode == GizmoMode::Translate
+        && *active_tool == ActiveTool::Translate
         && let Some(e) = gizmo_drag.entity
         && let Ok(gt) = transforms.get(e)
     {
@@ -106,7 +107,7 @@ fn cache_reference_coords(
     mut state: ResMut<AlignmentGuideState>,
     settings: Res<OverlaySettings>,
     gizmo_drag: Res<GizmoDragState>,
-    gizmo_mode: Res<GizmoMode>,
+    active_tool: Res<ActiveTool>,
     modal_state: Res<ModalTransformState>,
     viewport_drag: Res<ViewportDragState>,
     non_selected: Query<(Entity, &GlobalTransform, Option<&BrushMeshCache>), Without<Selected>>,
@@ -122,7 +123,8 @@ fn cache_reference_coords(
         return;
     }
 
-    let dragging = is_translate_drag_active(&gizmo_drag, &gizmo_mode, &modal_state, &viewport_drag);
+    let dragging =
+        is_translate_drag_active(&gizmo_drag, &active_tool, &modal_state, &viewport_drag);
 
     if !dragging {
         state.cache_valid = false;
@@ -221,7 +223,7 @@ fn draw_alignment_guides(
     state: Res<AlignmentGuideState>,
     settings: Res<OverlaySettings>,
     gizmo_drag: Res<GizmoDragState>,
-    gizmo_mode: Res<GizmoMode>,
+    active_tool: Res<ActiveTool>,
     modal_state: Res<ModalTransformState>,
     viewport_drag: Res<ViewportDragState>,
     transforms: Query<&GlobalTransform>,
@@ -239,7 +241,7 @@ fn draw_alignment_guides(
 
     let Some((dragged_entity, drag_pos)) = dragged_entity_position(
         &gizmo_drag,
-        &gizmo_mode,
+        &active_tool,
         &modal_state,
         &viewport_drag,
         &transforms,
