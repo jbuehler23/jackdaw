@@ -590,13 +590,13 @@ fn spawn_layout(
     mut commands: Commands,
     icon_font: Res<jackdaw_feathers::icons::IconFont>,
     editor_font: Res<jackdaw_feathers::icons::EditorFont>,
-    brand_icon: Res<repo_link::JackdawBrandIcon>,
+    jackdaw_icon: Res<repo_link::JackdawIcon>,
 ) {
     commands.spawn((Camera2d, EditorEntity));
     commands.spawn(layout::editor_layout(
         &icon_font,
         &editor_font,
-        brand_icon.0.clone(),
+        jackdaw_icon.0.clone(),
     ));
 }
 

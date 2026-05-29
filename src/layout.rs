@@ -117,7 +117,7 @@ pub struct EditorLayoutRoot;
 pub fn editor_layout(
     icon_font: &IconFont,
     editor_font: &jackdaw_feathers::icons::EditorFont,
-    brand_icon: Handle<Image>,
+    jackdaw_icon: Handle<Image>,
 ) -> impl Bundle {
     (
         EditorEntity,
@@ -131,7 +131,7 @@ pub fn editor_layout(
             ..Default::default()
         },
         children![
-            window_header(icon_font.0.clone(), editor_font.0.clone(), brand_icon),
+            window_header(icon_font.0.clone(), editor_font.0.clone(), jackdaw_icon),
             (
                 EditorEntity,
                 Node {
@@ -219,11 +219,11 @@ pub fn editor_layout(
 fn window_header(
     icon_font: Handle<Font>,
     editor_font: Handle<Font>,
-    brand_icon: Handle<Image>,
+    jackdaw_icon: Handle<Image>,
 ) -> impl Bundle {
     window_header_row(children![
         crate::window_chrome::window_controls(icon_font),
-        window_header_brand_link(brand_icon),
+        window_header_repo_link(jackdaw_icon),
         window_header_menu_and_tabs(),
         crate::window_chrome::drag_region(),
         window_header_right_controls(icon_font, editor_font),
@@ -234,17 +234,17 @@ fn window_header(
 fn window_header(
     icon_font: Handle<Font>,
     editor_font: Handle<Font>,
-    brand_icon: Handle<Image>,
+    jackdaw_icon: Handle<Image>,
 ) -> impl Bundle {
     window_header_row(children![
-        window_header_brand_link(brand_icon),
+        window_header_repo_link(jackdaw_icon),
         window_header_menu_and_tabs(),
         crate::window_chrome::drag_region(),
         window_header_right_controls_with_caption(icon_font, editor_font),
     ])
 }
 
-fn window_header_brand_link(brand_icon: Handle<Image>) -> impl Bundle {
+fn window_header_repo_link(jackdaw_icon: Handle<Image>) -> impl Bundle {
     (
         EditorEntity,
         Node {
@@ -252,7 +252,7 @@ fn window_header_brand_link(brand_icon: Handle<Image>) -> impl Bundle {
             flex_shrink: 0.0,
             ..default()
         },
-        children![crate::repo_link::brand_link_button(brand_icon)],
+        children![crate::repo_link::jackdaw_link_button(jackdaw_icon)],
     )
 }
 

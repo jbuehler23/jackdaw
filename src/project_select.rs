@@ -22,7 +22,7 @@ use crate::{
     command_runner::{CommandIo, LogChunk},
     new_project::{self, ScaffoldError, TemplateLinkage, TemplatePreset, scaffold_project},
     project::{self, ProjectRoot},
-    repo_link::{JackdawBrandIcon, brand_link_button},
+    repo_link::{JackdawIcon, jackdaw_link_button},
     scene_io,
     scrolling_log::{self, ScrollingLog},
     window_chrome::WindowShellRoot,
@@ -351,7 +351,7 @@ fn spawn_project_selector(
     mut commands: Commands,
     editor_font: Res<EditorFont>,
     icon_font: Res<jackdaw_feathers::icons::IconFont>,
-    brand_icon: Res<JackdawBrandIcon>,
+    jackdaw_icon: Res<JackdawIcon>,
     pending: Option<Res<PendingAutoOpen>>,
 ) {
     // UI camera for the project selector screen. Spawned BEFORE the
@@ -375,7 +375,7 @@ fn spawn_project_selector(
     let recent = project::read_recent_projects();
     let font = editor_font.0.clone();
     let icon_font_handle = icon_font.0.clone();
-    let brand_icon_handle = brand_icon.0.clone();
+    let jackdaw_icon_handle = jackdaw_icon.0.clone();
 
     // Detect CWD project candidate
     let cwd = std::env::current_dir().unwrap_or_default();
@@ -421,16 +421,15 @@ fn spawn_project_selector(
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
                         column_gap: Val::Px(8.0),
-                        flex_shrink: 0.0,
                         ..Default::default()
                     },
                     children![
-                        brand_link_button(brand_icon_handle),
+                        jackdaw_link_button(jackdaw_icon_handle),
                         (
                             Text::new("jackdaw"),
                             TextFont {
                                 font: font.clone(),
-                                font_size: tokens::FONT_LG,
+                                font_size: tokens::FONT_MD,
                                 ..Default::default()
                             },
                             TextColor(tokens::TEXT_PRIMARY),

@@ -1,4 +1,4 @@
-//! Clickable Jackdaw brand icon that opens the repository in the system browser.
+//! Clickable Jackdaw icon that opens the repository in the system browser.
 
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::feathers::cursor::EntityCursor;
@@ -13,7 +13,7 @@ use crate::EditorEntity;
 pub const JACKDAW_REPO_URL: &str = "https://github.com/jbuehler23/jackdaw";
 
 #[derive(Resource, Clone)]
-pub struct JackdawBrandIcon(pub Handle<Image>);
+pub struct JackdawIcon(pub Handle<Image>);
 
 #[derive(Component)]
 struct JackdawRepoLinkButton;
@@ -27,13 +27,13 @@ impl Plugin for RepoLinkPlugin {
         // before `Startup` on the first frame) can require this resource.
         let assets = app.world().resource::<AssetServer>();
         let handle = load_embedded_asset!(&*assets, "../assets/jackdaw_icon_small.png");
-        app.insert_resource(JackdawBrandIcon(handle));
+        app.insert_resource(JackdawIcon(handle));
         app.add_observer(on_repo_link_click);
     }
 }
 
-/// Small square brand control for the window chrome row.
-pub fn brand_link_button(image: Handle<Image>) -> impl Bundle {
+/// button with icon to open the Jackdaw repository in the system browser.
+pub fn jackdaw_link_button(image: Handle<Image>) -> impl Bundle {
     let variant = ButtonVariant::Ghost;
     (
         JackdawRepoLinkButton,
