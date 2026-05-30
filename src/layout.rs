@@ -261,7 +261,7 @@ fn play_pause_controls(icon_font: Handle<Font>) -> impl Bundle {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
-            height: px(22.0),
+            height: px(tokens::HEADER_CONTROL_HEIGHT),
             padding: UiRect::horizontal(px(6.5)),
             column_gap: px(9.0),
             border: UiRect::all(px(1.0)),

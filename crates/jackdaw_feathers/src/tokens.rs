@@ -90,6 +90,8 @@ pub const HEADER_CONTROL_BG: Color = Color::srgb(0.212, 0.216, 0.231);
 pub const HEADER_CONTROL_BORDER: Color = Color::srgb(0.255, 0.255, 0.259);
 /// Label color inside the Scene View dropdown (Figma #DADADA)
 pub const HEADER_CONTROL_LABEL: Color = Color::srgb(0.855, 0.855, 0.855);
+/// Height shared by header pills: scene tabs, workspace dropdown, play/pause.
+pub const HEADER_CONTROL_HEIGHT: f32 = 22.0;
 
 // ---------------------------------------------------------------------------
 // Viewport-specific backgrounds
@@ -327,7 +329,6 @@ pub const ROW_HEIGHT: f32 = 24.0;
 pub const HEADER_HEIGHT: f32 = 28.0;
 pub const WINDOW_HEADER_HEIGHT: f32 = 36.0;
 pub const STATUS_BAR_HEIGHT: f32 = 22.0;
-pub const MENU_BAR_HEIGHT: f32 = 28.0;
 pub const INPUT_HEIGHT: f32 = 28.0;
 
 /// Panel tab bar height (Figma: 30px)

@@ -200,7 +200,7 @@ pub fn menu_bar_shell() -> impl Bundle {
             // their share of the row; `flex_shrink: 0` keeps our menu
             // items from being squeezed if the window is narrow.
             width: Val::Auto,
-            height: Val::Px(tokens::MENU_BAR_HEIGHT),
+            height: Val::Px(tokens::HEADER_CONTROL_HEIGHT),
             flex_shrink: 0.0,
             ..Default::default()
         },

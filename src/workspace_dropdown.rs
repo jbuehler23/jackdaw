@@ -76,7 +76,7 @@ pub fn workspace_dropdown_trigger(
             padding: UiRect::axes(Val::Px(10.0), Val::Px(3.0)),
             border: UiRect::all(Val::Px(1.0)),
             border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
-            height: Val::Px(22.0),
+            height: Val::Px(tokens::HEADER_CONTROL_HEIGHT),
             min_width: Val::Px(120.0),
             ..Default::default()
         },
