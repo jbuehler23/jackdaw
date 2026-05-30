@@ -77,10 +77,11 @@ pub enum EditorAction {
     CsgIntersect,
     ExtendFaceToBrush,
 
-    // Gizmo
-    GizmoRotate,
-    GizmoScale,
-    GizmoTranslate,
+    // Tools
+    ToolSelect,
+    ToolTranslate,
+    ToolRotate,
+    ToolScale,
     ToggleGizmoSpace,
 
     // Viewport
@@ -185,9 +186,10 @@ impl fmt::Display for EditorAction {
             Self::CsgSubtract => "CSG Subtract",
             Self::CsgIntersect => "CSG Intersect",
             Self::ExtendFaceToBrush => "Extend Face to Brush",
-            Self::GizmoRotate => "Gizmo Rotate",
-            Self::GizmoScale => "Gizmo Scale",
-            Self::GizmoTranslate => "Gizmo Translate",
+            Self::ToolSelect => "Tool Select",
+            Self::ToolTranslate => "Tool Translate",
+            Self::ToolRotate => "Tool Rotate",
+            Self::ToolScale => "Tool Scale",
             Self::ToggleGizmoSpace => "Toggle Gizmo Space",
             Self::FocusSelected => "Focus Selected",
             Self::DecreaseGrid => "Decrease Grid",
@@ -284,9 +286,10 @@ impl EditorAction {
             "CSG Subtract" => Some(Self::CsgSubtract),
             "CSG Intersect" => Some(Self::CsgIntersect),
             "Extend Face to Brush" => Some(Self::ExtendFaceToBrush),
-            "Gizmo Rotate" => Some(Self::GizmoRotate),
-            "Gizmo Scale" => Some(Self::GizmoScale),
-            "Gizmo Translate" => Some(Self::GizmoTranslate),
+            "Tool Select" => Some(Self::ToolSelect),
+            "Tool Translate" => Some(Self::ToolTranslate),
+            "Tool Rotate" => Some(Self::ToolRotate),
+            "Tool Scale" => Some(Self::ToolScale),
             "Toggle Gizmo Space" => Some(Self::ToggleGizmoSpace),
             "Focus Selected" => Some(Self::FocusSelected),
             "Decrease Grid" => Some(Self::DecreaseGrid),
@@ -378,10 +381,11 @@ impl EditorAction {
             | Self::CsgSubtract
             | Self::CsgIntersect
             | Self::ExtendFaceToBrush => "CSG",
-            Self::GizmoRotate
-            | Self::GizmoScale
-            | Self::GizmoTranslate
-            | Self::ToggleGizmoSpace => "Gizmo",
+            Self::ToolSelect
+            | Self::ToolTranslate
+            | Self::ToolRotate
+            | Self::ToolScale
+            | Self::ToggleGizmoSpace => "Tools",
             Self::FocusSelected
             | Self::CameraForward
             | Self::CameraBackward
@@ -479,10 +483,11 @@ impl EditorAction {
             A::CsgSubtract,
             A::CsgIntersect,
             A::ExtendFaceToBrush,
-            // Gizmo
-            A::GizmoRotate,
-            A::GizmoScale,
-            A::GizmoTranslate,
+            // Tools
+            A::ToolSelect,
+            A::ToolTranslate,
+            A::ToolRotate,
+            A::ToolScale,
             A::ToggleGizmoSpace,
             // Navigation
             A::FocusSelected,
@@ -518,25 +523,30 @@ impl EditorAction {
     }
 }
 
-/// A single key binding: a key plus modifier flags.
+/// A single key binding: a key plus modifier flags and an optional mouse-button chord.
 ///
-/// Modifier matching is **exact**: a keybind with `ctrl: true, shift: false`
+/// Modifier matching is exact: a keybind with `ctrl: true, shift: false`
 /// matches only when Ctrl is held AND Shift is NOT held. Left/Right variants
-/// of each modifier are unified internally.
+/// of each modifier are unified internally. When `mouse` is `Some(btn)`, the
+/// named button must be held. When `mouse` is `None`, any held mouse button
+/// causes a non-match, preventing plain tool keys from firing mid-drag.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Keybind {
     pub key: KeyCode,
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
+    #[serde(default)]
+    pub mouse: Option<MouseButton>,
 }
 
 impl Keybind {
-    /// Parse a human-readable keybind string like `"Ctrl+Shift+Z"`.
+    /// Parse a human-readable keybind string like `"Ctrl+Shift+Z"` or `"RMB+W"`.
     pub fn parse(s: &str) -> Option<Self> {
         let mut ctrl = false;
         let mut shift = false;
         let mut alt = false;
+        let mut mouse: Option<MouseButton> = None;
 
         let parts: Vec<&str> = s.split('+').collect();
         if parts.is_empty() {
@@ -549,6 +559,9 @@ impl Keybind {
                 "Ctrl" => ctrl = true,
                 "Shift" => shift = true,
                 "Alt" => alt = true,
+                "RMB" => mouse = Some(MouseButton::Right),
+                "MMB" => mouse = Some(MouseButton::Middle),
+                "LMB" => mouse = Some(MouseButton::Left),
                 _ => return None,
             }
         }
@@ -559,7 +572,32 @@ impl Keybind {
             ctrl,
             shift,
             alt,
+            mouse,
         })
+    }
+
+    /// Human-readable string for this keybind, e.g. `"Ctrl+Z"` or `"RMB+W"`.
+    pub fn display_name(&self) -> String {
+        let mut out = String::new();
+        if let Some(btn) = self.mouse {
+            out.push_str(match btn {
+                MouseButton::Right => "RMB+",
+                MouseButton::Middle => "MMB+",
+                MouseButton::Left => "LMB+",
+                MouseButton::Back | MouseButton::Forward | MouseButton::Other(_) => "Mouse?+",
+            });
+        }
+        if self.ctrl {
+            out.push_str("Ctrl+");
+        }
+        if self.shift {
+            out.push_str("Shift+");
+        }
+        if self.alt {
+            out.push_str("Alt+");
+        }
+        out.push_str(key_display_name(self.key));
+        out
     }
 
     /// Keybind with no modifiers.
@@ -569,6 +607,7 @@ impl Keybind {
             ctrl: false,
             shift: false,
             alt: false,
+            mouse: None,
         }
     }
 
@@ -579,6 +618,7 @@ impl Keybind {
             ctrl: true,
             shift: false,
             alt: false,
+            mouse: None,
         }
     }
 
@@ -589,6 +629,7 @@ impl Keybind {
             ctrl: true,
             shift: true,
             alt: false,
+            mouse: None,
         }
     }
 
@@ -599,30 +640,45 @@ impl Keybind {
             ctrl: false,
             shift: false,
             alt: true,
+            mouse: None,
         }
     }
 
-    /// Check if the modifier keys match exactly (Left/Right unified).
-    pub fn modifiers_match(&self, keyboard: &ButtonInput<KeyCode>) -> bool {
+    /// Keybind that requires RMB held alongside the key, with no keyboard modifiers.
+    pub const fn rmb_key(key: KeyCode) -> Self {
+        Self {
+            key,
+            ctrl: false,
+            shift: false,
+            alt: false,
+            mouse: Some(MouseButton::Right),
+        }
+    }
+
+    /// Check if the modifier keys and mouse button state match exactly (Left/Right unified).
+    pub fn modifiers_match(
+        &self,
+        keyboard: &ButtonInput<KeyCode>,
+        mouse: &ButtonInput<MouseButton>,
+    ) -> bool {
         let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
         let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
         let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
-        self.ctrl == ctrl && self.shift == shift && self.alt == alt
+        let mouse_ok = match self.mouse {
+            Some(btn) => mouse.pressed(btn),
+            None => {
+                !mouse.pressed(MouseButton::Right)
+                    && !mouse.pressed(MouseButton::Middle)
+                    && !mouse.pressed(MouseButton::Left)
+            }
+        };
+        self.ctrl == ctrl && self.shift == shift && self.alt == alt && mouse_ok
     }
 }
 
 impl fmt::Display for Keybind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.ctrl {
-            f.write_str("Ctrl+")?;
-        }
-        if self.shift {
-            f.write_str("Shift+")?;
-        }
-        if self.alt {
-            f.write_str("Alt+")?;
-        }
-        f.write_str(key_display_name(self.key))
+        f.write_str(&self.display_name())
     }
 }
 
@@ -804,38 +860,53 @@ pub struct KeybindRegistry {
 
 impl KeybindRegistry {
     /// Check if the action's full keybind (key + exact modifiers) was just pressed.
-    pub fn just_pressed(&self, action: EditorAction, keyboard: &ButtonInput<KeyCode>) -> bool {
+    pub fn just_pressed(
+        &self,
+        action: EditorAction,
+        keyboard: &ButtonInput<KeyCode>,
+        mouse: &ButtonInput<MouseButton>,
+    ) -> bool {
         if self.recording {
             return false;
         }
         self.bindings.get(&action).is_some_and(|binds| {
             binds
                 .iter()
-                .any(|b| keyboard.just_pressed(b.key) && b.modifiers_match(keyboard))
+                .any(|b| keyboard.just_pressed(b.key) && b.modifiers_match(keyboard, mouse))
         })
     }
 
     /// Check if the action's full keybind (key + exact modifiers) is held.
-    pub fn pressed(&self, action: EditorAction, keyboard: &ButtonInput<KeyCode>) -> bool {
+    pub fn pressed(
+        &self,
+        action: EditorAction,
+        keyboard: &ButtonInput<KeyCode>,
+        mouse: &ButtonInput<MouseButton>,
+    ) -> bool {
         if self.recording {
             return false;
         }
         self.bindings.get(&action).is_some_and(|binds| {
             binds
                 .iter()
-                .any(|b| keyboard.pressed(b.key) && b.modifiers_match(keyboard))
+                .any(|b| keyboard.pressed(b.key) && b.modifiers_match(keyboard, mouse))
         })
     }
 
     /// Check if the action's full keybind (key + exact modifiers) was just released.
-    pub fn just_released(&self, action: EditorAction, keyboard: &ButtonInput<KeyCode>) -> bool {
+    pub fn just_released(
+        &self,
+        action: EditorAction,
+        keyboard: &ButtonInput<KeyCode>,
+        mouse: &ButtonInput<MouseButton>,
+    ) -> bool {
         if self.recording {
             return false;
         }
         self.bindings.get(&action).is_some_and(|binds| {
             binds
                 .iter()
-                .any(|b| keyboard.just_released(b.key) && b.modifiers_match(keyboard))
+                .any(|b| keyboard.just_released(b.key) && b.modifiers_match(keyboard, mouse))
         })
     }
 
@@ -854,8 +925,9 @@ impl KeybindRegistry {
 
     /// Check only if the action's key is held (ignoring modifiers).
     ///
-    /// Use for continuous input (e.g. camera WASD) where modifiers are checked
-    /// separately by the system.
+    /// Use for continuous input where modifier logic is handled by the system
+    /// itself. For chorded continuous input (key + mouse button), use
+    /// [`Self::key_chord_pressed`].
     pub fn key_pressed(&self, action: EditorAction, keyboard: &ButtonInput<KeyCode>) -> bool {
         if self.recording {
             return false;
@@ -865,14 +937,38 @@ impl KeybindRegistry {
             .is_some_and(|binds| binds.iter().any(|b| keyboard.pressed(b.key)))
     }
 
+    /// Check that the action's key is held and its mouse modifier is held (if any),
+    /// while ignoring ctrl/shift/alt state. Use for continuous-input chords where
+    /// keyboard modifiers must compose freely (e.g. camera fly + Shift run).
+    pub fn key_chord_pressed(
+        &self,
+        action: EditorAction,
+        keyboard: &ButtonInput<KeyCode>,
+        mouse: &ButtonInput<MouseButton>,
+    ) -> bool {
+        if self.recording {
+            return false;
+        }
+        self.bindings.get(&action).is_some_and(|binds| {
+            binds
+                .iter()
+                .any(|b| keyboard.pressed(b.key) && b.mouse.is_none_or(|btn| mouse.pressed(btn)))
+        })
+    }
+
     /// Check only if the action's modifiers are currently held (not the key).
-    pub fn modifiers_held(&self, action: EditorAction, keyboard: &ButtonInput<KeyCode>) -> bool {
+    pub fn modifiers_held(
+        &self,
+        action: EditorAction,
+        keyboard: &ButtonInput<KeyCode>,
+        mouse: &ButtonInput<MouseButton>,
+    ) -> bool {
         if self.recording {
             return false;
         }
         self.bindings
             .get(&action)
-            .is_some_and(|binds| binds.iter().any(|b| b.modifiers_match(keyboard)))
+            .is_some_and(|binds| binds.iter().any(|b| b.modifiers_match(keyboard, mouse)))
     }
 }
 
@@ -889,9 +985,11 @@ impl Default for KeybindRegistry {
                 ctrl,
                 shift,
                 alt,
+                mouse: None,
             }]
         };
         let k = |key: KeyCode| -> Vec<Keybind> { vec![Keybind::key(key)] };
+        let rmb = |key: KeyCode| -> Vec<Keybind> { vec![Keybind::rmb_key(key)] };
 
         // -- File ------------------------------------------------------
         bindings.insert(A::Undo, b(K::KeyZ, true, false, false));
@@ -966,10 +1064,11 @@ impl Default for KeybindRegistry {
         bindings.insert(A::CsgIntersect, b(K::KeyK, true, true, false));
         bindings.insert(A::ExtendFaceToBrush, b(K::KeyE, true, false, false));
 
-        // -- Gizmo -----------------------------------------------------
-        bindings.insert(A::GizmoRotate, k(K::KeyR));
-        bindings.insert(A::GizmoScale, k(K::KeyT));
-        bindings.insert(A::GizmoTranslate, k(K::Escape));
+        // -- Tools -----------------------------------------------------
+        bindings.insert(A::ToolSelect, k(K::KeyQ));
+        bindings.insert(A::ToolTranslate, k(K::KeyW));
+        bindings.insert(A::ToolRotate, k(K::KeyE));
+        bindings.insert(A::ToolScale, k(K::KeyR));
         bindings.insert(A::ToggleGizmoSpace, k(K::KeyX));
 
         // -- Viewport --------------------------------------------------
@@ -983,32 +1082,18 @@ impl Default for KeybindRegistry {
         bindings.insert(A::ToggleWireframe, b(K::KeyW, true, true, false));
 
         // -- Camera movement -------------------------------------------
-        bindings.insert(A::CameraForward, k(K::KeyW));
-        bindings.insert(A::CameraBackward, k(K::KeyS));
-        bindings.insert(A::CameraLeft, k(K::KeyA));
-        bindings.insert(A::CameraRight, k(K::KeyD));
-        bindings.insert(A::CameraDown, k(K::KeyQ));
-        bindings.insert(A::CameraUp, k(K::KeyE));
+        bindings.insert(A::CameraForward, rmb(K::KeyW));
+        bindings.insert(A::CameraBackward, rmb(K::KeyS));
+        bindings.insert(A::CameraLeft, rmb(K::KeyA));
+        bindings.insert(A::CameraRight, rmb(K::KeyD));
+        bindings.insert(A::CameraDown, rmb(K::KeyQ));
+        bindings.insert(A::CameraUp, rmb(K::KeyE));
 
-        // -- Camera bookmarks (Ctrl+N to save, N to load) -------------
-        bindings.insert(A::SaveBookmark1, b(K::Digit1, true, false, false));
-        bindings.insert(A::SaveBookmark2, b(K::Digit2, true, false, false));
-        bindings.insert(A::SaveBookmark3, b(K::Digit3, true, false, false));
-        bindings.insert(A::SaveBookmark4, b(K::Digit4, true, false, false));
-        bindings.insert(A::SaveBookmark5, b(K::Digit5, true, false, false));
-        bindings.insert(A::SaveBookmark6, b(K::Digit6, true, false, false));
-        bindings.insert(A::SaveBookmark7, b(K::Digit7, true, false, false));
-        bindings.insert(A::SaveBookmark8, b(K::Digit8, true, false, false));
-        bindings.insert(A::SaveBookmark9, b(K::Digit9, true, false, false));
-        bindings.insert(A::LoadBookmark1, k(K::Digit1));
-        bindings.insert(A::LoadBookmark2, k(K::Digit2));
-        bindings.insert(A::LoadBookmark3, k(K::Digit3));
-        bindings.insert(A::LoadBookmark4, k(K::Digit4));
-        bindings.insert(A::LoadBookmark5, k(K::Digit5));
-        bindings.insert(A::LoadBookmark6, k(K::Digit6));
-        bindings.insert(A::LoadBookmark7, k(K::Digit7));
-        bindings.insert(A::LoadBookmark8, k(K::Digit8));
-        bindings.insert(A::LoadBookmark9, k(K::Digit9));
+        // Camera bookmarks (save/load slots 1..=9) are intentionally left
+        // unbound by default. They remain remappable in the keybind settings
+        // and are reachable from the camera bookmark menu. Leaving them
+        // unbound keeps the bare number keys free for the edit-mode shortcuts
+        // (Vertex/Edge/Face/Clip on 1..=4).
 
         // -- Modal transform (disabled, keybinds ready) ----------------
         bindings.insert(A::ModalGrab, k(K::KeyG));
@@ -1024,5 +1109,58 @@ impl Default for KeybindRegistry {
             bindings,
             recording: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod mouse_modifier_tests {
+    use super::*;
+    use bevy::input::ButtonInput;
+    use bevy::prelude::{KeyCode, MouseButton};
+
+    fn empty_keyboard() -> ButtonInput<KeyCode> {
+        ButtonInput::default()
+    }
+    fn mouse_with(btns: &[MouseButton]) -> ButtonInput<MouseButton> {
+        let mut input = ButtonInput::<MouseButton>::default();
+        for &b in btns {
+            input.press(b);
+        }
+        input
+    }
+
+    #[test]
+    fn plain_keybind_has_no_mouse_modifier() {
+        let kb = Keybind::key(KeyCode::KeyW);
+        assert_eq!(kb.mouse, None);
+    }
+
+    #[test]
+    fn rmb_key_sets_right_mouse_modifier() {
+        let kb = Keybind::rmb_key(KeyCode::KeyW);
+        assert_eq!(kb.mouse, Some(MouseButton::Right));
+        assert_eq!(kb.key, KeyCode::KeyW);
+        assert!(!kb.ctrl && !kb.shift && !kb.alt);
+    }
+
+    #[test]
+    fn modifiers_match_requires_mouse_state_to_match() {
+        let plain = Keybind::key(KeyCode::KeyW);
+        let chord = Keybind::rmb_key(KeyCode::KeyW);
+        let kb = empty_keyboard();
+        let no_mouse = mouse_with(&[]);
+        let rmb = mouse_with(&[MouseButton::Right]);
+
+        assert!(plain.modifiers_match(&kb, &no_mouse));
+        assert!(!plain.modifiers_match(&kb, &rmb));
+        assert!(!chord.modifiers_match(&kb, &no_mouse));
+        assert!(chord.modifiers_match(&kb, &rmb));
+    }
+
+    #[test]
+    fn parse_round_trips_rmb_prefix() {
+        let kb = Keybind::parse("RMB+W").expect("parse RMB+W");
+        assert_eq!(kb, Keybind::rmb_key(KeyCode::KeyW));
+        assert_eq!(kb.display_name(), "RMB+W");
     }
 }

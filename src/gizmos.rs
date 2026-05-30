@@ -7,6 +7,7 @@ use bevy::{
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 
+use crate::active_tool::ActiveTool;
 use crate::default_style;
 use crate::{
     modal_transform::ModalTransformState,
@@ -48,14 +49,6 @@ const AXIS_HIT_DISTANCE: f32 = 35.0;
 const EPSILON: f32 = 1e-6;
 
 #[derive(Resource, Default, PartialEq, Eq, Clone, Copy, Debug)]
-pub enum GizmoMode {
-    #[default]
-    Translate,
-    Rotate,
-    Scale,
-}
-
-#[derive(Resource, Default, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum GizmoSpace {
     #[default]
     World,
@@ -95,7 +88,7 @@ pub struct TransformGizmosPlugin;
 
 impl Plugin for TransformGizmosPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<GizmoMode>()
+        app.init_resource::<ActiveTool>()
             .init_resource::<GizmoSpace>()
             .init_resource::<GizmoDragState>()
             .init_resource::<GizmoHoverState>()
@@ -149,7 +142,7 @@ pub(crate) fn handle_gizmo_hover(
     transforms: Query<&GlobalTransform, With<Selected>>,
     camera_query: Query<(&Camera, &GlobalTransform, &Projection), With<MainViewportCamera>>,
     cursor: crate::viewport::UiCursorPos,
-    mode: Res<GizmoMode>,
+    mode: Res<ActiveTool>,
     space: Res<GizmoSpace>,
     mut hover: ResMut<GizmoHoverState>,
     drag_state: Res<GizmoDragState>,
@@ -199,8 +192,12 @@ pub(crate) fn handle_gizmo_hover(
     };
 
     let gizmo_pos = global_tf.translation();
+    if matches!(*mode, ActiveTool::Select) {
+        return;
+    }
+
     // Scale is inherently local, so force local orientation so handles match transform.scale axes
-    let effective_space = if *mode == GizmoMode::Scale {
+    let effective_space = if *mode == ActiveTool::Scale {
         &GizmoSpace::Local
     } else {
         &space
@@ -221,7 +218,7 @@ pub(crate) fn handle_gizmo_hover(
 
     for (axis, dir) in &axes {
         let dist = match *mode {
-            GizmoMode::Translate | GizmoMode::Scale => {
+            ActiveTool::Translate | ActiveTool::Scale => {
                 let start = gizmo_pos + *dir * (AXIS_START_OFFSET * scale);
                 let endpoint = gizmo_pos + *dir * (AXIS_LENGTH * scale);
                 let Some(start_screen) = camera.world_to_viewport(cam_tf, start).ok() else {
@@ -232,7 +229,7 @@ pub(crate) fn handle_gizmo_hover(
                 };
                 point_to_segment_dist(viewport_cursor, start_screen, end_screen)
             }
-            GizmoMode::Rotate => point_to_ring_screen_dist(
+            ActiveTool::Rotate => point_to_ring_screen_dist(
                 viewport_cursor,
                 camera,
                 cam_tf,
@@ -240,6 +237,7 @@ pub(crate) fn handle_gizmo_hover(
                 *dir,
                 ROTATE_RING_RADIUS * scale,
             ),
+            ActiveTool::Select => continue,
         };
         if dist < threshold && dist < best_dist {
             best_dist = dist;
@@ -289,7 +287,7 @@ fn gizmo_drag_invoke_trigger(
     description = "Drag the active transform gizmo to translate / rotate / scale the \
                    primary selection. Modal: commits on LMB release, cancels on \
                    Escape (restoring the start transform). Mode and axis come from \
-                   the toolbar's `GizmoMode` resource and the click-time \
+                   the toolbar's `ActiveTool` resource and the click-time \
                    `GizmoHoverState`.",
     modal = true,
     allows_undo = true,
@@ -304,7 +302,7 @@ pub fn gizmo_drag(
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mode: Res<GizmoMode>,
+    mode: Res<ActiveTool>,
     space: Res<GizmoSpace>,
     hover: Res<GizmoHoverState>,
     mut drag_state: ResMut<GizmoDragState>,
@@ -388,7 +386,7 @@ pub fn gizmo_drag(
         return OperatorResult::Finished;
     };
 
-    let effective_space = if *mode == GizmoMode::Scale {
+    let effective_space = if *mode == ActiveTool::Scale {
         &GizmoSpace::Local
     } else {
         &space
@@ -403,8 +401,12 @@ pub fn gizmo_drag(
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let mouse_delta = viewport_cursor - drag_state.drag_start_screen;
 
+    if matches!(*mode, ActiveTool::Select) {
+        return OperatorResult::Finished;
+    }
+
     match *mode {
-        GizmoMode::Translate => {
+        ActiveTool::Translate => {
             let drag_start_pos = drag_state.start_transform.translation;
             let Ok(origin_screen) = camera.world_to_viewport(cam_tf, drag_start_pos) else {
                 return OperatorResult::Running;
@@ -422,7 +424,7 @@ pub fn gizmo_drag(
             let snapped = snap_settings.snap_translate_vec3_if(axis_dir * projected, ctrl);
             transform.translation = drag_state.start_transform.translation + snapped;
         }
-        GizmoMode::Rotate => {
+        ActiveTool::Rotate => {
             let screen_axis = match axis {
                 GizmoAxis::X => Vec2::Y,
                 GizmoAxis::Y => Vec2::X,
@@ -433,7 +435,7 @@ pub fn gizmo_drag(
             transform.rotation =
                 Quat::from_axis_angle(axis_dir, angle) * drag_state.start_transform.rotation;
         }
-        GizmoMode::Scale => {
+        ActiveTool::Scale => {
             let Ok(origin_screen) = camera.world_to_viewport(cam_tf, gizmo_pos) else {
                 return OperatorResult::Running;
             };
@@ -450,6 +452,7 @@ pub fn gizmo_drag(
             }
             transform.scale = snap_settings.snap_scale_vec3_if(new_scale, ctrl);
         }
+        ActiveTool::Select => {}
     }
     OperatorResult::Running
 }
@@ -487,13 +490,17 @@ fn draw_gizmos(
     transforms: Query<&GlobalTransform, With<Selected>>,
     camera_query: Query<(Entity, &GlobalTransform, &Projection), With<MainViewportCamera>>,
     active: Res<crate::viewport::ActiveViewport>,
-    mode: Res<GizmoMode>,
+    mode: Res<ActiveTool>,
     space: Res<GizmoSpace>,
     hover: Res<GizmoHoverState>,
     drag_state: Res<GizmoDragState>,
     modal: Res<ModalTransformState>,
     edit_mode: Res<crate::brush::EditMode>,
 ) {
+    if matches!(*mode, ActiveTool::Select) {
+        return;
+    }
+
     // Hide gizmo during modal operations or brush edit mode
     if modal.active.is_some() || *edit_mode != crate::brush::EditMode::Object {
         return;
@@ -519,7 +526,7 @@ fn draw_gizmos(
     };
 
     let pos = global_tf.translation();
-    let effective_space = if *mode == GizmoMode::Scale {
+    let effective_space = if *mode == ActiveTool::Scale {
         &GizmoSpace::Local
     } else {
         &space
@@ -544,7 +551,7 @@ fn draw_gizmos(
     let z_color = axis_color(GizmoAxis::Z, active_axis, dragging);
 
     match *mode {
-        GizmoMode::Translate => {
+        ActiveTool::Translate => {
             gizmos
                 .arrow(
                     pos + right * (AXIS_START_OFFSET * scale),
@@ -567,7 +574,7 @@ fn draw_gizmos(
                 )
                 .with_tip_length(AXIS_TIP_LENGTH * scale);
         }
-        GizmoMode::Rotate => {
+        ActiveTool::Rotate => {
             // Draw rotation rings
             gizmos.circle(
                 Isometry3d::new(pos, Quat::from_rotation_arc(Vec3::Z, right)),
@@ -585,7 +592,7 @@ fn draw_gizmos(
                 z_color,
             );
         }
-        GizmoMode::Scale => {
+        ActiveTool::Scale => {
             // Draw scale handles: lines with cubes at the end
             let cube_half = SCALE_CUBE_SIZE * scale;
             for (dir, color) in [(right, x_color), (up, y_color), (forward, z_color)] {
@@ -622,6 +629,7 @@ fn draw_gizmos(
                 gizmos.line(corners[3], corners[7], color);
             }
         }
+        ActiveTool::Select => {}
     }
 }
 

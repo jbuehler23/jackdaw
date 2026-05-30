@@ -3,10 +3,11 @@ use jackdaw_feathers::status_bar::{StatusBarCenter, StatusBarLeft, StatusBarRigh
 
 use crate::{
     EditorEntity,
+    active_tool::ActiveTool,
     brush::{BrushEditMode, EditMode},
     build_status::{BuildState, BuildStatus},
     draw_brush::DrawBrushState,
-    gizmos::{GizmoMode, GizmoSpace},
+    gizmos::GizmoSpace,
     modal_transform::{ModalOp, ModalTransformState},
     scene_io::{SceneDirtyState, SceneFilePath},
 };
@@ -119,7 +120,7 @@ fn update_status_center(
 pub struct SceneStatsText;
 
 fn update_status_right(
-    mode: Res<GizmoMode>,
+    mode: Res<ActiveTool>,
     space: Res<GizmoSpace>,
     modal: Res<ModalTransformState>,
     edit_mode: Res<EditMode>,
@@ -227,9 +228,10 @@ fn update_status_right(
     }
 
     let mode_str = match *mode {
-        GizmoMode::Translate => "Translate",
-        GizmoMode::Rotate => "Rotate",
-        GizmoMode::Scale => "Scale",
+        ActiveTool::Select => "Select",
+        ActiveTool::Translate => "Translate",
+        ActiveTool::Rotate => "Rotate",
+        ActiveTool::Scale => "Scale",
     };
     let space_str = match *space {
         GizmoSpace::World => "World",

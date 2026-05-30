@@ -17,8 +17,9 @@ use jackdaw_api_internal::snapshot::{ActiveSnapshotter, SceneSnapshot, SceneSnap
 use jackdaw_avian_integration::PhysicsOverlayConfig;
 use jackdaw_jsn::SceneJsnAst;
 
+use crate::active_tool::ActiveTool;
 use crate::brush::EditMode;
-use crate::gizmos::{GizmoMode, GizmoSpace};
+use crate::gizmos::GizmoSpace;
 use crate::snapping::SnapSettings;
 use crate::view_modes::ViewModeSettings;
 use crate::viewport_overlays::OverlaySettings;
@@ -83,7 +84,7 @@ impl SceneSnapshot for JsnAstSnapshot {
 #[derive(Clone, PartialEq)]
 struct EditorStateSnapshot {
     edit_mode: EditMode,
-    gizmo_mode: GizmoMode,
+    active_tool: ActiveTool,
     gizmo_space: GizmoSpace,
     snap_settings: SnapSettings,
     view_mode: ViewModeSettings,
@@ -100,7 +101,7 @@ impl EditorStateSnapshot {
     fn capture(world: &World) -> Self {
         Self {
             edit_mode: *world.resource::<EditMode>(),
-            gizmo_mode: *world.resource::<GizmoMode>(),
+            active_tool: *world.resource::<ActiveTool>(),
             gizmo_space: *world.resource::<GizmoSpace>(),
             snap_settings: world.resource::<SnapSettings>().clone(),
             view_mode: world.resource::<ViewModeSettings>().clone(),
@@ -112,7 +113,7 @@ impl EditorStateSnapshot {
 
     fn apply(&self, world: &mut World) {
         *world.resource_mut::<EditMode>() = self.edit_mode;
-        *world.resource_mut::<GizmoMode>() = self.gizmo_mode;
+        *world.resource_mut::<ActiveTool>() = self.active_tool;
         *world.resource_mut::<GizmoSpace>() = self.gizmo_space;
         *world.resource_mut::<SnapSettings>() = self.snap_settings.clone();
         *world.resource_mut::<ViewModeSettings>() = self.view_mode.clone();

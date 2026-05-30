@@ -1,12 +1,9 @@
-//! Edit-mode switch operators: Object / Vertex / Edge / Face / Clip /
-//! Physics. Each one either enters the named mode or, if already in
-//! it, toggles back out to Object.
+//! Edit-mode switch operators: Vertex / Edge / Face / Clip / Knife.
+//! Each one either enters the named mode or, if already in it, toggles
+//! back to Object. All `allows_undo = false` because edit-mode is UI
+//! state, not a scene mutation.
 //!
-//! These replace what `handle_edit_mode_keys` and the toolbar's
-//! per-variant `.observe(...)` closures did before. All `allows_undo =
-//! false` because edit-mode is a UI state, not a scene mutation.
-//!
-//! Default keybinds: `1` vertex, `2` edge, `3` face, `4` clip.
+//! Default keybinds: `1` vertex, `2` edge, `3` face, `4` clip, `K` knife.
 
 use bevy::{input_focus::InputFocus, prelude::*};
 use bevy_enhanced_input::prelude::{Press, *};
@@ -20,9 +17,23 @@ use crate::core_extension::CoreExtensionInputContext;
 use crate::draw_brush::DrawBrushState;
 use crate::selection::Selection;
 
+/// Resets edit mode to Object, clears any brush sub-element selection,
+/// and cancels an in-progress draw brush session. Called by `tool.select`
+/// so that switching to the Select tool always lands in Object mode.
+pub(crate) fn set_edit_mode_object(world: &mut World) {
+    if let Some(mut edit_mode) = world.get_resource_mut::<EditMode>() {
+        *edit_mode = EditMode::Object;
+    }
+    if let Some(mut brush_selection) = world.get_resource_mut::<BrushSelection>() {
+        brush_selection.clear();
+    }
+    if let Some(mut draw_state) = world.get_resource_mut::<DrawBrushState>() {
+        draw_state.active = None;
+    }
+}
+
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<EditModeObjectOp>()
-        .register_operator::<EditModeVertexOp>()
+    ctx.register_operator::<EditModeVertexOp>()
         .register_operator::<EditModeEdgeOp>()
         .register_operator::<EditModeFaceOp>()
         .register_operator::<EditModeClipOp>()
@@ -133,24 +144,6 @@ fn can_change_edit_mode(
         return false;
     }
     true
-}
-
-#[operator(
-    id = "edit_mode.object",
-    label = "Object Mode",
-    is_available = can_change_edit_mode,
-    allows_undo = false,
-)]
-pub fn edit_mode_object(
-    _: In<OperatorParameters>,
-    mut edit_mode: ResMut<EditMode>,
-    mut brush_selection: ResMut<BrushSelection>,
-    mut draw_state: ResMut<DrawBrushState>,
-) -> OperatorResult {
-    *edit_mode = EditMode::Object;
-    brush_selection.clear();
-    draw_state.active = None;
-    OperatorResult::Finished
 }
 
 #[operator(

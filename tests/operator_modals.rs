@@ -19,9 +19,8 @@
 
 use bevy::prelude::*;
 use jackdaw::draw_brush::ActivateDrawBrushModalOp;
-use jackdaw::edit_mode_ops::EditModeObjectOp;
-use jackdaw::gizmo_ops::GizmoModeRotateOp;
 use jackdaw::layout::update_toolbar_button_variants;
+use jackdaw::tool_ops::{ToolRotateOp, ToolSelectOp};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::{ActiveModalOperator, OperatorEntity};
 use jackdaw_feathers::button::{ButtonOperatorCall, ButtonVariant};
@@ -134,14 +133,14 @@ fn modal_dispatch_steals_toolbar_highlight() {
     let object_button = app
         .world_mut()
         .spawn((
-            ButtonOperatorCall::new(EditModeObjectOp::ID),
+            ButtonOperatorCall::new(ToolSelectOp::ID),
             ButtonVariant::Active,
         ))
         .id();
     let rotate_button = app
         .world_mut()
         .spawn((
-            ButtonOperatorCall::new(GizmoModeRotateOp::ID),
+            ButtonOperatorCall::new(ToolRotateOp::ID),
             ButtonVariant::Active,
         ))
         .id();

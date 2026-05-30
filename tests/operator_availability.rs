@@ -36,12 +36,13 @@ const HAS_PRIMARY_SELECTION_OPS: &[&str] = &[
     "animation.toggle_keyframe",
 ];
 
-/// Operators gated on `can_change_gizmo` (no modal running, no rename
-/// in progress). With a clean app these should already be available.
-const CAN_CHANGE_GIZMO_OPS: &[&str] = &[
-    "gizmo.mode.translate",
-    "gizmo.mode.rotate",
-    "gizmo.mode.scale",
+/// Tool and gizmo operators that should be available in a clean app
+/// (no modal running, no text field focused).
+const TOOL_AND_GIZMO_OPS: &[&str] = &[
+    "tool.select",
+    "tool.translate",
+    "tool.rotate",
+    "tool.scale",
     "gizmo.space.toggle",
 ];
 
@@ -86,9 +87,9 @@ fn has_primary_selection_gate_clears_with_selection() {
 }
 
 #[test]
-fn can_change_gizmo_gate_open_in_clean_app() {
+fn tool_and_gizmo_ops_available_in_clean_app() {
     let mut app = util::editor_test_app();
-    for id in CAN_CHANGE_GIZMO_OPS {
+    for id in TOOL_AND_GIZMO_OPS {
         let ready = app
             .world_mut()
             .operator(*id)

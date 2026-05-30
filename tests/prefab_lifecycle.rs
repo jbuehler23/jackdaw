@@ -3388,7 +3388,7 @@ fn spawn_instance_undo_via_framework_snapshot_round_trip_removes_instance() {
     // The JsnAstSnapshotter captures editor state alongside the AST;
     // initialize the resources it reads so its capture/apply don't panic.
     app.init_resource::<jackdaw::brush::EditMode>();
-    app.init_resource::<jackdaw::gizmos::GizmoMode>();
+    app.init_resource::<jackdaw::active_tool::ActiveTool>();
     app.init_resource::<jackdaw::gizmos::GizmoSpace>();
     app.init_resource::<jackdaw::snapping::SnapSettings>();
     app.init_resource::<jackdaw::view_modes::ViewModeSettings>();
@@ -3863,7 +3863,7 @@ fn typed_command_and_snapshot_diff_interleave_cleanly_on_undo() {
 
     // Initialize editor-state resources the snapshotter expects.
     app.init_resource::<jackdaw::brush::EditMode>();
-    app.init_resource::<jackdaw::gizmos::GizmoMode>();
+    app.init_resource::<jackdaw::active_tool::ActiveTool>();
     app.init_resource::<jackdaw::gizmos::GizmoSpace>();
     app.init_resource::<jackdaw::snapping::SnapSettings>();
     app.init_resource::<jackdaw::view_modes::ViewModeSettings>();

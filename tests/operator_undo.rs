@@ -13,7 +13,7 @@
 //! ```
 //!
 //! The snapshot capture covers `ViewModeSettings`, `OverlaySettings`,
-//! `EditMode`, `GizmoMode`, `GizmoSpace`, `SnapSettings`,
+//! `EditMode`, `ActiveTool`, `GizmoSpace`, `SnapSettings`,
 //! `PhysicsOverlayConfig`, `GroupEditState.active_group`, and the
 //! scene AST (see `src/undo_snapshot.rs`).
 //!
@@ -129,17 +129,30 @@ fn grid_decrease_round_trip() {
 }
 
 #[test]
-fn gizmo_mode_rotate_round_trip() {
-    // Default `GizmoMode` is `Translate`; rotate diverges, so the
+fn tool_rotate_round_trip() {
+    // Default `ActiveTool` is `Select`; rotate diverges, so the
     // snapshot diff is non-empty.
     let mut app = util::editor_test_app();
-    assert_undo_redo_round_trip(&mut app, "gizmo.mode.rotate");
+    assert_undo_redo_round_trip(&mut app, "tool.rotate");
 }
 
 #[test]
-fn gizmo_mode_scale_round_trip() {
+fn tool_select_round_trip_from_translate() {
+    // `tool.select` flips both `ActiveTool` and `EditMode`; starting
+    // from a non-default state proves the snapshot captures both.
     let mut app = util::editor_test_app();
-    assert_undo_redo_round_trip(&mut app, "gizmo.mode.scale");
+    *app.world_mut()
+        .resource_mut::<jackdaw::active_tool::ActiveTool>() =
+        jackdaw::active_tool::ActiveTool::Translate;
+    *app.world_mut().resource_mut::<jackdaw::brush::EditMode>() =
+        jackdaw::brush::EditMode::BrushEdit(jackdaw::brush::BrushEditMode::Vertex);
+    assert_undo_redo_round_trip(&mut app, "tool.select");
+}
+
+#[test]
+fn tool_scale_round_trip() {
+    let mut app = util::editor_test_app();
+    assert_undo_redo_round_trip(&mut app, "tool.scale");
 }
 
 #[test]

@@ -1,44 +1,21 @@
-//! Gizmo mode + space operators.
+//! Gizmo space operator.
 //!
-//! Mode ops (`gizmo.mode.translate/rotate/scale`) flip the active
-//! transform gizmo. Space op (`gizmo.space.toggle`) flips world/local.
-//! All gated to Object mode so they don't fire while the user is
-//! editing brush sub-elements or mid-modal.
-//!
-//! Default keybinds: R=rotate, T=scale, Escape=translate, X=space
-//! toggle.
+//! `gizmo.space.toggle` flips world/local transform space.
+//! Default keybind: X.
 
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
 use crate::core_extension::CoreExtensionInputContext;
-use crate::gizmos::{GizmoMode, GizmoSpace};
+use crate::gizmos::GizmoSpace;
 use crate::keybind_focus::KeybindFocus;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<GizmoModeTranslateOp>()
-        .register_operator::<GizmoModeRotateOp>()
-        .register_operator::<GizmoModeScaleOp>()
-        .register_operator::<GizmoSpaceToggleOp>();
+    ctx.register_operator::<GizmoSpaceToggleOp>();
 
     let ext = ctx.id();
     ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<GizmoModeRotateOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::KeyR, Press::default())],
-        ));
-        world.spawn((
-            Action::<GizmoModeScaleOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::KeyT, Press::default())],
-        ));
-        world.spawn((
-            Action::<GizmoModeTranslateOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Escape, Press::default())],
-        ));
         world.spawn((
             Action::<GizmoSpaceToggleOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(ext),
@@ -47,59 +24,16 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     });
 }
 
-/// Gizmo mode changes are ignored while any overlay is typing into a
-/// text field or a modal operator is in flight; matches the guards
-/// the legacy handler used to apply.
-fn can_change_gizmo(
-    keybind_focus: KeybindFocus,
-    edit_mode: Res<crate::brush::EditMode>,
-    active: ActiveModalQuery,
-) -> bool {
-    !keybind_focus.is_typing()
-        && !active.is_modal_running()
-        && *edit_mode == crate::brush::EditMode::Object
-}
-
-#[operator(
-    id = "gizmo.mode.translate",
-    label = "Gizmo Translate",
-    is_available = can_change_gizmo
-)]
-pub(crate) fn gizmo_mode_translate(
-    _: In<OperatorParameters>,
-    mut mode: ResMut<GizmoMode>,
-) -> OperatorResult {
-    *mode = GizmoMode::Translate;
-    OperatorResult::Finished
-}
-
-#[operator(
-    id = "gizmo.mode.rotate",
-    label = "Gizmo Rotate",
-    is_available = can_change_gizmo
-)]
-pub fn gizmo_mode_rotate(_: In<OperatorParameters>, mut mode: ResMut<GizmoMode>) -> OperatorResult {
-    *mode = GizmoMode::Rotate;
-    OperatorResult::Finished
-}
-
-#[operator(
-    id = "gizmo.mode.scale",
-    label = "Gizmo Scale",
-    is_available = can_change_gizmo
-)]
-pub(crate) fn gizmo_mode_scale(
-    _: In<OperatorParameters>,
-    mut mode: ResMut<GizmoMode>,
-) -> OperatorResult {
-    *mode = GizmoMode::Scale;
-    OperatorResult::Finished
+/// Space toggle is allowed in any edit mode. Modal drags block it via
+/// `is_modal_running`; the toggle is a no-op when no gizmo is visible.
+fn can_toggle_space(keybind_focus: KeybindFocus, active: ActiveModalQuery) -> bool {
+    !keybind_focus.is_typing() && !active.is_modal_running()
 }
 
 #[operator(
     id = "gizmo.space.toggle",
     label = "Toggle Gizmo Space",
-    is_available = can_change_gizmo
+    is_available = can_toggle_space
 )]
 pub(crate) fn gizmo_space_toggle(
     _: In<OperatorParameters>,

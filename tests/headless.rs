@@ -65,7 +65,7 @@ fn can_pass_params_to_operator() {
 }
 
 /// Verifies that the snapshot mechanism notices changes to editor-state
-/// resources (`EditMode`, `GizmoMode`, `ViewModeSettings`, ...). Two
+/// resources (`EditMode`, `ActiveTool`, `ViewModeSettings`, ...). Two
 /// snapshots taken either side of a resource mutation must compare
 /// unequal - if they compared equal, the operator dispatcher would
 /// silently drop the undo entry and Ctrl+Z wouldn't restore the old
@@ -75,8 +75,9 @@ fn can_pass_params_to_operator() {
 /// editor.
 #[test]
 fn snapshot_notices_editor_state_changes() {
+    use jackdaw::active_tool::ActiveTool;
     use jackdaw::brush::{BrushEditMode, EditMode};
-    use jackdaw::gizmos::{GizmoMode, GizmoSpace};
+    use jackdaw::gizmos::GizmoSpace;
     use jackdaw::snapping::SnapSettings;
     use jackdaw::view_modes::ViewModeSettings;
     use jackdaw::viewport_overlays::OverlaySettings;
@@ -94,7 +95,7 @@ fn snapshot_notices_editor_state_changes() {
     // Flip each editor-state resource the snapshot should cover.
     *world.resource_mut::<ViewModeSettings>() = ViewModeSettings { wireframe: true };
     *world.resource_mut::<EditMode>() = EditMode::BrushEdit(BrushEditMode::Face);
-    *world.resource_mut::<GizmoMode>() = GizmoMode::Rotate;
+    *world.resource_mut::<ActiveTool>() = ActiveTool::Rotate;
     *world.resource_mut::<GizmoSpace>() = GizmoSpace::Local;
     world.resource_mut::<SnapSettings>().grid_power = 3;
     world.resource_mut::<OverlaySettings>().show_bounding_boxes = true;
