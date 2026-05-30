@@ -68,13 +68,18 @@ pub fn borderless_primary_window() -> Window {
     Window::default()
 }
 
-fn caption_button(icon: Icon, marker: impl Bundle, icon_font: Handle<Font>) -> impl Bundle {
+fn caption_button(
+    icon: Icon,
+    marker: impl Bundle,
+    icon_font: Handle<Font>,
+    variant: ButtonVariant,
+) -> impl Bundle {
     (
         marker,
         EditorEntity,
         icon_button(
             IconButtonProps::new(icon)
-                .variant(ButtonVariant::Ghost)
+                .variant(variant)
                 .with_size(ButtonSize::Icon),
             &icon_font,
         ),
@@ -94,9 +99,19 @@ pub fn window_controls(icon_font: Handle<Font>) -> impl Bundle {
         },
         Pickable::IGNORE,
         children![
-            caption_button(Icon::Minus, WindowChromeMinimize, icon_font.clone()),
-            caption_button(Icon::Maximize2, WindowChromeMaximize, icon_font.clone()),
-            caption_button(Icon::X, WindowChromeClose, icon_font),
+            caption_button(
+                Icon::Minus,
+                WindowChromeMinimize,
+                icon_font.clone(),
+                ButtonVariant::Ghost,
+            ),
+            caption_button(
+                Icon::Maximize2,
+                WindowChromeMaximize,
+                icon_font.clone(),
+                ButtonVariant::Ghost,
+            ),
+            caption_button(Icon::X, WindowChromeClose, icon_font, ButtonVariant::Close,),
         ],
     )
 }
