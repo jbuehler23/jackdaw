@@ -25,8 +25,9 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::{hint, thread};
 
 use crate::new_project::TemplateLinkage;
 use crate::sdk_paths::SdkPaths;
@@ -52,6 +53,10 @@ pub enum BuildError {
     },
     OutputNotProduced {
         expected: PathBuf,
+    },
+    /// Caller flipped the cancel flag; child was killed and reaped.
+    Cancelled {
+        stderr_tail: String,
     },
 }
 
@@ -92,6 +97,13 @@ impl std::fmt::Display for BuildError {
                 "cargo succeeded but no .so was produced at {}",
                 expected.display()
             ),
+            Self::Cancelled { stderr_tail } => {
+                if stderr_tail.is_empty() {
+                    write!(f, "build cancelled")
+                } else {
+                    write!(f, "build cancelled\n{stderr_tail}")
+                }
+            }
         }
     }
 }
@@ -211,7 +223,7 @@ pub fn build_extension_project(
     project_dir: &Path,
     linkage: TemplateLinkage,
 ) -> Result<PathBuf, BuildError> {
-    build_extension_project_with_progress(project_dir, None, linkage)
+    build_extension_project_with_progress(project_dir, None, linkage, None)
 }
 
 /// Build the project and (optionally) stream progress into `sink`.
@@ -226,6 +238,7 @@ pub fn build_extension_project_with_progress(
     project_dir: &Path,
     sink: Option<Arc<Mutex<BuildProgress>>>,
     linkage: TemplateLinkage,
+    cancel: Option<Arc<AtomicBool>>,
 ) -> Result<PathBuf, BuildError> {
     let project_dir = project_dir
         .canonicalize()
@@ -275,7 +288,7 @@ pub fn build_extension_project_with_progress(
         cmd.env("JACKDAW_SDK_DEPS", &sdk.deps);
     }
 
-    run_cargo_with_progress(cmd, sink.as_ref())?;
+    run_cargo_with_progress(cmd, sink.as_ref(), cancel.as_ref())?;
 
     match linkage {
         TemplateLinkage::Dylib => {
@@ -305,6 +318,7 @@ pub fn build_extension_project_with_progress(
 pub fn build_static_editor_with_progress(
     project_dir: &Path,
     sink: Option<Arc<Mutex<BuildProgress>>>,
+    cancel: Option<Arc<AtomicBool>>,
 ) -> Result<PathBuf, BuildError> {
     let project_dir = project_dir
         .canonicalize()
@@ -359,7 +373,7 @@ pub fn build_static_editor_with_progress(
         .expect("CARGO_TARGET_DIR path must be valid UTF-8");
     cmd.env("CARGO_TARGET_DIR", editor_target_str);
 
-    run_cargo_with_progress(cmd, sink.as_ref())?;
+    run_cargo_with_progress(cmd, sink.as_ref(), cancel.as_ref())?;
 
     let bin_name = if cfg!(target_os = "windows") {
         "editor.exe"
@@ -386,6 +400,7 @@ pub fn build_static_editor_with_progress(
 fn run_cargo_with_progress(
     mut cmd: Command,
     sink: Option<&Arc<Mutex<BuildProgress>>>,
+    cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<(), BuildError> {
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -442,7 +457,35 @@ fn run_cargo_with_progress(
         }
     });
 
-    let status = child.wait().map_err(BuildError::BuildSpawn)?;
+    // Poll the child so the cancel flag can interrupt it. `try_wait`
+    // returns `Ok(None)` while the child is still running; on cancel
+    // we kill+reap and surface `BuildError::Cancelled`. Drainer
+    // threads exit on their own once the child's pipes close.
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if cancel.map(|c| c.load(Ordering::Acquire)).unwrap_or(false) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_handle.join();
+                    let _ = stderr_handle.join();
+                    if let Some(s) = sink
+                        && let Ok(mut g) = s.lock()
+                    {
+                        g.finished = true;
+                    }
+                    let tail = stderr_tail
+                        .lock()
+                        .map(|t| t.iter().cloned().collect::<Vec<_>>().join("\n"))
+                        .unwrap_or_default();
+                    return Err(BuildError::Cancelled { stderr_tail: tail });
+                }
+                hint::spin_loop();
+            }
+            Err(e) => return Err(BuildError::BuildSpawn(e)),
+        }
+    };
     let _ = stdout_handle.join();
     let _ = stderr_handle.join();
 
