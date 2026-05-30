@@ -22,10 +22,11 @@ use crate::{
     command_runner::{CommandIo, LogChunk},
     new_project::{self, ScaffoldError, TemplateLinkage, TemplatePreset, scaffold_project},
     project::{self, ProjectRoot},
-    repo_link::{JackdawIcon, jackdaw_link_button},
+    repo_link::JackdawIcon,
     scene_io,
     scrolling_log::{self, ScrollingLog},
     window_chrome::WindowShellRoot,
+    window_header,
 };
 
 #[derive(Default)]
@@ -398,33 +399,21 @@ fn spawn_project_selector(
         .with_children(|root| {
             // Launcher header mirrors the editor chrome: compact title on the
             // left, version metadata on the right, and no centered splash card.
-            root.spawn((
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Px(tokens::WINDOW_HEADER_HEIGHT),
-                    align_items: AlignItems::Center,
-                    padding: UiRect::axes(Val::Px(14.0), Val::Px(0.0)),
-                    column_gap: Val::Px(8.0),
-                    border: UiRect::bottom(Val::Px(1.0)),
-                    ..Default::default()
-                },
-                BackgroundColor(tokens::PANEL_HEADER_BG),
-                BorderColor::all(tokens::BORDER_SUBTLE),
-            ))
-            .with_children(|header| {
-                #[cfg(target_os = "macos")]
-                header.spawn(crate::window_chrome::window_controls(
-                    icon_font_handle.clone(),
-                ));
-                header.spawn((
+            root.spawn(window_header::window_header(
+                icon_font_handle.clone(),
+                jackdaw_icon_handle.clone(),
+                (
                     Node {
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
-                        column_gap: Val::Px(8.0),
+                        justify_content: JustifyContent::SpaceBetween,
+                        width: Val::Percent(100.0),
+                        height: Val::Percent(100.0),
+                        padding: UiRect::horizontal(Val::Px(tokens::SPACING_MD)),
                         ..Default::default()
                     },
+                    Pickable::IGNORE,
                     children![
-                        jackdaw_link_button(jackdaw_icon_handle),
                         (
                             Text::new("jackdaw"),
                             TextFont {
@@ -433,20 +422,9 @@ fn spawn_project_selector(
                                 ..Default::default()
                             },
                             TextColor(tokens::TEXT_PRIMARY),
+                            Pickable::IGNORE,
                         ),
-                    ],
-                ));
-                header.spawn(crate::window_chrome::drag_region());
-                header
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(8.0),
-                        flex_shrink: 0.0,
-                        ..Default::default()
-                    })
-                    .with_children(|trailing| {
-                        trailing.spawn((
+                        (
                             Text::new(format!("v{}", env!("CARGO_PKG_VERSION"))),
                             TextFont {
                                 font: font.clone(),
@@ -454,20 +432,18 @@ fn spawn_project_selector(
                                 ..Default::default()
                             },
                             TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
-                        ));
-                        #[cfg(not(target_os = "macos"))]
-                        trailing.spawn(crate::window_chrome::window_controls(
-                            icon_font_handle.clone(),
-                        ));
-                    });
-            });
+                            Pickable::IGNORE,
+                        ),
+                    ],
+                ),
+            ));
 
             root.spawn(Node {
                 width: Val::Percent(100.0),
                 flex_grow: 1.0,
                 flex_direction: FlexDirection::Row,
                 column_gap: Val::Px(8.0),
-                padding: UiRect::all(Val::Px(8.0)),
+                padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(0.0), Val::Px(8.0)),
                 ..Default::default()
             })
             .with_children(|content| {

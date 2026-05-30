@@ -89,6 +89,7 @@ pub mod viewport_overlays;
 pub mod viewport_select;
 pub mod viewport_util;
 pub mod window_chrome;
+pub mod window_header;
 pub mod workspace_dropdown;
 
 use bevy::{
@@ -330,7 +331,11 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(operator_tooltip::OperatorTooltipPlugin)
         .add_plugins(jackdaw_node_graph::NodeGraphPlugin)
         .add_plugins(jackdaw_animation::AnimationPlugin)
-        .add_plugins((repo_link::RepoLinkPlugin, window_chrome::WindowChromePlugin))
+        .add_plugins((
+            repo_link::RepoLinkPlugin,
+            window_chrome::WindowChromePlugin,
+            window_header::WindowHeaderPlugin,
+        ))
         .add_plugins(jackdaw_panels::DockPlugin)
         .add_plugins(jackdaw_api_internal::ExtensionLoaderPlugin)
         .add_plugins(extension_watcher::ExtensionWatcherPlugin)

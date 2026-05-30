@@ -131,7 +131,11 @@ pub fn editor_layout(
             ..Default::default()
         },
         children![
-            window_header(icon_font.0.clone(), editor_font.0.clone(), jackdaw_icon),
+            crate::window_header::window_header(
+                icon_font.0.clone(),
+                jackdaw_icon,
+                window_header_content(icon_font.0.clone(), editor_font.0.clone()),
+            ),
             (
                 EditorEntity,
                 Node {
@@ -213,82 +217,25 @@ pub fn editor_layout(
     )
 }
 
-/// Integrated window header: menu bar, scene tabs, workspace transport,
-/// OS caption buttons, and a drag region between the left and right groups.
-#[cfg(target_os = "macos")]
-fn window_header(
-    icon_font: Handle<Font>,
-    editor_font: Handle<Font>,
-    jackdaw_icon: Handle<Image>,
-) -> impl Bundle {
-    window_header_row(children![
-        crate::window_chrome::window_controls(icon_font),
-        window_header_repo_link(jackdaw_icon),
-        window_header_menu_and_tabs(),
-        crate::window_chrome::drag_region(),
-        window_header_right_controls(icon_font, editor_font),
-    ])
-}
-
-#[cfg(not(target_os = "macos"))]
-fn window_header(
-    icon_font: Handle<Font>,
-    editor_font: Handle<Font>,
-    jackdaw_icon: Handle<Image>,
-) -> impl Bundle {
-    window_header_row(children![
-        window_header_repo_link(jackdaw_icon),
-        window_header_menu_and_tabs(),
-        crate::window_chrome::drag_region(),
-        window_header_right_controls_with_caption(icon_font, editor_font),
-    ])
-}
-
-fn window_header_repo_link(jackdaw_icon: Handle<Image>) -> impl Bundle {
-    (
-        EditorEntity,
-        Node {
-            padding: UiRect::left(px(tokens::SPACING_MD)),
-            flex_shrink: 0.0,
-            ..default()
-        },
-        children![crate::repo_link::jackdaw_link_button(jackdaw_icon)],
-    )
-}
-
-fn window_header_row(children: impl Bundle) -> impl Bundle {
+fn window_header_content(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bundle {
     (
         EditorEntity,
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             width: percent(100),
-            height: px(tokens::WINDOW_HEADER_HEIGHT),
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::WINDOW_BG),
-        children,
-    )
-}
-
-fn window_header_menu_and_tabs() -> impl Bundle {
-    (
-        EditorEntity,
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
             height: percent(100),
-            column_gap: px(tokens::SPACING_LG),
-            flex_shrink: 1.0,
-            min_width: px(0.0),
+            padding: UiRect::right(px(tokens::SPACING_MD)),
+            column_gap: px(tokens::SPACING_MD),
             ..Default::default()
         },
+        Pickable::IGNORE,
         children![
             menu_bar::menu_bar_shell(),
             (
                 crate::scenes::ui::SceneTabStrip,
                 EditorEntity,
+                Pickable::IGNORE,
                 Node {
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
@@ -302,48 +249,8 @@ fn window_header_menu_and_tabs() -> impl Bundle {
                 },
                 ScrollPosition::default(),
             ),
-        ],
-    )
-}
-
-#[cfg(target_os = "macos")]
-fn window_header_right_controls(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bundle {
-    (
-        EditorEntity,
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            padding: UiRect::horizontal(px(tokens::SPACING_MD)),
-            column_gap: px(8.0),
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        children![
             crate::workspace_dropdown::workspace_dropdown_trigger(editor_font, icon_font.clone()),
             play_pause_controls(icon_font),
-        ],
-    )
-}
-
-#[cfg(not(target_os = "macos"))]
-fn window_header_right_controls_with_caption(
-    icon_font: Handle<Font>,
-    editor_font: Handle<Font>,
-) -> impl Bundle {
-    (
-        EditorEntity,
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            padding: UiRect::horizontal(px(tokens::SPACING_MD)),
-            column_gap: px(8.0),
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        children![
-            crate::workspace_dropdown::workspace_dropdown_trigger(editor_font, icon_font.clone()),
-            play_pause_controls(icon_font.clone()),
-            crate::window_chrome::window_controls(icon_font),
         ],
     )
 }

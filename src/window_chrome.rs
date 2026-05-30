@@ -1,4 +1,4 @@
-//! Borderless primary window with in-app caption buttons and drag regions.
+//! Borderless primary window caption buttons and resize edge handles.
 
 use bevy::feathers::cursor::EntityCursor;
 use bevy::math::CompassOctant;
@@ -19,9 +19,6 @@ const WINDOW_SHELL_CORNER_RADIUS_PX: f32 = 8.0;
 /// Root shell node whose corners track windowed vs maximized/fullscreen state.
 #[derive(Component)]
 pub struct WindowShellRoot;
-
-#[derive(Component)]
-pub struct WindowChromeDragRegion;
 
 #[derive(Component)]
 pub struct WindowChromeMinimize;
@@ -46,7 +43,6 @@ pub struct WindowChromePlugin;
 impl Plugin for WindowChromePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WindowChromeMaximized>()
-            .add_observer(on_drag_region_press)
             .add_observer(on_minimize_click)
             .add_observer(on_maximize_click)
             .add_observer(on_close_click);
@@ -72,11 +68,6 @@ pub fn borderless_primary_window() -> Window {
     Window::default()
 }
 
-/// `true` on macOS (traffic-light side); `false` on Windows and Linux.
-pub fn controls_on_left() -> bool {
-    cfg!(target_os = "macos")
-}
-
 fn caption_button(icon: Icon, marker: impl Bundle, icon_font: Handle<Font>) -> impl Bundle {
     (
         marker,
@@ -84,7 +75,7 @@ fn caption_button(icon: Icon, marker: impl Bundle, icon_font: Handle<Font>) -> i
         icon_button(
             IconButtonProps::new(icon)
                 .variant(ButtonVariant::Ghost)
-                .with_size(ButtonSize::IconSM),
+                .with_size(ButtonSize::Icon),
             &icon_font,
         ),
     )
@@ -101,25 +92,12 @@ pub fn window_controls(icon_font: Handle<Font>) -> impl Bundle {
             flex_shrink: 0.0,
             ..default()
         },
+        Pickable::IGNORE,
         children![
             caption_button(Icon::Minus, WindowChromeMinimize, icon_font.clone()),
             caption_button(Icon::Maximize2, WindowChromeMaximize, icon_font.clone()),
             caption_button(Icon::X, WindowChromeClose, icon_font),
         ],
-    )
-}
-
-/// Flexible hit area that starts an OS window drag on primary-button press.
-pub fn drag_region() -> impl Bundle {
-    (
-        WindowChromeDragRegion,
-        EditorEntity,
-        Node {
-            flex_grow: 1.0,
-            min_width: px(0.0),
-            height: percent(100),
-            ..default()
-        },
     )
 }
 
@@ -273,23 +251,6 @@ fn resize_cursor_icon(direction: CompassOctant) -> SystemCursorIcon {
     }
 }
 
-fn on_drag_region_press(
-    press: On<Pointer<Press>>,
-    regions: Query<Entity, With<WindowChromeDragRegion>>,
-    parents: Query<&ChildOf>,
-    mut windows: Query<&mut Window, With<PrimaryWindow>>,
-) {
-    if press.button != PointerButton::Primary {
-        return;
-    }
-    let Some(_region) = find_ancestor_with(press.event_target(), &regions, &parents) else {
-        return;
-    };
-    for mut window in windows.iter_mut() {
-        window.start_drag_move();
-    }
-}
-
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
 fn on_resize_edge_press(
     press: On<Pointer<Press>>,
@@ -419,22 +380,6 @@ fn on_close_click(
         return;
     };
     close_events.write(WindowCloseRequested { window });
-}
-
-fn find_ancestor_with(
-    mut entity: Entity,
-    query: &Query<Entity, With<WindowChromeDragRegion>>,
-    parents: &Query<&ChildOf>,
-) -> Option<Entity> {
-    loop {
-        if query.contains(entity) {
-            return Some(entity);
-        }
-        let Ok(parent) = parents.get(entity) else {
-            return None;
-        };
-        entity = parent.parent();
-    }
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
