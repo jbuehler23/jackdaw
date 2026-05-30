@@ -13,7 +13,7 @@ use jackdaw_feathers::{
 
 use crate::EditorEntity;
 
-const RESIZE_HANDLE_THICKNESS: f32 = 5.0;
+const RESIZE_HANDLE_THICKNESS: f32 = 8.0;
 const WINDOW_SHELL_CORNER_RADIUS_PX: f32 = 8.0;
 
 /// Root shell node whose corners track windowed vs maximized state.
