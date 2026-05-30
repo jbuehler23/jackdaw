@@ -110,10 +110,6 @@ pub struct HierarchyFilter;
 #[derive(Component)]
 pub struct Toolbar;
 
-/// Root UI node for the editor shell (flush with the OS window client area).
-#[derive(Component)]
-pub struct EditorLayoutRoot;
-
 pub fn editor_layout(
     icon_font: &IconFont,
     editor_font: &jackdaw_feathers::icons::EditorFont,
@@ -121,7 +117,6 @@ pub fn editor_layout(
 ) -> impl Bundle {
     (
         EditorEntity,
-        EditorLayoutRoot,
         crate::window_chrome::WindowShellRoot,
         BackgroundColor(tokens::WINDOW_BG),
         Node {
