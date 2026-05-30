@@ -22,11 +22,9 @@ use crate::{
     command_runner::{CommandIo, LogChunk},
     new_project::{self, ScaffoldError, TemplateLinkage, TemplatePreset, scaffold_project},
     project::{self, ProjectRoot},
-    repo_link::JackdawIcon,
     scene_io,
     scrolling_log::{self, ScrollingLog},
-    window_chrome::WindowShellRoot,
-    window_header,
+    windowing::{JackdawIcon, WindowShellRoot, resize_edge_overlay, window_header},
 };
 
 #[derive(Default)]
@@ -392,6 +390,7 @@ fn spawn_project_selector(
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
+                overflow: Overflow::clip(),
                 ..Default::default()
             },
             BackgroundColor(tokens::WINDOW_BG),
@@ -399,7 +398,7 @@ fn spawn_project_selector(
         .with_children(|root| {
             // Launcher header mirrors the editor chrome: compact title on the
             // left, version metadata on the right, and no centered splash card.
-            root.spawn(window_header::window_header(
+            root.spawn(window_header(
                 icon_font_handle.clone(),
                 jackdaw_icon_handle.clone(),
                 (
@@ -644,7 +643,7 @@ fn spawn_project_selector(
                     });
             });
             #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-            root.spawn(crate::window_chrome::resize_edge_overlay());
+            root.spawn(resize_edge_overlay());
         });
 }
 

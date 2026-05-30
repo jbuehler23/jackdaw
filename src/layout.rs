@@ -27,6 +27,7 @@ use crate::{
     remote::ConnectionManager,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
+    windowing::{WindowShellRoot, resize_edge_overlay, window_header},
 };
 
 /// Discriminator for the header tab kinds the editor knows how to host.
@@ -117,16 +118,17 @@ pub fn editor_layout(
 ) -> impl Bundle {
     (
         EditorEntity,
-        crate::window_chrome::WindowShellRoot,
+        WindowShellRoot,
         BackgroundColor(tokens::WINDOW_BG),
         Node {
             width: percent(100),
             height: percent(100),
             flex_direction: FlexDirection::Column,
+            overflow: Overflow::clip(),
             ..Default::default()
         },
         children![
-            crate::window_header::window_header(
+            window_header(
                 icon_font.0.clone(),
                 jackdaw_icon,
                 window_header_content(icon_font.0.clone(), editor_font.0.clone()),
@@ -207,7 +209,7 @@ pub fn editor_layout(
                 ],
             ),
             #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-            crate::window_chrome::resize_edge_overlay(),
+            resize_edge_overlay(),
         ],
     )
 }

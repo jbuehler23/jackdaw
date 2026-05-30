@@ -10,7 +10,7 @@ use jackdaw_feathers::tokens::{BORDER_RADIUS_MD, ICON_MD};
 
 use crate::EditorEntity;
 
-pub const JACKDAW_REPO_URL: &str = "https://github.com/jbuehler23/jackdaw";
+const JACKDAW_REPO_URL: &str = "https://github.com/jbuehler23/jackdaw";
 
 #[derive(Resource, Clone)]
 pub struct JackdawIcon(pub Handle<Image>);
@@ -22,16 +22,16 @@ pub struct RepoLinkPlugin;
 
 impl Plugin for RepoLinkPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "../assets/jackdaw_icon_small.png");
+        embedded_asset!(app, "../../assets/jackdaw_icon_small.png");
         let assets = app.world().resource::<AssetServer>();
-        let handle = load_embedded_asset!(&*assets, "../assets/jackdaw_icon_small.png");
+        let handle = load_embedded_asset!(&*assets, "../../assets/jackdaw_icon_small.png");
         app.insert_resource(JackdawIcon(handle));
         app.add_observer(on_repo_link_click);
     }
 }
 
 /// Button with icon to open the Jackdaw repository in the system browser.
-pub fn jackdaw_link_button(image: Handle<Image>) -> impl Bundle {
+pub(crate) fn jackdaw_link_button(image: Handle<Image>) -> impl Bundle {
     let variant = ButtonVariant::Ghost;
     (
         JackdawRepoLinkButton,

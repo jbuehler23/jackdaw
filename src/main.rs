@@ -3,12 +3,9 @@ use bevy::{
     ecs::error::ErrorContext,
     image::{ImageAddressMode, ImagePlugin, ImageSamplerDescriptor},
     prelude::*,
-    window::{ExitCondition, WindowPlugin},
+    window::{ExitCondition, Window, WindowPlugin},
 };
 use jackdaw::prelude::*;
-
-#[cfg(not(target_arch = "wasm32"))]
-mod window_icon;
 
 fn main() -> AppExit {
     // Install a SIGINT/SIGTERM handler before anything else gets a
@@ -94,7 +91,10 @@ fn main() -> AppExit {
                 .set(WindowPlugin {
                     exit_condition: ExitCondition::DontExit,
                     close_when_requested: false,
-                    primary_window: Some(jackdaw::window_chrome::borderless_primary_window()),
+                    primary_window: Some(Window {
+                        decorations: false,
+                        ..default()
+                    }),
                     ..default()
                 }),
         )
@@ -112,9 +112,6 @@ fn main() -> AppExit {
     if let Some(pending) = auto_open {
         app.insert_resource(pending);
     }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    window_icon::install(&mut app);
 
     app.run()
 }
