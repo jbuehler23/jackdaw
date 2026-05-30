@@ -132,6 +132,8 @@ ctrlc = "3"
 bevy_simple_subsecond_system = { version = "0.2", optional = true }
 winit.workspace = true
 image.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 jackdaw_localization = { version = "0.4.1", path = "crates/jackdaw_localization" }
 
 [workspace.dependencies]

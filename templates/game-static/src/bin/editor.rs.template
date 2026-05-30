@@ -16,6 +16,8 @@ use jackdaw::prelude::*;
 use jackdaw::project_select::PendingAutoOpen;
 
 fn main() -> AppExit {
+    jackdaw::ui_log::init_logging();
+
     // Claim SIGINT/SIGTERM before wgpu/gilrs install their own
     // handlers that swallow the signal.
     let _ = ctrlc::set_handler(|| std::process::exit(130));
@@ -41,6 +43,8 @@ fn main() -> AppExit {
     app.set_error_handler(bevy::ecs::error::error)
         .add_plugins(
             DefaultPlugins
+                .build()
+                .disable::<bevy::log::LogPlugin>()
                 .set(AssetPlugin {
                     file_path: asset_root,
                     ..default()

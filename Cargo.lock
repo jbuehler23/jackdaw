@@ -4692,6 +4692,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "test_fixture_extension",
+ "tracing",
+ "tracing-subscriber",
  "winit",
 ]
 

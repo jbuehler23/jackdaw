@@ -349,3 +349,13 @@ pub const SEARCH_INPUT_WIDTH: f32 = 200.0;
 pub const BORDER_RADIUS_SM: f32 = 3.0;
 pub const BORDER_RADIUS_MD: f32 = 4.0;
 pub const BORDER_RADIUS_LG: f32 = 5.0;
+
+// ---------------------------------------------------------------------------
+// Log / Alert / Status colors
+// ---------------------------------------------------------------------------
+
+pub const COLOR_ERROR: Color = Color::srgb(0.95, 0.4, 0.4);
+pub const COLOR_WARN: Color = Color::srgb(0.95, 0.75, 0.2);
+pub const COLOR_INFO: Color = Color::srgb(0.4, 0.7, 0.95);
+pub const COLOR_DEBUG: Color = Color::srgb(0.6, 0.6, 0.6);
+pub const COLOR_TRACE: Color = Color::srgb(0.5, 0.5, 0.5);

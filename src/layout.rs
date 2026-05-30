@@ -224,7 +224,7 @@ pub fn editor_layout(
                 ],
                 ),
                 // Status bar (fixed height) with connection indicator
-                editor_status_bar()
+                editor_status_bar(&icon_font.0, &editor_font.0)
             ],
         )],
     )
@@ -835,7 +835,7 @@ pub fn update_tab_strip_highlights(
 
 /// Custom status bar that wraps the feathers status bar sections and adds
 /// a connection indicator on the far right.
-fn editor_status_bar() -> impl Bundle {
+fn editor_status_bar(icon_font: &Handle<Font>, editor_font: &Handle<Font>) -> impl Bundle {
     (
         status_bar::StatusBar,
         Node {
@@ -851,13 +851,24 @@ fn editor_status_bar() -> impl Bundle {
         BackgroundColor(tokens::WINDOW_BG),
         children![
             (
-                status_bar::StatusBarLeft,
-                LocalizedText::new("ready"),
-                TextFont {
-                    font_size: tokens::FONT_SM,
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(tokens::SPACING_MD),
                     ..Default::default()
                 },
-                bevy::feathers::theme::ThemedText,
+                children![
+                    (
+                        status_bar::StatusBarLeft,
+                        LocalizedText::new("ready"),
+                        TextFont {
+                            font_size: tokens::FONT_SM,
+                            ..Default::default()
+                        },
+                        bevy::feathers::theme::ThemedText,
+                    ),
+                    editor_status_bar_log_area(icon_font.clone(), editor_font.clone())
+                ]
             ),
             (
                 status_bar::StatusBarCenter,
@@ -889,6 +900,43 @@ fn editor_status_bar() -> impl Bundle {
                     // Connection indicator
                     crate::remote::panel::connection_indicator()
                 ],
+            )
+        ],
+    )
+}
+
+fn editor_status_bar_log_area(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bundle {
+    (
+        crate::ui_log::StatusBarLogArea,
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(tokens::SPACING_XS),
+            padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(tokens::SPACING_XS)),
+            border_radius: BorderRadius::all(Val::Px(4.0)),
+            ..Default::default()
+        },
+        Interaction::None,
+        jackdaw_feathers::tooltip::Tooltip::title("Click to open log history"),
+        children![
+            (
+                crate::ui_log::StatusBarLogIcon,
+                jackdaw_feathers::icons::icon_colored(
+                    Icon::Terminal,
+                    tokens::FONT_SM,
+                    icon_font,
+                    tokens::TEXT_MUTED_COLOR.into(),
+                )
+            ),
+            (
+                crate::ui_log::StatusBarLogText,
+                Text::new(""),
+                TextFont {
+                    font: editor_font,
+                    font_size: tokens::FONT_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_MUTED_COLOR.into()),
             )
         ],
     )
