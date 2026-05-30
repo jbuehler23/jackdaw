@@ -16,34 +16,30 @@ use crate::EditorEntity;
 const RESIZE_HANDLE_THICKNESS: f32 = 5.0;
 const WINDOW_SHELL_CORNER_RADIUS_PX: f32 = 8.0;
 
-/// Root shell node whose corners track windowed vs maximized/fullscreen state.
+/// Root shell node whose corners track windowed vs maximized state.
 #[derive(Component)]
 pub struct WindowShellRoot;
 
 #[derive(Component)]
-pub struct WindowChromeMinimize;
+struct WindowChromeMinimize;
 
 #[derive(Component)]
-pub struct WindowChromeMaximize;
+struct WindowChromeMaximize;
 
 #[derive(Component)]
-pub struct WindowChromeClose;
+struct WindowChromeClose;
 
 #[derive(Component)]
-pub struct WindowChromeResizeRoot;
+struct WindowChromeResizeRoot;
 
 #[derive(Component, Copy, Clone)]
-pub struct WindowChromeResizeEdge(pub CompassOctant);
-
-#[derive(Resource, Default)]
-struct WindowChromeMaximized(bool);
+struct WindowChromeResizeEdge(pub CompassOctant);
 
 pub struct WindowChromePlugin;
 
 impl Plugin for WindowChromePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WindowChromeMaximized>()
-            .add_observer(on_minimize_click)
+        app.add_observer(on_minimize_click)
             .add_observer(on_maximize_click)
             .add_observer(on_close_click);
         #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
@@ -111,7 +107,7 @@ pub fn window_controls(icon_font: Handle<Font>) -> impl Bundle {
                 icon_font.clone(),
                 ButtonVariant::Ghost,
             ),
-            caption_button(Icon::X, WindowChromeClose, icon_font, ButtonVariant::Close,),
+            caption_button(Icon::X, WindowChromeClose, icon_font, ButtonVariant::Close),
         ],
     )
 }
@@ -287,23 +283,18 @@ fn on_resize_edge_press(
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
 fn sync_window_chrome_state(
     _main_thread: bevy::ecs::system::NonSendMarker,
-    windows: Query<(&Window, Entity), With<PrimaryWindow>>,
+    windows: Query<(Entity, &Window), With<PrimaryWindow>>,
     mut overlays: Query<&mut Node, (With<WindowChromeResizeRoot>, Without<WindowShellRoot>)>,
     mut shells: Query<&mut Node, (With<WindowShellRoot>, Without<WindowChromeResizeRoot>)>,
-    mut maximized: ResMut<WindowChromeMaximized>,
+    maximize_buttons: Query<&Children, With<WindowChromeMaximize>>,
+    mut texts: Query<&mut Text>,
 ) {
-    let Ok((window, entity)) = windows.single() else {
+    let Ok((entity, window)) = windows.single() else {
         return;
     };
 
     let is_fullscreen = !matches!(window.mode, WindowMode::Windowed);
-    let is_maximized = WINIT_WINDOWS.with(|windows_cell| {
-        let winit_windows = windows_cell.borrow();
-        winit_windows
-            .get_window(entity)
-            .is_some_and(|backend| backend.is_maximized())
-    });
-    maximized.0 = is_maximized;
+    let is_maximized = primary_window_is_maximized(entity);
 
     let windowed_shell = !is_fullscreen && !is_maximized;
     for mut node in overlays.iter_mut() {
@@ -331,6 +322,23 @@ fn sync_window_chrome_state(
 
     #[cfg(target_os = "windows")]
     apply_windows_corner_preference(entity, windowed_shell);
+
+    let icon = if is_maximized {
+        Icon::Minimize2
+    } else {
+        Icon::Maximize2
+    };
+    let glyph = icon.unicode().to_string();
+    for children in &maximize_buttons {
+        for child in children.iter() {
+            let Ok(mut text) = texts.get_mut(child) else {
+                continue;
+            };
+            if text.0 != glyph {
+                text.0 = glyph.clone();
+            }
+        }
+    }
 }
 
 #[cfg(all(
@@ -370,28 +378,41 @@ fn on_minimize_click(
 fn on_maximize_click(
     click: On<ButtonClickEvent>,
     buttons: Query<Entity, With<WindowChromeMaximize>>,
-    mut windows: Query<&mut Window, With<PrimaryWindow>>,
-    mut maximized: ResMut<WindowChromeMaximized>,
+    mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
 ) {
     if buttons.get(click.entity).is_err() {
         return;
     }
-    maximized.0 = !maximized.0;
-    for mut window in windows.iter_mut() {
-        window.set_maximized(maximized.0);
-    }
+    let Ok((window_entity, mut window)) = windows.single_mut() else {
+        return;
+    };
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
+    let next_maximized = !primary_window_is_maximized(window_entity);
+    #[cfg(any(target_arch = "wasm32", target_os = "ios", target_os = "android"))]
+    let next_maximized = true;
+    window.set_maximized(next_maximized);
+}
+
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
+fn primary_window_is_maximized(window_entity: Entity) -> bool {
+    WINIT_WINDOWS.with(|windows_cell| {
+        let winit_windows = windows_cell.borrow();
+        winit_windows
+            .get_window(window_entity)
+            .is_some_and(|backend| backend.is_maximized())
+    })
 }
 
 fn on_close_click(
     click: On<ButtonClickEvent>,
     buttons: Query<Entity, With<WindowChromeClose>>,
-    primary: Query<Entity, With<PrimaryWindow>>,
+    windows: Query<Entity, With<PrimaryWindow>>,
     mut close_events: MessageWriter<WindowCloseRequested>,
 ) {
     if buttons.get(click.entity).is_err() {
         return;
     }
-    let Ok(window) = primary.single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
     close_events.write(WindowCloseRequested { window });

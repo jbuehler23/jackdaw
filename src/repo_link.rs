@@ -23,8 +23,6 @@ pub struct RepoLinkPlugin;
 impl Plugin for RepoLinkPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "../assets/jackdaw_icon_small.png");
-        // Insert during plugin setup so `OnEnter` spawn systems (which run
-        // before `Startup` on the first frame) can require this resource.
         let assets = app.world().resource::<AssetServer>();
         let handle = load_embedded_asset!(&*assets, "../assets/jackdaw_icon_small.png");
         app.insert_resource(JackdawIcon(handle));
@@ -32,7 +30,7 @@ impl Plugin for RepoLinkPlugin {
     }
 }
 
-/// button with icon to open the Jackdaw repository in the system browser.
+/// Button with icon to open the Jackdaw repository in the system browser.
 pub fn jackdaw_link_button(image: Handle<Image>) -> impl Bundle {
     let variant = ButtonVariant::Ghost;
     (
