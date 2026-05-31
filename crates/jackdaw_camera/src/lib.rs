@@ -21,6 +21,9 @@ impl Plugin for JackdawCameraPlugin {
 /// - Scroll wheel: move forward/back along view direction
 /// - Right-click + scroll: adjust camera speed
 /// - Shift (held): run speed multiplier while flying
+/// - Middle-click + drag: orbit around a pivot point
+/// - Shift + Middle-click + drag: pan the camera
+/// - Alt + Left-click + drag: orbit (alternative binding)
 #[derive(Component)]
 pub struct JackdawCameraSettings {
     /// Mouse look sensitivity (radians per pixel).
@@ -33,6 +36,12 @@ pub struct JackdawCameraSettings {
     pub enabled: bool,
     /// Scroll movement speed (units per scroll line).
     pub scroll_speed: f32,
+    /// Distance from camera to orbit pivot point (units). Updated by
+    /// scroll-wheel dolly so the orbit centre tracks the user's
+    /// implicit focus distance.
+    pub orbit_distance: f32,
+    /// Pan sensitivity multiplier (units per pixel).
+    pub pan_sensitivity: f32,
 }
 
 impl Default for JackdawCameraSettings {
@@ -43,6 +52,8 @@ impl Default for JackdawCameraSettings {
             run_multiplier: 2.0,
             enabled: true,
             scroll_speed: 1.0,
+            orbit_distance: 10.0,
+            pan_sensitivity: 0.01,
         }
     }
 }
@@ -82,6 +93,8 @@ fn camera_system(
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     let right_held = mouse.pressed(MouseButton::Right);
+    let middle_held = mouse.pressed(MouseButton::Middle);
+    let left_held = mouse.pressed(MouseButton::Left);
     let dt = time.delta_secs();
 
     for (mut settings, mut transform, projection) in &mut camera_query {
@@ -92,6 +105,60 @@ fn camera_system(
         let is_ortho = projection
             .as_ref()
             .is_some_and(|p| matches!(p.as_ref(), Projection::Orthographic(_)));
+
+        // --- Orbit (MMB drag, or Alt+LMB drag) -----------------------
+        // Rotates the camera around a pivot point `orbit_distance`
+        // units ahead along the current view direction.  Disabled in
+        // ortho mode so axis-locked views stay aligned.
+        let orbiting = middle_held && !shift && !right_held;
+        let alt_orbiting = alt && left_held && !right_held && !middle_held;
+        if (orbiting || alt_orbiting) && !is_ortho && mouse_delta != Vec2::ZERO {
+            let pivot =
+                transform.translation + transform.forward().as_vec3() * settings.orbit_distance;
+
+            let (mut yaw, mut pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+            yaw -= mouse_delta.x * settings.sensitivity;
+            pitch -= mouse_delta.y * settings.sensitivity;
+            pitch = pitch.clamp(
+                -std::f32::consts::FRAC_PI_2 + 0.01,
+                std::f32::consts::FRAC_PI_2 - 0.01,
+            );
+            transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+
+            // Reposition so the camera stays orbit_distance away from
+            // the pivot while facing the new direction.
+            transform.translation = pivot - transform.forward().as_vec3() * settings.orbit_distance;
+        }
+
+        // --- Pan (Shift+MMB drag) ------------------------------------
+        // Translates the camera along its local right and up axes.
+        // Works in both perspective and ortho.
+        let panning = middle_held && shift && !right_held;
+        if panning && mouse_delta != Vec2::ZERO {
+            let pan_scale = if is_ortho {
+                // In ortho the view extent doesn't change with
+                // translation, so scale pan speed by the ortho scale
+                // so movement feels proportional to the visible area.
+                projection
+                    .as_ref()
+                    .and_then(|p| match p.as_ref() {
+                        Projection::Orthographic(o) => Some(o.scale),
+                        _ => None,
+                    })
+                    .unwrap_or(1.0)
+            } else {
+                // In perspective, scale pan speed by orbit_distance so
+                // closer objects feel snappier and far ones don't
+                // under-pan.
+                settings.orbit_distance
+            };
+            let right = transform.right().as_vec3();
+            let up = transform.up().as_vec3();
+            let offset = (-right * mouse_delta.x + up * mouse_delta.y)
+                * settings.pan_sensitivity
+                * pan_scale;
+            transform.translation += offset;
+        }
 
         // Mouse look (only while right-click held; disabled in ortho
         // so axis-locked views stay aligned).
@@ -122,6 +189,10 @@ fn camera_system(
                     // Perspective: dolly along view direction.
                     let forward = transform.forward().as_vec3();
                     transform.translation += forward * delta * settings.scroll_speed;
+                    // Keep orbit_distance in sync with scroll dolly so
+                    // the orbit pivot tracks the user's implicit focus.
+                    settings.orbit_distance =
+                        (settings.orbit_distance - delta * settings.scroll_speed).clamp(0.5, 500.0);
                 }
             }
         }

@@ -406,7 +406,10 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
             RenderTarget::Image(image_handle.into()),
             Transform::from_xyz(0.0, 4.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y),
             Msaa::Off,
-            JackdawCameraSettings::default(),
+            JackdawCameraSettings {
+                orbit_distance: Vec3::new(0.0, 4.0, 8.0).length(),
+                ..default()
+            },
             ViewportConfig::default(),
             camera_layers,
             ViewportGrid(grid),
@@ -684,7 +687,10 @@ fn update_active_viewport(
     mouse: Res<ButtonInput<MouseButton>>,
     mut fly_state: ResMut<CameraFlyActive>,
 ) {
-    if mouse.just_released(MouseButton::Right) {
+    if mouse.just_released(MouseButton::Right) && !mouse.pressed(MouseButton::Middle) {
+        fly_state.0 = false;
+    }
+    if mouse.just_released(MouseButton::Middle) && !mouse.pressed(MouseButton::Right) {
         fly_state.0 = false;
     }
 
@@ -711,15 +717,20 @@ fn update_active_viewport(
         }
     }
 
-    // During an active fly session, keep the existing active viewport
-    // pinned even when the cursor strays outside its bounds. A normal
-    // hover update only takes effect once the user releases RMB.
+    // During an active fly/orbit/pan session, keep the existing active
+    // viewport pinned even when the cursor strays outside its bounds.
+    // A normal hover update only takes effect once the user releases
+    // the mouse button.
     if !fly_state.0 {
         active.ui_node = hovered.map(|(ui, _)| ui);
         active.camera = hovered.map(|(_, cam)| cam);
     }
 
     if mouse.just_pressed(MouseButton::Right) && hovered.is_some() {
+        fly_state.0 = true;
+    }
+    // Also pin during MMB orbit/pan sessions.
+    if mouse.just_pressed(MouseButton::Middle) && hovered.is_some() {
         fly_state.0 = true;
     }
 
@@ -732,7 +743,7 @@ fn update_active_viewport(
     let fly_engaged = fly_state.0;
 
     // Enable fly only on the active camera; disable all others. The
-    // fly session also keeps fly enabled when the cursor leaves.
+    // fly/orbit/pan session also keeps controls enabled when the cursor leaves.
     for (entity, mut settings) in &mut camera_query {
         let is_target = target_camera == Some(entity);
         let should_enable = inputs_clear && (is_target && (hovered.is_some() || fly_engaged));
