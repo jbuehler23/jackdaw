@@ -62,13 +62,24 @@ pub enum GizmoAxis {
     Z,
 }
 
+pub struct GizmoTarget {
+    pub entity: Entity,
+    pub start_transform: Transform,
+}
+
 #[derive(Resource, Default)]
 pub struct GizmoDragState {
     pub active: bool,
     pub axis: Option<GizmoAxis>,
     pub drag_start_screen: Vec2,
-    pub start_transform: Transform,
-    pub entity: Option<Entity>,
+    pub targets: Vec<GizmoTarget>,
+    /// World-space centroid, used to draw the gizmo and project the drag axis.
+    pub pivot: Vec3,
+    /// Centroid of the targets' local start translations, used as the orbit
+    /// center for rotate/scale. For a single target (or a group under one
+    /// parent) this keeps the transform in the targets' own space so parented
+    /// entities are not displaced; only mixed-parent groups are approximate.
+    pub pivot_local: Vec3,
     pub accumulated_delta: f32,
     /// Camera entity of the viewport this drag was started in.
     /// Captured at modal start so subsequent frames keep referring to
@@ -140,6 +151,7 @@ fn gizmo_world_scale(projection: &Projection, cam_tf: &GlobalTransform, gizmo_po
 pub(crate) fn handle_gizmo_hover(
     selection: Res<Selection>,
     transforms: Query<&GlobalTransform, With<Selected>>,
+    parents: Query<&ChildOf>,
     camera_query: Query<(&Camera, &GlobalTransform, &Projection), With<MainViewportCamera>>,
     cursor: crate::viewport::UiCursorPos,
     mode: Res<ActiveTool>,
@@ -163,12 +175,6 @@ pub(crate) fn handle_gizmo_hover(
         return;
     }
 
-    let Some(primary) = selection.primary() else {
-        return;
-    };
-    let Ok(global_tf) = transforms.get(primary) else {
-        return;
-    };
     // Hover-routed: only the camera + viewport pair under the cursor
     // gets gizmo hover treatment (multi-viewport).
     let Some(camera_entity) = active.camera else {
@@ -191,10 +197,23 @@ pub(crate) fn handle_gizmo_hover(
         return;
     };
 
-    let gizmo_pos = global_tf.translation();
     if matches!(*mode, ActiveTool::Select) {
         return;
     }
+
+    let topmost = topmost_selected(
+        &selection.entities,
+        |e| parents.get(e).ok().map(|c| c.0),
+        |e| selection.entities.contains(&e),
+    );
+    let positions: Vec<Vec3> = topmost
+        .iter()
+        .filter_map(|&e| transforms.get(e).ok().map(GlobalTransform::translation))
+        .collect();
+    if positions.is_empty() {
+        return;
+    }
+    let gizmo_pos = centroid(&positions);
 
     // Scale is inherently local, so force local orientation so handles match transform.scale axes
     let effective_space = if *mode == ActiveTool::Scale {
@@ -202,7 +221,15 @@ pub(crate) fn handle_gizmo_hover(
     } else {
         &space
     };
-    let rotation = gizmo_rotation(global_tf, effective_space);
+    let rotation = if topmost.len() == 1 {
+        transforms
+            .get(topmost[0])
+            .ok()
+            .map(|gt| gizmo_rotation(gt, effective_space))
+            .unwrap_or(Quat::IDENTITY)
+    } else {
+        Quat::IDENTITY
+    };
 
     let scale = gizmo_world_scale(projection, cam_tf, gizmo_pos);
 
@@ -297,6 +324,7 @@ pub fn gizmo_drag(
     _: In<OperatorParameters>,
     selection: Res<Selection>,
     mut transforms: Query<(&GlobalTransform, &mut Transform), With<Selected>>,
+    parents: Query<&ChildOf>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_ctx: GizmoViewportCtx,
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
@@ -351,14 +379,31 @@ pub fn gizmo_drag(
     };
 
     if modal.is_none() {
-        let primary = selection.primary()?;
         let axis = hover.hovered_axis?;
-        let (_, transform) = transforms.get(primary)?;
+        let target_entities = topmost_selected(
+            &selection.entities,
+            |e| parents.get(e).ok().map(|c| c.0),
+            |e| selection.entities.contains(&e),
+        );
+        let mut targets = Vec::new();
+        let mut positions = Vec::new();
+        let mut local_positions = Vec::new();
+        for e in target_entities {
+            if let Ok((gt, t)) = transforms.get(e) {
+                targets.push(GizmoTarget { entity: e, start_transform: *t });
+                positions.push(gt.translation());
+                local_positions.push(t.translation);
+            }
+        }
+        if targets.is_empty() {
+            return OperatorResult::Finished;
+        }
         drag_state.active = true;
         drag_state.axis = Some(axis);
         drag_state.drag_start_screen = viewport_cursor;
-        drag_state.start_transform = *transform;
-        drag_state.entity = Some(primary);
+        drag_state.targets = targets;
+        drag_state.pivot = centroid(&positions);
+        drag_state.pivot_local = centroid(&local_positions);
         drag_state.camera = Some(camera_entity);
         drag_state.viewport = Some(viewport_entity);
         drag_state.accumulated_delta = 0.0;
@@ -376,28 +421,33 @@ pub fn gizmo_drag(
         return OperatorResult::Finished;
     }
 
-    let Some(entity) = drag_state.entity else {
+    if drag_state.targets.is_empty() {
         return OperatorResult::Finished;
-    };
-    let Ok((global_tf, mut transform)) = transforms.get_mut(entity) else {
-        return OperatorResult::Finished;
-    };
+    }
     let Some(axis) = drag_state.axis else {
         return OperatorResult::Finished;
     };
 
-    let effective_space = if *mode == ActiveTool::Scale {
-        &GizmoSpace::Local
+    // Compute axis direction from the single target's frame (local/world),
+    // or world axes for multi-target drags. The immutable borrow via .get
+    // is released before the mutation loop below.
+    let rotation = if drag_state.targets.len() == 1 {
+        let single_entity = drag_state.targets[0].entity;
+        transforms
+            .get(single_entity)
+            .ok()
+            .map(|(g, _)| gizmo_rotation(g, if *mode == ActiveTool::Scale { &GizmoSpace::Local } else { &space }))
+            .unwrap_or(Quat::IDENTITY)
     } else {
-        &space
+        Quat::IDENTITY
     };
-    let rotation = gizmo_rotation(global_tf, effective_space);
     let axis_dir = match axis {
         GizmoAxis::X => rotation * Vec3::X,
         GizmoAxis::Y => rotation * Vec3::Y,
         GizmoAxis::Z => rotation * Vec3::Z,
     };
-    let gizmo_pos = global_tf.translation();
+    let pivot = drag_state.pivot;
+    let pivot_local = drag_state.pivot_local;
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let mouse_delta = viewport_cursor - drag_state.drag_start_screen;
 
@@ -407,12 +457,11 @@ pub fn gizmo_drag(
 
     match *mode {
         ActiveTool::Translate => {
-            let drag_start_pos = drag_state.start_transform.translation;
-            let Ok(origin_screen) = camera.world_to_viewport(cam_tf, drag_start_pos) else {
+            // Use the pivot as the reference point for projecting the axis onto screen.
+            let Ok(origin_screen) = camera.world_to_viewport(cam_tf, pivot) else {
                 return OperatorResult::Running;
             };
-            let Ok(axis_screen) = camera.world_to_viewport(cam_tf, drag_start_pos + axis_dir)
-            else {
+            let Ok(axis_screen) = camera.world_to_viewport(cam_tf, pivot + axis_dir) else {
                 return OperatorResult::Running;
             };
             let screen_axis = axis_screen - origin_screen;
@@ -422,7 +471,11 @@ pub fn gizmo_drag(
             }
             let projected = mouse_delta.dot(screen_axis) / len_sq;
             let snapped = snap_settings.snap_translate_vec3_if(axis_dir * projected, ctrl);
-            transform.translation = drag_state.start_transform.translation + snapped;
+            for t in &drag_state.targets {
+                if let Ok((_, mut tf)) = transforms.get_mut(t.entity) {
+                    tf.translation = t.start_transform.translation + snapped;
+                }
+            }
         }
         ActiveTool::Rotate => {
             let screen_axis = match axis {
@@ -432,25 +485,39 @@ pub fn gizmo_drag(
             };
             let raw_angle = mouse_delta.dot(screen_axis) * ROTATE_SENSITIVITY;
             let angle = snap_settings.snap_rotate_if(raw_angle, ctrl);
-            transform.rotation =
-                Quat::from_axis_angle(axis_dir, angle) * drag_state.start_transform.rotation;
+            let r = Quat::from_axis_angle(axis_dir, angle);
+            for t in &drag_state.targets {
+                if let Ok((_, mut tf)) = transforms.get_mut(t.entity) {
+                    tf.translation = pivot_local + r * (t.start_transform.translation - pivot_local);
+                    tf.rotation = r * t.start_transform.rotation;
+                }
+            }
         }
         ActiveTool::Scale => {
-            let Ok(origin_screen) = camera.world_to_viewport(cam_tf, gizmo_pos) else {
+            let Ok(origin_screen) = camera.world_to_viewport(cam_tf, pivot) else {
                 return OperatorResult::Running;
             };
-            let Ok(axis_screen) = camera.world_to_viewport(cam_tf, gizmo_pos + axis_dir) else {
+            let Ok(axis_screen) = camera.world_to_viewport(cam_tf, pivot + axis_dir) else {
                 return OperatorResult::Running;
             };
             let screen_axis = (axis_screen - origin_screen).normalize_or_zero();
             let projected = mouse_delta.dot(screen_axis) * SCALE_SENSITIVITY;
-            let mut new_scale = drag_state.start_transform.scale;
+            let mut factor = Vec3::ONE;
             match axis {
-                GizmoAxis::X => new_scale.x = f32::max(new_scale.x + projected, MIN_SCALE),
-                GizmoAxis::Y => new_scale.y = f32::max(new_scale.y + projected, MIN_SCALE),
-                GizmoAxis::Z => new_scale.z = f32::max(new_scale.z + projected, MIN_SCALE),
+                GizmoAxis::X => factor.x = 1.0 + projected,
+                GizmoAxis::Y => factor.y = 1.0 + projected,
+                GizmoAxis::Z => factor.z = 1.0 + projected,
             }
-            transform.scale = snap_settings.snap_scale_vec3_if(new_scale, ctrl);
+            for t in &drag_state.targets {
+                if let Ok((_, mut tf)) = transforms.get_mut(t.entity) {
+                    let offset = t.start_transform.translation - pivot_local;
+                    tf.translation = pivot_local + factor * offset;
+                    // Clamp the final scale (not the factor) so small start
+                    // scales cannot be driven below the floor.
+                    let scaled = (t.start_transform.scale * factor).max(Vec3::splat(MIN_SCALE));
+                    tf.scale = snap_settings.snap_scale_vec3_if(scaled, ctrl);
+                }
+            }
         }
         ActiveTool::Select => {}
     }
@@ -462,10 +529,10 @@ fn cancel_gizmo_drag(
     mut transforms: Query<&mut Transform, With<Selected>>,
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
 ) {
-    if let Some(entity) = drag_state.entity
-        && let Ok(mut transform) = transforms.get_mut(entity)
-    {
-        *transform = drag_state.start_transform;
+    for t in &drag_state.targets {
+        if let Ok(mut transform) = transforms.get_mut(t.entity) {
+            *transform = t.start_transform;
+        }
     }
     clear_gizmo_drag_state(&mut drag_state, &mut cursor_query);
 }
@@ -476,7 +543,7 @@ fn clear_gizmo_drag_state(
 ) {
     drag_state.active = false;
     drag_state.axis = None;
-    drag_state.entity = None;
+    drag_state.targets.clear();
     drag_state.camera = None;
     drag_state.viewport = None;
     if let Ok(mut cursor_opts) = cursor_query.single_mut() {
@@ -488,6 +555,7 @@ fn draw_gizmos(
     mut gizmos: Gizmos<TransformGizmoGroup>,
     selection: Res<Selection>,
     transforms: Query<&GlobalTransform, With<Selected>>,
+    parents: Query<&ChildOf>,
     camera_query: Query<(Entity, &GlobalTransform, &Projection), With<MainViewportCamera>>,
     active: Res<crate::viewport::ActiveViewport>,
     mode: Res<ActiveTool>,
@@ -506,12 +574,24 @@ fn draw_gizmos(
         return;
     }
 
-    let Some(primary) = selection.primary() else {
+    let topmost = topmost_selected(
+        &selection.entities,
+        |e| parents.get(e).ok().map(|c| c.0),
+        |e| selection.entities.contains(&e),
+    );
+    let positions: Vec<Vec3> = topmost
+        .iter()
+        .filter_map(|&e| transforms.get(e).ok().map(GlobalTransform::translation))
+        .collect();
+    if positions.is_empty() {
         return;
-    };
-    let Ok(global_tf) = transforms.get(primary) else {
-        return;
-    };
+    }
+    // Live centroid every frame so the gizmo tracks the selection during a
+    // drag (translate follows; rotate/scale keep the centroid at the pivot).
+    // Reading the targets' GlobalTransform glues the gizmo to the meshes,
+    // which read the same transforms.
+    let gizmo_pos = centroid(&positions);
+
     // Multi-viewport: scale the gizmo by the active (hovered)
     // viewport's camera, falling back to any camera. The single
     // Gizmos pass renders into every viewport, so the size will be
@@ -525,15 +605,22 @@ fn draw_gizmos(
         return;
     };
 
-    let pos = global_tf.translation();
     let effective_space = if *mode == ActiveTool::Scale {
         &GizmoSpace::Local
     } else {
         &space
     };
-    let rotation = gizmo_rotation(global_tf, effective_space);
+    let rotation = if topmost.len() == 1 {
+        transforms
+            .get(topmost[0])
+            .ok()
+            .map(|gt| gizmo_rotation(gt, effective_space))
+            .unwrap_or(Quat::IDENTITY)
+    } else {
+        Quat::IDENTITY
+    };
 
-    let scale = gizmo_world_scale(projection, cam_tf, pos);
+    let scale = gizmo_world_scale(projection, cam_tf, gizmo_pos);
 
     let right = rotation * Vec3::X;
     let up = rotation * Vec3::Y;
@@ -554,22 +641,22 @@ fn draw_gizmos(
         ActiveTool::Translate => {
             gizmos
                 .arrow(
-                    pos + right * (AXIS_START_OFFSET * scale),
-                    pos + right * (AXIS_LENGTH * scale),
+                    gizmo_pos + right * (AXIS_START_OFFSET * scale),
+                    gizmo_pos + right * (AXIS_LENGTH * scale),
                     x_color,
                 )
                 .with_tip_length(AXIS_TIP_LENGTH * scale);
             gizmos
                 .arrow(
-                    pos + up * (AXIS_START_OFFSET * scale),
-                    pos + up * (AXIS_LENGTH * scale),
+                    gizmo_pos + up * (AXIS_START_OFFSET * scale),
+                    gizmo_pos + up * (AXIS_LENGTH * scale),
                     y_color,
                 )
                 .with_tip_length(AXIS_TIP_LENGTH * scale);
             gizmos
                 .arrow(
-                    pos + forward * (AXIS_START_OFFSET * scale),
-                    pos + forward * (AXIS_LENGTH * scale),
+                    gizmo_pos + forward * (AXIS_START_OFFSET * scale),
+                    gizmo_pos + forward * (AXIS_LENGTH * scale),
                     z_color,
                 )
                 .with_tip_length(AXIS_TIP_LENGTH * scale);
@@ -577,17 +664,17 @@ fn draw_gizmos(
         ActiveTool::Rotate => {
             // Draw rotation rings
             gizmos.circle(
-                Isometry3d::new(pos, Quat::from_rotation_arc(Vec3::Z, right)),
+                Isometry3d::new(gizmo_pos, Quat::from_rotation_arc(Vec3::Z, right)),
                 ROTATE_RING_RADIUS * scale,
                 x_color,
             );
             gizmos.circle(
-                Isometry3d::new(pos, Quat::from_rotation_arc(Vec3::Z, up)),
+                Isometry3d::new(gizmo_pos, Quat::from_rotation_arc(Vec3::Z, up)),
                 ROTATE_RING_RADIUS * scale,
                 y_color,
             );
             gizmos.circle(
-                Isometry3d::new(pos, Quat::from_rotation_arc(Vec3::Z, forward)),
+                Isometry3d::new(gizmo_pos, Quat::from_rotation_arc(Vec3::Z, forward)),
                 ROTATE_RING_RADIUS * scale,
                 z_color,
             );
@@ -596,8 +683,8 @@ fn draw_gizmos(
             // Draw scale handles: lines with cubes at the end
             let cube_half = SCALE_CUBE_SIZE * scale;
             for (dir, color) in [(right, x_color), (up, y_color), (forward, z_color)] {
-                let end = pos + dir * (AXIS_LENGTH * scale);
-                gizmos.line(pos + dir * (AXIS_START_OFFSET * scale), end, color);
+                let end = gizmo_pos + dir * (AXIS_LENGTH * scale);
+                gizmos.line(gizmo_pos + dir * (AXIS_START_OFFSET * scale), end, color);
                 // Draw a small cube at the end using lines
                 let x = Vec3::X * cube_half;
                 let y = Vec3::Y * cube_half;
@@ -692,4 +779,65 @@ fn point_to_ring_screen_dist(
     }
 
     min_dist
+}
+
+/// Entities to transform as a group: the selected entities minus any whose
+/// ancestor is also selected (so a child moves once, via its parent, not
+/// twice). `ancestor_of` yields an entity's parent if any; `is_selected`
+/// reports selection membership.
+fn topmost_selected(
+    selected: &[Entity],
+    ancestor_of: impl Fn(Entity) -> Option<Entity>,
+    is_selected: impl Fn(Entity) -> bool,
+) -> Vec<Entity> {
+    selected
+        .iter()
+        .copied()
+        .filter(|&e| {
+            let mut cur = ancestor_of(e);
+            while let Some(a) = cur {
+                if is_selected(a) {
+                    return false;
+                }
+                cur = ancestor_of(a);
+            }
+            true
+        })
+        .collect()
+}
+
+/// Mean of a set of world positions. Empty input returns the origin.
+fn centroid(positions: &[Vec3]) -> Vec3 {
+    if positions.is_empty() {
+        return Vec3::ZERO;
+    }
+    positions.iter().copied().sum::<Vec3>() / positions.len() as f32
+}
+
+#[cfg(test)]
+mod central_gizmo_tests {
+    use super::*;
+
+    #[test]
+    fn topmost_excludes_selected_descendants() {
+        let parent = Entity::from_raw_u32(1).unwrap();
+        let child = Entity::from_raw_u32(2).unwrap();
+        let other = Entity::from_raw_u32(3).unwrap();
+        let selected = [parent, child, other];
+        let is_selected = |e: Entity| selected.contains(&e);
+        let ancestor = |e: Entity| if e == child { Some(parent) } else { None };
+        let out = topmost_selected(&selected, ancestor, is_selected);
+        // Order-independent: child is excluded (its parent is selected); the
+        // other two survive. Avoids depending on `Entity`'s sort order.
+        assert_eq!(out.len(), 2);
+        assert!(out.contains(&parent));
+        assert!(out.contains(&other));
+        assert!(!out.contains(&child));
+    }
+
+    #[test]
+    fn centroid_is_mean_of_positions() {
+        let c = centroid(&[Vec3::ZERO, Vec3::new(2.0, 0.0, 0.0), Vec3::new(0.0, 3.0, 0.0)]);
+        assert!((c - Vec3::new(2.0 / 3.0, 1.0, 0.0)).length() < 1e-6);
+    }
 }

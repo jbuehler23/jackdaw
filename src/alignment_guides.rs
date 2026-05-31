@@ -59,7 +59,10 @@ fn is_translate_drag_active(
     modal_state: &ModalTransformState,
     viewport_drag: &ViewportDragState,
 ) -> bool {
-    if gizmo_drag.active && *active_tool == ActiveTool::Translate {
+    // Single-target gizmo translate only. For a multi-target group drag,
+    // snapping the representative entity alone would drift the group apart,
+    // so alignment guides stay off for groups.
+    if gizmo_drag.active && *active_tool == ActiveTool::Translate && gizmo_drag.targets.len() == 1 {
         return true;
     }
     if let Some(ref active) = modal_state.active
@@ -78,13 +81,13 @@ fn dragged_entity_position(
     viewport_drag: &ViewportDragState,
     transforms: &Query<&GlobalTransform>,
 ) -> Option<(Entity, Vec3)> {
-    // Gizmo translate
+    // Gizmo translate: use the first target entity as the representative.
     if gizmo_drag.active
         && *active_tool == ActiveTool::Translate
-        && let Some(e) = gizmo_drag.entity
-        && let Ok(gt) = transforms.get(e)
+        && let Some(t) = gizmo_drag.targets.first()
+        && let Ok(gt) = transforms.get(t.entity)
     {
-        return Some((e, gt.translation()));
+        return Some((t.entity, gt.translation()));
     }
     // Modal grab
     if let Some(ref active) = modal_state.active
