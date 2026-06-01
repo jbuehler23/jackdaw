@@ -166,7 +166,7 @@ pub fn touch_recent(root: &Path, name: &str) {
         RecentEntry {
             path: root.to_path_buf(),
             name: name.to_string(),
-            last_opened: chrono_now(),
+            last_opened: crate::timestamps::utc_rfc3339_now(),
         },
     );
 
@@ -174,14 +174,4 @@ pub fn touch_recent(root: &Path, name: &str) {
     recent.projects.truncate(10);
 
     save_recent_projects(&recent);
-}
-
-fn chrono_now() -> String {
-    // Simple ISO 8601-ish timestamp without pulling in chrono
-    let dur = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs();
-    // Just store the unix timestamp, good enough for sorting.
-    format!("{secs}")
 }

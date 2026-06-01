@@ -46,7 +46,7 @@ pub fn poll_registry_task(
                 jsn: jackdaw_remote::schema::JsnRegistryHeader {
                     format_version: [1, 0, 0],
                 },
-                extracted_at: timestamp_now(),
+                extracted_at: crate::timestamps::utc_rfc3339_now(),
                 source: jackdaw_remote::schema::JsnRegistrySource {
                     app_name: Some(app_info.app_name),
                     endpoint: manager.endpoint.clone(),
@@ -87,11 +87,4 @@ fn cache_registry_to_disk(jsn_dir: &std::path::Path, registry: &JsnRegistry) {
             warn!("Failed to serialize registry: {e}");
         }
     }
-}
-
-fn timestamp_now() -> String {
-    let dur = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{}", dur.as_secs())
 }

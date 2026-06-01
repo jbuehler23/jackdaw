@@ -72,6 +72,7 @@ pub mod selection;
 pub mod snapping;
 pub mod status_bar;
 pub mod terrain;
+pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod transform_ops;
 pub mod undo_snapshot;
