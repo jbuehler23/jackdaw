@@ -11,6 +11,7 @@ use bevy::{
     asset::AssetPlugin,
     image::{ImageAddressMode, ImagePlugin, ImageSamplerDescriptor},
     prelude::*,
+    winit::WinitSettings,
 };
 use jackdaw::prelude::*;
 use jackdaw::project_select::PendingAutoOpen;
@@ -59,7 +60,8 @@ fn main() -> AppExit {
         // bevy_enhanced_input.
         .add_plugins((PhysicsPlugins::default(), EnhancedInputPlugin))
         .add_plugins(EditorPlugins::default())
-        .add_plugins({{crate_name}}::MyGamePlugin);
+        .add_plugins({{crate_name}}::MyGamePlugin)
+        .insert_resource(WinitSettings::desktop_app());
 
     if let Some(root) = project_root.filter(|p| p.is_dir()) {
         // `skip_build = true`: this binary IS the editor; no
