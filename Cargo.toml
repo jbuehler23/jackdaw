@@ -11,7 +11,7 @@ categories = ["game-development", "graphics"]
 # Ship only what the published crate needs: library source, the
 # assets referenced by `embedded_asset!` (env maps + grid texture),
 # the `[[example]]` source files declared below, manifest, license,
-# and README. Everything else in the repo (book/, docs/, templates/,
+# README, and small logos. Everything else in the repo (book/, docs/, templates/,
 # demo assets in `assets/jan/`, `assets/models/`, etc.) is for
 # source-checkout development and stays out of the .crate so it fits
 # under crates.io's 10 MiB upload limit.
@@ -19,7 +19,6 @@ include = [
     "src/**/*.rs",
     "examples/extension/*.rs",
     "assets/environment_maps/**/*",
-    "assets/logo/jackdaw_icon.png",
     "assets/logo/jackdaw_icon_small.png",
     "assets/logo/jackdaw_icon_pride_small.png",
     "assets/textures/jd_grid.png",

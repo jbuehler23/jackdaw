@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="/assets/logo/jackdaw_icon.png" alt="Jackdaw" width="200" />
+  <img src="https://raw.githubusercontent.com/jbuehler23/jackdaw/main/assets/logo/jackdaw_icon.png" alt="Jackdaw" width="200" />
 </p>
 
 # Jackdaw
