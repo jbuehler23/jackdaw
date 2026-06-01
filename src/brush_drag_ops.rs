@@ -22,7 +22,8 @@ use crate::brush::interaction::{
 use crate::brush::box_select::BrushBoxSelectState;
 use crate::brush::{
     BrushDragCapture, BrushDragState, BrushEditMode, BrushFaceEntity, BrushMeshCache,
-    BrushSelection, EdgeDragState, EditMode, VertexDragState, rebuild_brush_from_vertices,
+    BrushSelection, BrushSubSelection, EdgeDragState, EditMode, VertexDragState,
+    rebuild_brush_from_vertices,
 };
 use crate::draw_brush::DrawBrushState;
 use crate::keybind_focus::KeybindFocus;
@@ -232,8 +233,7 @@ pub fn brush_face_drag(
         if in_face_edit {
             let candidates: Vec<Entity> = brush_selection.edit_brushes().collect();
 
-            let mut best_brush: Option<Entity> = None;
-            let mut best_face: Option<usize> = None;
+            let mut best: Option<(Entity, usize)> = None;
             let mut best_depth = f32::MAX;
 
             for candidate in &candidates {
@@ -272,14 +272,13 @@ pub fn brush_face_drag(
                         .length_squared();
                         if depth < best_depth {
                             best_depth = depth;
-                            best_brush = Some(brush_entity);
-                            best_face = Some(face_ent.face_index);
+                            best = Some((brush_entity, face_ent.face_index));
                         }
                     }
                 }
             }
 
-            let Some(brush_entity) = best_brush else {
+            let Some((brush_entity, face_idx)) = best else {
                 // No face hit. Ctrl is additive-toggle, so an empty
                 // Ctrl-click is a no-op. Otherwise hand the press to the
                 // edit-mode box-select (Shift records an add-select);
@@ -290,7 +289,6 @@ pub fn brush_face_drag(
                 }
                 return OperatorResult::Cancelled;
             };
-            let face_idx = best_face.expect("best_brush set implies best_face set");
 
             brush_selection.active_brush = Some(brush_entity);
             drag_state.quick_action = false;
@@ -854,23 +852,9 @@ pub fn brush_vertex_drag(
             let cache = brush_caches.get(brush_entity)?;
             let brush_global = brush_transforms.get(brush_entity)?;
 
-            let mut unique_edges: Vec<(usize, usize)> = Vec::new();
-            for polygon in &cache.face_polygons {
-                if polygon.len() < 2 {
-                    continue;
-                }
-                for i in 0..polygon.len() {
-                    let a = polygon[i];
-                    let b = polygon[(i + 1) % polygon.len()];
-                    let edge = (a.min(b), a.max(b));
-                    if !unique_edges.contains(&edge) {
-                        unique_edges.push(edge);
-                    }
-                }
-            }
             let mut best_split: Option<Vec3> = None;
             let mut best_dist = 20.0_f32;
-            for &(a, b) in &unique_edges {
+            for (a, b) in cache.unique_edges() {
                 let midpoint = (cache.vertices[a] + cache.vertices[b]) * 0.5;
                 if let Ok(screen) =
                     camera.world_to_viewport(cam_tf, brush_global.transform_point(midpoint))
@@ -912,8 +896,7 @@ pub fn brush_vertex_drag(
         }
 
         // Plain or Ctrl+click: find the nearest vertex across all edit brushes.
-        let mut best_brush: Option<Entity> = None;
-        let mut best_vert: Option<usize> = None;
+        let mut best: Option<(Entity, usize)> = None;
         let mut best_dist = 20.0_f32;
         for &brush_entity in &candidates {
             let Ok(cache) = brush_caches.get(brush_entity) else {
@@ -929,13 +912,12 @@ pub fn brush_vertex_drag(
                     let dist = (screen - viewport_cursor).length();
                     if dist < best_dist {
                         best_dist = dist;
-                        best_brush = Some(brush_entity);
-                        best_vert = Some(vi);
+                        best = Some((brush_entity, vi));
                     }
                 }
             }
         }
-        let Some(brush_entity) = best_brush else {
+        let Some((brush_entity, vi)) = best else {
             // No vertex hit. Ctrl is additive-toggle, so an empty
             // Ctrl-click is a no-op. Otherwise hand the press to the
             // edit-mode box-select (Shift records an add-select); staying
@@ -946,7 +928,6 @@ pub fn brush_vertex_drag(
             }
             return OperatorResult::Cancelled;
         };
-        let vi = best_vert.expect("best_brush set implies best_vert set");
 
         brush_selection.active_brush = Some(brush_entity);
 
@@ -1033,44 +1014,31 @@ pub fn brush_vertex_drag(
         drag_state.start_face_polygons = cache.face_polygons.clone();
 
         // Capture every edit brush with selected vertices so one shared world
-        // offset moves them all. The active brush's capture uses the
-        // split-extended vertex list above so a Shift-split still works.
-        let mut captures = Vec::new();
-        for e in brush_selection.edit_brushes() {
-            let indices: Vec<usize> = brush_selection
-                .sub(e)
-                .map(|s| s.vertices.clone())
-                .unwrap_or_default();
-            if indices.is_empty() {
-                continue;
-            }
-            let Ok(e_cache) = brush_caches.get(e) else {
-                continue;
-            };
-            let Ok(e_brush) = brushes.get(e) else {
-                continue;
-            };
-            let Ok(e_global) = brush_transforms.get(e) else {
-                continue;
-            };
-            let e_all_vertices = if e == brush_entity {
-                drag_state.start_all_vertices.clone()
-            } else {
-                e_cache.vertices.clone()
-            };
-            let start_local_positions: Vec<Vec3> = indices
+        // offset moves them all.
+        let mut captures = capture_edit_brushes(
+            &brush_selection,
+            &brushes,
+            &brush_caches,
+            &brush_transforms,
+            |sub, _| sub.vertices.clone(),
+        );
+        // A Shift-split appends one vertex to the active brush only. The shared
+        // capture builds from the live cache, which does not contain that
+        // vertex, so re-derive the active brush's capture from the
+        // split-extended vertex list set above.
+        if drag_state.split_vertex.is_some()
+            && let Some(capture) = captures.iter_mut().find(|c| c.entity == brush_entity)
+        {
+            let extended = &drag_state.start_all_vertices;
+            capture.start_world = capture
+                .indices
                 .iter()
-                .map(|&vi| e_all_vertices.get(vi).copied().unwrap_or(Vec3::ZERO))
+                .map(|&vi| {
+                    let local = extended.get(vi).copied().unwrap_or(Vec3::ZERO);
+                    brush_global.transform_point(local)
+                })
                 .collect();
-            captures.push(BrushDragCapture {
-                entity: e,
-                start_brush: e_brush.clone(),
-                start_all_vertices: e_all_vertices,
-                start_face_polygons: e_cache.face_polygons.clone(),
-                indices,
-                start_local_positions,
-                start_world_to_local: e_global.affine().inverse(),
-            });
+            capture.start_all_vertices = extended.clone();
         }
         drag_state.brush_captures = captures;
         set_grab_cursor(&mut override_cursor);
@@ -1078,36 +1046,21 @@ pub fn brush_vertex_drag(
 
     if drag_state.active {
         let mouse_delta = viewport_cursor - drag_state.start_cursor;
-        let Some(local_offset) = compute_brush_drag_offset(
-            drag_state.constraint,
-            mouse_delta,
-            cam_tf,
-            camera,
-            brush_global,
-        ) else {
-            return OperatorResult::Running;
-        };
         let primary_start = drag_state
             .start_vertex_positions
             .first()
             .copied()
             .unwrap_or(Vec3::ZERO);
-        let local_offset = snap_drag_local_offset(
-            local_offset,
-            primary_start,
+        apply_shared_drag(
             drag_state.constraint,
+            mouse_delta,
+            primary_start,
+            cam_tf,
+            camera,
             brush_global,
             &snap_settings,
             ctrl,
-        );
-        // The snapped offset is in the active brush's local space; lift it to a
-        // world displacement so every captured brush can re-express it in its
-        // own local space. `transform_vector3` applies rotation + scale only.
-        let world_offset = brush_global.affine().transform_vector3(local_offset);
-
-        broadcast_drag_to_captures(
             &drag_state.brush_captures,
-            world_offset,
             &mut brushes,
             &mut halfedge_q,
         );
@@ -1236,8 +1189,7 @@ pub fn brush_edge_drag(
             return OperatorResult::Cancelled;
         }
 
-        let mut best_brush: Option<Entity> = None;
-        let mut best_edge: Option<(usize, usize)> = None;
+        let mut best: Option<(Entity, (usize, usize))> = None;
         let mut best_dist = 20.0_f32;
 
         for &brush_entity in &candidates {
@@ -1248,22 +1200,7 @@ pub fn brush_edge_drag(
                 continue;
             };
 
-            let mut unique_edges: Vec<(usize, usize)> = Vec::new();
-            for polygon in &cache.face_polygons {
-                if polygon.len() < 2 {
-                    continue;
-                }
-                for i in 0..polygon.len() {
-                    let a = polygon[i];
-                    let b = polygon[(i + 1) % polygon.len()];
-                    let edge = (a.min(b), a.max(b));
-                    if !unique_edges.contains(&edge) {
-                        unique_edges.push(edge);
-                    }
-                }
-            }
-
-            for &(a, b) in &unique_edges {
+            for (a, b) in cache.unique_edges() {
                 let wa = brush_global.transform_point(cache.vertices[a]);
                 let wb = brush_global.transform_point(cache.vertices[b]);
                 let Ok(sa) = camera.world_to_viewport(cam_tf, wa) else {
@@ -1275,13 +1212,12 @@ pub fn brush_edge_drag(
                 let dist = point_to_segment_dist(viewport_cursor, sa, sb);
                 if dist < best_dist {
                     best_dist = dist;
-                    best_brush = Some(brush_entity);
-                    best_edge = Some((a, b));
+                    best = Some((brush_entity, (a, b)));
                 }
             }
         }
 
-        let Some(brush_entity) = best_brush else {
+        let Some((brush_entity, edge)) = best else {
             // No edge hit. Ctrl is additive-toggle, so an empty
             // Ctrl-click is a no-op. Otherwise hand the press to the
             // edit-mode box-select (Shift records an add-select); staying
@@ -1292,7 +1228,6 @@ pub fn brush_edge_drag(
             }
             return OperatorResult::Cancelled;
         };
-        let edge = best_edge.expect("best_brush set implies best_edge set");
 
         brush_selection.active_brush = Some(brush_entity);
 
@@ -1384,83 +1319,45 @@ pub fn brush_edge_drag(
         // Capture every edit brush with selected edges so one shared world
         // offset moves them all. `indices` are the deduped endpoint vertices of
         // that brush's selected edges.
-        let mut captures = Vec::new();
-        for e in brush_selection.edit_brushes() {
-            let edges: Vec<(usize, usize)> = brush_selection
-                .sub(e)
-                .map(|s| s.edges.clone())
-                .unwrap_or_default();
-            if edges.is_empty() {
-                continue;
-            }
-            let Ok(e_cache) = brush_caches.get(e) else {
-                continue;
-            };
-            let Ok(e_brush) = brushes.get(e) else {
-                continue;
-            };
-            let Ok(e_global) = brush_transforms.get(e) else {
-                continue;
-            };
-            let mut e_seen = std::collections::HashSet::new();
-            let mut indices = Vec::new();
-            for &(a, b) in &edges {
-                if e_seen.insert(a) {
-                    indices.push(a);
+        drag_state.brush_captures = capture_edit_brushes(
+            &brush_selection,
+            &brushes,
+            &brush_caches,
+            &brush_transforms,
+            |sub, _| {
+                let mut seen = std::collections::HashSet::new();
+                let mut indices = Vec::new();
+                for &(a, b) in &sub.edges {
+                    if seen.insert(a) {
+                        indices.push(a);
+                    }
+                    if seen.insert(b) {
+                        indices.push(b);
+                    }
                 }
-                if e_seen.insert(b) {
-                    indices.push(b);
-                }
-            }
-            let start_local_positions: Vec<Vec3> = indices
-                .iter()
-                .map(|&vi| e_cache.vertices.get(vi).copied().unwrap_or(Vec3::ZERO))
-                .collect();
-            captures.push(BrushDragCapture {
-                entity: e,
-                start_brush: e_brush.clone(),
-                start_all_vertices: e_cache.vertices.clone(),
-                start_face_polygons: e_cache.face_polygons.clone(),
-                indices,
-                start_local_positions,
-                start_world_to_local: e_global.affine().inverse(),
-            });
-        }
-        drag_state.brush_captures = captures;
+                indices
+            },
+        );
         set_grab_cursor(&mut override_cursor);
     }
 
     if drag_state.active {
         let mouse_delta = viewport_cursor - drag_state.start_cursor;
-        let Some(local_offset) = compute_brush_drag_offset(
-            drag_state.constraint,
-            mouse_delta,
-            cam_tf,
-            camera,
-            brush_global,
-        ) else {
-            return OperatorResult::Running;
-        };
         let primary_start = drag_state
             .start_edge_vertices
             .first()
             .map(|&(_, p)| p)
             .unwrap_or(Vec3::ZERO);
-        let local_offset = snap_drag_local_offset(
-            local_offset,
-            primary_start,
+        apply_shared_drag(
             drag_state.constraint,
+            mouse_delta,
+            primary_start,
+            cam_tf,
+            camera,
             brush_global,
             &snap_settings,
             ctrl,
-        );
-        // The snapped offset is in the active brush's local space; lift it to a
-        // world displacement so every captured brush can re-express it locally.
-        let world_offset = brush_global.affine().transform_vector3(local_offset);
-
-        broadcast_drag_to_captures(
             &drag_state.brush_captures,
-            world_offset,
             &mut brushes,
             &mut halfedge_q,
         );
@@ -1489,10 +1386,102 @@ fn clear_edge_drag_state(drag_state: &mut EdgeDragState) {
     drag_state.drag_viewport = None;
 }
 
+/// Build a [`BrushDragCapture`] for every edit brush whose sub-selection
+/// resolves to a non-empty set of topology vertex indices. `indices_of` maps a
+/// brush's sub-selection and face polygons to the vertex indices the drag
+/// should move (vertex drag: the selected vertices; edge drag: the deduped
+/// edge endpoints; gizmo: every selected sub-element vertex). Each capture's
+/// `start_world` is the world position of those vertices at drag start, taken
+/// from the live cache; callers that need a split-extended vertex list (the
+/// vertex drag) adjust the active brush's capture afterward.
+pub(crate) fn capture_edit_brushes(
+    brush_selection: &BrushSelection,
+    brushes: &Query<&mut Brush>,
+    caches: &Query<&BrushMeshCache>,
+    transforms: &Query<&GlobalTransform>,
+    indices_of: impl Fn(&BrushSubSelection, &[Vec<usize>]) -> Vec<usize>,
+) -> Vec<BrushDragCapture> {
+    let mut captures = Vec::new();
+    for e in brush_selection.edit_brushes() {
+        let Some(sub) = brush_selection.sub(e) else {
+            continue;
+        };
+        let Ok(e_cache) = caches.get(e) else {
+            continue;
+        };
+        let indices = indices_of(sub, &e_cache.face_polygons);
+        if indices.is_empty() {
+            continue;
+        }
+        let Ok(e_brush) = brushes.get(e) else {
+            continue;
+        };
+        let Ok(e_global) = transforms.get(e) else {
+            continue;
+        };
+        let start_world: Vec<Vec3> = indices
+            .iter()
+            .map(|&vi| {
+                let local = e_cache.vertices.get(vi).copied().unwrap_or(Vec3::ZERO);
+                e_global.transform_point(local)
+            })
+            .collect();
+        captures.push(BrushDragCapture {
+            entity: e,
+            start_brush: e_brush.clone(),
+            start_all_vertices: e_cache.vertices.clone(),
+            start_face_polygons: e_cache.face_polygons.clone(),
+            indices,
+            start_world,
+            start_world_to_local: e_global.affine().inverse(),
+        });
+    }
+    captures
+}
+
+/// Resolve the current mouse delta into a snapped world displacement and
+/// broadcast it to every captured brush. Shared by the vertex and edge drag
+/// per-frame tails, which differ only in how `primary_start` (the local start
+/// position the free-drag snap rounds against) is sourced. Does nothing when
+/// the offset cannot be projected this frame, matching the per-operator early
+/// return.
+fn apply_shared_drag(
+    constraint: VertexDragConstraint,
+    mouse_delta: Vec2,
+    primary_start: Vec3,
+    cam_tf: &GlobalTransform,
+    camera: &Camera,
+    brush_global: &GlobalTransform,
+    snap_settings: &SnapSettings,
+    ctrl: bool,
+    captures: &[BrushDragCapture],
+    brushes: &mut Query<&mut Brush>,
+    halfedge_q: &mut Query<&mut crate::brush::BrushHalfedge>,
+) {
+    let Some(local_offset) =
+        compute_brush_drag_offset(constraint, mouse_delta, cam_tf, camera, brush_global)
+    else {
+        return;
+    };
+    let local_offset = snap_drag_local_offset(
+        local_offset,
+        primary_start,
+        constraint,
+        brush_global,
+        snap_settings,
+        ctrl,
+    );
+    // The snapped offset is in the active brush's local space; lift it to a
+    // world displacement so every captured brush can re-express it in its own
+    // local space. `transform_vector3` applies rotation + scale only.
+    let world_offset = brush_global.affine().transform_vector3(local_offset);
+    broadcast_drag_to_captures(captures, world_offset, brushes, halfedge_q);
+}
+
 /// Move every captured brush's selected vertices by one shared world
-/// displacement. Each capture re-expresses `world_offset` in its own local
-/// space via the inverse affine taken at drag start, adds it to the captured
-/// start positions, and rebuilds through [`apply_vertex_deltas`].
+/// displacement. Each capture offsets its start world positions, converts the
+/// result back to its own local space via the inverse affine taken at drag
+/// start, and rebuilds through [`apply_vertex_deltas`].
 fn broadcast_drag_to_captures(
     captures: &[BrushDragCapture],
     world_offset: Vec3,
@@ -1500,11 +1489,10 @@ fn broadcast_drag_to_captures(
     halfedge_q: &mut Query<&mut crate::brush::BrushHalfedge>,
 ) {
     for capture in captures {
-        let brush_local_offset = capture.start_world_to_local.transform_vector3(world_offset);
         let new_positions: Vec<Vec3> = capture
-            .start_local_positions
+            .start_world
             .iter()
-            .map(|&p| p + brush_local_offset)
+            .map(|&w| capture.start_world_to_local.transform_point3(w + world_offset))
             .collect();
         let Ok(mut brush) = brushes.get_mut(capture.entity) else {
             continue;
@@ -1523,8 +1511,9 @@ fn broadcast_drag_to_captures(
 }
 
 /// Restore every captured brush to its drag-start topology and re-lift its
-/// half-edge mesh. Shared by the vertex and edge drag cancel handlers.
-fn restore_captures(
+/// half-edge mesh. Shared by the vertex, edge, and edit-gizmo drag cancel
+/// handlers.
+pub(crate) fn restore_captures(
     captures: &[BrushDragCapture],
     brushes: &mut Query<&mut Brush>,
     halfedge_q: &mut Query<&mut crate::brush::BrushHalfedge>,

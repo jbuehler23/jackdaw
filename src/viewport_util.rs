@@ -1,5 +1,6 @@
-use bevy::{prelude::*, ui::UiGlobalTransform};
+use bevy::{picking::prelude::Pickable, prelude::*, ui::UiGlobalTransform};
 
+use crate::default_style;
 use crate::viewport::SceneViewport;
 
 /// Window-to-camera-space mapping for the scene viewport node.
@@ -29,6 +30,49 @@ impl ViewportRemap {
             remap: target_size / vp_size,
         }
     }
+}
+
+/// Build the rubber-band marquee overlay node spanning `start`..`current`
+/// in window pixels. Returns the node bundle without a marker component so
+/// each box-select system can attach its own marker and spawn-or-despawn
+/// against its own state.
+pub(crate) fn marquee_node(start: Vec2, current: Vec2) -> impl Bundle {
+    let min = start.min(current);
+    let max = start.max(current);
+    let size = max - min;
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(min.x),
+            top: Val::Px(min.y),
+            width: Val::Px(size.x),
+            height: Val::Px(size.y),
+            border: UiRect::all(Val::Px(1.0)),
+            ..default()
+        },
+        BackgroundColor(default_style::SELECTION_MARQUEE_BG),
+        BorderColor::all(default_style::SELECTION_MARQUEE_BORDER),
+        GlobalZIndex(50),
+        Pickable::IGNORE,
+    )
+}
+
+/// Viewport-local `(min, max)` rectangle in render-target pixels for a
+/// box-select that spanned `start`..`current` in window pixels. The caller
+/// resolves the captured camera + viewport node and passes them in.
+pub(crate) fn box_select_rect(
+    camera: &Camera,
+    vp_computed: &ComputedNode,
+    vp_tf: &UiGlobalTransform,
+    start: Vec2,
+    current: Vec2,
+) -> (Vec2, Vec2) {
+    let map = ViewportRemap::new(camera, vp_computed, vp_tf);
+    let start_local = start - map.top_left;
+    let current_local = current - map.top_left;
+    let min = start_local.min(current_local) * map.remap;
+    let max = start_local.max(current_local) * map.remap;
+    (min, max)
 }
 
 /// Convert a window cursor position to camera-space viewport coordinates,

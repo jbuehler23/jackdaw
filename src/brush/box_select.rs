@@ -13,15 +13,12 @@
 //! and either promotes it to an active drag once the cursor crosses the
 //! threshold or resolves it as a plain click on release.
 
-use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 
-use crate::brush::{BrushEditMode, BrushMeshCache, BrushSelection, EditMode};
-use crate::default_style;
+use crate::brush::{BrushEditMode, BrushMeshCache, BrushSelection, BrushSubSelection, EditMode};
 use crate::viewport::ViewportCursor;
 use crate::viewport_select::cursor_dragged_past_threshold;
-use crate::viewport_util::ViewportRemap;
 
 /// Marker for the brush box-select visual overlay node.
 #[derive(Component)]
@@ -46,6 +43,11 @@ pub struct BrushBoxSelectState {
     pub camera: Option<Entity>,
     /// `SceneViewport` UI-node entity of the same viewport.
     pub viewport: Option<Entity>,
+    /// Snapshot of every edit brush's sub-selection at drag start. The live
+    /// selection is recomputed from this each frame (base plus the boxed
+    /// elements) so shrinking the box deselects, Shift adds to the original
+    /// picks, and cancel restores them.
+    pub base: std::collections::HashMap<Entity, BrushSubSelection>,
 }
 
 impl BrushBoxSelectState {
@@ -144,48 +146,64 @@ pub fn brush_box_select(
         box_state.activate(cursor_pos);
         box_state.camera = vp.camera_entity();
         box_state.viewport = vp.viewport_entity();
+        box_state.base = brush_selection.brushes.clone();
         return OperatorResult::Running;
     }
 
     box_state.current = cursor_pos;
-    if !mouse.just_released(MouseButton::Left) {
-        return OperatorResult::Running;
-    }
-    box_state.active = false;
+    let released = mouse.just_released(MouseButton::Left);
 
-    let shift = box_state.shift;
-    box_state.shift = false;
+    // Resolve the captured viewport. If it is gone, end the drag on release;
+    // otherwise wait for the next frame.
+    let resolved = box_state
+        .camera
+        .zip(box_state.viewport)
+        .and_then(|(cam_e, vp_e)| Some((vp.camera_for(cam_e)?, vp.viewport_for(vp_e)?)));
+    let Some(((camera, cam_tf), (vp_computed, vp_tf))) = resolved else {
+        if released {
+            box_state.active = false;
+            box_state.shift = false;
+        }
+        return if released {
+            OperatorResult::Finished
+        } else {
+            OperatorResult::Running
+        };
+    };
 
-    let Some(camera_entity) = box_state.camera else {
-        return OperatorResult::Finished;
+    let EditMode::BrushEdit(
+        mode @ (BrushEditMode::Vertex | BrushEditMode::Edge | BrushEditMode::Face),
+    ) = *edit_mode
+    else {
+        if released {
+            box_state.active = false;
+            box_state.shift = false;
+        }
+        return if released {
+            OperatorResult::Finished
+        } else {
+            OperatorResult::Running
+        };
     };
-    let Some(viewport_entity) = box_state.viewport else {
-        return OperatorResult::Finished;
-    };
-    let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
-        return OperatorResult::Finished;
-    };
-    let Some((vp_computed, vp_tf)) = vp.viewport_for(viewport_entity) else {
-        return OperatorResult::Finished;
-    };
-    let map = ViewportRemap::new(camera, vp_computed, vp_tf);
-    let start_local = box_state.start - map.top_left;
-    let current_local = box_state.current - map.top_left;
-    let min = start_local.min(current_local) * map.remap;
-    let max = start_local.max(current_local) * map.remap;
+
+    let (min, max) = crate::viewport_util::box_select_rect(
+        camera,
+        vp_computed,
+        vp_tf,
+        box_state.start,
+        box_state.current,
+    );
     let inside = |p: Vec2| p.x >= min.x && p.x <= max.x && p.y >= min.y && p.y <= max.y;
 
-    let mode = match *edit_mode {
-        EditMode::BrushEdit(m @ (BrushEditMode::Vertex | BrushEditMode::Edge | BrushEditMode::Face)) => m,
-        _ => return OperatorResult::Finished,
-    };
-
-    let edit_brushes: Vec<Entity> = brush_selection.edit_brushes().collect();
-
-    if !shift {
+    // Recompute the live selection every frame from the captured base plus the
+    // boxed elements, so the handles highlight in real time as the box moves
+    // and shrinking the box deselects.
+    brush_selection.brushes = box_state.base.clone();
+    if !box_state.shift {
         brush_selection.clear_sub_selections();
     }
 
+    let edit_brushes: Vec<Entity> = brush_selection.edit_brushes().collect();
     let mut first_hit_brush: Option<Entity> = None;
 
     for entity in edit_brushes {
@@ -216,7 +234,7 @@ pub fn brush_box_select(
                 }
             }
             BrushEditMode::Edge => {
-                let unique_edges = unique_edges_of(cache);
+                let unique_edges = cache.unique_edges();
                 let sub = brush_selection.sub_mut(entity);
                 for (a, b) in unique_edges {
                     let (Some(sa), Some(sb)) = (
@@ -260,33 +278,24 @@ pub fn brush_box_select(
         brush_selection.active_brush = Some(entity);
     }
 
-    OperatorResult::Finished
+    if released {
+        box_state.active = false;
+        box_state.shift = false;
+        OperatorResult::Finished
+    } else {
+        OperatorResult::Running
+    }
 }
 
-fn cancel_brush_box_select(mut box_state: ResMut<BrushBoxSelectState>) {
+fn cancel_brush_box_select(
+    mut box_state: ResMut<BrushBoxSelectState>,
+    mut brush_selection: ResMut<BrushSelection>,
+) {
+    // Restore the selection captured at drag start, undoing the live preview.
+    brush_selection.brushes = std::mem::take(&mut box_state.base);
     box_state.active = false;
     box_state.pending = None;
     box_state.shift = false;
-}
-
-/// Build the unique edges of a brush from its face polygons, normalized to
-/// `(min, max)` index pairs. Same construction the edge pick uses.
-fn unique_edges_of(cache: &BrushMeshCache) -> Vec<(usize, usize)> {
-    let mut unique_edges: Vec<(usize, usize)> = Vec::new();
-    for polygon in &cache.face_polygons {
-        if polygon.len() < 2 {
-            continue;
-        }
-        for i in 0..polygon.len() {
-            let a = polygon[i];
-            let b = polygon[(i + 1) % polygon.len()];
-            let edge = (a.min(b), a.max(b));
-            if !unique_edges.contains(&edge) {
-                unique_edges.push(edge);
-            }
-        }
-    }
-    unique_edges
 }
 
 /// Draw the rubber-band rectangle while a brush box-select is active.
@@ -298,25 +307,9 @@ pub(crate) fn update_brush_box_select_overlay(
     mut commands: Commands,
 ) {
     if box_state.active {
-        let min = box_state.start.min(box_state.current);
-        let max = box_state.start.max(box_state.current);
-        let size = max - min;
-
         let node = (
             BrushBoxSelectOverlay,
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(min.x),
-                top: Val::Px(min.y),
-                width: Val::Px(size.x),
-                height: Val::Px(size.y),
-                border: UiRect::all(Val::Px(1.0)),
-                ..default()
-            },
-            BackgroundColor(default_style::SELECTION_MARQUEE_BG),
-            BorderColor::all(default_style::SELECTION_MARQUEE_BORDER),
-            GlobalZIndex(50),
-            Pickable::IGNORE,
+            crate::viewport_util::marquee_node(box_state.start, box_state.current),
         );
 
         if let Some(entity) = overlay_query.iter().next() {

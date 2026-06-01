@@ -45,6 +45,28 @@ pub struct BrushMeshCache {
     pub face_entities: Vec<Entity>,
 }
 
+impl BrushMeshCache {
+    /// Unique undirected edges as normalized `(min, max)` vertex-index pairs,
+    /// derived from the face polygons. Order follows first appearance.
+    pub fn unique_edges(&self) -> Vec<(usize, usize)> {
+        let mut unique_edges: Vec<(usize, usize)> = Vec::new();
+        for polygon in &self.face_polygons {
+            if polygon.len() < 2 {
+                continue;
+            }
+            for i in 0..polygon.len() {
+                let a = polygon[i];
+                let b = polygon[(i + 1) % polygon.len()];
+                let edge = (a.min(b), a.max(b));
+                if !unique_edges.contains(&edge) {
+                    unique_edges.push(edge);
+                }
+            }
+        }
+        unique_edges
+    }
+}
+
 /// Marker on child entities that render individual brush faces.
 /// Brush faces are derived from the parent brush's `Brush` data,
 /// so they're always hidden from the outliner and excluded from

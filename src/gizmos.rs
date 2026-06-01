@@ -1,7 +1,6 @@
 use bevy::{
     ecs::system::SystemParam,
     feathers::cursor::{EntityCursor, OverrideCursor},
-    math::Affine3A,
     prelude::*,
     ui::UiGlobalTransform,
     window::{CursorGrabMode, CursorOptions, SystemCursorIcon},
@@ -10,6 +9,8 @@ use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 
 use crate::active_tool::ActiveTool;
+use crate::brush::BrushDragCapture;
+use crate::brush_drag_ops::restore_captures;
 use crate::default_style;
 use crate::{
     modal_transform::ModalTransformState,
@@ -137,27 +138,6 @@ pub struct GizmoHoverState {
     pub hovered_axis: Option<GizmoAxis>,
 }
 
-/// One brush's contribution to a sub-element gizmo drag: its start topology,
-/// the cache state captured at drag start, the topology vertex indices the
-/// sub-selection touches, and those vertices' world positions at start.
-struct EditGizmoBrushCapture {
-    entity: Entity,
-    /// Brush at drag start, the rebuild baseline passed to `apply_vertex_deltas`.
-    start_brush: jackdaw_jsn::Brush,
-    /// `BrushMeshCache::vertices` at drag start (brush-local coordinates).
-    start_all_vertices: Vec<Vec3>,
-    /// `BrushMeshCache::face_polygons` at drag start.
-    start_face_polygons: Vec<Vec<usize>>,
-    /// Selected topology vertex indices for this brush (`selected_sub_vertices`).
-    indices: Vec<usize>,
-    /// World positions of `indices` at drag start.
-    start_world: Vec<Vec3>,
-    /// Inverse of the brush's world affine at drag start, used to convert the
-    /// transformed world positions back to brush-local on apply. A brush in
-    /// edit mode does not move during the drag, so this stays valid.
-    start_world_to_local: Affine3A,
-}
-
 /// Drag state for the central gizmo while in brush-edit mode. Transforms the
 /// selected sub-elements across every edit brush about their shared world
 /// centroid. Separate from [`GizmoDragState`] so object-mode dragging is
@@ -178,7 +158,7 @@ pub(crate) struct EditGizmoDragState {
     camera: Option<Entity>,
     /// `SceneViewport` UI-node entity of the same viewport.
     viewport: Option<Entity>,
-    captures: Vec<EditGizmoBrushCapture>,
+    captures: Vec<BrushDragCapture>,
 }
 
 pub struct TransformGizmosPlugin;
@@ -308,34 +288,12 @@ pub(crate) fn handle_gizmo_hover(
         };
         (pos, Quat::IDENTITY)
     } else {
-        let topmost = topmost_selected(
-            &selection.entities,
-            |e| parents.get(e).ok().map(|c| c.0),
-            |e| selection.entities.contains(&e),
-        );
-        let positions: Vec<Vec3> = topmost
-            .iter()
-            .filter_map(|&e| transforms.get(e).ok().map(GlobalTransform::translation))
-            .collect();
-        if positions.is_empty() {
+        let Some(placement) =
+            object_gizmo_placement(&selection, &transforms, &parents, &mode, &space)
+        else {
             return;
-        }
-        // Scale is inherently local, so force local orientation so handles match transform.scale axes
-        let effective_space = if *mode == ActiveTool::Scale {
-            &GizmoSpace::Local
-        } else {
-            &space
         };
-        let rotation = if topmost.len() == 1 {
-            transforms
-                .get(topmost[0])
-                .ok()
-                .map(|gt| gizmo_rotation(gt, effective_space))
-                .unwrap_or(Quat::IDENTITY)
-        } else {
-            Quat::IDENTITY
-        };
-        (centroid(&positions), rotation)
+        placement
     };
 
     let scale = gizmo_world_scale(projection, cam_tf, gizmo_pos);
@@ -501,43 +459,32 @@ pub fn gizmo_drag(
     let cursor_pos = viewport_ctx.cursor.get()?;
     // First-frame: pick the active (hovered) viewport. Subsequent
     // frames: use the captured one so the drag stays attached even
-    // if the cursor strays into a different viewport.
-    let (camera_entity, viewport_entity) = if modal.is_none() {
-        let camera_entity = viewport_ctx.active_viewport.camera?;
-        let viewport_entity = viewport_ctx.active_viewport.ui_node?;
-        (camera_entity, viewport_entity)
-    } else {
-        let Some(camera_entity) = drag_state.camera else {
-            return OperatorResult::Finished;
+    // if the cursor strays into a different viewport. A captured
+    // viewport that is no longer available finishes the drag; a missing
+    // active viewport on the first frame cancels it. Dragging across
+    // into a sibling viewport (or off the panel) yields no viewport
+    // cursor, cancelling the drag so the cancel handler restores the
+    // start transform, which the user sees as a snap-back.
+    let Some((camera_entity, viewport_entity)) = resolve_drag_viewport(
+        modal.is_some(),
+        &viewport_ctx,
+        drag_state.camera,
+        drag_state.viewport,
+    ) else {
+        return if modal.is_some() {
+            OperatorResult::Finished
+        } else {
+            OperatorResult::Cancelled
         };
-        let Some(viewport_entity) = drag_state.viewport else {
-            return OperatorResult::Finished;
-        };
-        (camera_entity, viewport_entity)
     };
     let (camera, cam_tf) = camera_query.get(camera_entity)?;
-    // Bounds-check on the first frame so a press that misses the
-    // viewport doesn't grab the gizmo. Once the modal is running the
-    // cursor belongs to the drag, so accept positions outside the
-    // viewport rectangle. Otherwise dragging across into a sibling
-    // viewport (or off the panel entirely) returns `None` here, the
-    // operator cancels, and the cancel handler restores the start
-    // transform, which the user sees as a snap-back.
-    let viewport_cursor = if modal.is_none() {
-        window_to_viewport_cursor_for(
-            cursor_pos,
-            camera,
-            viewport_entity,
-            &viewport_ctx.viewport_query,
-        )?
-    } else {
-        window_to_viewport_cursor_for_unbounded(
-            cursor_pos,
-            camera,
-            viewport_entity,
-            &viewport_ctx.viewport_query,
-        )?
-    };
+    let viewport_cursor = resolve_viewport_cursor(
+        modal.is_some(),
+        cursor_pos,
+        camera,
+        viewport_entity,
+        &viewport_ctx.viewport_query,
+    )?;
 
     if modal.is_none() {
         let axis = hover.hovered_axis?;
@@ -617,18 +564,11 @@ pub fn gizmo_drag(
     match *mode {
         ActiveTool::Translate => {
             // Use the pivot as the reference point for projecting the axis onto screen.
-            let Ok(origin_screen) = camera.world_to_viewport(cam_tf, pivot) else {
+            let Some(projected) =
+                translate_axis_amount(mouse_delta, camera, cam_tf, pivot, axis_dir)
+            else {
                 return OperatorResult::Running;
             };
-            let Ok(axis_screen) = camera.world_to_viewport(cam_tf, pivot + axis_dir) else {
-                return OperatorResult::Running;
-            };
-            let screen_axis = axis_screen - origin_screen;
-            let len_sq = screen_axis.length_squared();
-            if len_sq < EPSILON {
-                return OperatorResult::Running;
-            }
-            let projected = mouse_delta.dot(screen_axis) / len_sq;
             let snapped = snap_settings.snap_translate_vec3_if(axis_dir * projected, ctrl);
             for t in &drag_state.targets {
                 if let Ok((_, mut tf)) = transforms.get_mut(t.entity) {
@@ -637,13 +577,7 @@ pub fn gizmo_drag(
             }
         }
         ActiveTool::Rotate => {
-            let screen_axis = match axis {
-                GizmoAxis::X => Vec2::Y,
-                GizmoAxis::Y => Vec2::X,
-                GizmoAxis::Z => -Vec2::X,
-                // Uniform is scale-only and never reaches the rotate path.
-                GizmoAxis::Uniform => Vec2::ZERO,
-            };
+            let screen_axis = rotate_screen_axis(axis);
             let raw_angle = mouse_delta.dot(screen_axis) * ROTATE_SENSITIVITY;
             let angle = snap_settings.snap_rotate_if(raw_angle, ctrl);
             let r = Quat::from_axis_angle(axis_dir, angle);
@@ -655,34 +589,9 @@ pub fn gizmo_drag(
             }
         }
         ActiveTool::Scale => {
-            let factor = if axis == GizmoAxis::Uniform {
-                // Diagonal drag drives uniform scale so both horizontal and
-                // vertical movement respond: up / right grows, down / left
-                // shrinks. Signed and monotonic straight through the gizmo
-                // center (a radial distance would re-grow once the cursor
-                // passed back through the center). Screen Y is down-positive,
-                // so up is negative Y.
-                let dir = Vec2::new(1.0, -1.0).normalize_or_zero();
-                let projected = mouse_delta.dot(dir) * SCALE_SENSITIVITY;
-                Vec3::splat(1.0 + projected)
-            } else {
-                let Ok(origin_screen) = camera.world_to_viewport(cam_tf, pivot) else {
-                    return OperatorResult::Running;
-                };
-                let Ok(axis_screen) = camera.world_to_viewport(cam_tf, pivot + axis_dir) else {
-                    return OperatorResult::Running;
-                };
-                let screen_axis = (axis_screen - origin_screen).normalize_or_zero();
-                let projected = mouse_delta.dot(screen_axis) * SCALE_SENSITIVITY;
-                let mut factor = Vec3::ONE;
-                match axis {
-                    GizmoAxis::X => factor.x = 1.0 + projected,
-                    GizmoAxis::Y => factor.y = 1.0 + projected,
-                    GizmoAxis::Z => factor.z = 1.0 + projected,
-                    // Handled by the Uniform branch above.
-                    GizmoAxis::Uniform => {}
-                }
-                factor
+            let Some(factor) = scale_factor(axis, mouse_delta, camera, cam_tf, pivot, axis_dir)
+            else {
+                return OperatorResult::Running;
             };
             for t in &drag_state.targets {
                 if let Ok((_, mut tf)) = transforms.get_mut(t.entity) {
@@ -770,82 +679,44 @@ pub fn gizmo_drag_edit(
     let cursor_pos = viewport_ctx.cursor.get()?;
     // First frame picks the active (hovered) viewport; subsequent frames use
     // the captured one so the drag stays attached even if the cursor strays
-    // into a sibling viewport.
-    let (camera_entity, viewport_entity) = if modal.is_none() {
-        let camera_entity = viewport_ctx.active_viewport.camera?;
-        let viewport_entity = viewport_ctx.active_viewport.ui_node?;
-        (camera_entity, viewport_entity)
-    } else {
-        let Some(camera_entity) = drag_state.camera else {
-            return OperatorResult::Finished;
+    // into a sibling viewport. A captured viewport that is no longer available
+    // finishes the drag; a missing active viewport on the first frame cancels
+    // it.
+    let Some((camera_entity, viewport_entity)) = resolve_drag_viewport(
+        modal.is_some(),
+        &viewport_ctx,
+        drag_state.camera,
+        drag_state.viewport,
+    ) else {
+        return if modal.is_some() {
+            OperatorResult::Finished
+        } else {
+            OperatorResult::Cancelled
         };
-        let Some(viewport_entity) = drag_state.viewport else {
-            return OperatorResult::Finished;
-        };
-        (camera_entity, viewport_entity)
     };
     let (camera, cam_tf) = camera_query.get(camera_entity)?;
-    // Bounds-check the first frame so a press that misses the viewport does
-    // not grab the gizmo. Once running, the cursor belongs to the drag, so
-    // accept positions outside the viewport rectangle.
-    let viewport_cursor = if modal.is_none() {
-        window_to_viewport_cursor_for(
-            cursor_pos,
-            camera,
-            viewport_entity,
-            &viewport_ctx.viewport_query,
-        )?
-    } else {
-        window_to_viewport_cursor_for_unbounded(
-            cursor_pos,
-            camera,
-            viewport_entity,
-            &viewport_ctx.viewport_query,
-        )?
-    };
+    let viewport_cursor = resolve_viewport_cursor(
+        modal.is_some(),
+        cursor_pos,
+        camera,
+        viewport_entity,
+        &viewport_ctx.viewport_query,
+    )?;
 
     if modal.is_none() {
         let axis = hover.hovered_axis?;
-        let mut captures = Vec::new();
-        let mut all_start_world = Vec::new();
-        for entity in brush_selection.edit_brushes() {
-            let Ok(cache) = brush_params.caches.get(entity) else {
-                continue;
-            };
-            let Ok(global) = brush_params.globals.get(entity) else {
-                continue;
-            };
-            let Some(sub) = brush_selection.sub(entity) else {
-                continue;
-            };
-            let indices = selected_sub_vertices(sub, &cache.face_polygons);
-            if indices.is_empty() {
-                continue;
-            }
-            let Ok(brush) = brush_params.brushes.get(entity) else {
-                continue;
-            };
-            let start_world: Vec<Vec3> = indices
-                .iter()
-                .map(|&i| {
-                    let local = cache.vertices.get(i).copied().unwrap_or(Vec3::ZERO);
-                    global.transform_point(local)
-                })
-                .collect();
-            all_start_world.extend_from_slice(&start_world);
-            captures.push(EditGizmoBrushCapture {
-                entity,
-                start_brush: brush.clone(),
-                start_all_vertices: cache.vertices.clone(),
-                start_face_polygons: cache.face_polygons.clone(),
-                indices,
-                start_world,
-                start_world_to_local: global.affine().inverse(),
-            });
-        }
+        let captures = crate::brush_drag_ops::capture_edit_brushes(
+            &brush_selection,
+            &brush_params.brushes,
+            &brush_params.caches,
+            &brush_params.globals,
+            selected_sub_vertices,
+        );
         if captures.is_empty() {
             return OperatorResult::Finished;
         }
+        let all_start_world: Vec<Vec3> =
+            captures.iter().flat_map(|c| c.start_world.iter().copied()).collect();
         drag_state.active = true;
         drag_state.axis = Some(axis);
         drag_state.drag_start_screen = viewport_cursor;
@@ -901,18 +772,11 @@ pub fn gizmo_drag_edit(
 
     match *mode {
         ActiveTool::Translate => {
-            let Ok(origin_screen) = camera.world_to_viewport(cam_tf, pivot) else {
+            let Some(projected) =
+                translate_axis_amount(mouse_delta, camera, cam_tf, pivot, axis_dir)
+            else {
                 return OperatorResult::Running;
             };
-            let Ok(axis_screen) = camera.world_to_viewport(cam_tf, pivot + axis_dir) else {
-                return OperatorResult::Running;
-            };
-            let screen_axis = axis_screen - origin_screen;
-            let len_sq = screen_axis.length_squared();
-            if len_sq < EPSILON {
-                return OperatorResult::Running;
-            }
-            let projected = mouse_delta.dot(screen_axis) / len_sq;
             let world_delta = snap_settings.snap_translate_vec3_if(axis_dir * projected, ctrl);
             new_draw_pos = pivot + world_delta;
             for capture in &drag_state.captures {
@@ -925,13 +789,7 @@ pub fn gizmo_drag_edit(
             }
         }
         ActiveTool::Rotate => {
-            let screen_axis = match axis {
-                GizmoAxis::X => Vec2::Y,
-                GizmoAxis::Y => Vec2::X,
-                GizmoAxis::Z => -Vec2::X,
-                // Uniform is scale-only and never reaches the rotate path.
-                GizmoAxis::Uniform => Vec2::ZERO,
-            };
+            let screen_axis = rotate_screen_axis(axis);
             let raw_angle = mouse_delta.dot(screen_axis) * ROTATE_SENSITIVITY;
             let angle = snap_settings.snap_rotate_if(raw_angle, ctrl);
             let r = Quat::from_axis_angle(axis_dir, angle);
@@ -948,34 +806,9 @@ pub fn gizmo_drag_edit(
             }
         }
         ActiveTool::Scale => {
-            let factor = if axis == GizmoAxis::Uniform {
-                // Diagonal drag drives uniform scale so both horizontal and
-                // vertical movement respond: up / right grows, down / left
-                // shrinks. Signed and monotonic straight through the gizmo
-                // center (a radial distance would re-grow once the cursor
-                // passed back through the center). Screen Y is down-positive,
-                // so up is negative Y.
-                let dir = Vec2::new(1.0, -1.0).normalize_or_zero();
-                let projected = mouse_delta.dot(dir) * SCALE_SENSITIVITY;
-                Vec3::splat(1.0 + projected)
-            } else {
-                let Ok(origin_screen) = camera.world_to_viewport(cam_tf, pivot) else {
-                    return OperatorResult::Running;
-                };
-                let Ok(axis_screen) = camera.world_to_viewport(cam_tf, pivot + axis_dir) else {
-                    return OperatorResult::Running;
-                };
-                let screen_axis = (axis_screen - origin_screen).normalize_or_zero();
-                let projected = mouse_delta.dot(screen_axis) * SCALE_SENSITIVITY;
-                let mut factor = Vec3::ONE;
-                match axis {
-                    GizmoAxis::X => factor.x = 1.0 + projected,
-                    GizmoAxis::Y => factor.y = 1.0 + projected,
-                    GizmoAxis::Z => factor.z = 1.0 + projected,
-                    // Handled by the Uniform branch above.
-                    GizmoAxis::Uniform => {}
-                }
-                factor
+            let Some(factor) = scale_factor(axis, mouse_delta, camera, cam_tf, pivot, axis_dir)
+            else {
+                return OperatorResult::Running;
             };
             // When scale snapping is active (Ctrl flips it), land the
             // resulting vertex positions on the grid rather than snapping the
@@ -1023,8 +856,7 @@ pub fn gizmo_drag_edit(
 }
 
 /// Restore every captured brush to its drag-start topology, then clear state.
-/// Mirrors the per-brush vertex-drag cancel: replace the `Brush` with the
-/// start clone and re-lift the `HalfedgeMesh` if one is present.
+/// Shares [`restore_captures`] with the direct vertex / edge drag cancels.
 fn cancel_gizmo_edit_drag(
     mut drag_state: ResMut<EditGizmoDragState>,
     mut brushes: Query<&mut jackdaw_jsn::Brush>,
@@ -1032,15 +864,7 @@ fn cancel_gizmo_edit_drag(
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
     mut override_cursor: ResMut<OverrideCursor>,
 ) {
-    for capture in &drag_state.captures {
-        let Ok(mut brush) = brushes.get_mut(capture.entity) else {
-            continue;
-        };
-        *brush = capture.start_brush.clone();
-        if let Ok(mut halfedge) = halfedges.get_mut(capture.entity) {
-            *halfedge = crate::brush::BrushHalfedge::from_topology(&capture.start_brush.topology);
-        }
-    }
+    restore_captures(&drag_state.captures, &mut brushes, &mut halfedges);
     clear_gizmo_edit_drag_state(&mut drag_state, &mut cursor_query);
     clear_gizmo_grab_cursor(&mut override_cursor);
 }
@@ -1114,33 +938,12 @@ fn draw_gizmos(
         };
         (pos, Quat::IDENTITY)
     } else {
-        let topmost = topmost_selected(
-            &selection.entities,
-            |e| parents.get(e).ok().map(|c| c.0),
-            |e| selection.entities.contains(&e),
-        );
-        let positions: Vec<Vec3> = topmost
-            .iter()
-            .filter_map(|&e| transforms.get(e).ok().map(GlobalTransform::translation))
-            .collect();
-        if positions.is_empty() {
+        let Some(placement) =
+            object_gizmo_placement(&selection, &transforms, &parents, &mode, &space)
+        else {
             return;
-        }
-        let effective_space = if *mode == ActiveTool::Scale {
-            &GizmoSpace::Local
-        } else {
-            &space
         };
-        let rotation = if topmost.len() == 1 {
-            transforms
-                .get(topmost[0])
-                .ok()
-                .map(|gt| gizmo_rotation(gt, effective_space))
-                .unwrap_or(Quat::IDENTITY)
-        } else {
-            Quat::IDENTITY
-        };
-        (centroid(&positions), rotation)
+        placement
     };
 
     // Multi-viewport: scale the gizmo by the active (hovered)
@@ -1432,6 +1235,162 @@ fn sub_element_world_positions<'a>(
         }
     }
     positions
+}
+
+/// Maps a gizmo axis to the 2D screen-space direction whose signed projection
+/// of the mouse delta drives a rotation about that axis.
+fn rotate_screen_axis(axis: GizmoAxis) -> Vec2 {
+    match axis {
+        GizmoAxis::X => Vec2::Y,
+        GizmoAxis::Y => Vec2::X,
+        GizmoAxis::Z => -Vec2::X,
+        // Uniform is scale-only and never reaches the rotate path.
+        GizmoAxis::Uniform => Vec2::ZERO,
+    }
+}
+
+/// Per-component scale factor for a gizmo drag. `Uniform` scales every axis by
+/// the same amount, driven by a diagonal screen drag (up / right grows). For a
+/// directional axis the mouse delta is projected onto the axis as seen on
+/// screen. Returns `None` when the pivot or axis endpoint fails to project into
+/// the viewport.
+fn scale_factor(
+    axis: GizmoAxis,
+    mouse_delta: Vec2,
+    camera: &Camera,
+    cam_tf: &GlobalTransform,
+    pivot: Vec3,
+    axis_dir: Vec3,
+) -> Option<Vec3> {
+    if axis == GizmoAxis::Uniform {
+        // Diagonal drag drives uniform scale so both horizontal and
+        // vertical movement respond: up / right grows, down / left
+        // shrinks. Signed and monotonic straight through the gizmo
+        // center (a radial distance would re-grow once the cursor
+        // passed back through the center). Screen Y is down-positive,
+        // so up is negative Y.
+        let dir = Vec2::new(1.0, -1.0).normalize_or_zero();
+        let projected = mouse_delta.dot(dir) * SCALE_SENSITIVITY;
+        Some(Vec3::splat(1.0 + projected))
+    } else {
+        let origin_screen = camera.world_to_viewport(cam_tf, pivot).ok()?;
+        let axis_screen = camera.world_to_viewport(cam_tf, pivot + axis_dir).ok()?;
+        let screen_axis = (axis_screen - origin_screen).normalize_or_zero();
+        let projected = mouse_delta.dot(screen_axis) * SCALE_SENSITIVITY;
+        let mut factor = Vec3::ONE;
+        match axis {
+            GizmoAxis::X => factor.x = 1.0 + projected,
+            GizmoAxis::Y => factor.y = 1.0 + projected,
+            GizmoAxis::Z => factor.z = 1.0 + projected,
+            // Handled by the Uniform branch above.
+            GizmoAxis::Uniform => {}
+        }
+        Some(factor)
+    }
+}
+
+/// Signed distance the selection should move along `axis_dir` for the current
+/// mouse delta, found by projecting the delta onto the axis as it appears on
+/// screen. Returns `None` when the pivot or axis endpoint fails to project, or
+/// when the projected axis is degenerate (zero length on screen).
+fn translate_axis_amount(
+    mouse_delta: Vec2,
+    camera: &Camera,
+    cam_tf: &GlobalTransform,
+    pivot: Vec3,
+    axis_dir: Vec3,
+) -> Option<f32> {
+    let origin_screen = camera.world_to_viewport(cam_tf, pivot).ok()?;
+    let axis_screen = camera.world_to_viewport(cam_tf, pivot + axis_dir).ok()?;
+    let screen_axis = axis_screen - origin_screen;
+    let len_sq = screen_axis.length_squared();
+    if len_sq < EPSILON {
+        return None;
+    }
+    Some(mouse_delta.dot(screen_axis) / len_sq)
+}
+
+/// Camera and `SceneViewport` UI-node entities a gizmo drag should use this
+/// frame. On the first frame (`modal_active` false) this is the active
+/// (hovered) viewport; once the modal is running it is the viewport captured at
+/// drag start, so the drag stays attached even if the cursor strays into a
+/// sibling viewport. Returns `None` when the required viewport is unavailable.
+fn resolve_drag_viewport(
+    modal_active: bool,
+    viewport_ctx: &GizmoViewportCtx,
+    stored_camera: Option<Entity>,
+    stored_viewport: Option<Entity>,
+) -> Option<(Entity, Entity)> {
+    if !modal_active {
+        let camera_entity = viewport_ctx.active_viewport.camera?;
+        let viewport_entity = viewport_ctx.active_viewport.ui_node?;
+        Some((camera_entity, viewport_entity))
+    } else {
+        let camera_entity = stored_camera?;
+        let viewport_entity = stored_viewport?;
+        Some((camera_entity, viewport_entity))
+    }
+}
+
+/// Viewport-local cursor position for a gizmo drag. The first frame is
+/// bounds-checked so a press that misses the viewport does not grab the gizmo;
+/// once the modal is running the cursor belongs to the drag, so positions
+/// outside the viewport rectangle are accepted. Returns `None` when the cursor
+/// is rejected.
+fn resolve_viewport_cursor(
+    modal_active: bool,
+    cursor_pos: Vec2,
+    camera: &Camera,
+    viewport_entity: Entity,
+    viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+) -> Option<Vec2> {
+    if !modal_active {
+        window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, viewport_query)
+    } else {
+        window_to_viewport_cursor_for_unbounded(cursor_pos, camera, viewport_entity, viewport_query)
+    }
+}
+
+/// Gizmo position and orientation for object mode: the centroid of the topmost
+/// selected entities' world translations, with the orientation of the single
+/// selected target (or identity for a multi-target group). The Scale tool
+/// forces local orientation so handles align with the entity's scale axes.
+/// Returns `None` when nothing selected contributes a position.
+fn object_gizmo_placement(
+    selection: &Selection,
+    transforms: &Query<&GlobalTransform, With<Selected>>,
+    parents: &Query<&ChildOf>,
+    mode: &ActiveTool,
+    space: &GizmoSpace,
+) -> Option<(Vec3, Quat)> {
+    let topmost = topmost_selected(
+        &selection.entities,
+        |e| parents.get(e).ok().map(|c| c.0),
+        |e| selection.entities.contains(&e),
+    );
+    let positions: Vec<Vec3> = topmost
+        .iter()
+        .filter_map(|&e| transforms.get(e).ok().map(GlobalTransform::translation))
+        .collect();
+    if positions.is_empty() {
+        return None;
+    }
+    // Scale is inherently local, so force local orientation so handles match transform.scale axes
+    let effective_space = if *mode == ActiveTool::Scale {
+        &GizmoSpace::Local
+    } else {
+        space
+    };
+    let rotation = if topmost.len() == 1 {
+        transforms
+            .get(topmost[0])
+            .ok()
+            .map(|gt| gizmo_rotation(gt, effective_space))
+            .unwrap_or(Quat::IDENTITY)
+    } else {
+        Quat::IDENTITY
+    };
+    Some((centroid(&positions), rotation))
 }
 
 #[cfg(test)]

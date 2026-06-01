@@ -86,13 +86,14 @@ pub(crate) enum VertexDragConstraint {
     AxisZ,
 }
 
-/// One brush's start state for a direct sub-element drag. The drag moves the
-/// vertices named by `indices` from `start_local_positions` by a brush-local
-/// offset derived from a single shared world displacement. `start_brush`,
-/// `start_all_vertices`, and `start_face_polygons` are the rebuild baseline
-/// passed to `apply_vertex_deltas`; `start_world_to_local` converts the shared
-/// world offset into this brush's local space (a brush in edit mode does not
-/// move during the drag, so the inverse stays valid).
+/// One brush's start state for a sub-element drag, shared by the direct
+/// vertex / edge drags and the edit-mode gizmo. The drag moves the vertices
+/// named by `indices` from their `start_world` positions to new world
+/// positions, then converts each back to brush-local via `start_world_to_local`.
+/// `start_brush`, `start_all_vertices`, and `start_face_polygons` are the
+/// rebuild baseline passed to `apply_vertex_deltas`; `start_world_to_local` is
+/// the inverse of the brush's world affine at drag start (a brush in edit mode
+/// does not move during the drag, so the inverse stays valid).
 #[derive(Clone)]
 pub(crate) struct BrushDragCapture {
     pub(crate) entity: Entity,
@@ -100,7 +101,8 @@ pub(crate) struct BrushDragCapture {
     pub(crate) start_all_vertices: Vec<Vec3>,
     pub(crate) start_face_polygons: Vec<Vec<usize>>,
     pub(crate) indices: Vec<usize>,
-    pub(crate) start_local_positions: Vec<Vec3>,
+    /// World positions of `indices` at drag start.
+    pub(crate) start_world: Vec<Vec3>,
     pub(crate) start_world_to_local: bevy::math::Affine3A,
 }
 
@@ -662,22 +664,7 @@ pub(super) fn brush_vertex_edge_hover(
                 continue;
             };
 
-            let mut unique_edges: Vec<(usize, usize)> = Vec::new();
-            for polygon in &cache.face_polygons {
-                if polygon.len() < 2 {
-                    continue;
-                }
-                for i in 0..polygon.len() {
-                    let a = polygon[i];
-                    let b = polygon[(i + 1) % polygon.len()];
-                    let edge = (a.min(b), a.max(b));
-                    if !unique_edges.contains(&edge) {
-                        unique_edges.push(edge);
-                    }
-                }
-            }
-
-            for &(a, b) in &unique_edges {
+            for (a, b) in cache.unique_edges() {
                 let wa = brush_global.transform_point(cache.vertices[a]);
                 let wb = brush_global.transform_point(cache.vertices[b]);
                 let Ok(sa) = camera.world_to_viewport(cam_tf, wa) else {

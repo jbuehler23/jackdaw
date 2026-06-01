@@ -1,4 +1,3 @@
-use crate::default_style;
 use crate::{
     EditorEntity,
     brush::{BrushFaceEntity, BrushMeshCache},
@@ -12,7 +11,6 @@ use bevy::input_focus::InputFocus;
 use bevy::ui::ui_transform::UiGlobalTransform;
 use bevy::{
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
-    picking::prelude::Pickable,
     prelude::*,
 };
 use bevy_enhanced_input::prelude::{Press, *};
@@ -464,11 +462,13 @@ pub fn box_select(
     let Some((vp_computed, vp_tf)) = vp.viewport_for(viewport_entity) else {
         return OperatorResult::Finished;
     };
-    let map = crate::viewport_util::ViewportRemap::new(camera, vp_computed, vp_tf);
-    let start_local = box_state.start - map.top_left;
-    let current_local = box_state.current - map.top_left;
-    let min = start_local.min(current_local) * map.remap;
-    let max = start_local.max(current_local) * map.remap;
+    let (min, max) = crate::viewport_util::box_select_rect(
+        camera,
+        vp_computed,
+        vp_tf,
+        box_state.start,
+        box_state.current,
+    );
 
     let selected: Vec<Entity> = scene_entities
         .iter()
@@ -496,25 +496,9 @@ fn update_box_select_overlay(
     mut commands: Commands,
 ) {
     if box_state.active {
-        let min = box_state.start.min(box_state.current);
-        let max = box_state.start.max(box_state.current);
-        let size = max - min;
-
         let node = (
             BoxSelectOverlay,
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(min.x),
-                top: Val::Px(min.y),
-                width: Val::Px(size.x),
-                height: Val::Px(size.y),
-                border: UiRect::all(Val::Px(1.0)),
-                ..default()
-            },
-            BackgroundColor(default_style::SELECTION_MARQUEE_BG),
-            BorderColor::all(default_style::SELECTION_MARQUEE_BORDER),
-            GlobalZIndex(50),
-            Pickable::IGNORE,
+            crate::viewport_util::marquee_node(box_state.start, box_state.current),
         );
 
         if let Some(entity) = overlay_query.iter().next() {
