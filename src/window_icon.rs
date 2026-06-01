@@ -24,7 +24,7 @@ fn is_pride_month() -> bool {
     let Ok(date_time) = OffsetDateTime::now_local() else {
         return false;
     };
-    return date_time.month() == Month::June;
+    date_time.month() == Month::June
 }
 
 #[derive(Resource)]
