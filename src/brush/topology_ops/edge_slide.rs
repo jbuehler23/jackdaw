@@ -29,15 +29,19 @@ pub(crate) fn brush_edge_slide(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
         return OperatorResult::Cancelled;
     }
-    let brush_entity = selection.entity?;
-    if selection.edges.is_empty() {
+    let brush_entity = selection.active_brush?;
+    let sel_edges: Vec<(usize, usize)> = selection
+        .sub(brush_entity)
+        .map(|s| s.edges.clone())
+        .unwrap_or_default();
+    if sel_edges.is_empty() {
         return OperatorResult::Cancelled;
     }
 
     // Map each selected cache-edge (a, b) to a HalfedgeMesh EdgeKey via vert_keys.
     let mut halfedge = halfedge_q.get_mut(brush_entity)?;
-    let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
-    for &(a, b) in &selection.edges {
+    let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(sel_edges.len());
+    for &(a, b) in &sel_edges {
         let Some(&va) = halfedge.vert_keys.get(a) else {
             continue;
         };
@@ -115,7 +119,8 @@ fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<Ed
 }
 
 pub(crate) fn can_run_edge_slide(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge) && !selection.edges.is_empty()
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge)
+        && selection.active_sub().is_some_and(|s| !s.edges.is_empty())
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

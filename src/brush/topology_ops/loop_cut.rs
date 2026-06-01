@@ -98,8 +98,10 @@ pub(crate) fn brush_loop_cut(
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
             return OperatorResult::Cancelled;
         }
-        let brush_entity = selection.entity?;
-        let &(a, b) = selection.edges.first()?;
+        let brush_entity = selection.active_brush?;
+        let (a, b) = selection
+            .sub(brush_entity)
+            .and_then(|s| s.edges.first().copied())?;
 
         let brush_before = brushes.get(brush_entity).cloned()?;
         let halfedge = halfedge_q.get(brush_entity)?;
@@ -299,7 +301,7 @@ pub(crate) fn brush_loop_cut(
             .filter(|(a, b)| *a < vert_count && *b < vert_count)
             .collect();
         if !inbounds.is_empty() {
-            selection.edges = inbounds;
+            selection.sub_mut(brush_entity).edges = inbounds;
         }
 
         clear_modal(&mut modal_state, &mut preview_lines);
@@ -443,5 +445,6 @@ fn snap_to_fractions(t: f32) -> f32 {
 }
 
 pub(crate) fn can_run_loop_cut(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge) && !selection.edges.is_empty()
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge)
+        && selection.active_sub().is_some_and(|s| !s.edges.is_empty())
 }

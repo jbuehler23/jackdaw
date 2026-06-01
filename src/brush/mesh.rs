@@ -86,8 +86,8 @@ pub(super) fn setup_default_materials(
 /// Transform by the equivalent world-space offset so the rendered
 /// position stays the same.
 ///
-/// Skipped while a vertex / edge / face drag is active so mid-drag
-/// world coordinates remain stable.
+/// Skipped while a vertex / edge / face drag or the edit-mode gizmo drag
+/// is active so mid-drag world coordinates remain stable.
 pub fn recenter_brush_origins(
     mut brushes: Query<
         (
@@ -100,8 +100,9 @@ pub fn recenter_brush_origins(
     vertex_drag: Res<super::VertexDragState>,
     edge_drag: Res<super::EdgeDragState>,
     face_drag: Res<super::BrushDragState>,
+    edit_gizmo_drag: Res<crate::gizmos::EditGizmoDragState>,
 ) {
-    if vertex_drag.active || edge_drag.active || face_drag.active {
+    if vertex_drag.active || edge_drag.active || face_drag.active || edit_gizmo_drag.active {
         return;
     }
     for (mut brush, mut transform, halfedge) in &mut brushes {
@@ -336,7 +337,7 @@ pub(super) fn sync_brush_preview(
     existing: Query<Entity, With<BrushPreview>>,
 ) {
     let preview_entity = if face_drag.active || vertex_drag.active || edge_drag.active {
-        selection.entity
+        selection.active_brush
     } else if let Some(ref active) = draw_state.active {
         active.append_target
     } else {

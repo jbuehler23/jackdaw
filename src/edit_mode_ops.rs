@@ -10,8 +10,8 @@ use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
 use crate::brush::{
-    BrushDragState, BrushEditMode, BrushSelection, ClipState, EdgeDragState, EditMode, KnifeMode,
-    VertexDragState,
+    shown_edit_brushes, BrushDragState, BrushEditMode, BrushSelection, ClipState, EdgeDragState,
+    EditMode, KnifeMode, VertexDragState,
 };
 use crate::core_extension::CoreExtensionInputContext;
 use crate::draw_brush::DrawBrushState;
@@ -159,6 +159,7 @@ pub(crate) fn edit_mode_vertex(
     draw_state: ResMut<DrawBrushState>,
     selection: Res<Selection>,
     brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    children: Query<&Children>,
 ) -> OperatorResult {
     switch_brush_edit_mode(
         BrushEditMode::Vertex,
@@ -167,6 +168,7 @@ pub(crate) fn edit_mode_vertex(
         draw_state,
         selection,
         brushes,
+        children,
     )
 }
 
@@ -183,6 +185,7 @@ pub(crate) fn edit_mode_edge(
     draw_state: ResMut<DrawBrushState>,
     selection: Res<Selection>,
     brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    children: Query<&Children>,
 ) -> OperatorResult {
     switch_brush_edit_mode(
         BrushEditMode::Edge,
@@ -191,6 +194,7 @@ pub(crate) fn edit_mode_edge(
         draw_state,
         selection,
         brushes,
+        children,
     )
 }
 
@@ -207,6 +211,7 @@ pub(crate) fn edit_mode_face(
     draw_state: ResMut<DrawBrushState>,
     selection: Res<Selection>,
     brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    children: Query<&Children>,
 ) -> OperatorResult {
     switch_brush_edit_mode(
         BrushEditMode::Face,
@@ -215,6 +220,7 @@ pub(crate) fn edit_mode_face(
         draw_state,
         selection,
         brushes,
+        children,
     )
 }
 
@@ -231,6 +237,7 @@ pub(crate) fn edit_mode_clip(
     draw_state: ResMut<DrawBrushState>,
     selection: Res<Selection>,
     brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    children: Query<&Children>,
 ) -> OperatorResult {
     switch_brush_edit_mode(
         BrushEditMode::Clip,
@@ -239,6 +246,7 @@ pub(crate) fn edit_mode_clip(
         draw_state,
         selection,
         brushes,
+        children,
     )
 }
 
@@ -258,6 +266,7 @@ pub(crate) fn edit_mode_knife(
     draw_state: ResMut<DrawBrushState>,
     selection: Res<Selection>,
     brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    children: Query<&Children>,
 ) -> OperatorResult {
     switch_brush_edit_mode(
         BrushEditMode::Knife,
@@ -266,6 +275,7 @@ pub(crate) fn edit_mode_knife(
         draw_state,
         selection,
         brushes,
+        children,
     )
 }
 
@@ -276,6 +286,7 @@ fn switch_brush_edit_mode(
     mut draw_state: ResMut<DrawBrushState>,
     selection: Res<Selection>,
     brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    children: Query<&Children>,
 ) -> OperatorResult {
     draw_state.active = None;
 
@@ -286,23 +297,40 @@ fn switch_brush_edit_mode(
             brush_selection.clear();
         }
         EditMode::BrushEdit(_) => {
-            // Switching between brush sub-modes: swap the mode but
-            // keep the entity selected. Drop any sub-element picks
+            // Switching between brush sub-modes: swap and clear all sub-element picks
             // (indices are per-mode and don't translate across).
             *edit_mode = EditMode::BrushEdit(target);
-            brush_selection.faces.clear();
-            brush_selection.vertices.clear();
-            brush_selection.edges.clear();
+            brush_selection.clear_sub_selections();
         }
         _ => {
-            // Entering from Object / Physics requires a selected
-            // brush; otherwise the op is a no-op.
-            let entity = selection.primary().filter(|&e| brushes.contains(e))?;
+            // Entering from Object / Physics: populate from selection,
+            // expanding any non-brush selected entities to their brush children.
+            let shown = shown_edit_brushes(
+                &selection.entities,
+                |e| brushes.contains(e),
+                |e| {
+                    children
+                        .get(e)
+                        .map(|c| c.iter().collect())
+                        .unwrap_or_default()
+                },
+            );
+
+            // No edit brushes in the selection: no-op.
+            if shown.is_empty() {
+                return OperatorResult::Cancelled;
+            }
+
+            brush_selection.clear();
+            for &e in &shown {
+                brush_selection.sub_mut(e);
+            }
+            brush_selection.active_brush = selection
+                .primary()
+                .filter(|&e| brushes.contains(e))
+                .or_else(|| shown.first().copied());
+
             *edit_mode = EditMode::BrushEdit(target);
-            brush_selection.entity = Some(entity);
-            brush_selection.faces.clear();
-            brush_selection.vertices.clear();
-            brush_selection.edges.clear();
         }
     }
     OperatorResult::Finished

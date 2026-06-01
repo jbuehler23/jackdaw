@@ -24,13 +24,16 @@ pub(crate) fn brush_select_less(
     mut selection: ResMut<BrushSelection>,
     halfedge_q: Query<&BrushHalfedge>,
 ) -> OperatorResult {
-    let brush_entity = selection.entity?;
+    let brush_entity = selection.active_brush?;
     let halfedge = halfedge_q.get(brush_entity)?;
     let mesh = &halfedge.mesh;
 
     match *edit_mode {
         EditMode::BrushEdit(BrushEditMode::Vertex) => {
-            let current: HashSet<usize> = selection.vertices.iter().copied().collect();
+            let current: HashSet<usize> = selection
+                .sub(brush_entity)
+                .map(|s| s.vertices.iter().copied().collect())
+                .unwrap_or_default();
             // Keep only verts whose ALL neighbors are also in the selection.
             let kept: Vec<usize> = current
                 .iter()
@@ -59,11 +62,14 @@ pub(crate) fn brush_select_less(
                 .collect();
             let mut sorted = kept;
             sorted.sort();
-            selection.vertices = sorted;
+            selection.sub_mut(brush_entity).vertices = sorted;
             OperatorResult::Finished
         }
         EditMode::BrushEdit(BrushEditMode::Edge) => {
-            let current: HashSet<(usize, usize)> = selection.edges.iter().copied().collect();
+            let current: HashSet<(usize, usize)> = selection
+                .sub(brush_entity)
+                .map(|s| s.edges.iter().copied().collect())
+                .unwrap_or_default();
             let mut key_to_idx: std::collections::HashMap<VertKey, usize> =
                 std::collections::HashMap::new();
             for (i, &k) in halfedge.vert_keys.iter().enumerate() {
@@ -98,11 +104,14 @@ pub(crate) fn brush_select_less(
                     true
                 })
                 .collect();
-            selection.edges = kept;
+            selection.sub_mut(brush_entity).edges = kept;
             OperatorResult::Finished
         }
         EditMode::BrushEdit(BrushEditMode::Face) => {
-            let current: HashSet<usize> = selection.faces.iter().copied().collect();
+            let current: HashSet<usize> = selection
+                .sub(brush_entity)
+                .map(|s| s.faces.iter().copied().collect())
+                .unwrap_or_default();
             let kept: Vec<usize> = current
                 .iter()
                 .copied()
@@ -135,7 +144,7 @@ pub(crate) fn brush_select_less(
                 .collect();
             let mut sorted = kept;
             sorted.sort();
-            selection.faces = sorted;
+            selection.sub_mut(brush_entity).faces = sorted;
             OperatorResult::Finished
         }
         _ => OperatorResult::Cancelled,
@@ -149,13 +158,16 @@ pub(crate) fn can_run_select_less(
     if !matches!(*edit_mode, EditMode::BrushEdit(_)) {
         return false;
     }
-    if selection.entity.is_none() {
+    if selection.active_brush.is_none() {
         return false;
     }
+    let Some(sub) = selection.active_sub() else {
+        return false;
+    };
     match *edit_mode {
-        EditMode::BrushEdit(BrushEditMode::Vertex) => !selection.vertices.is_empty(),
-        EditMode::BrushEdit(BrushEditMode::Edge) => !selection.edges.is_empty(),
-        EditMode::BrushEdit(BrushEditMode::Face) => !selection.faces.is_empty(),
+        EditMode::BrushEdit(BrushEditMode::Vertex) => !sub.vertices.is_empty(),
+        EditMode::BrushEdit(BrushEditMode::Edge) => !sub.edges.is_empty(),
+        EditMode::BrushEdit(BrushEditMode::Face) => !sub.faces.is_empty(),
         _ => false,
     }
 }

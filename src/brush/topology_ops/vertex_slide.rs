@@ -28,15 +28,19 @@ pub(crate) fn brush_vertex_slide(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
         return OperatorResult::Cancelled;
     }
-    let brush_entity = selection.entity?;
-    if selection.vertices.is_empty() {
+    let brush_entity = selection.active_brush?;
+    let sel_verts: Vec<usize> = selection
+        .sub(brush_entity)
+        .map(|s| s.vertices.clone())
+        .unwrap_or_default();
+    if sel_verts.is_empty() {
         return OperatorResult::Cancelled;
     }
 
     // Map cache vertex indices to HalfedgeMesh VertKeys via vert_keys parallel array.
     let mut halfedge = halfedge_q.get_mut(brush_entity)?;
-    let mut vert_keys: Vec<VertKey> = Vec::with_capacity(selection.vertices.len());
-    for &vert_idx in &selection.vertices {
+    let mut vert_keys: Vec<VertKey> = Vec::with_capacity(sel_verts.len());
+    for &vert_idx in &sel_verts {
         if let Some(&vk) = halfedge.vert_keys.get(vert_idx) {
             vert_keys.push(vk);
         }
@@ -110,7 +114,8 @@ pub(crate) fn can_run_vertex_slide(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
 ) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex) && !selection.vertices.is_empty()
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
+        && selection.active_sub().is_some_and(|s| !s.vertices.is_empty())
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

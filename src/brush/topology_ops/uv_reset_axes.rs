@@ -23,13 +23,17 @@ pub(crate) fn brush_uv_reset_axes(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return OperatorResult::Cancelled;
     }
-    let brush_entity = selection.entity?;
-    if selection.faces.is_empty() {
+    let brush_entity = selection.active_brush?;
+    let sel_faces: Vec<usize> = selection
+        .sub(brush_entity)
+        .map(|s| s.faces.clone())
+        .unwrap_or_default();
+    if sel_faces.is_empty() {
         return OperatorResult::Cancelled;
     }
     let mut brush = brushes.get_mut(brush_entity)?;
 
-    for &face_idx in &selection.faces {
+    for &face_idx in &sel_faces {
         if face_idx >= brush.faces.len() {
             continue;
         }
@@ -46,7 +50,8 @@ pub(crate) fn brush_uv_reset_axes(
 }
 
 pub(crate) fn can_run_uv_face_op(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face) && !selection.faces.is_empty()
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+        && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

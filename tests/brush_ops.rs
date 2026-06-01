@@ -166,8 +166,8 @@ fn brush_extend_face_unavailable_without_resolvable_face() {
         *app.world_mut().resource_mut::<EditMode>() = EditMode::BrushEdit(BrushEditMode::Face);
         {
             let mut brush_selection = app.world_mut().resource_mut::<BrushSelection>();
-            brush_selection.entity = Some(b1);
-            brush_selection.faces = vec![0];
+            brush_selection.active_brush = Some(b1);
+            brush_selection.sub_mut(b1).faces = vec![0];
         }
         app.update();
         assert!(app.world_mut().operator(op).is_available().unwrap());

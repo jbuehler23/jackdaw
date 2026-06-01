@@ -26,15 +26,19 @@ pub(crate) fn brush_connect_verts(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
         return OperatorResult::Cancelled;
     }
-    let brush_entity = selection.entity?;
-    if selection.vertices.len() < 2 {
+    let brush_entity = selection.active_brush?;
+    let sel_verts: Vec<usize> = selection
+        .sub(brush_entity)
+        .map(|s| s.vertices.clone())
+        .unwrap_or_default();
+    if sel_verts.len() < 2 {
         return OperatorResult::Cancelled;
     }
 
     // Map cache vertex indices to HalfedgeMesh VertKeys via vert_keys parallel array.
     let mut halfedge = halfedge_q.get_mut(brush_entity)?;
-    let mut vert_keys: Vec<VertKey> = Vec::with_capacity(selection.vertices.len());
-    for &vert_idx in &selection.vertices {
+    let mut vert_keys: Vec<VertKey> = Vec::with_capacity(sel_verts.len());
+    for &vert_idx in &sel_verts {
         if let Some(&vk) = halfedge.vert_keys.get(vert_idx) {
             vert_keys.push(vk);
         }
@@ -144,7 +148,7 @@ pub(crate) fn brush_connect_verts(
         .filter(|(a, b)| *a < vert_count && *b < vert_count)
         .collect();
     if !inbounds.is_empty() {
-        selection.edges = inbounds;
+        selection.sub_mut(brush_entity).edges = inbounds;
     }
 
     OperatorResult::Finished
@@ -154,7 +158,10 @@ pub(crate) fn can_run_connect_verts(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
 ) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex) && selection.vertices.len() >= 2
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
+        && selection
+            .active_sub()
+            .is_some_and(|s| s.vertices.len() >= 2)
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

@@ -1,3 +1,4 @@
+pub(crate) mod box_select;
 mod csg;
 pub mod edit_mode_systems;
 mod geometry;
@@ -21,7 +22,7 @@ pub use self::geometry::{compute_brush_geometry_from_planes, compute_face_tangen
 pub use self::hull::HullFace;
 pub(crate) use self::hull::{merge_hull_triangles, rebuild_brush_from_vertices};
 pub(crate) use self::interaction::{
-    BrushDragState, ClipMode, ClipState, EdgeDragState, VertexDragState,
+    BrushDragCapture, BrushDragState, ClipMode, ClipState, EdgeDragState, VertexDragState,
 };
 pub use edit_mode_systems::BrushHalfedge;
 pub use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
@@ -78,28 +79,76 @@ pub enum BrushEditMode {
     Knife,
 }
 
-/// Tracks selected sub-elements within brush edit mode.
-#[derive(Resource, Default, Clone)]
-pub struct BrushSelection {
-    pub entity: Option<Entity>,
+/// Per-brush sub-element selection (faces, vertices, edges).
+#[derive(Default, Clone)]
+pub struct BrushSubSelection {
     pub faces: Vec<usize>,
     pub vertices: Vec<usize>,
     /// Selected edges as normalized (min, max) vertex index pairs.
     pub edges: Vec<(usize, usize)>,
+}
+
+impl BrushSubSelection {
+    /// Clear all selected faces, vertices, and edges.
+    pub fn clear(&mut self) {
+        self.faces.clear();
+        self.vertices.clear();
+        self.edges.clear();
+    }
+}
+
+/// Tracks selected sub-elements within brush edit mode.
+///
+/// Multiple brushes can be in edit mode simultaneously (their handles shown).
+/// `active_brush` is the single brush that single-brush consumers (clip mode,
+/// inspector, material apply) act on; it is set to the last entered or clicked brush.
+#[derive(Resource, Default, Clone)]
+pub struct BrushSelection {
+    /// Edit brushes (whose handles are shown) and their per-brush selected sub-elements.
+    pub brushes: std::collections::HashMap<Entity, BrushSubSelection>,
+    /// The brush single-brush consumers (clip mode, inspector, material apply) act on.
+    /// Set to the last entered / clicked brush.
+    pub active_brush: Option<Entity>,
     /// Remembered face from the last time face mode was exited (for extend-to-brush fallback).
     pub last_face_entity: Option<Entity>,
     pub last_face_index: Option<usize>,
 }
 
 impl BrushSelection {
-    /// Clear the active selection (entity + faces + vertices + edges).
+    /// Clear the active selection (edit brushes + `active_brush`).
     /// Leaves `last_face_*` untouched so the extend-to-brush fallback
     /// still works after deselecting.
     pub fn clear(&mut self) {
-        self.entity = None;
-        self.faces.clear();
-        self.vertices.clear();
-        self.edges.clear();
+        self.brushes.clear();
+        self.active_brush = None;
+    }
+
+    /// Empty every edit brush's sub-selection while staying in edit mode
+    /// (distinct from `clear`, which also drops the edit-brush set).
+    pub fn clear_sub_selections(&mut self) {
+        for sub in self.brushes.values_mut() {
+            sub.clear();
+        }
+    }
+
+    /// Sub-selection for one brush, if it is an edit brush.
+    pub fn sub(&self, e: Entity) -> Option<&BrushSubSelection> {
+        self.brushes.get(&e)
+    }
+
+    /// Mutable sub-selection for a brush, inserting an empty one if absent.
+    pub fn sub_mut(&mut self, e: Entity) -> &mut BrushSubSelection {
+        self.brushes.entry(e).or_default()
+    }
+
+    /// The brushes currently in edit mode (handles shown).
+    pub fn edit_brushes(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.brushes.keys().copied()
+    }
+
+    /// Sub-selection of the active brush.
+    pub fn active_sub(&self) -> Option<&BrushSubSelection> {
+        self.active_brush.and_then(|e| self.brushes.get(&e))
     }
 }
 
@@ -111,11 +160,17 @@ pub enum HoverIntent {
     Extend,
 }
 
-/// Tracks which brush face the cursor is hovering over.
+/// Tracks which brush sub-element the cursor is hovering over.
+///
+/// `entity` is the brush entity; `face_index`, `vertex_index`, and `edge`
+/// are set to `Some` for the element type that is currently highlighted.
+/// At most one of the three will be `Some` in any given frame.
 #[derive(Resource, Default)]
 pub struct BrushFaceHover {
     pub entity: Option<Entity>,
     pub face_index: Option<usize>,
+    pub vertex_index: Option<usize>,
+    pub edge: Option<(usize, usize)>,
     pub intent: HoverIntent,
 }
 
@@ -178,22 +233,9 @@ fn apply_brush(world: &mut World, entity: Entity, target: &Brush) {
     }
     sync_brush_to_ast(world, entity, target);
     if world.get::<BrushHalfedge>(entity).is_some() && !target.topology.polygons.is_empty() {
-        let mesh = jackdaw_geometry::halfedge::HalfedgeMesh::lift_from_topology(&target.topology);
-        let vert_keys: Vec<_> = mesh.verts.keys().collect();
-        let mut face_keys: Vec<_> =
-            vec![jackdaw_geometry::halfedge::FaceKey::default(); mesh.faces.len()];
-        for (k, f) in mesh.faces.iter() {
-            let slot = f.material_idx as usize;
-            if slot < face_keys.len() {
-                face_keys[slot] = k;
-            }
-        }
+        let halfedge = BrushHalfedge::from_topology(&target.topology);
         if let Ok(mut ec) = world.get_entity_mut(entity) {
-            ec.insert(BrushHalfedge {
-                mesh,
-                vert_keys,
-                face_keys,
-            });
+            ec.insert(halfedge);
         }
     }
     if let Ok(mut ec) = world.get_entity_mut(entity) {
@@ -258,6 +300,7 @@ impl Plugin for BrushPlugin {
             .init_resource::<BrushDragState>()
             .init_resource::<VertexDragState>()
             .init_resource::<EdgeDragState>()
+            .init_resource::<box_select::BrushBoxSelectState>()
             .init_resource::<ClipState>()
             .init_resource::<InsetModalState>()
             .init_resource::<LoopCutModalState>()
@@ -280,9 +323,11 @@ impl Plugin for BrushPlugin {
                 (
                     interaction::drop_brush_edit_on_deselect,
                     interaction::brush_face_hover,
+                    interaction::brush_vertex_edge_hover,
                     crate::brush_drag_ops::face_drag_invoke_trigger,
                     crate::brush_drag_ops::vertex_drag_invoke_trigger,
                     crate::brush_drag_ops::edge_drag_invoke_trigger,
+                    box_select::brush_box_select_promote,
                     crate::clip_ops::place_point_invoke_trigger,
                     interaction::handle_clip_mode,
                     knife_mode::handle_knife_mode,
@@ -303,6 +348,7 @@ impl Plugin for BrushPlugin {
                     gizmo_overlay::draw_brush_edit_gizmos,
                     gizmo_overlay::draw_loop_cut_preview,
                     knife_mode::draw_knife_overlay,
+                    box_select::update_brush_box_select_overlay,
                 )
                     .chain()
                     .after(crate::EditorInteractionSystems)
@@ -322,5 +368,112 @@ impl Plugin for BrushPlugin {
                 topology_migration::migrate_legacy_brush_topology
                     .run_if(in_state(crate::AppState::Editor)),
             );
+    }
+}
+
+/// Edit brushes for a selection: every selected brush, plus the child brushes
+/// of any selected entity that is not itself a brush (e.g. a `BrushGroup`).
+/// `is_brush` reports whether an entity has a `Brush`; `children_of` yields an
+/// entity's direct children. Order follows the selection; duplicates removed.
+pub fn shown_edit_brushes(
+    selected: &[Entity],
+    is_brush: impl Fn(Entity) -> bool,
+    children_of: impl Fn(Entity) -> Vec<Entity>,
+) -> Vec<Entity> {
+    let mut out = Vec::new();
+    for &e in selected {
+        if is_brush(e) {
+            if !out.contains(&e) {
+                out.push(e);
+            }
+        } else {
+            for child in children_of(e) {
+                if is_brush(child) && !out.contains(&child) {
+                    out.push(child);
+                }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod shown_edit_brushes_tests {
+    use super::shown_edit_brushes;
+    use bevy::prelude::Entity;
+
+    #[test]
+    fn brush_and_group_expand_correctly() {
+        let brush1 = Entity::from_raw_u32(1).unwrap();
+        let group = Entity::from_raw_u32(2).unwrap();
+        let gb1 = Entity::from_raw_u32(3).unwrap();
+        let gb2 = Entity::from_raw_u32(4).unwrap();
+        let unselected = Entity::from_raw_u32(5).unwrap();
+
+        let brushes = [brush1, gb1, gb2, unselected];
+
+        let result = shown_edit_brushes(
+            &[brush1, group],
+            |e| brushes.contains(&e),
+            |e| {
+                if e == group {
+                    vec![gb1, gb2]
+                } else {
+                    vec![]
+                }
+            },
+        );
+
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&brush1));
+        assert!(result.contains(&gb1));
+        assert!(result.contains(&gb2));
+        assert!(!result.contains(&unselected));
+    }
+
+    #[test]
+    fn unselected_brush_excluded() {
+        let brush1 = Entity::from_raw_u32(1).unwrap();
+        let unselected = Entity::from_raw_u32(2).unwrap();
+
+        let brushes = [brush1, unselected];
+
+        let result = shown_edit_brushes(
+            &[brush1],
+            |e| brushes.contains(&e),
+            |_| vec![],
+        );
+
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&brush1));
+        assert!(!result.contains(&unselected));
+    }
+
+    #[test]
+    fn no_duplicates_when_group_child_also_selected() {
+        let brush1 = Entity::from_raw_u32(1).unwrap();
+        let group = Entity::from_raw_u32(2).unwrap();
+
+        // brush1 is both directly selected and a child of the group
+        let result = shown_edit_brushes(
+            &[brush1, group],
+            |e| e == brush1,
+            |e| {
+                if e == group {
+                    vec![brush1]
+                } else {
+                    vec![]
+                }
+            },
+        );
+
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&brush1));
+    }
+
+    #[test]
+    fn empty_selection_yields_empty() {
+        let result = shown_edit_brushes(&[], |_| true, |_| vec![]);
+        assert!(result.is_empty());
     }
 }

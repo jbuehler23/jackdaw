@@ -665,12 +665,16 @@ fn handle_apply_material(
 ) {
     last_material.material = Some(event.material.clone());
 
-    if *edit_mode == EditMode::BrushEdit(BrushEditMode::Face) && !brush_selection.faces.is_empty() {
-        if let Some(entity) = brush_selection.entity
+    let active_faces: Vec<usize> = brush_selection
+        .active_sub()
+        .map(|s| s.faces.clone())
+        .unwrap_or_default();
+    if *edit_mode == EditMode::BrushEdit(BrushEditMode::Face) && !active_faces.is_empty() {
+        if let Some(entity) = brush_selection.active_brush
             && let Ok(mut brush) = brushes.get_mut(entity)
         {
             let old = brush.clone();
-            for &face_idx in &brush_selection.faces {
+            for &face_idx in &active_faces {
                 if face_idx < brush.faces.len() {
                     brush.faces[face_idx].material = event.material.clone();
                 }

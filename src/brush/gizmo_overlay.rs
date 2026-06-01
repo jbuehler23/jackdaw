@@ -20,7 +20,8 @@ pub(super) fn draw_brush_edit_gizmos(
     hover: Res<super::BrushFaceHover>,
     mut gizmos: Gizmos<BrushOutlineSelectedGizmoGroup>,
 ) {
-    // Draw hover face outline (works in both Object and Edit modes)
+    // Draw hover face outline (works in both Object and Edit modes).
+    // In edit mode the hover entity may be any edit brush, not just the active one.
     if let (Some(hover_entity), Some(hover_face)) = (hover.entity, hover.face_index)
         && let Ok(cache) = brush_caches.get(hover_entity)
         && let Ok(brush_global) = brush_transforms.get(hover_entity)
@@ -28,10 +29,11 @@ pub(super) fn draw_brush_edit_gizmos(
         let polygon = &cache.face_polygons[hover_face];
         if polygon.len() >= 3 {
             // Skip if face is already selected (avoid double highlight)
-            let is_selected = brush_selection.faces.contains(&hover_face)
-                && brush_selection.entity == Some(hover_entity);
+            let is_selected = brush_selection
+                .sub(hover_entity)
+                .is_some_and(|s| s.faces.contains(&hover_face));
             if !is_selected {
-                let color = default_style::EDIT_AVAILABLE_COLOR;
+                let color = default_style::EDIT_HOVER_COLOR;
                 for i in 0..polygon.len() {
                     let a = brush_global.transform_point(cache.vertices[polygon[i]]);
                     let b = brush_global
@@ -46,97 +48,130 @@ pub(super) fn draw_brush_edit_gizmos(
         return;
     };
 
-    let Some(brush_entity) = brush_selection.entity else {
-        return;
-    };
-    let Ok(cache) = brush_caches.get(brush_entity) else {
-        return;
-    };
-    let Ok(brush_global) = brush_transforms.get(brush_entity) else {
-        return;
-    };
+    // Collect edit brushes to avoid holding an immutable borrow on
+    // brush_selection while we call sub() below.
+    let edit_brushes: Vec<Entity> = brush_selection.edit_brushes().collect();
+    let active_brush = brush_selection.active_brush;
 
-    // In Clip mode, hide edge/vertex overlays on default-material brushes so the
-    // clip plane and cut preview are clearly visible.
-    let all_faces_default = brushes
-        .get(brush_entity)
-        .is_ok_and(|b| b.faces.iter().all(|f| f.material == Handle::default()));
-    let skip_wireframe = mode == BrushEditMode::Clip && all_faces_default;
+    if edit_brushes.is_empty() {
+        return;
+    }
 
-    if !skip_wireframe {
-        // Collect unique edges and track selected state
-        let mut drawn_edges: Vec<(usize, usize, bool)> = Vec::new();
-        for polygon in &cache.face_polygons {
-            if polygon.len() < 2 {
-                continue;
+    // Draw handles on every edit brush. All selected brushes are equally
+    // editable, so their handles share one resting color.
+    for &brush_entity in &edit_brushes {
+        let Ok(cache) = brush_caches.get(brush_entity) else {
+            continue;
+        };
+        let Ok(brush_global) = brush_transforms.get(brush_entity) else {
+            continue;
+        };
+
+        let sub = brush_selection.sub(brush_entity);
+        let available_color = default_style::EDIT_AVAILABLE_COLOR;
+
+        // In Clip mode, hide edge/vertex overlays on default-material brushes so
+        // the clip plane and cut preview are clearly visible.
+        let all_faces_default = brushes
+            .get(brush_entity)
+            .is_ok_and(|b| b.faces.iter().all(|f| f.material == Handle::default()));
+        let skip_wireframe = mode == BrushEditMode::Clip && all_faces_default;
+
+        if !skip_wireframe {
+            // Collect unique edges and track selected/hover state.
+            let mut drawn_edges: Vec<(usize, usize, bool)> = Vec::new();
+            for polygon in &cache.face_polygons {
+                if polygon.len() < 2 {
+                    continue;
+                }
+                for i in 0..polygon.len() {
+                    let a = polygon[i];
+                    let b = polygon[(i + 1) % polygon.len()];
+                    let edge = (a.min(b), a.max(b));
+                    if !drawn_edges
+                        .iter()
+                        .any(|(ea, eb, _)| *ea == edge.0 && *eb == edge.1)
+                    {
+                        let selected = sub.is_some_and(|s| s.edges.contains(&edge));
+                        drawn_edges.push((edge.0, edge.1, selected));
+                    }
+                }
             }
-            for i in 0..polygon.len() {
-                let a = polygon[i];
-                let b = polygon[(i + 1) % polygon.len()];
-                let edge = (a.min(b), a.max(b));
-                if !drawn_edges
-                    .iter()
-                    .any(|(ea, eb, _)| *ea == edge.0 && *eb == edge.1)
-                {
-                    let selected = brush_selection.edges.contains(&edge);
-                    drawn_edges.push((edge.0, edge.1, selected));
+
+            // Draw all edges; edge hover color overrides resting/selected for the hovered edge.
+            let hover_edge = if hover.entity == Some(brush_entity) {
+                hover.edge
+            } else {
+                None
+            };
+            for &(a, b, selected) in &drawn_edges {
+                let wa = brush_global.transform_point(cache.vertices[a]);
+                let wb = brush_global.transform_point(cache.vertices[b]);
+                let color =
+                    if hover_edge.is_some_and(|he| he == (a, b) || he == (b, a)) && !selected {
+                        default_style::EDIT_HOVER_COLOR
+                    } else if selected {
+                        default_style::EDIT_SELECTED_COLOR
+                    } else {
+                        available_color
+                    };
+                if mode == BrushEditMode::Edge || mode == BrushEditMode::Knife {
+                    gizmos.line(wa, wb, color);
+                }
+            }
+
+            // Draw vertices as small spheres; vertex hover color overrides resting/selected.
+            let hover_vi = if hover.entity == Some(brush_entity) {
+                hover.vertex_index
+            } else {
+                None
+            };
+            for (vi, v) in cache.vertices.iter().enumerate() {
+                let world_pos = brush_global.transform_point(*v);
+                let selected = sub.is_some_and(|s| s.vertices.contains(&vi));
+                let color = if hover_vi == Some(vi) && !selected {
+                    default_style::EDIT_HOVER_COLOR
+                } else if selected {
+                    default_style::EDIT_SELECTED_COLOR
+                } else {
+                    available_color
+                };
+                if mode == BrushEditMode::Vertex || mode == BrushEditMode::Knife {
+                    gizmos.sphere(
+                        Isometry3d::from_translation(world_pos),
+                        default_style::EDIT_VERTEX_RADIUS,
+                        color,
+                    );
                 }
             }
         }
 
-        // Draw all edges
-        for &(a, b, selected) in &drawn_edges {
-            let wa = brush_global.transform_point(cache.vertices[a]);
-            let wb = brush_global.transform_point(cache.vertices[b]);
-            let color = if selected {
-                default_style::EDIT_SELECTED_COLOR
-            } else {
-                default_style::EDIT_AVAILABLE_COLOR
-            };
-            // Knife mode also shows the edge wireframe so the user
-            // sees what they're snapping to.
-            if mode == BrushEditMode::Edge || mode == BrushEditMode::Knife {
-                gizmos.line(wa, wb, color);
-            }
-        }
-
-        // Draw vertices as small spheres
-        for (vi, v) in cache.vertices.iter().enumerate() {
-            let world_pos = brush_global.transform_point(*v);
-            let selected = brush_selection.vertices.contains(&vi);
-            let color = if selected {
-                default_style::EDIT_SELECTED_COLOR
-            } else {
-                default_style::EDIT_AVAILABLE_COLOR
-            };
-            // Knife mode also draws vertex dots so corners are
-            // visible as snap targets.
-            if mode == BrushEditMode::Vertex || mode == BrushEditMode::Knife {
-                gizmos.sphere(
-                    Isometry3d::from_translation(world_pos),
-                    default_style::EDIT_VERTEX_RADIUS,
-                    color,
-                );
+        // Highlight selected faces.
+        if mode == BrushEditMode::Face {
+            let faces = sub.map(|s| s.faces.as_slice()).unwrap_or(&[]);
+            for &face_idx in faces {
+                let polygon = &cache.face_polygons[face_idx];
+                if polygon.len() < 3 {
+                    continue;
+                }
+                for i in 0..polygon.len() {
+                    let a = brush_global.transform_point(cache.vertices[polygon[i]]);
+                    let b = brush_global
+                        .transform_point(cache.vertices[polygon[(i + 1) % polygon.len()]]);
+                    gizmos.line(a, b, default_style::EDIT_SELECTED_COLOR);
+                }
             }
         }
     }
 
-    // Highlight selected faces
-    if mode == BrushEditMode::Face {
-        for &face_idx in &brush_selection.faces {
-            let polygon = &cache.face_polygons[face_idx];
-            if polygon.len() < 3 {
-                continue;
-            }
-            // Draw face outline in bright color
-            for i in 0..polygon.len() {
-                let a = brush_global.transform_point(cache.vertices[polygon[i]]);
-                let b =
-                    brush_global.transform_point(cache.vertices[polygon[(i + 1) % polygon.len()]]);
-                gizmos.line(a, b, default_style::EDIT_SELECTED_COLOR);
-            }
-        }
-    }
+    // Drag constraint line and extend preview use the active brush's transform.
+    // If there is no active brush, skip these overlays.
+    let Some(active_entity) = active_brush else {
+        return;
+    };
+    let Ok(active_global) = brush_transforms.get(active_entity) else {
+        return;
+    };
 
     // Draw extend mode wireframe preview
     if face_drag.active && face_drag.extrude_mode == FaceExtrudeMode::Extend {
@@ -183,9 +218,9 @@ pub(super) fn draw_brush_edit_gizmos(
             VertexDragConstraint::AxisZ => (Vec3::Z, default_style::AXIS_Z),
             VertexDragConstraint::Free => unreachable!(),
         };
-        let (_, brush_rot, _) = brush_global.to_scale_rotation_translation();
+        let (_, brush_rot, _) = active_global.to_scale_rotation_translation();
         let world_axis = brush_rot * axis_dir;
-        let center = brush_global.translation();
+        let center = active_global.translation();
         gizmos.line(
             center - world_axis * 50.0,
             center + world_axis * 50.0,

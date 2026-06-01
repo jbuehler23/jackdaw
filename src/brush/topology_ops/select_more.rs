@@ -24,18 +24,19 @@ pub(crate) fn brush_select_more(
     mut selection: ResMut<BrushSelection>,
     halfedge_q: Query<&BrushHalfedge>,
 ) -> OperatorResult {
-    let brush_entity = selection.entity?;
+    let brush_entity = selection.active_brush?;
     let halfedge = halfedge_q.get(brush_entity)?;
     let mesh = &halfedge.mesh;
 
     match *edit_mode {
         EditMode::BrushEdit(BrushEditMode::Vertex) => {
-            // For each selected vert (cache idx), find the corresponding VertKey, walk its
-            // disk, for each incident edge add the OTHER endpoint's cache idx.
-            let mut new_set: HashSet<usize> = selection.vertices.iter().copied().collect();
-            let current: Vec<usize> = selection.vertices.clone();
-            for vi in current {
-                let Some(&vk) = halfedge.vert_keys.get(vi) else {
+            let current: Vec<usize> = selection
+                .sub(brush_entity)
+                .map(|s| s.vertices.clone())
+                .unwrap_or_default();
+            let mut new_set: HashSet<usize> = current.iter().copied().collect();
+            for vi in &current {
+                let Some(&vk) = halfedge.vert_keys.get(*vi) else {
                     continue;
                 };
                 for ek in disk_walk(mesh, vk).collect::<Vec<_>>() {
@@ -50,26 +51,27 @@ pub(crate) fn brush_select_more(
                     }
                 }
             }
-            selection.vertices = new_set.into_iter().collect();
-            selection.vertices.sort();
+            let mut result: Vec<usize> = new_set.into_iter().collect();
+            result.sort();
+            selection.sub_mut(brush_entity).vertices = result;
             OperatorResult::Finished
         }
         EditMode::BrushEdit(BrushEditMode::Edge) => {
-            // For each selected edge, find its two endpoint VertKeys, walk each's disk; add all
-            // resulting edges to the selection.
-            let mut new_set: HashSet<(usize, usize)> = selection.edges.iter().copied().collect();
-            let current: Vec<(usize, usize)> = selection.edges.clone();
-            // Build VertKey -> idx lookup once.
+            let current: Vec<(usize, usize)> = selection
+                .sub(brush_entity)
+                .map(|s| s.edges.clone())
+                .unwrap_or_default();
+            let mut new_set: HashSet<(usize, usize)> = current.iter().copied().collect();
             let mut key_to_idx: std::collections::HashMap<VertKey, usize> =
                 std::collections::HashMap::new();
             for (i, &k) in halfedge.vert_keys.iter().enumerate() {
                 key_to_idx.insert(k, i);
             }
-            for (a, b) in current {
-                let Some(&va) = halfedge.vert_keys.get(a) else {
+            for (a, b) in &current {
+                let Some(&va) = halfedge.vert_keys.get(*a) else {
                     continue;
                 };
-                let Some(&vb) = halfedge.vert_keys.get(b) else {
+                let Some(&vb) = halfedge.vert_keys.get(*b) else {
                     continue;
                 };
                 for vk in [va, vb] {
@@ -86,16 +88,17 @@ pub(crate) fn brush_select_more(
                     }
                 }
             }
-            selection.edges = new_set.into_iter().collect();
+            selection.sub_mut(brush_entity).edges = new_set.into_iter().collect();
             OperatorResult::Finished
         }
         EditMode::BrushEdit(BrushEditMode::Face) => {
-            // For each selected face, walk its loops; for each edge, walk radial; add neighbor
-            // faces.
-            let mut new_set: HashSet<usize> = selection.faces.iter().copied().collect();
-            let current: Vec<usize> = selection.faces.clone();
-            for fi in current {
-                let Some(&fk) = halfedge.face_keys.get(fi) else {
+            let current: Vec<usize> = selection
+                .sub(brush_entity)
+                .map(|s| s.faces.clone())
+                .unwrap_or_default();
+            let mut new_set: HashSet<usize> = current.iter().copied().collect();
+            for fi in &current {
+                let Some(&fk) = halfedge.face_keys.get(*fi) else {
                     continue;
                 };
                 let face_data = &mesh.faces[fk];
@@ -113,8 +116,9 @@ pub(crate) fn brush_select_more(
                     cur = mesh.loops[cur].next;
                 }
             }
-            selection.faces = new_set.into_iter().collect();
-            selection.faces.sort();
+            let mut result: Vec<usize> = new_set.into_iter().collect();
+            result.sort();
+            selection.sub_mut(brush_entity).faces = result;
             OperatorResult::Finished
         }
         _ => OperatorResult::Cancelled,
@@ -128,13 +132,16 @@ pub(crate) fn can_run_select_more(
     if !matches!(*edit_mode, EditMode::BrushEdit(_)) {
         return false;
     }
-    if selection.entity.is_none() {
+    if selection.active_brush.is_none() {
         return false;
     }
+    let Some(sub) = selection.active_sub() else {
+        return false;
+    };
     match *edit_mode {
-        EditMode::BrushEdit(BrushEditMode::Vertex) => !selection.vertices.is_empty(),
-        EditMode::BrushEdit(BrushEditMode::Edge) => !selection.edges.is_empty(),
-        EditMode::BrushEdit(BrushEditMode::Face) => !selection.faces.is_empty(),
+        EditMode::BrushEdit(BrushEditMode::Vertex) => !sub.vertices.is_empty(),
+        EditMode::BrushEdit(BrushEditMode::Edge) => !sub.edges.is_empty(),
+        EditMode::BrushEdit(BrushEditMode::Face) => !sub.faces.is_empty(),
         _ => false,
     }
 }

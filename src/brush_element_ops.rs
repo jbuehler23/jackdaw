@@ -86,60 +86,119 @@ pub(crate) fn brush_delete_element(
     let EditMode::BrushEdit(mode) = *edit_mode else {
         return OperatorResult::Cancelled;
     };
-    let brush_entity = brush_selection.entity?;
-    let mut brush = brushes.get_mut(brush_entity)?;
-
-    match mode {
-        BrushEditMode::Vertex => {
-            if brush_selection.vertices.is_empty() {
-                return OperatorResult::Cancelled;
-            }
-            let Ok(cache) = brush_caches.get(brush_entity) else {
-                return OperatorResult::Cancelled;
-            };
-            let removed: HashSet<usize> = brush_selection.vertices.iter().copied().collect();
-            if !rebuild_after_remove(&mut brush, cache, &removed) {
-                return OperatorResult::Cancelled;
-            }
-            brush_selection.vertices.clear();
-        }
-        BrushEditMode::Edge => {
-            if brush_selection.edges.is_empty() {
-                return OperatorResult::Cancelled;
-            }
-            let Ok(cache) = brush_caches.get(brush_entity) else {
-                return OperatorResult::Cancelled;
-            };
-            let removed: HashSet<usize> = brush_selection
-                .edges
-                .iter()
-                .flat_map(|&(a, b)| [a, b])
-                .collect();
-            if !rebuild_after_remove(&mut brush, cache, &removed) {
-                return OperatorResult::Cancelled;
-            }
-            brush_selection.edges.clear();
-        }
-        BrushEditMode::Face => {
-            if brush_selection.faces.is_empty() {
-                return OperatorResult::Cancelled;
-            }
-            if brush.faces.len() - brush_selection.faces.len() < 4 {
-                return OperatorResult::Cancelled;
-            }
-            let removed: HashSet<usize> = brush_selection.faces.iter().copied().collect();
-            brush.faces = brush
-                .faces
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !removed.contains(i))
-                .map(|(_, f)| f.clone())
-                .collect();
-            brush_selection.faces.clear();
-        }
-        BrushEditMode::Clip | BrushEditMode::Knife => return OperatorResult::Cancelled,
+    if matches!(mode, BrushEditMode::Clip | BrushEditMode::Knife) {
+        return OperatorResult::Cancelled;
     }
-    OperatorResult::Finished
+
+    // Gather per-brush work plans from immutable reads before any mutation.
+    struct DeletePlan {
+        entity: Entity,
+        removed_verts: HashSet<usize>,
+        removed_faces: HashSet<usize>,
+    }
+
+    let edit_entities: Vec<Entity> = brush_selection.edit_brushes().collect();
+    let mut plans: Vec<DeletePlan> = Vec::new();
+    for e in &edit_entities {
+        let e = *e;
+        let Some(sub) = brush_selection.sub(e) else {
+            continue;
+        };
+        let Ok(cache) = brush_caches.get(e) else {
+            continue;
+        };
+        let Ok(brush) = brushes.get(e) else {
+            continue;
+        };
+        match mode {
+            BrushEditMode::Vertex if !sub.vertices.is_empty() => {
+                let removed: HashSet<usize> = sub.vertices.iter().copied().collect();
+                let remaining = cache.vertices.len().saturating_sub(removed.len());
+                if remaining >= 4 {
+                    plans.push(DeletePlan {
+                        entity: e,
+                        removed_verts: removed,
+                        removed_faces: HashSet::new(),
+                    });
+                }
+            }
+            BrushEditMode::Edge if !sub.edges.is_empty() => {
+                let removed: HashSet<usize> =
+                    sub.edges.iter().flat_map(|&(a, b)| [a, b]).collect();
+                let remaining = cache.vertices.len().saturating_sub(removed.len());
+                if remaining >= 4 {
+                    plans.push(DeletePlan {
+                        entity: e,
+                        removed_verts: removed,
+                        removed_faces: HashSet::new(),
+                    });
+                }
+            }
+            BrushEditMode::Face if !sub.faces.is_empty() => {
+                let removed: HashSet<usize> = sub.faces.iter().copied().collect();
+                let remaining = brush.faces.len().saturating_sub(removed.len());
+                if remaining >= 4 {
+                    plans.push(DeletePlan {
+                        entity: e,
+                        removed_verts: HashSet::new(),
+                        removed_faces: removed,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if plans.is_empty() {
+        return OperatorResult::Cancelled;
+    }
+
+    let mut any_modified = false;
+    for plan in plans {
+        match mode {
+            BrushEditMode::Vertex | BrushEditMode::Edge => {
+                let Ok(cache) = brush_caches.get(plan.entity) else {
+                    continue;
+                };
+                let Ok(mut brush) = brushes.get_mut(plan.entity) else {
+                    continue;
+                };
+                if rebuild_after_remove(&mut brush, cache, &plan.removed_verts) {
+                    if let Some(sub) = brush_selection.brushes.get_mut(&plan.entity) {
+                        if matches!(mode, BrushEditMode::Vertex) {
+                            sub.vertices.clear();
+                        } else {
+                            sub.edges.clear();
+                        }
+                    }
+                    any_modified = true;
+                }
+            }
+            BrushEditMode::Face => {
+                let Ok(mut brush) = brushes.get_mut(plan.entity) else {
+                    continue;
+                };
+                brush.faces = brush
+                    .faces
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !plan.removed_faces.contains(i))
+                    .map(|(_, f)| f.clone())
+                    .collect();
+                if let Some(sub) = brush_selection.brushes.get_mut(&plan.entity) {
+                    sub.faces.clear();
+                }
+                any_modified = true;
+            }
+            BrushEditMode::Clip | BrushEditMode::Knife => unreachable!(),
+        }
+    }
+
+    if any_modified {
+        OperatorResult::Finished
+    } else {
+        OperatorResult::Cancelled
+    }
 }
 
 fn rebuild_after_remove(
@@ -229,50 +288,94 @@ fn nudge_brush_element(
     let EditMode::BrushEdit(mode) = *edit_mode else {
         return OperatorResult::Cancelled;
     };
-    let brush_entity = brush_selection.entity?;
-    let cache = brush_caches.get(brush_entity)?;
-    let mut brush = brushes.get_mut(brush_entity)?;
 
-    let affected: HashSet<usize> = match mode {
-        BrushEditMode::Vertex if !brush_selection.vertices.is_empty() => {
-            brush_selection.vertices.iter().copied().collect()
-        }
-        BrushEditMode::Edge if !brush_selection.edges.is_empty() => brush_selection
-            .edges
-            .iter()
-            .flat_map(|&(a, b)| [a, b])
-            .collect(),
-        BrushEditMode::Face if !brush_selection.faces.is_empty() => brush_selection
-            .faces
-            .iter()
-            .filter_map(|&fi| cache.face_polygons.get(fi))
-            .flat_map(|poly| poly.iter().copied())
-            .collect(),
-        _ => return OperatorResult::Cancelled,
-    };
+    // Gather per-brush affected vertex sets from immutable reads before mutation.
+    struct NudgePlan {
+        entity: Entity,
+        affected_verts: HashSet<usize>,
+        // Face nudge needs the remapped face list after rebuild.
+        nudge_faces: Vec<usize>,
+    }
 
     let offset = Vec3::new(0.0, direction * snap.grid_size(), 0.0);
-    let mut new_verts = cache.vertices.clone();
-    for &vi in &affected {
-        if vi < new_verts.len() {
-            new_verts[vi] += offset;
-        }
-    }
-    let (new_brush, old_to_new) =
-        rebuild_brush_from_vertices(&brush, &cache.vertices, &cache.face_polygons, &new_verts)?;
-    *brush = new_brush;
-
-    match mode {
-        BrushEditMode::Vertex | BrushEditMode::Edge => {}
-        BrushEditMode::Face => {
-            // Face indices may have been remapped during rebuild.
-            brush_selection.faces = brush_selection
+    let edit_entities: Vec<Entity> = brush_selection.edit_brushes().collect();
+    let mut plans: Vec<NudgePlan> = Vec::new();
+    for e in &edit_entities {
+        let e = *e;
+        let Some(sub) = brush_selection.sub(e) else {
+            continue;
+        };
+        let Ok(cache) = brush_caches.get(e) else {
+            continue;
+        };
+        let affected: HashSet<usize> = match mode {
+            BrushEditMode::Vertex if !sub.vertices.is_empty() => {
+                sub.vertices.iter().copied().collect()
+            }
+            BrushEditMode::Edge if !sub.edges.is_empty() => {
+                sub.edges.iter().flat_map(|&(a, b)| [a, b]).collect()
+            }
+            BrushEditMode::Face if !sub.faces.is_empty() => sub
                 .faces
                 .iter()
-                .filter_map(|&fi| old_to_new.get(fi).copied())
-                .collect();
+                .filter_map(|&fi| cache.face_polygons.get(fi))
+                .flat_map(|poly| poly.iter().copied())
+                .collect(),
+            _ => continue,
+        };
+        if affected.is_empty() {
+            continue;
         }
-        BrushEditMode::Clip | BrushEditMode::Knife => unreachable!(),
+        plans.push(NudgePlan {
+            entity: e,
+            affected_verts: affected,
+            nudge_faces: sub.faces.clone(),
+        });
     }
-    OperatorResult::Finished
+
+    if plans.is_empty() {
+        return OperatorResult::Cancelled;
+    }
+
+    let mut any_modified = false;
+    for plan in plans {
+        let Ok(cache) = brush_caches.get(plan.entity) else {
+            continue;
+        };
+        let Ok(mut brush) = brushes.get_mut(plan.entity) else {
+            continue;
+        };
+        let mut new_verts = cache.vertices.clone();
+        for &vi in &plan.affected_verts {
+            if vi < new_verts.len() {
+                new_verts[vi] += offset;
+            }
+        }
+        let Some((new_brush, old_to_new)) = rebuild_brush_from_vertices(
+            &brush,
+            &cache.vertices,
+            &cache.face_polygons,
+            &new_verts,
+        ) else {
+            continue;
+        };
+        *brush = new_brush;
+        if matches!(mode, BrushEditMode::Face) {
+            // Face indices may be remapped during rebuild.
+            if let Some(sub) = brush_selection.brushes.get_mut(&plan.entity) {
+                sub.faces = plan
+                    .nudge_faces
+                    .iter()
+                    .filter_map(|&fi| old_to_new.get(fi).copied())
+                    .collect();
+            }
+        }
+        any_modified = true;
+    }
+
+    if any_modified {
+        OperatorResult::Finished
+    } else {
+        OperatorResult::Cancelled
+    }
 }

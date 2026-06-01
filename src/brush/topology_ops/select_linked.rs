@@ -30,15 +30,19 @@ pub(crate) fn brush_select_linked(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return OperatorResult::Cancelled;
     }
-    let brush_entity = selection.entity?;
-    if selection.faces.is_empty() {
+    let brush_entity = selection.active_brush?;
+    let sel_faces: Vec<usize> = selection
+        .sub(brush_entity)
+        .map(|s| s.faces.clone())
+        .unwrap_or_default();
+    if sel_faces.is_empty() {
         return OperatorResult::Cancelled;
     }
     let halfedge = halfedge_q.get(brush_entity)?;
 
     // Map each selected cache face index to its HalfedgeMesh FaceKey.
-    let mut mesh_faces: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());
-    for &face_idx in &selection.faces {
+    let mut mesh_faces: Vec<FaceKey> = Vec::with_capacity(sel_faces.len());
+    for &face_idx in &sel_faces {
         if let Some(&fk) = halfedge.face_keys.get(face_idx) {
             mesh_faces.push(fk);
         }
@@ -66,7 +70,7 @@ pub(crate) fn brush_select_linked(
         }
     }
 
-    selection.faces = new_faces;
+    selection.sub_mut(brush_entity).faces = new_faces;
     OperatorResult::Finished
 }
 
@@ -74,7 +78,8 @@ pub(crate) fn can_run_select_linked(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
 ) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face) && !selection.faces.is_empty()
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+        && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

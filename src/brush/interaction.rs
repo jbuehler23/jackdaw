@@ -2,7 +2,9 @@ use bevy::{input_focus::InputFocus, prelude::*};
 
 use crate::default_style;
 use crate::{
-    selection::Selection, viewport::MainViewportCamera, viewport_util::point_in_polygon_2d,
+    selection::Selection,
+    viewport::MainViewportCamera,
+    viewport_util::{point_in_polygon_2d, point_to_segment_dist},
 };
 
 use super::{BrushEditMode, BrushMeshCache, BrushSelection, EditMode};
@@ -25,13 +27,16 @@ pub(super) fn drop_brush_edit_on_deselect(
     }
 
     if let EditMode::BrushEdit(_) = *edit_mode
-        && let Some(brush_entity) = brush_selection.entity
-        && selection.primary() != Some(brush_entity)
+        && let Some(brush_entity) = brush_selection.active_brush
+        && !selection.entities.contains(&brush_entity)
     {
         // Save last selected face for extend-to-brush fallback
-        if !brush_selection.faces.is_empty() {
+        let last_face = brush_selection
+            .sub(brush_entity)
+            .and_then(|s| s.faces.last().copied());
+        if let Some(face_idx) = last_face {
             brush_selection.last_face_entity = Some(brush_entity);
-            brush_selection.last_face_index = brush_selection.faces.last().copied();
+            brush_selection.last_face_index = Some(face_idx);
         }
         *edit_mode = EditMode::Object;
         brush_selection.clear();
@@ -81,6 +86,24 @@ pub(crate) enum VertexDragConstraint {
     AxisZ,
 }
 
+/// One brush's start state for a direct sub-element drag. The drag moves the
+/// vertices named by `indices` from `start_local_positions` by a brush-local
+/// offset derived from a single shared world displacement. `start_brush`,
+/// `start_all_vertices`, and `start_face_polygons` are the rebuild baseline
+/// passed to `apply_vertex_deltas`; `start_world_to_local` converts the shared
+/// world offset into this brush's local space (a brush in edit mode does not
+/// move during the drag, so the inverse stays valid).
+#[derive(Clone)]
+pub(crate) struct BrushDragCapture {
+    pub(crate) entity: Entity,
+    pub(crate) start_brush: Brush,
+    pub(crate) start_all_vertices: Vec<Vec3>,
+    pub(crate) start_face_polygons: Vec<Vec<usize>>,
+    pub(crate) indices: Vec<usize>,
+    pub(crate) start_local_positions: Vec<Vec3>,
+    pub(crate) start_world_to_local: bevy::math::Affine3A,
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct VertexDragState {
     pub pending: Option<PendingSubDrag>,
@@ -95,6 +118,9 @@ pub(crate) struct VertexDragState {
     pub(crate) start_face_polygons: Vec<Vec<usize>>,
     /// New vertex position for Shift+drag split (edge midpoint or face center).
     pub(crate) split_vertex: Option<Vec3>,
+    /// Per-brush start state for the cross-brush direct drag. One entry per
+    /// edit brush with selected vertices; drives the shared-offset broadcast.
+    pub(crate) brush_captures: Vec<BrushDragCapture>,
     /// Multi-viewport: see [`BrushDragState::drag_camera`].
     pub(crate) drag_camera: Option<Entity>,
     pub(crate) drag_viewport: Option<Entity>,
@@ -155,6 +181,9 @@ pub(crate) struct EdgeDragState {
     pub(crate) start_all_vertices: Vec<Vec3>,
     /// Per-face polygon indices at drag start (for hull rebuild).
     pub(crate) start_face_polygons: Vec<Vec<usize>>,
+    /// Per-brush start state for the cross-brush direct drag. One entry per
+    /// edit brush with selected edges; drives the shared-offset broadcast.
+    pub(crate) brush_captures: Vec<BrushDragCapture>,
     /// Multi-viewport: see [`BrushDragState::drag_camera`].
     pub(crate) drag_camera: Option<Entity>,
     pub(crate) drag_viewport: Option<Entity>,
@@ -197,7 +226,7 @@ pub(super) fn handle_clip_mode(
         return;
     };
 
-    let Some(brush_entity) = brush_selection.entity else {
+    let Some(brush_entity) = brush_selection.active_brush else {
         return;
     };
     let Ok(brush_global) = brush_transforms.get(brush_entity) else {
@@ -372,7 +401,17 @@ fn pick_face_under_cursor(
     best_face
 }
 
-/// Updates the hover resource each frame to track which face the cursor is over.
+fn clear_hover(hover: &mut super::BrushFaceHover) {
+    hover.entity = None;
+    hover.face_index = None;
+    hover.vertex_index = None;
+    hover.edge = None;
+}
+
+/// Updates the hover resource each frame to track which sub-element the cursor is over.
+///
+/// In face-edit mode, iterates all edit brushes and picks the nearest face across
+/// them. In object mode with Shift/Alt held, checks the primary selected brush.
 pub(super) fn brush_face_hover(
     edit_mode: Res<EditMode>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -380,6 +419,7 @@ pub(super) fn brush_face_hover(
     face_entities: Query<(Entity, &super::BrushFaceEntity, &GlobalTransform)>,
     brush_selection: Res<BrushSelection>,
     brush_caches: Query<&BrushMeshCache>,
+    brush_transforms: Query<&GlobalTransform>,
     selection: Res<Selection>,
     drag_state: Res<BrushDragState>,
     mut hover: ResMut<super::BrushFaceHover>,
@@ -391,8 +431,7 @@ pub(super) fn brush_face_hover(
 
     // Clear hover during active drag
     if drag_state.active {
-        hover.entity = None;
-        hover.face_index = None;
+        clear_hover(&mut hover);
         return;
     }
 
@@ -400,8 +439,7 @@ pub(super) fn brush_face_hover(
     let should_hover = in_face_edit || (*edit_mode == EditMode::Object && (shift || alt));
 
     if !should_hover {
-        hover.entity = None;
-        hover.face_index = None;
+        clear_hover(&mut hover);
         return;
     }
 
@@ -412,62 +450,258 @@ pub(super) fn brush_face_hover(
     };
 
     let Some(cursor_pos) = vp.cursor() else {
-        hover.entity = None;
-        hover.face_index = None;
+        clear_hover(&mut hover);
         return;
     };
     let Some(camera_entity) = vp.camera_entity() else {
-        hover.entity = None;
-        hover.face_index = None;
+        clear_hover(&mut hover);
         return;
     };
     let Some(viewport_entity) = vp.viewport_entity() else {
-        hover.entity = None;
-        hover.face_index = None;
+        clear_hover(&mut hover);
         return;
     };
     let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
-        hover.entity = None;
-        hover.face_index = None;
+        clear_hover(&mut hover);
         return;
     };
     let Some(viewport_cursor) = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos) else {
-        hover.entity = None;
-        hover.face_index = None;
+        clear_hover(&mut hover);
         return;
     };
 
-    let brush_entity = if in_face_edit {
-        brush_selection.entity
+    if in_face_edit {
+        // Collect candidate brushes to avoid borrowing brush_selection while
+        // mutating hover later.
+        let candidates: Vec<Entity> = brush_selection.edit_brushes().collect();
+
+        let mut best_entity: Option<Entity> = None;
+        let mut best_face: Option<usize> = None;
+        let mut best_depth = f32::MAX;
+
+        for brush_entity in candidates {
+            let Ok(cache) = brush_caches.get(brush_entity) else {
+                continue;
+            };
+            let Ok(brush_global) = brush_transforms.get(brush_entity) else {
+                continue;
+            };
+            for (_, face_ent, face_global) in &face_entities {
+                if face_ent.brush_entity != brush_entity {
+                    continue;
+                }
+                let face_idx = face_ent.face_index;
+                let polygon = &cache.face_polygons[face_idx];
+                if polygon.len() < 3 {
+                    continue;
+                }
+                let screen_verts: Vec<Vec2> = polygon
+                    .iter()
+                    .filter_map(|&vi| {
+                        let world = face_global.transform_point(cache.vertices[vi]);
+                        camera.world_to_viewport(cam_tf, world).ok()
+                    })
+                    .collect();
+                if screen_verts.len() < 3 {
+                    continue;
+                }
+                if point_in_polygon_2d(viewport_cursor, &screen_verts) {
+                    let centroid: Vec3 = polygon
+                        .iter()
+                        .map(|&vi| cache.vertices[vi])
+                        .sum::<Vec3>()
+                        / polygon.len() as f32;
+                    let world_centroid = brush_global.transform_point(centroid);
+                    let depth = (cam_tf.translation() - world_centroid).length_squared();
+                    if depth < best_depth {
+                        best_depth = depth;
+                        best_entity = Some(brush_entity);
+                        best_face = Some(face_idx);
+                    }
+                }
+            }
+        }
+
+        if let (Some(entity), Some(face_idx)) = (best_entity, best_face) {
+            hover.entity = Some(entity);
+            hover.face_index = Some(face_idx);
+            hover.vertex_index = None;
+            hover.edge = None;
+            hover.intent = intent;
+        } else {
+            clear_hover(&mut hover);
+        }
     } else {
-        selection.primary().filter(|&e| brushes.contains(e))
-    };
+        // Object mode with Shift/Alt: check only the primary selected brush.
+        let Some(brush_entity) = selection.primary().filter(|&e| brushes.contains(e)) else {
+            clear_hover(&mut hover);
+            return;
+        };
 
-    let Some(brush_entity) = brush_entity else {
-        hover.entity = None;
-        hover.face_index = None;
+        let Ok(cache) = brush_caches.get(brush_entity) else {
+            clear_hover(&mut hover);
+            return;
+        };
+
+        if let Some(face_idx) = pick_face_under_cursor(
+            viewport_cursor,
+            brush_entity,
+            camera,
+            cam_tf,
+            cache,
+            &face_entities,
+        ) {
+            hover.entity = Some(brush_entity);
+            hover.face_index = Some(face_idx);
+            hover.vertex_index = None;
+            hover.edge = None;
+            hover.intent = intent;
+        } else {
+            clear_hover(&mut hover);
+        }
+    }
+}
+
+/// Updates vertex/edge hover state for vertex-edit and edge-edit modes.
+///
+/// Runs after `brush_face_hover`. In those modes `brush_face_hover` skips
+/// hover (its `should_hover` guard is false), so this system fills in the
+/// vertex or edge nearest to the cursor across all edit brushes and writes
+/// it into `BrushFaceHover`.
+pub(super) fn brush_vertex_edge_hover(
+    edit_mode: Res<EditMode>,
+    vp: crate::viewport::ViewportCursor,
+    brush_selection: Res<BrushSelection>,
+    brush_caches: Query<&BrushMeshCache>,
+    brush_transforms: Query<&GlobalTransform>,
+    drag_state_v: Res<super::VertexDragState>,
+    drag_state_e: Res<super::EdgeDragState>,
+    mut hover: ResMut<super::BrushFaceHover>,
+) {
+    let in_vertex = matches!(*edit_mode, EditMode::BrushEdit(BrushEditMode::Vertex));
+    let in_edge = matches!(*edit_mode, EditMode::BrushEdit(BrushEditMode::Edge));
+
+    if !in_vertex && !in_edge {
+        return;
+    }
+
+    // Don't update hover during active drags.
+    if drag_state_v.active || drag_state_e.active {
+        return;
+    }
+
+    let Some(cursor_pos) = vp.cursor() else {
+        clear_hover(&mut hover);
+        return;
+    };
+    let Some(camera_entity) = vp.camera_entity() else {
+        clear_hover(&mut hover);
+        return;
+    };
+    let Some(viewport_entity) = vp.viewport_entity() else {
+        clear_hover(&mut hover);
+        return;
+    };
+    let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
+        clear_hover(&mut hover);
+        return;
+    };
+    let Some(viewport_cursor) = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos) else {
+        clear_hover(&mut hover);
         return;
     };
 
-    let Ok(cache) = brush_caches.get(brush_entity) else {
-        hover.entity = None;
-        hover.face_index = None;
-        return;
-    };
+    let candidates: Vec<Entity> = brush_selection.edit_brushes().collect();
 
-    if let Some(face_idx) = pick_face_under_cursor(
-        viewport_cursor,
-        brush_entity,
-        camera,
-        cam_tf,
-        cache,
-        &face_entities,
-    ) {
-        hover.entity = Some(brush_entity);
-        hover.face_index = Some(face_idx);
-        hover.intent = intent;
+    if in_vertex {
+        let mut best_entity: Option<Entity> = None;
+        let mut best_vi: Option<usize> = None;
+        let mut best_dist = 20.0_f32;
+
+        for brush_entity in candidates {
+            let Ok(cache) = brush_caches.get(brush_entity) else {
+                continue;
+            };
+            let Ok(brush_global) = brush_transforms.get(brush_entity) else {
+                continue;
+            };
+            for (vi, v) in cache.vertices.iter().enumerate() {
+                let Ok(screen) =
+                    camera.world_to_viewport(cam_tf, brush_global.transform_point(*v))
+                else {
+                    continue;
+                };
+                let dist = (screen - viewport_cursor).length();
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_entity = Some(brush_entity);
+                    best_vi = Some(vi);
+                }
+            }
+        }
+
+        if let (Some(entity), Some(vi)) = (best_entity, best_vi) {
+            hover.entity = Some(entity);
+            hover.face_index = None;
+            hover.vertex_index = Some(vi);
+            hover.edge = None;
+        } else {
+            clear_hover(&mut hover);
+        }
     } else {
-        hover.entity = None;
-        hover.face_index = None;
+        // Edge mode.
+        let mut best_entity: Option<Entity> = None;
+        let mut best_edge: Option<(usize, usize)> = None;
+        let mut best_dist = 20.0_f32;
+
+        for brush_entity in candidates {
+            let Ok(cache) = brush_caches.get(brush_entity) else {
+                continue;
+            };
+            let Ok(brush_global) = brush_transforms.get(brush_entity) else {
+                continue;
+            };
+
+            let mut unique_edges: Vec<(usize, usize)> = Vec::new();
+            for polygon in &cache.face_polygons {
+                if polygon.len() < 2 {
+                    continue;
+                }
+                for i in 0..polygon.len() {
+                    let a = polygon[i];
+                    let b = polygon[(i + 1) % polygon.len()];
+                    let edge = (a.min(b), a.max(b));
+                    if !unique_edges.contains(&edge) {
+                        unique_edges.push(edge);
+                    }
+                }
+            }
+
+            for &(a, b) in &unique_edges {
+                let wa = brush_global.transform_point(cache.vertices[a]);
+                let wb = brush_global.transform_point(cache.vertices[b]);
+                let Ok(sa) = camera.world_to_viewport(cam_tf, wa) else {
+                    continue;
+                };
+                let Ok(sb) = camera.world_to_viewport(cam_tf, wb) else {
+                    continue;
+                };
+                let dist = point_to_segment_dist(viewport_cursor, sa, sb);
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_entity = Some(brush_entity);
+                    best_edge = Some((a, b));
+                }
+            }
+        }
+
+        if let (Some(entity), Some(edge)) = (best_entity, best_edge) {
+            hover.entity = Some(entity);
+            hover.face_index = None;
+            hover.vertex_index = None;
+            hover.edge = Some(edge);
+        } else {
+            clear_hover(&mut hover);
+        }
     }
 }

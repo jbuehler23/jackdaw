@@ -22,15 +22,18 @@ pub(crate) fn brush_select_invert(
     mut selection: ResMut<BrushSelection>,
     halfedge_q: Query<&BrushHalfedge>,
 ) -> OperatorResult {
-    let brush_entity = selection.entity?;
+    let brush_entity = selection.active_brush?;
     let halfedge = halfedge_q.get(brush_entity)?;
 
     match *edit_mode {
         EditMode::BrushEdit(BrushEditMode::Vertex) => {
             let total = halfedge.vert_keys.len();
-            let current: std::collections::HashSet<usize> =
-                selection.vertices.iter().copied().collect();
-            selection.vertices = (0..total).filter(|i| !current.contains(i)).collect();
+            let current: std::collections::HashSet<usize> = selection
+                .sub(brush_entity)
+                .map(|s| s.vertices.iter().copied().collect())
+                .unwrap_or_default();
+            selection.sub_mut(brush_entity).vertices =
+                (0..total).filter(|i| !current.contains(i)).collect();
             OperatorResult::Finished
         }
         EditMode::BrushEdit(BrushEditMode::Edge) => {
@@ -54,9 +57,11 @@ pub(crate) fn brush_select_invert(
                 let pair = if a < b { (a, b) } else { (b, a) };
                 all_edges.push(pair);
             }
-            let current: std::collections::HashSet<(usize, usize)> =
-                selection.edges.iter().copied().collect();
-            selection.edges = all_edges
+            let current: std::collections::HashSet<(usize, usize)> = selection
+                .sub(brush_entity)
+                .map(|s| s.edges.iter().copied().collect())
+                .unwrap_or_default();
+            selection.sub_mut(brush_entity).edges = all_edges
                 .into_iter()
                 .filter(|p| !current.contains(p))
                 .collect();
@@ -64,9 +69,12 @@ pub(crate) fn brush_select_invert(
         }
         EditMode::BrushEdit(BrushEditMode::Face) => {
             let total = halfedge.face_keys.len();
-            let current: std::collections::HashSet<usize> =
-                selection.faces.iter().copied().collect();
-            selection.faces = (0..total).filter(|i| !current.contains(i)).collect();
+            let current: std::collections::HashSet<usize> = selection
+                .sub(brush_entity)
+                .map(|s| s.faces.iter().copied().collect())
+                .unwrap_or_default();
+            selection.sub_mut(brush_entity).faces =
+                (0..total).filter(|i| !current.contains(i)).collect();
             OperatorResult::Finished
         }
         _ => OperatorResult::Cancelled,
@@ -77,7 +85,7 @@ pub(crate) fn can_run_select_invert(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
 ) -> bool {
-    matches!(*edit_mode, EditMode::BrushEdit(_)) && selection.entity.is_some()
+    matches!(*edit_mode, EditMode::BrushEdit(_)) && selection.active_brush.is_some()
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

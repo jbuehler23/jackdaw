@@ -297,7 +297,7 @@ pub(super) fn handle_knife_mode(
 
     // Resolve the active brush; bail (without clearing the path) if
     // the selection is gone.
-    let Some(brush_entity) = selection.entity else {
+    let Some(brush_entity) = selection.active_brush else {
         return;
     };
     // If the active brush changed under us (e.g. user selected a

@@ -115,6 +115,22 @@ impl SnapSettings {
         2.0_f32.powi(self.grid_power)
     }
 
+    /// Snap a world position to the nearest grid line on each axis.
+    /// Independent of the per-tool snap flags; callers gate on the
+    /// relevant toggle (e.g. `scale_active`).
+    pub fn snap_position_to_grid(&self, v: Vec3) -> Vec3 {
+        let g = self.grid_size();
+        if g > 0.0 {
+            Vec3::new(
+                (v.x / g).round() * g,
+                (v.y / g).round() * g,
+                (v.z / g).round() * g,
+            )
+        } else {
+            v
+        }
+    }
+
     /// Snap a translation value to the nearest increment.
     pub fn snap_translate(&self, value: f32) -> f32 {
         if self.translate_snap && self.translate_increment > 0.0 {

@@ -38,15 +38,19 @@ pub(crate) fn brush_make_edge_face(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
         return OperatorResult::Cancelled;
     }
-    let brush_entity = selection.entity?;
-    if selection.vertices.len() < 2 {
+    let brush_entity = selection.active_brush?;
+    let sel_verts: Vec<usize> = selection
+        .sub(brush_entity)
+        .map(|s| s.vertices.clone())
+        .unwrap_or_default();
+    if sel_verts.len() < 2 {
         return OperatorResult::Cancelled;
     }
 
     // Map cache vertex indices to HalfedgeMesh VertKeys via vert_keys parallel array.
     let mut halfedge = halfedge_q.get_mut(brush_entity)?;
-    let mut vert_keys: Vec<VertKey> = Vec::with_capacity(selection.vertices.len());
-    for &vert_idx in &selection.vertices {
+    let mut vert_keys: Vec<VertKey> = Vec::with_capacity(sel_verts.len());
+    for &vert_idx in &sel_verts {
         if let Some(&vk) = halfedge.vert_keys.get(vert_idx) {
             vert_keys.push(vk);
         }
@@ -156,7 +160,7 @@ pub(crate) fn brush_make_edge_face(
         Some(ChainTarget::Edge((a, b))) => {
             let vert_count = brush.topology.vertices.len();
             if a < vert_count && b < vert_count {
-                selection.edges = vec![(a, b)];
+                selection.sub_mut(brush_entity).edges = vec![(a, b)];
             }
         }
         Some(ChainTarget::Face(mtx)) => {
@@ -167,7 +171,7 @@ pub(crate) fn brush_make_edge_face(
                 .filter(|f| f.material_idx < mtx)
                 .count();
             if face_idx < brush.faces.len() {
-                selection.faces = vec![face_idx];
+                selection.sub_mut(brush_entity).faces = vec![face_idx];
             }
         }
         None => {}
@@ -180,7 +184,10 @@ pub(crate) fn can_run_make_edge_face(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
 ) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex) && selection.vertices.len() >= 2
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
+        && selection
+            .active_sub()
+            .is_some_and(|s| s.vertices.len() >= 2)
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

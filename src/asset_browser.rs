@@ -985,11 +985,15 @@ pub fn apply_texture(
 
     let mut modified: Vec<Entity> = Vec::new();
 
-    if *edit_mode == EditMode::BrushEdit(BrushEditMode::Face) && !brush_selection.faces.is_empty() {
-        if let Some(entity) = brush_selection.entity
+    let active_faces: Vec<usize> = brush_selection
+        .active_sub()
+        .map(|s| s.faces.clone())
+        .unwrap_or_default();
+    if *edit_mode == EditMode::BrushEdit(BrushEditMode::Face) && !active_faces.is_empty() {
+        if let Some(entity) = brush_selection.active_brush
             && let Ok(mut brush) = brushes.get_mut(entity)
         {
-            for &face_idx in &brush_selection.faces {
+            for &face_idx in &active_faces {
                 if face_idx < brush.faces.len() {
                     brush.faces[face_idx].material = material.clone();
                 }

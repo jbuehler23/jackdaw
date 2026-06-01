@@ -80,15 +80,19 @@ pub(crate) fn brush_extrude_region(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return OperatorResult::Cancelled;
     }
-    let brush_entity = selection.entity?;
-    if selection.faces.is_empty() {
+    let brush_entity = selection.active_brush?;
+    let sel_faces: Vec<usize> = selection
+        .sub(brush_entity)
+        .map(|s| s.faces.clone())
+        .unwrap_or_default();
+    if sel_faces.is_empty() {
         return OperatorResult::Cancelled;
     }
 
     // Map cache face indices to HalfedgeMesh FaceKeys via face_keys parallel array.
     let mut halfedge = halfedge_q.get_mut(brush_entity)?;
-    let mut mesh_faces: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());
-    for &face_idx in &selection.faces {
+    let mut mesh_faces: Vec<FaceKey> = Vec::with_capacity(sel_faces.len());
+    for &face_idx in &sel_faces {
         if let Some(&fk) = halfedge.face_keys.get(face_idx) {
             mesh_faces.push(fk);
         }
@@ -189,7 +193,7 @@ pub(crate) fn brush_extrude_region(
         .filter(|&i| i < face_count)
         .collect();
     if !new_top_indices.is_empty() {
-        selection.faces = new_top_indices;
+        selection.sub_mut(brush_entity).faces = new_top_indices;
     }
 
     OperatorResult::Finished
@@ -199,7 +203,8 @@ pub(crate) fn can_run_extrude_region(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
 ) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face) && !selection.faces.is_empty()
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+        && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
 }
 
 // --- Modal extrude (`brush.mesh.extrude`, bound to `E`) ---
@@ -245,16 +250,20 @@ pub(crate) fn brush_extrude(
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
             return OperatorResult::Cancelled;
         }
-        let brush_entity = selection.entity?;
-        if selection.faces.is_empty() {
+        let brush_entity = selection.active_brush?;
+        let modal_sel_faces: Vec<usize> = selection
+            .sub(brush_entity)
+            .map(|s| s.faces.clone())
+            .unwrap_or_default();
+        if modal_sel_faces.is_empty() {
             return OperatorResult::Cancelled;
         }
 
         let brush_before = brushes.get(brush_entity).cloned()?;
         let halfedge = halfedge_q.get(brush_entity)?;
 
-        let mut face_keys: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());
-        for &face_idx in &selection.faces {
+        let mut face_keys: Vec<FaceKey> = Vec::with_capacity(modal_sel_faces.len());
+        for &face_idx in &modal_sel_faces {
             if let Some(&fk) = halfedge.face_keys.get(face_idx) {
                 face_keys.push(fk);
             }
@@ -281,7 +290,7 @@ pub(crate) fn brush_extrude(
         modal_state.active = true;
         modal_state.brush_entity = Some(brush_entity);
         modal_state.face_keys = face_keys;
-        modal_state.face_indices = selection.faces.clone();
+        modal_state.face_indices = modal_sel_faces;
         modal_state.start_cursor = cursor_pos;
         modal_state.screen_normal_dir = screen_normal_dir;
         modal_state.current_amount = 0.0;
@@ -356,7 +365,7 @@ pub(crate) fn brush_extrude(
             .filter(|&i| i < face_count)
             .collect();
         if !new_top_indices.is_empty() {
-            selection.faces = new_top_indices;
+            selection.sub_mut(brush_entity).faces = new_top_indices;
         }
 
         *modal_state = ExtrudeModalState::default();
@@ -648,7 +657,8 @@ fn compute_screen_normal_dir(
 }
 
 pub(crate) fn can_run_extrude(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face) && !selection.faces.is_empty()
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+        && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

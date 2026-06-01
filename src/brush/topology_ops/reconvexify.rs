@@ -28,7 +28,7 @@ pub(crate) fn brush_reconvexify(
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
 ) -> OperatorResult {
-    let brush_entity = selection.entity?;
+    let brush_entity = selection.active_brush?;
     let brush_before = brushes.get(brush_entity).cloned()?;
 
     // Collect current vertex positions from the brush's topology.
@@ -103,7 +103,7 @@ pub(crate) fn brush_reconvexify(
 }
 
 pub(crate) fn can_run_reconvexify(selection: Res<BrushSelection>, brushes: Query<&Brush>) -> bool {
-    let Some(brush_entity) = selection.entity else {
+    let Some(brush_entity) = selection.active_brush else {
         return false;
     };
     brushes.get(brush_entity).is_ok()

@@ -32,7 +32,7 @@ pub(crate) fn brush_merge_by_distance(
     }
 
     // Get the currently edited brush entity.
-    let brush_entity = selection.entity?;
+    let brush_entity = selection.active_brush?;
 
     // Get mutable HalfedgeMesh and run remove_doubles.
     let mut halfedge = halfedge_q.get_mut(brush_entity)?;

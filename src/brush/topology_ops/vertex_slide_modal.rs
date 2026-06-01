@@ -128,15 +128,19 @@ pub(crate) fn brush_vertex_slide_modal(
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
             return OperatorResult::Cancelled;
         }
-        let brush_entity = selection.entity?;
-        if selection.vertices.len() != 1 {
+        let brush_entity = selection.active_brush?;
+        let sel_verts: Vec<usize> = selection
+            .sub(brush_entity)
+            .map(|s| s.vertices.clone())
+            .unwrap_or_default();
+        if sel_verts.len() != 1 {
             return OperatorResult::Cancelled;
         }
 
         let brush_before = brushes.get(brush_entity).cloned()?;
         let halfedge = halfedge_q.get(brush_entity)?;
 
-        let &vert_idx = selection.vertices.first()?;
+        let &vert_idx = sel_verts.first()?;
         let &vert_key = halfedge.vert_keys.get(vert_idx)?;
 
         let mesh_snapshot = halfedge.mesh.clone();
@@ -518,5 +522,6 @@ pub(crate) fn can_run_vertex_slide_modal(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
 ) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex) && selection.vertices.len() == 1
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
+        && selection.active_sub().is_some_and(|s| s.vertices.len() == 1)
 }

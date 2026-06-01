@@ -360,9 +360,10 @@ pub(crate) fn update_brush_face_properties(
         return;
     };
 
+    let active_sub = brush_selection.active_sub();
     let show = *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
-        && !brush_selection.faces.is_empty()
-        && brush_selection.entity.is_some();
+        && brush_selection.active_brush.is_some()
+        && active_sub.is_some_and(|s| !s.faces.is_empty());
 
     if !show {
         // Clear if we had content
@@ -377,14 +378,15 @@ pub(crate) fn update_brush_face_properties(
         return;
     }
 
-    let brush_entity = brush_selection.entity.unwrap();
+    let brush_entity = brush_selection.active_brush.unwrap();
+    let sub = brush_selection.sub(brush_entity).unwrap();
     let Ok(brush) = brushes.get(brush_entity) else {
         return;
     };
 
     // Compute hash of selected face data
     let mut combined_hash = 0u64;
-    for &fi in &brush_selection.faces {
+    for &fi in &sub.faces {
         if fi < brush.faces.len() {
             combined_hash = combined_hash.wrapping_add(hash_face_data(&brush.faces[fi]));
         }
@@ -392,7 +394,7 @@ pub(crate) fn update_brush_face_properties(
 
     // Check if anything changed
     if local_state.entity == Some(brush_entity)
-        && local_state.faces == brush_selection.faces
+        && local_state.faces == sub.faces
         && local_state.data_hash == combined_hash
     {
         return;
@@ -406,17 +408,17 @@ pub(crate) fn update_brush_face_properties(
     }
 
     local_state.entity = Some(brush_entity);
-    local_state.faces = brush_selection.faces.clone();
+    local_state.faces = sub.faces.clone();
     local_state.data_hash = combined_hash;
 
     // Use first selected face for display values
-    let first_face_idx = brush_selection.faces[0];
+    let first_face_idx = sub.faces[0];
     let face = &brush.faces[first_face_idx];
-    let multi = brush_selection.faces.len() > 1;
+    let multi = sub.faces.len() > 1;
 
     // Header
     let header_text = if multi {
-        format!("{} faces selected", brush_selection.faces.len())
+        format!("{} faces selected", sub.faces.len())
     } else {
         format!("Face {}", first_face_idx)
     };
@@ -817,15 +819,19 @@ fn apply_brush_face_field(
     brushes: &mut Query<&mut Brush>,
     history: &mut CommandHistory,
 ) {
-    let Some(brush_entity) = brush_selection.entity else {
+    let Some(brush_entity) = brush_selection.active_brush else {
         return;
     };
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return;
     };
+    let faces: Vec<usize> = brush_selection
+        .sub(brush_entity)
+        .map(|s| s.faces.clone())
+        .unwrap_or_default();
 
     let old = brush.clone();
-    for &face_idx in &brush_selection.faces {
+    for &face_idx in &faces {
         if face_idx >= brush.faces.len() {
             continue;
         }
@@ -858,7 +864,10 @@ fn brush_face_with_selection(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
         return false;
     }
-    brush_selection.entity.is_some() && !brush_selection.faces.is_empty()
+    brush_selection.active_brush.is_some()
+        && brush_selection
+            .active_sub()
+            .is_some_and(|s| !s.faces.is_empty())
 }
 
 #[operator(
@@ -874,11 +883,15 @@ pub(crate) fn brush_face_clear_material(
     mut history: ResMut<CommandHistory>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let brush_entity = brush_selection.entity?;
+    let brush_entity = brush_selection.active_brush?;
+    let faces: Vec<usize> = brush_selection
+        .sub(brush_entity)
+        .map(|s| s.faces.clone())
+        .unwrap_or_default();
     let mut brush = brushes.get_mut(brush_entity)?;
 
     let old = brush.clone();
-    for &face_idx in &brush_selection.faces {
+    for &face_idx in &faces {
         if face_idx < brush.faces.len() {
             brush.faces[face_idx].material = Handle::default();
         }
@@ -908,10 +921,11 @@ pub(crate) fn brush_face_apply_texture_to_all(
     mut history: ResMut<CommandHistory>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let brush_entity = brush_selection.entity?;
+    let brush_entity = brush_selection.active_brush?;
+    let source_idx = brush_selection
+        .sub(brush_entity)
+        .and_then(|s| s.faces.first().copied())?;
     let mut brush = brushes.get_mut(brush_entity)?;
-
-    let source_idx = brush_selection.faces[0];
     if source_idx >= brush.faces.len() {
         return OperatorResult::Cancelled;
     }
@@ -950,12 +964,16 @@ pub(crate) fn brush_face_set_uv_scale_preset(
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     let scale_value = params.as_float("scale").unwrap_or(1.0) as f32;
-    let brush_entity = brush_selection.entity?;
+    let brush_entity = brush_selection.active_brush?;
+    let faces: Vec<usize> = brush_selection
+        .sub(brush_entity)
+        .map(|s| s.faces.clone())
+        .unwrap_or_default();
     let mut brush = brushes.get_mut(brush_entity)?;
 
     let old = brush.clone();
     let scale = Vec2::splat(scale_value);
-    for &face_idx in &brush_selection.faces {
+    for &face_idx in &faces {
         if face_idx < brush.faces.len() {
             brush.faces[face_idx].uv_scale = scale;
         }

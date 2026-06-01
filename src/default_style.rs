@@ -61,6 +61,8 @@ pub const SELECTION_MARQUEE_BORDER: Color = Color::srgba(0.3, 0.5, 1.0, 0.7);
 pub const EDIT_SELECTED_COLOR: Color = Color::WHITE;
 /// For things that are not currently being edited, but could be if the user e.g. clicked on them
 pub const EDIT_AVAILABLE_COLOR: Color = Color::srgba(0.996, 0.996, 0.133333, 1.0);
+/// Hovered sub-element (distinct from selected and resting state)
+pub const EDIT_HOVER_COLOR: Color = Color::srgba(1.0, 0.55, 0.1, 1.0);
 pub const EDIT_VERTEX_RADIUS: f32 = 0.04;
 pub const FACE_EXTRUDE_PREVIEW: Color = Color::srgb(0.0, 1.0, 0.5);
 

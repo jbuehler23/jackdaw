@@ -131,8 +131,12 @@ pub(crate) fn brush_inset(
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
             return OperatorResult::Cancelled;
         }
-        let brush_entity = selection.entity?;
-        if selection.faces.is_empty() {
+        let brush_entity = selection.active_brush?;
+        let modal_sel_faces: Vec<usize> = selection
+            .sub(brush_entity)
+            .map(|s| s.faces.clone())
+            .unwrap_or_default();
+        if modal_sel_faces.is_empty() {
             return OperatorResult::Cancelled;
         }
 
@@ -140,8 +144,8 @@ pub(crate) fn brush_inset(
         let halfedge = halfedge_q.get(brush_entity)?;
 
         // Collect FaceKeys for every selected face index.
-        let mut face_keys: Vec<FaceKey> = Vec::with_capacity(selection.faces.len());
-        for &face_idx in &selection.faces {
+        let mut face_keys: Vec<FaceKey> = Vec::with_capacity(modal_sel_faces.len());
+        for &face_idx in &modal_sel_faces {
             if let Some(&fk) = halfedge.face_keys.get(face_idx) {
                 face_keys.push(fk);
             }
@@ -169,7 +173,7 @@ pub(crate) fn brush_inset(
         modal_state.active = true;
         modal_state.brush_entity = Some(brush_entity);
         modal_state.face_keys = face_keys;
-        modal_state.face_indices = selection.faces.clone();
+        modal_state.face_indices = modal_sel_faces;
         modal_state.start_cursor = cursor_pos;
         modal_state.current_amount = 0.0;
         modal_state.start_brush = Some(brush_before);
@@ -251,7 +255,7 @@ pub(crate) fn brush_inset(
             .filter(|&i| i < face_count)
             .collect();
         if !inner_indices.is_empty() {
-            selection.faces = inner_indices;
+            selection.sub_mut(brush_entity).faces = inner_indices;
         }
 
         *modal_state = InsetModalState::default();
@@ -465,5 +469,6 @@ fn apply_live_inset(
 }
 
 pub(crate) fn can_run_inset(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face) && !selection.faces.is_empty()
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+        && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
 }

@@ -49,7 +49,8 @@ fn view_state_default_has_empty_selection_and_no_sub_selection() {
     use jackdaw::scenes::ViewState;
     let vs = ViewState::default();
     assert!(vs.selection.is_empty());
-    assert!(vs.brush_sub_selection.entity.is_none());
+    assert!(vs.brush_sub_selection.active_brush.is_none());
+    assert!(vs.brush_sub_selection.brushes.is_empty());
 }
 
 #[test]

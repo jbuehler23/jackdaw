@@ -199,6 +199,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::clip_ops::add_to_extension(ctx);
         crate::brush_element_ops::add_to_extension(ctx);
         crate::brush_drag_ops::add_to_extension(ctx);
+        crate::brush::box_select::add_to_extension(ctx);
         crate::brush::topology_ops::bridge_edge_loops::add_to_extension(ctx);
         crate::brush::topology_ops::connect_verts::add_to_extension(ctx);
         crate::brush::topology_ops::dissolve_edges::add_to_extension(ctx);

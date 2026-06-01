@@ -30,16 +30,20 @@ pub(crate) fn brush_weld_selected(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
         return OperatorResult::Cancelled;
     }
-    let brush_entity = selection.entity?;
-    if selection.vertices.len() < 2 {
+    let brush_entity = selection.active_brush?;
+    let sel_verts: Vec<usize> = selection
+        .sub(brush_entity)
+        .map(|s| s.vertices.clone())
+        .unwrap_or_default();
+    if sel_verts.len() < 2 {
         return OperatorResult::Cancelled;
     }
 
     let mut halfedge = halfedge_q.get_mut(brush_entity)?;
 
     // Map cache vertex indices to HalfedgeMesh VertKeys.
-    let mut vert_keys = Vec::with_capacity(selection.vertices.len());
-    for &vi in &selection.vertices {
+    let mut vert_keys = Vec::with_capacity(sel_verts.len());
+    for &vi in &sel_verts {
         if let Some(&k) = halfedge.vert_keys.get(vi) {
             vert_keys.push(k);
         }
@@ -128,7 +132,10 @@ pub(crate) fn brush_weld_selected(
 }
 
 pub(crate) fn can_run_weld(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex) && selection.vertices.len() >= 2
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
+        && selection
+            .active_sub()
+            .is_some_and(|s| s.vertices.len() >= 2)
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

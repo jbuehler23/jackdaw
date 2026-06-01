@@ -185,10 +185,7 @@ pub fn activate_draw_brush_modal(
         // Exit brush edit mode if active
         if *edit_mode != crate::brush::EditMode::Object {
             *edit_mode = crate::brush::EditMode::Object;
-            brush_selection.entity = None;
-            brush_selection.faces.clear();
-            brush_selection.vertices.clear();
-            brush_selection.edges.clear();
+            brush_selection.clear();
         }
 
         draw_state.active = Some(ActiveDraw {
@@ -3509,8 +3506,10 @@ fn can_run_extend_face(
         .count();
     match *edit_mode {
         crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face) => {
-            brush_selection.entity.is_some()
-                && !brush_selection.faces.is_empty()
+            brush_selection.active_brush.is_some()
+                && brush_selection
+                    .active_sub()
+                    .is_some_and(|s| !s.faces.is_empty())
                 && brush_count >= 1
         }
         crate::brush::EditMode::Object => {
@@ -3554,9 +3553,11 @@ pub(crate) fn brush_extend_face_to_brush(
         if *edit_mode == crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face) {
             // Face mode path: primary is the brush being edited, face is the selected face
             let primary = brush_selection
-                .entity
+                .active_brush
                 .filter(|&e| brush_query.contains(e))?;
-            let &face_index = brush_selection.faces.last()?;
+            let face_index = brush_selection
+                .sub(primary)
+                .and_then(|s| s.faces.last().copied())?;
             let targets: Vec<Entity> = selection
                 .entities
                 .iter()
@@ -3605,10 +3606,7 @@ pub(crate) fn brush_extend_face_to_brush(
     // If we were in face mode, exit it (geometry is about to change, indices become invalid)
     if *edit_mode == crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face) {
         *edit_mode = crate::brush::EditMode::Object;
-        brush_selection.entity = None;
-        brush_selection.faces.clear();
-        brush_selection.vertices.clear();
-        brush_selection.edges.clear();
+        brush_selection.clear();
     }
 
     let targets_clone = targets.clone();

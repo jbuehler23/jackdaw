@@ -99,7 +99,7 @@ fn can_place_point(
     clip_state: Res<ClipState>,
 ) -> bool {
     is_clip_mode_open(&edit_mode, &keybind_focus)
-        && brush_selection.entity.is_some()
+        && brush_selection.active_brush.is_some()
         && clip_state.points.len() < 3
 }
 
@@ -148,7 +148,7 @@ pub(crate) fn clip_place_point(
     snap_settings: Res<crate::snapping::SnapSettings>,
     mut clip_state: ResMut<ClipState>,
 ) -> OperatorResult {
-    let brush_entity = brush_selection.entity?;
+    let brush_entity = brush_selection.active_brush?;
     let brush_global = brush_transforms.get(brush_entity)?;
     let brush = brushes.get(brush_entity)?;
     let cache = brush_caches.get(brush_entity)?;
@@ -256,7 +256,7 @@ pub(crate) fn clip_apply(
     mut history: ResMut<CommandHistory>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let brush_entity = brush_selection.entity?;
+    let brush_entity = brush_selection.active_brush?;
     let mut brush = brushes.get_mut(brush_entity)?;
     let plane = clip_state.preview_plane.clone()?;
     let brush_global = brush_transforms.get(brush_entity)?;

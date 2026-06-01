@@ -29,16 +29,20 @@ pub(crate) fn brush_bridge_edge_loops(
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
         return OperatorResult::Cancelled;
     }
-    let brush_entity = selection.entity?;
-    if selection.edges.len() < 2 {
+    let brush_entity = selection.active_brush?;
+    let sel_edges: Vec<(usize, usize)> = selection
+        .sub(brush_entity)
+        .map(|s| s.edges.clone())
+        .unwrap_or_default();
+    if sel_edges.len() < 2 {
         return OperatorResult::Cancelled;
     }
 
     let mut halfedge = halfedge_q.get_mut(brush_entity)?;
 
     // Map cache edge pairs (a, b) -> HalfedgeMesh EdgeKeys via vert_keys.
-    let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(selection.edges.len());
-    for &(a, b) in &selection.edges {
+    let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(sel_edges.len());
+    for &(a, b) in &sel_edges {
         let Some(&va) = halfedge.vert_keys.get(a) else {
             continue;
         };
@@ -141,7 +145,7 @@ pub(crate) fn brush_bridge_edge_loops(
         .filter(|&i| i < face_count)
         .collect();
     if !new_face_indices.is_empty() {
-        selection.faces = new_face_indices;
+        selection.sub_mut(brush_entity).faces = new_face_indices;
     }
     OperatorResult::Finished
 }
@@ -196,7 +200,10 @@ fn partition_edges_by_connectivity(mesh: &HalfedgeMesh, edges: &[EdgeKey]) -> Ve
 }
 
 pub(crate) fn can_run_bridge(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge) && selection.edges.len() >= 2
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge)
+        && selection
+            .active_sub()
+            .is_some_and(|s| s.edges.len() >= 2)
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

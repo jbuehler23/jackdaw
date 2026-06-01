@@ -140,6 +140,7 @@ pub(crate) fn handle_viewport_click(
     editor_entities: Query<(), With<EditorEntity>>,
     parents: Query<&ChildOf>,
     brush_groups: Query<(), With<BrushGroup>>,
+    brushes: Query<(), With<Brush>>,
     guards: InteractionGuards,
     mut selection: ResMut<Selection>,
     mut input_focus: ResMut<InputFocus>,
@@ -211,6 +212,7 @@ pub(crate) fn handle_viewport_click(
                 &parents,
                 &group_edit,
                 &brush_groups,
+                &brushes,
             ) {
                 best_entity = Some(ancestor);
                 break;
@@ -230,6 +232,7 @@ pub(crate) fn handle_viewport_click(
                     &parents,
                     &group_edit,
                     &brush_groups,
+                    &brushes,
                 ) == Some(current_primary)
                 {
                     return;
@@ -327,7 +330,7 @@ fn box_select_pending_trigger(
     brush_caches: Query<&BrushMeshCache>,
 ) {
     // `gizmo_drag.active` doesn't flip until next frame because the
-    // gizmo invoke-trigger queues its dispatch — `gizmo_hover` covers
+    // gizmo invoke-trigger queues its dispatch; `gizmo_hover` covers
     // the same-frame case.
     if box_state.active
         || box_state.pending.is_some()
@@ -527,33 +530,37 @@ fn update_box_select_overlay(
 }
 
 /// Walk up the `ChildOf` hierarchy from a raycast hit entity to find the
-/// top-level scene entity (one that appears in `scene_entities`).
-/// Handles GLTF child meshes and brush face children.
-///
-/// When inside a group (`GroupEditState::active_group` is set), stops at children
-/// of that group so individual fragments can be selected.
+/// selectable ancestor. A brush resolves to itself regardless of nesting.
+/// A non-brush scene entity whose parent is also a scene entity walks up
+/// to the scene-entity root (resolves GLTF sub-meshes to the model root).
+/// When inside a group (`GroupEditState::active_group` is set), non-brush
+/// children of that group stop at the child so individual fragments can
+/// be selected; a brush child returns via the brush early-exit above.
 fn find_selectable_ancestor(
     mut entity: Entity,
     scene_entities: &Query<(Entity, &GlobalTransform), (Without<EditorEntity>, With<Transform>)>,
     parents: &Query<&ChildOf>,
     group_edit: &GroupEditState,
     brush_groups: &Query<(), With<BrushGroup>>,
+    brushes: &Query<(), With<Brush>>,
 ) -> Option<Entity> {
-    // Walk up until we find a scene entity (one that has Transform and is not EditorEntity)
-    // Start with the hit entity itself  -- it may already be a scene entity
     loop {
         if scene_entities.contains(entity) {
-            // Check if this entity has a parent that's also a scene entity;
-            // if so, prefer the parent (handles GLTF sub-meshes).
+            // A brush always resolves to itself; never walk past it to a parent.
+            if brushes.contains(entity) {
+                return Some(entity);
+            }
+            // For non-brush scene entities, check whether the parent is also
+            // a scene entity. If so, prefer the parent (resolves GLTF sub-meshes
+            // to the model root).
             if let Ok(child_of) = parents.get(entity) {
                 let parent = child_of.0;
                 if scene_entities.contains(parent) {
-                    // If we're inside a group and this parent IS that group,
-                    // stop here  -- let the user select the child fragment.
+                    // When editing inside a group and this parent is that group,
+                    // stop here so individual non-brush fragments can be selected.
                     if group_edit.active_group == Some(parent) && brush_groups.contains(parent) {
                         return Some(entity);
                     }
-                    // Keep walking up  -- the parent is also selectable
                     entity = parent;
                     continue;
                 }
