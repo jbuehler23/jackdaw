@@ -324,7 +324,9 @@ pub fn brush_face_drag(
         }
 
         // Object-mode quick-action: single brush path (unchanged).
-        let brush_entity = selection.primary().filter(|&e| params.brushes.contains(e))?;
+        let brush_entity = selection
+            .primary()
+            .filter(|&e| params.brushes.contains(e))?;
         let cache = params.brush_caches.get(brush_entity)?;
 
         let mut best_face = None;
