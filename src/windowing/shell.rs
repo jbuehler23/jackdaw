@@ -9,7 +9,6 @@ use super::WindowShellRoot;
 use super::WindowsCaptionFont;
 use super::chrome::WindowChromeStyle;
 use super::header::spawn_window_header;
-use super::repo_link::JackdawIcon;
 use super::resize::spawn_resize_edge_overlay_if_needed;
 
 /// Unstyled flex column that fills the area below the window header.
@@ -24,7 +23,6 @@ pub fn spawn_window_shell<S: Component + Copy>(
     commands: &mut Commands,
     chrome: WindowChromeStyle,
     #[allow(unused_variables)] icon_font: &IconFont,
-    jackdaw_icon: &JackdawIcon,
     #[cfg(target_os = "windows")] caption_font: &WindowsCaptionFont,
     screen: S,
 ) -> WindowShellSlots {
@@ -51,7 +49,6 @@ pub fn spawn_window_shell<S: Component + Copy>(
                     spawn_window_header(
                         shell,
                         caption_font.0.clone(),
-                        jackdaw_icon.0.clone(),
                         chrome,
                     )
                 }
@@ -60,7 +57,6 @@ pub fn spawn_window_shell<S: Component + Copy>(
                     spawn_window_header(
                         shell,
                         icon_font.0.clone(),
-                        jackdaw_icon.0.clone(),
                         chrome,
                     )
                 }

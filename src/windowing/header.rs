@@ -1,6 +1,6 @@
 //! Shared window header shell for the editor and project launcher.
 //!
-//! Has window controls, drag region, and jackdaw repo button.
+//! Has window controls, drag region, and an empty content slot for screen-specific header UI.
 
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
@@ -11,18 +11,21 @@ use crate::EditorEntity;
 use super::chrome::WindowChromeStyle;
 use super::controls;
 use super::native_hit_test::NativeHitTestClient;
-use super::repo_link;
 
 #[derive(Component)]
 pub struct WindowHeaderRoot;
 
-/// Empty flex region between repo link and caption controls; fill with screen content.
+/// Empty flex region between leading chrome and caption controls; fill with screen content.
 #[derive(Component)]
 pub struct WindowShellHeaderSlot;
 
 /// Backplate behind header chrome; receives window-drag presses on empty title-bar space.
 #[derive(Component)]
 pub struct WindowHeaderDragRegion;
+
+/// Absolute header layers; `Node::left` updated when the window fills the work area (macOS).
+#[derive(Component)]
+pub struct MacosHeaderChromeInset;
 
 pub struct WindowHeaderPlugin;
 
@@ -40,7 +43,6 @@ pub fn spawn_window_header(
     parent: &mut ChildSpawnerCommands,
     #[cfg(not(target_os = "windows"))] icon_font: Handle<Font>,
     #[cfg(target_os = "windows")] caption_font: Handle<Font>,
-    jackdaw_icon: Handle<Image>,
     chrome: WindowChromeStyle,
 ) -> Entity {
     let macos_traffic_light_inset = chrome.macos_traffic_light_inset();
@@ -72,8 +74,6 @@ pub fn spawn_window_header(
                 header,
                 macos_traffic_light_inset,
                 uses_macos_native_titlebar,
-                jackdaw_icon,
-                chrome,
                 show_custom_controls,
                 caption_controls,
             ));
@@ -85,8 +85,6 @@ fn spawn_foreground_row(
     parent: &mut ChildSpawnerCommands,
     macos_traffic_light_inset: f32,
     uses_macos_native_titlebar: bool,
-    jackdaw_icon: Handle<Image>,
-    chrome: WindowChromeStyle,
     show_custom_controls: bool,
     caption_controls: impl Bundle,
 ) -> Entity {
@@ -111,22 +109,6 @@ fn spawn_foreground_row(
                 row.spawn(header_chrome_background(macos_traffic_light_inset));
             }
             row.spawn(header_drag_backplate(macos_traffic_light_inset));
-            row.spawn((
-                EditorEntity,
-                Pickable::IGNORE,
-                Node {
-                    flex_shrink: 0.0,
-                    width: px(macos_traffic_light_inset),
-                    height: percent(100),
-                    display: if macos_traffic_light_inset > 0.0 {
-                        Display::Flex
-                    } else {
-                        Display::None
-                    },
-                    ..default()
-                },
-            ));
-            row.spawn(chrome_repo_slot(jackdaw_icon, chrome));
             header_slot = Some(row.spawn(header_content_slot()).id());
             row.spawn(caption_controls_slot(
                 show_custom_controls,
@@ -138,6 +120,7 @@ fn spawn_foreground_row(
 
 fn header_chrome_background(macos_traffic_light_inset: f32) -> impl Bundle {
     (
+        MacosHeaderChromeInset,
         EditorEntity,
         Pickable::IGNORE,
         Node {
@@ -154,6 +137,7 @@ fn header_chrome_background(macos_traffic_light_inset: f32) -> impl Bundle {
 
 fn header_drag_backplate(macos_traffic_light_inset: f32) -> impl Bundle {
     (
+        MacosHeaderChromeInset,
         WindowHeaderDragRegion,
         EditorEntity,
         Node {
@@ -203,29 +187,6 @@ fn header_content_slot() -> impl Bundle {
             overflow: Overflow::clip(),
             ..default()
         },
-    )
-}
-
-fn chrome_repo_slot(jackdaw_icon: Handle<Image>, chrome: WindowChromeStyle) -> impl Bundle {
-    let padding = match chrome {
-        WindowChromeStyle::MacNativeTitlebar => UiRect::right(px(tokens::SPACING_MD)),
-        WindowChromeStyle::CustomClient | WindowChromeStyle::SystemServer => {
-            UiRect::left(px(tokens::SPACING_MD))
-        }
-    };
-
-    (
-        EditorEntity,
-        Pickable::IGNORE,
-        NativeHitTestClient,
-        Node {
-            flex_shrink: 0.0,
-            padding,
-            height: percent(100),
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        children![repo_link::jackdaw_link_button(jackdaw_icon)],
     )
 }
 

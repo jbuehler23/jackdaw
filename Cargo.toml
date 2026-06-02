@@ -156,10 +156,14 @@ webbrowser.workspace = true
 objc2 = { version = "0.5.2", features = ["relax-sign-encoding"] }
 objc2-foundation = { version = "0.2.2", default-features = false, features = [
     "NSGeometry",
+    "NSNotification",
+    "NSObject",
+    "NSString",
 ] }
 objc2-app-kit = { version = "0.2.2", default-features = false, features = [
     "NSView",
     "NSWindow",
+    "NSScreen",
 ] }
 raw-window-handle = { version = "0.6", features = ["std"] }
 

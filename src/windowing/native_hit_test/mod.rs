@@ -1,13 +1,19 @@
 //! Screen-space regions consumed by platform-native window hit testing.
 
 use bevy::prelude::*;
+
+#[cfg(target_os = "windows")]
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 
+#[cfg(target_os = "windows")]
 use super::chrome::WindowChromeStyle;
+#[cfg(target_os = "windows")]
 use super::controls::{WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize};
+#[cfg(target_os = "windows")]
 use super::header::WindowHeaderRoot;
 
 /// Client-area rectangle in physical pixels (origin: top-left of the window).
+#[cfg(target_os = "windows")]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ClientRect {
     pub min_x: f32,
@@ -16,6 +22,7 @@ pub struct ClientRect {
     pub max_y: f32,
 }
 
+#[cfg(target_os = "windows")]
 impl ClientRect {
     /// Axis-aligned bounds in physical pixels. `UiGlobalTransform` translation is the node center.
     pub fn from_node(node: &ComputedNode, transform: &UiGlobalTransform) -> Self {
@@ -40,6 +47,7 @@ impl ClientRect {
 }
 
 /// Caption button under the cursor during non-client hover (Windows).
+#[cfg(target_os = "windows")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Component)]
 pub enum NativeCaptionButton {
     Minimize,
@@ -48,6 +56,7 @@ pub enum NativeCaptionButton {
 }
 
 /// Hover / pressed state for Win32-drawn caption buttons.
+#[cfg(target_os = "windows")]
 #[derive(Clone, Copy, Debug, Default, Resource)]
 pub struct NativeCaptionHover {
     pub hovered: Option<NativeCaptionButton>,
@@ -55,6 +64,7 @@ pub struct NativeCaptionHover {
 }
 
 /// Latest layout-derived regions for native non-client hit testing.
+#[cfg(target_os = "windows")]
 #[derive(Clone, Debug, Default, Resource)]
 pub struct NativeHitTestRegions {
     pub header_drag: Option<ClientRect>,
@@ -88,11 +98,11 @@ mod windows;
 pub struct NativeHitTestPlugin;
 
 impl Plugin for NativeHitTestPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<NativeHitTestRegions>();
+    fn build(&self, _app: &mut App) {
         #[cfg(target_os = "windows")]
         {
-            app.init_resource::<NativeCaptionHover>()
+            _app.init_resource::<NativeHitTestRegions>()
+                .init_resource::<NativeCaptionHover>()
                 .add_systems(
                     PostUpdate,
                     (
@@ -113,34 +123,10 @@ fn sync_native_hit_test_regions(
     mut regions: ResMut<NativeHitTestRegions>,
     primary_window: Query<(Entity, &Window), With<bevy::window::PrimaryWindow>>,
     header_roots: Query<(&ComputedNode, &UiGlobalTransform), With<WindowHeaderRoot>>,
-    minimize_buttons: Query<
-        (&ComputedNode, &UiGlobalTransform),
-        (
-            With<WindowControlsMinimize>,
-            Without<WindowControlsMaximize>,
-        ),
-    >,
-    maximize_buttons: Query<
-        (&ComputedNode, &UiGlobalTransform),
-        (
-            With<WindowControlsMaximize>,
-            Without<WindowControlsMinimize>,
-        ),
-    >,
-    close_buttons: Query<
-        (&ComputedNode, &UiGlobalTransform),
-        (With<WindowControlsClose>, Without<WindowControlsMaximize>),
-    >,
-    client_blocks: Query<
-        (&ComputedNode, &UiGlobalTransform),
-        (
-            With<NativeHitTestClient>,
-            Without<WindowHeaderRoot>,
-            Without<WindowControlsMinimize>,
-            Without<WindowControlsMaximize>,
-            Without<WindowControlsClose>,
-        ),
-    >,
+    minimize_buttons: Query<(&ComputedNode, &UiGlobalTransform), With<WindowControlsMinimize>>,
+    maximize_buttons: Query<(&ComputedNode, &UiGlobalTransform), With<WindowControlsMaximize>>,
+    close_buttons: Query<(&ComputedNode, &UiGlobalTransform), With<WindowControlsClose>>,
+    client_blocks: Query<(&ComputedNode, &UiGlobalTransform), With<NativeHitTestClient>>,
 ) {
     if !chrome.uses_native_hit_testing() {
         *regions = NativeHitTestRegions::default();

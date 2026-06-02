@@ -26,7 +26,7 @@ use crate::{
     project::{self, ProjectRoot},
     scene_io,
     scrolling_log::{self, ScrollingLog},
-    windowing::{JackdawIcon, WindowChromeStyle, spawn_window_shell},
+    windowing::{JackdawIcon, WindowChromeStyle, header_repo_link, spawn_window_shell},
 };
 
 #[derive(Default)]
@@ -383,7 +383,6 @@ fn spawn_project_selector(
         &mut commands,
         *chrome,
         &icon_font,
-        &jackdaw_icon,
         #[cfg(target_os = "windows")]
         &windows_caption_font,
         ProjectSelectorRoot,
@@ -394,6 +393,8 @@ fn spawn_project_selector(
         body,
         font,
         icon_font_handle,
+        jackdaw_icon.0.clone(),
+        *chrome,
         recent,
         cwd,
         cwd_has_project,
@@ -406,6 +407,8 @@ fn fill_project_selector(
     body: Entity,
     font: Handle<Font>,
     icon_font_handle: Handle<Font>,
+    jackdaw_icon: Handle<Image>,
+    chrome: WindowChromeStyle,
     recent: project::RecentProjects,
     cwd: PathBuf,
     cwd_has_project: bool,
@@ -423,6 +426,7 @@ fn fill_project_selector(
             },
             Pickable::IGNORE,
             children![
+                header_repo_link(jackdaw_icon, chrome),
                 (
                     Text::new("jackdaw"),
                     TextFont {

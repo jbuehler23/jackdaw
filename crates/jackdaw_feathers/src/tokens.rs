@@ -330,9 +330,8 @@ pub const HEADER_HEIGHT: f32 = 28.0;
 pub const WINDOW_HEADER_HEIGHT: f32 = 36.0;
 /// Horizontal space reserved in the jackdaw header for the traffic light cluster.
 pub const MACOS_TRAFFIC_LIGHT_INSET: f32 = 78.0;
-/// Native button placement (Zed uses `point(px(12.), px(12.))` in `TitlebarOptions`).
+/// Native close-button inset from the window's leading edge (Zed uses 12px).
 pub const MACOS_TRAFFIC_LIGHT_POSITION_X: f32 = 12.0;
-pub const MACOS_TRAFFIC_LIGHT_POSITION_Y: f32 = 12.0;
 pub const STATUS_BAR_HEIGHT: f32 = 22.0;
 pub const INPUT_HEIGHT: f32 = 28.0;
 

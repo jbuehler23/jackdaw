@@ -28,7 +28,7 @@ use crate::{
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
     windowing::{
-        JackdawIcon, NativeHitTestClient, WindowChromeStyle, spawn_window_shell,
+        JackdawIcon, NativeHitTestClient, WindowChromeStyle, header_repo_link, spawn_window_shell,
     },
 };
 #[cfg(target_os = "windows")]
@@ -182,9 +182,16 @@ pub fn spawn_editor(
     body: Entity,
     icon_font: Handle<Font>,
     editor_font: Handle<Font>,
+    jackdaw_icon: Handle<Image>,
+    chrome: WindowChromeStyle,
 ) {
     commands.entity(header).with_children(|header_parent| {
-        header_parent.spawn(window_header_content(icon_font.clone(), editor_font.clone()));
+        header_parent.spawn(window_header_content(
+            icon_font.clone(),
+            editor_font.clone(),
+            jackdaw_icon,
+            chrome,
+        ));
     });
     commands.entity(body).insert((
         EditorEntity,
@@ -216,7 +223,6 @@ pub fn spawn_editor_layout(
         &mut commands,
         *chrome,
         &icon_font,
-        &jackdaw_icon,
         #[cfg(target_os = "windows")]
         &windows_caption_font,
         EditorEntity,
@@ -227,10 +233,17 @@ pub fn spawn_editor_layout(
         body,
         icon_font.0.clone(),
         editor_font.0.clone(),
+        jackdaw_icon.0.clone(),
+        *chrome,
     );
 }
 
-fn window_header_content(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bundle {
+fn window_header_content(
+    icon_font: Handle<Font>,
+    editor_font: Handle<Font>,
+    jackdaw_icon: Handle<Image>,
+    chrome: WindowChromeStyle,
+) -> impl Bundle {
     (
         EditorEntity,
         Node {
@@ -238,12 +251,13 @@ fn window_header_content(icon_font: Handle<Font>, editor_font: Handle<Font>) -> 
             align_items: AlignItems::Center,
             width: percent(100),
             height: percent(100),
-            padding: UiRect::right(px(tokens::SPACING_MD)),
+            padding: UiRect::horizontal(px(tokens::SPACING_MD)),
             column_gap: px(tokens::SPACING_MD),
             ..Default::default()
         },
         Pickable::IGNORE,
         children![
+            header_repo_link(jackdaw_icon, chrome),
             menu_bar::menu_bar_shell(),
             (
                 crate::scenes::ui::SceneTabStrip,

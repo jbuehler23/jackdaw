@@ -10,7 +10,14 @@ use jackdaw_feathers::tokens::{BORDER_RADIUS_MD, ICON_MD};
 
 use crate::EditorEntity;
 
+use super::chrome::WindowChromeStyle;
+use super::native_hit_test::NativeHitTestClient;
+
 const JACKDAW_REPO_URL: &str = "https://github.com/jbuehler23/jackdaw";
+
+/// Leading repo link slot; `Node::margin.left` updated when the window fills the work area (macOS).
+#[derive(Component)]
+pub struct MacosHeaderLeadingInset;
 
 #[derive(Resource, Clone)]
 pub struct JackdawIcon(pub Handle<Image>);
@@ -30,8 +37,28 @@ impl Plugin for RepoLinkPlugin {
     }
 }
 
+/// Header row slot wrapping [`jackdaw_link_button`] with platform-appropriate leading inset and hit testing.
+pub fn header_repo_link(image: Handle<Image>, chrome: WindowChromeStyle) -> impl Bundle {
+    return (
+        MacosHeaderLeadingInset,
+        Pickable::IGNORE,
+        NativeHitTestClient,
+        Node {
+            flex_shrink: 0.0,
+            height: percent(100),
+            align_items: AlignItems::Center,
+            margin: UiRect {
+                left: px(chrome.macos_traffic_light_inset()),
+                ..default()
+            },
+            ..default()
+        },
+        children![jackdaw_link_button(image)],
+    );
+}
+
 /// Button with icon to open the Jackdaw repository in the system browser.
-pub(crate) fn jackdaw_link_button(image: Handle<Image>) -> impl Bundle {
+pub fn jackdaw_link_button(image: Handle<Image>) -> impl Bundle {
     let variant = ButtonVariant::Ghost;
     (
         JackdawRepoLinkButton,

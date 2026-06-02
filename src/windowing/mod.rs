@@ -22,19 +22,21 @@ pub use header::{
 pub use native_hit_test::NativeHitTestClient;
 #[cfg(target_os = "windows")]
 pub use native_hit_test::mark_menu_bar_native_clients;
-pub use repo_link::JackdawIcon;
+pub use repo_link::{JackdawIcon, header_repo_link};
 pub use resize::{resize_edge_overlay, spawn_resize_edge_overlay_if_needed};
 pub use shell::{WindowShellContent, WindowShellSlots, spawn_window_shell};
 
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window, WindowMode};
-#[cfg(target_os = "macos")]
-use bevy::window::WindowResized;
 use bevy::winit::WINIT_WINDOWS;
 
 use chrome::WindowChromeStyle as ChromeStyle;
 use controls::WindowControlsPlugin;
 use header::WindowHeaderPlugin;
+use header::MacosHeaderChromeInset;
+use repo_link::MacosHeaderLeadingInset;
+#[cfg(target_os = "macos")]
+use jackdaw_feathers::tokens;
 use resize::{WindowResizeRoot, on_resize_edge_press};
 
 const WINDOW_SHELL_CORNER_RADIUS_PX: f32 = 8.0;
@@ -59,7 +61,7 @@ impl Plugin for WindowingPlugin {
             if chrome.uses_resize_edge_overlay() {
                 app.add_observer(on_resize_edge_press);
             }
-            app.add_systems(Update, sync_window_shell_state);
+            app.add_systems(PostUpdate, sync_window_shell_state);
         }
         #[cfg(not(target_arch = "wasm32"))]
         icon::install(app);
@@ -81,10 +83,13 @@ fn sync_window_shell_state(
     _main_thread: bevy::ecs::system::NonSendMarker,
     chrome: Res<WindowChromeStyle>,
     windows: Query<(Entity, &Window), With<PrimaryWindow>>,
-    mut resize_roots: Query<&mut Node, (With<WindowResizeRoot>, Without<WindowShellRoot>)>,
-    mut shell_roots: Query<&mut Node, (With<WindowShellRoot>, Without<WindowResizeRoot>)>,
-    #[cfg(target_os = "macos")] mut resize_events: MessageReader<WindowResized>,
-    #[cfg(target_os = "macos")] mut previous_maximized: Local<Option<bool>>,
+    mut shell_nodes: ParamSet<(
+        Query<&mut Node, With<WindowResizeRoot>>,
+        Query<&mut Node, With<WindowShellRoot>>,
+        Query<&mut Node, With<MacosHeaderChromeInset>>,
+        Query<&mut Node, With<MacosHeaderLeadingInset>>,
+    )>,
+    #[cfg(target_os = "macos")] mut previous_fills_work_area: Local<Option<bool>>,
 ) {
     let Ok((entity, window)) = windows.single() else {
         return;
@@ -96,18 +101,36 @@ fn sync_window_shell_state(
 
     #[cfg(target_os = "macos")]
     if *chrome == ChromeStyle::MacNativeTitlebar && !is_fullscreen {
-        let window_resized = resize_events.read().any(|event| event.window == entity);
-        let maximized_changed = previous_maximized.get() != Some(is_maximized);
-        if window_resized || maximized_changed {
-            macos_titlebar::reposition_traffic_lights(entity);
+        let first_sync = previous_fills_work_area.is_none();
+        if first_sync {
+            if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+                macos_titlebar::ensure_traffic_light_resize_observer(entity, mtm);
+            }
         }
-        if maximized_changed {
-            *previous_maximized = Some(is_maximized);
+        let fills_work_area = macos_titlebar::window_fills_work_area(entity);
+        let fills_work_area_changed = *previous_fills_work_area != Some(fills_work_area);
+        let traffic_light_inset = if fills_work_area {
+            0.0
+        } else {
+            tokens::MACOS_TRAFFIC_LIGHT_INSET
+        };
+        for mut node in shell_nodes.p2().iter_mut() {
+            node.left = Val::Px(traffic_light_inset);
+        }
+        for mut node in shell_nodes.p3().iter_mut() {
+            node.margin.left = Val::Px(traffic_light_inset);
+        }
+        if fills_work_area_changed {
+            *previous_fills_work_area = Some(fills_work_area);
+            macos_titlebar::set_traffic_lights_hidden(entity, fills_work_area);
+            if !fills_work_area {
+                macos_titlebar::reposition_traffic_lights(entity);
+            }
         }
     }
 
     if chrome.uses_resize_edge_overlay() {
-        for mut node in resize_roots.iter_mut() {
+        for mut node in shell_nodes.p0().iter_mut() {
             node.display = if is_floating_window {
                 Display::Flex
             } else {
@@ -122,7 +145,7 @@ fn sync_window_shell_state(
         } else {
             BorderRadius::ZERO
         };
-        for mut node in shell_roots.iter_mut() {
+        for mut node in shell_nodes.p1().iter_mut() {
             node.border_radius = shell_border_radius;
         }
     }
