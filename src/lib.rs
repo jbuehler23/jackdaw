@@ -1,3 +1,7 @@
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/jbuehler23/jackdaw/main/assets/logo/jackdaw_icon_small.png",
+    html_favicon_url = "https://raw.githubusercontent.com/jbuehler23/jackdaw/main/assets/logo/jackdaw_icon_small.png"
+)]
 //! Main crate for the Jackdaw editor.
 //! Usage of this crate is meant for headless operation. If you want to interact with the jackdaw API for extensions, use the `jackdaw_api` crate instead.
 pub mod active_tool;
@@ -72,6 +76,7 @@ pub mod selection;
 pub mod snapping;
 pub mod status_bar;
 pub mod terrain;
+pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod transform_ops;
 pub mod undo_snapshot;

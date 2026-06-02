@@ -285,7 +285,7 @@ pub fn serialize_world_to_jsn_scene(world: &mut World) -> JsnScene {
     drop(registry_guard);
 
     // Build metadata.
-    let now = chrono_now();
+    let now = crate::timestamps::utc_rfc3339_now();
     let mut metadata = world
         .get_resource::<SceneFilePath>()
         .map(|r| r.metadata.clone())
@@ -2207,52 +2207,6 @@ pub fn apply_ast_to_world(world: &mut World, ast: &jackdaw_jsn::SceneJsnAst) {
             }
         }
     }
-}
-
-/// ISO 8601 timestamp (simplified  -- no chrono dependency).
-fn chrono_now() -> String {
-    let since_epoch = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = since_epoch.as_secs();
-    let days = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let seconds = time_of_day % 60;
-    let (year, month, day) = days_to_date(days);
-    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
-}
-
-fn days_to_date(days: u64) -> (u64, u64, u64) {
-    let mut y = 1970;
-    let mut remaining = days;
-    loop {
-        let days_in_year = if is_leap(y) { 366 } else { 365 };
-        if remaining < days_in_year {
-            break;
-        }
-        remaining -= days_in_year;
-        y += 1;
-    }
-    let month_days = if is_leap(y) {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-    let mut m = 0;
-    for (i, &md) in month_days.iter().enumerate() {
-        if remaining < md {
-            m = i;
-            break;
-        }
-        remaining -= md;
-    }
-    (y, m as u64 + 1, remaining + 1)
-}
-
-fn is_leap(y: u64) -> bool {
-    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
 
 fn poll_scene_dialog(world: &mut World) {

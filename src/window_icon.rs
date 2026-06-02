@@ -1,10 +1,31 @@
 use bevy::{ecs::system::NonSendMarker, prelude::*, window::WindowCreated, winit::WINIT_WINDOWS};
+use time::{Month, OffsetDateTime};
 use winit::window::Icon;
 
 const WINDOW_ICON_PNG: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/assets/jackdaw_icon_small.png"
+    "/assets/logo/jackdaw_icon_small.png"
 ));
+
+const WINDOW_ICON_PRIDE_PNG: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/logo/jackdaw_icon_pride_small.png"
+));
+
+fn window_icon_png_bytes() -> &'static [u8] {
+    if is_pride_month() {
+        WINDOW_ICON_PRIDE_PNG
+    } else {
+        WINDOW_ICON_PNG
+    }
+}
+
+fn is_pride_month() -> bool {
+    let Ok(date_time) = OffsetDateTime::now_local() else {
+        return false;
+    };
+    date_time.month() == Month::June
+}
 
 #[derive(Resource)]
 struct WindowIconResource(Option<Icon>);
@@ -17,7 +38,7 @@ pub(crate) fn install(app: &mut App) {
 }
 
 fn load_icon_png() -> Option<Icon> {
-    let image = match image::load_from_memory(WINDOW_ICON_PNG) {
+    let image = match image::load_from_memory(window_icon_png_bytes()) {
         Ok(image) => image.into_rgba8(),
         Err(error) => {
             bevy::log::warn_once!(

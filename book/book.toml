@@ -6,3 +6,4 @@ title = "Jackdaw - A Bevy Editor"
 
 [output.html]
 git-repository-url = "https://github.com/jbuehler23/jackdaw"
+theme = "theme"

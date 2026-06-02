@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jbuehler23/jackdaw/main/assets/logo/jackdaw_icon.png" alt="Jackdaw" width="200" />
+</p>
+
 # Introduction
 
 Jackdaw is a 3D level editor built with
