@@ -401,9 +401,10 @@ fn gizmo_drag_edit_invoke_trigger(
     brush_selection: Res<crate::brush::BrushSelection>,
     mut commands: Commands,
 ) {
-    let has_sub_selection = brush_selection.brushes.values().any(|s| {
-        !s.vertices.is_empty() || !s.edges.is_empty() || !s.faces.is_empty()
-    });
+    let has_sub_selection = brush_selection
+        .brushes
+        .values()
+        .any(|s| !s.vertices.is_empty() || !s.edges.is_empty() || !s.faces.is_empty());
     if drag_state.active
         || object_drag.active
         || !mouse.just_pressed(MouseButton::Left)
@@ -498,7 +499,10 @@ pub fn gizmo_drag(
         let mut local_positions = Vec::new();
         for e in target_entities {
             if let Ok((gt, t)) = transforms.get(e) {
-                targets.push(GizmoTarget { entity: e, start_transform: *t });
+                targets.push(GizmoTarget {
+                    entity: e,
+                    start_transform: *t,
+                });
                 positions.push(gt.translation());
                 local_positions.push(t.translation);
             }
@@ -543,7 +547,16 @@ pub fn gizmo_drag(
         transforms
             .get(single_entity)
             .ok()
-            .map(|(g, _)| gizmo_rotation(g, if *mode == ActiveTool::Scale { &GizmoSpace::Local } else { &space }))
+            .map(|(g, _)| {
+                gizmo_rotation(
+                    g,
+                    if *mode == ActiveTool::Scale {
+                        &GizmoSpace::Local
+                    } else {
+                        &space
+                    },
+                )
+            })
             .unwrap_or(Quat::IDENTITY)
     } else {
         Quat::IDENTITY
@@ -583,7 +596,8 @@ pub fn gizmo_drag(
             let r = Quat::from_axis_angle(axis_dir, angle);
             for t in &drag_state.targets {
                 if let Ok((_, mut tf)) = transforms.get_mut(t.entity) {
-                    tf.translation = pivot_local + r * (t.start_transform.translation - pivot_local);
+                    tf.translation =
+                        pivot_local + r * (t.start_transform.translation - pivot_local);
                     tf.rotation = r * t.start_transform.rotation;
                 }
             }
@@ -715,8 +729,10 @@ pub fn gizmo_drag_edit(
         if captures.is_empty() {
             return OperatorResult::Finished;
         }
-        let all_start_world: Vec<Vec3> =
-            captures.iter().flat_map(|c| c.start_world.iter().copied()).collect();
+        let all_start_world: Vec<Vec3> = captures
+            .iter()
+            .flat_map(|c| c.start_world.iter().copied())
+            .collect();
         drag_state.active = true;
         drag_state.axis = Some(axis);
         drag_state.drag_start_screen = viewport_cursor;
@@ -783,7 +799,11 @@ pub fn gizmo_drag_edit(
                 let new_local: Vec<Vec3> = capture
                     .start_world
                     .iter()
-                    .map(|&w| capture.start_world_to_local.transform_point3(w + world_delta))
+                    .map(|&w| {
+                        capture
+                            .start_world_to_local
+                            .transform_point3(w + world_delta)
+                    })
                     .collect();
                 plan.push((capture.entity, new_local));
             }
@@ -1039,12 +1059,7 @@ fn draw_gizmos(
 
 /// Draw a world-axis-aligned wireframe cube centered at `center` with the
 /// given half-extent, using gizmo line segments.
-fn draw_wire_cube(
-    gizmos: &mut Gizmos<TransformGizmoGroup>,
-    center: Vec3,
-    half: f32,
-    color: Color,
-) {
+fn draw_wire_cube(gizmos: &mut Gizmos<TransformGizmoGroup>, center: Vec3, half: f32, color: Color) {
     let x = Vec3::X * half;
     let y = Vec3::Y * half;
     let z = Vec3::Z * half;
@@ -1416,7 +1431,11 @@ mod central_gizmo_tests {
 
     #[test]
     fn centroid_is_mean_of_positions() {
-        let c = centroid(&[Vec3::ZERO, Vec3::new(2.0, 0.0, 0.0), Vec3::new(0.0, 3.0, 0.0)]);
+        let c = centroid(&[
+            Vec3::ZERO,
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(0.0, 3.0, 0.0),
+        ]);
         assert!((c - Vec3::new(2.0 / 3.0, 1.0, 0.0)).length() < 1e-6);
     }
 
@@ -1454,7 +1473,10 @@ mod central_gizmo_tests {
             faces: vec![0, 1],
         };
         // vertices: 1; edge (1,2): 2; face 0: 0; face 1 (2,1,3): 3.
-        assert_eq!(selected_sub_vertices(&sub, &face_polygons), vec![1, 2, 0, 3]);
+        assert_eq!(
+            selected_sub_vertices(&sub, &face_polygons),
+            vec![1, 2, 0, 3]
+        );
 
         // Out-of-range face index is skipped without panicking.
         let sub = BrushSubSelection {

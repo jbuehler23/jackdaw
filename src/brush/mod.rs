@@ -438,11 +438,7 @@ mod shown_edit_brushes_tests {
             &[brush1, group],
             |e| brushes.contains(&e),
             |e| {
-                if e == group {
-                    vec![gb1, gb2]
-                } else {
-                    vec![]
-                }
+                if e == group { vec![gb1, gb2] } else { vec![] }
             },
         );
 
@@ -460,11 +456,7 @@ mod shown_edit_brushes_tests {
 
         let brushes = [brush1, unselected];
 
-        let result = shown_edit_brushes(
-            &[brush1],
-            |e| brushes.contains(&e),
-            |_| vec![],
-        );
+        let result = shown_edit_brushes(&[brush1], |e| brushes.contains(&e), |_| vec![]);
 
         assert_eq!(result.len(), 1);
         assert!(result.contains(&brush1));
@@ -481,11 +473,7 @@ mod shown_edit_brushes_tests {
             &[brush1, group],
             |e| e == brush1,
             |e| {
-                if e == group {
-                    vec![brush1]
-                } else {
-                    vec![]
-                }
+                if e == group { vec![brush1] } else { vec![] }
             },
         );
 

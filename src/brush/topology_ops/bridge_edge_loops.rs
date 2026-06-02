@@ -201,9 +201,7 @@ fn partition_edges_by_connectivity(mesh: &HalfedgeMesh, edges: &[EdgeKey]) -> Ve
 
 pub(crate) fn can_run_bridge(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
     *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge)
-        && selection
-            .active_sub()
-            .is_some_and(|s| s.edges.len() >= 2)
+        && selection.active_sub().is_some_and(|s| s.edges.len() >= 2)
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

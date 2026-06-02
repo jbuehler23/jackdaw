@@ -123,8 +123,7 @@ pub(crate) fn brush_delete_element(
                 }
             }
             BrushEditMode::Edge if !sub.edges.is_empty() => {
-                let removed: HashSet<usize> =
-                    sub.edges.iter().flat_map(|&(a, b)| [a, b]).collect();
+                let removed: HashSet<usize> = sub.edges.iter().flat_map(|&(a, b)| [a, b]).collect();
                 let remaining = cache.vertices.len().saturating_sub(removed.len());
                 if remaining >= 4 {
                     plans.push(DeletePlan {
@@ -351,12 +350,9 @@ fn nudge_brush_element(
                 new_verts[vi] += offset;
             }
         }
-        let Some((new_brush, old_to_new)) = rebuild_brush_from_vertices(
-            &brush,
-            &cache.vertices,
-            &cache.face_polygons,
-            &new_verts,
-        ) else {
+        let Some((new_brush, old_to_new)) =
+            rebuild_brush_from_vertices(&brush, &cache.vertices, &cache.face_polygons, &new_verts)
+        else {
             continue;
         };
         *brush = new_brush;

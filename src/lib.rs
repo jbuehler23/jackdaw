@@ -13,6 +13,7 @@ pub mod build_status;
 pub mod builtin_extensions;
 pub mod clip_ops;
 pub mod command_palette;
+pub mod command_runner;
 pub mod commands;
 pub mod custom_properties;
 pub mod default_style;
@@ -65,6 +66,7 @@ pub mod restart;
 pub mod scene_io;
 pub mod scene_ops;
 pub mod scenes;
+pub mod scrolling_log;
 pub mod sdk_paths;
 pub mod selection;
 pub mod snapping;
@@ -260,11 +262,12 @@ impl Plugin for EditorCorePlugin {
             EditorFeathersPlugin,
         ));
         app.add_plugins((
+            jackdaw_jsn::JsnPlugin {
+                runtime_mesh_rebuild: false,
+            },
             (
-                jackdaw_jsn::JsnPlugin {
-                    runtime_mesh_rebuild: false,
-                },
                 project_select::ProjectSelectPlugin,
+                scrolling_log::ScrollingLogPlugin,
                 inspector::InspectorPlugin,
                 hierarchy::HierarchyPlugin,
                 viewport::ViewportPlugin,

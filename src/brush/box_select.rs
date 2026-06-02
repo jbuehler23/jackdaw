@@ -237,10 +237,9 @@ pub fn brush_box_select(
                 let unique_edges = cache.unique_edges();
                 let sub = brush_selection.sub_mut(entity);
                 for (a, b) in unique_edges {
-                    let (Some(sa), Some(sb)) = (
-                        screen_of(cache.vertices[a]),
-                        screen_of(cache.vertices[b]),
-                    ) else {
+                    let (Some(sa), Some(sb)) =
+                        (screen_of(cache.vertices[a]), screen_of(cache.vertices[b]))
+                    else {
                         continue;
                     };
                     if inside(sa) && inside(sb) && !sub.edges.contains(&(a, b)) {

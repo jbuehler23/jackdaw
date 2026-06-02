@@ -508,10 +508,7 @@ pub(super) fn brush_face_hover(
                     continue;
                 }
                 if point_in_polygon_2d(viewport_cursor, &screen_verts) {
-                    let centroid: Vec3 = polygon
-                        .iter()
-                        .map(|&vi| cache.vertices[vi])
-                        .sum::<Vec3>()
+                    let centroid: Vec3 = polygon.iter().map(|&vi| cache.vertices[vi]).sum::<Vec3>()
                         / polygon.len() as f32;
                     let world_centroid = brush_global.transform_point(centroid);
                     let depth = (cam_tf.translation() - world_centroid).length_squared();
@@ -628,8 +625,7 @@ pub(super) fn brush_vertex_edge_hover(
                 continue;
             };
             for (vi, v) in cache.vertices.iter().enumerate() {
-                let Ok(screen) =
-                    camera.world_to_viewport(cam_tf, brush_global.transform_point(*v))
+                let Ok(screen) = camera.world_to_viewport(cam_tf, brush_global.transform_point(*v))
                 else {
                     continue;
                 };

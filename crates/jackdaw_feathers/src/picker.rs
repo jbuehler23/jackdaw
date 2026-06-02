@@ -686,6 +686,175 @@ fn on_text_edit_submit(
     }
 }
 
+#[derive(Resource, Default)]
+struct PickerNavigationRepeat {
+    delay: Timer,
+    repeat_index: u32,
+}
+
+const PICKER_NAV_INITIAL_DELAY: f32 = 0.2; // seconds
+const PICKER_NAV_REPEAT_INTERVAL_BASE: f32 = 0.1; // seconds
+const PICKER_NAV_REPEAT_INTERVAL_MIN: f32 = 0.02; // seconds
+const PICKER_NAV_REPEAT_RAMP: f32 = 25.0; // how many repeat navigation ticks to get to min interval
+
+fn picker_navigation_repeat_interval(repeat_index: u32) -> f32 {
+    if repeat_index == 0 {
+        return PICKER_NAV_INITIAL_DELAY;
+    }
+    let ramp = ((repeat_index - 1) as f32 / PICKER_NAV_REPEAT_RAMP).min(1.0);
+    PICKER_NAV_REPEAT_INTERVAL_BASE
+        + (PICKER_NAV_REPEAT_INTERVAL_MIN - PICKER_NAV_REPEAT_INTERVAL_BASE) * ramp
+}
+
+fn picker_navigation_should_tick(
+    key: KeyCode,
+    keyboard: &ButtonInput<KeyCode>,
+    time: &Time,
+    repeat: &mut PickerNavigationRepeat,
+) -> bool {
+    if keyboard.just_pressed(key) {
+        repeat.repeat_index = 0;
+        repeat.delay = Timer::from_seconds(picker_navigation_repeat_interval(0), TimerMode::Once);
+        return true;
+    }
+    if !keyboard.pressed(key) {
+        return false;
+    }
+    repeat.delay.tick(time.delta());
+    if !repeat.delay.is_finished() {
+        return false;
+    }
+    repeat.repeat_index += 1;
+    repeat.delay = Timer::from_seconds(
+        picker_navigation_repeat_interval(repeat.repeat_index),
+        TimerMode::Once,
+    );
+    true
+}
+
+fn display_ordered_picker_items(
+    entity: Entity,
+    children: &Query<&Children>,
+    picker_items: &Query<(Entity, &PickerItem)>,
+) -> Vec<Entity> {
+    let mut items = Vec::new();
+    if picker_items.get(entity).is_ok() {
+        items.push(entity);
+    }
+    let Ok(child_entities) = children.get(entity) else {
+        return items;
+    };
+    for child in child_entities.iter() {
+        items.extend(display_ordered_picker_items(child, children, picker_items));
+    }
+    items
+}
+
+fn picker_host_from_focus(
+    focused_entity: Entity,
+    child_of: &Query<&ChildOf>,
+    pickers: &Query<(Entity, &WithPickerList), With<Picker>>,
+) -> Option<(Entity, Entity)> {
+    for candidate in std::iter::once(focused_entity).chain(child_of.iter_ancestors(focused_entity))
+    {
+        if let Ok((picker_entity, with_list)) = pickers.get(candidate) {
+            return Some((picker_entity, with_list.0));
+        }
+    }
+    None
+}
+
+fn picker_keyboard_navigation(
+    time: Res<Time>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut focus: ResMut<InputFocus>,
+    mut navigation_repeat: ResMut<PickerNavigationRepeat>,
+    child_of: Query<&ChildOf>,
+    children: Query<&Children>,
+    pickers: Query<(Entity, &WithPickerList), With<Picker>>,
+    picker_items: Query<(Entity, &PickerItem)>,
+    mut commands: Commands,
+) {
+    let pressed_enter =
+        keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::NumpadEnter);
+
+    let navigation_key = match (
+        keyboard.pressed(KeyCode::ArrowDown),
+        keyboard.pressed(KeyCode::ArrowUp),
+    ) {
+        (true, false) => Some(KeyCode::ArrowDown),
+        (false, true) => Some(KeyCode::ArrowUp),
+        _ => None,
+    };
+
+    if navigation_key.is_none() {
+        *navigation_repeat = PickerNavigationRepeat::default();
+    }
+
+    if navigation_key.is_none() && !pressed_enter {
+        return;
+    }
+
+    let Some(focused_entity) = focus.0 else {
+        return;
+    };
+
+    let Some((picker_entity, list_entity)) =
+        picker_host_from_focus(focused_entity, &child_of, &pickers)
+    else {
+        return;
+    };
+
+    let items_for_picker = display_ordered_picker_items(list_entity, &children, &picker_items);
+
+    if items_for_picker.is_empty() {
+        return;
+    }
+
+    if pressed_enter && let Ok((_, item)) = picker_items.get(focused_entity) {
+        commands.trigger(PickerSelect {
+            entity: picker_entity,
+            index: item.0,
+        });
+        return;
+    }
+
+    let Some(navigation_key) = navigation_key else {
+        return;
+    };
+
+    if !picker_navigation_should_tick(navigation_key, &keyboard, &time, &mut navigation_repeat) {
+        return;
+    }
+
+    let current_position = items_for_picker
+        .iter()
+        .position(|&entity| entity == focused_entity);
+
+    let item_count = items_for_picker.len();
+    let next_focus = match navigation_key {
+        KeyCode::ArrowDown => match current_position {
+            Some(position) => {
+                let next_index = (position + 1) % item_count;
+                Some(items_for_picker[next_index])
+            }
+            None => Some(items_for_picker[0]),
+        },
+        KeyCode::ArrowUp => match current_position {
+            Some(position) => {
+                let next_index = (position + item_count - 1) % item_count;
+                Some(items_for_picker[next_index])
+            }
+            None => Some(items_for_picker[0]),
+        },
+        _ => None,
+    };
+
+    if let Some(entity) = next_focus {
+        focus.0 = Some(entity);
+    }
+}
+
 impl<T: Pickable> PickerProps<T> {
     /// Create a new [`PickerProps`] with two systems:
     /// - one to spawn the item, with a [`SpawnItemInput`]
@@ -802,12 +971,17 @@ impl Matchable for Item {
 }
 
 pub(crate) fn plugin(app: &mut App) {
-    app.add_systems(
-        Update,
-        (process_pickers, on_text_edit_submit, scroll_to_picker_item),
-    )
-    .add_observer(on_picker_selected)
-    .add_observer(on_picker_dismissed)
-    .add_observer(on_picker_item_activated)
-    .add_observer(on_dismiss_activated);
+    app.init_resource::<PickerNavigationRepeat>()
+        .add_systems(
+            Update,
+            (
+                process_pickers,
+                on_text_edit_submit,
+                (picker_keyboard_navigation, scroll_to_picker_item).chain(),
+            ),
+        )
+        .add_observer(on_picker_selected)
+        .add_observer(on_picker_dismissed)
+        .add_observer(on_picker_item_activated)
+        .add_observer(on_dismiss_activated);
 }

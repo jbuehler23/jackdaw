@@ -16,10 +16,10 @@ use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_jsn::Brush;
 
+use crate::brush::box_select::BrushBoxSelectState;
 use crate::brush::interaction::{
     FaceExtrudeMode, PendingSubDrag, VertexDragConstraint, compute_brush_drag_offset,
 };
-use crate::brush::box_select::BrushBoxSelectState;
 use crate::brush::{
     BrushDragCapture, BrushDragState, BrushEditMode, BrushFaceEntity, BrushMeshCache,
     BrushSelection, BrushSubSelection, EdgeDragState, EditMode, VertexDragState,
@@ -267,9 +267,8 @@ pub fn brush_face_drag(
                         let centroid: Vec3 =
                             polygon.iter().map(|&vi| cache.vertices[vi]).sum::<Vec3>()
                                 / polygon.len() as f32;
-                        let depth = (cam_tf.translation()
-                            - face_global.transform_point(centroid))
-                        .length_squared();
+                        let depth = (cam_tf.translation() - face_global.transform_point(centroid))
+                            .length_squared();
                         if depth < best_depth {
                             best_depth = depth;
                             best = Some((brush_entity, face_ent.face_index));
@@ -317,8 +316,7 @@ pub fn brush_face_drag(
         }
 
         // Object-mode quick-action: single brush path (unchanged).
-        let brush_entity =
-            selection.primary().filter(|&e| brushes.contains(e))?;
+        let brush_entity = selection.primary().filter(|&e| brushes.contains(e))?;
         let cache = brush_caches.get(brush_entity)?;
 
         let mut best_face = None;
@@ -1492,7 +1490,11 @@ fn broadcast_drag_to_captures(
         let new_positions: Vec<Vec3> = capture
             .start_world
             .iter()
-            .map(|&w| capture.start_world_to_local.transform_point3(w + world_offset))
+            .map(|&w| {
+                capture
+                    .start_world_to_local
+                    .transform_point3(w + world_offset)
+            })
             .collect();
         let Ok(mut brush) = brushes.get_mut(capture.entity) else {
             continue;
@@ -1588,9 +1590,8 @@ pub fn apply_vertex_deltas(
         for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
             if face_idx < new_topology.polygons.len() {
                 let normal = new_topology.face_normal_with(&positions, face_idx);
-                let v0_idx =
-                    new_topology.loops[new_topology.polygons[face_idx].loop_start as usize].vert
-                        as usize;
+                let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
+                    .vert as usize;
                 let distance = positions[v0_idx].dot(normal);
                 face_data.plane.normal = normal;
                 face_data.plane.distance = distance;
@@ -1666,7 +1667,12 @@ mod apply_vertex_deltas_tests {
         assert!(
             found,
             "no vertex near {new_pos:?} after move; topology = {:?}",
-            brush.topology.vertices.iter().map(|v| v.position).collect::<Vec<_>>()
+            brush
+                .topology
+                .vertices
+                .iter()
+                .map(|v| v.position)
+                .collect::<Vec<_>>()
         );
         assert_eq!(
             brush.faces.len(),

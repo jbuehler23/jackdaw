@@ -396,5 +396,7 @@ pub(crate) fn can_run_vertex_bevel(
     selection: Res<BrushSelection>,
 ) -> bool {
     *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
-        && selection.active_sub().is_some_and(|s| s.vertices.len() == 1)
+        && selection
+            .active_sub()
+            .is_some_and(|s| s.vertices.len() == 1)
 }

@@ -130,7 +130,9 @@ pub(crate) fn can_run_dissolve_verts(
     selection: Res<BrushSelection>,
 ) -> bool {
     *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
-        && selection.active_sub().is_some_and(|s| !s.vertices.is_empty())
+        && selection
+            .active_sub()
+            .is_some_and(|s| !s.vertices.is_empty())
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

@@ -6,7 +6,7 @@
 //!
 //! # How this template is wired
 //!
-//! `GamePlugin::build` adds one system that rotates any entity
+//! `MyGamePlugin::build` adds one system that rotates any entity
 //! carrying the [`SpinningCube`] component while `PlayState::Playing`.
 //! **No entities are spawned from code.** Jackdaw's scene (the
 //! `.jsn` file) is the source of truth for level content, so a cube
@@ -50,9 +50,9 @@ pub struct SpinningCube {
 }
 
 #[derive(Default)]
-pub struct GamePlugin;
+pub struct MyGamePlugin;
 
-impl GamePlugin for GamePlugin {
+impl GamePlugin for MyGamePlugin {
     fn build(&self, ctx: &mut GameApp<'_>) {
         ctx.add_systems(Update, spin_cube.run_if(in_state(PlayState::Playing)));
     }
@@ -65,4 +65,4 @@ fn spin_cube(time: Res<Time>, mut cubes: Query<(&SpinningCube, &mut Transform)>)
     }
 }
 
-jackdaw_api::export_game!("{{project-name}}", GamePlugin);
+jackdaw_api::export_game!("{{project-name}}", MyGamePlugin);

@@ -24,13 +24,23 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+      - name: Remove unused software
+        run: |
+          echo "Available storage before:"
+          sudo df -h
+          echo
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          echo "Available storage after:"
+          sudo df -h
+          echo
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           components: rustc-codegen-cranelift-preview
           toolchain: ${{ env.toolchain }}
-
       - name: Set LD_LIBRARY_PATH
         run: |
           echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV

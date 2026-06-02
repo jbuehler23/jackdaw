@@ -10,8 +10,8 @@ use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 
 use crate::brush::{
-    shown_edit_brushes, BrushDragState, BrushEditMode, BrushSelection, ClipState, EdgeDragState,
-    EditMode, KnifeMode, VertexDragState,
+    BrushDragState, BrushEditMode, BrushSelection, ClipState, EdgeDragState, EditMode, KnifeMode,
+    VertexDragState, shown_edit_brushes,
 };
 use crate::core_extension::CoreExtensionInputContext;
 use crate::draw_brush::DrawBrushState;
