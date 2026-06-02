@@ -2,7 +2,7 @@ use bevy::{picking::hover::Hovered, prelude::*, ui_widgets::observe};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{self, ButtonOperatorCall, ButtonSize, ButtonVariant},
-    icons::IconFont,
+    icons::{EditorFont, IconFont},
     menu_bar, separator, split_panel, status_bar,
     text_edit::{self, TextEditProps},
     tokens,
@@ -27,8 +27,12 @@ use crate::{
     remote::ConnectionManager,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
-    windowing::{WindowShellRoot, resize_edge_overlay, window_header},
+    windowing::{
+        JackdawIcon, NativeHitTestClient, WindowChromeStyle, spawn_window_shell,
+    },
 };
+#[cfg(target_os = "windows")]
+use crate::windowing::WindowsCaptionFont;
 
 /// Discriminator for the header tab kinds the editor knows how to host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -111,107 +115,119 @@ pub struct HierarchyFilter;
 #[derive(Component)]
 pub struct Toolbar;
 
-pub fn editor_layout(
-    icon_font: &IconFont,
-    editor_font: &jackdaw_feathers::icons::EditorFont,
-    jackdaw_icon: Handle<Image>,
-) -> impl Bundle {
-    (
+fn spawn_editor_main_area(parent: &mut ChildSpawnerCommands) {
+    // Scene document (visible by default).
+    //
+    // The dock tree is materialised by `jackdaw_panels`' reconciler
+    // under this single host. The default tree (left | (center over
+    // bottom) | right) is built in `init_layout` from registered
+    // windows; the user can drag panels anywhere within it.
+    parent.spawn((
+        DocumentRoot(TabKind::Scene),
         EditorEntity,
-        WindowShellRoot,
-        BackgroundColor(tokens::WINDOW_BG),
+        Node {
+            width: percent(100),
+            flex_grow: 1.0,
+            min_height: px(0.0),
+            display: Display::Flex,
+            flex_direction: FlexDirection::Row,
+            ..Default::default()
+        },
+        children![(
+            jackdaw_panels::reconcile::DockTreeHost::default(),
+            EditorEntity,
+            Node {
+                width: percent(100),
+                height: percent(100),
+                flex_direction: FlexDirection::Row,
+                overflow: Overflow::clip(),
+                ..Default::default()
+            },
+        )],
+    ));
+    // Schedule Explorer document (hidden by default).
+    parent.spawn((
+        DocumentRoot(TabKind::ScheduleExplorer),
+        EditorEntity,
+        Node {
+            width: percent(100),
+            flex_grow: 1.0,
+            min_height: px(0.0),
+            flex_direction: FlexDirection::Column,
+            display: Display::None,
+            ..Default::default()
+        },
+        split_panel::panel_group(
+            0.2,
+            (
+                Spawn((
+                    split_panel::panel(1),
+                    crate::remote::entity_browser::remote_debug_workspace_content(),
+                )),
+                Spawn(split_panel::panel_handle()),
+                Spawn((
+                    split_panel::panel(1),
+                    crate::remote::remote_inspector::remote_inspector(),
+                )),
+            ),
+        ),
+    ));
+    parent.spawn(editor_status_bar());
+}
+
+/// Fills a [`spawn_window_shell`] header/body pair with editor UI.
+pub fn spawn_editor(
+    commands: &mut Commands,
+    header: Entity,
+    body: Entity,
+    icon_font: Handle<Font>,
+    editor_font: Handle<Font>,
+) {
+    commands.entity(header).with_children(|header_parent| {
+        header_parent.spawn(window_header_content(icon_font.clone(), editor_font.clone()));
+    });
+    commands.entity(body).insert((
+        EditorEntity,
         Node {
             width: percent(100),
             height: percent(100),
+            flex_grow: 1.0,
+            min_height: px(0.0),
             flex_direction: FlexDirection::Column,
+            padding: UiRect::horizontal(px(tokens::PANEL_GAP)),
+            row_gap: px(tokens::PANEL_GAP),
             overflow: Overflow::clip(),
             ..Default::default()
         },
-        children![
-            window_header(
-                icon_font.0.clone(),
-                jackdaw_icon,
-                window_header_content(icon_font.0.clone(), editor_font.0.clone()),
-            ),
-            (
-                EditorEntity,
-                Node {
-                    width: percent(100),
-                    flex_grow: 1.0,
-                    min_height: px(0.0),
-                    flex_direction: FlexDirection::Column,
-                    padding: UiRect::horizontal(px(tokens::PANEL_GAP)),
-                    row_gap: px(tokens::PANEL_GAP),
-                    overflow: Overflow::clip(),
-                    ..Default::default()
-                },
-                children![
-                    // Scene document (visible by default).
-                    //
-                    // The dock tree is materialised by `jackdaw_panels`'
-                    // reconciler under this single host. The default
-                    // tree (left | (center over bottom) | right) is
-                    // built in `init_layout` from registered windows;
-                    // the user can drag panels anywhere within it.
-                    (
-                        DocumentRoot(TabKind::Scene),
-                        EditorEntity,
-                        Node {
-                            width: percent(100),
-                            flex_grow: 1.0,
-                            min_height: px(0.0),
-                            display: Display::Flex,
-                            flex_direction: FlexDirection::Row,
-                            ..Default::default()
-                        },
-                        children![(
-                            jackdaw_panels::reconcile::DockTreeHost::default(),
-                            EditorEntity,
-                            Node {
-                                width: percent(100),
-                                height: percent(100),
-                                flex_direction: FlexDirection::Row,
-                                overflow: Overflow::clip(),
-                                ..Default::default()
-                            },
-                        )],
-                    ),
-                    // Schedule Explorer document (hidden by default).
-                    // Formerly the Remote Debug workspace; same content
-                    // repackaged as a document tab.
-                    (
-                        DocumentRoot(TabKind::ScheduleExplorer),
-                        EditorEntity,
-                        Node {
-                            width: percent(100),
-                            flex_grow: 1.0,
-                            min_height: px(0.0),
-                            flex_direction: FlexDirection::Column,
-                            display: Display::None,
-                            ..Default::default()
-                        },
-                        split_panel::panel_group(
-                            0.2,
-                            (
-                                Spawn((
-                                    split_panel::panel(1),
-                                    crate::remote::entity_browser::remote_debug_workspace_content(),
-                                )),
-                                Spawn(split_panel::panel_handle()),
-                                Spawn((
-                                    split_panel::panel(1),
-                                    crate::remote::remote_inspector::remote_inspector(),
-                                )),
-                            ),
-                        ),
-                    ),
-                    editor_status_bar(),
-                ],
-            ),
-            #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-            resize_edge_overlay(),
-        ],
-    )
+    ));
+    commands.entity(body).with_children(spawn_editor_main_area);
+}
+
+/// Editor entry: UI camera, window shell, then editor chrome/content.
+pub fn spawn_editor_layout(
+    mut commands: Commands,
+    icon_font: Res<IconFont>,
+    editor_font: Res<EditorFont>,
+    jackdaw_icon: Res<JackdawIcon>,
+    chrome: Res<WindowChromeStyle>,
+    #[cfg(target_os = "windows")] windows_caption_font: Res<WindowsCaptionFont>,
+) {
+    let (header, body) = spawn_window_shell(
+        &mut commands,
+        *chrome,
+        &icon_font,
+        &jackdaw_icon,
+        #[cfg(target_os = "windows")]
+        &windows_caption_font,
+        EditorEntity,
+    );
+    spawn_editor(
+        &mut commands,
+        header,
+        body,
+        icon_font.0.clone(),
+        editor_font.0.clone(),
+    );
 }
 
 fn window_header_content(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bundle {
@@ -292,6 +308,7 @@ fn pie_transport_button(
 ) -> impl Bundle {
     (
         kind,
+        NativeHitTestClient,
         EditorEntity,
         Node {
             align_items: AlignItems::Center,
@@ -359,7 +376,7 @@ pub fn project_files_panel_content() -> impl Bundle {
 /// Bundle the editor toolbar and the `SceneViewport` node together so
 /// `setup_viewport` can mount the whole thing inside the dock tree's
 /// "center" leaf in one go. Public to the crate because it's spawned
-/// by the viewport plugin, not by `editor_layout` directly.
+/// by the viewport plugin, not by the editor body layout directly.
 pub(crate) fn viewport_with_toolbar() -> impl Bundle {
     (
         EditorEntity,

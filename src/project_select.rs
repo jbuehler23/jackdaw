@@ -17,6 +17,8 @@ use jackdaw_feathers::{
 use jackdaw_localization::LocalizedText;
 use rfd::{AsyncFileDialog, FileHandle};
 
+#[cfg(target_os = "windows")]
+use crate::windowing::WindowsCaptionFont;
 use crate::{
     AppState,
     command_runner::{CommandIo, LogChunk},
@@ -24,7 +26,7 @@ use crate::{
     project::{self, ProjectRoot},
     scene_io,
     scrolling_log::{self, ScrollingLog},
-    windowing::{JackdawIcon, WindowShellRoot, resize_edge_overlay, window_header},
+    windowing::{JackdawIcon, WindowChromeStyle, spawn_window_shell},
 };
 
 #[derive(Default)]
@@ -118,7 +120,7 @@ impl Plugin for ProjectSelectPlugin {
 }
 
 /// Marker for the project selector root UI node.
-#[derive(Component)]
+#[derive(Component, Copy, Clone)]
 struct ProjectSelectorRoot;
 
 /// When set, the project selector will skip UI and auto-open the given project.
@@ -351,17 +353,13 @@ fn spawn_project_selector(
     editor_font: Res<EditorFont>,
     icon_font: Res<jackdaw_feathers::icons::IconFont>,
     jackdaw_icon: Res<JackdawIcon>,
+    chrome: Res<WindowChromeStyle>,
+    #[cfg(target_os = "windows")] windows_caption_font: Res<WindowsCaptionFont>,
     pending: Option<Res<PendingAutoOpen>>,
 ) {
-    // UI camera for the project selector screen. Spawned BEFORE the
-    // auto-open early-return so the build-progress modal renders
-    // against a valid camera even when the user lands directly in
-    // an opening project. Without this, the launcher window stays
-    // fully blank for several minutes during a static-editor build
-    // because the modal had no camera to draw on.
-    commands.spawn((ProjectSelectorRoot, Camera2d));
-
     if let Some(pending) = pending {
+        // Camera only — no shell while auto-opening; the build modal still needs to draw.
+        commands.spawn((Camera2d, ProjectSelectorRoot));
         let path = pending.path.clone();
         let skip_build = pending.skip_build;
         commands.remove_resource::<PendingAutoOpen>();
@@ -374,7 +372,6 @@ fn spawn_project_selector(
     let recent = project::read_recent_projects();
     let font = editor_font.0.clone();
     let icon_font_handle = icon_font.0.clone();
-    let jackdaw_icon_handle = jackdaw_icon.0.clone();
 
     // Detect CWD project candidate
     let cwd = std::env::current_dir().unwrap_or_default();
@@ -382,62 +379,75 @@ fn spawn_project_selector(
         || cwd.join("project.jsn").is_file()
         || cwd.join("assets").is_dir();
 
-    commands
-        .spawn((
-            ProjectSelectorRoot,
-            WindowShellRoot,
+    let (header, body) = spawn_window_shell(
+        &mut commands,
+        *chrome,
+        &icon_font,
+        &jackdaw_icon,
+        #[cfg(target_os = "windows")]
+        &windows_caption_font,
+        ProjectSelectorRoot,
+    );
+    fill_project_selector(
+        &mut commands,
+        header,
+        body,
+        font,
+        icon_font_handle,
+        recent,
+        cwd,
+        cwd_has_project,
+    );
+}
+
+fn fill_project_selector(
+    commands: &mut Commands,
+    header: Entity,
+    body: Entity,
+    font: Handle<Font>,
+    icon_font_handle: Handle<Font>,
+    recent: project::RecentProjects,
+    cwd: PathBuf,
+    cwd_has_project: bool,
+) {
+    commands.entity(header).with_children(|header_parent| {
+        header_parent.spawn((
             Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                overflow: Overflow::clip(),
+                padding: UiRect::horizontal(Val::Px(tokens::SPACING_MD)),
                 ..Default::default()
             },
-            BackgroundColor(tokens::WINDOW_BG),
-        ))
-        .with_children(|root| {
-            // Launcher header mirrors the editor chrome: compact title on the
-            // left, version metadata on the right, and no centered splash card.
-            root.spawn(window_header(
-                icon_font_handle.clone(),
-                jackdaw_icon_handle.clone(),
+            Pickable::IGNORE,
+            children![
                 (
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::SpaceBetween,
-                        width: Val::Percent(100.0),
-                        height: Val::Percent(100.0),
-                        padding: UiRect::horizontal(Val::Px(tokens::SPACING_MD)),
+                    Text::new("jackdaw"),
+                    TextFont {
+                        font: font.clone(),
+                        font_size: tokens::FONT_MD,
                         ..Default::default()
                     },
+                    TextColor(tokens::TEXT_PRIMARY),
                     Pickable::IGNORE,
-                    children![
-                        (
-                            Text::new("jackdaw"),
-                            TextFont {
-                                font: font.clone(),
-                                font_size: tokens::FONT_MD,
-                                ..Default::default()
-                            },
-                            TextColor(tokens::TEXT_PRIMARY),
-                            Pickable::IGNORE,
-                        ),
-                        (
-                            Text::new(format!("v{}", env!("CARGO_PKG_VERSION"))),
-                            TextFont {
-                                font: font.clone(),
-                                font_size: tokens::FONT_SM,
-                                ..Default::default()
-                            },
-                            TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
-                            Pickable::IGNORE,
-                        ),
-                    ],
                 ),
-            ));
-
-            root.spawn(Node {
+                (
+                    Text::new(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                    TextFont {
+                        font: font.clone(),
+                        font_size: tokens::FONT_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
+                    Pickable::IGNORE,
+                ),
+            ],
+        ));
+    });
+    commands.entity(body).with_children(|body_parent| {
+        body_parent.spawn(Node {
                 width: Val::Percent(100.0),
                 flex_grow: 1.0,
                 flex_direction: FlexDirection::Row,
@@ -642,9 +652,7 @@ fn spawn_project_selector(
                             });
                     });
             });
-            #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-            root.spawn(resize_edge_overlay());
-        });
+    });
 }
 
 fn spawn_project_row(

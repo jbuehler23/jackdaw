@@ -327,7 +327,8 @@ pub const SPACING_LG: f32 = 12.0;
 
 pub const ROW_HEIGHT: f32 = 24.0;
 pub const HEADER_HEIGHT: f32 = 28.0;
-pub const WINDOW_HEADER_HEIGHT: f32 = 36.0;
+pub const WINDOW_HEADER_HEIGHT: f32 = 32.0;
+pub const MACOS_TRAFFIC_LIGHT_INSET: f32 = 78.0;
 pub const STATUS_BAR_HEIGHT: f32 = 22.0;
 pub const INPUT_HEIGHT: f32 = 28.0;
 

@@ -68,6 +68,7 @@ pub fn workspace_dropdown_trigger(
 ) -> impl Bundle {
     (
         WorkspaceDropdownTrigger,
+        crate::windowing::NativeHitTestClient,
         Interaction::default(),
         Node {
             flex_direction: FlexDirection::Row,

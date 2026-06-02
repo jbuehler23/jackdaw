@@ -63,7 +63,7 @@ impl Plugin for ReconcilePlugin {
 /// root entity exists before saved-layout application runs.
 pub fn run_initial_reconcile(world: &mut World) {
     seed_root_from_host(world);
-    reconcile_tree(world);
+    materialize_dock_tree(world);
 }
 
 /// Public for editor flows that want to seed before applying defaults
@@ -75,7 +75,7 @@ pub fn seed_root(world: &mut World) {
 /// Public for editor flows that build the final tree shape (saved or
 /// defaults) up front and then materialize once.
 pub fn reconcile(world: &mut World) {
-    reconcile_tree(world);
+    materialize_dock_tree(world);
 }
 
 /// If the dock tree has no root and a `DockTreeHost` exists, seed a
@@ -102,7 +102,10 @@ fn reconcile_tree(world: &mut World) {
     if !world.is_resource_changed::<DockTree>() {
         return;
     }
+    materialize_dock_tree(world);
+}
 
+fn materialize_dock_tree(world: &mut World) {
     let Some(root) = world.resource::<DockTree>().root else {
         return;
     };

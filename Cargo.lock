@@ -5246,6 +5246,7 @@ dependencies = [
  "jackdaw_widgets",
  "notify",
  "pathdiff",
+ "raw-window-handle",
  "regex",
  "rfd",
  "serde",
@@ -5254,6 +5255,7 @@ dependencies = [
  "test_fixture_extension",
  "time",
  "webbrowser",
+ "windows-sys 0.61.2",
  "winit",
 ]
 

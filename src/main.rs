@@ -3,9 +3,10 @@ use bevy::{
     ecs::error::ErrorContext,
     image::{ImageAddressMode, ImagePlugin, ImageSamplerDescriptor},
     prelude::*,
-    window::{ExitCondition, Window, WindowPlugin},
+    window::{ExitCondition, WindowPlugin},
 };
 use jackdaw::prelude::*;
+use jackdaw::windowing::primary_window_attributes;
 
 fn main() -> AppExit {
     // Install a SIGINT/SIGTERM handler before anything else gets a
@@ -91,10 +92,7 @@ fn main() -> AppExit {
                 .set(WindowPlugin {
                     exit_condition: ExitCondition::DontExit,
                     close_when_requested: false,
-                    primary_window: Some(Window {
-                        decorations: false,
-                        ..default()
-                    }),
+                    primary_window: Some(primary_window_attributes()),
                     ..default()
                 }),
         )

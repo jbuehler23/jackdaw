@@ -7,6 +7,9 @@ use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, SystemCursorIcon, Window};
 
 use crate::EditorEntity;
+use jackdaw_feathers::tokens;
+
+use super::chrome::WindowChromeStyle;
 
 const RESIZE_HANDLE_THICKNESS: f32 = 8.0;
 
@@ -16,7 +19,17 @@ pub(crate) struct WindowResizeRoot;
 #[derive(Component, Copy, Clone)]
 pub(crate) struct WindowResizeEdge(pub CompassOctant);
 
-/// Invisible edge strips for borderless window resize
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
+pub fn spawn_resize_edge_overlay_if_needed(
+    parent: &mut ChildSpawnerCommands,
+    chrome: WindowChromeStyle,
+) {
+    if chrome.uses_resize_edge_overlay() {
+        parent.spawn(resize_edge_overlay());
+    }
+}
+
+/// Invisible edge strips for borderless window resize (Linux client-side chrome only).
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
 pub fn resize_edge_overlay() -> impl Bundle {
     let thickness = px(RESIZE_HANDLE_THICKNESS);
@@ -35,7 +48,7 @@ pub fn resize_edge_overlay() -> impl Bundle {
                 CompassOctant::North,
                 Node {
                     position_type: PositionType::Absolute,
-                    top: px(0.0),
+                    top: px(tokens::WINDOW_HEADER_HEIGHT),
                     left: px(0.0),
                     width: percent(100),
                     height: thickness,

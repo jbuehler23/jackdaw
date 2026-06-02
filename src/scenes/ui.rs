@@ -182,6 +182,7 @@ fn spawn_scene_tab(
     let tab_entity = commands
         .spawn((
             SceneTabIndex(idx),
+            crate::windowing::NativeHitTestClient,
             Interaction::default(),
             Hovered::default(),
             Tooltip::title(display_name.to_string()).with_description(path_display.to_string()),
@@ -351,6 +352,7 @@ fn spawn_scene_tab(
     let close_btn = commands
         .spawn((
             SceneTabCloseButton(idx),
+            crate::windowing::NativeHitTestClient,
             Interaction::default(),
             Node {
                 width: Val::Px(14.0),
@@ -391,6 +393,7 @@ fn spawn_add_tab_button(commands: &mut Commands, strip: Entity, icon_font: Optio
     let btn = commands
         .spawn((
             SceneTabAddButton,
+            crate::windowing::NativeHitTestClient,
             Interaction::default(),
             Node {
                 width: Val::Px(tokens::HEADER_CONTROL_HEIGHT),

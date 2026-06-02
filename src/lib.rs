@@ -149,7 +149,7 @@ pub enum AppState {
     Editor,
 }
 
-#[derive(Component, Default)]
+#[derive(Component, Copy, Clone, Default)]
 pub struct EditorEntity;
 
 /// Marker component for UI overlays that should block viewport camera input
@@ -384,7 +384,13 @@ impl Plugin for EditorCorePlugin {
         .add_observer(flag_menu_dirty_on_menu_entry_remove)
         .add_systems(
             OnEnter(AppState::Editor),
-            (spawn_layout, init_layout, populate_menu).chain(),
+            (
+                layout::spawn_editor_layout,
+                ApplyDeferred,
+                init_layout,
+                populate_menu,
+            )
+                .chain(),
         )
         .add_systems(
             Update,
@@ -583,20 +589,6 @@ fn auto_hide_internal_entities(
             }
         }
     }
-}
-
-fn spawn_layout(
-    mut commands: Commands,
-    icon_font: Res<jackdaw_feathers::icons::IconFont>,
-    editor_font: Res<jackdaw_feathers::icons::EditorFont>,
-    jackdaw_icon: Res<windowing::JackdawIcon>,
-) {
-    commands.spawn((Camera2d, EditorEntity));
-    commands.spawn(layout::editor_layout(
-        &icon_font,
-        &editor_font,
-        jackdaw_icon.0.clone(),
-    ));
 }
 
 /// Spawn a new keyframe clip on the same target as the currently-
@@ -2208,6 +2200,8 @@ fn populate_menu(
     let menu_items = menu_items.into_values().flatten();
 
     jackdaw_feathers::menu_bar::populate_menu_bar(world, menu_bar_entity, menu_items);
+    #[cfg(target_os = "windows")]
+    windowing::mark_menu_bar_native_clients(world);
 }
 
 /// Open a registered dock window by id.
