@@ -17,9 +17,11 @@ use bevy::prelude::*;
 use jackdaw::prelude::*;
 
 fn main() -> AppExit {
+    jackdaw::ui_log::init_logging();
+
     App::new()
         .add_plugins((
-            DefaultPlugins,
+            DefaultPlugins.build().disable::<bevy::log::LogPlugin>(),
             EnhancedInputPlugin,
             PhysicsPlugins::default(),
             EditorPlugins::default().set(
