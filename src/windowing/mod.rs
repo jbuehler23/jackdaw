@@ -3,6 +3,8 @@
 mod chrome;
 mod controls;
 mod header;
+#[cfg(target_os = "macos")]
+mod macos_titlebar;
 mod icon;
 mod native_hit_test;
 mod repo_link;
@@ -26,6 +28,8 @@ pub use shell::{WindowShellContent, WindowShellSlots, spawn_window_shell};
 
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window, WindowMode};
+#[cfg(target_os = "macos")]
+use bevy::window::WindowResized;
 use bevy::winit::WINIT_WINDOWS;
 
 use chrome::WindowChromeStyle as ChromeStyle;
@@ -79,6 +83,8 @@ fn sync_window_shell_state(
     windows: Query<(Entity, &Window), With<PrimaryWindow>>,
     mut resize_roots: Query<&mut Node, (With<WindowResizeRoot>, Without<WindowShellRoot>)>,
     mut shell_roots: Query<&mut Node, (With<WindowShellRoot>, Without<WindowResizeRoot>)>,
+    #[cfg(target_os = "macos")] mut resize_events: MessageReader<WindowResized>,
+    #[cfg(target_os = "macos")] mut previous_maximized: Local<Option<bool>>,
 ) {
     let Ok((entity, window)) = windows.single() else {
         return;
@@ -87,6 +93,18 @@ fn sync_window_shell_state(
     let is_fullscreen = !matches!(window.mode, WindowMode::Windowed);
     let is_maximized = primary_window_is_maximized(entity);
     let is_floating_window = !is_fullscreen && !is_maximized;
+
+    #[cfg(target_os = "macos")]
+    if *chrome == ChromeStyle::MacNativeTitlebar && !is_fullscreen {
+        let window_resized = resize_events.read().any(|event| event.window == entity);
+        let maximized_changed = previous_maximized.get() != Some(is_maximized);
+        if window_resized || maximized_changed {
+            macos_titlebar::reposition_traffic_lights(entity);
+        }
+        if maximized_changed {
+            *previous_maximized = Some(is_maximized);
+        }
+    }
 
     if chrome.uses_resize_edge_overlay() {
         for mut node in resize_roots.iter_mut() {

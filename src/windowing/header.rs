@@ -50,23 +50,28 @@ pub fn spawn_window_header(
     #[cfg(not(target_os = "windows"))]
     let caption_controls = controls::window_controls_interactive(icon_font);
 
+    let uses_macos_native_titlebar = chrome == WindowChromeStyle::MacNativeTitlebar;
     let mut header_slot = None::<Entity>;
-    parent
-        .spawn((
-            WindowHeaderRoot,
-            EditorEntity,
-            Node {
-                position_type: PositionType::Relative,
-                width: percent(100),
-                height: px(tokens::WINDOW_HEADER_HEIGHT),
-                ..default()
-            },
-            BackgroundColor(tokens::WINDOW_BG),
-        ))
+    let header_root = (
+        WindowHeaderRoot,
+        EditorEntity,
+        Node {
+            position_type: PositionType::Relative,
+            width: percent(100),
+            height: px(tokens::WINDOW_HEADER_HEIGHT),
+            ..default()
+        },
+    );
+    let mut header_spawner = parent.spawn(header_root);
+    if !uses_macos_native_titlebar {
+        header_spawner.insert(BackgroundColor(tokens::WINDOW_BG));
+    }
+    header_spawner
         .with_children(|header| {
             header_slot = Some(spawn_foreground_row(
                 header,
                 macos_traffic_light_inset,
+                uses_macos_native_titlebar,
                 jackdaw_icon,
                 chrome,
                 show_custom_controls,
@@ -79,6 +84,7 @@ pub fn spawn_window_header(
 fn spawn_foreground_row(
     parent: &mut ChildSpawnerCommands,
     macos_traffic_light_inset: f32,
+    uses_macos_native_titlebar: bool,
     jackdaw_icon: Handle<Image>,
     chrome: WindowChromeStyle,
     show_custom_controls: bool,
@@ -101,7 +107,10 @@ fn spawn_foreground_row(
             },
         ))
         .with_children(|row| {
-            row.spawn(header_drag_backplate());
+            if uses_macos_native_titlebar {
+                row.spawn(header_chrome_background(macos_traffic_light_inset));
+            }
+            row.spawn(header_drag_backplate(macos_traffic_light_inset));
             row.spawn((
                 EditorEntity,
                 Pickable::IGNORE,
@@ -127,15 +136,31 @@ fn spawn_foreground_row(
     return header_slot.expect("window header content slot spawned");
 }
 
-fn header_drag_backplate() -> impl Bundle {
+fn header_chrome_background(macos_traffic_light_inset: f32) -> impl Bundle {
+    (
+        EditorEntity,
+        Pickable::IGNORE,
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(0.0),
+            left: px(macos_traffic_light_inset),
+            right: px(0.0),
+            height: percent(100),
+            ..default()
+        },
+        BackgroundColor(tokens::WINDOW_BG),
+    )
+}
+
+fn header_drag_backplate(macos_traffic_light_inset: f32) -> impl Bundle {
     (
         WindowHeaderDragRegion,
         EditorEntity,
         Node {
             position_type: PositionType::Absolute,
             top: px(0.0),
-            left: px(0.0),
-            width: percent(100),
+            left: px(macos_traffic_light_inset),
+            right: px(0.0),
             height: percent(100),
             ..default()
         },
