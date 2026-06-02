@@ -397,7 +397,7 @@ impl Plugin for BrushPlugin {
 /// of any selected entity that is not itself a brush (e.g. a `BrushGroup`).
 /// `is_brush` reports whether an entity has a `Brush`; `children_of` yields an
 /// entity's direct children. Order follows the selection; duplicates removed.
-pub fn shown_edit_brushes(
+pub(crate) fn shown_edit_brushes(
     selected: &[Entity],
     is_brush: impl Fn(Entity) -> bool,
     children_of: impl Fn(Entity) -> Vec<Entity>,

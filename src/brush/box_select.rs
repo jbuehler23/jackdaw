@@ -8,10 +8,13 @@
 //! The per-element drag operators in `brush_drag_ops` hit-test on their
 //! first invoke. When nothing is hit they hand the press to this module
 //! by recording [`BrushBoxSelectState::pending`] instead of dropping to
-//! Object mode. From there the lifecycle mirrors the object-mode
-//! box-select: [`brush_box_select_promote`] watches the pending press
-//! and either promotes it to an active drag once the cursor crosses the
-//! threshold or resolves it as a plain click on release.
+//! Object mode. The pending/promote/release lifecycle has the same shape
+//! as the object-mode box-select: [`brush_box_select_promote`] watches
+//! the pending press and either promotes it to an active drag once the
+//! cursor crosses the threshold or resolves it as a plain click on
+//! release. Unlike the object version, which resolves once on release,
+//! the active drag here runs every frame and recomputes a live highlight
+//! preview from a per-frame `base` snapshot.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -24,10 +27,12 @@ use crate::viewport_select::cursor_dragged_past_threshold;
 #[derive(Component)]
 pub(crate) struct BrushBoxSelectOverlay;
 
-/// State for the edit-mode rubber-band box-select. Mirrors the object
-/// `BoxSelectState` but is scoped to brush sub-element editing.
+/// State for the edit-mode rubber-band box-select. Shares the
+/// pending/active/release lifecycle shape of the object `BoxSelectState`,
+/// scoped to brush sub-element editing, and additionally drives a live
+/// per-frame highlight preview off the `base` snapshot.
 #[derive(Resource, Default)]
-pub struct BrushBoxSelectState {
+pub(crate) struct BrushBoxSelectState {
     /// Cursor position recorded at LMB-down by a drag operator that hit
     /// nothing. Stays set until promoted to an active drag or cleared on
     /// release without crossing the threshold.

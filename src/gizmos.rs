@@ -1194,7 +1194,7 @@ fn centroid(positions: &[Vec3]) -> Vec3 {
 /// face polygons. Unions the selected vertices, both ends of each selected
 /// edge, and every vertex of each selected face. Deduplicated, order-stable
 /// (first appearance wins).
-pub fn selected_sub_vertices(
+fn selected_sub_vertices(
     sub: &crate::brush::BrushSubSelection,
     face_polygons: &[Vec<usize>],
 ) -> Vec<usize> {

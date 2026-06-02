@@ -9,6 +9,7 @@
 //! inline in the operator body. Escape goes through the global
 //! `modal.cancel` chain.
 
+use bevy::ecs::system::SystemParam;
 use bevy::feathers::cursor::{EntityCursor, OverrideCursor};
 use bevy::prelude::*;
 use bevy::window::SystemCursorIcon;
@@ -38,6 +39,15 @@ const MIN_EXTRUDE_DEPTH: f32 = 0.01;
 
 /// Pixels the cursor must travel after a press to promote pending -> active.
 const DRAG_THRESHOLD: f32 = 5.0;
+
+/// Brush geometry queries used by `brush_face_drag` for face picking and the
+/// drag edit. Bundling keeps the operator under Bevy's system-param ceiling.
+#[derive(SystemParam)]
+struct FacePickParams<'w, 's> {
+    face_entities: Query<'w, 's, (Entity, &'static BrushFaceEntity, &'static GlobalTransform)>,
+    brush_caches: Query<'w, 's, &'static BrushMeshCache>,
+    brushes: Query<'w, 's, (&'static mut Brush, &'static GlobalTransform)>,
+}
 
 /// Show the grabbing cursor while a geometry drag is active.
 fn set_grab_cursor(override_cursor: &mut OverrideCursor) {
@@ -184,13 +194,11 @@ pub fn brush_face_drag(
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     vp: ViewportCursor,
-    face_entities: Query<(Entity, &BrushFaceEntity, &GlobalTransform)>,
-    brush_caches: Query<&BrushMeshCache>,
+    mut params: FacePickParams,
     selection: Res<Selection>,
     snap_settings: Res<SnapSettings>,
     mut brush_selection: ResMut<BrushSelection>,
     mut brush_box_state: ResMut<BrushBoxSelectState>,
-    mut brushes: Query<(&mut Brush, &GlobalTransform)>,
     mut drag_state: ResMut<BrushDragState>,
     mut commands: Commands,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
@@ -238,10 +246,10 @@ pub fn brush_face_drag(
 
             for candidate in &candidates {
                 let brush_entity = *candidate;
-                let Ok(cache) = brush_caches.get(brush_entity) else {
+                let Ok(cache) = params.brush_caches.get(brush_entity) else {
                     continue;
                 };
-                for (_, face_ent, face_global) in &face_entities {
+                for (_, face_ent, face_global) in &params.face_entities {
                     if face_ent.brush_entity != brush_entity {
                         continue;
                     }
@@ -316,12 +324,12 @@ pub fn brush_face_drag(
         }
 
         // Object-mode quick-action: single brush path (unchanged).
-        let brush_entity = selection.primary().filter(|&e| brushes.contains(e))?;
-        let cache = brush_caches.get(brush_entity)?;
+        let brush_entity = selection.primary().filter(|&e| params.brushes.contains(e))?;
+        let cache = params.brush_caches.get(brush_entity)?;
 
         let mut best_face = None;
         let mut best_depth = f32::MAX;
-        for (_, face_ent, face_global) in &face_entities {
+        for (_, face_ent, face_global) in &params.face_entities {
             if face_ent.brush_entity != brush_entity {
                 continue;
             }
@@ -412,7 +420,7 @@ pub fn brush_face_drag(
         && !drag_state.active
         && (cursor_pos - pending.click_pos).length() > DRAG_THRESHOLD
         && let Some(brush_entity) = brush_selection.active_brush
-        && let Ok((brush, brush_global)) = brushes.get(brush_entity)
+        && let Ok((brush, brush_global)) = params.brushes.get(brush_entity)
     {
         drag_state.active = true;
         set_grab_cursor(&mut override_cursor);
@@ -434,7 +442,7 @@ pub fn brush_face_drag(
                 let (_, brush_rot, _) = brush_global.to_scale_rotation_translation();
                 drag_state.extend_face_normal =
                     (brush_rot * drag_state.drag_face_normal).normalize();
-                if let Ok(cache) = brush_caches.get(brush_entity)
+                if let Ok(cache) = params.brush_caches.get(brush_entity)
                     && let Some(&face_idx) = active_faces.first()
                 {
                     drag_state.extend_face_polygon = cache.face_polygons[face_idx]
@@ -455,7 +463,7 @@ pub fn brush_face_drag(
             .unwrap_or_default();
         match drag_state.extrude_mode {
             FaceExtrudeMode::Merge => {
-                let (mut brush, brush_global) = brushes.get_mut(brush_entity)?;
+                let (mut brush, brush_global) = params.brushes.get_mut(brush_entity)?;
                 let start = drag_state.start_brush.as_ref()?;
                 let brush_pos = brush_global.translation();
                 let Ok(origin_screen) = camera.world_to_viewport(cam_tf, brush_pos) else {
@@ -1553,7 +1561,7 @@ pub(crate) fn restore_captures(
 ///   overwritten, then `rebuild_brush_from_vertices` derives the convex hull.
 ///   `start_brush`, `all_vertices`, and `face_polygons` are only read on this
 ///   path; they may be empty slices when the `HalfedgeMesh` path is guaranteed.
-pub fn apply_vertex_deltas(
+pub(crate) fn apply_vertex_deltas(
     brush: &mut Brush,
     halfedge: Option<&mut crate::brush::BrushHalfedge>,
     start_brush: &Brush,

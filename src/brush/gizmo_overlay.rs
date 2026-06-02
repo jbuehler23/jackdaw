@@ -78,33 +78,14 @@ pub(super) fn draw_brush_edit_gizmos(
         let skip_wireframe = mode == BrushEditMode::Clip && all_faces_default;
 
         if !skip_wireframe {
-            // Collect unique edges and track selected/hover state.
-            let mut drawn_edges: Vec<(usize, usize, bool)> = Vec::new();
-            for polygon in &cache.face_polygons {
-                if polygon.len() < 2 {
-                    continue;
-                }
-                for i in 0..polygon.len() {
-                    let a = polygon[i];
-                    let b = polygon[(i + 1) % polygon.len()];
-                    let edge = (a.min(b), a.max(b));
-                    if !drawn_edges
-                        .iter()
-                        .any(|(ea, eb, _)| *ea == edge.0 && *eb == edge.1)
-                    {
-                        let selected = sub.is_some_and(|s| s.edges.contains(&edge));
-                        drawn_edges.push((edge.0, edge.1, selected));
-                    }
-                }
-            }
-
             // Draw all edges; edge hover color overrides resting/selected for the hovered edge.
             let hover_edge = if hover.entity == Some(brush_entity) {
                 hover.edge
             } else {
                 None
             };
-            for &(a, b, selected) in &drawn_edges {
+            for (a, b) in cache.unique_edges() {
+                let selected = sub.is_some_and(|s| s.edges.contains(&(a, b)));
                 let wa = brush_global.transform_point(cache.vertices[a]);
                 let wb = brush_global.transform_point(cache.vertices[b]);
                 let color =
