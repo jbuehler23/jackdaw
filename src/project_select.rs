@@ -426,16 +426,26 @@ fn fill_project_selector(
             },
             Pickable::IGNORE,
             children![
-                header_repo_link(jackdaw_icon, chrome),
                 (
-                    Text::new("jackdaw"),
-                    TextFont {
-                        font: font.clone(),
-                        font_size: tokens::FONT_MD,
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(tokens::SPACING_MD),
                         ..Default::default()
                     },
-                    TextColor(tokens::TEXT_PRIMARY),
-                    Pickable::IGNORE,
+                    children![
+                        header_repo_link(jackdaw_icon, chrome),
+                        (
+                            Text::new("jackdaw"),
+                            TextFont {
+                                font: font.clone(),
+                                font_size: tokens::FONT_MD,
+                                ..Default::default()
+                            },
+                            TextColor(tokens::TEXT_PRIMARY),
+                            Pickable::IGNORE,
+                        ),
+                    ],
                 ),
                 (
                     Text::new(format!("v{}", env!("CARGO_PKG_VERSION"))),
@@ -446,12 +456,13 @@ fn fill_project_selector(
                     },
                     TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
                     Pickable::IGNORE,
-                ),
+                )
             ],
         ));
     });
     commands.entity(body).with_children(|body_parent| {
-        body_parent.spawn(Node {
+        body_parent
+            .spawn(Node {
                 width: Val::Percent(100.0),
                 flex_grow: 1.0,
                 flex_direction: FlexDirection::Row,
