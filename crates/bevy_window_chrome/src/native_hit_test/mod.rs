@@ -6,11 +6,11 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 
 #[cfg(target_os = "windows")]
-use super::chrome::WindowChromeStyle;
+use crate::chrome::WindowChromeStyle;
 #[cfg(target_os = "windows")]
-use super::controls::{WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize};
+use crate::controls::{WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize};
 #[cfg(target_os = "windows")]
-use super::header::WindowHeaderRoot;
+use crate::header::WindowHeaderRoot;
 
 /// Client-area rectangle in physical pixels (origin: top-left of the window).
 #[cfg(target_os = "windows")]
@@ -38,11 +38,11 @@ impl ClientRect {
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
-        x >= self.min_x && x < self.max_x && y >= self.min_y && y < self.max_y
+        return x >= self.min_x && x < self.max_x && y >= self.min_y && y < self.max_y;
     }
 
     pub fn is_valid(&self) -> bool {
-        self.max_x > self.min_x && self.max_y > self.min_y
+        return self.max_x > self.min_x && self.max_y > self.min_y;
     }
 }
 
@@ -75,51 +75,36 @@ pub struct NativeHitTestRegions {
 }
 
 /// Interactive header widgets that must remain in the client area (menus, tabs, links).
+///
+/// On Windows, tag any interactive widget placed inside the title-bar drag region with this so
+/// Win32 `WM_NCHITTEST` treats it as client area instead of a window-drag surface.
 #[derive(Component)]
 pub struct NativeHitTestClient;
-
-/// Tag menu bar items so they stay in the client area under Win32 `WM_NCHITTEST` (Windows only).
-#[cfg(target_os = "windows")]
-pub fn mark_menu_bar_native_clients(world: &mut World) {
-    let menu_item_entities: Vec<Entity> = world
-        .query_filtered::<Entity, With<jackdaw_widgets::menu_bar::MenuBarItem>>()
-        .iter(world)
-        .collect();
-    for entity in menu_item_entities {
-        if let Ok(mut entity_commands) = world.get_entity_mut(entity) {
-            entity_commands.insert(NativeHitTestClient);
-        }
-    }
-}
 
 #[cfg(target_os = "windows")]
 mod windows;
 
-pub struct NativeHitTestPlugin;
-
-impl Plugin for NativeHitTestPlugin {
-    fn build(&self, _app: &mut App) {
-        #[cfg(target_os = "windows")]
-        {
-            _app.init_resource::<NativeHitTestRegions>()
-                .init_resource::<NativeCaptionHover>()
-                .add_systems(
-                    PostUpdate,
-                    (
-                        sync_native_hit_test_regions,
-                        sync_caption_hover_from_cursor,
-                        super::controls::windows_caption::sync_windows_caption_chrome,
-                    )
-                        .chain(),
+pub(crate) fn build(_app: &mut App) {
+    #[cfg(target_os = "windows")]
+    {
+        _app.init_resource::<NativeHitTestRegions>()
+            .init_resource::<NativeCaptionHover>()
+            .add_systems(
+                PostUpdate,
+                (
+                    sync_native_hit_test_regions,
+                    sync_caption_hover_from_cursor,
+                    crate::controls::windows_caption::sync_windows_caption_chrome,
                 )
-                .add_systems(PostUpdate, windows::install_primary_window_subclass);
-        }
+                    .chain(),
+            )
+            .add_systems(PostUpdate, windows::install_primary_window_subclass);
     }
 }
 
 #[cfg(target_os = "windows")]
 fn sync_native_hit_test_regions(
-    chrome: Res<WindowChromeStyle>,
+    style: Res<WindowChromeStyle>,
     mut regions: ResMut<NativeHitTestRegions>,
     primary_window: Query<(Entity, &Window), With<bevy::window::PrimaryWindow>>,
     header_roots: Query<(&ComputedNode, &UiGlobalTransform), With<WindowHeaderRoot>>,
@@ -128,7 +113,7 @@ fn sync_native_hit_test_regions(
     close_buttons: Query<(&ComputedNode, &UiGlobalTransform), With<WindowControlsClose>>,
     client_blocks: Query<(&ComputedNode, &UiGlobalTransform), With<NativeHitTestClient>>,
 ) {
-    if !chrome.uses_native_hit_testing() {
+    if !style.uses_native_hit_testing() {
         *regions = NativeHitTestRegions::default();
         windows::publish_regions(&regions);
         return;
@@ -175,12 +160,12 @@ fn sync_native_hit_test_regions(
 #[cfg(target_os = "windows")]
 fn sync_caption_hover_from_cursor(
     _main_thread: bevy::ecs::system::NonSendMarker,
-    chrome: Res<WindowChromeStyle>,
+    style: Res<WindowChromeStyle>,
     regions: Res<NativeHitTestRegions>,
     primary_window: Query<(Entity, &Window), With<bevy::window::PrimaryWindow>>,
     mut hover: ResMut<NativeCaptionHover>,
 ) {
-    if !chrome.uses_native_hit_testing() {
+    if !style.uses_native_hit_testing() {
         hover.hovered = None;
         return;
     }

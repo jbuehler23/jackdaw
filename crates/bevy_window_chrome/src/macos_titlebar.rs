@@ -1,12 +1,13 @@
-//! Native traffic light positioning on macOS (Zed-style transparent title bar).
+//! Native traffic light positioning on macOS (transparent integrated title bar).
 
 use std::cell::RefCell;
+use std::sync::OnceLock;
 
 use bevy::ecs::entity::Entity;
 use bevy::winit::WINIT_WINDOWS;
 use objc2::rc::Retained;
 use objc2::runtime::NSObject;
-use objc2::{declare_class, msg_send_id, mutability, sel, ClassType, DeclaredClass};
+use objc2::{ClassType, DeclaredClass, declare_class, msg_send_id, mutability, sel};
 use objc2_app_kit::{
     NSButton, NSView, NSWindow, NSWindowButton, NSWindowDidResizeNotification, NSWindowStyleMask,
 };
@@ -15,7 +16,26 @@ use objc2_foundation::{
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-use jackdaw_feathers::tokens;
+/// Title-bar metrics needed to align native traffic lights with the custom header.
+#[derive(Clone, Copy)]
+pub(crate) struct MacChromeMetrics {
+    pub header_height: f64,
+    pub traffic_light_position_x: f64,
+}
+
+static LAYOUT_METRICS: OnceLock<MacChromeMetrics> = OnceLock::new();
+
+/// Stores the title-bar layout metrics used when repositioning traffic lights.
+pub(crate) fn set_layout_metrics(metrics: MacChromeMetrics) {
+    let _ = LAYOUT_METRICS.set(metrics);
+}
+
+fn layout_metrics() -> MacChromeMetrics {
+    return LAYOUT_METRICS.get().copied().unwrap_or(MacChromeMetrics {
+        header_height: 36.0,
+        traffic_light_position_x: 12.0,
+    });
+}
 
 thread_local! {
     static TRAFFIC_LIGHT_RESIZE_OBSERVER: RefCell<Option<Retained<TrafficLightResizeObserver>>> =
@@ -32,7 +52,7 @@ declare_class!(
     unsafe impl ClassType for TrafficLightResizeObserver {
         type Super = NSObject;
         type Mutability = mutability::InteriorMutable;
-        const NAME: &'static str = "JackdawTrafficLightResizeObserver";
+        const NAME: &'static str = "BevyWindowChromeTrafficLightResizeObserver";
     }
 
     impl DeclaredClass for TrafficLightResizeObserver {
@@ -150,19 +170,19 @@ pub fn reposition_traffic_lights(window_entity: Entity) {
         return;
     };
 
+    let metrics = layout_metrics();
     let window_frame = ns_window.frame();
     let content_layout_rect = unsafe { ns_window.contentLayoutRect() };
-    let titlebar_height =
-        window_frame.size.height - content_layout_rect.size.height;
+    let titlebar_height = window_frame.size.height - content_layout_rect.size.height;
 
     let mut close_frame = close_button.frame();
     let minimize_frame = minimize_button.frame();
     let mut zoom_frame = zoom_button.frame();
 
     let button_spacing = minimize_frame.origin.x - close_frame.origin.x;
-    let traffic_light_x = tokens::MACOS_TRAFFIC_LIGHT_POSITION_X as f64;
+    let traffic_light_x = metrics.traffic_light_position_x;
     let button_height = close_frame.size.height;
-    let header_height = tokens::WINDOW_HEADER_HEIGHT as f64;
+    let header_height = metrics.header_height;
     let layout_height = titlebar_height.min(header_height);
     let y_offset_from_titlebar_top = (layout_height - button_height) / 2.0;
     let origin_y = titlebar_height - y_offset_from_titlebar_top - button_height;

@@ -81,6 +81,7 @@ jackdaw_geometry.workspace = true
 jackdaw_csg.workspace = true
 bevy_monitors.workspace = true
 bevy_infinite_grid.workspace = true
+bevy_window_chrome.workspace = true
 jackdaw_camera.workspace = true
 jackdaw_feathers.workspace = true
 jackdaw_widgets.workspace = true
@@ -193,6 +194,7 @@ jackdaw_geometry = { version = "0.4.1", path = "crates/jackdaw_geometry" }
 jackdaw_csg = { version = "0.4.1", path = "crates/jackdaw_csg" }
 bevy_monitors = "0.2"
 bevy_infinite_grid = "0.18"
+bevy_window_chrome = { version = "0.1.0", path = "crates/bevy_window_chrome" }
 jackdaw_camera = { version = "0.4.1", path = "crates/jackdaw_camera" }
 jackdaw_camera_rig = { version = "0.4.1", path = "crates/jackdaw_camera_rig" }
 jackdaw_feathers = { version = "0.4.1", path = "crates/jackdaw_feathers" }

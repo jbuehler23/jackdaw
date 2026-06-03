@@ -1,178 +1,138 @@
-//! Borderless primary window chrome: shell styling, header window controls, resize edges
+//! Jackdaw window chrome: wires the reusable [`bevy_window_chrome`] crate to jackdaw's design
+//! tokens, branding, and editor entity bookkeeping.
 
-mod chrome;
-mod controls;
-mod header;
-#[cfg(target_os = "macos")]
-mod macos_titlebar;
-mod icon;
-mod native_hit_test;
-mod repo_link;
-mod resize;
-mod shell;
-
-pub use chrome::{WindowChromeStyle, primary_window_attributes};
 #[cfg(not(target_os = "windows"))]
-pub use controls::window_controls_interactive;
+mod controls_interactive;
+mod repo_link;
+
 #[cfg(target_os = "windows")]
-pub use controls::{WindowsCaptionFont, window_controls_native};
-pub use header::{
-    WindowHeaderRoot, WindowShellHeaderSlot, native_hit_test_client, spawn_window_header,
+pub use bevy_window_chrome::WindowsCaptionFont;
+pub use bevy_window_chrome::{
+    NativeHitTestClient, WindowChromeStyle, WindowHeaderRoot, WindowShellContent,
+    WindowShellHeaderSlot, WindowShellSlots, native_hit_test_client,
 };
-pub use native_hit_test::NativeHitTestClient;
-#[cfg(target_os = "windows")]
-pub use native_hit_test::mark_menu_bar_native_clients;
 pub use repo_link::{JackdawIcon, header_repo_link};
-pub use resize::{resize_edge_overlay, spawn_resize_edge_overlay_if_needed};
-pub use shell::{WindowShellContent, WindowShellSlots, spawn_window_shell};
 
 use bevy::prelude::*;
-use bevy::window::{PrimaryWindow, Window, WindowMode};
-use bevy::winit::WINIT_WINDOWS;
-
-use chrome::WindowChromeStyle as ChromeStyle;
-use controls::WindowControlsPlugin;
-use header::WindowHeaderPlugin;
-use header::MacosHeaderChromeInset;
-use repo_link::MacosHeaderLeadingInset;
-#[cfg(target_os = "macos")]
+use bevy_window_chrome::{
+    CaptionTheme, WindowChromeEntity, WindowChromePlugin, WindowChromeTheme, WindowIconPlugin,
+};
+use jackdaw_feathers::icons::IconFont;
 use jackdaw_feathers::tokens;
-use resize::{WindowResizeRoot, on_resize_edge_press};
+use time::{Month, OffsetDateTime};
 
-const WINDOW_SHELL_CORNER_RADIUS_PX: f32 = 8.0;
+use crate::EditorEntity;
 
-#[derive(Component)]
-pub struct WindowShellRoot;
+const WINDOW_ICON_PNG: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/logo/jackdaw_icon_small.png"
+));
+
+const WINDOW_ICON_PRIDE_PNG: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/logo/jackdaw_icon_pride_small.png"
+));
+
+fn window_icon_png_bytes() -> &'static [u8] {
+    if is_pride_month() {
+        WINDOW_ICON_PRIDE_PNG
+    } else {
+        WINDOW_ICON_PNG
+    }
+}
+
+fn is_pride_month() -> bool {
+    let Ok(date_time) = OffsetDateTime::now_local() else {
+        return false;
+    };
+    return date_time.month() == Month::June;
+}
+
+/// Resolves jackdaw's window chrome style, honoring `JACKDAW_WINDOW_DECORATIONS`.
+pub fn jackdaw_window_chrome_style() -> WindowChromeStyle {
+    let decorations = std::env::var("JACKDAW_WINDOW_DECORATIONS").ok();
+    return WindowChromeStyle::resolve(decorations.as_deref());
+}
+
+/// Primary-window attributes for jackdaw's current platform chrome strategy.
+pub fn primary_window_attributes() -> Window {
+    return bevy_window_chrome::primary_window_attributes(jackdaw_window_chrome_style());
+}
+
+/// Window chrome theme built from jackdaw's design tokens.
+fn jackdaw_window_chrome_theme() -> WindowChromeTheme {
+    return WindowChromeTheme {
+        header_height: tokens::WINDOW_HEADER_HEIGHT,
+        window_background: tokens::WINDOW_BG,
+        shell_corner_radius: 8.0,
+        macos_traffic_light_inset: tokens::MACOS_TRAFFIC_LIGHT_INSET,
+        macos_traffic_light_position_x: tokens::MACOS_TRAFFIC_LIGHT_POSITION_X,
+        caption: CaptionTheme {
+            foreground: tokens::TEXT_PRIMARY,
+            button_hover_background: tokens::TOOLBAR_BUTTON_BG,
+            ..CaptionTheme::default()
+        },
+    };
+}
 
 pub struct WindowingPlugin;
 
 impl Plugin for WindowingPlugin {
     fn build(&self, app: &mut App) {
-        let chrome = WindowChromeStyle::current();
-        app.insert_resource(chrome);
-        app.add_plugins((
-            WindowControlsPlugin,
-            WindowHeaderPlugin,
-            repo_link::RepoLinkPlugin,
-            native_hit_test::NativeHitTestPlugin,
+        let style = jackdaw_window_chrome_style();
+        app.add_plugins(WindowChromePlugin::new(
+            jackdaw_window_chrome_theme(),
+            style,
         ));
-        #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-        {
-            if chrome.uses_resize_edge_overlay() {
-                app.add_observer(on_resize_edge_press);
-            }
-            app.add_systems(PostUpdate, sync_window_shell_state);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        icon::install(app);
+        app.add_plugins(WindowIconPlugin::new(window_icon_png_bytes()));
+        app.add_plugins(repo_link::RepoLinkPlugin);
+        app.add_observer(tag_chrome_entity_as_editor);
+        #[cfg(not(target_os = "windows"))]
+        controls_interactive::register(app);
     }
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-pub(crate) fn primary_window_is_maximized(window_entity: Entity) -> bool {
-    WINIT_WINDOWS.with(|windows_cell| {
-        let winit_windows = windows_cell.borrow();
-        winit_windows
-            .get_window(window_entity)
-            .is_some_and(|backend| backend.is_maximized())
-    })
+/// Stamps `EditorEntity` onto every chrome entity so jackdaw's cleanup, hierarchy, and viewport
+/// systems treat the window chrome as editor UI.
+fn tag_chrome_entity_as_editor(add: On<Add, WindowChromeEntity>, mut commands: Commands) {
+    commands.entity(add.event_target()).insert(EditorEntity);
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-fn sync_window_shell_state(
-    _main_thread: bevy::ecs::system::NonSendMarker,
-    chrome: Res<WindowChromeStyle>,
-    windows: Query<(Entity, &Window), With<PrimaryWindow>>,
-    mut shell_nodes: ParamSet<(
-        Query<&mut Node, With<WindowResizeRoot>>,
-        Query<&mut Node, With<WindowShellRoot>>,
-        Query<&mut Node, With<MacosHeaderChromeInset>>,
-        Query<&mut Node, With<MacosHeaderLeadingInset>>,
-    )>,
-    #[cfg(target_os = "macos")] mut previous_fills_work_area: Local<Option<bool>>,
-) {
-    let Ok((entity, window)) = windows.single() else {
-        return;
-    };
-
-    let is_fullscreen = !matches!(window.mode, WindowMode::Windowed);
-    let is_maximized = primary_window_is_maximized(entity);
-    let is_floating_window = !is_fullscreen && !is_maximized;
-
-    #[cfg(target_os = "macos")]
-    if *chrome == ChromeStyle::MacNativeTitlebar && !is_fullscreen {
-        let first_sync = previous_fills_work_area.is_none();
-        if first_sync {
-            if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
-                macos_titlebar::ensure_traffic_light_resize_observer(entity, mtm);
-            }
-        }
-        let fills_work_area = macos_titlebar::window_fills_work_area(entity);
-        let fills_work_area_changed = *previous_fills_work_area != Some(fills_work_area);
-        let traffic_light_inset = if fills_work_area {
-            0.0
-        } else {
-            tokens::MACOS_TRAFFIC_LIGHT_INSET
-        };
-        for mut node in shell_nodes.p2().iter_mut() {
-            node.left = Val::Px(traffic_light_inset);
-        }
-        for mut node in shell_nodes.p3().iter_mut() {
-            node.margin.left = Val::Px(traffic_light_inset);
-        }
-        if fills_work_area_changed {
-            *previous_fills_work_area = Some(fills_work_area);
-            macos_titlebar::set_traffic_lights_hidden(entity, fills_work_area);
-            if !fills_work_area {
-                macos_titlebar::reposition_traffic_lights(entity);
-            }
-        }
-    }
-
-    if chrome.uses_resize_edge_overlay() {
-        for mut node in shell_nodes.p0().iter_mut() {
-            node.display = if is_floating_window {
-                Display::Flex
-            } else {
-                Display::None
-            };
-        }
-    }
-
-    if chrome.uses_shell_corner_radius() {
-        let shell_border_radius = if is_floating_window {
-            BorderRadius::all(Val::Px(WINDOW_SHELL_CORNER_RADIUS_PX))
-        } else {
-            BorderRadius::ZERO
-        };
-        for mut node in shell_nodes.p1().iter_mut() {
-            node.border_radius = shell_border_radius;
-        }
-    }
-
+/// Spawns the jackdaw window shell, returning `(header_slot, body_slot)`.
+pub fn spawn_window_shell<S: Component + Copy>(
+    commands: &mut Commands,
+    chrome: WindowChromeStyle,
+    icon_font: &IconFont,
+    #[cfg(target_os = "windows")] caption_font: &WindowsCaptionFont,
+    screen: S,
+) -> WindowShellSlots {
+    let theme = jackdaw_window_chrome_theme();
     #[cfg(target_os = "windows")]
-    if *chrome == ChromeStyle::CustomClient {
-        apply_windows_corner_preference(entity, is_floating_window);
-    }
+    let caption_controls = {
+        let _ = icon_font;
+        bevy_window_chrome::window_controls_native(&theme, caption_font.0.clone())
+    };
+    #[cfg(not(target_os = "windows"))]
+    let caption_controls = controls_interactive::window_controls_interactive(icon_font.0.clone());
+    return bevy_window_chrome::spawn_window_shell(
+        commands,
+        chrome,
+        &theme,
+        caption_controls,
+        screen,
+    );
 }
 
-#[cfg(all(
-    not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")),
-    target_os = "windows"
-))]
-fn apply_windows_corner_preference(window_entity: Entity, round: bool) {
-    use winit::platform::windows::{CornerPreference, WindowExtWindows};
-
-    WINIT_WINDOWS.with(|windows_cell| {
-        let winit_windows = windows_cell.borrow();
-        let Some(backend) = winit_windows.get_window(window_entity) else {
-            return;
-        };
-        let preference = if round {
-            CornerPreference::Round
-        } else {
-            CornerPreference::DoNotRound
-        };
-        backend.set_corner_preference(preference);
-    });
+/// Tag menu bar items so they stay in the client area under Win32 `WM_NCHITTEST` (Windows only).
+#[cfg(target_os = "windows")]
+pub fn mark_menu_bar_native_clients(world: &mut World) {
+    let menu_item_entities: Vec<Entity> = world
+        .query_filtered::<Entity, With<jackdaw_widgets::menu_bar::MenuBarItem>>()
+        .iter(world)
+        .collect();
+    for entity in menu_item_entities {
+        if let Ok(mut entity_commands) = world.get_entity_mut(entity) {
+            entity_commands.insert(NativeHitTestClient);
+        }
+    }
 }

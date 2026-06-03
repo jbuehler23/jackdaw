@@ -2604,6 +2604,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_window_chrome"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "image",
+ "objc2 0.5.2",
+ "objc2-app-kit 0.2.2",
+ "objc2-foundation 0.2.2",
+ "raw-window-handle",
+ "windows-sys 0.61.2",
+ "winit",
+]
+
+[[package]]
 name = "bevy_winit"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5216,6 +5230,7 @@ dependencies = [
  "bevy_monitors",
  "bevy_rerecast",
  "bevy_simple_subsecond_system",
+ "bevy_window_chrome",
  "bincode",
  "ctrlc",
  "dirs",

@@ -1,15 +1,11 @@
-//! Shared primary-window shell: chrome root, header, body slot, resize overlay.
+//! Primary-window shell: chrome root, header, body slot, and resize overlay.
 
 use bevy::prelude::*;
-use jackdaw_feathers::icons::IconFont;
-use jackdaw_feathers::tokens;
 
-use super::WindowShellRoot;
-#[cfg(target_os = "windows")]
-use super::WindowsCaptionFont;
-use super::chrome::WindowChromeStyle;
-use super::header::spawn_window_header;
-use super::resize::spawn_resize_edge_overlay_if_needed;
+use crate::chrome::WindowChromeStyle;
+use crate::header::spawn_window_header;
+use crate::resize::spawn_resize_edge_overlay_if_needed;
+use crate::{WindowChromeTheme, WindowShellRoot};
 
 /// Unstyled flex column that fills the area below the window header.
 #[derive(Component)]
@@ -19,11 +15,15 @@ pub struct WindowShellContent;
 pub type WindowShellSlots = (Entity, Entity);
 
 /// Spawns a UI camera, the window shell, and returns `(header_slot, body_slot)` for screen content.
+///
+/// `screen` is a caller marker copied onto the UI camera and shell root (useful for despawning a
+/// screen's chrome as a unit). `caption_controls` is the minimize/maximize/close cluster bundle
+/// (see [`spawn_window_header`]).
 pub fn spawn_window_shell<S: Component + Copy>(
     commands: &mut Commands,
-    chrome: WindowChromeStyle,
-    #[allow(unused_variables)] icon_font: &IconFont,
-    #[cfg(target_os = "windows")] caption_font: &WindowsCaptionFont,
+    style: WindowChromeStyle,
+    theme: &WindowChromeTheme,
+    caption_controls: impl Bundle,
     screen: S,
 ) -> WindowShellSlots {
     commands.spawn((Camera2d, screen));
@@ -33,34 +33,17 @@ pub fn spawn_window_shell<S: Component + Copy>(
         .spawn((
             screen,
             WindowShellRoot,
-            BackgroundColor(tokens::WINDOW_BG),
+            BackgroundColor(theme.window_background),
             Node {
                 width: percent(100),
                 height: percent(100),
                 flex_direction: FlexDirection::Column,
                 overflow: Overflow::clip(),
-                ..Default::default()
+                ..default()
             },
         ))
         .with_children(|shell| {
-            header_slot = Some({
-                #[cfg(target_os = "windows")]
-                {
-                    spawn_window_header(
-                        shell,
-                        caption_font.0.clone(),
-                        chrome,
-                    )
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    spawn_window_header(
-                        shell,
-                        icon_font.0.clone(),
-                        chrome,
-                    )
-                }
-            });
+            header_slot = Some(spawn_window_header(shell, theme, style, caption_controls));
             body_slot = Some(
                 shell
                     .spawn((
@@ -72,13 +55,13 @@ pub fn spawn_window_shell<S: Component + Copy>(
                             min_height: px(0.0),
                             flex_direction: FlexDirection::Column,
                             overflow: Overflow::clip(),
-                            ..Default::default()
+                            ..default()
                         },
                     ))
                     .id(),
             );
             #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-            spawn_resize_edge_overlay_if_needed(shell, chrome);
+            spawn_resize_edge_overlay_if_needed(shell, style, theme.header_height);
         });
     return (
         header_slot.expect("window shell header slot spawned"),

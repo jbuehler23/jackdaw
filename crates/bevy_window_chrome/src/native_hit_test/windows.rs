@@ -1,4 +1,4 @@
-//! Win32 non-client hit testing and caption button actions (Zed-style).
+//! Win32 non-client hit testing and caption button actions.
 
 use std::sync::{Mutex, OnceLock};
 
@@ -39,7 +39,7 @@ pub(super) fn publish_regions(regions: &NativeHitTestRegions) {
 /// Bevy's `Window::physical_cursor_position` is `None` over non-client caption hits
 /// (`HTMINBUTTON` / `HTMAXBUTTON` / `HTCLOSE`), so hover must read the cursor from Win32.
 pub(super) fn primary_window_client_cursor(window_entity: Entity) -> Option<Vec2> {
-    WINIT_WINDOWS.with(|windows_cell| {
+    return WINIT_WINDOWS.with(|windows_cell| {
         let winit_windows = windows_cell.borrow();
         let backend = winit_windows.get_window(window_entity)?;
         let handle = backend.window_handle().ok()?;
@@ -48,7 +48,7 @@ pub(super) fn primary_window_client_cursor(window_entity: Entity) -> Option<Vec2
         };
         let hwnd = window_handle.hwnd.get() as HWND;
         return client_cursor_physical_position(hwnd);
-    })
+    });
 }
 
 pub(super) fn client_cursor_physical_position(hwnd: HWND) -> Option<Vec2> {
@@ -65,10 +65,10 @@ pub(super) fn client_cursor_physical_position(hwnd: HWND) -> Option<Vec2> {
 }
 
 pub(super) fn caption_button_pressed() -> Option<NativeCaptionButton> {
-    CAPTION_PRESSED
+    return CAPTION_PRESSED
         .get()
         .and_then(|slot| slot.lock().ok())
-        .and_then(|locked| *locked)
+        .and_then(|locked| *locked);
 }
 
 fn set_caption_button_pressed(pressed: Option<NativeCaptionButton>) {
@@ -96,13 +96,13 @@ pub(super) fn install_primary_window_subclass(
             let winit_windows = windows_cell.borrow();
             let Some(backend) = winit_windows.get_window(event.window) else {
                 bevy::log::warn!(
-                    "jackdaw: winit backend window missing when installing native hit-test subclass"
+                    "bevy_window_chrome: winit backend window missing when installing native hit-test subclass"
                 );
                 return;
             };
             let Ok(handle) = backend.window_handle() else {
                 bevy::log::warn!(
-                    "jackdaw: failed to read Win32 window handle for native hit testing"
+                    "bevy_window_chrome: failed to read Win32 window handle for native hit testing"
                 );
                 return;
             };
@@ -113,7 +113,9 @@ pub(super) fn install_primary_window_subclass(
             let result =
                 unsafe { SetWindowSubclass(hwnd, Some(subclass_window_proc), SUBCLASS_ID, 0) };
             if result == 0 {
-                bevy::log::warn!("jackdaw: SetWindowSubclass failed for native window hit testing");
+                bevy::log::warn!(
+                    "bevy_window_chrome: SetWindowSubclass failed for native window hit testing"
+                );
             }
         });
     }
@@ -152,12 +154,12 @@ unsafe extern "system" fn subclass_window_proc(
 }
 
 fn caption_button_from_hit(wparam: WPARAM) -> Option<NativeCaptionButton> {
-    match wparam as u32 {
+    return match wparam as u32 {
         x if x == HTMINBUTTON as u32 => Some(NativeCaptionButton::Minimize),
         x if x == HTMAXBUTTON as u32 => Some(NativeCaptionButton::Maximize),
         x if x == HTCLOSE as u32 => Some(NativeCaptionButton::Close),
         _ => None,
-    }
+    };
 }
 
 fn handle_caption_button_up(hwnd: HWND, wparam: WPARAM) -> bool {
@@ -246,7 +248,7 @@ fn hit_test(hwnd: HWND, lparam: LPARAM) -> Option<i32> {
         }
     }
 
-    None
+    return None;
 }
 
 fn query_window_dpi(hwnd: HWND) -> u32 {
@@ -296,7 +298,7 @@ fn edge_hit_test(hwnd: HWND, x: f32, y: f32) -> Option<i32> {
         return Some(HTRIGHT as i32);
     }
 
-    None
+    return None;
 }
 
 fn frame_thickness_x(dpi: u32) -> i32 {

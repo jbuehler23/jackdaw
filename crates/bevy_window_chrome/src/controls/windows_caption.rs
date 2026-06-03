@@ -3,23 +3,16 @@
 use bevy::prelude::*;
 use bevy::text::LineHeight;
 use bevy::window::PrimaryWindow;
-use jackdaw_feathers::tokens;
 
-use crate::EditorEntity;
+use crate::native_hit_test::{NativeCaptionButton, NativeCaptionHover};
+use crate::{CaptionTheme, WindowChromeEntity, WindowChromeTheme};
 
-use super::super::native_hit_test::{NativeCaptionButton, NativeCaptionHover};
 use super::{WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize};
-
-const CAPTION_BUTTON_WIDTH: f32 = 36.0;
-const CAPTION_GLYPH_SIZE: f32 = 10.0;
 
 const GLYPH_MINIMIZE: &str = "\u{e921}";
 const GLYPH_MAXIMIZE: &str = "\u{e922}";
 const GLYPH_RESTORE: &str = "\u{e923}";
 const GLYPH_CLOSE: &str = "\u{e8bb}";
-
-const CLOSE_HOVER_BACKGROUND: Color = Color::srgb(232.0 / 255.0, 17.0 / 255.0, 32.0 / 255.0);
-const CLOSE_ACTIVE_BACKGROUND: Color = Color::srgba(232.0 / 255.0, 17.0 / 255.0, 32.0 / 255.0, 0.8);
 
 const SEGOE_FLUENT_ICONS_FILE: &str = "SegoeIcons.ttf";
 const SEGOE_MDL2_ASSETS_FILE: &str = "segmdl2.ttf";
@@ -28,7 +21,7 @@ const SEGOE_MDL2_ASSETS_FILE: &str = "segmdl2.ttf";
 #[derive(Resource, Clone)]
 pub struct WindowsCaptionFont(pub Handle<Font>);
 
-/// Installed from [`super::install_windows_caption_font_in_app`] during plugin build.
+/// Loads the Segoe caption icon font from the system font directory.
 pub fn load_windows_caption_font(fonts: &mut Assets<Font>) -> Option<Handle<Font>> {
     for path in windows_caption_font_paths() {
         let bytes = std::fs::read(&path).ok()?;
@@ -38,7 +31,7 @@ pub fn load_windows_caption_font(fonts: &mut Assets<Font>) -> Option<Handle<Font
     return None;
 }
 
-/// Prefer Segoe Fluent Icons on Windows 11+, Segoe MDL2 Assets on older releases (same as Zed).
+/// Prefer Segoe Fluent Icons on Windows 11+, Segoe MDL2 Assets on older releases.
 fn windows_caption_font_paths() -> Vec<std::path::PathBuf> {
     let fonts_directory = std::path::Path::new(r"C:\Windows\Fonts");
     let fluent = fonts_directory.join(SEGOE_FLUENT_ICONS_FILE);
@@ -67,9 +60,15 @@ fn is_windows_11_or_later() -> bool {
 }
 
 /// Visual caption buttons; interaction is handled via Win32 non-client hit testing.
-pub fn window_controls_native(caption_font: Handle<Font>) -> impl Bundle {
-    (
-        EditorEntity,
+pub fn window_controls_native(
+    theme: &WindowChromeTheme,
+    caption_font: Handle<Font>,
+) -> impl Bundle {
+    let button_width = theme.caption.button_width;
+    let glyph_size = theme.caption.glyph_size;
+    let foreground = theme.caption.foreground;
+    return (
+        WindowChromeEntity,
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Stretch,
@@ -79,49 +78,49 @@ pub fn window_controls_native(caption_font: Handle<Font>) -> impl Bundle {
         },
         Pickable::IGNORE,
         children![
-            caption_minimize_button(caption_font.clone()),
-            caption_maximize_button(caption_font.clone()),
-            caption_close_button(caption_font),
+            caption_button_bundle(
+                caption_font.clone(),
+                button_width,
+                glyph_size,
+                foreground,
+                NativeCaptionButton::Minimize,
+                WindowControlsMinimize,
+            ),
+            caption_button_bundle(
+                caption_font.clone(),
+                button_width,
+                glyph_size,
+                foreground,
+                NativeCaptionButton::Maximize,
+                WindowControlsMaximize,
+            ),
+            caption_button_bundle(
+                caption_font,
+                button_width,
+                glyph_size,
+                foreground,
+                NativeCaptionButton::Close,
+                WindowControlsClose,
+            ),
         ],
-    )
-}
-
-fn caption_minimize_button(caption_font: Handle<Font>) -> impl Bundle {
-    caption_button_bundle(
-        caption_font,
-        NativeCaptionButton::Minimize,
-        WindowControlsMinimize,
-    )
-}
-
-fn caption_maximize_button(caption_font: Handle<Font>) -> impl Bundle {
-    caption_button_bundle(
-        caption_font,
-        NativeCaptionButton::Maximize,
-        WindowControlsMaximize,
-    )
-}
-
-fn caption_close_button(caption_font: Handle<Font>) -> impl Bundle {
-    caption_button_bundle(
-        caption_font,
-        NativeCaptionButton::Close,
-        WindowControlsClose,
-    )
+    );
 }
 
 fn caption_button_bundle(
     caption_font: Handle<Font>,
+    button_width: f32,
+    glyph_size: f32,
+    foreground: Color,
     kind: NativeCaptionButton,
     marker: impl Bundle,
 ) -> impl Bundle {
     return (
         marker,
         kind,
-        EditorEntity,
+        WindowChromeEntity,
         Pickable::IGNORE,
         Node {
-            width: px(CAPTION_BUTTON_WIDTH),
+            width: px(button_width),
             height: percent(100),
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
@@ -132,21 +131,21 @@ fn caption_button_bundle(
             Text::new(caption_glyph(kind).to_string()),
             TextFont {
                 font: caption_font,
-                font_size: CAPTION_GLYPH_SIZE,
+                font_size: glyph_size,
                 ..default()
             },
-            TextColor(tokens::TEXT_PRIMARY),
-            LineHeight::Px(CAPTION_GLYPH_SIZE),
+            TextColor(foreground),
+            LineHeight::Px(glyph_size),
         )],
     );
 }
 
 fn caption_glyph(kind: NativeCaptionButton) -> &'static str {
-    match kind {
+    return match kind {
         NativeCaptionButton::Minimize => GLYPH_MINIMIZE,
         NativeCaptionButton::Maximize => GLYPH_MAXIMIZE,
         NativeCaptionButton::Close => GLYPH_CLOSE,
-    }
+    };
 }
 
 fn maximize_caption_label(is_maximized: bool) -> String {
@@ -160,6 +159,7 @@ fn maximize_caption_label(is_maximized: bool) -> String {
 pub fn sync_windows_caption_chrome(
     _main_thread: bevy::ecs::system::NonSendMarker,
     hover: Res<NativeCaptionHover>,
+    theme: Res<WindowChromeTheme>,
     primary_window: Query<Entity, With<PrimaryWindow>>,
     mut buttons: Query<
         (
@@ -180,11 +180,11 @@ pub fn sync_windows_caption_chrome(
     let is_maximized = primary_window
         .single()
         .ok()
-        .is_some_and(|entity| super::super::primary_window_is_maximized(entity));
+        .is_some_and(|entity| crate::primary_window_is_maximized(entity));
     let maximize_label = maximize_caption_label(is_maximized);
 
     for (kind, mut background, children, is_maximize_control) in buttons.iter_mut() {
-        let (background_color, foreground_color) = caption_colors(*kind, &hover);
+        let (background_color, foreground_color) = caption_colors(*kind, &hover, &theme.caption);
         background.0 = background_color;
 
         for child in children.iter() {
@@ -203,22 +203,26 @@ pub fn sync_windows_caption_chrome(
     }
 }
 
-fn caption_colors(kind: NativeCaptionButton, hover: &NativeCaptionHover) -> (Color, Color) {
+fn caption_colors(
+    kind: NativeCaptionButton,
+    hover: &NativeCaptionHover,
+    caption: &CaptionTheme,
+) -> (Color, Color) {
     let highlighted = hover.hovered == Some(kind) || hover.pressed == Some(kind);
     if !highlighted {
-        return (Color::NONE, tokens::TEXT_PRIMARY);
+        return (Color::NONE, caption.foreground);
     }
-    match kind {
+    return match kind {
         NativeCaptionButton::Close => {
             let background = if hover.pressed == Some(kind) {
-                CLOSE_ACTIVE_BACKGROUND
+                caption.close_active_background
             } else {
-                CLOSE_HOVER_BACKGROUND
+                caption.close_hover_background
             };
             (background, Color::WHITE)
         }
         NativeCaptionButton::Minimize | NativeCaptionButton::Maximize => {
-            (tokens::TOOLBAR_BUTTON_BG, tokens::TEXT_PRIMARY)
+            (caption.button_hover_background, caption.foreground)
         }
-    }
+    };
 }

@@ -1,4 +1,4 @@
-//! Invisible edge strips for borderless window resize.
+//! Invisible edge strips for borderless window resize (client-side chrome only).
 
 use bevy::feathers::cursor::EntityCursor;
 use bevy::math::CompassOctant;
@@ -6,10 +6,8 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, SystemCursorIcon, Window};
 
-use crate::EditorEntity;
-use jackdaw_feathers::tokens;
-
-use super::chrome::WindowChromeStyle;
+use crate::WindowChromeEntity;
+use crate::chrome::WindowChromeStyle;
 
 const RESIZE_HANDLE_THICKNESS: f32 = 8.0;
 
@@ -19,23 +17,28 @@ pub(crate) struct WindowResizeRoot;
 #[derive(Component, Copy, Clone)]
 pub(crate) struct WindowResizeEdge(pub CompassOctant);
 
+/// Spawns the resize edge overlay as a child if the chrome style uses client-side resize handles.
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
 pub fn spawn_resize_edge_overlay_if_needed(
     parent: &mut ChildSpawnerCommands,
-    chrome: WindowChromeStyle,
+    style: WindowChromeStyle,
+    header_height: f32,
 ) {
-    if chrome.uses_resize_edge_overlay() {
-        parent.spawn(resize_edge_overlay());
+    if style.uses_resize_edge_overlay() {
+        parent.spawn(resize_edge_overlay(header_height));
     }
 }
 
-/// Invisible edge strips for borderless window resize (Linux client-side chrome only).
+/// Invisible edge strips for borderless window resize (client-side chrome only).
+///
+/// The top edge starts below the header band so it does not fight the title-bar drag region.
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-pub fn resize_edge_overlay() -> impl Bundle {
+pub fn resize_edge_overlay(header_height: f32) -> impl Bundle {
     let thickness = px(RESIZE_HANDLE_THICKNESS);
-    (
+    let header_band = px(header_height);
+    return (
         WindowResizeRoot,
-        EditorEntity,
+        WindowChromeEntity,
         Pickable::IGNORE,
         Node {
             position_type: PositionType::Absolute,
@@ -48,7 +51,7 @@ pub fn resize_edge_overlay() -> impl Bundle {
                 CompassOctant::North,
                 Node {
                     position_type: PositionType::Absolute,
-                    top: px(tokens::WINDOW_HEADER_HEIGHT),
+                    top: header_band,
                     left: px(0.0),
                     width: percent(100),
                     height: thickness,
@@ -133,23 +136,23 @@ pub fn resize_edge_overlay() -> impl Bundle {
                 },
             ),
         ],
-    )
+    );
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
 fn resize_edge(direction: CompassOctant, node: Node) -> impl Bundle {
-    (
+    return (
         WindowResizeEdge(direction),
-        EditorEntity,
+        WindowChromeEntity,
         node,
         Hovered::default(),
         EntityCursor::System(resize_cursor_icon(direction)),
-    )
+    );
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
 fn resize_cursor_icon(direction: CompassOctant) -> SystemCursorIcon {
-    match direction {
+    return match direction {
         CompassOctant::North => SystemCursorIcon::NResize,
         CompassOctant::South => SystemCursorIcon::SResize,
         CompassOctant::East => SystemCursorIcon::EResize,
@@ -158,7 +161,7 @@ fn resize_cursor_icon(direction: CompassOctant) -> SystemCursorIcon {
         CompassOctant::NorthWest => SystemCursorIcon::NwResize,
         CompassOctant::SouthEast => SystemCursorIcon::SeResize,
         CompassOctant::SouthWest => SystemCursorIcon::SwResize,
-    }
+    };
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]

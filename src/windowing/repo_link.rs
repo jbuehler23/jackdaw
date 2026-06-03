@@ -6,21 +6,25 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::window::SystemCursorIcon;
 use jackdaw_feathers::button::{ButtonClickEvent, ButtonSize, ButtonVariant, EditorButton};
+use jackdaw_feathers::tokens;
 use jackdaw_feathers::tokens::{BORDER_RADIUS_MD, ICON_MD};
+
+use bevy_window_chrome::{MacosHeaderLeadingInset, NativeHitTestClient, WindowChromeStyle};
 
 use crate::EditorEntity;
 
-use super::chrome::WindowChromeStyle;
-use super::native_hit_test::NativeHitTestClient;
-
 const JACKDAW_REPO_URL: &str = "https://github.com/jbuehler23/jackdaw";
-
-/// Leading repo link slot; `Node::margin.left` updated when the window fills the work area (macOS).
-#[derive(Component)]
-pub struct MacosHeaderLeadingInset;
 
 #[derive(Resource, Clone)]
 pub struct JackdawIcon(pub Handle<Image>);
+
+fn macos_traffic_light_inset(chrome: WindowChromeStyle) -> f32 {
+    return if chrome == WindowChromeStyle::MacNativeTitlebar {
+        tokens::MACOS_TRAFFIC_LIGHT_INSET
+    } else {
+        0.0
+    };
+}
 
 #[derive(Component)]
 struct JackdawRepoLinkButton;
@@ -48,7 +52,7 @@ pub fn header_repo_link(image: Handle<Image>, chrome: WindowChromeStyle) -> impl
             height: percent(100),
             align_items: AlignItems::Center,
             margin: UiRect {
-                left: px(chrome.macos_traffic_light_inset()),
+                left: px(macos_traffic_light_inset(chrome)),
                 ..default()
             },
             ..default()

@@ -1,16 +1,20 @@
-//! Bevy-driven caption buttons (Linux client chrome, macOS optional layout).
+//! Bevy-driven caption buttons for jackdaw's client-side chrome (Linux).
+//!
+//! The minimize/maximize/close visuals use jackdaw's feathers buttons; window actions are wired
+//! through the markers re-exported by [`bevy_window_chrome`].
 
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window, WindowCloseRequested};
+use bevy_window_chrome::{
+    WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize,
+    primary_window_is_maximized,
+};
 use jackdaw_feathers::{
     button::{ButtonClickEvent, ButtonSize, ButtonVariant, IconButtonProps, icon_button},
     icons::Icon,
 };
 
 use crate::EditorEntity;
-
-use super::super::primary_window_is_maximized;
-use super::{WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize};
 
 pub fn register(app: &mut App) {
     app.add_observer(on_minimize_click)
@@ -24,7 +28,7 @@ fn caption_button(
     icon_font: Handle<Font>,
     variant: ButtonVariant,
 ) -> impl Bundle {
-    (
+    return (
         marker,
         EditorEntity,
         icon_button(
@@ -33,12 +37,12 @@ fn caption_button(
                 .with_size(ButtonSize::Icon),
             &icon_font,
         ),
-    )
+    );
 }
 
 /// Minimize / maximize / close cluster for the top chrome row.
 pub fn window_controls_interactive(icon_font: Handle<Font>) -> impl Bundle {
-    (
+    return (
         EditorEntity,
         Node {
             flex_direction: FlexDirection::Row,
@@ -68,7 +72,7 @@ pub fn window_controls_interactive(icon_font: Handle<Font>) -> impl Bundle {
                 ButtonVariant::Close
             ),
         ],
-    )
+    );
 }
 
 fn on_minimize_click(
@@ -96,10 +100,7 @@ fn on_maximize_click(
     let Ok((window_entity, mut window)) = windows.single_mut() else {
         return;
     };
-    #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
     let next_maximized = !primary_window_is_maximized(window_entity);
-    #[cfg(any(target_arch = "wasm32", target_os = "ios", target_os = "android"))]
-    let next_maximized = true;
     window.set_maximized(next_maximized);
 }
 
