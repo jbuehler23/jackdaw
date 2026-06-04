@@ -47,11 +47,15 @@ impl KeybindFocus<'_, '_> {
 
 pub(crate) fn disable_keyboard_input_when_typing(
     focus: KeybindFocus,
+    numeric: Res<crate::numeric_transform::NumericTransformState>,
     mut sources: ResMut<ActionSources>,
 ) {
-    if !focus.is_changed() {
+    if !focus.is_changed() && !numeric.is_changed() {
         return;
     }
 
-    sources.keyboard = !focus.is_typing();
+    // Suppress action keybinds while a text field is focused or a numeric
+    // transform entry is capturing the keyboard, so typed digits go to the
+    // entry instead of firing edit-mode and tool keybinds.
+    sources.keyboard = !focus.is_typing() && numeric.axis.is_none();
 }
