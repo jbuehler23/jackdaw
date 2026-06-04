@@ -36,7 +36,7 @@ include = [
 default-run = "jackdaw"
 
 [features]
-default = ["multiplayer"]
+default = ["multiplayer", "camera_rig"]
 # Bundles the editor-only networking authoring extension into the
 # editor: registers the proxy reflection types (`Replication`,
 # `NetworkRoom`) plus the user-toggleable networking extension. The
@@ -44,6 +44,7 @@ default = ["multiplayer"]
 # into the editor; the lightyear backend lives game-side. On by
 # default; opt out with `--no-default-features` for a slimmer build.
 multiplayer = ["dep:jackdaw_multiplayer", "dep:jackdaw_multiplayer_editor"]
+camera_rig = ["dep:jackdaw_camera_rig"]
 hot-reload = ["dep:bevy_simple_subsecond_system"]
 # Experimental dylib-based extension flow. Enables Bevy's
 # `dynamic_linking` plus jackdaw's `bevy_dylib`-style facade so
@@ -96,6 +97,7 @@ jackdaw_avian_integration.workspace = true
 # `--no-default-features` produces a slimmer build.
 jackdaw_multiplayer = { workspace = true, optional = true }
 jackdaw_multiplayer_editor = { workspace = true, optional = true }
+jackdaw_camera_rig = { workspace = true, optional = true }
 jackdaw_panels.workspace = true
 jackdaw_api.workspace = true
 # The editor crate uses `jackdaw_api` the same way third-party
@@ -164,6 +166,7 @@ jackdaw_csg = { version = "0.4.1", path = "crates/jackdaw_csg" }
 bevy_monitors = "0.2"
 bevy_infinite_grid = "0.18"
 jackdaw_camera = { version = "0.4.1", path = "crates/jackdaw_camera" }
+jackdaw_camera_rig = { version = "0.4.1", path = "crates/jackdaw_camera_rig" }
 jackdaw_feathers = { version = "0.4.1", path = "crates/jackdaw_feathers" }
 jackdaw_widgets = { version = "0.4.1", path = "crates/jackdaw_widgets" }
 jackdaw_commands = { version = "0.4.1", path = "crates/jackdaw_commands" }

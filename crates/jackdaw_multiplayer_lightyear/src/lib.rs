@@ -29,5 +29,10 @@ pub use server::{HostedZones, JackdawMultiplayerServer};
 // marks the local player's input entity (queried client-side to write input).
 pub use lightyear::prelude::input::native::{ActionState, InputMarker};
 
+// Re-export the local-player marker so a game can find the entity it controls (e.g. to
+// attach a camera) without importing `lightyear` directly. Lightyear inserts `Controlled`
+// on the client's own replicated player entity.
+pub use lightyear::prelude::Controlled;
+
 /// Netcode protocol id — client + server must agree or the handshake is rejected.
 pub const PROTOCOL_ID: u64 = 0x_4A41_434B_4D50_5631; // "JACKMPV1"

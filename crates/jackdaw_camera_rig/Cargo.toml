@@ -1,0 +1,13 @@
+[package]
+name = "jackdaw_camera_rig"
+version = "0.4.1"
+edition = "2024"
+description = "Authorable third/first-person camera-rig components + runtime driver for Jackdaw scenes."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+bevy = { workspace = true }
+jackdaw_jsn = { workspace = true }
+
+[lints]
+workspace = true

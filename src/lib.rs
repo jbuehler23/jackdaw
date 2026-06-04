@@ -488,6 +488,15 @@ impl Plugin for ExtensionPlugin {
                 .register_extension::<jackdaw_multiplayer_editor::MultiplayerExtension>();
         }
 
+        // Bundled behind the default-on `camera_rig` feature: registers the
+        // authorable camera-rig component types (ThirdPersonCamera / FirstPersonCamera /
+        // CameraTarget) so they appear in the inspector's component picker under "Camera".
+        // No runtime camera systems run in the editor (only the types plugin is added).
+        #[cfg(feature = "camera_rig")]
+        if self.enable_builtin_extensiosn {
+            app.add_plugins(jackdaw_camera_rig::JackdawCameraRigTypesPlugin);
+        }
+
         for ctor in &self.user_extensions {
             let ctor = std::sync::Arc::clone(ctor);
             app.register_extension_with(move || (*ctor)());

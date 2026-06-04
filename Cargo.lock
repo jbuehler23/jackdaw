@@ -5226,6 +5226,7 @@ dependencies = [
  "jackdaw_api_internal",
  "jackdaw_avian_integration",
  "jackdaw_camera",
+ "jackdaw_camera_rig",
  "jackdaw_commands",
  "jackdaw_csg",
  "jackdaw_feathers",
@@ -5322,6 +5323,14 @@ version = "0.4.1"
 dependencies = [
  "bevy",
  "jackdaw_commands",
+]
+
+[[package]]
+name = "jackdaw_camera_rig"
+version = "0.4.1"
+dependencies = [
+ "bevy",
+ "jackdaw_jsn",
 ]
 
 [[package]]
