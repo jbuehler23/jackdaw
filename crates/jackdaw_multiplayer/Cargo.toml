@@ -1,0 +1,17 @@
+[package]
+name = "jackdaw_multiplayer"
+version = "0.4.1"
+edition = "2024"
+description = "Backend-agnostic networking proxy components for Jackdaw scenes. Authored in the editor; translated to a concrete backend (e.g. lightyear) at runtime."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+bevy = { workspace = true }
+jackdaw_jsn = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

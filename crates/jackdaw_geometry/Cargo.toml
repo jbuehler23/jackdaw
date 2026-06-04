@@ -7,7 +7,12 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-bevy.workspace = true
+bevy = { version = "0.18", default-features = false, features = [
+    "reflect_auto_register",
+    "std",
+    "serialize",
+    "bevy_asset",
+] }
 slotmap = "1.0"
 earcutr = "0.5"
 cdt = "0.1"
@@ -15,7 +20,11 @@ bitflags = "2"
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
-jackdaw_jsn = { path = "../jackdaw_jsn" }
+jackdaw_jsn = { path = "../jackdaw_jsn", default-features = false }
+
+[features]
+default = ["render"]
+render = ["bevy/bevy_pbr", "bevy/bevy_render"]
 
 [lints]
 workspace = true

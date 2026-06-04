@@ -1,0 +1,28 @@
+[package]
+name = "jackdaw_multiplayer_lightyear"
+version = "0.4.1"
+edition = "2024"
+description = "Default lightyear backend for Jackdaw networking: translates proxy components into real lightyear replication at runtime."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+bevy = { workspace = true }
+jackdaw_multiplayer = { workspace = true }
+# Needed to express the `Serialize + DeserializeOwned` registration bounds in
+# `MultiplayerAppExt` (mirrors lightyear's own `register_component` bounds).
+serde = { workspace = true }
+lightyear = { version = "0.26", default-features = false, features = [
+    "client",
+    "server",
+    "replication",
+    "interpolation",
+    "input_native",
+    "netcode",
+    "udp",
+] }
+
+[dev-dependencies]
+serde = { workspace = true }
+
+[lints]
+workspace = true

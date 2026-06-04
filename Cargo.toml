@@ -36,7 +36,14 @@ include = [
 default-run = "jackdaw"
 
 [features]
-default = []
+default = ["multiplayer"]
+# Bundles the editor-only networking authoring extension into the
+# editor: registers the proxy reflection types (`Replication`,
+# `NetworkRoom`) plus the user-toggleable networking extension. The
+# editor authors networking metadata only - no lightyear is compiled
+# into the editor; the lightyear backend lives game-side. On by
+# default; opt out with `--no-default-features` for a slimmer build.
+multiplayer = ["dep:jackdaw_multiplayer", "dep:jackdaw_multiplayer_editor"]
 hot-reload = ["dep:bevy_simple_subsecond_system"]
 # Experimental dylib-based extension flow. Enables Bevy's
 # `dynamic_linking` plus jackdaw's `bevy_dylib`-style facade so
@@ -82,6 +89,13 @@ jackdaw_remote.workspace = true
 jackdaw_node_graph.workspace = true
 jackdaw_animation.workspace = true
 jackdaw_avian_integration.workspace = true
+# Optional, activated by the default-on `multiplayer` feature. Together
+# these bundle the editor-only networking authoring extension (proxy
+# reflection types + the toggleable networking extension) into the
+# editor; no lightyear is compiled into the editor. Gated so
+# `--no-default-features` produces a slimmer build.
+jackdaw_multiplayer = { workspace = true, optional = true }
+jackdaw_multiplayer_editor = { workspace = true, optional = true }
 jackdaw_panels.workspace = true
 jackdaw_api.workspace = true
 # The editor crate uses `jackdaw_api` the same way third-party
@@ -172,6 +186,9 @@ avian3d = { version = "0.6", default-features = false, features = [
     "collider-from-mesh",
 ] }
 jackdaw_avian_integration = { version = "0.4.1", path = "crates/jackdaw_avian_integration" }
+jackdaw_multiplayer = { version = "0.4.1", path = "crates/jackdaw_multiplayer" }
+jackdaw_multiplayer_editor = { version = "0.4.1", path = "crates/jackdaw_multiplayer_editor" }
+jackdaw_multiplayer_lightyear = { version = "0.4.1", path = "crates/jackdaw_multiplayer_lightyear" }
 jackdaw_runtime = { version = "0.4.1", path = "crates/jackdaw_runtime" }
 jackdaw_panels = { version = "0.4.1", path = "crates/jackdaw_panels" }
 jackdaw_api = { version = "0.4.1", path = "crates/jackdaw_api" }

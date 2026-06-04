@@ -7,11 +7,28 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-bevy.workspace = true
-jackdaw_geometry.workspace = true
+bevy = { version = "0.18", default-features = false, features = [
+    "reflect_auto_register",
+    "std",
+    "serialize",
+    "bevy_asset",
+    "bevy_camera",
+    "bevy_scene",
+    "bevy_log",
+] }
+jackdaw_geometry = { version = "0.4.1", path = "../jackdaw_geometry", default-features = false }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror = "2"
+
+[features]
+default = ["render"]
+render = [
+    "bevy/bevy_pbr",
+    "bevy/bevy_render",
+    "bevy/bevy_image",
+    "jackdaw_geometry/render",
+]
 
 [lints]
 workspace = true

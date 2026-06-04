@@ -2,6 +2,7 @@ pub mod ast;
 pub mod editor_meta;
 pub mod format;
 mod loader;
+#[cfg(feature = "render")]
 pub mod mesh_rebuild;
 pub mod types;
 
@@ -59,6 +60,7 @@ impl Plugin for JsnPlugin {
             .register_type::<NavmeshRegion>()
             .register_type::<Terrain>()
             .init_asset_loader::<JsnAssetLoader>();
+        #[cfg(feature = "render")]
         if self.runtime_mesh_rebuild {
             app.add_plugins(mesh_rebuild::MeshRebuildPlugin);
         }

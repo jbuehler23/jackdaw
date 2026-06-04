@@ -1,0 +1,14 @@
+[package]
+name = "jackdaw_multiplayer_editor"
+version = "0.4.1"
+edition = "2024"
+description = "Editor extension that surfaces Jackdaw's networking proxy components in the inspector. No networking runtime."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+bevy = { workspace = true }
+jackdaw_api = { workspace = true }
+jackdaw_multiplayer = { workspace = true }
+
+[lints]
+workspace = true

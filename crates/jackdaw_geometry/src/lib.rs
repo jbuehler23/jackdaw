@@ -32,7 +32,10 @@ pub struct BrushPlane {
 pub struct BrushFaceData {
     pub plane: BrushPlane,
     /// Material handle for this face. Serialized as an asset path or inline `#Name` reference.
+    #[cfg(feature = "render")]
     pub material: Handle<StandardMaterial>,
+    #[cfg(not(feature = "render"))]
+    pub material: String,
     pub uv_offset: Vec2,
     pub uv_scale: Vec2,
     pub uv_rotation: f32,

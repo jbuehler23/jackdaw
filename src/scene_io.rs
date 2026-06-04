@@ -403,6 +403,10 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         })
         .detach();
 
+    // Also persist the in-memory baked navmesh (if any) to a sibling
+    // `<scene>.nav` file so it survives reload. No-op when nothing is baked.
+    export_navmesh_sibling(world, &path);
+
     // The live `SceneJsnAst` is the source of truth and stays untouched
     // across save. Do not rebuild it from `jsn` here:
     // `collect_scene_entities_from_set` iterates a `HashSet`, so a
@@ -417,6 +421,53 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     save_layout_to_project(world);
 
     Ok(())
+}
+
+/// Export the in-memory baked navmesh to a sibling `<scene>.nav` file,
+/// reusing the same bincode serialization as the manual `navmesh.save`
+/// operator (and the same contract `navmesh.load` / a headless server
+/// reads back). This is a clean no-op when no navmesh is baked (the common
+/// case): it never errors the scene save and never writes an empty file.
+///
+/// Known limitation: a previously-exported `.nav` is never deleted here. If
+/// a scene once had a navmesh (so `.nav` exists) and the navmesh is later
+/// removed, the stale `.nav` remains on disk. This is intentional for now —
+/// deletion risks clobbering a file another tool or the user owns, and a
+/// stale `.nav` is better caught by a freshness check on the load side.
+fn export_navmesh_sibling(world: &World, scene_path: &str) {
+    use bevy_rerecast::Navmesh;
+
+    use crate::navmesh::NavmeshHandleRes;
+
+    let Some(handle) = world.get_resource::<NavmeshHandleRes>() else {
+        return;
+    };
+    let Some(assets) = world.get_resource::<Assets<Navmesh>>() else {
+        return;
+    };
+    let Some(navmesh) = assets.get(&handle.0) else {
+        return;
+    };
+
+    let nav_path = PathBuf::from(scene_path).with_extension("nav");
+    let navmesh = navmesh.clone();
+    IoTaskPool::get()
+        .spawn(async move {
+            let result = (|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+                if let Some(parent) = nav_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let mut file = std::fs::File::create(&nav_path)?;
+                let config = bincode::config::standard();
+                bincode::serde::encode_into_std_write(&navmesh, &mut file, config)?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => info!("Navmesh exported to {}", nav_path.display()),
+                Err(err) => warn!("Failed to export navmesh: {err}"),
+            }
+        })
+        .detach();
 }
 
 pub fn save_layout_to_project(world: &mut World) {
@@ -2474,5 +2525,149 @@ mod tests {
             !scene_entities.contains(&helper_root),
             "root entities tagged SkipSerialization must NOT appear in saved scene",
         );
+    }
+}
+
+/// Tests for the navmesh auto-export-on-save sibling writer.
+///
+/// `export_navmesh_sibling` dispatches the actual file write onto
+/// `IoTaskPool` and `.detach()`es it, so "assert the file exists right
+/// after calling" is inherently racy. This build enables the
+/// `multi_threaded` task-pool feature, so detached IO-pool tasks run on
+/// dedicated OS threads and make progress without any main-thread tick.
+/// We therefore exercise the *real* production code path (Option 1 from
+/// the plan) and poll the filesystem with a bounded timeout for the
+/// sibling `.nav` to appear. The no-navmesh case early-returns before
+/// any task is spawned, so it is deterministic without polling.
+#[cfg(test)]
+mod navmesh_export_tests {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use bevy::prelude::*;
+    use bevy::tasks::{IoTaskPool, TaskPoolBuilder};
+    use bevy_rerecast::Navmesh;
+    use bevy_rerecast::rerecast::{DetailNavmesh, PolygonNavmesh};
+
+    use super::export_navmesh_sibling;
+    use crate::navmesh::NavmeshHandleRes;
+
+    /// Build a minimal, valid `Navmesh`. `Navmesh` itself does not derive
+    /// `Default`, but each of its three fields does (`PolygonNavmesh` and
+    /// `DetailNavmesh` derive it; `NavmeshSettings` has a hand-written
+    /// `impl Default`), so we assemble it field-by-field.
+    fn empty_navmesh() -> Navmesh {
+        Navmesh {
+            polygon: PolygonNavmesh::default(),
+            detail: DetailNavmesh::default(),
+            settings: bevy_rerecast::NavmeshSettings::default(),
+        }
+    }
+
+    /// A unique temp directory for one test, namespaced by PID + a label
+    /// so concurrent test runs (and the two tests here) never collide.
+    fn unique_tmp_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("jd_nav_{}_{label}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    /// A minimal App with just enough to host `Assets<Navmesh>`:
+    /// `MinimalPlugins` provides the task pools that `AssetPlugin`
+    /// requires, `AssetPlugin` provides the asset infrastructure, and
+    /// `init_asset::<Navmesh>` registers the store.
+    fn minimal_asset_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default())
+            .init_asset::<Navmesh>();
+        app
+    }
+
+    #[test]
+    fn exports_decodable_nav_when_baked() {
+        // The production write runs on IoTaskPool; make sure it exists.
+        // `get_or_init` is idempotent, so this is safe even if another
+        // test/plugin already initialized it.
+        IoTaskPool::get_or_init(|| TaskPoolBuilder::new().build());
+
+        let tmp = unique_tmp_dir("baked");
+        let scene_path = tmp.join("zone.jsn");
+        let nav_path = tmp.join("zone.nav");
+
+        let mut app = minimal_asset_app();
+
+        // Insert a baked navmesh and point NavmeshHandleRes at it.
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<Navmesh>>()
+            .add(empty_navmesh());
+        app.world_mut().insert_resource(NavmeshHandleRes(handle));
+
+        // Call the real production helper: it spawns a detached IoTaskPool
+        // write of the sibling `.nav`.
+        export_navmesh_sibling(app.world(), &scene_path.to_string_lossy());
+
+        // Poll for the file to appear (bounded ~3s). The IO pool runs on
+        // its own threads, so no app tick is needed; we still tick the
+        // global pools each iteration as a belt-and-suspenders nudge in
+        // case the runner constrained the pool to the calling thread.
+        let mut appeared = false;
+        for _ in 0..300 {
+            if nav_path.exists() {
+                appeared = true;
+                break;
+            }
+            bevy::tasks::tick_global_task_pools_on_main_thread();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            appeared,
+            "sibling .nav was not written within the timeout: {}",
+            nav_path.display()
+        );
+
+        // The bytes must decode back into a Navmesh via the same bincode
+        // contract the loader uses (`navmesh.load`).
+        let mut file = std::fs::File::open(&nav_path).expect("open written .nav");
+        let config = bincode::config::standard();
+        let decoded: Navmesh = bincode::serde::decode_from_std_read(&mut file, config)
+            .expect("written .nav decodes back into a Navmesh");
+        assert_eq!(
+            decoded,
+            empty_navmesh(),
+            "round-tripped navmesh must equal the baked input"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn no_nav_when_not_baked() {
+        let tmp = unique_tmp_dir("empty");
+        let scene_path = tmp.join("empty.jsn");
+        let nav_path = tmp.join("empty.nav");
+
+        // Asset store exists, but NO NavmeshHandleRes resource is inserted,
+        // so the helper early-returns before spawning any task. This path
+        // is deterministic and needs no polling.
+        let app = minimal_asset_app();
+
+        export_navmesh_sibling(app.world(), &scene_path.to_string_lossy());
+
+        // Give any (erroneously) spawned async write a chance to land, so
+        // a regression that drops the guard would actually be caught.
+        for _ in 0..20 {
+            bevy::tasks::tick_global_task_pools_on_main_thread();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        assert!(
+            !nav_path.exists(),
+            "no .nav must be written when nothing is baked: {}",
+            nav_path.display()
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

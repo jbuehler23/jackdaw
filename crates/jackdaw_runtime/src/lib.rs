@@ -1,5 +1,7 @@
 use std::any::TypeId;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(feature = "render")]
+use std::collections::HashSet;
 use std::fmt::{self, Formatter};
 use std::path::{Path, PathBuf};
 
@@ -7,6 +9,7 @@ use bevy::asset::{
     AssetLoader, LoadContext, ReflectAsset, ReflectHandle, UntypedHandle, io::Reader,
 };
 use bevy::ecs::reflect::AppTypeRegistry;
+#[cfg(feature = "render")]
 use bevy::image::ImageLoaderSettings;
 use bevy::prelude::*;
 use bevy::reflect::serde::{ReflectDeserializerProcessor, TypedReflectDeserializer};
@@ -366,24 +369,27 @@ fn spawn_scene_entities(
     }
     drop(registry_guard);
 
-    let gltf_entities: Vec<(Entity, String, usize)> = spawned
-        .iter()
-        .filter_map(|&e| {
-            world
-                .get::<jackdaw_jsn::GltfSource>(e)
-                .map(|gs| (e, gs.path.clone(), gs.scene_index))
-        })
-        .collect();
-    for (entity, gltf_path, scene_index) in gltf_entities {
-        let resolved = if Path::new(&gltf_path).is_relative() {
-            parent_path.join(&gltf_path).to_string_lossy().into_owned()
-        } else {
-            gltf_path
-        };
-        let label = format!("Scene{scene_index}");
-        let full_path = format!("{resolved}#{label}");
-        let scene_handle: Handle<Scene> = asset_server.load(full_path);
-        world.entity_mut(entity).insert(SceneRoot(scene_handle));
+    #[cfg(feature = "render")]
+    {
+        let gltf_entities: Vec<(Entity, String, usize)> = spawned
+            .iter()
+            .filter_map(|&e| {
+                world
+                    .get::<jackdaw_jsn::GltfSource>(e)
+                    .map(|gs| (e, gs.path.clone(), gs.scene_index))
+            })
+            .collect();
+        for (entity, gltf_path, scene_index) in gltf_entities {
+            let resolved = if Path::new(&gltf_path).is_relative() {
+                parent_path.join(&gltf_path).to_string_lossy().into_owned()
+            } else {
+                gltf_path
+            };
+            let label = format!("Scene{scene_index}");
+            let full_path = format!("{resolved}#{label}");
+            let scene_handle: Handle<Scene> = asset_server.load(full_path);
+            world.entity_mut(entity).insert(SceneRoot(scene_handle));
+        }
     }
 }
 
@@ -438,6 +444,7 @@ fn load_inline_assets(
     catalog_assets: &HashMap<String, UntypedHandle>,
 ) -> HashMap<String, UntypedHandle> {
     let mut local_assets: HashMap<String, UntypedHandle> = HashMap::new();
+    #[cfg(feature = "render")]
     let linear_image_names = collect_linear_image_names(assets);
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry_guard = registry.read();
@@ -465,21 +472,36 @@ fn load_inline_assets(
                 rel_path.clone()
             };
 
-            let handle = if type_path == "bevy_image::image::Image" {
-                if linear_image_names.contains(name) {
-                    asset_server
-                        .load_with_settings::<Image, ImageLoaderSettings>(
-                            &resolved,
-                            |s: &mut ImageLoaderSettings| s.is_srgb = false,
-                        )
-                        .untyped()
-                } else {
-                    asset_server.load::<Image>(&resolved).untyped()
+            let handle = {
+                #[cfg(feature = "render")]
+                {
+                    if type_path == "bevy_image::image::Image" {
+                        if linear_image_names.contains(name) {
+                            asset_server
+                                .load_with_settings::<Image, ImageLoaderSettings>(
+                                    &resolved,
+                                    |s: &mut ImageLoaderSettings| s.is_srgb = false,
+                                )
+                                .untyped()
+                        } else {
+                            asset_server.load::<Image>(&resolved).untyped()
+                        }
+                    } else {
+                        asset_server
+                            .load::<bevy::asset::LoadedUntypedAsset>(&resolved)
+                            .untyped()
+                    }
                 }
-            } else {
-                asset_server
-                    .load::<bevy::asset::LoadedUntypedAsset>(&resolved)
-                    .untyped()
+                #[cfg(not(feature = "render"))]
+                {
+                    // The `Image`/`StandardMaterial` type-path special-casing is
+                    // render-only; headless loads everything untyped. `type_path`
+                    // is otherwise unused on this branch.
+                    let _ = type_path;
+                    asset_server
+                        .load::<bevy::asset::LoadedUntypedAsset>(&resolved)
+                        .untyped()
+                }
             };
             local_assets.insert(name.clone(), handle);
         }
@@ -603,6 +625,7 @@ fn discover_catalog_path() -> Option<PathBuf> {
     Some(base.join(".jsn").join("catalog.jsn"))
 }
 
+#[cfg(feature = "render")]
 fn collect_linear_image_names(assets: &JsnAssets) -> HashSet<String> {
     const LINEAR_SLOTS: &[&str] = &[
         "normal_map_texture",

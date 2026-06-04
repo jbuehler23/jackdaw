@@ -286,6 +286,7 @@ pub(crate) fn build_inspector_displays(
                     && !full_path.starts_with("jackdaw_jsn")
                     && !full_path.starts_with("jackdaw_avian_integration")
                     && !full_path.starts_with("jackdaw_animation")
+                    && !full_path.starts_with("jackdaw_multiplayer")
                 {
                     return None;
                 }
@@ -305,7 +306,8 @@ pub(crate) fn build_inspector_displays(
                     && !full_path.starts_with("core")
                     && !full_path.starts_with("std")
                     && (!full_path.starts_with("jackdaw")
-                        || full_path.starts_with("jackdaw_avian_integration"));
+                        || full_path.starts_with("jackdaw_avian_integration")
+                        || full_path.starts_with("jackdaw_multiplayer"));
                 if !is_user_type
                     && !jsn_type_paths.is_empty()
                     && !jsn_type_paths.contains(full_path)
