@@ -1,31 +1,21 @@
-//! Numeric transform entry: type an axis + a number to apply a delta
-//! transform along a world axis.
+//! Numeric transform entry: type an axis and a number to apply a delta
+//! transform along a world axis, to an object selection or to edit-mode
+//! sub-elements (vertices / edges / faces) across every edit brush.
 //!
-//! With a transform tool active (`ActiveTool::Translate` / `Rotate` /
-//! `Scale`) and something selected, pressing X / Y / Z starts a numeric
-//! entry constrained to that world axis. Digits, a decimal point, and a
-//! leading minus accumulate into the entry; Enter applies a delta and
-//! Escape cancels. The delta is:
+//! With something selected, X / Y / Z arm an axis; digits, a decimal point,
+//! and a leading minus accumulate; Enter applies and Escape cancels. The
+//! delta by tool:
 //!
-//! - Translate: move the selection by `value` world units along the axis.
-//! - Rotate: rotate the selection by `value` degrees about the axis,
-//!   around the selection pivot.
-//! - Scale: scale the selection by `value` along the axis, about the pivot.
+//! - Translate: move by `value` world units along the axis.
+//! - Rotate: rotate by `value` degrees about the axis, around the pivot.
+//! - Scale: scale by `value` along the axis, about the pivot.
 //!
-//! Arming an axis also constrains a direct viewport drag of an object
-//! selection to that axis, using the same screen projection as the gizmo
-//! handle drag; the armed axis clears when the drag ends.
+//! Select applies a translate. An armed axis also constrains a direct
+//! viewport drag of an object selection, with the same projection as the
+//! gizmo handle drag, and clears when the drag ends.
 //!
-//! Works for object selection and for edit-mode sub-elements (vertices /
-//! edges / faces) across every edit brush. The input system only gates and
-//! accumulates; the apply runs as the `transform.numeric_apply` operator so
-//! the change lands as a single undo entry.
-//!
-//! Axis-key note: the bare X key otherwise toggles gizmo space
-//! (`gizmo.space.toggle`). That toggle yields to numeric entry while a
-//! transform tool has a valid selection (see `can_toggle_space` in
-//! `gizmo_ops`), so X / Y / Z start an entry in that context and X still
-//! toggles space when the Select tool is active or nothing is selected.
+//! The input system only gates and accumulates; `transform.numeric_apply`
+//! applies the delta as a single undo entry.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -46,7 +36,7 @@ use crate::selection::{Selected, Selection};
 const MIN_SCALE: f32 = 0.01;
 
 /// Half-length of the numeric-entry axis guide line, matching the brush drag
-/// constraint line so the two read identically.
+/// constraint line.
 const AXIS_GUIDE_HALF_LENGTH: f32 = 50.0;
 
 /// Active numeric transform entry. `axis` is `Some` while an entry is in
@@ -262,12 +252,10 @@ fn numeric_transform_input(
     }
 }
 
-/// Draw a colored guide line through the selection pivot along the locked
-/// axis while a numeric entry is in progress. Mirrors the brush drag
-/// constraint line in `gizmo_overlay`, extended to object mode: the line is
-/// red / green / blue for X / Y / Z and passes through the selection's world
-/// centroid (object mode) or the selected sub-elements' world centroid (brush
-/// edit mode), the same pivot the apply operator transforms about.
+/// Draw a guide line through the selection pivot along the armed axis while a
+/// numeric entry is active: red / green / blue for X / Y / Z, through the
+/// object selection's world centroid or the selected sub-elements' centroid
+/// (the pivot the apply transforms about).
 fn draw_numeric_axis_guide(
     state: Res<NumericTransformState>,
     edit_mode: Res<EditMode>,
@@ -340,9 +328,8 @@ fn draw_numeric_axis_guide(
 }
 
 /// Topology vertex indices a sub-selection touches: the union of its
-/// vertices, both ends of every edge, and every vertex of each selected
-/// face polygon. Mirrors `gizmos::selected_sub_vertices`, replicated here so
-/// the closure stays local to this module.
+/// vertices, both ends of every edge, and every vertex of each selected face
+/// polygon. Mirrors `gizmos::selected_sub_vertices`, kept local here.
 fn sub_selection_vertices(sub: &BrushSubSelection, face_polygons: &[Vec<usize>]) -> Vec<usize> {
     let mut out: Vec<usize> = Vec::new();
     let push = |v: usize, out: &mut Vec<usize>| {
@@ -409,12 +396,9 @@ struct NumericBrushParams<'w, 's> {
 #[operator(
     id = "transform.numeric_apply",
     label = "Apply Numeric Transform",
-    description = "Apply the in-progress numeric transform entry: a delta \
-                   translate / rotate / scale along the chosen world axis, by \
-                   the typed amount, to the object selection or the edit-mode \
-                   sub-elements. Reads the axis and value from \
-                   `NumericTransformState`, the operation from the active tool, \
-                   and clears the entry when done.",
+    description = "Apply the in-progress numeric transform: a delta translate \
+                   / rotate / scale along the chosen axis by the typed amount, \
+                   to the object selection or edit-mode sub-elements.",
     allows_undo = true
 )]
 pub fn numeric_transform_apply(
@@ -424,7 +408,7 @@ pub fn numeric_transform_apply(
     edit_mode: Res<EditMode>,
     selection: Res<Selection>,
     parents: Query<&ChildOf>,
-    transforms: Query<(&GlobalTransform, &mut Transform), With<Selected>>,
+    transforms: Query<&mut Transform, With<Selected>>,
     brush_selection: Res<BrushSelection>,
     brush_params: NumericBrushParams,
 ) -> OperatorResult {
@@ -466,31 +450,23 @@ fn apply_object(
     value: f32,
     selection: &Selection,
     parents: &Query<&ChildOf>,
-    mut transforms: Query<(&GlobalTransform, &mut Transform), With<Selected>>,
+    mut transforms: Query<&mut Transform, With<Selected>>,
 ) {
     let targets = topmost_selected(selection, parents);
-    let world_positions: Vec<Vec3> = targets
-        .iter()
-        .filter_map(|&e| transforms.get(e).ok().map(|(gt, _)| gt.translation()))
-        .collect();
     let local_positions: Vec<Vec3> = targets
         .iter()
-        .filter_map(|&e| transforms.get(e).ok().map(|(_, t)| t.translation))
+        .filter_map(|&e| transforms.get(e).ok().map(|t| t.translation))
         .collect();
     if local_positions.is_empty() {
         return;
     }
     let pivot_local = centroid(&local_positions);
-    // World pivot is computed for parity with the gizmo drag; the object
-    // arms operate in each target's local frame, so only `pivot_local` is
-    // read below.
-    let _pivot_world = centroid(&world_positions);
 
     match mode {
         ActiveTool::Translate => {
             let delta = axis_dir * value;
             for &e in &targets {
-                if let Ok((_, mut tf)) = transforms.get_mut(e) {
+                if let Ok(mut tf) = transforms.get_mut(e) {
                     tf.translation += delta;
                 }
             }
@@ -498,7 +474,7 @@ fn apply_object(
         ActiveTool::Rotate => {
             let r = Quat::from_axis_angle(axis_dir, value.to_radians());
             for &e in &targets {
-                if let Ok((_, mut tf)) = transforms.get_mut(e) {
+                if let Ok(mut tf) = transforms.get_mut(e) {
                     tf.translation = pivot_local + r * (tf.translation - pivot_local);
                     tf.rotation = r * tf.rotation;
                 }
@@ -513,7 +489,7 @@ fn apply_object(
                 _ => {}
             }
             for &e in &targets {
-                if let Ok((_, mut tf)) = transforms.get_mut(e) {
+                if let Ok(mut tf) = transforms.get_mut(e) {
                     tf.translation = pivot_local + factor * (tf.translation - pivot_local);
                     tf.scale = (tf.scale * factor).max(Vec3::splat(MIN_SCALE));
                 }
