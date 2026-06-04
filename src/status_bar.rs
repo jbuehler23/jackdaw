@@ -7,8 +7,9 @@ use crate::{
     brush::{BrushEditMode, EditMode},
     build_status::{BuildState, BuildStatus},
     draw_brush::DrawBrushState,
-    gizmos::GizmoSpace,
+    gizmos::{GizmoAxis, GizmoSpace},
     modal_transform::{ModalOp, ModalTransformState},
+    numeric_transform::NumericTransformState,
     scene_io::{SceneDirtyState, SceneFilePath},
 };
 
@@ -126,6 +127,7 @@ fn update_status_right(
     edit_mode: Res<EditMode>,
     draw_state: Res<DrawBrushState>,
     build_status: Res<BuildStatus>,
+    numeric: Res<NumericTransformState>,
     mut text_query: Query<(&mut Text, &mut TextColor), With<StatusBarRight>>,
 ) {
     // The build-progress states (`Building` / `Ready` / `Failed`)
@@ -145,6 +147,7 @@ fn update_status_right(
         && !modal.is_changed()
         && !edit_mode.is_changed()
         && !draw_state.is_changed()
+        && !numeric.is_changed()
     {
         return;
     }
@@ -189,6 +192,26 @@ fn update_status_right(
             // Fall through to the existing gizmo / edit-mode
             // rendering below.
         }
+    }
+
+    // Numeric transform entry takes priority while active: show the tool,
+    // the constrained axis, and the number typed so far.
+    if let Some(axis) = numeric.axis {
+        let tool_str = match *mode {
+            ActiveTool::Select => "Select",
+            ActiveTool::Translate => "Translate",
+            ActiveTool::Rotate => "Rotate",
+            ActiveTool::Scale => "Scale",
+        };
+        let axis_str = match axis {
+            GizmoAxis::X => "X",
+            GizmoAxis::Y => "Y",
+            GizmoAxis::Z => "Z",
+            GizmoAxis::Uniform => "",
+        };
+        text.0 = format!("{tool_str} {axis_str}: {}", numeric.input);
+        color.0 = jackdaw_feathers::tokens::TEXT_ACCENT;
+        return;
     }
 
     // Show draw brush mode status

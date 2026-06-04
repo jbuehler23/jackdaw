@@ -56,6 +56,7 @@ pub mod measure_tool;
 pub mod modal_transform;
 pub mod navmesh;
 pub mod new_project;
+pub mod numeric_transform;
 pub mod operator_tooltip;
 pub mod physics_brush_bridge;
 pub mod physics_tool;
@@ -302,6 +303,7 @@ impl Plugin for EditorCorePlugin {
             status_bar::StatusBarPlugin,
             project_files::ProjectFilesPlugin,
             modal_transform::ModalTransformPlugin,
+            numeric_transform::NumericTransformPlugin,
             custom_properties::CustomPropertiesPlugin,
             brush::BrushPlugin,
             material_preview::MaterialPreviewPlugin,

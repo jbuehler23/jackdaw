@@ -1490,7 +1490,7 @@ fn apply_shared_drag(
 /// displacement. Each capture offsets its start world positions, converts the
 /// result back to its own local space via the inverse affine taken at drag
 /// start, and rebuilds through [`apply_vertex_deltas`].
-fn broadcast_drag_to_captures(
+pub(crate) fn broadcast_drag_to_captures(
     captures: &[BrushDragCapture],
     world_offset: Vec3,
     brushes: &mut Query<&mut Brush>,
