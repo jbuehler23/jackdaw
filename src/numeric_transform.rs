@@ -131,18 +131,14 @@ fn toggle_sign(input: &mut String) {
     }
 }
 
-/// True when a transform tool is active with a target the numeric entry can
-/// act on: a primary object selection in object mode, or a non-empty
-/// sub-selection in brush-edit mode.
+/// True when there is a target the numeric entry can act on: a primary object
+/// selection in object mode, or a non-empty sub-selection in brush-edit mode.
+/// Works with any tool, including Select (which applies a translate).
 pub(crate) fn numeric_entry_eligible(
-    mode: &ActiveTool,
     edit_mode: &EditMode,
     selection: &Selection,
     brush_selection: &BrushSelection,
 ) -> bool {
-    if matches!(mode, ActiveTool::Select) {
-        return false;
-    }
     match edit_mode {
         EditMode::Object => selection.primary().is_some(),
         EditMode::BrushEdit(_) => brush_selection
@@ -158,7 +154,6 @@ pub(crate) fn numeric_entry_eligible(
 /// operator; the transform itself lives in `numeric_transform_apply`.
 fn numeric_transform_input(
     keyboard: Res<ButtonInput<KeyCode>>,
-    mode: Res<ActiveTool>,
     edit_mode: Res<EditMode>,
     selection: Res<Selection>,
     brush_selection: Res<BrushSelection>,
@@ -179,7 +174,7 @@ fn numeric_transform_input(
         || edit_gizmo_active.active
         || viewport_drag.active.is_some()
         || viewport_drag.pending.is_some()
-        || !numeric_entry_eligible(&mode, &edit_mode, &selection, &brush_selection);
+        || !numeric_entry_eligible(&edit_mode, &selection, &brush_selection);
     if blocked {
         if state.axis.is_some() {
             state.clear();
@@ -346,12 +341,20 @@ pub fn numeric_transform_apply(
     };
     let axis_dir = axis_direction(axis);
 
+    // Select has no transform of its own, so a numeric entry in Select mode
+    // applies a translate.
+    let op = if matches!(*mode, ActiveTool::Select) {
+        ActiveTool::Translate
+    } else {
+        *mode
+    };
+
     match *edit_mode {
         EditMode::Object => {
-            apply_object(&mode, axis_dir, value, &selection, &parents, transforms);
+            apply_object(&op, axis_dir, value, &selection, &parents, transforms);
         }
         EditMode::BrushEdit(_) => {
-            apply_sub_elements(&mode, axis_dir, value, &brush_selection, brush_params);
+            apply_sub_elements(&op, axis_dir, value, &brush_selection, brush_params);
         }
         EditMode::Physics => {}
     }
