@@ -32,6 +32,7 @@ use crate::brush::{BrushSelection, BrushSubSelection, EditMode};
 use crate::brush_drag_ops::{
     apply_vertex_deltas, broadcast_drag_to_captures, capture_edit_brushes,
 };
+use crate::default_style;
 use crate::gizmos::{GizmoAxis, GizmoDragState};
 use crate::keybind_focus::KeybindFocus;
 use crate::modal_transform::{ModalTransformState, ViewportDragState};
@@ -39,6 +40,10 @@ use crate::selection::{Selected, Selection};
 
 /// Floor for any single scale component, matching the gizmo drag.
 const MIN_SCALE: f32 = 0.01;
+
+/// Half-length of the numeric-entry axis guide line, matching the brush drag
+/// constraint line so the two read identically.
+const AXIS_GUIDE_HALF_LENGTH: f32 = 50.0;
 
 /// Active numeric transform entry. `axis` is `Some` while an entry is in
 /// progress (only X / Y / Z, never `Uniform`); `input` is the accumulated
@@ -69,7 +74,10 @@ impl Plugin for NumericTransformPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NumericTransformState>().add_systems(
             Update,
-            numeric_transform_input.in_set(crate::EditorInteractionSystems),
+            (
+                numeric_transform_input.in_set(crate::EditorInteractionSystems),
+                draw_numeric_axis_guide,
+            ),
         );
     }
 }
@@ -242,6 +250,83 @@ fn numeric_transform_input(
             break;
         }
     }
+}
+
+/// Draw a colored guide line through the selection pivot along the locked
+/// axis while a numeric entry is in progress. Mirrors the brush drag
+/// constraint line in `gizmo_overlay`, extended to object mode: the line is
+/// red / green / blue for X / Y / Z and passes through the selection's world
+/// centroid (object mode) or the selected sub-elements' world centroid (brush
+/// edit mode), the same pivot the apply operator transforms about.
+fn draw_numeric_axis_guide(
+    state: Res<NumericTransformState>,
+    edit_mode: Res<EditMode>,
+    selection: Res<Selection>,
+    parents: Query<&ChildOf>,
+    selected_globals: Query<&GlobalTransform, With<Selected>>,
+    brush_selection: Res<BrushSelection>,
+    brush_caches: Query<&crate::brush::BrushMeshCache>,
+    brush_globals: Query<&GlobalTransform>,
+    mut gizmos: Gizmos,
+) {
+    let Some(axis) = state.axis else {
+        return;
+    };
+    let (axis_dir, color) = match axis {
+        GizmoAxis::X => (Vec3::X, default_style::AXIS_X),
+        GizmoAxis::Y => (Vec3::Y, default_style::AXIS_Y),
+        GizmoAxis::Z => (Vec3::Z, default_style::AXIS_Z),
+        GizmoAxis::Uniform => return,
+    };
+
+    let pivot = match *edit_mode {
+        EditMode::Object => {
+            let positions: Vec<Vec3> = topmost_selected(&selection, &parents)
+                .iter()
+                .filter_map(|&e| {
+                    selected_globals
+                        .get(e)
+                        .ok()
+                        .map(GlobalTransform::translation)
+                })
+                .collect();
+            if positions.is_empty() {
+                return;
+            }
+            centroid(&positions)
+        }
+        EditMode::BrushEdit(_) => {
+            let mut positions: Vec<Vec3> = Vec::new();
+            let edit_brushes: Vec<Entity> = brush_selection.edit_brushes().collect();
+            for entity in edit_brushes {
+                let Ok(cache) = brush_caches.get(entity) else {
+                    continue;
+                };
+                let Ok(global) = brush_globals.get(entity) else {
+                    continue;
+                };
+                let Some(sub) = brush_selection.sub(entity) else {
+                    continue;
+                };
+                for vi in sub_selection_vertices(sub, &cache.face_polygons) {
+                    if let Some(v) = cache.vertices.get(vi) {
+                        positions.push(global.transform_point(*v));
+                    }
+                }
+            }
+            if positions.is_empty() {
+                return;
+            }
+            centroid(&positions)
+        }
+        EditMode::Physics => return,
+    };
+
+    gizmos.line(
+        pivot - axis_dir * AXIS_GUIDE_HALF_LENGTH,
+        pivot + axis_dir * AXIS_GUIDE_HALF_LENGTH,
+        color,
+    );
 }
 
 /// Topology vertex indices a sub-selection touches: the union of its
