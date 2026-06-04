@@ -260,6 +260,7 @@ fn viewport_drag_update(
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     snap_settings: Res<SnapSettings>,
+    numeric: Res<crate::numeric_transform::NumericTransformState>,
     mut drag_state: ResMut<ViewportDragState>,
     mut transforms: Query<&mut Transform>,
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
@@ -339,7 +340,16 @@ fn viewport_drag_update(
     let scale = cam_dist * 0.003;
     let mouse_delta = viewport_cursor - active.start_viewport_cursor;
 
-    let offset = if alt {
+    let offset = if let Some(axis) = numeric.axis {
+        // Armed numeric axis: constrain the drag to that world axis with the
+        // same screen projection the gizmo handle drag uses, so dragging the
+        // body and dragging the handle feel identical.
+        let axis_dir = crate::numeric_transform::axis_direction(axis);
+        let amount =
+            crate::gizmos::translate_axis_amount(mouse_delta, camera, cam_tf, start_pos, axis_dir)
+                .unwrap_or(0.0);
+        axis_dir * amount
+    } else if alt {
         // Alt+drag: move along Y axis only (vertical)
         Vec3::Y * (-mouse_delta.y) * scale
     } else {
@@ -375,6 +385,7 @@ fn viewport_drag_finish(
     mut drag_state: ResMut<ViewportDragState>,
     transforms: Query<&Transform>,
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
+    mut numeric: ResMut<crate::numeric_transform::NumericTransformState>,
     mut commands: Commands,
 ) {
     if !mouse.just_released(MouseButton::Left) {
@@ -386,6 +397,10 @@ fn viewport_drag_finish(
     let Some(active) = drag_state.active.take() else {
         return;
     };
+
+    // The drag consumed the armed axis; disarm so the next operation starts
+    // free unless the user re-arms with X / Y / Z.
+    numeric.clear();
 
     if let Ok(transform) = transforms.get(active.entity) {
         // Modal mutated ECS directly during the drag; the synced push

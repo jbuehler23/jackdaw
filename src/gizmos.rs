@@ -1308,7 +1308,7 @@ fn scale_factor(
 /// mouse delta, found by projecting the delta onto the axis as it appears on
 /// screen. Returns `None` when the pivot or axis endpoint fails to project, or
 /// when the projected axis is degenerate (zero length on screen).
-fn translate_axis_amount(
+pub(crate) fn translate_axis_amount(
     mouse_delta: Vec2,
     camera: &Camera,
     cam_tf: &GlobalTransform,

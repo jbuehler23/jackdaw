@@ -12,6 +12,10 @@
 //!   around the selection pivot.
 //! - Scale: scale the selection by `value` along the axis, about the pivot.
 //!
+//! Arming an axis also constrains a direct viewport drag of an object
+//! selection to that axis, using the same screen projection as the gizmo
+//! handle drag; the armed axis clears when the drag ends.
+//!
 //! Works for object selection and for edit-mode sub-elements (vertices /
 //! edges / faces) across every edit brush. The input system only gates and
 //! accumulates; the apply runs as the `transform.numeric_apply` operator so
@@ -56,7 +60,7 @@ pub struct NumericTransformState {
 
 impl NumericTransformState {
     /// End the current entry.
-    fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.axis = None;
         self.input.clear();
     }
@@ -88,7 +92,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
 /// World unit vector for a numeric-entry axis. `Uniform` is never stored in
 /// the entry state, so it maps to zero defensively.
-fn axis_direction(axis: GizmoAxis) -> Vec3 {
+pub(crate) fn axis_direction(axis: GizmoAxis) -> Vec3 {
     match axis {
         GizmoAxis::X => Vec3::X,
         GizmoAxis::Y => Vec3::Y,
@@ -173,20 +177,26 @@ fn numeric_transform_input(
     mut state: ResMut<NumericTransformState>,
     mut commands: Commands,
 ) {
-    // Bail and reset whenever the context can no longer host a numeric
-    // entry: a drag / modal is running, the user is typing, or there is no
-    // eligible transform target.
-    let blocked = keybind_focus.is_typing()
+    // Drop the armed axis entirely when the context can no longer host an
+    // entry: text focus, a running modal op, or no eligible target.
+    let hard_reset = keybind_focus.is_typing()
         || modal.active.is_some()
-        || gizmo_drag.active
-        || edit_gizmo_active.active
-        || viewport_drag.active.is_some()
-        || viewport_drag.pending.is_some()
         || !numeric_entry_eligible(&edit_mode, &selection, &brush_selection);
-    if blocked {
+    if hard_reset {
         if state.axis.is_some() {
             state.clear();
         }
+        return;
+    }
+
+    // While a drag runs the armed axis is consumed by the drag to constrain
+    // it (see `viewport_drag_update`); keep it armed, but do not accumulate
+    // digits or start a new entry until the drag ends.
+    if gizmo_drag.active
+        || edit_gizmo_active.active
+        || viewport_drag.active.is_some()
+        || viewport_drag.pending.is_some()
+    {
         return;
     }
 
