@@ -21,7 +21,7 @@ pub enum HostedZones {
 
 /// Turnkey multiplayer SERVER plugin. Headless. Owns transport + lifecycle +
 /// auto-spawn + rooms + zone transitions + movement scheduling.
-pub struct JackdawMultiplayerServer {
+pub struct JackdawMultiplayerServerPlugin {
     /// Address the server binds (UDP).
     pub bind: SocketAddr,
     /// Network tick duration.
@@ -30,12 +30,12 @@ pub struct JackdawMultiplayerServer {
     pub hosted_zones: HostedZones,
     /// Per-connection inbound-RPC cap (messages/second). `None` = unlimited.
     pub max_msgs_per_sec: Option<u32>,
-    /// Whether to auto-spawn a player on connect ([`SpawnPolicy::OnConnect`], default)
-    /// or leave spawning to the game ([`SpawnPolicy::Manual`]).
+    /// Whether to auto-spawn a player on connect (`SpawnPolicy::OnConnect`, the default)
+    /// or leave spawning to the game (`SpawnPolicy::Manual`).
     pub spawn_policy: crate::lifecycle::SpawnPolicy,
 }
 
-impl Default for JackdawMultiplayerServer {
+impl Default for JackdawMultiplayerServerPlugin {
     fn default() -> Self {
         Self {
             bind: "127.0.0.1:0".parse().expect("valid default bind addr"),
@@ -59,7 +59,7 @@ pub(crate) struct ServerConfig {
     pub bind: SocketAddr,
 }
 
-impl Plugin for JackdawMultiplayerServer {
+impl Plugin for JackdawMultiplayerServerPlugin {
     fn build(&self, app: &mut App) {
         // The server reads authored world positions (SpawnPoint / ZoneTransition)
         // via `GlobalTransform`, which only propagates from `Transform` under

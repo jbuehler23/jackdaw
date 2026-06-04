@@ -28,9 +28,9 @@ use serde::de::DeserializeOwned;
 /// resulting replication later (`FixedPostUpdate` / `PostUpdate`). Plain
 /// `FixedUpdate` therefore sits naturally AFTER inputs are applied and BEFORE
 /// replication is serialized, which is exactly where authoritative movement must
-/// run. `MovementSet` is public so a game can order its own systems relative to it.
+/// run. `MovementSystems` is public so a game can order its own systems relative to it.
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub struct MovementSet;
+pub struct MovementSystems;
 
 /// App-extension the game calls to register networked types + its movement rule
 /// without importing lightyear directly.
@@ -106,8 +106,8 @@ pub trait MultiplayerAppExt {
             + FromReflect;
 
     /// Add the game's authoritative movement system. It runs in `FixedUpdate` in
-    /// the public [`MovementSet`] (naturally after input is applied, before
-    /// replication is buffered; see [`MovementSet`]).
+    /// the public [`MovementSystems`] (naturally after input is applied, before
+    /// replication is buffered; see [`MovementSystems`]).
     fn add_movement_system<M, Marker>(&mut self, system: M) -> &mut Self
     where
         M: IntoScheduleConfigs<ScheduleSystem, Marker>;
@@ -182,7 +182,7 @@ impl MultiplayerAppExt for App {
     where
         M: IntoScheduleConfigs<ScheduleSystem, Marker>,
     {
-        self.add_systems(FixedUpdate, system.in_set(MovementSet));
+        self.add_systems(FixedUpdate, system.in_set(MovementSystems));
         self
     }
 

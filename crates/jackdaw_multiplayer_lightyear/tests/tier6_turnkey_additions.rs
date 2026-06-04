@@ -6,8 +6,8 @@ use bevy::MinimalPlugins;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use jackdaw_multiplayer_lightyear::{
-    ClientMessage, JackdawMultiplayerClient, JackdawMultiplayerServer, MultiplayerAppExt,
-    RpcCommandsExt, ServerMessage,
+    ClientMessage, JackdawMultiplayerClientPlugin, JackdawMultiplayerServerPlugin,
+    MultiplayerAppExt, RpcCommandsExt, ServerMessage,
 };
 use lightyear::prelude::EventSender;
 use serde::{Deserialize, Serialize};
@@ -61,7 +61,7 @@ fn client_send_ping_once(
 fn make_client(addr: std::net::SocketAddr, id: u64) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
-    app.add_plugins(JackdawMultiplayerClient {
+    app.add_plugins(JackdawMultiplayerClientPlugin {
         server: addr,
         client_id: id,
         tick: std::time::Duration::from_millis(50),
@@ -78,7 +78,7 @@ fn commands_round_trip() {
 
     let mut server = App::new();
     server.add_plugins((MinimalPlugins, StatesPlugin));
-    server.add_plugins(JackdawMultiplayerServer {
+    server.add_plugins(JackdawMultiplayerServerPlugin {
         bind: addr,
         ..Default::default()
     });
@@ -129,7 +129,7 @@ fn commands_broadcast() {
 
     let mut server = App::new();
     server.add_plugins((MinimalPlugins, StatesPlugin));
-    server.add_plugins(JackdawMultiplayerServer {
+    server.add_plugins(JackdawMultiplayerServerPlugin {
         bind: addr,
         ..Default::default()
     });
@@ -180,7 +180,7 @@ fn rec_disconnect(ev: On<ClientDisconnected>, mut r: ResMut<Disconnects>) {
 fn connect_event_server(addr: std::net::SocketAddr) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
-    app.add_plugins(JackdawMultiplayerServer {
+    app.add_plugins(JackdawMultiplayerServerPlugin {
         bind: addr,
         ..Default::default()
     });
@@ -195,7 +195,7 @@ fn connect_event_server(addr: std::net::SocketAddr) -> App {
 fn make_plain_client(addr: std::net::SocketAddr, id: u64) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
-    app.add_plugins(JackdawMultiplayerClient {
+    app.add_plugins(JackdawMultiplayerClientPlugin {
         server: addr,
         client_id: id,
         tick: std::time::Duration::from_millis(50),
@@ -304,7 +304,7 @@ fn rate_limit_drops_over_cap() {
 
     let mut server = App::new();
     server.add_plugins((MinimalPlugins, StatesPlugin));
-    server.add_plugins(JackdawMultiplayerServer {
+    server.add_plugins(JackdawMultiplayerServerPlugin {
         bind: addr,
         max_msgs_per_sec: Some(3),
         ..Default::default()

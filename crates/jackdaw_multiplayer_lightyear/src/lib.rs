@@ -1,5 +1,5 @@
 //! Default lightyear backend for Jackdaw multiplayer: the turnkey runtime.
-//! A game adds `JackdawMultiplayerServer` (headless) and `JackdawMultiplayerClient`;
+//! A game adds `JackdawMultiplayerServerPlugin` (headless) and `JackdawMultiplayerClientPlugin`;
 //! the layer owns transport, connection lifecycle, player auto-spawn, room-based
 //! interest management, input plumbing, movement scheduling, and authored zone
 //! transitions. The game writes only its `Input` type, a movement system, and
@@ -16,12 +16,12 @@ mod rpc;
 mod server;
 mod transitions;
 
-pub use client::JackdawMultiplayerClient;
+pub use client::JackdawMultiplayerClientPlugin;
 pub use lifecycle::{ClientConnected, ClientDisconnected, PlayerSpawner, SpawnPolicy};
-pub use registration::{MovementSet, MultiplayerAppExt};
+pub use registration::{MovementSystems, MultiplayerAppExt};
 pub use rooms::{CurrentZone, ZoneRooms, move_player_to_zone, set_zone};
 pub use rpc::{ClientMessage, ClientSender, RpcCommandsExt, ServerMessage, ServerSender};
-pub use server::{HostedZones, JackdawMultiplayerServer};
+pub use server::{HostedZones, JackdawMultiplayerServerPlugin};
 
 // Re-export the native-input types a game's movement system + client input need, so
 // games depend on this layer rather than `lightyear` directly. `ActionState` carries

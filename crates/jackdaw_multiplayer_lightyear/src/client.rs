@@ -24,14 +24,14 @@ const MIN_INPUT_DELAY_TICKS: u16 = 3;
 /// `client_id` must be DISTINCT per client (the netcode handshake keys on it).
 /// It is a required field (no `Default`) so callers are forced to choose unique
 /// ids; a silent default of 0 would let two clients collide.
-pub struct JackdawMultiplayerClient {
+pub struct JackdawMultiplayerClientPlugin {
     /// Server address to connect to.
     pub server: SocketAddr,
     /// Unique netcode client id (distinct per connecting client).
     pub client_id: u64,
     /// Network tick duration. MUST match the server's `tick`; a mismatch
     /// silently diverges lightyear's sync/replication timelines. Default 50ms
-    /// (matches `JackdawMultiplayerServer`'s default).
+    /// (matches `JackdawMultiplayerServerPlugin`'s default).
     pub tick: std::time::Duration,
 }
 
@@ -42,7 +42,7 @@ struct ClientConfig {
     client_id: u64,
 }
 
-impl Plugin for JackdawMultiplayerClient {
+impl Plugin for JackdawMultiplayerClientPlugin {
     fn build(&self, app: &mut App) {
         // The client reads/renders replicated world positions via `GlobalTransform`,
         // which only propagates from `Transform` under `TransformPlugin`, absent from

@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use jackdaw_multiplayer::SpawnPoint;
 use jackdaw_multiplayer_lightyear::{
-    JackdawMultiplayerClient, JackdawMultiplayerServer, PlayerSpawner, SpawnPolicy,
+    JackdawMultiplayerClientPlugin, JackdawMultiplayerServerPlugin, PlayerSpawner, SpawnPolicy,
 };
 use lightyear::prelude::{ControlledBy, NetworkVisibility, Replicate};
 
@@ -21,7 +21,7 @@ fn free_addr() -> std::net::SocketAddr {
 fn manual_server(addr: std::net::SocketAddr) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
-    app.add_plugins(JackdawMultiplayerServer {
+    app.add_plugins(JackdawMultiplayerServerPlugin {
         bind: addr,
         spawn_policy: SpawnPolicy::Manual,
         ..Default::default()
@@ -39,7 +39,7 @@ fn manual_server(addr: std::net::SocketAddr) -> App {
 fn client(addr: std::net::SocketAddr) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
-    app.add_plugins(JackdawMultiplayerClient {
+    app.add_plugins(JackdawMultiplayerClientPlugin {
         server: addr,
         client_id: 1,
         tick: std::time::Duration::from_millis(50),

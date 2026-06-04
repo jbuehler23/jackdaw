@@ -13,7 +13,7 @@ use bevy::MinimalPlugins;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use jackdaw_multiplayer_lightyear::{
-    ClientMessage, ClientSender, JackdawMultiplayerClient, JackdawMultiplayerServer,
+    ClientMessage, ClientSender, JackdawMultiplayerClientPlugin, JackdawMultiplayerServerPlugin,
     MultiplayerAppExt, ServerMessage, ServerSender,
 };
 use lightyear::prelude::EventSender;
@@ -46,7 +46,7 @@ struct LastPingFrom(Option<Entity>);
 fn build_reply_server(addr: std::net::SocketAddr) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
-    app.add_plugins(JackdawMultiplayerServer {
+    app.add_plugins(JackdawMultiplayerServerPlugin {
         bind: addr,
         ..Default::default()
     });
@@ -71,7 +71,7 @@ fn on_ping(
 fn build_client(addr: std::net::SocketAddr, id: u64, send_ping: bool) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
-    app.add_plugins(JackdawMultiplayerClient {
+    app.add_plugins(JackdawMultiplayerClientPlugin {
         server: addr,
         client_id: id,
         tick: std::time::Duration::from_millis(50),
@@ -149,7 +149,7 @@ struct DidBroadcast(bool);
 fn build_broadcast_server(addr: std::net::SocketAddr) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
-    app.add_plugins(JackdawMultiplayerServer {
+    app.add_plugins(JackdawMultiplayerServerPlugin {
         bind: addr,
         ..Default::default()
     });

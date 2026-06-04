@@ -2,13 +2,13 @@
 //! enforced at the single inbound choke point (`rpc::rewrap_incoming`): every
 //! inbound RPC, across all message types, increments a per-connection counter for
 //! the current 1-second window; messages over the cap are dropped (never surfaced
-//! to the game). Configured by `JackdawMultiplayerServer::max_msgs_per_sec`.
+//! to the game). Configured by `JackdawMultiplayerServerPlugin::max_msgs_per_sec`.
 
 use bevy::prelude::*;
 use std::collections::HashMap;
 
 /// Inbound-RPC cap per connection per second. `None` = unlimited. Inserted by the
-/// server plugin from `JackdawMultiplayerServer::max_msgs_per_sec`.
+/// server plugin from `JackdawMultiplayerServerPlugin::max_msgs_per_sec`.
 #[derive(Resource)]
 pub(crate) struct RpcRateLimit(pub Option<u32>);
 

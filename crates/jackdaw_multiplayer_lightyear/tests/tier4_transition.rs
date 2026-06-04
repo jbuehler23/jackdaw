@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use jackdaw_multiplayer::{SpawnPoint, ZoneTransition};
 use jackdaw_multiplayer_lightyear::{
-    CurrentZone, JackdawMultiplayerClient, JackdawMultiplayerServer,
+    CurrentZone, JackdawMultiplayerClientPlugin, JackdawMultiplayerServerPlugin,
 };
 
 /// The zone-1 starter spawn (where the player auto-spawns) AND the location of the
@@ -40,10 +40,10 @@ fn authored_trigger_moves_player_to_destination_zone_and_spawn() {
     // would never propagate into `GlobalTransform` (it would stay identity/zero) and
     // the authored trigger/spawn *world* positions the transition system + lifecycle
     // read would all be zero. We deliberately do NOT add `TransformPlugin` here:
-    // `JackdawMultiplayerServer` adds it itself (idempotently), so this test proves
+    // `JackdawMultiplayerServerPlugin` adds it itself (idempotently), so this test proves
     // the turnkey layer self-provides it on a headless server.
     server.add_plugins((MinimalPlugins, StatesPlugin));
-    server.add_plugins(JackdawMultiplayerServer {
+    server.add_plugins(JackdawMultiplayerServerPlugin {
         bind: addr,
         ..Default::default()
     });
@@ -76,10 +76,10 @@ fn authored_trigger_moves_player_to_destination_zone_and_spawn() {
 
     // ---- one client ----
     let mut client = App::new();
-    // Likewise no explicit `TransformPlugin`: `JackdawMultiplayerClient` adds it
+    // Likewise no explicit `TransformPlugin`: `JackdawMultiplayerClientPlugin` adds it
     // itself (idempotently).
     client.add_plugins((MinimalPlugins, StatesPlugin));
-    client.add_plugins(JackdawMultiplayerClient {
+    client.add_plugins(JackdawMultiplayerClientPlugin {
         server: addr,
         client_id: 1,
         tick: std::time::Duration::from_millis(50),
