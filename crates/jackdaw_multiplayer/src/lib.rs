@@ -22,7 +22,7 @@ pub struct Replication {
 }
 
 /// Author-time replication target. Peer-specific targets (a single client id)
-/// are runtime-only — a concrete `PeerId` is never known at scene-author time —
+/// are runtime-only (a concrete `PeerId` is never known at scene-author time),
 /// so the authoring surface exposes only the scene-meaningful choices.
 #[derive(Reflect, Clone, Copy, PartialEq, Debug, Default)]
 pub enum ReplTarget {

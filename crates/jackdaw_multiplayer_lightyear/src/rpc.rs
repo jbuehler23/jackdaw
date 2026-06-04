@@ -1,4 +1,4 @@
-//! Turnkey RPC surface over lightyear — typed client↔server messaging with zero
+//! Turnkey RPC surface over lightyear: typed client<->server messaging with zero
 //! raw lightyear in game code. Two one-way messages paired by type (no request-id
 //! correlation): a client sends a request; the server handles it knowing the
 //! sender connection entity and replies to that one client.
@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 /// The single reliable, ordered channel every turnkey RPC rides. Private to the
-/// layer — games never name it. (lightyear blanket-impls `Channel` for any
+/// layer; games never name it. (lightyear blanket-impls `Channel` for any
 /// `Send + Sync + 'static` type, so a bare unit struct is a valid channel.)
 pub(crate) struct RpcChannel;
 
@@ -34,7 +34,7 @@ pub struct ServerMessage<M: Event> {
     pub message: M,
 }
 
-/// Client→server sender. Use on the client app: take `mut tx: ClientSender<MyMsg>`
+/// Client->server sender. Use on the client app: take `mut tx: ClientSender<MyMsg>`
 /// in a client system and call `tx.send(msg)`.
 #[derive(SystemParam)]
 pub struct ClientSender<'w, 's, M: Event + Serialize + DeserializeOwned> {
@@ -56,7 +56,7 @@ impl<M: Event + Serialize + DeserializeOwned> ClientSender<'_, '_, M> {
     }
 }
 
-/// Server→client sender. Use on the server app: take `mut tx: ServerSender<MyMsg>`
+/// Server->client sender. Use on the server app: take `mut tx: ServerSender<MyMsg>`
 /// in a server system or observer and call `tx.send_to(client, msg)`.
 #[derive(SystemParam)]
 pub struct ServerSender<'w, 's, M: Event + Serialize + DeserializeOwned> {
@@ -93,14 +93,14 @@ impl<M: Event + Serialize + DeserializeOwned> ServerSender<'_, '_, M> {
 /// lightyear's `RemoteEvent<M>` into the layer's lightyear-free `ClientMessage<M>`
 /// (server side) or `ServerMessage<M>` (client side), self-selecting by sender so
 /// the same registration serves both apps:
-/// - `from == PeerId::Server` → we are the client; emit `ServerMessage`.
-/// - otherwise → we are the server; resolve the sender `PeerId` to its connection
+/// - `from == PeerId::Server`: we are the client; emit `ServerMessage`.
+/// - otherwise: we are the server; resolve the sender `PeerId` to its connection
 ///   `Entity` via `PeerMetadata` and emit `ClientMessage`.
 ///
-/// This is also the single server-inbound choke point, so it enforces the optional
+/// Also the single server-inbound choke point, so it enforces the optional
 /// per-connection rate cap (`rate_limit`): an over-cap message is dropped here (no
-/// `ClientMessage` emitted) rather than reaching the game. The rate-limit resources
-/// exist only on the server app, so the check is a no-op on the client.
+/// `ClientMessage` emitted). The rate-limit resources exist only on the server app,
+/// so the check is a no-op on the client.
 pub(crate) fn rewrap_incoming<M: Event + Clone>(
     ev: On<RemoteEvent<M>>,
     peers: Option<Res<PeerMetadata>>,
@@ -136,16 +136,16 @@ pub(crate) fn rewrap_incoming<M: Event + Clone>(
     });
 }
 
-/// `Commands`-based RPC sends — usable anywhere you hold `&mut Commands` (generic
+/// `Commands`-based RPC sends, usable anywhere you hold `&mut Commands` (generic
 /// helpers, observers, async-polling systems), complementing the [`ClientSender`] /
 /// [`ServerSender`] system params. Each method enqueues a command that triggers the
 /// connection's `EventSender` on the reliable RPC channel.
 pub trait RpcCommandsExt {
-    /// Server → one client (its connection entity). Mirrors [`ServerSender::send_to`].
+    /// Server -> one client (its connection entity). Mirrors [`ServerSender::send_to`].
     fn server_send_to<M: Event + Serialize + DeserializeOwned>(&mut self, client: Entity, msg: M);
-    /// Server → every connected client. Mirrors [`ServerSender::broadcast`].
+    /// Server -> every connected client. Mirrors [`ServerSender::broadcast`].
     fn server_broadcast<M: Event + Serialize + DeserializeOwned + Clone>(&mut self, msg: M);
-    /// Client → server. Mirrors [`ClientSender::send`].
+    /// Client -> server. Mirrors [`ClientSender::send`].
     fn client_send<M: Event + Serialize + DeserializeOwned>(&mut self, msg: M);
 }
 

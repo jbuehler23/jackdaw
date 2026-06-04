@@ -63,8 +63,7 @@ impl Plugin for JackdawMultiplayerServer {
     fn build(&self, app: &mut App) {
         // The server reads authored world positions (SpawnPoint / ZoneTransition)
         // via `GlobalTransform`, which only propagates from `Transform` under
-        // `TransformPlugin` — absent from `MinimalPlugins` on a headless server.
-        // Add it here so games/headless servers don't have to. The
+        // `TransformPlugin`, absent from `MinimalPlugins` on a headless server. The
         // `is_plugin_added` guard makes this a no-op when the game already brought
         // it in (e.g. via `DefaultPlugins`).
         if !app.is_plugin_added::<bevy::transform::TransformPlugin>() {

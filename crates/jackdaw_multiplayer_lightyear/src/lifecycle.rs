@@ -10,7 +10,7 @@ use lightyear::prelude::{
 use std::time::Duration;
 
 /// Fired (server side) when a client connection completes the handshake. `client`
-/// is the connection (`ClientOf`) entity — the natural key for per-connection game
+/// is the connection (`ClientOf`) entity, the natural key for per-connection game
 /// state. Lightyear-free: a game observes `On<ClientConnected>` without importing
 /// lightyear types.
 #[derive(Event)]
@@ -19,7 +19,7 @@ pub struct ClientConnected {
 }
 
 /// Fired (server side) when a client connection is lost. `client` is the connection
-/// entity (still valid to read here — lightyear inserts `Disconnected` just before
+/// entity (still valid to read here: lightyear inserts `Disconnected` just before
 /// despawning it). A game observes `On<ClientDisconnected>` to tear down state.
 #[derive(Event)]
 pub struct ClientDisconnected {
@@ -73,7 +73,7 @@ fn spawn_player_bundle(
     player
 }
 
-/// Spawns a player into a zone on demand — the `Manual`-spawn path (e.g. a game
+/// Spawns a player into a zone on demand: the `Manual`-spawn path (e.g. a game
 /// spawning on character-select). Looks up the `SpawnPoint` matching `(zone, tag)`.
 #[derive(SystemParam)]
 pub struct PlayerSpawner<'w, 's> {
@@ -129,7 +129,7 @@ fn on_link_add(add: On<Add, LinkOf>, mut commands: Commands) {
 }
 
 /// When a connection finishes the netcode handshake, fire `ClientConnected` (always)
-/// and — unless `SpawnPolicy::Manual` — auto-spawn the player entity with the full
+/// and, unless `SpawnPolicy::Manual`, auto-spawn the player entity with the full
 /// networking bundle and join it to its zone room.
 fn on_client_connected(
     add: On<Add, Connected>,

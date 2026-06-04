@@ -1,6 +1,6 @@
 //! Editor extension surfacing Jackdaw's networking proxy components
 //! (`jackdaw_multiplayer::Replication`, `NetworkRoom`) in the inspector. Pure
-//! authoring — no networking runtime, no lightyear dependency.
+//! authoring: no networking runtime, no lightyear dependency.
 
 use jackdaw_api::prelude::{ExtensionContext, ExtensionKind, JackdawExtension};
 

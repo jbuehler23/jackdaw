@@ -5,7 +5,7 @@
 //! every trigger box each `FixedUpdate`; when a player is inside a trigger that
 //! targets a *different* zone, it moves the player into that zone (room
 //! re-membership via [`set_zone`]) and repositions it at the destination
-//! [`SpawnPoint`]. No physics dependency — the overlap test is a pure AABB check.
+//! [`SpawnPoint`]. No physics dependency: the overlap test is a pure AABB check.
 
 use crate::lifecycle::PlayerConnection;
 use crate::rooms::{CurrentZone, ZoneRooms, set_zone};

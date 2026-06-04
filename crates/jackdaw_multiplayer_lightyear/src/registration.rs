@@ -1,11 +1,10 @@
 //! App-extension the game calls to register networked types + its movement rule
 //! without importing lightyear directly.
 //!
-//! Phase 5 turns the former stub into three real registration helpers plus the
-//! client-side input-marker placement. The generic bounds mirror lightyear's own
-//! bounds verbatim (see the `where` clauses + comments below); they are the load-
-//! bearing part of this module — loosening them would fail to compile against
-//! lightyear's `register_component` / `add_linear_interpolation` / `InputPlugin`.
+//! The generic bounds mirror lightyear's own bounds verbatim (see the `where`
+//! clauses + comments below); they are load-bearing here: loosening them would
+//! fail to compile against lightyear's `register_component` /
+//! `add_linear_interpolation` / `InputPlugin`.
 
 use bevy::ecs::component::Mutable;
 use bevy::ecs::entity::MapEntities;
@@ -25,7 +24,7 @@ use serde::de::DeserializeOwned;
 ///
 /// lightyear applies inputs in `FixedPreUpdate` (client buffers in
 /// `InputSystems::BufferClientInputs`, server populates `ActionState` in
-/// `InputSystems::UpdateActionState` — both `FixedPreUpdate`) and buffers the
+/// `InputSystems::UpdateActionState`, both `FixedPreUpdate`) and buffers the
 /// resulting replication later (`FixedPostUpdate` / `PostUpdate`). Plain
 /// `FixedUpdate` therefore sits naturally AFTER inputs are applied and BEFORE
 /// replication is serialized, which is exactly where authoritative movement must
@@ -80,7 +79,7 @@ pub trait MultiplayerAppExt {
             + DeserializeOwned
             + 'static;
 
-    /// Register the player input type (shipped client→server) and install the
+    /// Register the player input type (shipped client->server) and install the
     /// client-side input-marker placement.
     ///
     /// Call on BOTH the client and server apps: lightyear's `InputPlugin<A>`
@@ -108,7 +107,7 @@ pub trait MultiplayerAppExt {
 
     /// Add the game's authoritative movement system. It runs in `FixedUpdate` in
     /// the public [`MovementSet`] (naturally after input is applied, before
-    /// replication is buffered — see [`MovementSet`]).
+    /// replication is buffered; see [`MovementSet`]).
     fn add_movement_system<M, Marker>(&mut self, system: M) -> &mut Self
     where
         M: IntoScheduleConfigs<ScheduleSystem, Marker>;
@@ -116,7 +115,7 @@ pub trait MultiplayerAppExt {
     /// Register a type usable as an RPC message in both directions. Call once per
     /// message type on BOTH the client and server apps, AFTER adding the turnkey
     /// plugin (it needs the message registry that `ServerPlugins`/`ClientPlugins`
-    /// installs — same ordering rule as [`replicate`](Self::replicate)).
+    /// installs; same ordering rule as [`replicate`](Self::replicate)).
     ///
     /// Send with the [`ClientSender`](crate::ClientSender) /
     /// [`ServerSender`](crate::ServerSender) system params; receive by observing

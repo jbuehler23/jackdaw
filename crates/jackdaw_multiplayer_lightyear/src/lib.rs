@@ -1,4 +1,4 @@
-//! Default lightyear backend for Jackdaw multiplayer — the turnkey runtime.
+//! Default lightyear backend for Jackdaw multiplayer: the turnkey runtime.
 //! A game adds `JackdawMultiplayerServer` (headless) and `JackdawMultiplayerClient`;
 //! the layer owns transport, connection lifecycle, player auto-spawn, room-based
 //! interest management, input plumbing, movement scheduling, and authored zone
@@ -24,15 +24,15 @@ pub use rpc::{ClientMessage, ClientSender, RpcCommandsExt, ServerMessage, Server
 pub use server::{HostedZones, JackdawMultiplayerServer};
 
 // Re-export the native-input types a game's movement system + client input need, so
-// games depend on this layer rather than importing `lightyear` directly. `ActionState`
-// carries the player's input (read server-side in the movement system); `InputMarker`
-// marks the local player's input entity (queried client-side to write input).
+// games depend on this layer rather than `lightyear` directly. `ActionState` carries
+// the player's input (read server-side in the movement system); `InputMarker` marks
+// the local player's input entity (queried client-side to write input).
 pub use lightyear::prelude::input::native::{ActionState, InputMarker};
 
 // Re-export the local-player marker so a game can find the entity it controls (e.g. to
-// attach a camera) without importing `lightyear` directly. Lightyear inserts `Controlled`
-// on the client's own replicated player entity.
+// attach a camera) without importing `lightyear`. Lightyear inserts `Controlled` on the
+// client's own replicated player entity.
 pub use lightyear::prelude::Controlled;
 
-/// Netcode protocol id — client + server must agree or the handshake is rejected.
+/// Netcode protocol id; client + server must agree or the handshake is rejected.
 pub const PROTOCOL_ID: u64 = 0x_4A41_434B_4D50_5631; // "JACKMPV1"

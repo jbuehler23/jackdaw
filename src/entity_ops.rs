@@ -1126,6 +1126,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<EntityAddTerrainOp>()
         .register_operator::<EntityAddPrefabOp>();
 
+    #[cfg(feature = "multiplayer")]
+    ctx.register_operator::<EntityAddSpawnPointOp>()
+        .register_operator::<EntityAddZoneTransitionOp>()
+        .register_operator::<EntityAddNetworkRoomOp>();
+
     let ext = ctx.id();
     ctx.entity_mut().world_scope(|world| {
         world.spawn((
@@ -1388,6 +1393,93 @@ pub(crate) fn entity_add_navmesh(
                 SystemState::new(world);
             let (mut commands, mut selection) = system_state.get_mut(world);
             let entity = crate::navmesh::spawn_navmesh_entity(&mut commands);
+            selection.select_single(&mut commands, entity);
+            system_state.apply(world);
+            crate::scene_io::register_entity_in_ast(world, entity);
+            entity
+        });
+    });
+    OperatorResult::Finished
+}
+
+#[cfg(feature = "multiplayer")]
+#[operator(id = "entity.add.spawn_point", label = "Spawn Point")]
+pub(crate) fn entity_add_spawn_point(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        crate::spawn_undoable(world, "Add Spawn Point", |world| {
+            let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
+                SystemState::new(world);
+            let (mut commands, mut selection) = system_state.get_mut(world);
+            let entity = commands
+                .spawn((
+                    Name::new("Spawn Point"),
+                    jackdaw_multiplayer::SpawnPoint::default(),
+                    Transform::default(),
+                    Visibility::default(),
+                ))
+                .id();
+            selection.select_single(&mut commands, entity);
+            system_state.apply(world);
+            crate::scene_io::register_entity_in_ast(world, entity);
+            entity
+        });
+    });
+    OperatorResult::Finished
+}
+
+#[cfg(feature = "multiplayer")]
+#[operator(id = "entity.add.zone_transition", label = "Zone Transition")]
+pub(crate) fn entity_add_zone_transition(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        crate::spawn_undoable(world, "Add Zone Transition", |world| {
+            let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
+                SystemState::new(world);
+            let (mut commands, mut selection) = system_state.get_mut(world);
+            let entity = commands
+                .spawn((
+                    Name::new("Zone Transition"),
+                    jackdaw_multiplayer::ZoneTransition {
+                        half_extents: Vec3::splat(1.0),
+                        ..default()
+                    },
+                    Transform::default(),
+                    Visibility::default(),
+                ))
+                .id();
+            selection.select_single(&mut commands, entity);
+            system_state.apply(world);
+            crate::scene_io::register_entity_in_ast(world, entity);
+            entity
+        });
+    });
+    OperatorResult::Finished
+}
+
+#[cfg(feature = "multiplayer")]
+#[operator(id = "entity.add.network_room", label = "Network Room")]
+pub(crate) fn entity_add_network_room(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        crate::spawn_undoable(world, "Add Network Room", |world| {
+            let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
+                SystemState::new(world);
+            let (mut commands, mut selection) = system_state.get_mut(world);
+            let entity = commands
+                .spawn((
+                    Name::new("Network Room"),
+                    jackdaw_multiplayer::NetworkRoom::default(),
+                    Transform::default(),
+                    Visibility::default(),
+                ))
+                .id();
             selection.select_single(&mut commands, entity);
             system_state.apply(world);
             crate::scene_io::register_entity_in_ast(world, entity);

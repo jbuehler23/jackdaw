@@ -3,10 +3,10 @@ use bevy::prelude::*;
 use lightyear::prelude::{Room, RoomEvent, RoomTarget};
 use std::collections::HashMap;
 
-/// Maps authored zone ids → the lightyear `Room` entity created for each.
+/// Maps authored zone ids to the lightyear `Room` entity created for each.
 #[derive(Resource, Default)]
 pub struct ZoneRooms {
-    /// zone id → lightyear `Room` entity.
+    /// zone id -> lightyear `Room` entity.
     pub by_zone: HashMap<u64, Entity>,
 }
 

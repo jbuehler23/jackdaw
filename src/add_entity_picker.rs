@@ -16,6 +16,8 @@ use crate::entity_ops::{
     EntityAddNavmeshOp, EntityAddPointLightOp, EntityAddPrefabOp, EntityAddSphereOp,
     EntityAddSpotLightOp, EntityAddTerrainOp,
 };
+#[cfg(feature = "multiplayer")]
+use crate::entity_ops::{EntityAddNetworkRoomOp, EntityAddSpawnPointOp, EntityAddZoneTransitionOp};
 
 /// Marker for the scene-tree Add Entity button.
 #[derive(Component)]
@@ -68,10 +70,11 @@ fn builtin_groups() -> Vec<AddMenuItem> {
     };
     let prefabs = Category {
         name: Some(String::from("Prefabs")),
-        order: -4,
+        order: -5,
     };
 
-    vec![
+    #[cfg_attr(not(feature = "multiplayer"), expect(unused_mut))]
+    let mut items = vec![
         AddMenuItem {
             action: op_action::<EntityAddCubeOp>(),
             label: "Cube".into(),
@@ -122,7 +125,34 @@ fn builtin_groups() -> Vec<AddMenuItem> {
             label: "Prefab...".into(),
             category: prefabs,
         },
-    ]
+    ];
+
+    #[cfg(feature = "multiplayer")]
+    {
+        let multiplayer = Category {
+            name: Some(String::from("Multiplayer")),
+            order: -4,
+        };
+        items.extend([
+            AddMenuItem {
+                action: op_action::<EntityAddSpawnPointOp>(),
+                label: "Spawn Point".into(),
+                category: multiplayer.clone(),
+            },
+            AddMenuItem {
+                action: op_action::<EntityAddZoneTransitionOp>(),
+                label: "Zone Transition".into(),
+                category: multiplayer.clone(),
+            },
+            AddMenuItem {
+                action: op_action::<EntityAddNetworkRoomOp>(),
+                label: "Network Room".into(),
+                category: multiplayer,
+            },
+        ]);
+    }
+
+    items
 }
 
 /// One row in the Add menu or Add Entity picker. `action` is handled
@@ -168,7 +198,7 @@ pub fn collect_add_menu_items(world: &mut World) -> Vec<AddMenuItem> {
             label,
             category: Category {
                 name: Some(category),
-                order: -5,
+                order: -6,
             },
         });
     }
