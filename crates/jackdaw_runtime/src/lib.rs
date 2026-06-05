@@ -24,6 +24,9 @@ pub use jackdaw_jsn::{
     GltfSource, PropertyValue, SkipSerialization,
 };
 
+#[cfg(feature = "pie")]
+mod pie;
+
 pub mod prelude {
     pub use crate::{
         EditorCategory, EditorDescription, EditorHidden, JackdawCatalog, JackdawCatalogPath,
@@ -50,6 +53,18 @@ impl Plugin for JackdawPlugin {
             Update,
             (clear_modified_scene_roots, spawn_loaded_scenes).chain(),
         );
+
+        // When the game binary is launched with `--jackdaw-pie`, open the
+        // ipc-channel link to the editor and attach the PIE stream / control
+        // systems. A connect failure logs and leaves the runtime untouched, so
+        // a standalone launch (no flag, or no editor listening) is unaffected.
+        #[cfg(feature = "pie")]
+        if let Some(args) = pie::pie_args() {
+            match jackdaw_pie_protocol::connect(&args.server) {
+                Ok(transport) => pie::attach_pie(app, transport),
+                Err(err) => bevy::log::error!("PIE connect failed: {err}"),
+            }
+        }
     }
 }
 

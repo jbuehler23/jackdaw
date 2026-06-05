@@ -5552,6 +5552,7 @@ dependencies = [
  "bevy",
  "jackdaw_geometry",
  "jackdaw_jsn",
+ "jackdaw_pie_protocol",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
