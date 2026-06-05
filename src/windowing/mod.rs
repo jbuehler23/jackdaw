@@ -75,7 +75,7 @@ fn tag_chrome_entity_as_editor(add: On<Add, WindowChromeEntity>, mut commands: C
     commands.entity(add.event_target()).insert(EditorEntity);
 }
 
-/// Spawns the jackdaw window shell, returning `(header_slot, body_slot)`.
+/// Spawns the jackdaw window shell, returning header and body content slots.
 pub fn spawn_window_shell<S: Component + Copy>(
     commands: &mut Commands,
     icon_font: &IconFont,

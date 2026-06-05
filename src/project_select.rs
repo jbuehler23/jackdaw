@@ -378,7 +378,7 @@ fn spawn_project_selector(
         || cwd.join("project.jsn").is_file()
         || cwd.join("assets").is_dir();
 
-    let (header, body) = spawn_window_shell(
+    let slots = spawn_window_shell(
         &mut commands,
         &icon_font,
         #[cfg(target_os = "windows")]
@@ -387,8 +387,8 @@ fn spawn_project_selector(
     );
     fill_project_selector(
         &mut commands,
-        header,
-        body,
+        slots.header,
+        slots.body,
         font,
         icon_font_handle,
         jackdaw_icon.0.clone(),

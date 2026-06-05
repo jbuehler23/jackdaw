@@ -11,9 +11,13 @@ use crate::{WindowChromeTheme, WindowShellRoot};
 pub struct WindowShellContent;
 
 /// Header and body entities returned by [`spawn_window_shell`].
-pub type WindowShellSlots = (Entity, Entity);
+#[derive(Clone, Copy, Debug)]
+pub struct WindowShellSlots {
+    pub header: Entity,
+    pub body: Entity,
+}
 
-/// Spawns a UI camera, the window shell, and returns `(header_slot, body_slot)` for screen content.
+/// Spawns a UI camera, the window shell, and returns header/body slots for screen content.
 ///
 /// `screen` is a caller marker copied onto the UI camera and shell root (useful for despawning a
 /// screen's chrome as a unit). `caption_controls` is the minimize/maximize/close cluster bundle
@@ -71,8 +75,8 @@ pub fn spawn_window_shell<S: Component + Copy>(
             #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
             spawn_resize_edge_overlay_if_needed(shell);
         });
-    return (
-        header_slot.expect("window shell header slot spawned"),
-        body_slot.expect("window shell body slot spawned"),
-    );
+    return WindowShellSlots {
+        header: header_slot.expect("window shell header slot spawned"),
+        body: body_slot.expect("window shell body slot spawned"),
+    };
 }

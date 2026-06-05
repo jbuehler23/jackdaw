@@ -133,9 +133,7 @@ fn caption_controls_slot(caption_controls: impl Bundle) -> impl Bundle {
     );
 }
 
-fn header_content_slot(
-    #[cfg(target_os = "macos")] macos_traffic_light_inset: f32,
-) -> impl Bundle {
+fn header_content_slot(#[cfg(target_os = "macos")] macos_traffic_light_inset: f32) -> impl Bundle {
     #[cfg(target_os = "macos")]
     let padding = UiRect {
         left: px(macos_traffic_light_inset),

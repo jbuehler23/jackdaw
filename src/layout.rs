@@ -214,7 +214,7 @@ pub fn spawn_editor_layout(
     jackdaw_icon: Res<JackdawIcon>,
     #[cfg(target_os = "windows")] caption_font: Res<CaptionFont>,
 ) {
-    let (header, body) = spawn_window_shell(
+    let slots = spawn_window_shell(
         &mut commands,
         &icon_font,
         #[cfg(target_os = "windows")]
@@ -223,8 +223,8 @@ pub fn spawn_editor_layout(
     );
     spawn_editor(
         &mut commands,
-        header,
-        body,
+        slots.header,
+        slots.body,
         icon_font.0.clone(),
         editor_font.0.clone(),
         jackdaw_icon.0.clone(),

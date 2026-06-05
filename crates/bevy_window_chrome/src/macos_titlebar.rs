@@ -4,7 +4,10 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use bevy::ecs::entity::Entity;
+use bevy::prelude::{Node, Query, Val, With};
 use bevy::winit::WINIT_WINDOWS;
+
+use crate::header::MacosHeaderContentInset;
 use objc2::rc::Retained;
 use objc2::runtime::NSObject;
 use objc2::{ClassType, DeclaredClass, declare_class, msg_send_id, mutability, sel};
@@ -84,6 +87,43 @@ impl TrafficLightResizeObserver {
 }
 
 const FRAME_MATCH_TOLERANCE_PX: f64 = 2.0;
+
+/// Syncs traffic-light visibility, positioning, and header content inset with window state.
+pub(crate) fn sync_window_shell_state(
+    window_entity: Entity,
+    is_fullscreen: bool,
+    traffic_light_inset: f32,
+    header_inset_nodes: &mut Query<&mut Node, With<MacosHeaderContentInset>>,
+    previous_fills_work_area: &mut Option<bool>,
+) {
+    if is_fullscreen {
+        return;
+    }
+
+    let first_sync = previous_fills_work_area.is_none();
+    if first_sync {
+        if let Some(mtm) = MainThreadMarker::new() {
+            ensure_traffic_light_resize_observer(window_entity, mtm);
+        }
+    }
+    let fills_work_area = window_fills_work_area(window_entity);
+    let fills_work_area_changed = *previous_fills_work_area != Some(fills_work_area);
+    let content_inset = if fills_work_area {
+        0.0
+    } else {
+        traffic_light_inset
+    };
+    for mut node in header_inset_nodes.iter_mut() {
+        node.padding.left = Val::Px(content_inset);
+    }
+    if fills_work_area_changed {
+        *previous_fills_work_area = Some(fills_work_area);
+        set_traffic_lights_hidden(window_entity, fills_work_area);
+        if !fills_work_area {
+            reposition_traffic_lights(window_entity);
+        }
+    }
+}
 
 /// Whether the window frame fills the display work area (green-button zoom).
 ///

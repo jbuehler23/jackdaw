@@ -246,31 +246,13 @@ fn sync_window_shell_state(
     let is_floating_window = !is_fullscreen && !is_maximized;
 
     #[cfg(target_os = "macos")]
-    if !is_fullscreen {
-        let first_sync = previous_fills_work_area.is_none();
-        if first_sync {
-            if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
-                macos_titlebar::ensure_traffic_light_resize_observer(entity, mtm);
-            }
-        }
-        let fills_work_area = macos_titlebar::window_fills_work_area(entity);
-        let fills_work_area_changed = *previous_fills_work_area != Some(fills_work_area);
-        let traffic_light_inset = if fills_work_area {
-            0.0
-        } else {
-            theme.macos_traffic_light_inset
-        };
-        for mut node in shell_nodes.p1().iter_mut() {
-            node.padding.left = Val::Px(traffic_light_inset);
-        }
-        if fills_work_area_changed {
-            *previous_fills_work_area = Some(fills_work_area);
-            macos_titlebar::set_traffic_lights_hidden(entity, fills_work_area);
-            if !fills_work_area {
-                macos_titlebar::reposition_traffic_lights(entity);
-            }
-        }
-    }
+    macos_titlebar::sync_window_shell_state(
+        entity,
+        is_fullscreen,
+        theme.macos_traffic_light_inset,
+        &mut shell_nodes.p1(),
+        &mut previous_fills_work_area,
+    );
 
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
     {
