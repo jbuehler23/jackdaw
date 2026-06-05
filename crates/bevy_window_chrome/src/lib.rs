@@ -3,13 +3,15 @@
 //! Provides a borderless/transparent primary-window shell with a draggable title bar,
 //! caption buttons, and resize handles, with per-platform chrome integration:
 //!
-//! - **Windows**: borderless window with Win32 non-client hit testing for drag, resize, and caption buttons.
+//! - **Windows / Linux / FreeBSD**: borderless client-side chrome with Bevy-driven drag, resize,
+//!   and caption buttons.
 //! - **macOS**: native traffic lights with a transparent integrated title bar.
-//! - **Linux**: client-side custom chrome by default; opt into server decorations via
-//!   the `BEVY_WINDOW_DECORATIONS=server` environment variable (or [`WindowChromeStyle::resolve`]).
+//! - **Linux / FreeBSD**: opt into server decorations via the `BEVY_WINDOW_DECORATIONS=server`
+//!   environment variable (or [`WindowChromeStyle::resolve`]).
 //!
-//! The crate is theme-agnostic: colors and metrics come from a [`WindowChromeTheme`] supplied by
-//! the host application, so it carries no dependency on any particular design-token crate.
+//! Colors and metrics come from a [`WindowChromeTheme`] supplied by the host application.
+//! Client-side caption buttons use Segoe icon glyphs on Windows and Lucide-compatible glyphs on
+//! Linux / FreeBSD.
 
 mod chrome;
 mod controls;
@@ -17,20 +19,19 @@ mod header;
 mod icon;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
-mod native_hit_test;
 mod resize;
 mod shell;
 
 pub use chrome::{WindowChromeStyle, primary_window_attributes};
-pub use controls::{WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize};
-#[cfg(target_os = "windows")]
-pub use controls::{WindowsCaptionFont, window_controls_native};
+pub use controls::{
+    CaptionFont, WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize,
+    window_caption_controls,
+};
 pub use header::{
-    MacosHeaderChromeInset, MacosHeaderLeadingInset, WindowHeaderDragRegion, WindowHeaderRoot,
-    WindowShellHeaderSlot, native_hit_test_client, spawn_window_header,
+    MacosHeaderChromeInset, MacosHeaderLeadingInset, WindowHeaderContentSlot,
+    WindowHeaderDragRegion, WindowHeaderRoot, spawn_window_header,
 };
 pub use icon::WindowIconPlugin;
-pub use native_hit_test::NativeHitTestClient;
 pub use resize::{resize_edge_overlay, spawn_resize_edge_overlay_if_needed};
 pub use shell::{WindowShellContent, WindowShellSlots, spawn_window_shell};
 
@@ -72,7 +73,7 @@ pub struct WindowChromeTheme {
     pub caption: CaptionTheme,
 }
 
-/// Styling for the Win32-style caption buttons drawn on Windows.
+/// Styling for client-side caption buttons.
 #[derive(Clone, Debug)]
 pub struct CaptionTheme {
     /// Foreground (glyph) color for minimize / maximize / close.
@@ -91,13 +92,20 @@ pub struct CaptionTheme {
 
 impl Default for CaptionTheme {
     fn default() -> Self {
+        #[cfg(target_os = "windows")]
+        let glyph_size = 10.0;
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        let glyph_size = 16.0;
+        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "freebsd")))]
+        let glyph_size = 10.0;
+
         return Self {
             foreground: Color::srgb(0.925, 0.925, 0.925),
             button_hover_background: Color::srgb(0.165, 0.165, 0.180),
             close_hover_background: Color::srgb(232.0 / 255.0, 17.0 / 255.0, 32.0 / 255.0),
             close_active_background: Color::srgba(232.0 / 255.0, 17.0 / 255.0, 32.0 / 255.0, 0.8),
             button_width: 36.0,
-            glyph_size: 10.0,
+            glyph_size,
         };
     }
 }
@@ -115,8 +123,7 @@ impl Default for WindowChromeTheme {
     }
 }
 
-/// Installs the window chrome: shell-state sync, caption controls, drag/resize handlers, and
-/// platform-native hit testing.
+/// Installs the window chrome: shell-state sync, caption controls, and drag/resize handlers.
 ///
 /// The window itself must be created with [`primary_window_attributes`] for the same
 /// [`WindowChromeStyle`], typically by feeding it into Bevy's `WindowPlugin`.
@@ -144,8 +151,7 @@ impl Plugin for WindowChromePlugin {
             traffic_light_position_x: self.theme.macos_traffic_light_position_x as f64,
         });
 
-        controls::build(app);
-        native_hit_test::build(app);
+        controls::build(app, style);
 
         if style.uses_app_drag_handler() {
             app.add_observer(header::on_drag_region_press);
@@ -166,10 +172,37 @@ impl Plugin for WindowChromePlugin {
 pub fn primary_window_is_maximized(window_entity: Entity) -> bool {
     return WINIT_WINDOWS.with(|windows_cell| {
         let winit_windows = windows_cell.borrow();
-        return winit_windows
-            .get_window(window_entity)
-            .is_some_and(|backend| backend.is_maximized());
+        let Some(backend) = winit_windows.get_window(window_entity) else {
+            return false;
+        };
+        if backend.is_maximized() {
+            return true;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            return win32_window_is_maximized(backend);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            return false;
+        }
     });
+}
+
+#[cfg(target_os = "windows")]
+fn win32_window_is_maximized(backend: &winit::window::Window) -> bool {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::IsZoomed;
+
+    let Ok(handle) = backend.window_handle() else {
+        return false;
+    };
+    let RawWindowHandle::Win32(window_handle) = handle.as_raw() else {
+        return false;
+    };
+    let hwnd = window_handle.hwnd.get() as HWND;
+    return unsafe { IsZoomed(hwnd) != 0 };
 }
 
 /// Whether the primary window is currently maximized (false on platforms without winit windows).

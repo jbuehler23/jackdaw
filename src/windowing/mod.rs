@@ -1,21 +1,18 @@
 //! Jackdaw window chrome: wires the reusable [`bevy_window_chrome`] crate to jackdaw's design
 //! tokens, branding, and editor entity bookkeeping.
 
-#[cfg(not(target_os = "windows"))]
-mod controls_interactive;
 mod repo_link;
 
-#[cfg(target_os = "windows")]
-pub use bevy_window_chrome::WindowsCaptionFont;
 pub use bevy_window_chrome::{
-    NativeHitTestClient, WindowChromeStyle, WindowHeaderRoot, WindowShellContent,
-    WindowShellHeaderSlot, WindowShellSlots, native_hit_test_client,
+    WindowChromeStyle, WindowHeaderContentSlot, WindowHeaderRoot, WindowShellContent,
+    WindowShellSlots,
 };
 pub use repo_link::{JackdawIcon, header_repo_link};
 
 use bevy::prelude::*;
 use bevy_window_chrome::{
-    CaptionTheme, WindowChromeEntity, WindowChromePlugin, WindowChromeTheme, WindowIconPlugin,
+    CaptionFont, CaptionTheme, WindowChromeEntity, WindowChromePlugin, WindowChromeTheme,
+    WindowIconPlugin,
 };
 use jackdaw_feathers::icons::IconFont;
 use jackdaw_feathers::tokens;
@@ -87,8 +84,6 @@ impl Plugin for WindowingPlugin {
         app.add_plugins(WindowIconPlugin::new(window_icon_png_bytes()));
         app.add_plugins(repo_link::RepoLinkPlugin);
         app.add_observer(tag_chrome_entity_as_editor);
-        #[cfg(not(target_os = "windows"))]
-        controls_interactive::register(app);
     }
 }
 
@@ -103,17 +98,24 @@ pub fn spawn_window_shell<S: Component + Copy>(
     commands: &mut Commands,
     chrome: WindowChromeStyle,
     icon_font: &IconFont,
-    #[cfg(target_os = "windows")] caption_font: &WindowsCaptionFont,
+    #[cfg(target_os = "windows")] caption_font: &CaptionFont,
     screen: S,
 ) -> WindowShellSlots {
-    let theme = jackdaw_window_chrome_theme();
     #[cfg(target_os = "windows")]
-    let caption_controls = {
-        let _ = icon_font;
-        bevy_window_chrome::window_controls_native(&theme, caption_font.0.clone())
+    let _ = icon_font;
+
+    let theme = jackdaw_window_chrome_theme();
+    let caption_font = {
+        #[cfg(target_os = "windows")]
+        {
+            caption_font.0.clone()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            icon_font.0.clone()
+        }
     };
-    #[cfg(not(target_os = "windows"))]
-    let caption_controls = controls_interactive::window_controls_interactive(icon_font.0.clone());
+    let caption_controls = bevy_window_chrome::window_caption_controls(&theme, caption_font);
     return bevy_window_chrome::spawn_window_shell(
         commands,
         chrome,
@@ -121,18 +123,4 @@ pub fn spawn_window_shell<S: Component + Copy>(
         caption_controls,
         screen,
     );
-}
-
-/// Tag menu bar items so they stay in the client area under Win32 `WM_NCHITTEST` (Windows only).
-#[cfg(target_os = "windows")]
-pub fn mark_menu_bar_native_clients(world: &mut World) {
-    let menu_item_entities: Vec<Entity> = world
-        .query_filtered::<Entity, With<jackdaw_widgets::menu_bar::MenuBarItem>>()
-        .iter(world)
-        .collect();
-    for entity in menu_item_entities {
-        if let Ok(mut entity_commands) = world.get_entity_mut(entity) {
-            entity_commands.insert(NativeHitTestClient);
-        }
-    }
 }

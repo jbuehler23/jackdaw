@@ -1,19 +1,16 @@
-//! Shared window header shell: caption controls, drag region, and an empty content slot.
+//! Window header shell: caption controls, drag region, and an empty content slot.
 
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 
-use crate::native_hit_test::NativeHitTestClient;
 use crate::{WindowChromeEntity, WindowChromeStyle, WindowChromeTheme};
 
 #[derive(Component)]
 pub struct WindowHeaderRoot;
 
-/// Empty flex region between leading chrome and caption controls; fill with screen content.
 #[derive(Component)]
-pub struct WindowShellHeaderSlot;
+pub struct WindowHeaderContentSlot;
 
-/// Backplate behind header chrome; receives window-drag presses on empty title-bar space.
 #[derive(Component)]
 pub struct WindowHeaderDragRegion;
 
@@ -35,10 +32,8 @@ fn macos_traffic_light_inset(style: WindowChromeStyle, theme: &WindowChromeTheme
 
 /// Window header chrome with an empty [`WindowShellHeaderSlot`]. Returns the slot entity.
 ///
-/// `caption_controls` is the minimize/maximize/close cluster bundle. On Windows, use
-/// [`crate::window_controls_native`]; on other platforms supply your own button widgets carrying
-/// the [`crate::WindowControlsMinimize`] / [`crate::WindowControlsMaximize`] /
-/// [`crate::WindowControlsClose`] markers.
+/// `caption_controls` is the minimize/maximize/close cluster bundle. Prefer
+/// [`crate::window_caption_controls`] for the platform-appropriate cluster.
 pub fn spawn_window_header(
     parent: &mut ChildSpawnerCommands,
     theme: &WindowChromeTheme,
@@ -175,7 +170,7 @@ fn caption_controls_slot(show_custom_controls: bool, caption_controls: impl Bund
 
 fn header_content_slot() -> impl Bundle {
     return (
-        WindowShellHeaderSlot,
+        WindowHeaderContentSlot,
         WindowChromeEntity,
         Pickable::IGNORE,
         Node {
@@ -203,12 +198,4 @@ pub(crate) fn on_drag_region_press(
         return;
     };
     window.start_drag_move();
-}
-
-/// Marks a header widget bundle as client-area for native non-client hit testing (Windows).
-///
-/// Any interactive widget placed in the title-bar drag region (menus, tabs, buttons) must be
-/// tagged so Win32 hit testing treats it as client area instead of a window-drag surface.
-pub fn native_hit_test_client(content: impl Bundle) -> impl Bundle {
-    return (NativeHitTestClient, content);
 }

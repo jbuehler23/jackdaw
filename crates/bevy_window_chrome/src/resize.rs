@@ -22,20 +22,18 @@ pub(crate) struct WindowResizeEdge(pub CompassOctant);
 pub fn spawn_resize_edge_overlay_if_needed(
     parent: &mut ChildSpawnerCommands,
     style: WindowChromeStyle,
-    header_height: f32,
 ) {
     if style.uses_resize_edge_overlay() {
-        parent.spawn(resize_edge_overlay(header_height));
+        parent.spawn(resize_edge_overlay());
     }
 }
 
 /// Invisible edge strips for borderless window resize (client-side chrome only).
 ///
-/// The top edge starts below the header band so it does not fight the title-bar drag region.
+/// Stacked above the header drag region and application content so edge picks always win.
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-pub fn resize_edge_overlay(header_height: f32) -> impl Bundle {
+pub fn resize_edge_overlay() -> impl Bundle {
     let thickness = px(RESIZE_HANDLE_THICKNESS);
-    let header_band = px(header_height);
     return (
         WindowResizeRoot,
         WindowChromeEntity,
@@ -51,7 +49,7 @@ pub fn resize_edge_overlay(header_height: f32) -> impl Bundle {
                 CompassOctant::North,
                 Node {
                     position_type: PositionType::Absolute,
-                    top: header_band,
+                    top: px(0.0),
                     left: px(0.0),
                     width: percent(100),
                     height: thickness,

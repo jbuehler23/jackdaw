@@ -61,7 +61,7 @@ pub fn spawn_window_shell<S: Component + Copy>(
                     .id(),
             );
             #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-            spawn_resize_edge_overlay_if_needed(shell, style, theme.header_height);
+            spawn_resize_edge_overlay_if_needed(shell, style);
         });
     return (
         header_slot.expect("window shell header slot spawned"),

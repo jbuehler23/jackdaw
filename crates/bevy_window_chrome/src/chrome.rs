@@ -1,9 +1,10 @@
 //! Platform-specific primary-window chrome strategy (hybrid native + custom UI).
 //!
-//! - **Windows**: borderless window with Win32 non-client hit testing for drag, resize, and caption buttons.
+//! - **Windows / Linux / FreeBSD**: borderless client-side chrome with Bevy-driven drag, resize,
+//!   and caption buttons.
 //! - **macOS**: native traffic lights with a transparent integrated title bar.
-//! - **Linux**: client-side custom chrome by default; opt into server decorations via
-//!   the decorations preference (`server`/`system` vs `client`).
+//! - **Linux / FreeBSD**: opt into server decorations via the decorations preference
+//!   (`server`/`system` vs `client`).
 
 use bevy::prelude::*;
 use bevy::window::Window;
@@ -83,30 +84,22 @@ impl WindowChromeStyle {
     }
 
     pub fn uses_resize_edge_overlay(self) -> bool {
-        return self == WindowChromeStyle::CustomClient && !self.uses_native_hit_testing();
+        return self == WindowChromeStyle::CustomClient;
     }
 
     pub fn uses_shell_corner_radius(self) -> bool {
         return self == WindowChromeStyle::CustomClient;
     }
 
-    pub fn uses_native_hit_testing(self) -> bool {
-        return match self {
-            WindowChromeStyle::CustomClient => cfg!(target_os = "windows"),
-            WindowChromeStyle::MacNativeTitlebar | WindowChromeStyle::SystemServer => true,
-        };
-    }
-
     pub fn uses_app_drag_handler(self) -> bool {
         return match self {
-            WindowChromeStyle::MacNativeTitlebar => true,
-            WindowChromeStyle::CustomClient => !cfg!(target_os = "windows"),
+            WindowChromeStyle::MacNativeTitlebar | WindowChromeStyle::CustomClient => true,
             WindowChromeStyle::SystemServer => false,
         };
     }
 
     pub fn uses_app_caption_button_handlers(self) -> bool {
-        return self.shows_custom_window_controls() && !self.uses_native_hit_testing();
+        return self.shows_custom_window_controls();
     }
 }
 

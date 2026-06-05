@@ -10,6 +10,8 @@ use jackdaw_feathers::{
 };
 use jackdaw_localization::LocalizedText;
 
+#[cfg(target_os = "windows")]
+use bevy_window_chrome::CaptionFont;
 use crate::{
     EditorEntity,
     active_tool::ActiveTool,
@@ -27,12 +29,8 @@ use crate::{
     remote::ConnectionManager,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
-    windowing::{
-        JackdawIcon, NativeHitTestClient, WindowChromeStyle, header_repo_link, spawn_window_shell,
-    },
+    windowing::{JackdawIcon, WindowChromeStyle, header_repo_link, spawn_window_shell},
 };
-#[cfg(target_os = "windows")]
-use crate::windowing::WindowsCaptionFont;
 
 /// Discriminator for the header tab kinds the editor knows how to host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -217,14 +215,14 @@ pub fn spawn_editor_layout(
     editor_font: Res<EditorFont>,
     jackdaw_icon: Res<JackdawIcon>,
     chrome: Res<WindowChromeStyle>,
-    #[cfg(target_os = "windows")] windows_caption_font: Res<WindowsCaptionFont>,
+    #[cfg(target_os = "windows")] caption_font: Res<CaptionFont>,
 ) {
     let (header, body) = spawn_window_shell(
         &mut commands,
         *chrome,
         &icon_font,
         #[cfg(target_os = "windows")]
-        &windows_caption_font,
+        &caption_font,
         EditorEntity,
     );
     spawn_editor(
@@ -322,7 +320,6 @@ fn pie_transport_button(
 ) -> impl Bundle {
     (
         kind,
-        NativeHitTestClient,
         EditorEntity,
         Node {
             align_items: AlignItems::Center,

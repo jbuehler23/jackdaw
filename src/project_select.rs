@@ -18,7 +18,7 @@ use jackdaw_localization::LocalizedText;
 use rfd::{AsyncFileDialog, FileHandle};
 
 #[cfg(target_os = "windows")]
-use crate::windowing::WindowsCaptionFont;
+use bevy_window_chrome::CaptionFont;
 use crate::{
     AppState,
     command_runner::{CommandIo, LogChunk},
@@ -354,7 +354,7 @@ fn spawn_project_selector(
     icon_font: Res<jackdaw_feathers::icons::IconFont>,
     jackdaw_icon: Res<JackdawIcon>,
     chrome: Res<WindowChromeStyle>,
-    #[cfg(target_os = "windows")] windows_caption_font: Res<WindowsCaptionFont>,
+    #[cfg(target_os = "windows")] caption_font: Res<CaptionFont>,
     pending: Option<Res<PendingAutoOpen>>,
 ) {
     if let Some(pending) = pending {
@@ -384,7 +384,7 @@ fn spawn_project_selector(
         *chrome,
         &icon_font,
         #[cfg(target_os = "windows")]
-        &windows_caption_font,
+        &caption_font,
         ProjectSelectorRoot,
     );
     fill_project_selector(

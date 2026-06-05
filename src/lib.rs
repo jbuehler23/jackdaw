@@ -2200,8 +2200,6 @@ fn populate_menu(
     let menu_items = menu_items.into_values().flatten();
 
     jackdaw_feathers::menu_bar::populate_menu_bar(world, menu_bar_entity, menu_items);
-    #[cfg(target_os = "windows")]
-    windowing::mark_menu_bar_native_clients(world);
 }
 
 /// Open a registered dock window by id.

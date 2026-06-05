@@ -9,7 +9,7 @@ use jackdaw_feathers::button::{ButtonClickEvent, ButtonSize, ButtonVariant, Edit
 use jackdaw_feathers::tokens;
 use jackdaw_feathers::tokens::{BORDER_RADIUS_MD, ICON_MD};
 
-use bevy_window_chrome::{MacosHeaderLeadingInset, NativeHitTestClient, WindowChromeStyle};
+use bevy_window_chrome::{MacosHeaderLeadingInset, WindowChromeStyle};
 
 use crate::EditorEntity;
 
@@ -41,12 +41,11 @@ impl Plugin for RepoLinkPlugin {
     }
 }
 
-/// Header row slot wrapping [`jackdaw_link_button`] with platform-appropriate leading inset and hit testing.
+/// Header row slot wrapping [`jackdaw_link_button`] with platform-appropriate leading inset.
 pub fn header_repo_link(image: Handle<Image>, chrome: WindowChromeStyle) -> impl Bundle {
     return (
         MacosHeaderLeadingInset,
         Pickable::IGNORE,
-        NativeHitTestClient,
         Node {
             flex_shrink: 0.0,
             height: percent(100),
@@ -62,7 +61,7 @@ pub fn header_repo_link(image: Handle<Image>, chrome: WindowChromeStyle) -> impl
 }
 
 /// Button with icon to open the Jackdaw repository in the system browser.
-pub fn jackdaw_link_button(image: Handle<Image>) -> impl Bundle {
+fn jackdaw_link_button(image: Handle<Image>) -> impl Bundle {
     let variant = ButtonVariant::Ghost;
     (
         JackdawRepoLinkButton,
