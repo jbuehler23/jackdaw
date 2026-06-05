@@ -3,14 +3,9 @@
 //! - **Windows / Linux / FreeBSD**: borderless client-side chrome with Bevy-driven drag, resize,
 //!   and caption buttons.
 //! - **macOS**: native traffic lights with a transparent integrated title bar.
-//! - **Linux / FreeBSD**: opt into server decorations via the decorations preference
-//!   (`server`/`system` vs `client`).
 
 use bevy::prelude::*;
 use bevy::window::Window;
-
-/// Default environment variable consulted by [`WindowChromeStyle::current`] on Linux/FreeBSD.
-pub const DEFAULT_DECORATIONS_ENV: &str = "BEVY_WINDOW_DECORATIONS";
 
 /// How the primary window integrates OS window chrome with the application's header UI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Resource)]
@@ -19,63 +14,19 @@ pub enum WindowChromeStyle {
     CustomClient,
     /// macOS: keep native traffic lights; draw the header under a transparent title bar.
     MacNativeTitlebar,
-    /// OS-provided title bar (server-side decorations when available).
-    SystemServer,
 }
 
 impl WindowChromeStyle {
-    /// Resolve the chrome strategy for this process, reading [`DEFAULT_DECORATIONS_ENV`]
-    /// for the Linux/FreeBSD client-vs-server preference.
-    pub fn current() -> Self {
-        let decorations = std::env::var(DEFAULT_DECORATIONS_ENV).ok();
-        return Self::resolve(decorations.as_deref());
-    }
-
-    /// Resolve the chrome strategy, taking an explicit decorations preference.
-    ///
-    /// `decorations` only affects Linux/FreeBSD: `"server"`/`"system"` selects server-side
-    /// decorations, `"client"`/`None` selects client-side chrome. Other targets ignore it.
-    pub fn resolve(decorations: Option<&str>) -> Self {
+    /// Platform-default chrome strategy for this process.
+    pub fn platform_default() -> Self {
         #[cfg(target_os = "macos")]
         {
-            let _ = decorations;
             return WindowChromeStyle::MacNativeTitlebar;
         }
 
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        #[cfg(not(target_os = "macos"))]
         {
-            return match decorations
-                .map(str::trim)
-                .map(str::to_ascii_lowercase)
-                .as_deref()
-            {
-                Some("server") | Some("system") => WindowChromeStyle::SystemServer,
-                Some("client") | None => WindowChromeStyle::CustomClient,
-                Some(other) => {
-                    bevy::log::warn!(
-                        "bevy_window_chrome: unknown window decorations preference {other:?}; \
-                         expected \"client\" or \"server\", using client-side chrome"
-                    );
-                    WindowChromeStyle::CustomClient
-                }
-            };
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            let _ = decorations;
             return WindowChromeStyle::CustomClient;
-        }
-
-        #[cfg(not(any(
-            target_os = "macos",
-            target_os = "windows",
-            target_os = "linux",
-            target_os = "freebsd"
-        )))]
-        {
-            let _ = decorations;
-            return WindowChromeStyle::SystemServer;
         }
     }
 
@@ -89,13 +40,6 @@ impl WindowChromeStyle {
 
     pub fn uses_shell_corner_radius(self) -> bool {
         return self == WindowChromeStyle::CustomClient;
-    }
-
-    pub fn uses_app_drag_handler(self) -> bool {
-        return match self {
-            WindowChromeStyle::MacNativeTitlebar | WindowChromeStyle::CustomClient => true,
-            WindowChromeStyle::SystemServer => false,
-        };
     }
 
     pub fn uses_app_caption_button_handlers(self) -> bool {
@@ -118,10 +62,6 @@ pub fn primary_window_attributes(style: WindowChromeStyle) -> Window {
             fullsize_content_view: true,
             titlebar_show_title: false,
             titlebar_show_buttons: true,
-            ..default()
-        },
-        WindowChromeStyle::SystemServer => Window {
-            decorations: true,
             ..default()
         },
     };

@@ -6,8 +6,6 @@
 //! - **Windows / Linux / FreeBSD**: borderless client-side chrome with Bevy-driven drag, resize,
 //!   and caption buttons.
 //! - **macOS**: native traffic lights with a transparent integrated title bar.
-//! - **Linux / FreeBSD**: opt into server decorations via the `BEVY_WINDOW_DECORATIONS=server`
-//!   environment variable (or [`WindowChromeStyle::resolve`]).
 //!
 //! Colors and metrics come from a [`WindowChromeTheme`] supplied by the host application.
 //! Client-side caption buttons use Segoe icon glyphs on Windows and Lucide-compatible glyphs on
@@ -153,9 +151,7 @@ impl Plugin for WindowChromePlugin {
 
         controls::build(app, style);
 
-        if style.uses_app_drag_handler() {
-            app.add_observer(header::on_drag_region_press);
-        }
+        app.add_observer(header::on_drag_region_press);
 
         #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
         {

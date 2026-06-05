@@ -45,15 +45,9 @@ fn is_pride_month() -> bool {
     return date_time.month() == Month::June;
 }
 
-/// Resolves jackdaw's window chrome style, honoring `JACKDAW_WINDOW_DECORATIONS`.
-pub fn jackdaw_window_chrome_style() -> WindowChromeStyle {
-    let decorations = std::env::var("JACKDAW_WINDOW_DECORATIONS").ok();
-    return WindowChromeStyle::resolve(decorations.as_deref());
-}
-
 /// Primary-window attributes for jackdaw's current platform chrome strategy.
 pub fn primary_window_attributes() -> Window {
-    return bevy_window_chrome::primary_window_attributes(jackdaw_window_chrome_style());
+    return bevy_window_chrome::primary_window_attributes(WindowChromeStyle::platform_default());
 }
 
 /// Window chrome theme built from jackdaw's design tokens.
@@ -76,7 +70,7 @@ pub struct WindowingPlugin;
 
 impl Plugin for WindowingPlugin {
     fn build(&self, app: &mut App) {
-        let style = jackdaw_window_chrome_style();
+        let style = WindowChromeStyle::platform_default();
         app.add_plugins(WindowChromePlugin::new(
             jackdaw_window_chrome_theme(),
             style,
