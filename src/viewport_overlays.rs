@@ -2,10 +2,12 @@ use std::f32::consts::FRAC_PI_2;
 
 use crate::brush::{self, BrushMeshCache};
 use crate::entity_ops::EmptyEntity;
+use crate::gizmos::gizmo_world_scale;
 use crate::selection::Selected;
-use crate::viewport::{AxisIndicator, SceneViewport};
+use crate::viewport::{AxisIndicator, MainViewportCamera, SceneViewport};
 use crate::{JackdawDrawSystems, default_style};
 use avian3d::parry::transformation::convex_hull;
+use bevy::light::{FogVolume, VolumetricFog};
 use bevy::prelude::*;
 use bevy::ui::widget::ViewportNode;
 use jackdaw_jsn::BrushGroup;
@@ -21,11 +23,20 @@ struct ViewportAxisLabels {
     labels: [Entity; 3],
 }
 
+/// Gizmo group for persistent entity markers (lights, cameras, empties)
+/// and their selected-only spatial extents. Carries its own slight
+/// negative `depth_bias` so the markers read on top of geometry,
+/// separate from the transform gizmo's group.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct EntityGizmoGroup;
+
 pub struct ViewportOverlaysPlugin;
 
 impl Plugin for ViewportOverlaysPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OverlaySettings>()
+            .init_gizmo_group::<EntityGizmoGroup>()
+            .add_systems(Startup, configure_entity_gizmos)
             .add_systems(
                 Update,
                 ensure_axis_labels.run_if(in_state(crate::AppState::Editor)),
@@ -35,6 +46,10 @@ impl Plugin for ViewportOverlaysPlugin {
                 draw_selection_bounding_boxes.in_set(JackdawDrawSystems),
             )
             .add_systems(
+                Update,
+                ensure_volumetric_fog.run_if(in_state(crate::AppState::Editor)),
+            )
+            .add_systems(
                 PostUpdate,
                 (
                     draw_point_light_gizmo,
@@ -42,6 +57,10 @@ impl Plugin for ViewportOverlaysPlugin {
                     draw_dir_light_gizmo,
                     draw_camera_gizmo,
                     draw_empty_entity_marker,
+                    draw_animation_player_marker,
+                    draw_audio_source_marker,
+                    draw_fog_volume_gizmo,
+                    draw_reflection_probe_gizmo,
                 )
                     .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
                     .run_if(in_state(crate::AppState::Editor)),
@@ -280,6 +299,25 @@ pub(crate) fn collect_descendant_mesh_world_vertices(
     }
 }
 
+fn configure_entity_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
+    let (config, _) = config_store.config_mut::<EntityGizmoGroup>();
+    config.depth_bias = -1.0;
+}
+
+/// Camera-distance scale for a constant on-screen marker size at
+/// `marker_pos`, or a small fixed world size when no main-viewport
+/// camera is available.
+fn marker_scale(
+    camera_query: &Query<(&GlobalTransform, &Projection), With<MainViewportCamera>>,
+    marker_pos: Vec3,
+) -> f32 {
+    const FALLBACK_SCALE: f32 = 1.0;
+    match camera_query.iter().next() {
+        Some((cam_tf, projection)) => gizmo_world_scale(projection, cam_tf, marker_pos),
+        None => FALLBACK_SCALE,
+    }
+}
+
 /// Bright bounding-box color when selected, dim marker color otherwise.
 fn marker_color(is_selected: bool) -> Color {
     if is_selected {
@@ -294,8 +332,9 @@ fn marker_color(is_selected: bool) -> Color {
 /// editor-local lights (e.g. the material-preview rig) stay out of
 /// the main viewport.
 fn draw_point_light_gizmo(
-    mut gizmos: Gizmos,
+    mut gizmos: Gizmos<EntityGizmoGroup>,
     settings: Res<OverlaySettings>,
+    camera_query: Query<(&GlobalTransform, &Projection), With<MainViewportCamera>>,
     query: Query<
         (
             Entity,
@@ -307,15 +346,20 @@ fn draw_point_light_gizmo(
         With<crate::entity_ops::SceneLight>,
     >,
 ) {
-    if !settings.show_bounding_boxes {
-        return;
-    }
     for (_entity, light, tf, inherited_vis, selected) in &query {
         if !inherited_vis.get() {
             continue;
         }
         let color = marker_color(selected);
         let pos = tf.translation();
+        // Always-on constant-size marker so the light is findable.
+        let scale = marker_scale(&camera_query, pos);
+        gizmos.sphere(Isometry3d::from_translation(pos), scale * 0.15, color);
+
+        // Full range extent only when selected or the override is on.
+        if !(selected || settings.show_bounding_boxes) {
+            continue;
+        }
         gizmos.circle(
             Isometry3d::new(pos, Quat::from_rotation_x(FRAC_PI_2)),
             light.range,
@@ -332,8 +376,9 @@ fn draw_point_light_gizmo(
 
 /// Spot light cone: `outer_angle` and `range`.
 fn draw_spot_light_gizmo(
-    mut gizmos: Gizmos,
+    mut gizmos: Gizmos<EntityGizmoGroup>,
     settings: Res<OverlaySettings>,
+    camera_query: Query<(&GlobalTransform, &Projection), With<MainViewportCamera>>,
     query: Query<
         (
             &SpotLight,
@@ -344,15 +389,20 @@ fn draw_spot_light_gizmo(
         With<crate::entity_ops::SceneLight>,
     >,
 ) {
-    if !settings.show_bounding_boxes {
-        return;
-    }
     for (light, tf, inherited_vis, selected) in &query {
         if !inherited_vis.get() {
             continue;
         }
         let color = marker_color(selected);
         let pos = tf.translation();
+        // Always-on constant-size marker so the light is findable.
+        let scale = marker_scale(&camera_query, pos);
+        gizmos.sphere(Isometry3d::from_translation(pos), scale * 0.15, color);
+
+        // Full cone extent only when selected or the override is on.
+        if !(selected || settings.show_bounding_boxes) {
+            continue;
+        }
         let fwd = tf.forward().as_vec3();
         let right = tf.right().as_vec3();
         let up = tf.up().as_vec3();
@@ -374,16 +424,14 @@ fn draw_spot_light_gizmo(
 
 /// Directional light: arrow along the forward direction.
 fn draw_dir_light_gizmo(
-    mut gizmos: Gizmos,
+    mut gizmos: Gizmos<EntityGizmoGroup>,
     settings: Res<OverlaySettings>,
+    camera_query: Query<(&GlobalTransform, &Projection), With<MainViewportCamera>>,
     query: Query<
         (&GlobalTransform, &InheritedVisibility, Has<Selected>),
         (With<DirectionalLight>, With<crate::entity_ops::SceneLight>),
     >,
 ) {
-    if !settings.show_bounding_boxes {
-        return;
-    }
     for (tf, inherited_vis, selected) in &query {
         if !inherited_vis.get() {
             continue;
@@ -391,6 +439,16 @@ fn draw_dir_light_gizmo(
         let color = marker_color(selected);
         let pos = tf.translation();
         let dir = tf.forward().as_vec3();
+        // Always-on constant-size marker: a small sphere plus a short
+        // forward arrow so the light's direction reads.
+        let scale = marker_scale(&camera_query, pos);
+        gizmos.sphere(Isometry3d::from_translation(pos), scale * 0.15, color);
+        gizmos.arrow(pos, pos + dir * (scale * 0.6), color);
+
+        // Full direction arrow only when selected or the override is on.
+        if !(selected || settings.show_bounding_boxes) {
+            continue;
+        }
         gizmos.arrow(pos, pos + dir * 2.0, color);
     }
 }
@@ -400,8 +458,9 @@ fn draw_dir_light_gizmo(
 /// viewport camera and the material-preview camera don't get a
 /// frustum gizmo.
 fn draw_camera_gizmo(
-    mut gizmos: Gizmos,
+    mut gizmos: Gizmos<EntityGizmoGroup>,
     settings: Res<OverlaySettings>,
+    camera_query: Query<(&GlobalTransform, &Projection), With<MainViewportCamera>>,
     query: Query<
         (
             &Projection,
@@ -412,25 +471,36 @@ fn draw_camera_gizmo(
         With<crate::entity_ops::SceneCamera>,
     >,
 ) {
-    if !settings.show_bounding_boxes {
-        return;
-    }
     for (projection, tf, inherited_vis, selected) in &query {
         if !inherited_vis.get() {
+            continue;
+        }
+        let color = marker_color(selected);
+        let pos = tf.translation();
+        // Always-on constant-size marker: a small body cube oriented
+        // with the camera so it is findable.
+        let scale = marker_scale(&camera_query, pos);
+        let body = Transform {
+            translation: pos,
+            rotation: tf.rotation(),
+            scale: Vec3::splat(scale * 0.18 * 2.0),
+        };
+        gizmos.cube(body, color);
+
+        // Full frustum only when selected or the override is on.
+        if !(selected || settings.show_bounding_boxes) {
             continue;
         }
         let Projection::Perspective(proj) = projection else {
             continue;
         };
-        let color = marker_color(selected);
         let depth = 2.0;
         let half_v = depth * (proj.fov / 2.0).tan();
         let half_h = half_v * proj.aspect_ratio;
         let fwd = tf.forward().as_vec3();
         let right = tf.right().as_vec3();
         let up = tf.up().as_vec3();
-        let origin = tf.translation();
-        let far_center = origin + fwd * depth;
+        let far_center = pos + fwd * depth;
         let corners = [
             far_center + right * half_h + up * half_v,
             far_center - right * half_h + up * half_v,
@@ -439,7 +509,7 @@ fn draw_camera_gizmo(
         ];
         // 4 lines from origin to far corners
         for &c in &corners {
-            gizmos.line(origin, c, color);
+            gizmos.line(pos, c, color);
         }
         // Far rectangle
         for i in 0..4 {
@@ -454,24 +524,173 @@ fn draw_camera_gizmo(
 /// the `show_bounding_boxes` setting because Empty entities have no
 /// other geometry to anchor the user's eye.
 fn draw_empty_entity_marker(
-    mut gizmos: Gizmos,
+    mut gizmos: Gizmos<EntityGizmoGroup>,
     query: Query<(&GlobalTransform, &InheritedVisibility, Has<Selected>), With<EmptyEntity>>,
 ) {
     // Fixed 0.5-unit cube so the marker is visible at any camera
     // distance. Not the world AABB: nothing to compute one from.
-    const SIZE: f32 = 0.25;
+    const SIZE: f32 = 0.5;
     for (tf, inherited_vis, selected) in &query {
         if !inherited_vis.get() {
             continue;
         }
         let color = marker_color(selected);
         let pos = tf.translation();
-        draw_aabb_wireframe(
-            &mut gizmos,
-            pos - Vec3::splat(SIZE),
-            pos + Vec3::splat(SIZE),
+        gizmos.cube(
+            Transform::from_translation(pos).with_scale(Vec3::splat(SIZE)),
             color,
         );
+    }
+}
+
+/// Always-on constant-size marker for entities tagged with
+/// [`SceneAnimationPlayer`](crate::entity_ops::SceneAnimationPlayer):
+/// a small wireframe octahedron. These entities have no spatial
+/// extent, so the marker is the only on-screen cue.
+fn draw_animation_player_marker(
+    mut gizmos: Gizmos<EntityGizmoGroup>,
+    camera_query: Query<(&GlobalTransform, &Projection), With<MainViewportCamera>>,
+    query: Query<
+        (&GlobalTransform, &InheritedVisibility, Has<Selected>),
+        With<crate::entity_ops::SceneAnimationPlayer>,
+    >,
+) {
+    for (tf, inherited_vis, selected) in &query {
+        if !inherited_vis.get() {
+            continue;
+        }
+        let pos = tf.translation();
+        let color = marker_color(selected);
+        let scale = marker_scale(&camera_query, pos);
+        let r = scale * 0.18;
+        let px = pos + Vec3::X * r;
+        let nx = pos - Vec3::X * r;
+        let py = pos + Vec3::Y * r;
+        let ny = pos - Vec3::Y * r;
+        let pz = pos + Vec3::Z * r;
+        let nz = pos - Vec3::Z * r;
+        // Top apex (py) and bottom apex (ny) each connect to the four
+        // equatorial points, forming the eight edges of the
+        // octahedron's two pyramids, plus the four equatorial edges.
+        for &equator in &[px, pz, nx, nz] {
+            gizmos.line(py, equator, color);
+            gizmos.line(ny, equator, color);
+        }
+        gizmos.line(px, pz, color);
+        gizmos.line(pz, nx, color);
+        gizmos.line(nx, nz, color);
+        gizmos.line(nz, px, color);
+    }
+}
+
+/// Always-on constant-size marker for entities tagged with
+/// [`SceneAudioSource`](crate::entity_ops::SceneAudioSource): a small
+/// wireframe cube. These entities have no spatial extent, so the
+/// marker is the only on-screen cue.
+fn draw_audio_source_marker(
+    mut gizmos: Gizmos<EntityGizmoGroup>,
+    camera_query: Query<(&GlobalTransform, &Projection), With<MainViewportCamera>>,
+    query: Query<
+        (&GlobalTransform, &InheritedVisibility, Has<Selected>),
+        With<crate::entity_ops::SceneAudioSource>,
+    >,
+) {
+    for (tf, inherited_vis, selected) in &query {
+        if !inherited_vis.get() {
+            continue;
+        }
+        let pos = tf.translation();
+        let color = marker_color(selected);
+        let scale = marker_scale(&camera_query, pos);
+        gizmos.cube(
+            Transform::from_translation(pos).with_scale(Vec3::splat(scale * 0.18)),
+            color,
+        );
+    }
+}
+
+/// `FogVolume` only renders through a camera that also carries
+/// `VolumetricFog`. When any scene fog volume exists, give each main
+/// viewport camera the volumetric-fog pass so the fog is visible.
+fn ensure_volumetric_fog(
+    mut commands: Commands,
+    fog_volumes: Query<(), With<crate::entity_ops::SceneFogVolume>>,
+    cameras: Query<Entity, (With<MainViewportCamera>, Without<VolumetricFog>)>,
+) {
+    if fog_volumes.is_empty() {
+        return;
+    }
+    for camera in &cameras {
+        commands
+            .entity(camera)
+            .insert_if_new(VolumetricFog::default());
+    }
+}
+
+/// Fog volume: small constant-size marker so it stays findable, plus
+/// the actual volume box (unit cube scaled by `Transform.scale`) when
+/// selected or the bounding-box override is on. Filtered by the
+/// [`SceneFogVolume`](crate::entity_ops::SceneFogVolume) marker.
+fn draw_fog_volume_gizmo(
+    mut gizmos: Gizmos<EntityGizmoGroup>,
+    settings: Res<OverlaySettings>,
+    camera_query: Query<(&GlobalTransform, &Projection), With<MainViewportCamera>>,
+    query: Query<
+        (&GlobalTransform, &InheritedVisibility, Has<Selected>),
+        (With<FogVolume>, With<crate::entity_ops::SceneFogVolume>),
+    >,
+) {
+    for (global, inherited_vis, selected) in &query {
+        if !inherited_vis.get() {
+            continue;
+        }
+        let color = marker_color(selected);
+        let pos = global.translation();
+        let scale = marker_scale(&camera_query, pos);
+        gizmos.cube(
+            Transform::from_translation(pos).with_scale(Vec3::splat(scale * 0.18)),
+            color,
+        );
+
+        // Actual volume extent only when selected or the override is on.
+        if !(selected || settings.show_bounding_boxes) {
+            continue;
+        }
+        gizmos.cube(global.compute_transform(), color);
+    }
+}
+
+/// Reflection probe: small constant-size marker so it stays findable,
+/// plus the influence-region box (unit cube scaled by `Transform.scale`)
+/// when selected or the bounding-box override is on. Filtered by the
+/// [`SceneReflectionProbe`](crate::entity_ops::SceneReflectionProbe)
+/// marker.
+fn draw_reflection_probe_gizmo(
+    mut gizmos: Gizmos<EntityGizmoGroup>,
+    settings: Res<OverlaySettings>,
+    camera_query: Query<(&GlobalTransform, &Projection), With<MainViewportCamera>>,
+    query: Query<
+        (&GlobalTransform, &InheritedVisibility, Has<Selected>),
+        With<crate::entity_ops::SceneReflectionProbe>,
+    >,
+) {
+    for (global, inherited_vis, selected) in &query {
+        if !inherited_vis.get() {
+            continue;
+        }
+        let color = marker_color(selected);
+        let pos = global.translation();
+        let scale = marker_scale(&camera_query, pos);
+        gizmos.cube(
+            Transform::from_translation(pos).with_scale(Vec3::splat(scale * 0.18)),
+            color,
+        );
+
+        // Influence region only when selected or the override is on.
+        if !(selected || settings.show_bounding_boxes) {
+            continue;
+        }
+        gizmos.cube(global.compute_transform(), color);
     }
 }
 

@@ -53,7 +53,11 @@ impl Plugin for EntityOpsPlugin {
         }
         app.register_type::<EmptyEntity>()
             .register_type::<SceneCamera>()
-            .register_type::<SceneLight>();
+            .register_type::<SceneLight>()
+            .register_type::<SceneFogVolume>()
+            .register_type::<SceneReflectionProbe>()
+            .register_type::<SceneAnimationPlayer>()
+            .register_type::<SceneAudioSource>();
     }
 }
 
@@ -80,6 +84,34 @@ pub struct SceneCamera;
 #[reflect(Component, @crate::EditorHidden)]
 pub struct SceneLight;
 
+/// Marks a fog-volume entity (`Add > Fog Volume`), so viewport
+/// overlays draw a box gizmo at the volume's extent. The box is the
+/// unit cube scaled by the entity's `Transform.scale`.
+#[derive(Component, Default, Reflect)]
+#[reflect(Component, @crate::EditorHidden)]
+pub struct SceneFogVolume;
+
+/// Marks a reflection-probe entity (`Add > Reflection Probe`), so
+/// viewport overlays draw a box gizmo at the probe's influence region.
+/// The box is the unit cube scaled by the entity's `Transform.scale`.
+#[derive(Component, Default, Reflect)]
+#[reflect(Component, @crate::EditorHidden)]
+pub struct SceneReflectionProbe;
+
+/// Marks an animation-player entity (`Add > Animation Player`) so
+/// viewport overlays draw a marker gizmo for it. The entity has no
+/// spatial extent, so the marker is the only on-screen cue.
+#[derive(Component, Default, Reflect)]
+#[reflect(Component, @crate::EditorHidden)]
+pub struct SceneAnimationPlayer;
+
+/// Marks an audio-source entity (`Add > Audio Source`) so viewport
+/// overlays draw a marker gizmo for it. The entity has no spatial
+/// extent, so the marker is the only on-screen cue.
+#[derive(Component, Default, Reflect)]
+#[reflect(Component, @crate::EditorHidden)]
+pub struct SceneAudioSource;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntityTemplate {
     Empty,
@@ -89,6 +121,14 @@ pub enum EntityTemplate {
     DirectionalLight,
     SpotLight,
     Camera3d,
+    Plane,
+    Cylinder,
+    Wedge,
+    Cone,
+    Pyramid,
+    FogVolume,
+    AnimationPlayer,
+    AudioSource,
 }
 
 impl EntityTemplate {
@@ -101,6 +141,14 @@ impl EntityTemplate {
             Self::DirectionalLight => "Directional Light",
             Self::SpotLight => "Spot Light",
             Self::Camera3d => "Camera",
+            Self::Plane => "Plane",
+            Self::Cylinder => "Cylinder",
+            Self::Wedge => "Wedge",
+            Self::Cone => "Cone",
+            Self::Pyramid => "Pyramid",
+            Self::FogVolume => "Fog Volume",
+            Self::AnimationPlayer => "Animation Player",
+            Self::AudioSource => "Audio Source",
         }
     }
 }
@@ -197,6 +245,91 @@ pub fn create_entity(
                     size: UVec2::splat(1),
                 },
                 Transform::from_xyz(0.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+            ))
+            .id(),
+        EntityTemplate::Plane => {
+            let id = commands
+                .spawn((
+                    Name::new("Plane"),
+                    crate::brush::Brush::plane(0.5, 0.5),
+                    Transform::default(),
+                    Visibility::default(),
+                ))
+                .id();
+            commands.queue(apply_last_material(id));
+            id
+        }
+        EntityTemplate::Cylinder => {
+            let id = commands
+                .spawn((
+                    Name::new("Cylinder"),
+                    crate::brush::Brush::cylinder(0.5, 0.5, 16),
+                    Transform::default(),
+                    Visibility::default(),
+                ))
+                .id();
+            commands.queue(apply_last_material(id));
+            id
+        }
+        EntityTemplate::Wedge => {
+            let id = commands
+                .spawn((
+                    Name::new("Wedge"),
+                    crate::brush::Brush::wedge(0.5, 0.5, 0.5),
+                    Transform::default(),
+                    Visibility::default(),
+                ))
+                .id();
+            commands.queue(apply_last_material(id));
+            id
+        }
+        EntityTemplate::Cone => {
+            let id = commands
+                .spawn((
+                    Name::new("Cone"),
+                    crate::brush::Brush::cone(0.5, 0.5, 16),
+                    Transform::default(),
+                    Visibility::default(),
+                ))
+                .id();
+            commands.queue(apply_last_material(id));
+            id
+        }
+        EntityTemplate::Pyramid => {
+            let id = commands
+                .spawn((
+                    Name::new("Pyramid"),
+                    crate::brush::Brush::pyramid(0.5, 0.5, 0.5),
+                    Transform::default(),
+                    Visibility::default(),
+                ))
+                .id();
+            commands.queue(apply_last_material(id));
+            id
+        }
+        EntityTemplate::FogVolume => commands
+            .spawn((
+                Name::new("Fog Volume"),
+                bevy::light::FogVolume::default(),
+                SceneFogVolume,
+                Transform::default(),
+                Visibility::default(),
+            ))
+            .id(),
+        EntityTemplate::AnimationPlayer => commands
+            .spawn((
+                Name::new("Animation Player"),
+                SceneAnimationPlayer,
+                Transform::default(),
+                Visibility::default(),
+            ))
+            .id(),
+        EntityTemplate::AudioSource => commands
+            .spawn((
+                Name::new("Audio Source"),
+                SceneAudioSource,
+                Transform::default(),
+                Visibility::default(),
             ))
             .id(),
     };
@@ -1124,7 +1257,16 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<EntityAddEmptyOp>()
         .register_operator::<EntityAddNavmeshOp>()
         .register_operator::<EntityAddTerrainOp>()
-        .register_operator::<EntityAddPrefabOp>();
+        .register_operator::<EntityAddPrefabOp>()
+        .register_operator::<EntityAddPlaneOp>()
+        .register_operator::<EntityAddCylinderOp>()
+        .register_operator::<EntityAddWedgeOp>()
+        .register_operator::<EntityAddConeOp>()
+        .register_operator::<EntityAddPyramidOp>()
+        .register_operator::<EntityAddAnimationPlayerOp>()
+        .register_operator::<EntityAddAudioSourceOp>()
+        .register_operator::<EntityAddFogVolumeOp>()
+        .register_operator::<EntityAddReflectionProbeOp>();
 
     #[cfg(feature = "multiplayer")]
     ctx.register_operator::<EntityAddSpawnPointOp>()
@@ -1378,6 +1520,136 @@ pub(crate) fn entity_add_empty(
 ) -> OperatorResult {
     commands.queue(|world: &mut World| {
         create_entity_in_world(world, EntityTemplate::Empty);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.plane", label = "Plane")]
+pub(crate) fn entity_add_plane(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::Plane);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.cylinder", label = "Cylinder")]
+pub(crate) fn entity_add_cylinder(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::Cylinder);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.wedge", label = "Wedge")]
+pub(crate) fn entity_add_wedge(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::Wedge);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.cone", label = "Cone")]
+pub(crate) fn entity_add_cone(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::Cone);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.pyramid", label = "Pyramid")]
+pub(crate) fn entity_add_pyramid(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::Pyramid);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.animation_player", label = "Animation Player")]
+pub(crate) fn entity_add_animation_player(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::AnimationPlayer);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.audio_source", label = "Audio Source")]
+pub(crate) fn entity_add_audio_source(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::AudioSource);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.fog_volume", label = "Fog Volume")]
+pub(crate) fn entity_add_fog_volume(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::FogVolume);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.reflection_probe", label = "Reflection Probe")]
+pub(crate) fn entity_add_reflection_probe(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        crate::spawn_undoable(world, "Add Reflection Probe", |world| {
+            let mut system_state: SystemState<(Commands, Res<AssetServer>, ResMut<Selection>)> =
+                SystemState::new(world);
+            let (mut commands, asset_server, mut selection) = system_state.get_mut(world);
+            // Reuse the editor's shipped environment-map cubemaps as the
+            // probe's reflection source, the same embedded asset the
+            // viewport and material preview load.
+            let diffuse_map = bevy::asset::load_embedded_asset!(
+                &*asset_server,
+                "../assets/environment_maps/voortrekker_interior_1k_diffuse.ktx2"
+            );
+            let specular_map = bevy::asset::load_embedded_asset!(
+                &*asset_server,
+                "../assets/environment_maps/voortrekker_interior_1k_specular.ktx2"
+            );
+            let entity = commands
+                .spawn((
+                    Name::new("Reflection Probe"),
+                    LightProbe,
+                    EnvironmentMapLight {
+                        diffuse_map,
+                        specular_map,
+                        intensity: 1000.0,
+                        ..default()
+                    },
+                    SceneReflectionProbe,
+                    Transform::from_scale(Vec3::splat(2.0)),
+                    Visibility::default(),
+                ))
+                .id();
+            selection.select_single(&mut commands, entity);
+            system_state.apply(world);
+            crate::scene_io::register_entity_in_ast(world, entity);
+            entity
+        });
     });
     OperatorResult::Finished
 }

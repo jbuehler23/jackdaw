@@ -504,6 +504,154 @@ impl Brush {
         let topology = compute_brush_topology(&faces);
         Self { faces, topology }
     }
+
+    /// A thin axis-aligned slab usable as a floor or wall tile. Implemented
+    /// as a `cuboid` with a small thickness along Y so it stays a closed
+    /// convex brush.
+    pub fn plane(half_x: f32, half_z: f32) -> Self {
+        const HALF_THICKNESS: f32 = 0.02;
+        Self::cuboid(half_x, HALF_THICKNESS, half_z)
+    }
+
+    /// An upright cylinder of `radius` and full height `2 * half_height`,
+    /// centered at the origin, approximated by a `sides`-gon (minimum 3).
+    /// Built by extruding the base polygon with `prism`. Falls back to a
+    /// `cuboid` only if the prism inputs are degenerate, which cannot happen
+    /// for `sides >= 3` and a non-zero height.
+    pub fn cylinder(radius: f32, half_height: f32, sides: usize) -> Self {
+        let sides = sides.max(3);
+        let ring: Vec<Vec3> = (0..sides)
+            .map(|i| {
+                let a = i as f32 / sides as f32 * std::f32::consts::TAU;
+                Vec3::new(radius * a.cos(), 0.0, radius * a.sin())
+            })
+            .collect();
+        Self::prism(&ring, Vec3::Y, half_height * 2.0)
+            .unwrap_or_else(|| Self::cuboid(radius, half_height, radius))
+    }
+
+    /// A right-triangular wedge (a ramp): a right triangle in the XY plane
+    /// extruded along Z by `2 * half_z`. The slope rises from -X to +X. Falls
+    /// back to a `cuboid` only on degenerate inputs.
+    pub fn wedge(half_x: f32, half_y: f32, half_z: f32) -> Self {
+        let tri = [
+            Vec3::new(-half_x, -half_y, 0.0),
+            Vec3::new(half_x, -half_y, 0.0),
+            Vec3::new(-half_x, half_y, 0.0),
+        ];
+        Self::prism(&tri, Vec3::Z, half_z * 2.0)
+            .unwrap_or_else(|| Self::cuboid(half_x, half_y, half_z))
+    }
+
+    /// A solid that tapers from a convex base polygon to a single apex
+    /// (cone, pyramid). `base` are the base-ring positions in winding order;
+    /// `apex` is the tip. One triangular side face per base edge, plus a base
+    /// cap. Returns `None` for fewer than 3 base vertices.
+    pub fn tapered(base: &[Vec3], apex: Vec3) -> Option<Self> {
+        let n = base.len();
+        if n < 3 {
+            return None;
+        }
+
+        let centroid: Vec3 = base.iter().sum::<Vec3>() / n as f32;
+        let mut faces = Vec::with_capacity(n + 1);
+
+        // Base cap: the plane through the base polygon, normal pointing away
+        // from the apex. Derive the polygon normal from the first non-degenerate
+        // edge pair, then flip so it points away from the apex.
+        let mut base_normal = Vec3::ZERO;
+        for i in 0..n {
+            let a = base[i] - centroid;
+            let b = base[(i + 1) % n] - centroid;
+            let cross = a.cross(b);
+            if cross.length_squared() > 1e-12 {
+                base_normal = cross.normalize();
+                break;
+            }
+        }
+        if base_normal.length_squared() < 0.5 {
+            return None;
+        }
+        // Point away from the apex (the cap faces outward, opposite the tip).
+        if base_normal.dot(apex - centroid) > 0.0 {
+            base_normal = -base_normal;
+        }
+        let base_distance = base_normal.dot(base[0]);
+        let (base_u, base_v) = compute_face_tangent_axes(base_normal);
+        faces.push(BrushFaceData {
+            plane: BrushPlane {
+                normal: base_normal,
+                distance: base_distance,
+            },
+            uv_scale: Vec2::ONE,
+            uv_u_axis: base_u,
+            uv_v_axis: base_v,
+            ..default()
+        });
+
+        // Side faces: one triangle per base edge, through (base[i], base[i+1], apex).
+        for i in 0..n {
+            let a = base[i];
+            let b = base[(i + 1) % n];
+            let side_normal = (b - a).cross(apex - a).normalize_or_zero();
+            if side_normal.length_squared() < 0.5 {
+                continue;
+            }
+            // Ensure outward-facing using the base centroid, like `prism`.
+            let side_normal = if side_normal.dot(a - centroid) < 0.0 {
+                -side_normal
+            } else {
+                side_normal
+            };
+            let distance = side_normal.dot(apex);
+            let (su, sv) = compute_face_tangent_axes(side_normal);
+            faces.push(BrushFaceData {
+                plane: BrushPlane {
+                    normal: side_normal,
+                    distance,
+                },
+                uv_scale: Vec2::ONE,
+                uv_u_axis: su,
+                uv_v_axis: sv,
+                ..default()
+            });
+        }
+
+        if faces.len() < 4 {
+            return None;
+        }
+
+        let topology = compute_brush_topology(&faces);
+        Some(Self { faces, topology })
+    }
+
+    /// Upright cone of `radius` and full height `2 * half_height`, centered at
+    /// the origin, approximated by a `sides`-gon base (min 3).
+    pub fn cone(radius: f32, half_height: f32, sides: usize) -> Self {
+        let sides = sides.max(3);
+        let base: Vec<Vec3> = (0..sides)
+            .map(|i| {
+                let a = i as f32 / sides as f32 * std::f32::consts::TAU;
+                Vec3::new(radius * a.cos(), -half_height, radius * a.sin())
+            })
+            .collect();
+        let apex = Vec3::new(0.0, half_height, 0.0);
+        Self::tapered(&base, apex).unwrap_or_else(|| Self::cuboid(radius, half_height, radius))
+    }
+
+    /// Upright rectangular pyramid: a quad base of half-extents
+    /// (`half_x`, `half_z`) at `y = -half_height`, apex at
+    /// `(0, half_height, 0)`.
+    pub fn pyramid(half_x: f32, half_z: f32, half_height: f32) -> Self {
+        let base = [
+            Vec3::new(-half_x, -half_height, -half_z),
+            Vec3::new(half_x, -half_height, -half_z),
+            Vec3::new(half_x, -half_height, half_z),
+            Vec3::new(-half_x, -half_height, half_z),
+        ];
+        let apex = Vec3::new(0.0, half_height, 0.0);
+        Self::tapered(&base, apex).unwrap_or_else(|| Self::cuboid(half_x, half_height, half_z))
+    }
 }
 
 #[derive(Component, Reflect, Default, Clone, Debug, Deref, DerefMut)]
@@ -752,5 +900,42 @@ impl Default for NavmeshRegion {
             tile_size: 32,
             connection_url: "http://127.0.0.1:15702".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plane_is_a_thin_six_faced_slab() {
+        let p = Brush::plane(0.5, 0.5);
+        assert_eq!(p.faces.len(), 6);
+    }
+
+    #[test]
+    fn cylinder_has_two_caps_and_one_side_per_segment() {
+        let sides = 16;
+        let c = Brush::cylinder(0.5, 1.0, sides);
+        // top cap + bottom cap + one side quad per segment
+        assert_eq!(c.faces.len(), sides + 2);
+    }
+
+    #[test]
+    fn wedge_has_two_triangle_caps_and_three_sides() {
+        let w = Brush::wedge(0.5, 0.5, 0.5);
+        assert_eq!(w.faces.len(), 5);
+    }
+
+    #[test]
+    fn cone_has_one_side_per_segment_plus_base() {
+        let c = Brush::cone(0.5, 0.5, 16);
+        assert_eq!(c.faces.len(), 17); // 16 side faces + 1 base cap
+    }
+
+    #[test]
+    fn pyramid_has_four_sides_plus_base() {
+        let p = Brush::pyramid(0.5, 0.5, 0.5);
+        assert_eq!(p.faces.len(), 5); // 4 side faces + 1 base cap
     }
 }

@@ -12,9 +12,11 @@ use jackdaw_feathers::picker::{
 use jackdaw_feathers::tooltip::Tooltip;
 
 use crate::entity_ops::{
-    EntityAddCameraOp, EntityAddCubeOp, EntityAddDirectionalLightOp, EntityAddEmptyOp,
-    EntityAddNavmeshOp, EntityAddPointLightOp, EntityAddPrefabOp, EntityAddSphereOp,
-    EntityAddSpotLightOp, EntityAddTerrainOp,
+    EntityAddAnimationPlayerOp, EntityAddAudioSourceOp, EntityAddCameraOp, EntityAddConeOp,
+    EntityAddCubeOp, EntityAddCylinderOp, EntityAddDirectionalLightOp, EntityAddEmptyOp,
+    EntityAddFogVolumeOp, EntityAddNavmeshOp, EntityAddPlaneOp, EntityAddPointLightOp,
+    EntityAddPrefabOp, EntityAddPyramidOp, EntityAddReflectionProbeOp, EntityAddSphereOp,
+    EntityAddSpotLightOp, EntityAddTerrainOp, EntityAddWedgeOp,
 };
 #[cfg(feature = "multiplayer")]
 use crate::entity_ops::{EntityAddNetworkRoomOp, EntityAddSpawnPointOp, EntityAddZoneTransitionOp};
@@ -52,25 +54,37 @@ fn op_action<O: Operator>() -> String {
 /// Built-in Add items grouped by category. Order here is the order in
 /// the picker and in the toolbar Add menu.
 fn builtin_groups() -> Vec<AddMenuItem> {
-    let shapes = Category {
-        name: Some(String::from("Shapes")),
+    let geometry = Category {
+        name: Some(String::from("Geometry")),
         order: 0,
     };
     let lights = Category {
         name: Some(String::from("Lights")),
         order: -1,
     };
+    let audio = Category {
+        name: Some(String::from("Audio")),
+        order: -2,
+    };
+    let animation = Category {
+        name: Some(String::from("Animation")),
+        order: -3,
+    };
     let cameras_entities = Category {
         name: Some(String::from("Cameras & Entities")),
-        order: -2,
+        order: -4,
     };
     let regions = Category {
         name: Some(String::from("Regions")),
-        order: -3,
+        order: -5,
+    };
+    let environment = Category {
+        name: Some(String::from("Environment")),
+        order: -6,
     };
     let prefabs = Category {
         name: Some(String::from("Prefabs")),
-        order: -5,
+        order: -7,
     };
 
     #[cfg_attr(not(feature = "multiplayer"), expect(unused_mut))]
@@ -78,12 +92,37 @@ fn builtin_groups() -> Vec<AddMenuItem> {
         AddMenuItem {
             action: op_action::<EntityAddCubeOp>(),
             label: "Cube".into(),
-            category: shapes.clone(),
+            category: geometry.clone(),
         },
         AddMenuItem {
             action: op_action::<EntityAddSphereOp>(),
             label: "Sphere".into(),
-            category: shapes,
+            category: geometry.clone(),
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddPlaneOp>(),
+            label: "Plane".into(),
+            category: geometry.clone(),
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddCylinderOp>(),
+            label: "Cylinder".into(),
+            category: geometry.clone(),
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddWedgeOp>(),
+            label: "Wedge".into(),
+            category: geometry.clone(),
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddConeOp>(),
+            label: "Cone".into(),
+            category: geometry.clone(),
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddPyramidOp>(),
+            label: "Pyramid".into(),
+            category: geometry,
         },
         AddMenuItem {
             action: op_action::<EntityAddPointLightOp>(),
@@ -99,6 +138,16 @@ fn builtin_groups() -> Vec<AddMenuItem> {
             action: op_action::<EntityAddSpotLightOp>(),
             label: "Spot Light".into(),
             category: lights,
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddAudioSourceOp>(),
+            label: "Audio Source".into(),
+            category: audio,
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddAnimationPlayerOp>(),
+            label: "Animation Player".into(),
+            category: animation,
         },
         AddMenuItem {
             action: op_action::<EntityAddCameraOp>(),
@@ -121,6 +170,16 @@ fn builtin_groups() -> Vec<AddMenuItem> {
             category: regions,
         },
         AddMenuItem {
+            action: op_action::<EntityAddFogVolumeOp>(),
+            label: "Fog Volume".into(),
+            category: environment.clone(),
+        },
+        AddMenuItem {
+            action: op_action::<EntityAddReflectionProbeOp>(),
+            label: "Reflection Probe".into(),
+            category: environment,
+        },
+        AddMenuItem {
             action: op_action::<EntityAddPrefabOp>(),
             label: "Prefab...".into(),
             category: prefabs,
@@ -131,7 +190,7 @@ fn builtin_groups() -> Vec<AddMenuItem> {
     {
         let multiplayer = Category {
             name: Some(String::from("Multiplayer")),
-            order: -4,
+            order: -6,
         };
         items.extend([
             AddMenuItem {
@@ -198,7 +257,7 @@ pub fn collect_add_menu_items(world: &mut World) -> Vec<AddMenuItem> {
             label,
             category: Category {
                 name: Some(category),
-                order: -6,
+                order: -8,
             },
         });
     }

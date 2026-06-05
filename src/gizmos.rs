@@ -213,7 +213,11 @@ fn configure_transform_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
 /// shrinks as the user zooms in. Multiplying that height by the same
 /// `GIZMO_SCREEN_SCALE` keeps the gizmo at the same on-screen fraction
 /// in both projections.
-fn gizmo_world_scale(projection: &Projection, cam_tf: &GlobalTransform, gizmo_pos: Vec3) -> f32 {
+pub(crate) fn gizmo_world_scale(
+    projection: &Projection,
+    cam_tf: &GlobalTransform,
+    gizmo_pos: Vec3,
+) -> f32 {
     match projection {
         Projection::Orthographic(ortho) => ortho.area.height() * GIZMO_SCREEN_SCALE,
         _ => (cam_tf.translation() - gizmo_pos).length() * GIZMO_SCREEN_SCALE,
