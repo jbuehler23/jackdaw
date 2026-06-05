@@ -52,42 +52,25 @@ pub enum CaptionButton {
 /// Loads the Segoe caption icon font from the system font directory.
 #[cfg(target_os = "windows")]
 pub fn load_windows_caption_font(fonts: &mut Assets<Font>) -> Option<Handle<Font>> {
-    for path in windows_caption_font_paths() {
-        let bytes = std::fs::read(&path).ok()?;
-        let font = Font::try_from_bytes(bytes).ok()?;
-        return Some(fonts.add(font));
-    }
-    return None;
-}
-
-/// Prefer Segoe Fluent Icons on Windows 11+, Segoe MDL2 Assets on older releases.
-#[cfg(target_os = "windows")]
-fn windows_caption_font_paths() -> Vec<std::path::PathBuf> {
     let fonts_directory = std::path::Path::new(r"C:\Windows\Fonts");
     let fluent = fonts_directory.join(SEGOE_FLUENT_ICONS_FILE);
     let mdl2 = fonts_directory.join(SEGOE_MDL2_ASSETS_FILE);
-    let ordered = if is_windows_11_or_later() {
-        [fluent, mdl2]
-    } else {
-        [mdl2, fluent]
-    };
-    return ordered.into_iter().filter(|path| path.is_file()).collect();
-}
 
-#[cfg(target_os = "windows")]
-fn is_windows_11_or_later() -> bool {
-    use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
-    use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
-
-    let mut version = OSVERSIONINFOW {
-        dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
-        ..unsafe { std::mem::zeroed() }
-    };
-    let status = unsafe { RtlGetVersion(&mut version) };
-    if status != 0 {
-        return true;
+    if fluent.is_file() {
+        if let Ok(bytes) = std::fs::read(&fluent) {
+            if let Ok(font) = Font::try_from_bytes(bytes) {
+                return Some(fonts.add(font));
+            }
+        }
     }
-    return version.dwBuildNumber >= 22000;
+    if mdl2.is_file() {
+        if let Ok(bytes) = std::fs::read(&mdl2) {
+            if let Ok(font) = Font::try_from_bytes(bytes) {
+                return Some(fonts.add(font));
+            }
+        }
+    }
+    return None;
 }
 
 pub(crate) fn register(app: &mut App) {
