@@ -83,14 +83,13 @@ pub fn window_controls(theme: &WindowChromeTheme, caption_font: Handle<Font>) ->
     let button_width = theme.caption.button_width;
     let glyph_size = theme.caption.glyph_size;
     let foreground = theme.caption.foreground;
-    let (align_items, column_gap) = caption_row_layout();
     return (
         WindowChromeEntity,
         Node {
             flex_direction: FlexDirection::Row,
-            align_items,
+            align_items: AlignItems::Stretch,
             flex_shrink: 0.0,
-            column_gap,
+            column_gap: px(0.0),
             ..default()
         },
         Pickable::IGNORE,
@@ -121,21 +120,6 @@ pub fn window_controls(theme: &WindowChromeTheme, caption_font: Handle<Font>) ->
             ),
         ],
     );
-}
-
-fn caption_row_layout() -> (AlignItems, Val) {
-    #[cfg(target_os = "windows")]
-    {
-        return (AlignItems::Stretch, px(0.0));
-    }
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    {
-        return (AlignItems::Center, px(2.0));
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "freebsd")))]
-    {
-        return (AlignItems::Center, px(0.0));
-    }
 }
 
 fn caption_button_bundle(

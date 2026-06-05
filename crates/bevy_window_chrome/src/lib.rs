@@ -66,7 +66,7 @@ pub struct WindowChromeTheme {
     pub macos_traffic_light_position_x: f32,
     /// Corner radius for the window shell and header on Linux / FreeBSD, in logical pixels.
     pub linux_corner_radius: f32,
-    /// Styling for the Windows caption buttons.
+    /// Styling for client-side caption buttons.
     pub caption: CaptionTheme,
 }
 
@@ -89,20 +89,13 @@ pub struct CaptionTheme {
 
 impl Default for CaptionTheme {
     fn default() -> Self {
-        #[cfg(target_os = "windows")]
-        let glyph_size = 10.0;
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        let glyph_size = 16.0;
-        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "freebsd")))]
-        let glyph_size = 10.0;
-
         return Self {
             foreground: Color::srgb(0.925, 0.925, 0.925),
             button_hover_background: Color::srgb(0.165, 0.165, 0.180),
             close_hover_background: Color::srgb(232.0 / 255.0, 17.0 / 255.0, 32.0 / 255.0),
             close_active_background: Color::srgba(232.0 / 255.0, 17.0 / 255.0, 32.0 / 255.0, 0.8),
             button_width: 36.0,
-            glyph_size,
+            glyph_size: 10.0,
         };
     }
 }

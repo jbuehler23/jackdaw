@@ -119,10 +119,7 @@ fn caption_controls_slot(caption_controls: impl Bundle) -> impl Bundle {
         Node {
             flex_shrink: 0.0,
             height: percent(100),
-            #[cfg(target_os = "windows")]
             align_items: AlignItems::Stretch,
-            #[cfg(not(target_os = "windows"))]
-            align_items: AlignItems::Center,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
             display: Display::Flex,
             #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "freebsd")))]
