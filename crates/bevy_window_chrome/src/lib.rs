@@ -11,7 +11,6 @@
 //! Client-side caption buttons use Segoe icon glyphs on Windows and Lucide-compatible glyphs on
 //! Linux / FreeBSD.
 
-mod chrome;
 mod controls;
 mod header;
 mod icon;
@@ -20,7 +19,6 @@ mod macos_titlebar;
 mod resize;
 mod shell;
 
-pub use chrome::primary_window_attributes;
 pub use controls::{
     CaptionFont, WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize,
     window_caption_controls,
@@ -34,6 +32,8 @@ pub use resize::{resize_edge_overlay, spawn_resize_edge_overlay_if_needed};
 pub use shell::{WindowShellContent, WindowShellSlots, spawn_window_shell};
 
 use bevy::prelude::*;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+use bevy::window::CompositeAlphaMode;
 use bevy::window::{PrimaryWindow, Window, WindowCreated, WindowMode};
 use bevy::winit::WINIT_WINDOWS;
 
@@ -257,4 +257,33 @@ fn sync_window_shell_state(
             };
         }
     }
+}
+
+pub fn primary_window_attributes() -> Window {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    {
+        return Window {
+            decorations: false,
+            transparent: true,
+            composite_alpha_mode: CompositeAlphaMode::PreMultiplied,
+            ..default()
+        };
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return Window {
+            decorations: true,
+            titlebar_transparent: true,
+            fullsize_content_view: true,
+            titlebar_show_title: false,
+            titlebar_show_buttons: true,
+            ..default()
+        };
+    }
+
+    return Window {
+        decorations: false,
+        ..default()
+    };
 }

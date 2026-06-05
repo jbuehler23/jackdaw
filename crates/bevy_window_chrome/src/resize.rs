@@ -1,4 +1,4 @@
-//! Invisible edge strips for borderless window resize (client-side chrome only).
+//! Invisible edge strips for borderless window resize.
 
 use bevy::feathers::cursor::EntityCursor;
 use bevy::math::CompassOctant;
