@@ -2,7 +2,6 @@
 
 use bevy::prelude::*;
 
-use crate::chrome::WindowChromeStyle;
 use crate::header::spawn_window_header;
 use crate::resize::spawn_resize_edge_overlay_if_needed;
 use crate::{WindowChromeTheme, WindowShellRoot};
@@ -21,12 +20,19 @@ pub type WindowShellSlots = (Entity, Entity);
 /// (see [`spawn_window_header`]).
 pub fn spawn_window_shell<S: Component + Copy>(
     commands: &mut Commands,
-    style: WindowChromeStyle,
     theme: &WindowChromeTheme,
     caption_controls: impl Bundle,
     screen: S,
 ) -> WindowShellSlots {
-    commands.spawn((Camera2d, screen));
+    commands.spawn((
+        Camera2d,
+        Camera {
+            // note that this does not work on Windows
+            clear_color: ClearColorConfig::Custom(Color::NONE),
+            ..default()
+        },
+        screen,
+    ));
     let mut header_slot = None::<Entity>;
     let mut body_slot = None::<Entity>;
     commands
@@ -39,11 +45,13 @@ pub fn spawn_window_shell<S: Component + Copy>(
                 height: percent(100),
                 flex_direction: FlexDirection::Column,
                 overflow: Overflow::clip(),
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                border_radius: BorderRadius::all(px(theme.linux_corner_radius)),
                 ..default()
             },
         ))
         .with_children(|shell| {
-            header_slot = Some(spawn_window_header(shell, theme, style, caption_controls));
+            header_slot = Some(spawn_window_header(shell, theme, caption_controls));
             body_slot = Some(
                 shell
                     .spawn((
@@ -61,7 +69,7 @@ pub fn spawn_window_shell<S: Component + Copy>(
                     .id(),
             );
             #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-            spawn_resize_edge_overlay_if_needed(shell, style);
+            spawn_resize_edge_overlay_if_needed(shell);
         });
     return (
         header_slot.expect("window shell header slot spawned"),

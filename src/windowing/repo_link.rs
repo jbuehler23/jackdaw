@@ -6,10 +6,7 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::window::SystemCursorIcon;
 use jackdaw_feathers::button::{ButtonClickEvent, ButtonSize, ButtonVariant, EditorButton};
-use jackdaw_feathers::tokens;
 use jackdaw_feathers::tokens::{BORDER_RADIUS_MD, ICON_MD};
-
-use bevy_window_chrome::{MacosHeaderLeadingInset, WindowChromeStyle};
 
 use crate::EditorEntity;
 
@@ -17,14 +14,6 @@ const JACKDAW_REPO_URL: &str = "https://github.com/jbuehler23/jackdaw";
 
 #[derive(Resource, Clone)]
 pub struct JackdawIcon(pub Handle<Image>);
-
-fn macos_traffic_light_inset(chrome: WindowChromeStyle) -> f32 {
-    return if chrome == WindowChromeStyle::MacNativeTitlebar {
-        tokens::MACOS_TRAFFIC_LIGHT_INSET
-    } else {
-        0.0
-    };
-}
 
 #[derive(Component)]
 struct JackdawRepoLinkButton;
@@ -41,19 +30,14 @@ impl Plugin for RepoLinkPlugin {
     }
 }
 
-/// Header row slot wrapping [`jackdaw_link_button`] with platform-appropriate leading inset.
-pub fn header_repo_link(image: Handle<Image>, chrome: WindowChromeStyle) -> impl Bundle {
+/// Header row slot wrapping [`jackdaw_link_button`].
+pub fn header_repo_link(image: Handle<Image>) -> impl Bundle {
     return (
-        MacosHeaderLeadingInset,
         Pickable::IGNORE,
         Node {
             flex_shrink: 0.0,
             height: percent(100),
             align_items: AlignItems::Center,
-            margin: UiRect {
-                left: px(macos_traffic_light_inset(chrome)),
-                ..default()
-            },
             ..default()
         },
         children![jackdaw_link_button(image)],

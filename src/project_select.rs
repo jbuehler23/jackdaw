@@ -17,8 +17,6 @@ use jackdaw_feathers::{
 use jackdaw_localization::LocalizedText;
 use rfd::{AsyncFileDialog, FileHandle};
 
-#[cfg(target_os = "windows")]
-use bevy_window_chrome::CaptionFont;
 use crate::{
     AppState,
     command_runner::{CommandIo, LogChunk},
@@ -26,8 +24,10 @@ use crate::{
     project::{self, ProjectRoot},
     scene_io,
     scrolling_log::{self, ScrollingLog},
-    windowing::{JackdawIcon, WindowChromeStyle, header_repo_link, spawn_window_shell},
+    windowing::{JackdawIcon, header_repo_link, spawn_window_shell},
 };
+#[cfg(target_os = "windows")]
+use bevy_window_chrome::CaptionFont;
 
 #[derive(Default)]
 enum ScaffoldState {
@@ -353,7 +353,6 @@ fn spawn_project_selector(
     editor_font: Res<EditorFont>,
     icon_font: Res<jackdaw_feathers::icons::IconFont>,
     jackdaw_icon: Res<JackdawIcon>,
-    chrome: Res<WindowChromeStyle>,
     #[cfg(target_os = "windows")] caption_font: Res<CaptionFont>,
     pending: Option<Res<PendingAutoOpen>>,
 ) {
@@ -381,7 +380,6 @@ fn spawn_project_selector(
 
     let (header, body) = spawn_window_shell(
         &mut commands,
-        *chrome,
         &icon_font,
         #[cfg(target_os = "windows")]
         &caption_font,
@@ -394,7 +392,6 @@ fn spawn_project_selector(
         font,
         icon_font_handle,
         jackdaw_icon.0.clone(),
-        *chrome,
         recent,
         cwd,
         cwd_has_project,
@@ -408,7 +405,6 @@ fn fill_project_selector(
     font: Handle<Font>,
     icon_font_handle: Handle<Font>,
     jackdaw_icon: Handle<Image>,
-    chrome: WindowChromeStyle,
     recent: project::RecentProjects,
     cwd: PathBuf,
     cwd_has_project: bool,
@@ -434,7 +430,7 @@ fn fill_project_selector(
                         ..Default::default()
                     },
                     children![
-                        header_repo_link(jackdaw_icon, chrome),
+                        header_repo_link(jackdaw_icon),
                         (
                             Text::new("jackdaw"),
                             TextFont {

@@ -7,7 +7,6 @@ use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, SystemCursorIcon, Window};
 
 use crate::WindowChromeEntity;
-use crate::chrome::WindowChromeStyle;
 
 const RESIZE_HANDLE_THICKNESS: f32 = 8.0;
 
@@ -17,13 +16,11 @@ pub(crate) struct WindowResizeRoot;
 #[derive(Component, Copy, Clone)]
 pub(crate) struct WindowResizeEdge(pub CompassOctant);
 
-/// Spawns the resize edge overlay as a child if the chrome style uses client-side resize handles.
+/// Spawns the resize edge overlay as a child on platforms with client-side resize handles.
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-pub fn spawn_resize_edge_overlay_if_needed(
-    parent: &mut ChildSpawnerCommands,
-    style: WindowChromeStyle,
-) {
-    if style.uses_resize_edge_overlay() {
+pub fn spawn_resize_edge_overlay_if_needed(parent: &mut ChildSpawnerCommands) {
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+    {
         parent.spawn(resize_edge_overlay());
     }
 }

@@ -5,8 +5,8 @@ use bevy::{
     prelude::*,
     window::{ExitCondition, WindowPlugin},
 };
+use bevy_window_chrome::primary_window_attributes;
 use jackdaw::prelude::*;
-use jackdaw::windowing::primary_window_attributes;
 
 fn main() -> AppExit {
     // Install a SIGINT/SIGTERM handler before anything else gets a

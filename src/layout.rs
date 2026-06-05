@@ -10,8 +10,6 @@ use jackdaw_feathers::{
 };
 use jackdaw_localization::LocalizedText;
 
-#[cfg(target_os = "windows")]
-use bevy_window_chrome::CaptionFont;
 use crate::{
     EditorEntity,
     active_tool::ActiveTool,
@@ -29,8 +27,10 @@ use crate::{
     remote::ConnectionManager,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
-    windowing::{JackdawIcon, WindowChromeStyle, header_repo_link, spawn_window_shell},
+    windowing::{JackdawIcon, header_repo_link, spawn_window_shell},
 };
+#[cfg(target_os = "windows")]
+use bevy_window_chrome::CaptionFont;
 
 /// Discriminator for the header tab kinds the editor knows how to host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -181,14 +181,12 @@ pub fn spawn_editor(
     icon_font: Handle<Font>,
     editor_font: Handle<Font>,
     jackdaw_icon: Handle<Image>,
-    chrome: WindowChromeStyle,
 ) {
     commands.entity(header).with_children(|header_parent| {
         header_parent.spawn(window_header_content(
             icon_font.clone(),
             editor_font.clone(),
             jackdaw_icon,
-            chrome,
         ));
     });
     commands.entity(body).insert((
@@ -214,12 +212,10 @@ pub fn spawn_editor_layout(
     icon_font: Res<IconFont>,
     editor_font: Res<EditorFont>,
     jackdaw_icon: Res<JackdawIcon>,
-    chrome: Res<WindowChromeStyle>,
     #[cfg(target_os = "windows")] caption_font: Res<CaptionFont>,
 ) {
     let (header, body) = spawn_window_shell(
         &mut commands,
-        *chrome,
         &icon_font,
         #[cfg(target_os = "windows")]
         &caption_font,
@@ -232,7 +228,6 @@ pub fn spawn_editor_layout(
         icon_font.0.clone(),
         editor_font.0.clone(),
         jackdaw_icon.0.clone(),
-        *chrome,
     );
 }
 
@@ -240,7 +235,6 @@ fn window_header_content(
     icon_font: Handle<Font>,
     editor_font: Handle<Font>,
     jackdaw_icon: Handle<Image>,
-    chrome: WindowChromeStyle,
 ) -> impl Bundle {
     (
         EditorEntity,
@@ -255,7 +249,7 @@ fn window_header_content(
         },
         Pickable::IGNORE,
         children![
-            header_repo_link(jackdaw_icon, chrome),
+            header_repo_link(jackdaw_icon),
             menu_bar::menu_bar_shell(),
             (
                 crate::scenes::ui::SceneTabStrip,

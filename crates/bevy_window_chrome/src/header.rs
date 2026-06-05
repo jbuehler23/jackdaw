@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 
-use crate::{WindowChromeEntity, WindowChromeStyle, WindowChromeTheme};
+use crate::{WindowChromeEntity, WindowChromeTheme};
 
 #[derive(Component)]
 pub struct WindowHeaderRoot;
@@ -14,21 +14,9 @@ pub struct WindowHeaderContentSlot;
 #[derive(Component)]
 pub struct WindowHeaderDragRegion;
 
-/// Absolute header background layer; `Node::left` updated when the window fills the work area (macOS).
+/// Header content slot; `Node::padding.left` updated when the window fills the work area (macOS).
 #[derive(Component)]
-pub struct MacosHeaderChromeInset;
-
-/// Leading header widget slot; `Node::margin.left` updated when the window fills the work area (macOS).
-#[derive(Component)]
-pub struct MacosHeaderLeadingInset;
-
-fn macos_traffic_light_inset(style: WindowChromeStyle, theme: &WindowChromeTheme) -> f32 {
-    return if style == WindowChromeStyle::MacNativeTitlebar {
-        theme.macos_traffic_light_inset
-    } else {
-        0.0
-    };
-}
+pub struct MacosHeaderContentInset;
 
 /// Window header chrome with an empty [`WindowShellHeaderSlot`]. Returns the slot entity.
 ///
@@ -37,13 +25,14 @@ fn macos_traffic_light_inset(style: WindowChromeStyle, theme: &WindowChromeTheme
 pub fn spawn_window_header(
     parent: &mut ChildSpawnerCommands,
     theme: &WindowChromeTheme,
-    style: WindowChromeStyle,
     caption_controls: impl Bundle,
 ) -> Entity {
-    let inset = macos_traffic_light_inset(style, theme);
-    let show_custom_controls = style.shows_custom_window_controls();
-    let uses_macos_native_titlebar = style == WindowChromeStyle::MacNativeTitlebar;
-
+    #[cfg(target_os = "macos")]
+    let macos_traffic_light_inset = theme.macos_traffic_light_inset;
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    let header_border_radius = BorderRadius::top(px(theme.linux_corner_radius));
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    let header_border_radius = BorderRadius::ZERO;
     let mut header_slot = None::<Entity>;
     let header_root = (
         WindowHeaderRoot,
@@ -52,20 +41,21 @@ pub fn spawn_window_header(
             position_type: PositionType::Relative,
             width: percent(100),
             height: px(theme.header_height),
+            border_radius: header_border_radius,
+            overflow: Overflow::clip(),
             ..default()
         },
     );
     let mut header_spawner = parent.spawn(header_root);
-    if !uses_macos_native_titlebar {
+    #[cfg(not(target_os = "macos"))]
+    {
         header_spawner.insert(BackgroundColor(theme.window_background));
     }
     header_spawner.with_children(|header| {
         header_slot = Some(spawn_foreground_row(
             header,
-            theme,
-            inset,
-            uses_macos_native_titlebar,
-            show_custom_controls,
+            #[cfg(target_os = "macos")]
+            macos_traffic_light_inset,
             caption_controls,
         ));
     });
@@ -74,10 +64,7 @@ pub fn spawn_window_header(
 
 fn spawn_foreground_row(
     parent: &mut ChildSpawnerCommands,
-    theme: &WindowChromeTheme,
-    macos_traffic_light_inset: f32,
-    uses_macos_native_titlebar: bool,
-    show_custom_controls: bool,
+    #[cfg(target_os = "macos")] macos_traffic_light_inset: f32,
     caption_controls: impl Bundle,
 ) -> Entity {
     let mut header_slot = None::<Entity>;
@@ -97,48 +84,27 @@ fn spawn_foreground_row(
             },
         ))
         .with_children(|row| {
-            if uses_macos_native_titlebar {
-                row.spawn(header_chrome_background(theme, macos_traffic_light_inset));
-            }
-            row.spawn(header_drag_backplate(macos_traffic_light_inset));
-            header_slot = Some(row.spawn(header_content_slot()).id());
-            row.spawn(caption_controls_slot(
-                show_custom_controls,
-                caption_controls,
-            ));
+            row.spawn(header_drag_backplate());
+            header_slot = Some(
+                row.spawn(header_content_slot(
+                    #[cfg(target_os = "macos")]
+                    macos_traffic_light_inset,
+                ))
+                .id(),
+            );
+            row.spawn(caption_controls_slot(caption_controls));
         });
     return header_slot.expect("window header content slot spawned");
 }
 
-fn header_chrome_background(
-    theme: &WindowChromeTheme,
-    macos_traffic_light_inset: f32,
-) -> impl Bundle {
+fn header_drag_backplate() -> impl Bundle {
     return (
-        MacosHeaderChromeInset,
-        WindowChromeEntity,
-        Pickable::IGNORE,
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(0.0),
-            left: px(macos_traffic_light_inset),
-            right: px(0.0),
-            height: percent(100),
-            ..default()
-        },
-        BackgroundColor(theme.window_background),
-    );
-}
-
-fn header_drag_backplate(macos_traffic_light_inset: f32) -> impl Bundle {
-    return (
-        MacosHeaderChromeInset,
         WindowHeaderDragRegion,
         WindowChromeEntity,
         Node {
             position_type: PositionType::Absolute,
             top: px(0.0),
-            left: px(macos_traffic_light_inset),
+            left: px(0.0),
             right: px(0.0),
             height: percent(100),
             ..default()
@@ -146,7 +112,7 @@ fn header_drag_backplate(macos_traffic_light_inset: f32) -> impl Bundle {
     );
 }
 
-fn caption_controls_slot(show_custom_controls: bool, caption_controls: impl Bundle) -> impl Bundle {
+fn caption_controls_slot(caption_controls: impl Bundle) -> impl Bundle {
     return (
         WindowChromeEntity,
         Pickable::IGNORE,
@@ -157,20 +123,31 @@ fn caption_controls_slot(show_custom_controls: bool, caption_controls: impl Bund
             align_items: AlignItems::Stretch,
             #[cfg(not(target_os = "windows"))]
             align_items: AlignItems::Center,
-            display: if show_custom_controls {
-                Display::Flex
-            } else {
-                Display::None
-            },
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+            display: Display::Flex,
+            #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "freebsd")))]
+            display: Display::None,
             ..default()
         },
         children![caption_controls],
     );
 }
 
-fn header_content_slot() -> impl Bundle {
+fn header_content_slot(
+    #[cfg(target_os = "macos")] macos_traffic_light_inset: f32,
+) -> impl Bundle {
+    #[cfg(target_os = "macos")]
+    let padding = UiRect {
+        left: px(macos_traffic_light_inset),
+        ..default()
+    };
+    #[cfg(not(target_os = "macos"))]
+    let padding = UiRect::ZERO;
+
     return (
         WindowHeaderContentSlot,
+        #[cfg(target_os = "macos")]
+        MacosHeaderContentInset,
         WindowChromeEntity,
         Pickable::IGNORE,
         Node {
@@ -178,6 +155,7 @@ fn header_content_slot() -> impl Bundle {
             min_width: px(0.0),
             height: percent(100),
             overflow: Overflow::clip(),
+            padding,
             ..default()
         },
     );

@@ -7,8 +7,6 @@ pub use caption::CaptionFont;
 
 use bevy::prelude::*;
 
-use crate::WindowChromeStyle;
-
 #[derive(Component)]
 pub struct WindowControlsMinimize;
 
@@ -40,14 +38,14 @@ fn caption_controls_placeholder() -> impl Bundle {
     return (crate::WindowChromeEntity, Pickable::IGNORE);
 }
 
-pub(crate) fn build(app: &mut App, style: WindowChromeStyle) {
+pub(crate) fn build(app: &mut App) {
     #[cfg(target_os = "windows")]
     {
         install_windows_caption_font_in_app(app);
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-    if style.uses_app_caption_button_handlers() {
+    {
         caption::register(app);
     }
 }
