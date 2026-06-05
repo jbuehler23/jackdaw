@@ -5486,10 +5486,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "jackdaw_pie_protocol"
+version = "0.4.1"
+dependencies = [
+ "bevy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "jackdaw_remote"
 version = "0.4.1"
 dependencies = [
  "bevy",
+ "jackdaw_pie_protocol",
  "serde",
  "serde_json",
 ]
