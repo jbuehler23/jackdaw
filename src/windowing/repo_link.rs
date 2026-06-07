@@ -22,9 +22,9 @@ pub struct RepoLinkPlugin;
 
 impl Plugin for RepoLinkPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "../../assets/jackdaw_icon_small.png");
+        embedded_asset!(app, "../../assets/logo/jackdaw_icon_small.png");
         let assets = app.world().resource::<AssetServer>();
-        let handle = load_embedded_asset!(&*assets, "../../assets/jackdaw_icon_small.png");
+        let handle = load_embedded_asset!(&*assets, "../../assets/logo/jackdaw_icon_small.png");
         app.insert_resource(JackdawIcon(handle));
         app.add_observer(on_repo_link_click);
     }
