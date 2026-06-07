@@ -15,6 +15,10 @@ pub const CORNER_RADIUS_LG: Val = Val::Px(4.0);
 pub const PRIMARY_COLOR: Srgba = tailwind::BLUE_500;
 /// Accent blue used for selections, active tabs, and highlights (#206EC8).
 pub const ACCENT_BLUE: Color = Color::srgb(0.126, 0.431, 0.784);
+/// Destructive action background (#EF4444, Tailwind red-500).
+pub const DESTRUCTIVE_RED: Srgba = tailwind::RED_500;
+/// Destructive hover / close-button hover background (#DC2626, Tailwind red-600).
+pub const DESTRUCTIVE_RED_HOVER: Srgba = tailwind::RED_600;
 
 // ---------------------------------------------------------------------------
 // Backgrounds (from Figma CSS, updated palette, slightly bluer tones)

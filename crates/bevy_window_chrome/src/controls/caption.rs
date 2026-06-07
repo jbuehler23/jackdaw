@@ -82,7 +82,7 @@ pub(crate) fn register(app: &mut App) {
 pub fn window_controls(theme: &WindowChromeTheme, caption_font: Handle<Font>) -> impl Bundle {
     let button_width = theme.caption.button_width;
     let glyph_size = theme.caption.glyph_size;
-    let foreground = theme.caption.foreground;
+    let foreground = theme.caption.icon_color;
     return (
         WindowChromeEntity,
         Node {
@@ -214,9 +214,8 @@ fn sync_caption_chrome(
     for (kind, interaction, hovered, mut background, children) in buttons.iter_mut() {
         let highlighted =
             hovered.0 || matches!(*interaction, Interaction::Hovered | Interaction::Pressed);
-        let pressed = matches!(*interaction, Interaction::Pressed);
         let (background_color, foreground_color) =
-            caption_colors(*kind, highlighted, pressed, &theme.caption);
+            caption_colors(*kind, highlighted, &theme.caption);
         background.0 = background_color;
 
         for child in children.iter() {
@@ -231,23 +230,15 @@ fn sync_caption_chrome(
 fn caption_colors(
     kind: CaptionButton,
     highlighted: bool,
-    pressed: bool,
     caption: &CaptionTheme,
 ) -> (Color, Color) {
     if !highlighted {
-        return (Color::NONE, caption.foreground);
+        return (Color::NONE, caption.icon_color);
     }
     return match kind {
-        CaptionButton::Close => {
-            let background = if pressed {
-                caption.close_active_background
-            } else {
-                caption.close_hover_background
-            };
-            (background, Color::WHITE)
-        }
+        CaptionButton::Close => (caption.close_hover_background, Color::WHITE),
         CaptionButton::Minimize | CaptionButton::Maximize => {
-            (caption.button_hover_background, caption.foreground)
+            (caption.button_hover_background, caption.icon_color)
         }
     };
 }

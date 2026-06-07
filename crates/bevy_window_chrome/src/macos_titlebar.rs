@@ -3,10 +3,12 @@
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
-use bevy::ecs::entity::Entity;
-use bevy::prelude::{Node, Query, Val, With};
+use bevy::ecs::system::NonSendMarker;
+use bevy::prelude::{Commands, Component, Node, On, Query, Res, Val, With};
+use bevy::window::{PrimaryWindow, Window, WindowCreated, WindowMode};
 use bevy::winit::WINIT_WINDOWS;
 
+use crate::WindowChromeTheme;
 use crate::header::MacosHeaderContentInset;
 use objc2::rc::Retained;
 use objc2::runtime::NSObject;
@@ -19,25 +21,15 @@ use objc2_foundation::{
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-/// Title-bar metrics needed to align native traffic lights with the custom header.
-#[derive(Clone, Copy)]
-pub(crate) struct MacChromeMetrics {
-    pub header_height: f64,
-    pub traffic_light_position_x: f64,
+static WINDOW_CHROME_THEME: OnceLock<WindowChromeTheme> = OnceLock::new();
+
+/// Sets the window chrome theme for AppKit callbacks that cannot access Bevy resources.
+pub(crate) fn set_theme(theme: WindowChromeTheme) {
+    WINDOW_CHROME_THEME.set(theme);
 }
 
-static LAYOUT_METRICS: OnceLock<MacChromeMetrics> = OnceLock::new();
-
-/// Stores the title-bar layout metrics used when repositioning traffic lights.
-pub(crate) fn set_layout_metrics(metrics: MacChromeMetrics) {
-    let _ = LAYOUT_METRICS.set(metrics);
-}
-
-fn layout_metrics() -> MacChromeMetrics {
-    return LAYOUT_METRICS.get().copied().unwrap_or(MacChromeMetrics {
-        header_height: 36.0,
-        traffic_light_position_x: 12.0,
-    });
+fn cached_theme() -> WindowChromeTheme {
+    return WINDOW_CHROME_THEME.get().cloned().unwrap_or_default();
 }
 
 thread_local! {
@@ -88,38 +80,58 @@ impl TrafficLightResizeObserver {
 
 const FRAME_MATCH_TOLERANCE_PX: f64 = 2.0;
 
-/// Syncs traffic-light visibility, positioning, and header content inset with window state.
-pub(crate) fn sync_window_shell_state(
-    window_entity: Entity,
-    is_fullscreen: bool,
-    traffic_light_inset: f32,
-    header_inset_nodes: &mut Query<&mut Node, With<MacosHeaderContentInset>>,
-    previous_fills_work_area: &mut Option<bool>,
+/// Cached macOS zoom state for the primary window (`window_fills_work_area`).
+#[derive(Component, Copy, Clone, Default)]
+pub(crate) struct MacosFillsWorkArea(pub bool);
+
+/// Registers the resize observer and initial traffic-light state when the primary window is created.
+pub(crate) fn on_macos_window_created(
+    _main_thread: NonSendMarker,
+    trigger: On<WindowCreated>,
+    mut commands: Commands,
 ) {
-    if is_fullscreen {
+    let window_entity = trigger.window;
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    ensure_traffic_light_resize_observer(window_entity, mtm);
+    let fills_work_area = window_fills_work_area(window_entity);
+    commands
+        .entity(window_entity)
+        .insert(MacosFillsWorkArea(fills_work_area));
+    set_traffic_lights_hidden(window_entity, fills_work_area);
+    if !fills_work_area {
+        reposition_traffic_lights(window_entity);
+    }
+}
+
+/// Syncs traffic-light visibility, positioning, and header content inset with window state.
+pub(crate) fn sync_macos_window_shell_state(
+    _main_thread: NonSendMarker,
+    theme: Res<WindowChromeTheme>,
+    mut windows: Query<(Entity, &Window, &mut MacosFillsWorkArea), With<PrimaryWindow>>,
+    mut header_inset_nodes: Query<&mut Node, With<MacosHeaderContentInset>>,
+) {
+    let Ok((window_entity, window, mut fills_work_area)) = windows.single_mut() else {
+        return;
+    };
+    if !matches!(window.mode, WindowMode::Windowed) {
         return;
     }
 
-    let first_sync = previous_fills_work_area.is_none();
-    if first_sync {
-        if let Some(mtm) = MainThreadMarker::new() {
-            ensure_traffic_light_resize_observer(window_entity, mtm);
-        }
-    }
-    let fills_work_area = window_fills_work_area(window_entity);
-    let fills_work_area_changed = *previous_fills_work_area != Some(fills_work_area);
-    let content_inset = if fills_work_area {
+    let current = window_fills_work_area(window_entity);
+    let content_inset = if current {
         0.0
     } else {
-        traffic_light_inset
+        theme.macos_traffic_light_inset
     };
     for mut node in header_inset_nodes.iter_mut() {
         node.padding.left = Val::Px(content_inset);
     }
-    if fills_work_area_changed {
-        *previous_fills_work_area = Some(fills_work_area);
-        set_traffic_lights_hidden(window_entity, fills_work_area);
-        if !fills_work_area {
+    if fills_work_area.0 != current {
+        fills_work_area.0 = current;
+        set_traffic_lights_hidden(window_entity, current);
+        if !current {
             reposition_traffic_lights(window_entity);
         }
     }
@@ -210,7 +222,7 @@ pub fn reposition_traffic_lights(window_entity: Entity) {
         return;
     };
 
-    let metrics = layout_metrics();
+    let theme = cached_theme();
     let window_frame = ns_window.frame();
     let content_layout_rect = unsafe { ns_window.contentLayoutRect() };
     let titlebar_height = window_frame.size.height - content_layout_rect.size.height;
@@ -220,9 +232,9 @@ pub fn reposition_traffic_lights(window_entity: Entity) {
     let mut zoom_frame = zoom_button.frame();
 
     let button_spacing = minimize_frame.origin.x - close_frame.origin.x;
-    let traffic_light_x = metrics.traffic_light_position_x;
+    let traffic_light_x = theme.macos_traffic_light_position_x as f64;
     let button_height = close_frame.size.height;
-    let header_height = metrics.header_height;
+    let header_height = theme.header_height as f64;
     let layout_height = titlebar_height.min(header_height);
     let y_offset_from_titlebar_top = (layout_height - button_height) / 2.0;
     let origin_y = titlebar_height - y_offset_from_titlebar_top - button_height;

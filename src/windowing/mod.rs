@@ -50,7 +50,7 @@ fn jackdaw_window_chrome_theme() -> WindowChromeTheme {
         header_height: tokens::WINDOW_HEADER_HEIGHT,
         window_background: tokens::WINDOW_BG,
         caption: CaptionTheme {
-            foreground: tokens::TEXT_PRIMARY,
+            icon_color: tokens::TEXT_PRIMARY,
             button_hover_background: tokens::TOOLBAR_BUTTON_BG,
             ..CaptionTheme::default()
         },

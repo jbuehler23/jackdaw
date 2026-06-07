@@ -2,9 +2,10 @@
 
 use bevy::feathers::cursor::EntityCursor;
 use bevy::math::CompassOctant;
+use bevy::picking::Pickable;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::window::{PrimaryWindow, SystemCursorIcon, Window};
+use bevy::window::{PrimaryWindow, SystemCursorIcon, Window, WindowMode};
 
 use crate::WindowChromeEntity;
 
@@ -139,10 +140,35 @@ fn resize_edge(direction: CompassOctant, node: Node) -> impl Bundle {
     return (
         WindowResizeEdge(direction),
         WindowChromeEntity,
+        Pickable::default(),
         node,
         Hovered::default(),
         EntityCursor::System(resize_cursor_icon(direction)),
     );
+}
+
+/// Disables resize-edge picking while the window cannot be resized.
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
+pub(crate) fn sync_resize_overlay_pickability(
+    _main_thread: bevy::ecs::system::NonSendMarker,
+    primary_window: Query<(Entity, &Window), With<PrimaryWindow>>,
+    mut resize_edges: Query<&mut Pickable, With<WindowResizeEdge>>,
+) {
+    let Ok((window_entity, window)) = primary_window.single() else {
+        return;
+    };
+    let resizing_disabled = !matches!(window.mode, WindowMode::Windowed)
+        || crate::primary_window_is_maximized(window_entity);
+    let pickable = if resizing_disabled {
+        Pickable::IGNORE
+    } else {
+        Pickable::default()
+    };
+    for mut edge_pickable in resize_edges.iter_mut() {
+        if *edge_pickable != pickable {
+            *edge_pickable = pickable.clone();
+        }
+    }
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]

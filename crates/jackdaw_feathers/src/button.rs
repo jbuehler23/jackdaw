@@ -8,8 +8,8 @@ use std::borrow::Cow;
 
 use crate::icons::EditorFont;
 use crate::tokens::{
-    BORDER_RADIUS_MD, PRIMARY_COLOR, TEXT_BODY_COLOR, TEXT_DISPLAY_COLOR, TEXT_MUTED_COLOR,
-    TEXT_SIZE, TEXT_SIZE_SM,
+    BORDER_RADIUS_MD, DESTRUCTIVE_RED, DESTRUCTIVE_RED_HOVER, PRIMARY_COLOR, TEXT_BODY_COLOR,
+    TEXT_DISPLAY_COLOR, TEXT_MUTED_COLOR, TEXT_SIZE, TEXT_SIZE_SM,
 };
 
 #[derive(EntityEvent)]
@@ -159,14 +159,14 @@ impl ButtonVariant {
             Self::Active => Srgba::new(0.314, 0.314, 0.314, 1.0),
             Self::Destructive => {
                 if hovered {
-                    tailwind::RED_600
+                    DESTRUCTIVE_RED_HOVER
                 } else {
-                    tailwind::RED_500
+                    DESTRUCTIVE_RED
                 }
             }
             Self::Close => {
                 if hovered {
-                    tailwind::RED_600
+                    DESTRUCTIVE_RED_HOVER
                 } else {
                     TEXT_BODY_COLOR
                 }
@@ -222,7 +222,7 @@ impl ButtonVariant {
         match self {
             Self::Default | Self::Ghost | Self::Close | Self::Disabled => tailwind::ZINC_700,
             Self::Primary | Self::Active => PRIMARY_COLOR,
-            Self::Destructive => tailwind::RED_500,
+            Self::Destructive => DESTRUCTIVE_RED,
             Self::ActiveAlt => TEXT_BODY_COLOR,
         }
     }
