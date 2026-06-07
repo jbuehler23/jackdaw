@@ -19,7 +19,7 @@ pub(crate) struct WindowResizeEdge(pub CompassOctant);
 
 /// Invisible edge strips for borderless window resize (client-side chrome only).
 ///
-/// Stacked above the header drag region and application content so edge picks always win.
+/// Stacked above the title bar drag region and application content so edge picks always win.
 pub fn resize_edge_overlay() -> impl Bundle {
     let thickness = px(RESIZE_HANDLE_THICKNESS);
     return (

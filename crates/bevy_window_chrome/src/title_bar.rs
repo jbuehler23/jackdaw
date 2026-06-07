@@ -1,4 +1,4 @@
-//! Window header shell: caption controls, drag region, and an empty content slot.
+//! Window title bar shell: caption controls, drag region, and an empty content slot.
 
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
@@ -8,16 +8,16 @@ use crate::caption_controls::window_controls;
 use crate::{WindowChromeEntity, WindowChromeTheme};
 
 #[derive(Component)]
-pub struct WindowHeaderRoot;
+pub struct WindowTitleBarRoot;
 
 #[derive(Component)]
-pub struct WindowHeaderContentSlot;
+pub struct WindowTitleBarContentSlot;
 
 #[derive(Component)]
-pub struct WindowHeaderDragRegion;
+pub struct WindowTitleBarDragRegion;
 
-/// Window header chrome with an empty [`WindowShellHeaderSlot`]. Returns the slot entity.
-pub fn spawn_window_header(
+/// Window title bar chrome with an empty [`WindowTitleBarContentSlot`]. Returns the slot entity.
+pub fn spawn_window_title_bar(
     parent: &mut ChildSpawnerCommands,
     theme: &WindowChromeTheme,
     caption_font: Handle<Font>,
@@ -30,34 +30,34 @@ pub fn spawn_window_header(
     let macos_traffic_light_inset = theme.macos_traffic_light_inset;
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    let header_border_radius = BorderRadius::top(px(theme.linux_corner_radius));
+    let title_bar_border_radius = BorderRadius::top(px(theme.linux_corner_radius));
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-    let header_border_radius = BorderRadius::ZERO;
+    let title_bar_border_radius = BorderRadius::ZERO;
 
-    let header_root = (
-        WindowHeaderRoot,
+    let title_bar_root = (
+        WindowTitleBarRoot,
         WindowChromeEntity,
         BackgroundColor(theme.window_background),
         Node {
             position_type: PositionType::Relative,
             width: percent(100),
-            height: px(theme.header_height),
-            border_radius: header_border_radius,
+            height: px(theme.title_bar_height),
+            border_radius: title_bar_border_radius,
             overflow: Overflow::clip(),
             ..default()
         },
     );
-    let mut header_slot = None::<Entity>;
-    parent.spawn(header_root).with_children(|header| {
-        header_slot = Some(spawn_foreground_row(
-            header,
+    let mut title_bar_slot = None::<Entity>;
+    parent.spawn(title_bar_root).with_children(|title_bar| {
+        title_bar_slot = Some(spawn_foreground_row(
+            title_bar,
             #[cfg(target_os = "macos")]
             macos_traffic_light_inset,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
             caption_controls,
         ));
     });
-    return header_slot.expect("window header content slot spawned");
+    return title_bar_slot.expect("window title bar content slot spawned");
 }
 
 fn spawn_foreground_row(
@@ -66,7 +66,7 @@ fn spawn_foreground_row(
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
     caption_controls: impl Bundle,
 ) -> Entity {
-    let mut header_slot = None::<Entity>;
+    let mut title_bar_slot = None::<Entity>;
     parent
         .spawn((
             WindowChromeEntity,
@@ -83,9 +83,9 @@ fn spawn_foreground_row(
             },
         ))
         .with_children(|row| {
-            row.spawn(header_drag_backplate());
-            header_slot = Some(
-                row.spawn(header_content_slot(
+            row.spawn(title_bar_drag_backplate());
+            title_bar_slot = Some(
+                row.spawn(title_bar_content_slot(
                     #[cfg(target_os = "macos")]
                     macos_traffic_light_inset,
                 ))
@@ -94,12 +94,12 @@ fn spawn_foreground_row(
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
             row.spawn(caption_controls_slot(caption_controls));
         });
-    return header_slot.expect("window header content slot spawned");
+    return title_bar_slot.expect("window title bar content slot spawned");
 }
 
-fn header_drag_backplate() -> impl Bundle {
+fn title_bar_drag_backplate() -> impl Bundle {
     return (
-        WindowHeaderDragRegion,
+        WindowTitleBarDragRegion,
         WindowChromeEntity,
         Node {
             position_type: PositionType::Absolute,
@@ -127,7 +127,7 @@ fn caption_controls_slot(caption_controls: impl Bundle) -> impl Bundle {
     );
 }
 
-fn header_content_slot(#[cfg(target_os = "macos")] macos_traffic_light_inset: f32) -> impl Bundle {
+fn title_bar_content_slot(#[cfg(target_os = "macos")] macos_traffic_light_inset: f32) -> impl Bundle {
     #[cfg(target_os = "macos")]
     let padding = UiRect {
         left: px(macos_traffic_light_inset),
@@ -137,7 +137,7 @@ fn header_content_slot(#[cfg(target_os = "macos")] macos_traffic_light_inset: f3
     let padding = UiRect::ZERO;
 
     return (
-        WindowHeaderContentSlot,
+        WindowTitleBarContentSlot,
         WindowChromeEntity,
         Pickable::IGNORE,
         Node {
@@ -153,7 +153,7 @@ fn header_content_slot(#[cfg(target_os = "macos")] macos_traffic_light_inset: f3
 
 pub(crate) fn on_drag_region_press(
     press: On<Pointer<Press>>,
-    drag_regions: Query<Entity, With<WindowHeaderDragRegion>>,
+    drag_regions: Query<Entity, With<WindowTitleBarDragRegion>>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
 ) {
     if press.button != PointerButton::Primary {

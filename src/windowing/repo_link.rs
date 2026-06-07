@@ -35,8 +35,8 @@ impl Plugin for RepoLinkPlugin {
     }
 }
 
-/// Header row slot wrapping [`jackdaw_link_button`].
-pub fn header_repo_link(image: Handle<Image>) -> impl Bundle {
+/// Title bar row slot wrapping [`jackdaw_link_button`].
+pub fn title_bar_repo_link(image: Handle<Image>) -> impl Bundle {
     return (
         Pickable::IGNORE,
         Node {

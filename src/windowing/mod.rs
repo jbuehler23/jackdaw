@@ -5,9 +5,9 @@ mod icon;
 mod repo_link;
 
 pub use bevy_window_chrome::{
-    WindowHeaderContentSlot, WindowHeaderRoot, WindowShellContent, WindowShellSlots,
+    WindowTitleBarContentSlot, WindowTitleBarRoot, WindowShellContent, WindowShellSlots,
 };
-pub use repo_link::{JackdawIcon, header_repo_link};
+pub use repo_link::{JackdawIcon, title_bar_repo_link};
 
 use bevy::prelude::*;
 use bevy_window_chrome::{
@@ -48,7 +48,7 @@ pub(crate) fn is_pride_month() -> bool {
 /// Window chrome theme built from jackdaw's design tokens.
 fn jackdaw_window_chrome_theme() -> WindowChromeTheme {
     return WindowChromeTheme {
-        header_height: tokens::WINDOW_HEADER_HEIGHT,
+        title_bar_height: tokens::WINDOW_TITLE_BAR_HEIGHT,
         window_background: tokens::WINDOW_BG,
         caption: CaptionTheme {
             icon_color: tokens::TEXT_PRIMARY,
@@ -76,7 +76,7 @@ fn tag_chrome_entity_as_editor(add: On<Add, WindowChromeEntity>, mut commands: C
     commands.entity(add.event_target()).insert(EditorEntity);
 }
 
-/// Spawns the jackdaw window shell, returning header and body content slots.
+/// Spawns the jackdaw window shell, returning title bar and body content slots.
 pub fn spawn_window_shell<S: Component + Copy>(
     commands: &mut Commands,
     icon_font: &IconFont,

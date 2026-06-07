@@ -6,15 +6,15 @@ use crate::macos_titlebar;
 /// Styling values used in the window chrome.
 #[derive(Resource, Clone, Debug)]
 pub struct WindowChromeTheme {
-    /// Height of the title-bar header row, in logical pixels.
-    pub header_height: f32,
-    /// Background color of the shell and header.
+    /// Height of the title bar row, in logical pixels.
+    pub title_bar_height: f32,
+    /// Background color of the shell and title bar.
     pub window_background: Color,
     /// Left inset reserved for macOS traffic lights.
     pub macos_traffic_light_inset: f32,
     /// Horizontal origin of the macOS traffic lights.
     pub macos_traffic_light_position_x: f32,
-    /// Corner radius for the window shell and header on Linux / FreeBSD, in logical pixels.
+    /// Corner radius for the window shell and title bar on Linux / FreeBSD, in logical pixels.
     pub linux_corner_radius: f32,
     /// Styling for client-side caption buttons.
     pub caption: CaptionTheme,
@@ -50,7 +50,7 @@ impl Default for CaptionTheme {
 impl Default for WindowChromeTheme {
     fn default() -> Self {
         return Self {
-            header_height: 36.0,
+            title_bar_height: 36.0,
             window_background: Color::srgb(0.122, 0.122, 0.141),
             macos_traffic_light_inset: 78.0,
             macos_traffic_light_position_x: 12.0,
@@ -96,7 +96,7 @@ impl Plugin for WindowChromePlugin {
                 app.add_observer(macos_titlebar::on_macos_window_created);
                 app.add_systems(PostUpdate, macos_titlebar::sync_macos_window_shell_state);
             }
-            app.add_observer(crate::header::on_drag_region_press);
+            app.add_observer(crate::title_bar::on_drag_region_press);
         }
     }
 }

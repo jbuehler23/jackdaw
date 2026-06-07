@@ -27,7 +27,7 @@ use crate::{
     remote::ConnectionManager,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
-    windowing::{JackdawIcon, header_repo_link, spawn_window_shell},
+    windowing::{JackdawIcon, title_bar_repo_link, spawn_window_shell},
 };
 #[cfg(target_os = "windows")]
 use bevy_window_chrome::CaptionFont;
@@ -173,17 +173,17 @@ fn spawn_editor_main_area(parent: &mut ChildSpawnerCommands) {
     parent.spawn(editor_status_bar());
 }
 
-/// Fills a [`spawn_window_shell`] header/body pair with editor UI.
+/// Fills a [`spawn_window_shell`] title bar/body pair with editor UI.
 pub fn spawn_editor(
     commands: &mut Commands,
-    header: Entity,
+    title_bar: Entity,
     body: Entity,
     icon_font: Handle<Font>,
     editor_font: Handle<Font>,
     jackdaw_icon: Handle<Image>,
 ) {
-    commands.entity(header).with_children(|header_parent| {
-        header_parent.spawn(window_header_content(
+    commands.entity(title_bar).with_children(|title_bar_parent| {
+        title_bar_parent.spawn(window_title_bar_content(
             icon_font.clone(),
             editor_font.clone(),
             jackdaw_icon,
@@ -223,7 +223,7 @@ pub fn spawn_editor_layout(
     );
     spawn_editor(
         &mut commands,
-        slots.header,
+        slots.title_bar,
         slots.body,
         icon_font.0.clone(),
         editor_font.0.clone(),
@@ -231,7 +231,7 @@ pub fn spawn_editor_layout(
     );
 }
 
-fn window_header_content(
+fn window_title_bar_content(
     icon_font: Handle<Font>,
     editor_font: Handle<Font>,
     jackdaw_icon: Handle<Image>,
@@ -249,7 +249,7 @@ fn window_header_content(
         },
         Pickable::IGNORE,
         children![
-            header_repo_link(jackdaw_icon),
+            title_bar_repo_link(jackdaw_icon),
             menu_bar::menu_bar_shell(),
             (
                 crate::scenes::ui::SceneTabStrip,

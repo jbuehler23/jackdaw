@@ -78,7 +78,7 @@ pub(crate) fn register(app: &mut App) {
     app.add_systems(Last, sync_caption_chrome);
 }
 
-/// Visual caption buttons for the window chrome header.
+/// Visual caption buttons for the window chrome title bar.
 pub fn window_controls(theme: &WindowChromeTheme, caption_font: Handle<Font>) -> impl Bundle {
     let button_width = theme.caption.button_width;
     let glyph_size = theme.caption.glyph_size;

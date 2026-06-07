@@ -24,7 +24,7 @@ use crate::{
     project::{self, ProjectRoot},
     scene_io,
     scrolling_log::{self, ScrollingLog},
-    windowing::{JackdawIcon, header_repo_link, spawn_window_shell},
+    windowing::{JackdawIcon, title_bar_repo_link, spawn_window_shell},
 };
 #[cfg(target_os = "windows")]
 use bevy_window_chrome::CaptionFont;
@@ -387,7 +387,7 @@ fn spawn_project_selector(
     );
     fill_project_selector(
         &mut commands,
-        slots.header,
+        slots.title_bar,
         slots.body,
         font,
         icon_font_handle,
@@ -400,7 +400,7 @@ fn spawn_project_selector(
 
 fn fill_project_selector(
     commands: &mut Commands,
-    header: Entity,
+    title_bar: Entity,
     body: Entity,
     font: Handle<Font>,
     icon_font_handle: Handle<Font>,
@@ -409,8 +409,8 @@ fn fill_project_selector(
     cwd: PathBuf,
     cwd_has_project: bool,
 ) {
-    commands.entity(header).with_children(|header_parent| {
-        header_parent.spawn((
+    commands.entity(title_bar).with_children(|title_bar_parent| {
+        title_bar_parent.spawn((
             Node {
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
@@ -430,7 +430,7 @@ fn fill_project_selector(
                         ..Default::default()
                     },
                     children![
-                        header_repo_link(jackdaw_icon),
+                        title_bar_repo_link(jackdaw_icon),
                         (
                             Text::new("jackdaw"),
                             TextFont {

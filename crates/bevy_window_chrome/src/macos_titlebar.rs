@@ -9,7 +9,7 @@ use bevy::window::{PrimaryWindow, Window, WindowCreated, WindowMode};
 use bevy::winit::WINIT_WINDOWS;
 
 use crate::WindowChromeTheme;
-use crate::header::WindowHeaderContentSlot;
+use crate::title_bar::WindowTitleBarContentSlot;
 use objc2::rc::Retained;
 use objc2::runtime::NSObject;
 use objc2::{ClassType, DeclaredClass, declare_class, msg_send_id, mutability, sel};
@@ -105,12 +105,12 @@ pub(crate) fn on_macos_window_created(
     }
 }
 
-/// Syncs traffic-light visibility, positioning, and header content inset with window state.
+/// Syncs traffic-light visibility, positioning, and title bar content inset with window state.
 pub(crate) fn sync_macos_window_shell_state(
     _main_thread: NonSendMarker,
     theme: Res<WindowChromeTheme>,
     mut windows: Query<(Entity, &Window, &mut MacosFillsWorkArea), With<PrimaryWindow>>,
-    mut header_content_slots: Query<&mut Node, With<WindowHeaderContentSlot>>,
+    mut title_bar_content_slots: Query<&mut Node, With<WindowTitleBarContentSlot>>,
 ) {
     let Ok((window_entity, window, mut fills_work_area)) = windows.single_mut() else {
         return;
@@ -125,7 +125,7 @@ pub(crate) fn sync_macos_window_shell_state(
     } else {
         theme.macos_traffic_light_inset
     };
-    for mut node in header_content_slots.iter_mut() {
+    for mut node in title_bar_content_slots.iter_mut() {
         node.padding.left = Val::Px(content_inset);
     }
     if fills_work_area.0 != current {
@@ -231,8 +231,8 @@ pub fn reposition_traffic_lights(window_entity: Entity) {
     let button_spacing = minimize_frame.origin.x - close_frame.origin.x;
     let traffic_light_x = theme.macos_traffic_light_position_x as f64;
     let button_height = close_frame.size.height;
-    let header_height = theme.header_height as f64;
-    let layout_height = titlebar_height.min(header_height);
+    let title_bar_height = theme.title_bar_height as f64;
+    let layout_height = titlebar_height.min(title_bar_height);
     let y_offset_from_titlebar_top = (layout_height - button_height) / 2.0;
     let origin_y = titlebar_height - y_offset_from_titlebar_top - button_height;
     let mut origin_x = traffic_light_x;

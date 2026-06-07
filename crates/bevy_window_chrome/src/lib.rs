@@ -13,9 +13,9 @@
 //! Segoe icon font on Windows and Lucide-compatible glyphs elsewhere.
 
 mod caption_controls;
-mod header;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
+mod title_bar;
 mod plugin;
 mod resize;
 mod shell;
@@ -26,8 +26,8 @@ pub use caption_controls::window_controls;
 pub use caption_controls::{
     CaptionFont, WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize,
 };
-pub use header::{
-    WindowHeaderContentSlot, WindowHeaderDragRegion, WindowHeaderRoot, spawn_window_header,
+pub use title_bar::{
+    WindowTitleBarContentSlot, WindowTitleBarDragRegion, WindowTitleBarRoot, spawn_window_title_bar,
 };
 pub use plugin::{CaptionTheme, WindowChromePlugin, WindowChromeTheme};
 pub use resize::resize_edge_overlay;
@@ -43,6 +43,6 @@ use bevy::prelude::Component;
 #[derive(Component, Copy, Clone, Default)]
 pub struct WindowChromeEntity;
 
-/// Outer shell column that hosts the window header and body slot.
+/// Outer shell column that hosts the window title bar and body slot.
 #[derive(Component)]
 pub struct WindowShellRoot;
