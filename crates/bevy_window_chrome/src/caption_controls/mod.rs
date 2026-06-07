@@ -16,26 +16,13 @@ pub struct WindowControlsMaximize;
 #[derive(Component)]
 pub struct WindowControlsClose;
 
-/// Caption minimize / maximize / close cluster for the current platform.
+/// Caption minimize / maximize / close cluster for Windows, Linux, and FreeBSD.
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
 pub fn window_caption_controls(
     theme: &crate::WindowChromeTheme,
     caption_font: Handle<Font>,
 ) -> impl Bundle {
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-    {
-        return caption::window_controls(theme, caption_font);
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "freebsd")))]
-    {
-        let _ = (theme, caption_font);
-        return caption_controls_placeholder();
-    }
-}
-
-/// macOS and other platforms without client-side caption buttons.
-#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "freebsd")))]
-fn caption_controls_placeholder() -> impl Bundle {
-    return (crate::WindowChromeEntity, Pickable::IGNORE);
+    return caption::window_controls(theme, caption_font);
 }
 
 pub(crate) fn build(app: &mut App) {

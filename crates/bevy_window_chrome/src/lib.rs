@@ -24,10 +24,11 @@ mod window;
 
 pub use caption_controls::{
     CaptionFont, WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize,
-    window_caption_controls,
 };
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+pub use caption_controls::window_caption_controls;
 pub use header::{
-    MacosHeaderContentInset, WindowHeaderContentSlot, WindowHeaderDragRegion, WindowHeaderRoot,
+    WindowHeaderContentSlot, WindowHeaderDragRegion, WindowHeaderRoot,
     spawn_window_header,
 };
 pub use icon::WindowIconPlugin;

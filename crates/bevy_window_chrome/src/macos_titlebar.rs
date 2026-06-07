@@ -9,7 +9,7 @@ use bevy::window::{PrimaryWindow, Window, WindowCreated, WindowMode};
 use bevy::winit::WINIT_WINDOWS;
 
 use crate::WindowChromeTheme;
-use crate::header::MacosHeaderContentInset;
+use crate::header::WindowHeaderContentSlot;
 use objc2::rc::Retained;
 use objc2::runtime::NSObject;
 use objc2::{ClassType, DeclaredClass, declare_class, msg_send_id, mutability, sel};
@@ -110,7 +110,7 @@ pub(crate) fn sync_macos_window_shell_state(
     _main_thread: NonSendMarker,
     theme: Res<WindowChromeTheme>,
     mut windows: Query<(Entity, &Window, &mut MacosFillsWorkArea), With<PrimaryWindow>>,
-    mut header_inset_nodes: Query<&mut Node, With<MacosHeaderContentInset>>,
+    mut header_content_slots: Query<&mut Node, With<WindowHeaderContentSlot>>,
 ) {
     let Ok((window_entity, window, mut fills_work_area)) = windows.single_mut() else {
         return;
@@ -125,7 +125,7 @@ pub(crate) fn sync_macos_window_shell_state(
     } else {
         theme.macos_traffic_light_inset
     };
-    for mut node in header_inset_nodes.iter_mut() {
+    for mut node in header_content_slots.iter_mut() {
         node.padding.left = Val::Px(content_inset);
     }
     if fills_work_area.0 != current {

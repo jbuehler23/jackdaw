@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
 use crate::caption_controls::window_caption_controls;
 use crate::{WindowChromeEntity, WindowChromeTheme};
 
@@ -15,15 +16,15 @@ pub struct WindowHeaderContentSlot;
 #[derive(Component)]
 pub struct WindowHeaderDragRegion;
 
-#[derive(Component)]
-pub struct MacosHeaderContentInset;
-
 /// Window header chrome with an empty [`WindowShellHeaderSlot`]. Returns the slot entity.
 pub fn spawn_window_header(
     parent: &mut ChildSpawnerCommands,
     theme: &WindowChromeTheme,
     caption_font: Handle<Font>,
 ) -> Entity {
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "freebsd")))]
+    let _ = caption_font;
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
     let caption_controls = window_caption_controls(theme, caption_font);
     #[cfg(target_os = "macos")]
     let macos_traffic_light_inset = theme.macos_traffic_light_inset;
@@ -52,6 +53,7 @@ pub fn spawn_window_header(
             header,
             #[cfg(target_os = "macos")]
             macos_traffic_light_inset,
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
             caption_controls,
         ));
     });
@@ -61,6 +63,7 @@ pub fn spawn_window_header(
 fn spawn_foreground_row(
     parent: &mut ChildSpawnerCommands,
     #[cfg(target_os = "macos")] macos_traffic_light_inset: f32,
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
     caption_controls: impl Bundle,
 ) -> Entity {
     let mut header_slot = None::<Entity>;
@@ -88,6 +91,7 @@ fn spawn_foreground_row(
                 ))
                 .id(),
             );
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
             row.spawn(caption_controls_slot(caption_controls));
         });
     return header_slot.expect("window header content slot spawned");
@@ -108,6 +112,7 @@ fn header_drag_backplate() -> impl Bundle {
     );
 }
 
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
 fn caption_controls_slot(caption_controls: impl Bundle) -> impl Bundle {
     return (
         WindowChromeEntity,
@@ -116,10 +121,6 @@ fn caption_controls_slot(caption_controls: impl Bundle) -> impl Bundle {
             flex_shrink: 0.0,
             height: percent(100),
             align_items: AlignItems::Stretch,
-            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-            display: Display::Flex,
-            #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "freebsd")))]
-            display: Display::None,
             ..default()
         },
         children![caption_controls],
@@ -137,8 +138,6 @@ fn header_content_slot(#[cfg(target_os = "macos")] macos_traffic_light_inset: f3
 
     return (
         WindowHeaderContentSlot,
-        #[cfg(target_os = "macos")]
-        MacosHeaderContentInset,
         WindowChromeEntity,
         Pickable::IGNORE,
         Node {
