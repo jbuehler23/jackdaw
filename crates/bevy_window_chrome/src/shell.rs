@@ -19,13 +19,13 @@ pub struct WindowShellSlots {
 
 /// Spawns a UI camera, the window shell, and returns header/body slots for screen content.
 ///
-/// `screen` is a caller marker copied onto the UI camera and shell root (useful for despawning a
-/// screen's chrome as a unit). `caption_controls` is the minimize/maximize/close cluster bundle
-/// (see [`spawn_window_header`]).
+/// `screen` is a caller marker copied onto the UI camera and shell root (useful for despawning
+/// screen's chrome as a unit). `caption_font` is the icon font for client-side caption buttons
+/// (Segoe on Windows; Lucide or compatible on Linux / FreeBSD).
 pub fn spawn_window_shell<S: Component + Copy>(
     commands: &mut Commands,
     theme: &WindowChromeTheme,
-    caption_controls: impl Bundle,
+    caption_font: Handle<Font>,
     screen: S,
 ) -> WindowShellSlots {
     commands.spawn((
@@ -55,7 +55,7 @@ pub fn spawn_window_shell<S: Component + Copy>(
             },
         ))
         .with_children(|shell| {
-            header_slot = Some(spawn_window_header(shell, theme, caption_controls));
+            header_slot = Some(spawn_window_header(shell, theme, caption_font));
             body_slot = Some(
                 shell
                     .spawn((

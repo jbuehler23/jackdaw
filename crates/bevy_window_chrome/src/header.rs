@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 
+use crate::controls::window_caption_controls;
 use crate::{WindowChromeEntity, WindowChromeTheme};
 
 #[derive(Component)]
@@ -19,14 +20,12 @@ pub struct WindowHeaderDragRegion;
 pub struct MacosHeaderContentInset;
 
 /// Window header chrome with an empty [`WindowShellHeaderSlot`]. Returns the slot entity.
-///
-/// `caption_controls` is the minimize/maximize/close cluster bundle. Prefer
-/// [`crate::window_caption_controls`] for the platform-appropriate cluster.
 pub fn spawn_window_header(
     parent: &mut ChildSpawnerCommands,
     theme: &WindowChromeTheme,
-    caption_controls: impl Bundle,
+    caption_font: Handle<Font>,
 ) -> Entity {
+    let caption_controls = window_caption_controls(theme, caption_font);
     #[cfg(target_os = "macos")]
     let macos_traffic_light_inset = theme.macos_traffic_light_inset;
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

@@ -84,7 +84,6 @@ pub fn spawn_window_shell<S: Component + Copy>(
 ) -> WindowShellSlots {
     #[cfg(target_os = "windows")]
     let _ = icon_font;
-
     let theme = jackdaw_window_chrome_theme();
     let caption_font = {
         #[cfg(target_os = "windows")]
@@ -96,6 +95,5 @@ pub fn spawn_window_shell<S: Component + Copy>(
             icon_font.0.clone()
         }
     };
-    let caption_controls = bevy_window_chrome::window_caption_controls(&theme, caption_font);
-    return bevy_window_chrome::spawn_window_shell(commands, &theme, caption_controls, screen);
+    return bevy_window_chrome::spawn_window_shell(commands, &theme, caption_font, screen);
 }

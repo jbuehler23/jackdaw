@@ -1,3 +1,5 @@
+//! Window attributes and native window state helpers.
+
 use bevy::prelude::*;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use bevy::window::CompositeAlphaMode;
