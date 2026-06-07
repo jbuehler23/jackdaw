@@ -36,7 +36,6 @@ pub fn primary_window_attributes() -> Window {
 }
 
 /// Whether the primary window is currently maximized.
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
 pub fn primary_window_is_maximized(window_entity: Entity) -> bool {
     return WINIT_WINDOWS.with(|windows_cell| {
         let winit_windows = windows_cell.borrow();

@@ -17,19 +17,9 @@ pub(crate) struct WindowResizeRoot;
 #[derive(Component, Copy, Clone)]
 pub(crate) struct WindowResizeEdge(pub CompassOctant);
 
-/// Spawns the resize edge overlay as a child on platforms with client-side resize handles.
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-pub fn spawn_resize_edge_overlay_if_needed(parent: &mut ChildSpawnerCommands) {
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-    {
-        parent.spawn(resize_edge_overlay());
-    }
-}
-
 /// Invisible edge strips for borderless window resize (client-side chrome only).
 ///
 /// Stacked above the header drag region and application content so edge picks always win.
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
 pub fn resize_edge_overlay() -> impl Bundle {
     let thickness = px(RESIZE_HANDLE_THICKNESS);
     return (
@@ -135,7 +125,6 @@ pub fn resize_edge_overlay() -> impl Bundle {
     );
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
 fn resize_edge(direction: CompassOctant, node: Node) -> impl Bundle {
     return (
         WindowResizeEdge(direction),
@@ -148,7 +137,6 @@ fn resize_edge(direction: CompassOctant, node: Node) -> impl Bundle {
 }
 
 /// Disables resize-edge picking while the window cannot be resized.
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
 pub(crate) fn sync_resize_overlay_pickability(
     _main_thread: bevy::ecs::system::NonSendMarker,
     primary_window: Query<(Entity, &Window), With<PrimaryWindow>>,
@@ -171,7 +159,6 @@ pub(crate) fn sync_resize_overlay_pickability(
     }
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
 fn resize_cursor_icon(direction: CompassOctant) -> SystemCursorIcon {
     return match direction {
         CompassOctant::North => SystemCursorIcon::NResize,
@@ -185,7 +172,6 @@ fn resize_cursor_icon(direction: CompassOctant) -> SystemCursorIcon {
     };
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
 pub(crate) fn on_resize_edge_press(
     press: On<Pointer<Press>>,
     edges: Query<&WindowResizeEdge>,

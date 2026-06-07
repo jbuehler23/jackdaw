@@ -1,4 +1,4 @@
-//! Native traffic light positioning on macOS (transparent integrated title bar).
+//! Native traffic light positioning on macOS.
 
 use std::cell::RefCell;
 use std::sync::OnceLock;
@@ -138,9 +138,6 @@ pub(crate) fn sync_macos_window_shell_state(
 }
 
 /// Whether the window frame fills the display work area (green-button zoom).
-///
-/// Compares width to `visibleFrame` and height to `visibleFrame` or full screen frame, since
-/// transparent title-bar windows often report a taller frame than `visibleFrame`.
 pub fn window_fills_work_area(window_entity: Entity) -> bool {
     let Some(mtm) = MainThreadMarker::new() else {
         return false;

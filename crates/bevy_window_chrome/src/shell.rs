@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 
 use crate::header::spawn_window_header;
-use crate::resize::spawn_resize_edge_overlay_if_needed;
+use crate::resize::resize_edge_overlay;
 use crate::{WindowChromeTheme, WindowShellRoot};
 
 /// Unstyled flex column that fills the area below the window header.
@@ -72,8 +72,8 @@ pub fn spawn_window_shell<S: Component + Copy>(
                     ))
                     .id(),
             );
-            #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-            spawn_resize_edge_overlay_if_needed(shell);
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+            shell.spawn(resize_edge_overlay());
         });
     return WindowShellSlots {
         header: header_slot.expect("window shell header slot spawned"),

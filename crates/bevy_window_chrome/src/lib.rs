@@ -31,7 +31,7 @@ pub use header::{
 };
 pub use icon::WindowIconPlugin;
 pub use plugin::{CaptionTheme, WindowChromePlugin, WindowChromeTheme};
-pub use resize::{resize_edge_overlay, spawn_resize_edge_overlay_if_needed};
+pub use resize::resize_edge_overlay;
 pub use shell::{WindowShellContent, WindowShellSlots, spawn_window_shell};
 pub use window::{primary_window_attributes, primary_window_is_maximized};
 
