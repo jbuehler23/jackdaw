@@ -14,7 +14,6 @@
 
 mod caption_controls;
 mod header;
-mod icon;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
 mod plugin;
@@ -30,7 +29,6 @@ pub use caption_controls::{
 pub use header::{
     WindowHeaderContentSlot, WindowHeaderDragRegion, WindowHeaderRoot, spawn_window_header,
 };
-pub use icon::WindowIconPlugin;
 pub use plugin::{CaptionTheme, WindowChromePlugin, WindowChromeTheme};
 pub use resize::resize_edge_overlay;
 pub use shell::{WindowShellContent, WindowShellSlots, spawn_window_shell};

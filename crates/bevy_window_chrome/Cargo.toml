@@ -12,7 +12,6 @@ include = ["Cargo.toml", "LICENSE*", "README.md", "src/**/*"]
 [dependencies]
 bevy.workspace = true
 winit.workspace = true
-image.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"

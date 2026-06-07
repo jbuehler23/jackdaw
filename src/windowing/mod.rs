@@ -1,6 +1,7 @@
 //! Jackdaw window chrome: wires the reusable [`bevy_window_chrome`] crate to jackdaw's design
 //! tokens, branding, and editor entity bookkeeping.
 
+mod icon;
 mod repo_link;
 
 pub use bevy_window_chrome::{
@@ -11,8 +12,8 @@ pub use repo_link::{JackdawIcon, header_repo_link};
 use bevy::prelude::*;
 use bevy_window_chrome::{
     CaptionFont, CaptionTheme, WindowChromeEntity, WindowChromePlugin, WindowChromeTheme,
-    WindowIconPlugin,
 };
+use icon::WindowIconPlugin;
 use jackdaw_feathers::icons::IconFont;
 use jackdaw_feathers::tokens;
 use time::{Month, OffsetDateTime};
@@ -37,7 +38,7 @@ fn window_icon_png_bytes() -> &'static [u8] {
     }
 }
 
-fn is_pride_month() -> bool {
+pub(crate) fn is_pride_month() -> bool {
     let Ok(date_time) = OffsetDateTime::now_local() else {
         return false;
     };
