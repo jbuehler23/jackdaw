@@ -33,10 +33,10 @@ pub fn spawn_window_header(
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     let header_border_radius = BorderRadius::ZERO;
 
-    let mut header_slot = None::<Entity>;
     let header_root = (
         WindowHeaderRoot,
         WindowChromeEntity,
+        BackgroundColor(theme.window_background),
         Node {
             position_type: PositionType::Relative,
             width: percent(100),
@@ -46,12 +46,8 @@ pub fn spawn_window_header(
             ..default()
         },
     );
-    let mut header_spawner = parent.spawn(header_root);
-    #[cfg(not(target_os = "macos"))]
-    {
-        header_spawner.insert(BackgroundColor(theme.window_background));
-    }
-    header_spawner.with_children(|header| {
+    let mut header_slot = None::<Entity>;
+    parent.spawn(header_root).with_children(|header| {
         header_slot = Some(spawn_foreground_row(
             header,
             #[cfg(target_os = "macos")]
