@@ -15,10 +15,10 @@
 mod caption_controls;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
-mod title_bar;
 mod plugin;
 mod resize;
 mod shell;
+mod title_bar;
 mod window;
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
@@ -26,12 +26,12 @@ pub use caption_controls::window_controls;
 pub use caption_controls::{
     CaptionFont, WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize,
 };
-pub use title_bar::{
-    WindowTitleBarContentSlot, WindowTitleBarDragRegion, WindowTitleBarRoot, spawn_window_title_bar,
-};
 pub use plugin::{CaptionTheme, WindowChromePlugin, WindowChromeTheme};
 pub use resize::resize_edge_overlay;
 pub use shell::{WindowShellContent, WindowShellSlots, spawn_window_shell};
+pub use title_bar::{
+    WindowTitleBarContentSlot, WindowTitleBarDragRegion, WindowTitleBarRoot, spawn_window_title_bar,
+};
 pub use window::{primary_window_attributes, primary_window_is_maximized};
 
 use bevy::prelude::Component;

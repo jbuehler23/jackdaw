@@ -5259,11 +5259,7 @@ dependencies = [
  "jackdaw_terrain",
  "jackdaw_widgets",
  "notify",
- "objc2 0.5.2",
- "objc2-app-kit 0.2.2",
- "objc2-foundation 0.2.2",
  "pathdiff",
- "raw-window-handle",
  "regex",
  "rfd",
  "serde",
@@ -5272,7 +5268,6 @@ dependencies = [
  "test_fixture_extension",
  "time",
  "webbrowser",
- "windows-sys 0.61.2",
  "winit",
 ]
 

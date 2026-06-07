@@ -2,8 +2,8 @@
 
 use bevy::prelude::*;
 
-use crate::title_bar::spawn_window_title_bar;
 use crate::resize::resize_edge_overlay;
+use crate::title_bar::spawn_window_title_bar;
 use crate::{WindowChromeTheme, WindowShellRoot};
 
 /// Unstyled flex column that fills the area below the window title bar.

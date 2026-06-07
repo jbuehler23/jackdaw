@@ -24,7 +24,7 @@ use crate::{
     project::{self, ProjectRoot},
     scene_io,
     scrolling_log::{self, ScrollingLog},
-    windowing::{JackdawIcon, title_bar_repo_link, spawn_window_shell},
+    windowing::{JackdawIcon, spawn_window_shell, title_bar_repo_link},
 };
 #[cfg(target_os = "windows")]
 use bevy_window_chrome::CaptionFont;
@@ -409,53 +409,55 @@ fn fill_project_selector(
     cwd: PathBuf,
     cwd_has_project: bool,
 ) {
-    commands.entity(title_bar).with_children(|title_bar_parent| {
-        title_bar_parent.spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceBetween,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                padding: UiRect::horizontal(Val::Px(tokens::SPACING_MD)),
-                ..Default::default()
-            },
-            Pickable::IGNORE,
-            children![
-                (
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(tokens::SPACING_MD),
-                        ..Default::default()
-                    },
-                    children![
-                        title_bar_repo_link(jackdaw_icon),
-                        (
-                            Text::new("jackdaw"),
-                            TextFont {
-                                font: font.clone(),
-                                font_size: tokens::FONT_MD,
-                                ..Default::default()
-                            },
-                            TextColor(tokens::TEXT_PRIMARY),
-                            Pickable::IGNORE,
-                        ),
-                    ],
-                ),
-                (
-                    Text::new(format!("v{}", env!("CARGO_PKG_VERSION"))),
-                    TextFont {
-                        font: font.clone(),
-                        font_size: tokens::FONT_SM,
-                        ..Default::default()
-                    },
-                    TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
-                    Pickable::IGNORE,
-                )
-            ],
-        ));
-    });
+    commands
+        .entity(title_bar)
+        .with_children(|title_bar_parent| {
+            title_bar_parent.spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::SpaceBetween,
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    padding: UiRect::horizontal(Val::Px(tokens::SPACING_MD)),
+                    ..Default::default()
+                },
+                Pickable::IGNORE,
+                children![
+                    (
+                        Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(tokens::SPACING_MD),
+                            ..Default::default()
+                        },
+                        children![
+                            title_bar_repo_link(jackdaw_icon),
+                            (
+                                Text::new("jackdaw"),
+                                TextFont {
+                                    font: font.clone(),
+                                    font_size: tokens::FONT_MD,
+                                    ..Default::default()
+                                },
+                                TextColor(tokens::TEXT_PRIMARY),
+                                Pickable::IGNORE,
+                            ),
+                        ],
+                    ),
+                    (
+                        Text::new(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                        TextFont {
+                            font: font.clone(),
+                            font_size: tokens::FONT_SM,
+                            ..Default::default()
+                        },
+                        TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
+                        Pickable::IGNORE,
+                    )
+                ],
+            ));
+        });
     commands.entity(body).with_children(|body_parent| {
         body_parent
             .spawn(Node {

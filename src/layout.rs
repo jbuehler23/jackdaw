@@ -27,7 +27,7 @@ use crate::{
     remote::ConnectionManager,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
-    windowing::{JackdawIcon, title_bar_repo_link, spawn_window_shell},
+    windowing::{JackdawIcon, spawn_window_shell, title_bar_repo_link},
 };
 #[cfg(target_os = "windows")]
 use bevy_window_chrome::CaptionFont;
@@ -182,13 +182,15 @@ pub fn spawn_editor(
     editor_font: Handle<Font>,
     jackdaw_icon: Handle<Image>,
 ) {
-    commands.entity(title_bar).with_children(|title_bar_parent| {
-        title_bar_parent.spawn(window_title_bar_content(
-            icon_font.clone(),
-            editor_font.clone(),
-            jackdaw_icon,
-        ));
-    });
+    commands
+        .entity(title_bar)
+        .with_children(|title_bar_parent| {
+            title_bar_parent.spawn(window_title_bar_content(
+                icon_font.clone(),
+                editor_font.clone(),
+                jackdaw_icon,
+            ));
+        });
     commands.entity(body).insert((
         EditorEntity,
         Node {

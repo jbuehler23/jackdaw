@@ -5,7 +5,7 @@ mod icon;
 mod repo_link;
 
 pub use bevy_window_chrome::{
-    WindowTitleBarContentSlot, WindowTitleBarRoot, WindowShellContent, WindowShellSlots,
+    WindowShellContent, WindowShellSlots, WindowTitleBarContentSlot, WindowTitleBarRoot,
 };
 pub use repo_link::{JackdawIcon, title_bar_repo_link};
 
