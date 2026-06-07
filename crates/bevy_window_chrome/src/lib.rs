@@ -22,14 +22,13 @@ mod resize;
 mod shell;
 mod window;
 
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+pub use caption_controls::window_controls;
 pub use caption_controls::{
     CaptionFont, WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize,
 };
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-pub use caption_controls::window_caption_controls;
 pub use header::{
-    WindowHeaderContentSlot, WindowHeaderDragRegion, WindowHeaderRoot,
-    spawn_window_header,
+    WindowHeaderContentSlot, WindowHeaderDragRegion, WindowHeaderRoot, spawn_window_header,
 };
 pub use icon::WindowIconPlugin;
 pub use plugin::{CaptionTheme, WindowChromePlugin, WindowChromeTheme};

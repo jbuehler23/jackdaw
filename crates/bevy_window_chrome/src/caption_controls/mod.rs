@@ -3,9 +3,11 @@
 mod caption;
 mod caption_actions;
 
-pub use caption::CaptionFont;
-
 use bevy::prelude::*;
+
+pub use caption::CaptionFont;
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+pub use caption::window_controls;
 
 #[derive(Component)]
 pub struct WindowControlsMinimize;
@@ -15,15 +17,6 @@ pub struct WindowControlsMaximize;
 
 #[derive(Component)]
 pub struct WindowControlsClose;
-
-/// Caption minimize / maximize / close cluster for Windows, Linux, and FreeBSD.
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-pub fn window_caption_controls(
-    theme: &crate::WindowChromeTheme,
-    caption_font: Handle<Font>,
-) -> impl Bundle {
-    return caption::window_controls(theme, caption_font);
-}
 
 pub(crate) fn build(app: &mut App) {
     #[cfg(target_os = "windows")]

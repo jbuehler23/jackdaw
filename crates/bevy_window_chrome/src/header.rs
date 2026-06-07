@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-use crate::caption_controls::window_caption_controls;
+use crate::caption_controls::window_controls;
 use crate::{WindowChromeEntity, WindowChromeTheme};
 
 #[derive(Component)]
@@ -25,7 +25,7 @@ pub fn spawn_window_header(
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "freebsd")))]
     let _ = caption_font;
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-    let caption_controls = window_caption_controls(theme, caption_font);
+    let caption_controls = window_controls(theme, caption_font);
     #[cfg(target_os = "macos")]
     let macos_traffic_light_inset = theme.macos_traffic_light_inset;
 
