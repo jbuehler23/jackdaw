@@ -82,7 +82,7 @@ impl Plugin for WindowChromePlugin {
         {
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
             {
-                crate::controls::build(app);
+                crate::caption_controls::build(app);
                 app.add_observer(crate::resize::on_resize_edge_press);
                 app.add_systems(Last, crate::resize::sync_resize_overlay_pickability);
             }

@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 
-use crate::controls::window_caption_controls;
+use crate::caption_controls::window_caption_controls;
 use crate::{WindowChromeEntity, WindowChromeTheme};
 
 #[derive(Component)]
@@ -15,7 +15,6 @@ pub struct WindowHeaderContentSlot;
 #[derive(Component)]
 pub struct WindowHeaderDragRegion;
 
-/// Header content slot; `Node::padding.left` updated when the window fills the work area (macOS).
 #[derive(Component)]
 pub struct MacosHeaderContentInset;
 
@@ -28,10 +27,12 @@ pub fn spawn_window_header(
     let caption_controls = window_caption_controls(theme, caption_font);
     #[cfg(target_os = "macos")]
     let macos_traffic_light_inset = theme.macos_traffic_light_inset;
+
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     let header_border_radius = BorderRadius::top(px(theme.linux_corner_radius));
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     let header_border_radius = BorderRadius::ZERO;
+
     let mut header_slot = None::<Entity>;
     let header_root = (
         WindowHeaderRoot,

@@ -1,17 +1,18 @@
 //! Native-looking custom window chrome for Bevy apps.
 //!
-//! Provides a draggable title bar, caption buttons, and resize handles with per-platform chrome:
+//! Provides a borderless or integrated primary-window shell with a draggable title bar, caption
+//! buttons, and resize handles. Platform behavior is fixed per target:
 //!
-//! - **Windows**: borderless client-side chrome; DWM rounds the HWND.
-//! - **Linux / FreeBSD**: borderless client-side chrome; Bevy UI rounds corners with a transparent
-//!   window background.
+//! - **Windows**: borderless client-side chrome; DWM rounds the HWND corner.
+//! - **Linux / FreeBSD**: borderless client-side chrome; Bevy UI rounds the shell with a
+//!   transparent window background.
 //! - **macOS**: native traffic lights with a transparent integrated title bar.
 //!
-//! Colors and metrics come from a [`WindowChromeTheme`] supplied by the host application.
-//! Client-side caption buttons use Segoe icon glyphs on Windows and Lucide-compatible glyphs on
-//! Linux / FreeBSD.
+//! Colors and metrics come from a [`WindowChromeTheme`] you supply to [`WindowChromePlugin`].
+//! Client-side caption buttons (Windows, Linux, FreeBSD) expect a
+//! Segoe icon font on Windows and Lucide-compatible glyphs elsewhere.
 
-mod controls;
+mod caption_controls;
 mod header;
 mod icon;
 #[cfg(target_os = "macos")]
@@ -21,7 +22,7 @@ mod resize;
 mod shell;
 mod window;
 
-pub use controls::{
+pub use caption_controls::{
     CaptionFont, WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize,
     window_caption_controls,
 };
