@@ -19,6 +19,8 @@ pub struct WindowControlsMaximize;
 pub struct WindowControlsClose;
 
 pub(crate) fn build(app: &mut App) {
+    caption_actions::register_pointer_handlers(app);
+
     #[cfg(target_os = "windows")]
     {
         install_windows_caption_font_in_app(app);
@@ -26,7 +28,7 @@ pub(crate) fn build(app: &mut App) {
 
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
     {
-        caption::register(app);
+        app.add_systems(Last, caption::sync_caption_chrome);
     }
 }
 

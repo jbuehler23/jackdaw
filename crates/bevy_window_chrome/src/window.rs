@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use bevy::window::CompositeAlphaMode;
-use bevy::window::{Window, WindowCreated};
+use bevy::window::{PrimaryWindow, Window, WindowCreated};
 use bevy::winit::WINIT_WINDOWS;
 
 pub fn primary_window_attributes() -> Window {
@@ -33,6 +33,17 @@ pub fn primary_window_attributes() -> Window {
         decorations: false,
         ..default()
     };
+}
+
+/// Toggles the primary window between maximized and restored.
+pub(crate) fn toggle_primary_window_maximized(
+    mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
+) {
+    let Ok((window_entity, mut window)) = windows.single_mut() else {
+        return;
+    };
+    let next_maximized = !primary_window_is_maximized(window_entity);
+    window.set_maximized(next_maximized);
 }
 
 /// Whether the primary window is currently maximized.

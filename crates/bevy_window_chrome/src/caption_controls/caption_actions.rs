@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window, WindowCloseRequested};
 
-use crate::primary_window_is_maximized;
+use crate::window::toggle_primary_window_maximized;
 
 use super::{WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize};
 
@@ -33,7 +33,7 @@ fn on_minimize_press(
 fn on_maximize_press(
     press: On<Pointer<Press>>,
     buttons: Query<Entity, With<WindowControlsMaximize>>,
-    mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
+    windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
 ) {
     if press.button != PointerButton::Primary {
         return;
@@ -41,11 +41,7 @@ fn on_maximize_press(
     if buttons.get(press.event_target()).is_err() {
         return;
     }
-    let Ok((window_entity, mut window)) = windows.single_mut() else {
-        return;
-    };
-    let next_maximized = !primary_window_is_maximized(window_entity);
-    window.set_maximized(next_maximized);
+    toggle_primary_window_maximized(windows);
 }
 
 fn on_close_press(

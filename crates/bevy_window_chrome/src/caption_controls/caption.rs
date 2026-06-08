@@ -7,7 +7,6 @@ use bevy::window::PrimaryWindow;
 
 use crate::{CaptionTheme, WindowChromeEntity, WindowChromeTheme};
 
-use super::caption_actions;
 use super::{WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize};
 
 #[cfg(target_os = "windows")]
@@ -71,11 +70,6 @@ pub fn load_windows_caption_font(fonts: &mut Assets<Font>) -> Option<Handle<Font
         }
     }
     return None;
-}
-
-pub(crate) fn register(app: &mut App) {
-    caption_actions::register_pointer_handlers(app);
-    app.add_systems(Last, sync_caption_chrome);
 }
 
 /// Visual caption buttons for the window chrome title bar.
@@ -173,7 +167,7 @@ fn maximize_caption_label(is_maximized: bool) -> String {
     };
 }
 
-fn sync_caption_chrome(
+pub(crate) fn sync_caption_chrome(
     _main_thread: bevy::ecs::system::NonSendMarker,
     theme: Res<WindowChromeTheme>,
     primary_window: Query<Entity, With<PrimaryWindow>>,

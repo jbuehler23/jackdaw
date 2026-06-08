@@ -5,7 +5,16 @@ use bevy::window::{PrimaryWindow, Window};
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
 use crate::caption_controls::window_controls;
+use crate::window::toggle_primary_window_maximized;
 use crate::{WindowChromeEntity, WindowChromeTheme};
+
+const DOUBLE_CLICK_THRESHOLD_S: f64 = 0.4;
+
+#[derive(Resource, Default)]
+struct DragRegionClickTracker {
+    last_click_entity: Option<Entity>,
+    last_click_time: Option<f64>,
+}
 
 #[derive(Component)]
 pub struct WindowTitleBarRoot;
@@ -153,19 +162,65 @@ fn title_bar_content_slot(
     );
 }
 
-pub(crate) fn on_drag_region_press(
+pub(crate) fn register_drag_region_handlers(app: &mut App) {
+    app.init_resource::<DragRegionClickTracker>()
+        .add_observer(on_drag_region_press)
+        .add_observer(on_drag_region_click);
+}
+
+fn on_drag_region_press(
     press: On<Pointer<Press>>,
     drag_regions: Query<Entity, With<WindowTitleBarDragRegion>>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    tracker: Res<DragRegionClickTracker>,
+    time: Res<Time>,
 ) {
     if press.button != PointerButton::Primary {
         return;
     }
-    if drag_regions.get(press.event_target()).is_err() {
+    let entity = press.event_target();
+    if drag_regions.get(entity).is_err() {
         return;
+    }
+    if let (Some(last_entity), Some(last_time)) =
+        (tracker.last_click_entity, tracker.last_click_time)
+    {
+        let now = time.elapsed_secs_f64();
+        if last_entity == entity && now - last_time < DOUBLE_CLICK_THRESHOLD_S {
+            return;
+        }
     }
     let Ok(mut window) = windows.single_mut() else {
         return;
     };
     window.start_drag_move();
+}
+
+fn on_drag_region_click(
+    click: On<Pointer<Click>>,
+    drag_regions: Query<Entity, With<WindowTitleBarDragRegion>>,
+    windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
+    mut tracker: ResMut<DragRegionClickTracker>,
+    time: Res<Time>,
+) {
+    if click.event.button != PointerButton::Primary {
+        return;
+    }
+    let entity = click.event_target();
+    if drag_regions.get(entity).is_err() {
+        return;
+    }
+    let now = time.elapsed_secs_f64();
+    let is_double_click = tracker.last_click_entity == Some(entity)
+        && tracker
+            .last_click_time
+            .is_some_and(|previous| now - previous < DOUBLE_CLICK_THRESHOLD_S);
+    tracker.last_click_entity = Some(entity);
+    tracker.last_click_time = Some(now);
+    if !is_double_click {
+        return;
+    }
+    tracker.last_click_entity = None;
+    tracker.last_click_time = None;
+    toggle_primary_window_maximized(windows);
 }
