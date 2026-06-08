@@ -80,10 +80,10 @@ impl Plugin for WindowChromePlugin {
 
         #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
         {
-            crate::caption_controls::build(app);
             crate::title_bar::register_drag_region_handlers(app);
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
             {
+                crate::caption_controls::build(app);
                 app.add_observer(crate::resize::on_resize_edge_press);
                 app.add_systems(Last, crate::resize::sync_resize_overlay_pickability);
             }

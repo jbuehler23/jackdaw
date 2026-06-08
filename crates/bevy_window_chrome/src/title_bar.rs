@@ -164,31 +164,20 @@ fn title_bar_content_slot(
 
 pub(crate) fn register_drag_region_handlers(app: &mut App) {
     app.init_resource::<DragRegionClickTracker>()
-        .add_observer(on_drag_region_press)
-        .add_observer(on_drag_region_click);
+        .add_observer(on_drag)
+        .add_observer(on_double_click);
 }
 
-fn on_drag_region_press(
+fn on_drag(
     press: On<Pointer<Press>>,
     drag_regions: Query<Entity, With<WindowTitleBarDragRegion>>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
-    tracker: Res<DragRegionClickTracker>,
-    time: Res<Time>,
 ) {
     if press.button != PointerButton::Primary {
         return;
     }
-    let entity = press.event_target();
-    if drag_regions.get(entity).is_err() {
+    if drag_regions.get(press.event_target()).is_err() {
         return;
-    }
-    if let (Some(last_entity), Some(last_time)) =
-        (tracker.last_click_entity, tracker.last_click_time)
-    {
-        let now = time.elapsed_secs_f64();
-        if last_entity == entity && now - last_time < DOUBLE_CLICK_THRESHOLD_S {
-            return;
-        }
     }
     let Ok(mut window) = windows.single_mut() else {
         return;
@@ -196,7 +185,7 @@ fn on_drag_region_press(
     window.start_drag_move();
 }
 
-fn on_drag_region_click(
+fn on_double_click(
     click: On<Pointer<Click>>,
     drag_regions: Query<Entity, With<WindowTitleBarDragRegion>>,
     windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
@@ -211,16 +200,15 @@ fn on_drag_region_click(
         return;
     }
     let now = time.elapsed_secs_f64();
+    tracker.last_click_entity = Some(entity);
+    tracker.last_click_time = Some(now);
+
     let is_double_click = tracker.last_click_entity == Some(entity)
         && tracker
             .last_click_time
             .is_some_and(|previous| now - previous < DOUBLE_CLICK_THRESHOLD_S);
-    tracker.last_click_entity = Some(entity);
-    tracker.last_click_time = Some(now);
-    if !is_double_click {
-        return;
+
+    if is_double_click {
+        toggle_primary_window_maximized(windows);
     }
-    tracker.last_click_entity = None;
-    tracker.last_click_time = None;
-    toggle_primary_window_maximized(windows);
 }
