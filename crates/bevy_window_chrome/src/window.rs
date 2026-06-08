@@ -70,6 +70,7 @@ pub fn primary_window_is_maximized(window_entity: Entity) -> bool {
     })
 }
 
+#[cfg(target_os = "windows")]
 fn win32_window_is_maximized(backend: &winit::window::Window) -> bool {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows_sys::Win32::Foundation::HWND;
