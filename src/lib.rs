@@ -61,6 +61,8 @@ pub mod operator_tooltip;
 pub mod physics_brush_bridge;
 pub mod physics_tool;
 pub mod pie;
+pub mod pie_menu;
+pub mod pie_mirror;
 pub mod prefab;
 pub mod project;
 pub mod project_files;
@@ -68,6 +70,7 @@ pub mod project_select;
 pub mod reflect_default;
 pub mod remote;
 pub mod restart;
+pub mod run_config;
 pub mod scene_io;
 pub mod scene_ops;
 pub mod scenes;
@@ -334,6 +337,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(extensions_dialog::ExtensionsDialogPlugin)
         .add_plugins(hot_reload::HotReloadPlugin)
         .add_plugins(pie::PiePlugin)
+        .add_plugins(pie_menu::PieMenuPlugin)
         .add_plugins(dock_ops::DockOpsPlugin)
         // Force-exit on `AppExit`: bypass wgpu device cleanup
         // and AsyncComputeTaskPool shutdown that otherwise hang
@@ -384,6 +388,7 @@ impl Plugin for EditorCorePlugin {
             OnEnter(AppState::Editor),
             (spawn_layout, init_layout, populate_menu).chain(),
         )
+        .add_systems(OnEnter(AppState::Editor), run_config::read_run_configs)
         .add_systems(
             Update,
             rebuild_menu_if_dirty.run_if(in_state(AppState::Editor)),
@@ -396,6 +401,9 @@ impl Plugin for EditorCorePlugin {
                 layout::update_toolbar_button_variants,
                 layout::update_active_document_display,
                 layout::update_tab_strip_highlights,
+                layout::update_pie_view_toggle_appearance,
+                layout::update_pie_view_header_accent,
+                layout::update_save_to_scene_button,
                 auto_hide_internal_entities,
                 decorate_timeline_tooltips,
                 discover_gltf_clips,

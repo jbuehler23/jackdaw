@@ -17,8 +17,11 @@ use serde_json::Value;
 pub struct RemoteEntity {
     /// Bevy entity bits (u64) for tracking across snapshots.
     pub entity: u64,
-    /// ALL reflectable components, keyed by type path, serialized via `TypedReflectSerializer`.
+    /// Reflectable components keyed by type path, serialized via `TypedReflectSerializer`.
     pub components: HashMap<String, Value>,
+    /// The authored scene node this entity was spawned from, or `None` for a runtime-spawned entity.
+    #[serde(default)]
+    pub scene_node_id: Option<u64>,
 }
 
 /// Component type path prefixes to skip during scene snapshot.
@@ -116,9 +119,8 @@ impl ReflectSerializerProcessor for RemoteSerializerProcessor {
     }
 }
 
-/// Reflection-serialize the given entities' components for remote display.
-/// Skips render/picking/window internals (see `SKIP_*`). `Handle<T>` becomes
-/// null, `Entity` becomes raw bits, non-finite floats become strings.
+/// Reflection-serialize `entities` for remote display, applying the skip lists
+/// and `RemoteSerializerProcessor` edge-case handling.
 pub fn build_snapshot(
     world: &World,
     registry: &TypeRegistry,
@@ -156,6 +158,7 @@ pub fn build_snapshot(
             RemoteEntity {
                 entity: entity.to_bits(),
                 components,
+                scene_node_id: None,
             }
         })
         .collect()

@@ -60,6 +60,7 @@ fn on_insert_observer_sees_propagated_global_transform() {
         assets: JsnAssets::default(),
         scene: vec![
             JsnEntity {
+                id: None,
                 parent: None,
                 components: [(
                     "bevy_transform::components::transform::Transform".to_string(),
@@ -73,6 +74,7 @@ fn on_insert_observer_sees_propagated_global_transform() {
                 .collect(),
             },
             JsnEntity {
+                id: None,
                 parent: Some(0),
                 components: [
                     (

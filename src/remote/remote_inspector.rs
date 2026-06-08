@@ -139,40 +139,8 @@ pub fn populate_remote_proxy(world: &mut World) {
     }
 
     // Populate proxy entity with real components via reflection
-    let mut populated_ids: Vec<ComponentId> = Vec::new();
-    let mut fallback_components: Vec<(String, serde_json::Value)> = Vec::new();
-
-    {
-        let registry_arc = world.resource::<AppTypeRegistry>().clone();
-        let registry = registry_arc.read();
-
-        for (type_path, json_value) in &remote_components {
-            let Some(registration) = registry.get_with_type_path(type_path) else {
-                fallback_components.push((type_path.clone(), json_value.clone()));
-                continue;
-            };
-            let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-                fallback_components.push((type_path.clone(), json_value.clone()));
-                continue;
-            };
-
-            let deserializer = TypedReflectDeserializer::new(registration, &registry);
-            let Ok(reflected) = deserializer.deserialize(json_value) else {
-                fallback_components.push((type_path.clone(), json_value.clone()));
-                continue;
-            };
-
-            // Insert the component onto the proxy entity.
-            let mut entity_mut = world.entity_mut(proxy_entity);
-            reflect_component.insert(&mut entity_mut, reflected.as_ref(), &registry);
-
-            // Track the component ID for cleanup
-            let type_id = registration.type_id();
-            if let Some(id) = world.components().get_id(type_id) {
-                populated_ids.push(id);
-            }
-        }
-    }
+    let (populated_ids, fallback_components) =
+        populate_proxy_from_components(world, proxy_entity, &remote_components);
 
     // Store populated component IDs for cleanup
     world
@@ -186,6 +154,53 @@ pub fn populate_remote_proxy(world: &mut World) {
             proxy_entity,
             fallback_components,
         });
+}
+
+/// Deserialize a JSON component map onto `proxy_entity` via reflection so
+/// the shared inspector renderer can display it like any ECS entity.
+///
+/// Returns the `ComponentId`s that were inserted (for later cleanup) and
+/// the components that could not be deserialized (no registration, no
+/// `ReflectComponent`, or a deserialize failure) so the caller can render
+/// them as raw JSON. Shared by the BRP remote inspector and the PIE Live
+/// inspector, which both hold component data as `(type_path, value)`.
+pub(crate) fn populate_proxy_from_components(
+    world: &mut World,
+    proxy_entity: Entity,
+    components: &[(String, serde_json::Value)],
+) -> (Vec<ComponentId>, Vec<(String, serde_json::Value)>) {
+    let mut populated_ids: Vec<ComponentId> = Vec::new();
+    let mut fallback_components: Vec<(String, serde_json::Value)> = Vec::new();
+
+    let registry_arc = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry_arc.read();
+
+    for (type_path, json_value) in components {
+        let Some(registration) = registry.get_with_type_path(type_path) else {
+            fallback_components.push((type_path.clone(), json_value.clone()));
+            continue;
+        };
+        let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+            fallback_components.push((type_path.clone(), json_value.clone()));
+            continue;
+        };
+
+        let deserializer = TypedReflectDeserializer::new(registration, &registry);
+        let Ok(reflected) = deserializer.deserialize(json_value) else {
+            fallback_components.push((type_path.clone(), json_value.clone()));
+            continue;
+        };
+
+        let mut entity_mut = world.entity_mut(proxy_entity);
+        reflect_component.insert(&mut entity_mut, reflected.as_ref(), &registry);
+
+        let type_id = registration.type_id();
+        if let Some(id) = world.components().get_id(type_id) {
+            populated_ids.push(id);
+        }
+    }
+
+    (populated_ids, fallback_components)
 }
 
 /// Normal system: read the rebuild flag and build inspector displays
@@ -253,7 +268,7 @@ pub fn build_remote_inspector_displays(
     }
 }
 
-fn spawn_fallback_section(
+pub(crate) fn spawn_fallback_section(
     commands: &mut Commands,
     inspector_entity: Entity,
     source_entity: Entity,

@@ -485,12 +485,12 @@ pub fn duplicate_selected(world: &mut World) {
             continue;
         }
 
-        // Snapshot the entity (and descendants) via DynamicSceneBuilder
-        let mut snapshot_entities = Vec::new();
-        crate::commands::collect_entity_ids(world, entity, &mut snapshot_entities);
-        let scene = DynamicSceneBuilder::from_world(world)
-            .extract_entities(snapshot_entities.into_iter())
-            .build();
+        // Snapshot the entity (and descendants) through the shared helper, which uses
+        // `filtered_scene_builder` to deny `Children`. A copied `Children` would remap its
+        // unmapped mesh-child refs to dead placeholder entities, leaving dangling references
+        // that crash later scene walks; the clone's hierarchy is rebuilt from the extracted
+        // `ChildOf` links on write.
+        let scene = crate::commands::snapshot_entity(world, entity);
 
         // Write the snapshot back to create a clone
         let mut entity_map = Default::default();
@@ -774,6 +774,9 @@ fn copy_components(world: &mut World) {
         .filter_map(|&e| {
             ast.node_for_entity(e)
                 .map(|node| jackdaw_jsn::format::JsnEntity {
+                    // Paste mints fresh node ids, so the clipboard copy drops
+                    // the source id (mirrors `remap_stable_ids`).
+                    id: None,
                     parent: None,
                     components: node.components.clone(),
                 })
@@ -1809,6 +1812,7 @@ mod tests {
         let original_id: u64 = 7;
 
         let mut entities = vec![jackdaw_jsn::format::JsnEntity {
+            id: None,
             parent: None,
             components: {
                 let mut map = std::collections::HashMap::new();
@@ -1847,6 +1851,7 @@ mod tests {
         crate::draw_brush::init_stable_id_counter(&mut world);
 
         let mut entities = vec![jackdaw_jsn::format::JsnEntity {
+            id: None,
             parent: None,
             components: {
                 let mut map = std::collections::HashMap::new();

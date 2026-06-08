@@ -1,15 +1,14 @@
 //! `ipc-channel` transport for play-in-editor across two OS processes.
 //!
-//! The editor (parent) calls [`serve`] to create a one-shot rendezvous and
-//! hands the returned name to the game (child) over a CLI arg or env var. The
-//! child calls [`connect`] with that name. After the bootstrap both ends hold
-//! an [`IpcChannelTransport`]: a bidirectional, typed pipe carrying
-//! `(PieChannel, Vec<u8>)` frames.
+//! The editor calls [`serve`] to create a one-shot rendezvous and passes the
+//! returned name to the game via a CLI arg or env var; the game calls
+//! [`connect`] to complete the bidirectional setup. Both ends then hold an
+//! [`IpcChannelTransport`] carrying `(PieChannel, Vec<u8>)` frames.
 //!
 //! `ipc-channel` is reliable-ordered on every platform, so
 //! [`PieChannel::Unreliable`](crate::event::PieChannel::Unreliable) frames are
-//! delivered reliably here. The channel is preserved end to end for transports
-//! (lightyear, raw sockets) that do distinguish the two.
+//! delivered reliably here. The channel tag is preserved so transports that do
+//! distinguish the two (lightyear, raw sockets) can act on it.
 
 use bevy::log::warn;
 use ipc_channel::ipc::{self, IpcOneShotServer, IpcReceiver, IpcSender};
@@ -26,10 +25,9 @@ struct Frame {
     bytes: Vec<u8>,
 }
 
-/// What the child ships to the parent over the one-shot connection to finish
-/// the bidirectional setup: the parent's receiving end of the child-to-parent
-/// pipe, and the parent's sending end of the parent-to-child pipe. Each side
-/// ends up with one sender to the peer and one receiver from the peer.
+/// Payload sent over the one-shot connection to complete bidirectional setup.
+/// The child ships the parent's ends of both one-way pipes so each side ends
+/// up with one sender and one receiver aimed at its peer.
 #[derive(Serialize, Deserialize)]
 struct Bootstrap {
     parent_rx: IpcReceiver<Frame>,
@@ -119,8 +117,8 @@ impl PieTransport for IpcChannelTransport {
     }
 }
 
-/// Map an `ipc-channel` error onto `std::io::Error` so the public surface never
-/// leaks `ipc-channel` types (apart from [`IpcChannelTransport`] itself).
+/// Map an `ipc-channel` error to `std::io::Error` so public APIs stay
+/// free of `ipc-channel` types (aside from [`IpcChannelTransport`] itself).
 fn ipc_error_to_io(err: IpcError) -> std::io::Error {
     match err {
         IpcError::Io(io) => io,

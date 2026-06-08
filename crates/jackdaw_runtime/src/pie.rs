@@ -1,85 +1,50 @@
 //! Play-in-editor link for the standalone runtime.
 //!
-//! When the game binary is launched with `--jackdaw-pie`, the editor passes the
-//! name of an `ipc-channel` rendezvous it is listening on. [`pie_args`] reads
-//! that out of the process arguments, [`JackdawPlugin`](crate::JackdawPlugin)
-//! connects, and [`attach_pie`] installs two `Update` systems:
-//!
-//! - the stream system snapshots the scene's ECS state and ships it to the
-//!   editor as [`StateEvent`]s, and
-//! - the apply system drains [`ControlEvent`]s from the editor and drives the
-//!   simulation's run state (pause / resume / stop).
-//!
-//! The transport reading and the system wiring are kept apart so [`attach_pie`]
-//! can be exercised with a directly-supplied transport in tests.
+//! When `JACKDAW_PIE` is set by the editor before launch, [`pie_config`]
+//! returns the rendezvous name and [`attach_pie`] installs a stream system
+//! (ECS state to editor as [`StateEvent`]s) and an apply system
+//! ([`ControlEvent`]s from the editor driving pause / resume / stop).
 
 use bevy::app::AppExit;
-use bevy::ecs::reflect::AppTypeRegistry;
-use bevy::ecs::system::SystemState;
+use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::prelude::*;
+use bevy::reflect::serde::TypedReflectDeserializer;
 use bevy::time::Virtual;
+use serde::de::DeserializeSeed;
 
+use jackdaw_jsn::JsnNodeId;
+use jackdaw_jsn::ast::JSN_NODE_ID_TYPE_PATH;
 use jackdaw_pie_protocol::event::{PieChannel, StateEvent, to_bytes};
 use jackdaw_pie_protocol::transport::PieTransport;
 use jackdaw_pie_protocol::transport_ipc::IpcChannelTransport;
 use jackdaw_pie_protocol::{ControlEvent, PieMode, build_snapshot};
 
-/// Type path the stream pulls out of a per-entity snapshot for the
-/// `ComponentChanged` payload. Mirrors the loader's `TRANSFORM_TYPE_PATH`.
-const TRANSFORM_TYPE_PATH: &str = "bevy_transform::components::transform::Transform";
-
-/// Parsed `--jackdaw-pie` launch arguments.
+/// The active PIE link parameters, read from the environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PieArgs {
+pub struct PieConfig {
     /// Mode the editor launched the game in.
     pub mode: PieMode,
-    /// Name of the editor's ipc-channel rendezvous to connect to.
+    /// ipc-channel rendezvous name to connect to.
     pub server: String,
 }
 
-/// Read PIE launch arguments from the process command line.
-///
-/// Returns `Some` only when `--jackdaw-pie` is present. `--mode` parses
-/// `play` / `editor-preview` and defaults to [`PieMode::Play`]; `--server`
-/// supplies the rendezvous name (empty when omitted, which makes the later
-/// connect fail and log rather than panic).
-pub fn pie_args() -> Option<PieArgs> {
-    args_from(std::env::args().skip(1))
+impl PieConfig {
+    /// Build from the value of `JACKDAW_PIE` (the rendezvous name).
+    /// Returns `None` when the variable is absent. `JACKDAW_PIE_MODE` selects
+    /// the mode and defaults to `play`.
+    pub fn from_env_value(server: Option<String>) -> Option<Self> {
+        let server = server?;
+        let mode = match std::env::var("JACKDAW_PIE_MODE").as_deref() {
+            Ok("editor-preview") => PieMode::EditorPreview,
+            _ => PieMode::Play,
+        };
+        Some(PieConfig { mode, server })
+    }
 }
 
-/// [`pie_args`] split from `std::env` so the parsing is unit-testable.
-fn args_from(args: impl Iterator<Item = String>) -> Option<PieArgs> {
-    let args: Vec<String> = args.collect();
-    if !args.iter().any(|a| a == "--jackdaw-pie") {
-        return None;
-    }
-
-    let mut mode = PieMode::Play;
-    let mut server = String::new();
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--mode" => {
-                if let Some(value) = args.get(i + 1) {
-                    mode = match value.as_str() {
-                        "editor-preview" => PieMode::EditorPreview,
-                        _ => PieMode::Play,
-                    };
-                    i += 1;
-                }
-            }
-            "--server" => {
-                if let Some(value) = args.get(i + 1) {
-                    server = value.clone();
-                    i += 1;
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-
-    Some(PieArgs { mode, server })
+/// Read the PIE link parameters from the process environment.
+pub fn pie_config() -> Option<PieConfig> {
+    PieConfig::from_env_value(std::env::var("JACKDAW_PIE").ok())
 }
 
 /// Holds the editor link. `IpcChannelTransport` is `Send` but not `Sync` (its
@@ -87,148 +52,354 @@ fn args_from(args: impl Iterator<Item = String>) -> Option<PieArgs> {
 /// resource and the PIE systems run on the main thread.
 struct PieTransportRes(IpcChannelTransport);
 
-/// Tracks whether the initial full snapshot has been streamed yet.
+/// Tracks whether the initial full snapshot has been streamed, and the last
+/// serialized component values per entity for value-diff delta streaming.
 #[derive(Resource, Default)]
 struct PieStreamState {
     sent_initial: bool,
+    /// Last-sent component values keyed by entity bits then type path.
+    last_sent: std::collections::HashMap<u64, std::collections::HashMap<String, serde_json::Value>>,
 }
 
 /// Install the PIE transport and the stream / apply systems.
 ///
-/// Separate from [`pie_args`] so tests can drive it with any
-/// [`IpcChannelTransport`] (for example one from
-/// [`connect`](jackdaw_pie_protocol::connect) against an in-test editor).
+/// Kept separate from [`pie_config`] so tests can supply any
+/// [`IpcChannelTransport`] directly.
 pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
     app.insert_non_send_resource(PieTransportRes(transport));
     app.init_resource::<PieStreamState>();
     app.add_systems(Update, (stream_state, apply_control));
 }
 
+/// Lift the `JsnNodeId` component out of a snapshot's `components` map and
+/// into its `scene_node_id` field.
+///
+/// `build_snapshot` serializes every reflectable component it finds, including
+/// `JsnNodeId`. The editor treats `scene_node_id` as the canonical authored-
+/// node link and should not also see `JsnNodeId` as a regular user component,
+/// so we remove the entry from `components` and populate `scene_node_id`
+/// instead. When the entity has no `JsnNodeId` component the snapshot is left
+/// unchanged and `scene_node_id` stays `None`.
+fn lift_scene_node_id(
+    world: &World,
+    entity_bits: u64,
+    remote: &mut jackdaw_pie_protocol::RemoteEntity,
+) {
+    remote.components.remove(JSN_NODE_ID_TYPE_PATH);
+    let entity = Entity::from_bits(entity_bits);
+    if let Ok(entity_ref) = world.get_entity(entity)
+        && let Some(node_id) = entity_ref.get::<JsnNodeId>()
+    {
+        remote.scene_node_id = Some(node_id.0);
+    }
+}
+
 /// Stream the scene's ECS state to the editor.
 ///
-/// The first run ships a full `EntitySpawned` snapshot for every entity with a
-/// `Transform` on the reliable channel. Each later run reports `Transform`
-/// mutations as `ComponentChanged` on the unreliable channel and entities that
-/// lost their `Transform` as `EntityDespawned` on the reliable channel.
-fn stream_state(
-    world: &mut World,
-    state: &mut SystemState<(
-        Query<Entity, Changed<Transform>>,
-        RemovedComponents<Transform>,
-    )>,
-) {
-    // The transport is a `NonSend` resource; bail quietly if it is gone.
+/// On the first run, ships a full `EntitySpawned` snapshot for every entity
+/// with a `Transform` on the reliable channel and records those component values
+/// in `last_sent`. On subsequent runs, calls `build_snapshot` for all
+/// `With<Transform>` entities and value-diffs against `last_sent`:
+///   - New entity bits: emit `EntitySpawned` (reliable) and record all components.
+///   - Known entity bits: emit `ComponentChanged` (unreliable) for each component
+///     whose serialized value differs from the last-sent value.
+///   - Bits present in `last_sent` but absent from the current set: emit
+///     `EntityDespawned` (reliable) and drop from `last_sent`.
+fn stream_state(world: &mut World) {
     if !world.contains_non_send::<PieTransportRes>() {
         return;
     }
 
     let sent_initial = world.resource::<PieStreamState>().sent_initial;
 
+    let entities: Vec<Entity> = world
+        .query_filtered::<Entity, With<Transform>>()
+        .iter(world)
+        .collect();
+    let registry = world.resource::<AppTypeRegistry>().clone();
+
     if !sent_initial {
-        let entities: Vec<Entity> = world
-            .query_filtered::<Entity, With<Transform>>()
-            .iter(world)
-            .collect();
-        let registry = world.resource::<AppTypeRegistry>().clone();
-        let frames: Vec<Vec<u8>> = {
+        let snapshots = {
             let registry = registry.read();
             build_snapshot(world, &registry, &entities)
-                .into_iter()
-                .filter_map(|entity| to_bytes(&StateEvent::EntitySpawned { entity }).ok())
-                .collect()
         };
 
+        let mut spawn_frames: Vec<Vec<u8>> = Vec::new();
+        let mut new_last_sent: std::collections::HashMap<
+            u64,
+            std::collections::HashMap<String, serde_json::Value>,
+        > = std::collections::HashMap::new();
+
+        for mut remote in snapshots {
+            lift_scene_node_id(world, remote.entity, &mut remote);
+            new_last_sent.insert(remote.entity, remote.components.clone());
+            if let Ok(bytes) = to_bytes(&StateEvent::EntitySpawned { entity: remote }) {
+                spawn_frames.push(bytes);
+            }
+        }
+
         let transport = &mut world.non_send_resource_mut::<PieTransportRes>().0;
-        for bytes in &frames {
+        for bytes in &spawn_frames {
             transport.send(PieChannel::Reliable, bytes);
         }
-        world.resource_mut::<PieStreamState>().sent_initial = true;
+        let mut pie_state = world.resource_mut::<PieStreamState>();
+        pie_state.sent_initial = true;
+        pie_state.last_sent = new_last_sent;
         return;
     }
 
-    // Collect changed / removed ids first, then drop the query borrow so
-    // `build_snapshot` can take `&World`.
-    let (changed, removed): (Vec<Entity>, Vec<Entity>) = {
-        let (changed_query, mut removed_reader) = state.get(world);
-        let changed = changed_query.iter().collect();
-        let removed = removed_reader.read().collect();
-        (changed, removed)
+    let current_bits: std::collections::HashSet<u64> =
+        entities.iter().map(|e| e.to_bits()).collect();
+
+    let snapshots = {
+        let registry = registry.read();
+        build_snapshot(world, &registry, &entities)
     };
 
-    let registry = world.resource::<AppTypeRegistry>().clone();
+    let mut spawn_frames: Vec<Vec<u8>> = Vec::new();
     let mut changed_frames: Vec<Vec<u8>> = Vec::new();
+    let mut despawn_frames: Vec<Vec<u8>> = Vec::new();
+
     {
-        let registry = registry.read();
-        for entity in changed {
-            let Some(mut snapshot) = build_snapshot(world, &registry, &[entity]).pop() else {
-                continue;
-            };
-            let Some(value) = snapshot.components.remove(TRANSFORM_TYPE_PATH) else {
-                continue;
-            };
-            let event = StateEvent::ComponentChanged {
-                entity: entity.to_bits(),
-                type_path: TRANSFORM_TYPE_PATH.to_string(),
-                value,
-            };
-            if let Ok(bytes) = to_bytes(&event) {
-                changed_frames.push(bytes);
+        let pie_state = world.resource::<PieStreamState>();
+        let known_bits: Vec<u64> = pie_state
+            .last_sent
+            .keys()
+            .filter(|b| !current_bits.contains(b))
+            .copied()
+            .collect();
+        for bits in known_bits {
+            if let Ok(bytes) = to_bytes(&StateEvent::EntityDespawned { entity: bits }) {
+                despawn_frames.push(bytes);
             }
         }
     }
 
-    let removed_frames: Vec<Vec<u8>> = removed
-        .into_iter()
-        .filter_map(|entity| {
-            to_bytes(&StateEvent::EntityDespawned {
-                entity: entity.to_bits(),
-            })
-            .ok()
-        })
-        .collect();
+    let mut updates: Vec<(u64, std::collections::HashMap<String, serde_json::Value>)> = Vec::new();
+
+    for mut remote in snapshots {
+        lift_scene_node_id(world, remote.entity, &mut remote);
+        let bits = remote.entity;
+        let pie_state = world.resource::<PieStreamState>();
+        if let Some(last_components) = pie_state.last_sent.get(&bits) {
+            for (type_path, value) in &remote.components {
+                if last_components.get(type_path) != Some(value) {
+                    let event = StateEvent::ComponentChanged {
+                        entity: bits,
+                        type_path: type_path.clone(),
+                        value: value.clone(),
+                    };
+                    if let Ok(bytes) = to_bytes(&event) {
+                        changed_frames.push(bytes);
+                    }
+                }
+            }
+            updates.push((bits, remote.components));
+        } else {
+            updates.push((bits, remote.components.clone()));
+            if let Ok(bytes) = to_bytes(&StateEvent::EntitySpawned { entity: remote }) {
+                spawn_frames.push(bytes);
+            }
+        }
+    }
 
     let transport = &mut world.non_send_resource_mut::<PieTransportRes>().0;
+    for bytes in &spawn_frames {
+        transport.send(PieChannel::Reliable, bytes);
+    }
     for bytes in &changed_frames {
         transport.send(PieChannel::Unreliable, bytes);
     }
-    for bytes in &removed_frames {
+    for bytes in &despawn_frames {
         transport.send(PieChannel::Reliable, bytes);
+    }
+
+    let mut pie_state = world.resource_mut::<PieStreamState>();
+    for (bits, components) in updates {
+        pie_state.last_sent.insert(bits, components);
+    }
+    let despawned: Vec<u64> = pie_state
+        .last_sent
+        .keys()
+        .filter(|b| !current_bits.contains(b))
+        .copied()
+        .collect();
+    for bits in despawned {
+        pie_state.last_sent.remove(&bits);
     }
 }
 
 /// Apply control commands from the editor.
 ///
-/// `Stop` writes `AppExit::Success` so the game loop tears down; `Pause` /
-/// `Resume` toggle the virtual clock so gameplay systems keyed on
-/// `Time<Virtual>` freeze and thaw. Unknown frames are ignored.
-fn apply_control(
-    mut transport: NonSendMut<PieTransportRes>,
-    mut app_exit: MessageWriter<AppExit>,
-    mut virtual_time: ResMut<Time<Virtual>>,
-) {
-    for (_, bytes) in transport.0.drain_received() {
+/// `Stop` writes `AppExit::Success` to tear down the game loop. `Pause` /
+/// `Resume` toggle the virtual clock, freezing gameplay systems keyed on
+/// `Time<Virtual>`. `SetComponent`, `AddComponent`, `RemoveComponent`
+/// apply reflected edits to live entities. Unknown frames are skipped.
+fn apply_control(world: &mut World) {
+    if !world.contains_non_send::<PieTransportRes>() {
+        return;
+    }
+
+    let frames: Vec<Vec<u8>> = world
+        .non_send_resource_mut::<PieTransportRes>()
+        .0
+        .drain_received()
+        .into_iter()
+        .map(|(_, bytes)| bytes)
+        .collect();
+
+    for bytes in frames {
         let Ok(event) = jackdaw_pie_protocol::event::from_bytes::<ControlEvent>(&bytes) else {
             continue;
         };
         match event {
             ControlEvent::Stop => {
-                app_exit.write(AppExit::Success);
+                world.write_message(AppExit::Success);
             }
-            ControlEvent::Pause => virtual_time.pause(),
-            ControlEvent::Resume => virtual_time.unpause(),
+            ControlEvent::Pause => {
+                world.resource_mut::<Time<Virtual>>().pause();
+            }
+            ControlEvent::Resume => {
+                world.resource_mut::<Time<Virtual>>().unpause();
+            }
+            ControlEvent::SetComponent {
+                entity,
+                type_path,
+                value,
+            } => {
+                apply_set_component(world, entity, &type_path, &value);
+            }
+            ControlEvent::AddComponent {
+                entity,
+                type_path,
+                value,
+            } => {
+                apply_add_component(world, entity, &type_path, &value);
+            }
+            ControlEvent::RemoveComponent { entity, type_path } => {
+                apply_remove_component(world, entity, &type_path);
+            }
         }
     }
+}
+
+/// Deserialize `value` for `type_path` and apply it to an existing component on the entity.
+/// Logs and skips on unknown type path, missing entity, or deserialize error.
+fn apply_set_component(
+    world: &mut World,
+    entity_bits: u64,
+    type_path: &str,
+    value: &serde_json::Value,
+) {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry_guard = registry.read();
+
+    let Some(registration) = registry_guard.get_with_type_path(type_path) else {
+        warn!("PIE: SetComponent: unknown type path `{type_path}`");
+        return;
+    };
+    let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+        warn!("PIE: SetComponent: `{type_path}` has no ReflectComponent");
+        return;
+    };
+
+    let reflected =
+        match TypedReflectDeserializer::new(registration, &registry_guard).deserialize(value) {
+            Ok(r) => r,
+            Err(err) => {
+                warn!("PIE: SetComponent: failed to deserialize `{type_path}`: {err}");
+                return;
+            }
+        };
+
+    let entity = Entity::from_bits(entity_bits);
+    if world.get_entity(entity).is_err() {
+        warn!("PIE: SetComponent: entity {entity_bits} not found");
+        return;
+    }
+    if !reflect_component.contains(world.entity(entity)) {
+        warn!("PIE: SetComponent: entity {entity_bits} does not have `{type_path}`");
+        return;
+    }
+
+    reflect_component.apply(world.entity_mut(entity), reflected.as_ref());
+}
+
+/// Deserialize `value` for `type_path` and insert (or replace) a component on the entity.
+/// Logs and skips on unknown type path, missing entity, or deserialize error.
+fn apply_add_component(
+    world: &mut World,
+    entity_bits: u64,
+    type_path: &str,
+    value: &serde_json::Value,
+) {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry_guard = registry.read();
+
+    let Some(registration) = registry_guard.get_with_type_path(type_path) else {
+        warn!("PIE: AddComponent: unknown type path `{type_path}`");
+        return;
+    };
+    let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+        warn!("PIE: AddComponent: `{type_path}` has no ReflectComponent");
+        return;
+    };
+
+    let reflected =
+        match TypedReflectDeserializer::new(registration, &registry_guard).deserialize(value) {
+            Ok(r) => r,
+            Err(err) => {
+                warn!("PIE: AddComponent: failed to deserialize `{type_path}`: {err}");
+                return;
+            }
+        };
+
+    let entity = Entity::from_bits(entity_bits);
+    if world.get_entity(entity).is_err() {
+        warn!("PIE: AddComponent: entity {entity_bits} not found");
+        return;
+    }
+
+    reflect_component.insert(
+        &mut world.entity_mut(entity),
+        reflected.as_ref(),
+        &registry_guard,
+    );
+}
+
+/// Remove a component identified by `type_path` from an entity.
+/// Logs and skips on unknown type path or missing entity; silently ignores absent components.
+fn apply_remove_component(world: &mut World, entity_bits: u64, type_path: &str) {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry_guard = registry.read();
+
+    let Some(registration) = registry_guard.get_with_type_path(type_path) else {
+        warn!("PIE: RemoveComponent: unknown type path `{type_path}`");
+        return;
+    };
+    let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+        warn!("PIE: RemoveComponent: `{type_path}` has no ReflectComponent");
+        return;
+    };
+
+    let entity = Entity::from_bits(entity_bits);
+    if world.get_entity(entity).is_err() {
+        warn!("PIE: RemoveComponent: entity {entity_bits} not found");
+        return;
+    }
+
+    reflect_component.remove(&mut world.entity_mut(entity));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy::app::AppExit;
+    use jackdaw_jsn::JsnNodeId;
     use jackdaw_pie_protocol::event::{ControlEvent, PieChannel, to_bytes};
     use jackdaw_pie_protocol::{IpcChannelTransport, connect, serve};
 
-    /// Build a headless app wired with the PIE systems and a single
-    /// `Name` + `Transform` entity, returning the spawned entity.
+    /// Headless app with PIE systems and a single `Name` + `Transform` entity.
     fn headless_pie_app(transport: IpcChannelTransport) -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -242,15 +413,113 @@ mod tests {
         (app, entity)
     }
 
-    /// Full round-trip in one process: the app streams its initial snapshot to
-    /// an in-test "editor" over ipc-channel, and a `Stop` from the editor makes
-    /// the app write `AppExit`.
+    /// Build a minimal app with `JsnNodeId` registered, spawn one entity that
+    /// carries the id and one without, run one stream tick, and verify:
+    ///  - the entity with `JsnNodeId(42)` produces `EntitySpawned` with
+    ///    `scene_node_id == Some(42)` and no `JsnNodeId` key in `components`.
+    ///  - the entity without `JsnNodeId` produces `EntitySpawned` with
+    ///    `scene_node_id == None`.
+    #[test]
+    fn scene_node_id_lifted_out_of_components() {
+        const JSN_NODE_ID_TYPE_PATH: &str = jackdaw_jsn::ast::JSN_NODE_ID_TYPE_PATH;
+
+        let (handle, rendezvous) = serve().expect("serve");
+
+        let editor = std::thread::spawn(move || {
+            let mut editor = handle.accept().expect("accept");
+            let mut received: Vec<StateEvent> = Vec::new();
+            for _ in 0..500_000 {
+                for (_, bytes) in editor.drain_received() {
+                    if let Ok(event) = jackdaw_pie_protocol::event::from_bytes::<StateEvent>(&bytes)
+                    {
+                        received.push(event);
+                    }
+                }
+                let spawn_count = received
+                    .iter()
+                    .filter(|e| matches!(e, StateEvent::EntitySpawned { .. }))
+                    .count();
+                if spawn_count >= 2 {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            editor.send(
+                PieChannel::Reliable,
+                &to_bytes(&ControlEvent::Stop).expect("encode"),
+            );
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            received
+        });
+
+        let transport = connect(&rendezvous).expect("connect");
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.register_type::<Name>();
+        app.register_type::<Transform>();
+        app.register_type::<JsnNodeId>();
+
+        let with_id = app
+            .world_mut()
+            .spawn((Transform::from_xyz(1.0, 0.0, 0.0), JsnNodeId(42)))
+            .id();
+        let without_id = app
+            .world_mut()
+            .spawn(Transform::from_xyz(2.0, 0.0, 0.0))
+            .id();
+
+        attach_pie(&mut app, transport);
+
+        for _ in 0..50 {
+            app.update();
+            if !app.world().resource::<Messages<AppExit>>().is_empty() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+
+        let received = editor.join().expect("editor thread");
+
+        let find_spawned = |bits: u64| -> Option<&jackdaw_pie_protocol::RemoteEntity> {
+            for event in &received {
+                if let StateEvent::EntitySpawned { entity: re } = event {
+                    if re.entity == bits {
+                        return Some(re);
+                    }
+                }
+            }
+            None
+        };
+
+        let re_with = find_spawned(with_id.to_bits())
+            .expect("EntitySpawned not received for entity with JsnNodeId");
+        assert_eq!(
+            re_with.scene_node_id,
+            Some(42),
+            "scene_node_id should be Some(42) for entity carrying JsnNodeId(42)"
+        );
+        assert!(
+            !re_with.components.contains_key(JSN_NODE_ID_TYPE_PATH),
+            "JsnNodeId must not appear in the components map; keys: {:?}",
+            re_with.components.keys().collect::<Vec<_>>()
+        );
+
+        let re_without = find_spawned(without_id.to_bits())
+            .expect("EntitySpawned not received for entity without JsnNodeId");
+        assert_eq!(
+            re_without.scene_node_id, None,
+            "scene_node_id should be None for entity without JsnNodeId"
+        );
+    }
+
+    /// Round-trip: app streams its initial snapshot to an in-test editor, and
+    /// a `Stop` from the editor causes the app to write `AppExit`.
     #[test]
     fn streams_spawn_and_stops_on_control() {
         let (handle, name) = serve().expect("serve");
 
-        // Editor side runs on a worker thread: accept the connection, collect
-        // received frames, then send Stop once the spawn frame has arrived.
+        // Worker thread simulates the editor: accept, collect frames, send Stop.
         let editor = std::thread::spawn(move || {
             let mut editor = handle.accept().expect("accept");
             let mut received: Vec<StateEvent> = Vec::new();
@@ -270,8 +539,7 @@ mod tests {
                 PieChannel::Reliable,
                 &to_bytes(&ControlEvent::Stop).expect("encode"),
             );
-            // Keep the editor end alive until the app has had a chance to read
-            // the Stop frame; the app side signals completion by joining.
+            // Hold the connection open until the app has read the Stop frame.
             std::thread::sleep(std::time::Duration::from_millis(200));
             received
         });
@@ -279,8 +547,6 @@ mod tests {
         let transport = connect(&name).expect("connect");
         let (mut app, entity) = headless_pie_app(transport);
 
-        // A few updates: the first streams the snapshot; later ones pick up the
-        // Stop frame from the editor.
         let mut exited = false;
         for _ in 0..50 {
             app.update();
@@ -309,43 +575,169 @@ mod tests {
         );
     }
 
+    /// After the initial `EntitySpawned`, mutating `Name` (a non-`Transform`
+    /// reflectable component) must produce a `ComponentChanged` whose
+    /// `type_path` identifies `Name`.
     #[test]
-    fn pie_args_requires_flag() {
-        assert!(args_from(std::iter::empty()).is_none());
-        let parsed = args_from(
-            ["--jackdaw-pie", "--mode", "play", "--server", "rv-123"]
-                .into_iter()
-                .map(str::to_owned),
-        );
-        assert_eq!(
-            parsed,
-            Some(PieArgs {
-                mode: PieMode::Play,
-                server: "rv-123".to_string(),
-            })
+    fn streams_name_delta_after_mutation() {
+        const NAME_TYPE_PATH: &str = "bevy_ecs::name::Name";
+
+        let (handle, rendezvous) = serve().expect("serve");
+
+        // Editor thread: accept connection, collect all events until it sees
+        // a ComponentChanged for Name, then send Stop.
+        let editor = std::thread::spawn(move || {
+            let mut editor = handle.accept().expect("accept");
+            let mut received: Vec<StateEvent> = Vec::new();
+
+            // Spin until we see a ComponentChanged for Name or give up.
+            for _ in 0..500_000 {
+                for (_, bytes) in editor.drain_received() {
+                    if let Ok(event) = jackdaw_pie_protocol::event::from_bytes::<StateEvent>(&bytes)
+                    {
+                        received.push(event);
+                    }
+                }
+                let has_name_delta = received.iter().any(|e| {
+                    matches!(e, StateEvent::ComponentChanged { type_path, .. }
+                        if type_path == NAME_TYPE_PATH)
+                });
+                if has_name_delta {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+
+            editor.send(
+                PieChannel::Reliable,
+                &to_bytes(&ControlEvent::Stop).expect("encode"),
+            );
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            received
+        });
+
+        let transport = connect(&rendezvous).expect("connect");
+        let (mut app, entity) = headless_pie_app(transport);
+
+        // First update: initial snapshot is sent.
+        app.update();
+
+        // Mutate `Name` to trigger a delta on the next update.
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(Name::new("pie-probe-renamed"));
+
+        // Drive updates until the app sees Stop.
+        for _ in 0..50 {
+            app.update();
+            if !app.world().resource::<Messages<AppExit>>().is_empty() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+
+        let received = editor.join().expect("editor thread");
+
+        assert!(
+            received.iter().any(|e| {
+                matches!(e, StateEvent::ComponentChanged { type_path, .. }
+                    if type_path == NAME_TYPE_PATH)
+            }),
+            "editor should receive a ComponentChanged for Name after mutation; got {received:?}"
         );
     }
 
     #[test]
-    fn pie_args_parses_editor_preview_and_defaults() {
-        let preview = args_from(
-            [
-                "--jackdaw-pie",
-                "--mode",
-                "editor-preview",
-                "--server",
-                "rv",
-            ]
-            .into_iter()
-            .map(str::to_owned),
-        )
-        .expect("present");
-        assert_eq!(preview.mode, PieMode::EditorPreview);
+    fn config_present_only_with_env() {
+        assert!(PieConfig::from_env_value(None).is_none());
+        let cfg = PieConfig::from_env_value(Some("rv-123".to_string())).unwrap();
+        assert_eq!(cfg.server, "rv-123");
+        assert_eq!(cfg.mode, PieMode::Play);
+    }
 
-        // `--mode` omitted defaults to Play; `--server` omitted leaves it empty.
-        let defaulted =
-            args_from(["--jackdaw-pie"].into_iter().map(str::to_owned)).expect("present");
-        assert_eq!(defaulted.mode, PieMode::Play);
-        assert!(defaulted.server.is_empty());
+    /// `SetComponent` sent from the editor updates the game world's `Transform`.
+    #[test]
+    fn set_component_applies_transform() {
+        const TRANSFORM_PATH: &str = "bevy_transform::components::transform::Transform";
+
+        let (handle, rendezvous) = serve().expect("serve");
+
+        let editor = std::thread::spawn(move || {
+            let mut editor = handle.accept().expect("accept");
+
+            // Wait until we receive an EntitySpawned so we know the entity bits.
+            let mut entity_bits: Option<u64> = None;
+            for _ in 0..500_000 {
+                for (_, bytes) in editor.drain_received() {
+                    if let Ok(jackdaw_pie_protocol::StateEvent::EntitySpawned { entity: re }) =
+                        jackdaw_pie_protocol::event::from_bytes(&bytes)
+                    {
+                        entity_bits = Some(re.entity);
+                    }
+                }
+                if entity_bits.is_some() {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            let bits = entity_bits.expect("never received EntitySpawned");
+
+            // Build a Transform JSON value matching what TypedReflectSerializer produces.
+            // Vec3 serializes as [x, y, z]; Quat as [x, y, z, w].
+            let new_translation = serde_json::json!({
+                "translation": [10.0, 20.0, 30.0],
+                "rotation": [0.0, 0.0, 0.0, 1.0],
+                "scale": [1.0, 1.0, 1.0]
+            });
+
+            let set_event = ControlEvent::SetComponent {
+                entity: bits,
+                type_path: TRANSFORM_PATH.to_string(),
+                value: new_translation,
+            };
+            editor.send(PieChannel::Reliable, &to_bytes(&set_event).expect("encode"));
+
+            // Give the game time to apply, then stop it.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            editor.send(
+                PieChannel::Reliable,
+                &to_bytes(&ControlEvent::Stop).expect("encode"),
+            );
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        });
+
+        let transport = connect(&rendezvous).expect("connect");
+        let (mut app, entity) = headless_pie_app(transport);
+
+        for _ in 0..200 {
+            app.update();
+            if !app.world().resource::<Messages<AppExit>>().is_empty() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+
+        editor.join().expect("editor thread");
+
+        let transform = app
+            .world()
+            .entity(entity)
+            .get::<Transform>()
+            .expect("entity should still have Transform");
+        assert!(
+            (transform.translation.x - 10.0).abs() < 1e-4,
+            "x should be 10.0, got {}",
+            transform.translation.x
+        );
+        assert!(
+            (transform.translation.y - 20.0).abs() < 1e-4,
+            "y should be 20.0, got {}",
+            transform.translation.y
+        );
+        assert!(
+            (transform.translation.z - 30.0).abs() < 1e-4,
+            "z should be 30.0, got {}",
+            transform.translation.z
+        );
     }
 }

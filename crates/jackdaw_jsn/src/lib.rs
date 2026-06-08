@@ -18,7 +18,7 @@ pub use types::{
 // Re-export geometry crate
 pub use jackdaw_geometry;
 
-pub use ast::SceneJsnAst;
+pub use ast::{JsnNodeId, SceneJsnAst};
 pub use format::{JsnProject, JsnProjectConfig, JsnScene};
 pub use loader::JsnAssetLoader;
 
@@ -55,14 +55,36 @@ impl Plugin for JsnPlugin {
             .register_type::<AttributeData>()
             .register_type::<CustomProperties>()
             .register_type::<PropertyValue>()
+            .register_type::<ast::JsnNodeId>()
             .register_type::<GltfSource>()
             .register_type::<JsnPrefab>()
             .register_type::<NavmeshRegion>()
             .register_type::<Terrain>()
             .init_asset_loader::<JsnAssetLoader>();
+
         #[cfg(feature = "render")]
-        if self.runtime_mesh_rebuild {
-            app.add_plugins(mesh_rebuild::MeshRebuildPlugin);
+        {
+            // With `render`, `BrushFaceData::material` is a `Handle<StandardMaterial>`.
+            // A dedicated server builds with `render` for these types but adds no
+            // rendering plugins, so material/image asset reflection is never set up and
+            // the deserializer (which keys these handles off `ReflectHandle`) drops any
+            // brush with an unassigned `material: null` face. Register it only when the
+            // render plugins are absent; when they are present (the editor, a windowed
+            // client) they own this, and re-registering corrupts the asset storage.
+            if !app
+                .world()
+                .contains_resource::<bevy::asset::Assets<bevy::pbr::StandardMaterial>>()
+            {
+                use bevy::asset::AssetApp;
+                app.init_asset::<bevy::pbr::StandardMaterial>()
+                    .register_asset_reflect::<bevy::pbr::StandardMaterial>()
+                    .init_asset::<bevy::image::Image>()
+                    .register_asset_reflect::<bevy::image::Image>();
+            }
+
+            if self.runtime_mesh_rebuild {
+                app.add_plugins(mesh_rebuild::MeshRebuildPlugin);
+            }
         }
     }
 }

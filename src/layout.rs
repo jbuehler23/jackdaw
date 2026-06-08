@@ -10,6 +10,8 @@ use jackdaw_feathers::{
 };
 use jackdaw_localization::LocalizedText;
 
+use jackdaw_api::pie::PlayState;
+
 use crate::{
     EditorEntity,
     active_tool::ActiveTool,
@@ -24,6 +26,7 @@ use crate::{
     inspector::Inspector,
     measure_tool::MeasureDistanceOp,
     physics_tool::PhysicsActivateOp,
+    pie_mirror::{PieViewHeader, PieViewMode, PieViewSegment},
     remote::ConnectionManager,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
@@ -338,9 +341,38 @@ fn play_pause_controls(icon_font: Handle<Font>) -> impl Bundle {
         BorderColor::all(tokens::HEADER_CONTROL_BORDER),
         children![
             pie_transport_button(crate::pie::PieButton::Play, Icon::Play, icon_font.clone(),),
+            pie_menu_button(icon_font.clone()),
             pie_transport_button(crate::pie::PieButton::Pause, Icon::Pause, icon_font.clone(),),
-            pie_transport_button(crate::pie::PieButton::Stop, Icon::Square, icon_font),
+            pie_transport_button(crate::pie::PieButton::Stop, Icon::Square, icon_font.clone(),),
+            pie_transport_button(crate::pie::PieButton::Reload, Icon::RefreshCw, icon_font),
         ],
+    )
+}
+
+/// Caret button next to Play that opens the run-config dropdown. Shares
+/// `pie_transport_button`'s glyph shape but carries the `PieMenuButton`
+/// marker, which `PieMenuPlugin` observes to open the menu.
+fn pie_menu_button(icon_font: Handle<Font>) -> impl Bundle {
+    (
+        crate::pie_menu::PieMenuButton,
+        EditorEntity,
+        Interaction::default(),
+        Node {
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            padding: UiRect::horizontal(px(2.0)),
+            ..Default::default()
+        },
+        children![(
+            Text::new(String::from(Icon::ChevronDown.unicode())),
+            TextFont {
+                font: icon_font,
+                font_size: 10.0,
+                ..Default::default()
+            },
+            TextColor(tokens::HEADER_CONTROL_LABEL),
+            Pickable::IGNORE,
+        )],
     )
 }
 
@@ -529,6 +561,7 @@ fn toolbar_op_button<Op: Operator>(icon: Icon) -> impl Bundle {
 
 pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
     let add_entity_icon_font = icon_font.clone();
+    let toggle_font = icon_font.clone();
     (
         HierarchyPanel,
         Node {
@@ -540,13 +573,17 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
         },
         children![
             (
+                PieViewHeader,
                 Node {
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
                     column_gap: px(tokens::SPACING_XS),
                     width: percent(100),
+                    padding: UiRect::vertical(px(tokens::SPACING_XS)),
+                    border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
                     ..Default::default()
                 },
+                BackgroundColor(Color::NONE),
                 children![
                     (
                         Node {
@@ -562,6 +599,7 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
                             ),
                         )],
                     ),
+                    pie_view_toggle(toggle_font),
                     (
                         HierarchyShowAllButton,
                         Interaction::default(),
@@ -895,6 +933,8 @@ fn editor_status_bar() -> impl Bundle {
 }
 
 pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
+    let toggle_font = icon_font.clone();
+    let save_font = icon_font.clone();
     (
         Node {
             flex_direction: FlexDirection::Column,
@@ -904,22 +944,43 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
         },
         children![
             (
+                PieViewHeader,
                 Node {
                     flex_direction: FlexDirection::Column,
                     width: percent(100),
                     padding: UiRect::all(px(tokens::SPACING_SM)),
                     row_gap: px(tokens::SPACING_XS),
                     flex_shrink: 0.0,
+                    border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
                     ..Default::default()
                 },
+                BackgroundColor(Color::NONE),
                 children![
                     (
-                        crate::inspector::InspectorSearch,
-                        text_edit::text_edit(
-                            TextEditProps::default()
-                                .with_placeholder("Filter...")
-                                .allow_empty()
-                        ),
+                        Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: px(tokens::SPACING_XS),
+                            width: percent(100),
+                            ..Default::default()
+                        },
+                        children![
+                            (
+                                Node {
+                                    flex_grow: 1.0,
+                                    ..Default::default()
+                                },
+                                children![(
+                                    crate::inspector::InspectorSearch,
+                                    text_edit::text_edit(
+                                        TextEditProps::default()
+                                            .with_placeholder("Filter...")
+                                            .allow_empty()
+                                    ),
+                                )],
+                            ),
+                            pie_view_toggle(toggle_font),
+                        ],
                     ),
                     (
                         crate::inspector::AddComponentButton,
@@ -976,6 +1037,7 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
                             });
                         },),
                     ),
+                    save_to_scene_button(save_font),
                 ],
             ),
             (
@@ -992,4 +1054,296 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
             ),
         ],
     )
+}
+
+/// "Save to Scene" button for the inspector header.
+///
+/// Promotes the selected running entity's runtime component values into its
+/// authored scene node. Hidden in Scene mode; in Live mode it is shown and
+/// enabled only when the selection maps back to an authored node (see
+/// [`update_save_to_scene_button`]). Click is gated the same way, so a
+/// dimmed button is inert.
+fn save_to_scene_button(icon_font: Handle<Font>) -> impl Bundle {
+    (
+        crate::inspector::SaveToSceneButton,
+        Interaction::default(),
+        Node {
+            flex_direction: FlexDirection::Row,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            width: percent(100),
+            height: px(tokens::ROW_HEIGHT),
+            column_gap: px(tokens::SPACING_SM),
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
+            flex_shrink: 0.0,
+            // Hidden until Live mode; the appearance system flips this.
+            display: Display::None,
+            ..Default::default()
+        },
+        BackgroundColor(tokens::ELEVATED_BG),
+        observe(
+            |hover: On<Pointer<Over>>,
+             mut bg: Query<&mut BackgroundColor>,
+             mode: Res<PieViewMode>,
+             selection: Res<crate::pie_mirror::PieLiveSelection>,
+             mirror: Res<crate::pie_mirror::PieMirror>| {
+                // Only the enabled button reacts to hover; a dimmed one stays
+                // at its base color (the same condition the click path uses).
+                let enabled = *mode == PieViewMode::Live
+                    && selection
+                        .selected
+                        .and_then(|bits| mirror.entities.get(&bits))
+                        .and_then(|entry| entry.scene_node_id)
+                        .is_some();
+                if !enabled {
+                    return;
+                }
+                if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
+                    bg.0 = tokens::TOOLBAR_ACTIVE_BG;
+                }
+            },
+        ),
+        observe(
+            |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
+                if let Ok(mut bg) = bg.get_mut(out.event_target()) {
+                    bg.0 = tokens::ELEVATED_BG;
+                }
+            },
+        ),
+        children![
+            (
+                Text::new(String::from(Icon::Save.unicode())),
+                TextFont {
+                    font: icon_font,
+                    font_size: tokens::ICON_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_PRIMARY),
+            ),
+            (
+                Text::new("Save to Scene"),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE,
+                    weight: FontWeight::MEDIUM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_PRIMARY),
+            ),
+        ],
+        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.queue(|world: &mut World| {
+                if crate::pie::can_save_live_to_scene(world) {
+                    crate::pie::save_live_entity_to_scene(world);
+                }
+            });
+        }),
+    )
+}
+
+/// Show/enable the inspector's "Save to Scene" button.
+///
+/// Hidden in Scene mode. In Live mode it is shown; enabled (full color) when
+/// the live selection maps to an authored node, otherwise dimmed (the click
+/// and hover paths gate on the same condition, so dimmed is inert).
+pub fn update_save_to_scene_button(
+    mode: Res<PieViewMode>,
+    selection: Res<crate::pie_mirror::PieLiveSelection>,
+    mirror: Res<crate::pie_mirror::PieMirror>,
+    mut buttons: Query<
+        (&mut Node, &mut BackgroundColor, &Children),
+        With<crate::inspector::SaveToSceneButton>,
+    >,
+    mut texts: Query<&mut TextColor>,
+) {
+    if !mode.is_changed() && !selection.is_changed() && !mirror.is_changed() {
+        return;
+    }
+    let live = *mode == PieViewMode::Live;
+    let enabled = live
+        && selection
+            .selected
+            .and_then(|bits| mirror.entities.get(&bits))
+            .and_then(|entry| entry.scene_node_id)
+            .is_some();
+
+    let text_color = if enabled {
+        tokens::TEXT_PRIMARY
+    } else {
+        tokens::TEXT_DISABLED
+    };
+
+    for (mut node, mut bg, children) in &mut buttons {
+        node.display = if live { Display::Flex } else { Display::None };
+        // Reset to the base color; the hover observer only brightens the
+        // enabled button, and `Out` restores this same value.
+        bg.0 = tokens::ELEVATED_BG;
+        for child in children.iter() {
+            if let Ok(mut tc) = texts.get_mut(child) {
+                tc.0 = text_color;
+            }
+        }
+    }
+}
+
+/// Teal accent color used to signal Live mode in panel headers.
+const LIVE_ACCENT: Color = Color::srgba(0.0, 0.667, 0.733, 0.15);
+
+/// Build the two-segment Scene/Live toggle pill.
+///
+/// Each segment carries [`PieViewSegment`]. The click observer and
+/// appearance system handle activation; only presentation lives here.
+fn pie_view_toggle(icon_font: Handle<Font>) -> impl Bundle {
+    (
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            border: UiRect::all(px(1.0)),
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
+            overflow: Overflow::clip(),
+            flex_shrink: 0.0,
+            ..Default::default()
+        },
+        BackgroundColor(tokens::ELEVATED_BG),
+        BorderColor::all(tokens::BORDER_SUBTLE),
+        children![
+            pie_view_segment(PieViewSegment::Scene, "Scene", icon_font.clone()),
+            pie_view_segment(PieViewSegment::Live, "Live", icon_font),
+        ],
+    )
+}
+
+/// One clickable segment inside the Scene/Live toggle.
+fn pie_view_segment(
+    segment: PieViewSegment,
+    label: &'static str,
+    icon_font: Handle<Font>,
+) -> impl Bundle {
+    (
+        segment,
+        Interaction::default(),
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            column_gap: px(tokens::SPACING_XS),
+            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
+            ..Default::default()
+        },
+        BackgroundColor(Color::NONE),
+        observe(
+            move |click: On<Pointer<Click>>,
+                  mut mode: ResMut<PieViewMode>,
+                  play_state: Res<State<PlayState>>| {
+                let _ = click;
+                if segment == PieViewSegment::Live && *play_state.get() == PlayState::Stopped {
+                    return;
+                }
+                *mode = match segment {
+                    PieViewSegment::Scene => PieViewMode::Scene,
+                    PieViewSegment::Live => PieViewMode::Live,
+                };
+            },
+        ),
+        children![
+            (
+                Text::new(label),
+                TextFont {
+                    font_size: tokens::FONT_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+            ),
+            // Live-dot: only visible when this is the Live segment and mode is Live.
+            // Shown as a small Radio icon glyph; hidden via display toggle.
+            (
+                PieViewLiveDot,
+                Text::new(String::from(Icon::Radio.unicode())),
+                TextFont {
+                    font: icon_font,
+                    font_size: 9.0,
+                    ..Default::default()
+                },
+                TextColor(tokens::CATEGORY_SCENE),
+                Node {
+                    display: Display::None,
+                    ..Default::default()
+                },
+            ),
+        ],
+    )
+}
+
+/// Marker on the live-dot glyph inside the Live segment.
+#[derive(Component)]
+pub struct PieViewLiveDot;
+
+/// Update the appearance of all Scene/Live toggle segments across both panels.
+///
+/// Active segment gets primary text color and a filled background.
+/// Inactive segment gets secondary text. Live segment is dimmed when
+/// `PlayState` is `Stopped`.
+pub fn update_pie_view_toggle_appearance(
+    mode: Res<PieViewMode>,
+    play_state: Res<State<PlayState>>,
+    mut segments: Query<(&PieViewSegment, &mut BackgroundColor, &Children)>,
+    mut texts: Query<(&mut TextColor, Option<&PieViewLiveDot>, Option<&mut Node>)>,
+) {
+    if !mode.is_changed() && !play_state.is_changed() {
+        return;
+    }
+    let stopped = *play_state.get() == PlayState::Stopped;
+    for (segment, mut bg, children) in &mut segments {
+        let is_active = (*segment == PieViewSegment::Scene && *mode == PieViewMode::Scene)
+            || (*segment == PieViewSegment::Live && *mode == PieViewMode::Live);
+        let is_live_seg = *segment == PieViewSegment::Live;
+        let disabled = is_live_seg && stopped;
+
+        bg.0 = if is_active {
+            tokens::TOOLBAR_ACTIVE_BG
+        } else {
+            Color::NONE
+        };
+
+        for child in children.iter() {
+            if let Ok((mut tc, dot, mut node_opt)) = texts.get_mut(child) {
+                if dot.is_some() {
+                    // Live-dot glyph: show only when Live is active.
+                    if let Some(ref mut node) = node_opt {
+                        node.display = if is_active && is_live_seg {
+                            Display::Flex
+                        } else {
+                            Display::None
+                        };
+                    }
+                } else {
+                    // Label text.
+                    tc.0 = if disabled {
+                        tokens::TEXT_DISABLED
+                    } else if is_active {
+                        tokens::TEXT_PRIMARY
+                    } else {
+                        tokens::TEXT_SECONDARY
+                    };
+                }
+            }
+        }
+    }
+}
+
+/// Tint both panel header containers when [`PieViewMode`] is `Live`.
+pub fn update_pie_view_header_accent(
+    mode: Res<PieViewMode>,
+    mut headers: Query<&mut BackgroundColor, With<PieViewHeader>>,
+) {
+    if !mode.is_changed() {
+        return;
+    }
+    let color = if *mode == PieViewMode::Live {
+        LIVE_ACCENT
+    } else {
+        Color::NONE
+    };
+    for mut bg in &mut headers {
+        bg.0 = color;
+    }
 }

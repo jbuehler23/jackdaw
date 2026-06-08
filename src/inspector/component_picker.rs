@@ -256,6 +256,9 @@ pub(crate) fn on_add_component_button_click(
     type_registry: Res<AppTypeRegistry>,
     components: &Components,
     entity_query: Query<&Archetype, (With<Selected>, Without<EditorEntity>)>,
+    archetypes: Query<&Archetype>,
+    view_mode: Res<crate::pie_mirror::PieViewMode>,
+    live_proxies: Query<&super::component_display::PieLiveInspectorProxy>,
     denylist: Res<PickerDenylist>,
 ) {
     if add_buttons.get(event.entity).is_err() {
@@ -267,11 +270,25 @@ pub(crate) fn on_add_component_button_click(
         return;
     }
 
-    let Some(primary) = selection.primary() else {
-        return;
-    };
-    let Ok(archetype) = entity_query.get(primary) else {
-        return;
+    // In Live mode the picker targets the hidden proxy backing the live
+    // view; the add operator streams an `AddComponent` to the running
+    // game. In Scene mode it targets the primary selection as usual.
+    let (target, archetype) = if *view_mode == crate::pie_mirror::PieViewMode::Live {
+        let Some(proxy) = live_proxies.iter().next().map(|p| p.0) else {
+            return;
+        };
+        let Ok(archetype) = archetypes.get(proxy) else {
+            return;
+        };
+        (proxy, archetype)
+    } else {
+        let Some(primary) = selection.primary() else {
+            return;
+        };
+        let Ok(archetype) = entity_query.get(primary) else {
+            return;
+        };
+        (primary, archetype)
     };
 
     let existing_types: HashSet<TypeId> = archetype
@@ -314,7 +331,7 @@ pub(crate) fn on_add_component_button_click(
         picker,
         EditorEntity,
         crate::BlocksCameraInput,
-        ComponentPicker(primary),
+        ComponentPicker(target),
     ));
 }
 

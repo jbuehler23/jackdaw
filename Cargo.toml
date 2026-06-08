@@ -113,6 +113,13 @@ jackdaw_loader.workspace = true
 # around) so the trait is reachable from a game crate that only
 # pulls in `jackdaw_runtime` and never compiles the editor.
 jackdaw_runtime.workspace = true
+# Process-based Play: the editor spawns the project's game binary and
+# drives it over ipc-channel. The protocol's `ipc` transport is light
+# enough to be unconditional, so Play always works in the editor with
+# no per-build feature gate.
+jackdaw_pie_protocol = { path = "crates/jackdaw_pie_protocol", features = [
+    "ipc",
+] }
 # Optional and activated only by the `dylib` feature. Nothing in
 # the editor's own Rust code imports `jackdaw_sdk` - it's a pure
 # build artifact consumed at runtime by the extension build
@@ -145,11 +152,17 @@ regex.workspace = true
 pathdiff.workspace = true
 notify = "8"
 ctrlc = "3"
+toml = "0.8"
 bevy_simple_subsecond_system = { version = "0.2", optional = true }
 winit.workspace = true
 image.workspace = true
 time.workspace = true
 jackdaw_localization = { version = "0.4.1", path = "crates/jackdaw_localization" }
+
+# Powers the Linux `PR_SET_PDEATHSIG` hook that takes PIE game processes down
+# with the editor when it is killed (`src/pie.rs`).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 
 [workspace.dependencies]
 bevy = { version = "0.18", features = [

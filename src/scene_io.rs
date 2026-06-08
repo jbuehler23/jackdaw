@@ -55,6 +55,11 @@ const ALWAYS_SAVE_PATHS: &[&str] = &[
     // Overrides the `jackdaw::` skip so `apply_ast_to_world` can
     // match selected brushes by stable id across an undo.
     "jackdaw::draw_brush::BrushStableId",
+    // The stable node id must persist so a running game can map a live
+    // entity back to its authored node. It is written as the structural
+    // `JsnEntity::id` field rather than a component entry, but this keeps
+    // any other save path from stripping it.
+    jackdaw_jsn::ast::JSN_NODE_ID_TYPE_PATH,
     // Prefab marker components must round-trip through save and AST
     // registration; stripping them breaks instance inheritance and
     // causes `revert_component` to lose track of the prefab source.
@@ -865,7 +870,11 @@ fn collect_inline_assets(
     ]);
 
     for &entity in scene_entities {
-        let entity_ref = world.entity(entity);
+        // Defensive: a stale/despawned entity can slip into `scene_entities`; skip it
+        // rather than panicking on `world.entity`.
+        let Ok(entity_ref) = world.get_entity(entity) else {
+            continue;
+        };
 
         for registration in registry.iter() {
             if skip_ids.contains(&registration.type_id()) {
@@ -1264,13 +1273,16 @@ pub(crate) fn build_scene_snapshot(
         entity_to_index: &entity_to_index,
     };
 
-    // Component types to skip  -- only computed/internal components
+    // Component types to skip  -- only computed/internal components.
+    // `JsnNodeId` is skipped here because it is emitted as the structural
+    // `JsnEntity::id` field below, not as a reflected component entry.
     let skip_ids: HashSet<TypeId> = HashSet::from([
         TypeId::of::<GlobalTransform>(),
         TypeId::of::<InheritedVisibility>(),
         TypeId::of::<ViewVisibility>(),
         TypeId::of::<ChildOf>(),
         TypeId::of::<Children>(),
+        TypeId::of::<jackdaw_jsn::JsnNodeId>(),
     ]);
 
     let ast = world.get_resource::<jackdaw_jsn::SceneJsnAst>();
@@ -1283,6 +1295,18 @@ pub(crate) fn build_scene_snapshot(
             let parent = entity_ref
                 .get::<ChildOf>()
                 .and_then(|c| entity_to_index.get(&c.parent()).copied());
+
+            // Carry the stable node id from the live entity into the
+            // structural field; fall back to the AST node when the live
+            // entity lacks the component (e.g. not yet backfilled).
+            let id = entity_ref
+                .get::<jackdaw_jsn::JsnNodeId>()
+                .map(|nid| nid.0)
+                .or_else(|| {
+                    ast.and_then(|a| a.node_for_entity(entity))
+                        .and_then(|n| n.id)
+                        .map(|nid| nid.0)
+                });
 
             // Derived components for this entity  -- skip them during save.
             // Falls back to an empty set when the AST resource is absent
@@ -1335,7 +1359,11 @@ pub(crate) fn build_scene_snapshot(
                 );
             }
 
-            JsnEntity { parent, components }
+            JsnEntity {
+                id,
+                parent,
+                components,
+            }
         })
         .collect()
 }
@@ -1710,6 +1738,18 @@ pub fn load_scene_from_jsn(
         }
     }
 
+    // Attach the stable node id so the live preview entity can be mapped
+    // back to its authored node (PIE "save runtime values" relies on this).
+    // The structural `id` is canonical; mint a fresh one only when the
+    // source entry predates node ids.
+    for (i, jsn) in entities.iter().enumerate() {
+        let node_id = jsn
+            .id
+            .map(jackdaw_jsn::JsnNodeId)
+            .unwrap_or_else(jackdaw_jsn::JsnNodeId::next);
+        world.entity_mut(spawned[i]).insert(node_id);
+    }
+
     // Wire ChildOf relationships now that every entity has its full
     // component set (see the ChildOf-last comment above).
     for (i, jsn) in entities.iter().enumerate() {
@@ -1877,6 +1917,13 @@ fn collect_scene_entities_from_set(
         }
         if let Some(children) = world.get::<Children>(entity) {
             for child in children.iter() {
+                // A duplicated subtree can leave a dangling child reference in a
+                // `Children` component (DynamicScene remaps an unmapped child ref to a
+                // dead placeholder entity). Skip children that are no longer alive so the
+                // serializer never walks a despawned entity.
+                if world.get_entity(child).is_err() {
+                    continue;
+                }
                 if world.get::<EditorHidden>(child).is_none()
                     && world.get::<NonSerializable>(child).is_none()
                     && world.get::<crate::SkipSerialization>(child).is_none()
@@ -2487,6 +2534,78 @@ mod tests {
         assert!(
             !scene_entities.contains(&helper_child),
             "SkipSerialization child must NOT be in the saved scene",
+        );
+    }
+
+    /// Every entity spawned from a scene carries a `JsnNodeId`, and the id
+    /// survives a save (`build_scene_snapshot`) then load round-trip so the
+    /// running game can map a live entity back to its authored node.
+    #[test]
+    fn spawned_entities_carry_node_id_and_round_trip() {
+        use jackdaw_jsn::JsnNodeId;
+        use jackdaw_jsn::format::JsnEntity;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default());
+        app.register_type::<JsnNodeId>();
+        app.register_type::<Name>();
+
+        // Two entities with explicit on-disk ids (parent + child).
+        let entities = vec![
+            JsnEntity {
+                id: Some(42),
+                parent: None,
+                components: HashMap::new(),
+            },
+            JsnEntity {
+                id: Some(99),
+                parent: Some(0),
+                components: HashMap::new(),
+            },
+        ];
+
+        let spawned =
+            load_scene_from_jsn(app.world_mut(), &entities, Path::new("."), &HashMap::new());
+        assert_eq!(spawned.len(), 2);
+
+        let id0 = app
+            .world()
+            .get::<JsnNodeId>(spawned[0])
+            .expect("spawned entity should carry JsnNodeId");
+        let id1 = app
+            .world()
+            .get::<JsnNodeId>(spawned[1])
+            .expect("spawned child should carry JsnNodeId");
+        assert_eq!(*id0, JsnNodeId(42));
+        assert_eq!(*id1, JsnNodeId(99));
+
+        // Save the live world back out and confirm the ids land in the
+        // structural `id` field, not duplicated as a component entry.
+        let registry = app.world().resource::<AppTypeRegistry>().clone();
+        let guard = registry.read();
+        let snapshot = build_scene_snapshot(
+            app.world(),
+            &guard,
+            Path::new("."),
+            &HashMap::new(),
+            &spawned,
+        );
+        drop(guard);
+
+        let by_id: HashMap<Option<u64>, &JsnEntity> = snapshot.iter().map(|e| (e.id, e)).collect();
+        let saved0 = by_id.get(&Some(42)).expect("node 42 in snapshot");
+        let saved1 = by_id.get(&Some(99)).expect("node 99 in snapshot");
+        assert!(
+            !saved0
+                .components
+                .contains_key(jackdaw_jsn::ast::JSN_NODE_ID_TYPE_PATH),
+            "node id must not be double-encoded as a component",
+        );
+        assert!(
+            !saved1
+                .components
+                .contains_key(jackdaw_jsn::ast::JSN_NODE_ID_TYPE_PATH),
         );
     }
 

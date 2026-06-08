@@ -3,8 +3,10 @@ use serde::{Deserialize, Serialize};
 use crate::snapshot::RemoteEntity;
 
 /// Which mode the editor launched the game in.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "kebab-case")]
 pub enum PieMode {
+    #[default]
     Play,
     EditorPreview,
 }
@@ -47,6 +49,27 @@ pub enum ControlEvent {
     Pause,
     Resume,
     Stop,
+    /// Replace an existing component on `entity` with a new value deserialized
+    /// from `value`. The component must already be present; if not, the game
+    /// side logs a warning and skips.
+    SetComponent {
+        entity: u64,
+        type_path: String,
+        value: serde_json::Value,
+    },
+    /// Insert a component onto `entity`. If the component is already present it
+    /// is replaced.
+    AddComponent {
+        entity: u64,
+        type_path: String,
+        value: serde_json::Value,
+    },
+    /// Remove a component from `entity`. If the component is absent the event
+    /// is silently ignored.
+    RemoveComponent {
+        entity: u64,
+        type_path: String,
+    },
 }
 
 /// Either direction, for transports that carry a single type.
@@ -56,9 +79,9 @@ pub enum PieEvent {
     Control(ControlEvent),
 }
 
-/// Serialize a protocol message to bytes. v1 uses JSON (the component
-/// payloads are already `serde_json::Value`); the encoding is isolated
-/// here so a compact codec can replace it without touching call sites.
+/// Serialize a protocol message to bytes. Uses JSON so component payloads
+/// (`serde_json::Value`) round-trip cleanly; swap the codec here to avoid
+/// touching call sites.
 pub fn to_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(value)
 }

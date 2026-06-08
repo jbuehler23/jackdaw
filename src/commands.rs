@@ -576,6 +576,11 @@ pub(crate) fn collect_entity_ids(world: &World, entity: Entity, out: &mut Vec<En
     out.push(entity);
     if let Some(children) = world.get::<Children>(entity) {
         for child in children.iter() {
+            // A dangling child reference (e.g. left by an older duplicate) points at a
+            // despawned entity; skip it so callers never feed it to DynamicSceneBuilder.
+            if world.get_entity(child).is_err() {
+                continue;
+            }
             // Skip editor-only entities and runtime-generated children
             // (e.g. BrushFaceEntity meshes). Including NonSerializable
             // children causes them to be restored as orphans at origin

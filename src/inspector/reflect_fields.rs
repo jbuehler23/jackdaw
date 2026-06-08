@@ -1280,6 +1280,19 @@ fn apply_color_with_undo(
 ) {
     let registry = world.resource::<AppTypeRegistry>().clone();
 
+    // Live edits need the color in canonical reflect form (a `Color`
+    // enum like `{"LinearRgba": {..}}`), not the picker's raw sRGBA
+    // array, so the game can deserialize the full component.
+    if *world.resource::<crate::pie_mirror::PieViewMode>() == crate::pie_mirror::PieViewMode::Live {
+        let srgba = Srgba::new(new_rgba[0], new_rgba[1], new_rgba[2], new_rgba[3]);
+        let canonical = {
+            let reg = registry.read();
+            color_to_canonical_json(Color::Srgba(srgba), &reg)
+        };
+        try_route_pie_live_field_edit(world, _entity, type_path, field_path, canonical);
+        return;
+    }
+
     let selection = world.resource::<Selection>();
     let targets: Vec<Entity> = selection.entities.clone();
 
@@ -1443,6 +1456,91 @@ fn spawn_editable_field(
     ));
 }
 
+/// Route a field edit to the running game when the inspector is showing
+/// the PIE live mirror, returning `true` when it was handled as a live
+/// edit (so the caller skips the Scene `SetJsnField` path entirely).
+///
+/// `source_entity` is the hidden proxy the live components were
+/// deserialized onto. When it matches an inspector's
+/// [`PieLiveInspectorProxy`], the current full component JSON is taken
+/// from [`PieMirror`], the edited field is merged into it (so the value
+/// stays canonical reflect JSON the game can deserialize), and a
+/// [`ControlEvent::SetComponent`] is broadcast. The next state delta
+/// from the game overwrites the mirror and confirms the change.
+fn try_route_pie_live_field_edit(
+    world: &mut World,
+    source_entity: Entity,
+    type_path: &str,
+    field_path: &str,
+    field_value: serde_json::Value,
+) -> bool {
+    use crate::inspector::component_display::PieLiveInspectorProxy;
+    use crate::pie_mirror::{PieLiveSelection, PieMirror, PieViewMode};
+    use jackdaw_pie_protocol::ControlEvent;
+
+    if *world.resource::<PieViewMode>() != PieViewMode::Live {
+        return false;
+    }
+    // Confirm the edit targets a live proxy, not a Scene entity that
+    // happens to be selected behind the live view.
+    let is_live_proxy = {
+        let mut proxies = world.query::<&PieLiveInspectorProxy>();
+        proxies.iter(world).any(|p| p.0 == source_entity)
+    };
+    if !is_live_proxy {
+        return false;
+    }
+    let Some(bits) = world.resource::<PieLiveSelection>().selected else {
+        return true;
+    };
+
+    let mut full_value = world
+        .resource::<PieMirror>()
+        .entities
+        .get(&bits)
+        .and_then(|entry| entry.components.get(type_path))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    {
+        let reg = registry.read();
+        jackdaw_jsn::ast::set_field_in_component_json(
+            &mut full_value,
+            type_path,
+            field_path,
+            field_value,
+            &reg,
+        );
+    }
+
+    crate::pie::send_edit(
+        world,
+        ControlEvent::SetComponent {
+            entity: bits,
+            type_path: type_path.to_string(),
+            value: full_value,
+        },
+    );
+    true
+}
+
+/// Serialize a `Color` to its canonical reflect JSON (e.g.
+/// `{"LinearRgba": {..}}`) so a live color edit round-trips through the
+/// game's full-component deserializer. Falls back to the raw sRGBA array
+/// when `Color` is not registered.
+fn color_to_canonical_json(
+    color: Color,
+    registry: &bevy::reflect::TypeRegistry,
+) -> serde_json::Value {
+    use bevy::reflect::serde::TypedReflectSerializer;
+    let serializer = TypedReflectSerializer::new(color.as_partial_reflect(), registry);
+    serde_json::to_value(&serializer).unwrap_or_else(|_| {
+        let srgba = color.to_srgba();
+        serde_json::json!([srgba.red, srgba.green, srgba.blue, srgba.alpha])
+    })
+}
+
 /// Apply a field value change with undo support -- snapshots old value, creates command.
 /// Propagates the edit to all selected entities that have the same component.
 fn apply_field_value_with_undo(
@@ -1452,13 +1550,16 @@ fn apply_field_value_with_undo(
     field_path: &str,
     new_value_str: &str,
 ) {
+    let new_json = parse_to_json_value(new_value_str);
+    if try_route_pie_live_field_edit(world, _entity, type_path, field_path, new_json.clone()) {
+        return;
+    }
+
     let registry = world.resource::<AppTypeRegistry>().clone();
 
     // Collect all selected entities
     let selection = world.resource::<Selection>();
     let targets: Vec<Entity> = selection.entities.clone();
-
-    let new_json = parse_to_json_value(new_value_str);
 
     let reg = registry.read();
     let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
@@ -1498,9 +1599,16 @@ fn apply_field_value_with_undo(
     history.push_executed(cmd);
 }
 
-/// Parse a text field string to the most appropriate JSON value.
+/// Parse a text field string to the most appropriate JSON value. Integer-looking
+/// input becomes a JSON integer, not a float: an integer field (`u64`, `u32`, ...)
+/// rejects a float like `1.0` on reflect-deserialize and the edit silently reverts,
+/// whereas an integer coerces cleanly into float fields too, so preferring it is safe.
 fn parse_to_json_value(s: &str) -> serde_json::Value {
-    if let Ok(v) = s.parse::<f64>() {
+    if let Ok(v) = s.parse::<i64>() {
+        serde_json::json!(v)
+    } else if let Ok(v) = s.parse::<u64>() {
+        serde_json::json!(v)
+    } else if let Ok(v) = s.parse::<f64>() {
         serde_json::json!(v)
     } else if let Ok(v) = s.parse::<bool>() {
         serde_json::json!(v)
@@ -2345,19 +2453,25 @@ fn apply_enum_variant_with_undo(
 ) {
     let registry = world.resource::<AppTypeRegistry>().clone();
 
-    let selection = world.resource::<Selection>();
-    let targets: Vec<Entity> = selection.entities.clone();
-
-    let reg = registry.read();
-
     // Build JSON that the TypedReflectDeserializer can round-trip. A bare
     // variant-name string only works for *unit* variants; struct/tuple variants
     // need `{"VariantName": {fields}}` / `{"VariantName": [items]}` with the
     // fields populated from each field type's `ReflectDefault`.
-    let new_json = resolve_enum_info(type_path, field_path, &reg)
-        .and_then(|enum_info| build_variant_default_json(enum_info, variant_name, &reg))
-        .unwrap_or_else(|| serde_json::Value::String(variant_name.to_string()));
+    let new_json = {
+        let reg = registry.read();
+        resolve_enum_info(type_path, field_path, &reg)
+            .and_then(|enum_info| build_variant_default_json(enum_info, variant_name, &reg))
+            .unwrap_or_else(|| serde_json::Value::String(variant_name.to_string()))
+    };
 
+    if try_route_pie_live_field_edit(world, _entity, type_path, field_path, new_json.clone()) {
+        return;
+    }
+
+    let selection = world.resource::<Selection>();
+    let targets: Vec<Entity> = selection.entities.clone();
+
+    let reg = registry.read();
     let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
 
     for &target in &targets {
@@ -2473,5 +2587,35 @@ fn build_variant_default_json(
             outer.insert(variant_name.to_string(), serde_json::Value::Array(values));
             Some(serde_json::Value::Object(outer))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_to_json_value;
+    use serde_json::Value;
+
+    #[test]
+    fn integer_input_parses_to_json_integer() {
+        // An integer component field (e.g. `SpawnPoint.zone: u64`) only round-trips
+        // when the edit is a JSON integer; a float like `1.0` fails reflect
+        // deserialization and the value silently reverts to its default.
+        let v = parse_to_json_value("1");
+        assert_eq!(v.as_u64(), Some(1), "got {v:?}");
+        assert!(!v.is_f64(), "integer input must not become a float: {v:?}");
+    }
+
+    #[test]
+    fn decimal_input_parses_to_json_float() {
+        assert_eq!(parse_to_json_value("1.5").as_f64(), Some(1.5));
+    }
+
+    #[test]
+    fn non_numeric_input_parses_to_bool_or_string() {
+        assert_eq!(parse_to_json_value("true"), Value::Bool(true));
+        assert_eq!(
+            parse_to_json_value("north_gate"),
+            Value::String("north_gate".to_string())
+        );
     }
 }

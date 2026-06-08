@@ -36,11 +36,19 @@ pub fn rebuild_brush_meshes(
     insert: On<Insert, Brush>,
     mut commands: Commands,
     new_brushes: Query<(Entity, &Brush)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+    materials: Option<ResMut<Assets<StandardMaterial>>>,
     assets: Res<AssetServer>,
 ) {
     let Ok((entity, brush)) = new_brushes.get(insert.entity) else {
+        return;
+    };
+
+    // A headless runtime (a dedicated server) compiles with `render` for the
+    // scene types but adds no rendering plugins, so the mesh and material asset
+    // stores are absent. Keep the loaded `Brush` component, but skip mesh
+    // generation; nothing renders it there.
+    let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
         return;
     };
 

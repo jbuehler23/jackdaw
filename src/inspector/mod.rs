@@ -127,6 +127,11 @@ impl Plugin for InspectorPlugin {
                     component_display::refresh_prefab_field_dots,
                     refresh_name_field,
                     flag_inspector_dirty_on_archetype_change,
+                    (
+                        component_display::pie_live_inspector_populate,
+                        component_display::pie_live_inspector_build,
+                    )
+                        .chain(),
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             );
@@ -260,6 +265,13 @@ pub(super) struct ComponentDisplayBody;
 
 #[derive(Component)]
 pub struct AddComponentButton;
+
+/// Marker for the "Save to Scene" button in the inspector header. Visible
+/// only in Live (PIE) mode; promotes the selected running entity's current
+/// component values into its authored scene node. See
+/// [`crate::pie::save_live_entity_to_scene`].
+#[derive(Component)]
+pub struct SaveToSceneButton;
 
 /// The component picker panel
 #[derive(Component)]

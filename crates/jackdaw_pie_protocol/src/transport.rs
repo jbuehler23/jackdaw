@@ -12,9 +12,8 @@ pub trait PieTransport {
     fn drain_received(&mut self) -> Vec<(PieChannel, Vec<u8>)>;
 }
 
-/// In-process transport pair for tests: whatever one end sends, the other
-/// end receives. Not used in production; the lightyear/socket transports
-/// implement `PieTransport` in later phases.
+/// In-process transport pair for tests: whatever one end sends the other
+/// receives. Production code uses the lightyear/socket transports.
 pub struct LoopbackTransport {
     outgoing: Sender<(PieChannel, Vec<u8>)>,
     incoming: Receiver<(PieChannel, Vec<u8>)>,

@@ -5,7 +5,7 @@ use serde_json::Value;
 pub use jackdaw_pie_protocol::RemoteEntity;
 
 /// BRP handler for `jackdaw/scene_snapshot`.
-/// Returns a `Vec<RemoteEntity>` with all reflectable components serialized.
+/// Returns all `Transform`-bearing entities serialized as `Vec<RemoteEntity>`.
 pub fn scene_snapshot_handler(
     In(_params): In<Option<Value>>,
     query: Query<Entity, With<Transform>>,

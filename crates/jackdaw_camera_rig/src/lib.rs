@@ -139,7 +139,7 @@ fn drive_third_person(
         // otherwise the camera follows whatever `yaw` the game set (e.g. keyboard turn).
         if mouse_buttons.pressed(MouseButton::Right) {
             look.yaw -= motion.delta.x * cfg.sensitivity;
-            look.pitch = (look.pitch - motion.delta.y * cfg.sensitivity).clamp(0.05, 1.4);
+            look.pitch = (look.pitch + motion.delta.y * cfg.sensitivity).clamp(0.05, 1.4);
         }
         let offset =
             Quat::from_euler(EulerRot::YXZ, look.yaw, -look.pitch, 0.0) * (Vec3::Z * cfg.distance);

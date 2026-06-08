@@ -106,8 +106,8 @@ impl Plugin for HierarchyPlugin {
                     toggle_show_all_button,
                     update_show_all_button_appearance,
                     on_show_all_changed,
+                    sync_pie_live_outliner,
                     jackdaw_feathers::tree_view::tree_keyboard_navigation,
-                    style_game_spawned_rows,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             )
@@ -122,6 +122,7 @@ impl Plugin for HierarchyPlugin {
             .add_observer(on_entity_deparented)
             .add_observer(on_tree_node_expanded)
             .add_observer(on_tree_row_clicked)
+            .add_observer(on_pie_live_row_clicked)
             .add_observer(on_entity_removed)
             .add_observer(on_name_changed)
             .add_observer(on_entity_selected)
@@ -290,6 +291,13 @@ fn rebuild_hierarchy_on_container_added(
 }
 
 pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
+    // In Live mode the outliner mirrors the running game instead of the
+    // editor ECS. The Scene-mode incremental path below is left exactly
+    // as before.
+    if *world.resource::<crate::pie_mirror::PieViewMode>() == crate::pie_mirror::PieViewMode::Live {
+        return rebuild_live_hierarchy(world);
+    }
+
     fn rebuild_hierarchy_inner(
         world: &mut World,
         containers: &mut QueryState<Entity, With<HierarchyTreeContainer>>,
@@ -345,6 +353,182 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
     world
         .run_system_cached(rebuild_hierarchy_inner)
         .map_err(BevyError::from)
+}
+
+/// Stand-in `TreeNode` source for a Live mirror entity. The tree row
+/// widget keys everything off an `Entity`, but mirror entries are the
+/// running game's entities (`u64` bits), not editor ECS entities, so
+/// each Live row gets a lightweight local proxy carrying the game bits.
+/// Distinct from the BRP remote browser's `RemoteEntityProxy` so the two
+/// views never tear down each other's rows.
+#[derive(Component)]
+pub struct PieLiveProxy {
+    pub bits: u64,
+}
+
+/// Marker on the small "runtime" badge shown on Live rows whose mirror
+/// entry has no `scene_node_id` (entities the game spawned at runtime,
+/// with no authored scene node behind them).
+#[derive(Component)]
+pub struct PieRuntimeBadge;
+
+/// Despawn every tree row in every Outliner container and forget those
+/// containers' `TreeIndex` entries, then despawn any leftover Live
+/// proxies. Shared by both view-mode rebuild paths so a switch starts
+/// from a clean slate regardless of which mode populated the rows.
+fn teardown_outliner_rows(world: &mut World) {
+    let containers: Vec<Entity> = world
+        .run_system_cached(collect_hierarchy_containers)
+        .unwrap_or_default();
+    for container in &containers {
+        let children: Vec<Entity> = world
+            .get::<Children>(*container)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        for child in children {
+            if world.get::<TreeNode>(child).is_some()
+                && let Ok(ec) = world.get_entity_mut(child)
+            {
+                ec.despawn();
+            }
+        }
+        world
+            .resource_mut::<TreeIndex>()
+            .clear_container(*container);
+    }
+
+    let proxies: Vec<Entity> = {
+        let mut q = world.query_filtered::<Entity, With<PieLiveProxy>>();
+        q.iter(world).collect()
+    };
+    for proxy in proxies {
+        if let Ok(ec) = world.get_entity_mut(proxy) {
+            ec.despawn();
+        }
+    }
+}
+
+/// Build the Live outliner: a flat list of rows, one per [`PieMirror`]
+/// entry, sorted by display label. Each row is backed by a [`PieLiveProxy`]
+/// carrying the game entity bits. Runtime-only entries (no `scene_node_id`)
+/// get a "runtime" badge. Always tears down whatever rows exist first, so
+/// it is safe to call on every mirror change.
+fn rebuild_live_hierarchy(world: &mut World) -> Result {
+    teardown_outliner_rows(world);
+
+    let containers: Vec<Entity> = world
+        .run_system_cached(collect_hierarchy_containers)
+        .unwrap_or_default();
+    if containers.is_empty() {
+        return Ok(());
+    }
+
+    // (bits, label, is_runtime) sorted by label so the flat list is stable.
+    let mut rows: Vec<(u64, String, bool)> = world
+        .resource::<crate::pie_mirror::PieMirror>()
+        .entities
+        .iter()
+        .map(|(bits, entry)| {
+            (
+                *bits,
+                crate::pie_mirror::mirror_entry_label(&entry.components, *bits),
+                entry.scene_node_id.is_none(),
+            )
+        })
+        .collect();
+    rows.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+
+    let selected = world
+        .resource::<crate::pie_mirror::PieLiveSelection>()
+        .selected;
+    let icon_font = world.resource::<IconFont>().0.clone();
+    let style = TreeRowStyle { icon_font };
+
+    for container in containers {
+        for (bits, label, is_runtime) in &rows {
+            let proxy = world.spawn(PieLiveProxy { bits: *bits }).id();
+            let tree_row_entity = world
+                .spawn((
+                    tree_row(
+                        label,
+                        false,
+                        selected == Some(*bits),
+                        proxy,
+                        EntityCategory::Entity,
+                        false,
+                        &style,
+                    ),
+                    ChildOf(container),
+                ))
+                .id();
+            world
+                .resource_mut::<TreeIndex>()
+                .insert(container, proxy, tree_row_entity);
+            if *is_runtime {
+                attach_runtime_badge(world, tree_row_entity);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Append a small dim "runtime" label to the trailing edge of a Live
+/// row's content. Locates the row's `TreeRowContent` child and spawns
+/// the badge into it.
+fn attach_runtime_badge(world: &mut World, tree_row_entity: Entity) {
+    let content = world.get::<Children>(tree_row_entity).and_then(|children| {
+        children
+            .iter()
+            .find(|c| world.get::<TreeRowContent>(*c).is_some())
+    });
+    let Some(content) = content else {
+        return;
+    };
+    world.spawn((
+        PieRuntimeBadge,
+        Text::new("runtime"),
+        TextFont {
+            font_size: tokens::FONT_XS,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_DISABLED),
+        Node {
+            margin: UiRect::horizontal(Val::Px(tokens::SPACING_XS)),
+            ..Default::default()
+        },
+        ChildOf(content),
+    ));
+}
+
+/// Rebuild the outliner when the Live mirror or the view mode changes.
+/// Live mode mirrors [`PieMirror`]; Scene mode falls back to the normal
+/// incremental rebuild after tearing down any Live rows left behind.
+fn sync_pie_live_outliner(
+    mode: Res<crate::pie_mirror::PieViewMode>,
+    mirror: Res<crate::pie_mirror::PieMirror>,
+    live_selection: Res<crate::pie_mirror::PieLiveSelection>,
+    mut commands: Commands,
+) {
+    if !mode.is_changed() && !mirror.is_changed() && !live_selection.is_changed() {
+        return;
+    }
+    match *mode {
+        crate::pie_mirror::PieViewMode::Live => {
+            commands.queue(rebuild_live_hierarchy);
+        }
+        crate::pie_mirror::PieViewMode::Scene => {
+            // Only the view-mode transition matters here; a mirror or
+            // selection change while in Scene mode leaves the authored
+            // tree untouched.
+            if !mode.is_changed() {
+                return;
+            }
+            commands.queue(|world: &mut World| {
+                teardown_outliner_rows(world);
+                rebuild_hierarchy(world)
+            });
+        }
+    }
 }
 
 /// When a new entity gets Transform and has no parent, create a row
@@ -760,9 +944,14 @@ fn on_tree_row_clicked(
     parent_query: Query<&ChildOf>,
     tree_nodes: Query<Entity, With<TreeNode>>,
     remote_check: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+    live_check: Query<(), With<PieLiveProxy>>,
 ) {
     // Skip remote entity proxies, handled by entity_browser observer
     if remote_check.contains(event.source_entity) {
+        return;
+    }
+    // Skip Live mirror proxies, handled by on_pie_live_row_clicked
+    if live_check.contains(event.source_entity) {
         return;
     }
 
@@ -782,6 +971,53 @@ fn on_tree_row_clicked(
         && tree_nodes.contains(tree_row)
     {
         focused.0 = Some(tree_row);
+    }
+}
+
+/// Handle a click on a Live mirror row: toggle [`PieLiveSelection`] by
+/// game-entity bits and repaint the row highlights. A second click on
+/// the selected row clears the selection, matching Scene-mode behavior.
+fn on_pie_live_row_clicked(
+    event: On<TreeRowClicked>,
+    mut commands: Commands,
+    proxies: Query<&PieLiveProxy>,
+    mut selection: ResMut<crate::pie_mirror::PieLiveSelection>,
+    tree_row_contents: Query<Entity, With<TreeRowContent>>,
+    proxy_tree_nodes: Query<(&TreeNode, &Children)>,
+    mut bg_query: Query<&mut BackgroundColor>,
+) {
+    let Ok(proxy) = proxies.get(event.source_entity) else {
+        return;
+    };
+    let bits = proxy.bits;
+
+    // Clear highlight on every Live row before re-applying.
+    for (tree_node, children) in &proxy_tree_nodes {
+        if proxies.get(tree_node.0).is_err() {
+            continue;
+        }
+        for child in children.iter() {
+            if tree_row_contents.contains(child) {
+                if let Ok(mut bg) = bg_query.get_mut(child) {
+                    bg.0 = ROW_BG;
+                }
+                if let Ok(mut ec) = commands.get_entity(child) {
+                    ec.remove::<TreeRowSelected>();
+                }
+            }
+        }
+    }
+
+    if selection.selected == Some(bits) {
+        selection.selected = None;
+    } else {
+        selection.selected = Some(bits);
+        if let Ok(mut bg) = bg_query.get_mut(event.entity) {
+            bg.0 = tokens::SELECTED_BG;
+        }
+        if let Ok(mut ec) = commands.get_entity(event.entity) {
+            ec.insert(TreeRowSelected);
+        }
     }
 }
 
@@ -1915,59 +2151,6 @@ fn toggle_show_all_button(
     for interaction in &interactions {
         if *interaction == Interaction::Pressed {
             show_all.0 = !show_all.0;
-        }
-    }
-}
-
-/// Style hierarchy rows whose source entity was spawned during
-/// `PlayState::Playing` (i.e. has the `GameSpawned` marker) in
-/// italic, so the user can tell at a glance which rows are
-/// authored vs transient runtime state that'll disappear on Stop.
-///
-/// Uses the `EditorFontItalic` handle loaded by
-/// `jackdaw_feathers::icons`. Text colour stays at the theme's
-/// primary foreground; only the font handle changes. Runs every
-/// frame while in `Editor` state; the body is a few pointer-chasing
-/// lookups per game-spawned entity; cheap enough to skip change
-/// detection. We only write when the font differs to keep bevy's
-/// `Changed<TextFont>` quiet for downstream consumers.
-fn style_game_spawned_rows(
-    game_spawned: Query<Entity, With<crate::pie::GameSpawned>>,
-    index: Res<jackdaw_widgets::tree_view::TreeIndex>,
-    italic_font: Option<Res<jackdaw_feathers::icons::EditorFontItalic>>,
-    children_q: Query<&Children>,
-    row_content_q: Query<(), With<jackdaw_widgets::tree_view::TreeRowContent>>,
-    label_q: Query<(), With<jackdaw_widgets::tree_view::TreeRowLabel>>,
-    mut text_fonts: Query<&mut TextFont>,
-) {
-    let Some(italic_font) = italic_font else {
-        return;
-    };
-    // Italicise the row in every Outliner panel that has one for the
-    // game-spawned source.
-    for source in &game_spawned {
-        for (_container, row_entity) in index.rows_for_source(source) {
-            let Ok(row_children) = children_q.get(row_entity) else {
-                continue;
-            };
-            for content in row_children.iter() {
-                if !row_content_q.contains(content) {
-                    continue;
-                }
-                let Ok(content_children) = children_q.get(content) else {
-                    continue;
-                };
-                for maybe_label in content_children.iter() {
-                    if !label_q.contains(maybe_label) {
-                        continue;
-                    }
-                    if let Ok(mut tf) = text_fonts.get_mut(maybe_label)
-                        && tf.font != italic_font.0
-                    {
-                        tf.font = italic_font.0.clone();
-                    }
-                }
-            }
         }
     }
 }

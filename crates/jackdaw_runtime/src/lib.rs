@@ -54,13 +54,12 @@ impl Plugin for JackdawPlugin {
             (clear_modified_scene_roots, spawn_loaded_scenes).chain(),
         );
 
-        // When the game binary is launched with `--jackdaw-pie`, open the
-        // ipc-channel link to the editor and attach the PIE stream / control
-        // systems. A connect failure logs and leaves the runtime untouched, so
-        // a standalone launch (no flag, or no editor listening) is unaffected.
+        // When `JACKDAW_PIE` is set, open the ipc-channel link to the editor
+        // and attach the PIE stream / control systems. A connect failure logs
+        // and leaves the runtime untouched.
         #[cfg(feature = "pie")]
-        if let Some(args) = pie::pie_args() {
-            match jackdaw_pie_protocol::connect(&args.server) {
+        if let Some(cfg) = pie::pie_config() {
+            match jackdaw_pie_protocol::connect(&cfg.server) {
                 Ok(transport) => pie::attach_pie(app, transport),
                 Err(err) => bevy::log::error!("PIE connect failed: {err}"),
             }
@@ -325,9 +324,12 @@ fn spawn_scene_entities(
                 &registry_guard,
                 &mut processor,
             );
-            let Ok(reflected) = deserializer.deserialize(value) else {
-                warn!("Failed to deserialize '{type_path}'; skipping");
-                continue;
+            let reflected = match deserializer.deserialize(value) {
+                Ok(reflected) => reflected,
+                Err(err) => {
+                    warn!("Failed to deserialize '{type_path}': {err}; skipping");
+                    continue;
+                }
             };
 
             if type_path == TRANSFORM_TYPE_PATH {
@@ -375,6 +377,16 @@ fn spawn_scene_entities(
             ))
             .id();
         spawned[i] = entity;
+
+        // Attach the stable authored-node id so the PIE mirror can map
+        // this runtime entity back to its scene node. Present only when
+        // the scene was saved with node id support; legacy entries are
+        // left without a JsnNodeId rather than minting a new one here.
+        if let Some(raw_id) = jsn.id {
+            world
+                .entity_mut(entity)
+                .insert(jackdaw_jsn::JsnNodeId(raw_id));
+        }
 
         // User components on top. `On<Insert, T>` fires here with
         // GlobalTransform / InheritedVisibility already correct.

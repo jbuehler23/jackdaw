@@ -24,7 +24,9 @@ pub struct Brush {
     pub faces: Vec<BrushFaceData>,
     /// Explicit half-edge topology. Empty for legacy brushes loaded from `.jsn` without topology
     /// data; they continue to use the plane-intersection path. New brushes built by constructors
-    /// have both `faces` (planes) and `topology` populated in lockstep.
+    /// have both `faces` (planes) and `topology` populated in lockstep. Defaulted when absent so
+    /// brushes saved before topology existed still deserialize.
+    #[reflect(default)]
     pub topology: BrushTopology,
 }
 
