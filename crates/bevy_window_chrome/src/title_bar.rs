@@ -8,7 +8,7 @@ use crate::caption_controls::window_controls;
 use crate::window::toggle_primary_window_maximized;
 use crate::{WindowChromeEntity, WindowChromeTheme};
 
-const DOUBLE_CLICK_THRESHOLD_S: f64 = 0.4;
+const DOUBLE_CLICK_THRESHOLD_S: f64 = 0.5;
 
 #[derive(Resource, Default)]
 struct LastClickedTime(Option<f64>);
@@ -196,13 +196,11 @@ fn on_double_click(
         return;
     }
     let now = time.elapsed_secs_f64();
-    tracker.0 = Some(now);
-
-    let is_double_click = tracker
-        .0
-        .is_some_and(|previous| now - previous < DOUBLE_CLICK_THRESHOLD_S);
-
-    if is_double_click {
+    let previous = tracker.0.replace(now);
+    let Some(previous) = previous else {
+        return;
+    };
+    if now - previous <= DOUBLE_CLICK_THRESHOLD_S {
         toggle_primary_window_maximized(windows);
     }
 }
