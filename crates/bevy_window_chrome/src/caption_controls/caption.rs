@@ -57,14 +57,16 @@ pub fn load_windows_caption_font(fonts: &mut Assets<Font>) -> Option<Handle<Font
 
     if fluent.is_file()
         && let Ok(bytes) = std::fs::read(&fluent)
-            && let Ok(font) = Font::try_from_bytes(bytes) {
-                return Some(fonts.add(font));
-            }
+        && let Ok(font) = Font::try_from_bytes(bytes)
+    {
+        return Some(fonts.add(font));
+    }
     if mdl2.is_file()
         && let Ok(bytes) = std::fs::read(&mdl2)
-            && let Ok(font) = Font::try_from_bytes(bytes) {
-                return Some(fonts.add(font));
-            }
+        && let Ok(font) = Font::try_from_bytes(bytes)
+    {
+        return Some(fonts.add(font));
+    }
     None
 }
 
@@ -194,9 +196,10 @@ pub(crate) fn sync_caption_chrome(
     for children in maximize_buttons.iter() {
         for child in children.iter() {
             if let Ok(mut text) = texts.get_mut(child)
-                && text.0 != maximize_label {
-                    text.0 = maximize_label.clone();
-                }
+                && text.0 != maximize_label
+            {
+                text.0 = maximize_label.clone();
+            }
         }
     }
 
