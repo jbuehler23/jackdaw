@@ -48,6 +48,9 @@ pub(crate) fn toggle_primary_window_maximized(
 
 /// Whether the primary window is currently maximized.
 pub fn primary_window_is_maximized(window_entity: Entity) -> bool {
+    #[cfg(any(target_arch = "wasm32", target_os = "ios", target_os = "android"))]
+    return false;
+
     return WINIT_WINDOWS.with(|windows_cell| {
         let winit_windows = windows_cell.borrow();
         let Some(backend) = winit_windows.get_window(window_entity) else {
@@ -81,12 +84,6 @@ fn win32_window_is_maximized(backend: &winit::window::Window) -> bool {
     };
     let hwnd = window_handle.hwnd.get() as HWND;
     return unsafe { IsZoomed(hwnd) != 0 };
-}
-
-/// Whether the primary window is currently maximized (false on platforms without winit windows).
-#[cfg(any(target_arch = "wasm32", target_os = "ios", target_os = "android"))]
-pub fn primary_window_is_maximized(_window_entity: Entity) -> bool {
-    return false;
 }
 
 #[cfg(target_os = "windows")]
