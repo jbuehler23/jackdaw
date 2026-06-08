@@ -86,6 +86,7 @@ fn win32_window_is_maximized(backend: &winit::window::Window) -> bool {
     unsafe { IsZoomed(hwnd) != 0 }
 }
 
+#[cfg(target_os = "windows")]
 pub(crate) fn apply_windows_corner_round(
     _main_thread: bevy::ecs::system::NonSendMarker,
     mut created: MessageReader<WindowCreated>,
