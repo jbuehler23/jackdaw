@@ -11,10 +11,7 @@ use crate::{WindowChromeEntity, WindowChromeTheme};
 const DOUBLE_CLICK_THRESHOLD_S: f64 = 0.4;
 
 #[derive(Resource, Default)]
-struct DragRegionClickTracker {
-    last_click_entity: Option<Entity>,
-    last_click_time: Option<f64>,
-}
+struct LastClickedTime(Option<f64>);
 
 #[derive(Component)]
 pub struct WindowTitleBarRoot;
@@ -163,7 +160,7 @@ fn title_bar_content_slot(
 }
 
 pub(crate) fn register_drag_region_handlers(app: &mut App) {
-    app.init_resource::<DragRegionClickTracker>()
+    app.init_resource::<LastClickedTime>()
         .add_observer(on_drag)
         .add_observer(on_double_click);
 }
@@ -189,24 +186,21 @@ fn on_double_click(
     click: On<Pointer<Click>>,
     drag_regions: Query<Entity, With<WindowTitleBarDragRegion>>,
     windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
-    mut tracker: ResMut<DragRegionClickTracker>,
+    mut tracker: ResMut<LastClickedTime>,
     time: Res<Time>,
 ) {
     if click.event.button != PointerButton::Primary {
         return;
     }
-    let entity = click.event_target();
-    if drag_regions.get(entity).is_err() {
+    if drag_regions.get(click.event_target()).is_err() {
         return;
     }
     let now = time.elapsed_secs_f64();
-    tracker.last_click_entity = Some(entity);
-    tracker.last_click_time = Some(now);
+    tracker.0 = Some(now);
 
-    let is_double_click = tracker.last_click_entity == Some(entity)
-        && tracker
-            .last_click_time
-            .is_some_and(|previous| now - previous < DOUBLE_CLICK_THRESHOLD_S);
+    let is_double_click = tracker
+        .0
+        .is_some_and(|previous| now - previous < DOUBLE_CLICK_THRESHOLD_S);
 
     if is_double_click {
         toggle_primary_window_maximized(windows);
