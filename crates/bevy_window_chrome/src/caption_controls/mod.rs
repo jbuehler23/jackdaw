@@ -33,7 +33,6 @@ pub(crate) fn build(app: &mut App) {
 }
 
 /// Load the system caption icon font before any schedule runs.
-#[cfg(target_os = "windows")]
 fn install_windows_caption_font_in_app(app: &mut App) {
     let mut fonts = app.world_mut().resource_mut::<Assets<Font>>();
     let handle = caption::load_windows_caption_font(&mut fonts).expect(

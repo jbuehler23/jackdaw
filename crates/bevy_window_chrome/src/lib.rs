@@ -28,7 +28,7 @@ pub use caption_controls::{
 };
 pub use plugin::{CaptionTheme, WindowChromePlugin, WindowChromeTheme};
 pub use resize::resize_edge_overlay;
-pub use shell::{WindowShellContent, WindowShellSlots, spawn_window_shell};
+pub use shell::{WindowShellContent, WindowShellRoot, WindowShellSlots, spawn_window_shell};
 pub use title_bar::{
     WindowTitleBarContentSlot, WindowTitleBarDragRegion, WindowTitleBarRoot, spawn_window_title_bar,
 };
@@ -42,7 +42,3 @@ use bevy::prelude::Component;
 /// stamp their own cleanup/exclusion markers onto the chrome hierarchy.
 #[derive(Component, Copy, Clone, Default)]
 pub struct WindowChromeEntity;
-
-/// Outer shell column that hosts the window title bar and body slot.
-#[derive(Component)]
-pub struct WindowShellRoot;

@@ -70,7 +70,6 @@ pub fn primary_window_is_maximized(window_entity: Entity) -> bool {
     });
 }
 
-#[cfg(target_os = "windows")]
 fn win32_window_is_maximized(backend: &winit::window::Window) -> bool {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows_sys::Win32::Foundation::HWND;
@@ -86,7 +85,6 @@ fn win32_window_is_maximized(backend: &winit::window::Window) -> bool {
     return unsafe { IsZoomed(hwnd) != 0 };
 }
 
-#[cfg(target_os = "windows")]
 pub(crate) fn apply_windows_corner_round(
     _main_thread: bevy::ecs::system::NonSendMarker,
     mut created: MessageReader<WindowCreated>,

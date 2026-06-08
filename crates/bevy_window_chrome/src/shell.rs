@@ -2,9 +2,13 @@
 
 use bevy::prelude::*;
 
+use crate::WindowChromeTheme;
 use crate::resize::resize_edge_overlay;
 use crate::title_bar::spawn_window_title_bar;
-use crate::{WindowChromeTheme, WindowShellRoot};
+
+/// Outer shell column that hosts the window title bar and body slot.
+#[derive(Component)]
+pub struct WindowShellRoot;
 
 /// Unstyled flex column that fills the area below the window title bar.
 #[derive(Component)]
