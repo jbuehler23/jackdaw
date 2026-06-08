@@ -8,9 +8,9 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 bevy = { workspace = true }
 jackdaw_jsn = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
-serde = { workspace = true }
 serde_json = { workspace = true }
 
 [lints]

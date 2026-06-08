@@ -8,6 +8,7 @@
 use bevy::prelude::*;
 use bevy::reflect::std_traits::ReflectDefault;
 use jackdaw_jsn::EditorCategory;
+use serde::{Deserialize, Serialize};
 
 /// Backend-agnostic replication intent for an entity. A designer adds this in
 /// the inspector; the active networking backend (e.g. `jackdaw_multiplayer_lightyear`)
@@ -35,11 +36,45 @@ pub enum ReplTarget {
 
 /// A stable zone/room id for interest management. The backend maps this to its
 /// own room/relevance mechanism (lightyear: a `Room` entity + `RoomEvent`).
-#[derive(Component, Reflect, Clone, Copy, PartialEq, Debug, Default)]
+#[derive(Component, Reflect, Clone, Default, PartialEq, Debug)]
 #[reflect(Component, Default, @EditorCategory::new("Multiplayer"))]
 pub struct NetworkRoom {
     /// Stable room/zone identifier.
-    pub id: u64,
+    pub id: ZoneId,
+}
+
+/// A human-readable zone identifier authored on a `SpawnPoint` (and matched by a
+/// `ZoneTransition`). Serializes as a bare string so a `.jsn` reads
+/// `"zone": "starter_zone"`. `reflect(Serialize, Deserialize)` makes Bevy reflect
+/// delegate to serde; `serde(transparent)` drops the newtype wrapper. Without both,
+/// reflect would emit the tuple-struct form `["starter_zone"]`.
+#[derive(Reflect, Clone, Default, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+#[reflect(Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ZoneId(pub String);
+
+impl ZoneId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ZoneId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for ZoneId {
+    fn from(s: &str) -> Self {
+        ZoneId(s.to_string())
+    }
+}
+
+impl From<String> for ZoneId {
+    fn from(s: String) -> Self {
+        ZoneId(s)
+    }
 }
 
 /// Where a connecting player materializes. Authored in the editor; the
@@ -47,9 +82,9 @@ pub struct NetworkRoom {
 #[derive(Component, Reflect, Clone, Default, PartialEq, Debug)]
 #[reflect(Component, Default, @EditorCategory::new("Multiplayer"))]
 pub struct SpawnPoint {
-    /// Zone this spawn belongs to (matches a `NetworkRoom` id). 0 = the
-    /// spawn's containing zone, resolved at load.
-    pub zone: u64,
+    /// Zone this spawn belongs to (matches a `NetworkRoom` id). Empty = unset.
+    #[reflect(default)]
+    pub zone: ZoneId,
     /// Spawn tag. Empty = the zone's default spawn (initial connect). Named
     /// tags (e.g. `north_gate`) are destination targets a `ZoneTransition`
     /// names.
@@ -62,7 +97,7 @@ pub struct SpawnPoint {
 #[reflect(Component, Default, @EditorCategory::new("Multiplayer"))]
 pub struct ZoneTransition {
     /// Zone id (a `NetworkRoom` id) the player is moved INTO.
-    pub dest_zone: u64,
+    pub dest_zone: ZoneId,
     /// Tag of the `SpawnPoint` in `dest_zone` to place the player at.
     pub dest_spawn_tag: String,
     /// Half-extents of the trigger box (local space), tested against the
@@ -80,7 +115,8 @@ impl Plugin for JackdawMultiplayerTypesPlugin {
             .register_type::<ReplTarget>()
             .register_type::<NetworkRoom>()
             .register_type::<SpawnPoint>()
-            .register_type::<ZoneTransition>();
+            .register_type::<ZoneTransition>()
+            .register_type::<ZoneId>();
         app.register_type_data::<Replication, ReflectDefault>()
             .register_type_data::<ReplTarget, ReflectDefault>()
             .register_type_data::<NetworkRoom, ReflectDefault>()
@@ -92,7 +128,11 @@ impl Plugin for JackdawMultiplayerTypesPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::reflect::TypeRegistry;
+    use bevy::reflect::serde::{TypedReflectDeserializer, TypedReflectSerializer};
     use bevy::reflect::std_traits::ReflectDefault;
+    use serde::de::DeserializeSeed;
+    use std::any::TypeId;
 
     #[test]
     fn proxies_insert_without_panic_and_register() {
@@ -104,7 +144,9 @@ mod tests {
             target: ReplTarget::All,
             interpolated: true,
         });
-        app.world_mut().entity_mut(e).insert(NetworkRoom { id: 7 });
+        app.world_mut().entity_mut(e).insert(NetworkRoom {
+            id: ZoneId::from("7"),
+        });
         app.update();
 
         assert!(app.world().entity(e).contains::<Replication>());
@@ -151,5 +193,29 @@ mod tests {
                 "{tn} missing ReflectDefault"
             );
         }
+    }
+
+    #[test]
+    fn zone_id_reflect_serializes_as_bare_string() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<ZoneId>();
+        let zone = ZoneId("starter_zone".to_string());
+        let serializer = TypedReflectSerializer::new(zone.as_partial_reflect(), &registry);
+        let json = serde_json::to_value(&serializer).unwrap();
+        assert_eq!(json, serde_json::json!("starter_zone"));
+    }
+
+    #[test]
+    fn zone_id_reflect_deserializes_from_bare_string() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<ZoneId>();
+        let reg = registry.get(TypeId::of::<ZoneId>()).unwrap();
+        let de = TypedReflectDeserializer::new(reg, &registry);
+        let json = serde_json::json!("starter_zone");
+        let json_str = json.to_string();
+        let mut deser = serde_json::Deserializer::from_str(&json_str);
+        let val = de.deserialize(&mut deser).unwrap();
+        let zone = ZoneId::from_reflect(val.as_ref()).unwrap();
+        assert_eq!(zone, ZoneId("starter_zone".to_string()));
     }
 }

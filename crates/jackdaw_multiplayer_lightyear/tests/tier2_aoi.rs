@@ -8,7 +8,7 @@
 use bevy::MinimalPlugins;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
-use jackdaw_multiplayer::SpawnPoint;
+use jackdaw_multiplayer::{SpawnPoint, ZoneId};
 use jackdaw_multiplayer_lightyear::{
     JackdawMultiplayerClientPlugin, JackdawMultiplayerServerPlugin, move_player_to_zone,
 };
@@ -75,7 +75,7 @@ fn two_clients_see_each_other_then_cross_zone_culls() {
     server.world_mut().spawn((
         Transform::default(),
         SpawnPoint {
-            zone: 1,
+            zone: ZoneId::from("1"),
             tag: String::new(),
         },
     ));
@@ -84,7 +84,7 @@ fn two_clients_see_each_other_then_cross_zone_culls() {
     server.world_mut().spawn((
         Transform::default(),
         SpawnPoint {
-            zone: 2,
+            zone: ZoneId::from("2"),
             tag: String::new(),
         },
     ));
@@ -145,7 +145,7 @@ fn two_clients_see_each_other_then_cross_zone_culls() {
             .query_filtered::<Entity, With<PlayerMarker>>();
         q.iter(server.world()).next().expect("a player to move")
     };
-    move_player_to_zone(server.world_mut(), moved, 2);
+    move_player_to_zone(server.world_mut(), moved, ZoneId::from("2"));
 
     // After the cull both directions lose visibility:
     //  - the moved client no longer shares a room with the unmoved player, and

@@ -1,5 +1,6 @@
 use crate::lifecycle::PlayerConnection;
 use bevy::prelude::*;
+use jackdaw_multiplayer::ZoneId;
 use lightyear::prelude::{Room, RoomEvent, RoomTarget};
 use std::collections::HashMap;
 
@@ -7,21 +8,21 @@ use std::collections::HashMap;
 #[derive(Resource, Default)]
 pub struct ZoneRooms {
     /// zone id -> lightyear `Room` entity.
-    pub by_zone: HashMap<u64, Entity>,
+    pub by_zone: HashMap<ZoneId, Entity>,
 }
 
 /// Which zone an entity currently lives in (drives room membership). Set at
 /// player spawn (`on_client_connected`) and mutated on zone transitions by
 /// `move_player_to_zone`.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct CurrentZone(pub u64);
+#[derive(Component, Clone, Debug)]
+pub struct CurrentZone(pub ZoneId);
 
 /// Ensure a lightyear `Room` exists for `zone`, returning its entity. Shared by
 /// `join_zone` (initial placement) and `set_zone` (re-membership on transition).
-fn ensure_room(commands: &mut Commands, rooms: &mut ZoneRooms, zone: u64) -> Entity {
+fn ensure_room(commands: &mut Commands, rooms: &mut ZoneRooms, zone: &ZoneId) -> Entity {
     *rooms
         .by_zone
-        .entry(zone)
+        .entry(zone.clone())
         .or_insert_with(|| commands.spawn(Room::default()).id())
 }
 
@@ -32,7 +33,7 @@ fn ensure_room(commands: &mut Commands, rooms: &mut ZoneRooms, zone: u64) -> Ent
 pub(crate) fn join_zone(
     commands: &mut Commands,
     rooms: &mut ZoneRooms,
-    zone: u64,
+    zone: &ZoneId,
     entity: Entity,
     sender: Entity,
 ) {
@@ -53,8 +54,8 @@ pub(crate) fn join_zone(
 pub fn set_zone(
     commands: &mut Commands,
     rooms: &mut ZoneRooms,
-    old_zone: u64,
-    new_zone: u64,
+    old_zone: &ZoneId,
+    new_zone: &ZoneId,
     player: Entity,
     connection: Entity,
 ) {
@@ -88,8 +89,8 @@ pub fn set_zone(
 ///
 /// This is the world-level entry point a game (or a test) calls to relocate a
 /// player across zones without threading `Commands`/`ZoneRooms` by hand.
-pub fn move_player_to_zone(world: &mut World, player: Entity, new_zone: u64) {
-    let Some(old_zone) = world.get::<CurrentZone>(player).map(|z| z.0) else {
+pub fn move_player_to_zone(world: &mut World, player: Entity, new_zone: ZoneId) {
+    let Some(old_zone) = world.get::<CurrentZone>(player).map(|z| z.0.clone()) else {
         warn!("move_player_to_zone: entity {player:?} has no CurrentZone; ignoring");
         return;
     };
@@ -106,8 +107,8 @@ pub fn move_player_to_zone(world: &mut World, player: Entity, new_zone: u64) {
         set_zone(
             &mut commands,
             &mut rooms,
-            old_zone,
-            new_zone,
+            &old_zone,
+            &new_zone,
             player,
             connection,
         );

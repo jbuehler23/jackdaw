@@ -735,6 +735,24 @@ fn spawn_field_row(
         return;
     }
 
+    // `ZoneId` is a transparent string newtype. Render its inner string as a plain
+    // text field rather than recursing into the tuple struct (which would show a
+    // nested `0:` field). Edits commit through the standard string path.
+    #[cfg(feature = "multiplayer")]
+    if let Some(zone) = value.try_downcast_ref::<jackdaw_multiplayer::ZoneId>() {
+        spawn_editable_field(
+            commands,
+            parent,
+            name,
+            &zone.0,
+            field_path,
+            source_entity,
+            type_path,
+            depth,
+        );
+        return;
+    }
+
     let is_compound = matches!(
         value.reflect_ref(),
         ReflectRef::Struct(_) | ReflectRef::TupleStruct(_) | ReflectRef::Tuple(_)

@@ -5,7 +5,7 @@
 use bevy::MinimalPlugins;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
-use jackdaw_multiplayer::SpawnPoint;
+use jackdaw_multiplayer::{SpawnPoint, ZoneId};
 use jackdaw_multiplayer_lightyear::{
     JackdawMultiplayerClientPlugin, JackdawMultiplayerServerPlugin,
 };
@@ -30,7 +30,7 @@ fn client_connects_and_player_is_spawned() {
     server.world_mut().spawn((
         Transform::default(),
         SpawnPoint {
-            zone: 1,
+            zone: ZoneId::from("1"),
             tag: String::new(),
         },
     ));

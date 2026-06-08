@@ -485,12 +485,18 @@ pub fn duplicate_selected(world: &mut World) {
             continue;
         }
 
-        // Snapshot the entity (and descendants) through the shared helper, which uses
-        // `filtered_scene_builder` to deny `Children`. A copied `Children` would remap its
-        // unmapped mesh-child refs to dead placeholder entities, leaving dangling references
-        // that crash later scene walks; the clone's hierarchy is rebuilt from the extracted
-        // `ChildOf` links on write.
-        let scene = crate::commands::snapshot_entity(world, entity);
+        // Snapshot the entity (and descendants) via DynamicSceneBuilder. The raw builder
+        // copies `Children`, which preserves real child entities (e.g. a tree's trunk
+        // brush). It also copies the brush's runtime mesh-face child refs, which
+        // DynamicScene remaps to dead placeholder entities; those dangling refs are harmless
+        // because every scene walk (`collect_entity_ids`, the serialize walk) skips
+        // despawned entities, and `Children` is never serialized. Denying `Children` here
+        // instead drops the real children, so the raw builder is correct.
+        let mut snapshot_entities = Vec::new();
+        crate::commands::collect_entity_ids(world, entity, &mut snapshot_entities);
+        let scene = DynamicSceneBuilder::from_world(world)
+            .extract_entities(snapshot_entities.into_iter())
+            .build();
 
         // Write the snapshot back to create a clone
         let mut entity_map = Default::default();
