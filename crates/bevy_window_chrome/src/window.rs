@@ -29,10 +29,10 @@ pub fn primary_window_attributes() -> Window {
         };
     }
 
-    return Window {
+    Window {
         decorations: false,
         ..default()
-    };
+    }
 }
 
 /// Toggles the primary window between maximized and restored.
@@ -51,7 +51,7 @@ pub fn primary_window_is_maximized(window_entity: Entity) -> bool {
     #[cfg(any(target_arch = "wasm32", target_os = "ios", target_os = "android"))]
     return false;
 
-    return WINIT_WINDOWS.with(|windows_cell| {
+    WINIT_WINDOWS.with(|windows_cell| {
         let winit_windows = windows_cell.borrow();
         let Some(backend) = winit_windows.get_window(window_entity) else {
             return false;
@@ -61,13 +61,13 @@ pub fn primary_window_is_maximized(window_entity: Entity) -> bool {
         }
         #[cfg(target_os = "windows")]
         {
-            return win32_window_is_maximized(backend);
+            win32_window_is_maximized(backend)
         }
         #[cfg(not(target_os = "windows"))]
         {
             return false;
         }
-    });
+    })
 }
 
 fn win32_window_is_maximized(backend: &winit::window::Window) -> bool {
@@ -82,7 +82,7 @@ fn win32_window_is_maximized(backend: &winit::window::Window) -> bool {
         return false;
     };
     let hwnd = window_handle.hwnd.get() as HWND;
-    return unsafe { IsZoomed(hwnd) != 0 };
+    unsafe { IsZoomed(hwnd) != 0 }
 }
 
 pub(crate) fn apply_windows_corner_round(

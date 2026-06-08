@@ -42,12 +42,12 @@ pub(crate) fn is_pride_month() -> bool {
     let Ok(date_time) = OffsetDateTime::now_local() else {
         return false;
     };
-    return date_time.month() == Month::June;
+    date_time.month() == Month::June
 }
 
 /// Window chrome theme built from jackdaw's design tokens.
 fn jackdaw_window_chrome_theme() -> WindowChromeTheme {
-    return WindowChromeTheme {
+    WindowChromeTheme {
         title_bar_height: tokens::WINDOW_TITLE_BAR_HEIGHT,
         window_background: tokens::WINDOW_BG,
         caption: CaptionTheme {
@@ -56,7 +56,7 @@ fn jackdaw_window_chrome_theme() -> WindowChromeTheme {
             ..CaptionTheme::default()
         },
         ..Default::default()
-    };
+    }
 }
 
 pub struct WindowingPlugin;
@@ -96,5 +96,5 @@ pub fn spawn_window_shell<S: Component + Copy>(
             icon_font.0.clone()
         }
     };
-    return bevy_window_chrome::spawn_window_shell(commands, &theme, caption_font, screen);
+    bevy_window_chrome::spawn_window_shell(commands, &theme, caption_font, screen)
 }

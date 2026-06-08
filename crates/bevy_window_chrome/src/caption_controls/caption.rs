@@ -55,21 +55,17 @@ pub fn load_windows_caption_font(fonts: &mut Assets<Font>) -> Option<Handle<Font
     let fluent = fonts_directory.join(SEGOE_FLUENT_ICONS_FILE);
     let mdl2 = fonts_directory.join(SEGOE_MDL2_ASSETS_FILE);
 
-    if fluent.is_file() {
-        if let Ok(bytes) = std::fs::read(&fluent) {
-            if let Ok(font) = Font::try_from_bytes(bytes) {
+    if fluent.is_file()
+        && let Ok(bytes) = std::fs::read(&fluent)
+            && let Ok(font) = Font::try_from_bytes(bytes) {
                 return Some(fonts.add(font));
             }
-        }
-    }
-    if mdl2.is_file() {
-        if let Ok(bytes) = std::fs::read(&mdl2) {
-            if let Ok(font) = Font::try_from_bytes(bytes) {
+    if mdl2.is_file()
+        && let Ok(bytes) = std::fs::read(&mdl2)
+            && let Ok(font) = Font::try_from_bytes(bytes) {
                 return Some(fonts.add(font));
             }
-        }
-    }
-    return None;
+    None
 }
 
 /// Visual caption buttons for the window chrome title bar.
@@ -77,7 +73,7 @@ pub fn window_controls(theme: &WindowChromeTheme, caption_font: Handle<Font>) ->
     let button_width = theme.caption.button_width;
     let glyph_size = theme.caption.glyph_size;
     let foreground = theme.caption.icon_color;
-    return (
+    (
         WindowChromeEntity,
         Node {
             flex_direction: FlexDirection::Row,
@@ -113,7 +109,7 @@ pub fn window_controls(theme: &WindowChromeTheme, caption_font: Handle<Font>) ->
                 WindowControlsClose,
             ),
         ],
-    );
+    )
 }
 
 fn caption_button_bundle(
@@ -124,7 +120,7 @@ fn caption_button_bundle(
     kind: CaptionButton,
     marker: impl Bundle,
 ) -> impl Bundle {
-    return (
+    (
         marker,
         kind,
         WindowChromeEntity,
@@ -148,23 +144,23 @@ fn caption_button_bundle(
             TextColor(foreground),
             LineHeight::Px(glyph_size),
         )],
-    );
+    )
 }
 
 fn caption_glyph(kind: CaptionButton) -> &'static str {
-    return match kind {
+    match kind {
         CaptionButton::Minimize => GLYPH_MINIMIZE,
         CaptionButton::Maximize => GLYPH_MAXIMIZE,
         CaptionButton::Close => GLYPH_CLOSE,
-    };
+    }
 }
 
 fn maximize_caption_label(is_maximized: bool) -> String {
-    return if is_maximized {
+    if is_maximized {
         GLYPH_RESTORE.to_string()
     } else {
         GLYPH_MAXIMIZE.to_string()
-    };
+    }
 }
 
 pub(crate) fn sync_caption_chrome(
@@ -192,16 +188,15 @@ pub(crate) fn sync_caption_chrome(
     let is_maximized = primary_window
         .single()
         .ok()
-        .is_some_and(|entity| crate::primary_window_is_maximized(entity));
+        .is_some_and(crate::primary_window_is_maximized);
     let maximize_label = maximize_caption_label(is_maximized);
 
     for children in maximize_buttons.iter() {
         for child in children.iter() {
-            if let Ok(mut text) = texts.get_mut(child) {
-                if text.0 != maximize_label {
+            if let Ok(mut text) = texts.get_mut(child)
+                && text.0 != maximize_label {
                     text.0 = maximize_label.clone();
                 }
-            }
         }
     }
 
@@ -229,10 +224,10 @@ fn caption_colors(
     if !highlighted {
         return (Color::NONE, caption.icon_color);
     }
-    return match kind {
+    match kind {
         CaptionButton::Close => (caption.close_hover_background, Color::WHITE),
         CaptionButton::Minimize | CaptionButton::Maximize => {
             (caption.button_hover_background, caption.icon_color)
         }
-    };
+    }
 }

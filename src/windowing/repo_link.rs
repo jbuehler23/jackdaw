@@ -26,9 +26,9 @@ impl Plugin for RepoLinkPlugin {
         embedded_asset!(app, "../../assets/logo/jackdaw_icon_pride_small.png");
         let assets = app.world().resource::<AssetServer>();
         let handle = if super::is_pride_month() {
-            load_embedded_asset!(&*assets, "../../assets/logo/jackdaw_icon_pride_small.png")
+            load_embedded_asset!(assets, "../../assets/logo/jackdaw_icon_pride_small.png")
         } else {
-            load_embedded_asset!(&*assets, "../../assets/logo/jackdaw_icon_small.png")
+            load_embedded_asset!(assets, "../../assets/logo/jackdaw_icon_small.png")
         };
         app.insert_resource(JackdawIcon(handle));
         app.add_observer(on_repo_link_click);
@@ -37,7 +37,7 @@ impl Plugin for RepoLinkPlugin {
 
 /// Title bar row slot wrapping [`jackdaw_link_button`].
 pub fn title_bar_repo_link(image: Handle<Image>) -> impl Bundle {
-    return (
+    (
         Pickable::IGNORE,
         Node {
             flex_shrink: 0.0,
@@ -46,7 +46,7 @@ pub fn title_bar_repo_link(image: Handle<Image>) -> impl Bundle {
             ..default()
         },
         children![jackdaw_link_button(image)],
-    );
+    )
 }
 
 /// Button with icon to open the Jackdaw repository in the system browser.

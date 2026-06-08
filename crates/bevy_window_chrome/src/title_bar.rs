@@ -66,7 +66,7 @@ pub fn spawn_window_title_bar(
             caption_controls,
         ));
     });
-    return title_bar_slot.expect("window title bar content slot spawned");
+    title_bar_slot.expect("window title bar content slot spawned")
 }
 
 fn spawn_foreground_row(
@@ -103,11 +103,11 @@ fn spawn_foreground_row(
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
             row.spawn(caption_controls_slot(caption_controls));
         });
-    return title_bar_slot.expect("window title bar content slot spawned");
+    title_bar_slot.expect("window title bar content slot spawned")
 }
 
 fn title_bar_drag_backplate() -> impl Bundle {
-    return (
+    (
         WindowTitleBarDragRegion,
         WindowChromeEntity,
         Node {
@@ -118,12 +118,12 @@ fn title_bar_drag_backplate() -> impl Bundle {
             height: percent(100),
             ..default()
         },
-    );
+    )
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
 fn caption_controls_slot(caption_controls: impl Bundle) -> impl Bundle {
-    return (
+    (
         WindowChromeEntity,
         Pickable::IGNORE,
         Node {
@@ -133,7 +133,7 @@ fn caption_controls_slot(caption_controls: impl Bundle) -> impl Bundle {
             ..default()
         },
         children![caption_controls],
-    );
+    )
 }
 
 fn title_bar_content_slot(
@@ -147,7 +147,7 @@ fn title_bar_content_slot(
     #[cfg(not(target_os = "macos"))]
     let padding = UiRect::ZERO;
 
-    return (
+    (
         WindowTitleBarContentSlot,
         WindowChromeEntity,
         Pickable::IGNORE,
@@ -159,7 +159,7 @@ fn title_bar_content_slot(
             padding,
             ..default()
         },
-    );
+    )
 }
 
 pub(crate) fn register_drag_region_handlers(app: &mut App) {

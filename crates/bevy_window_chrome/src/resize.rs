@@ -22,7 +22,7 @@ pub(crate) struct WindowResizeEdge(pub CompassOctant);
 /// Stacked above the title bar drag region and application content so edge picks always win.
 pub fn resize_edge_overlay() -> impl Bundle {
     let thickness = px(RESIZE_HANDLE_THICKNESS);
-    return (
+    (
         WindowResizeRoot,
         WindowChromeEntity,
         Pickable::IGNORE,
@@ -122,18 +122,18 @@ pub fn resize_edge_overlay() -> impl Bundle {
                 },
             ),
         ],
-    );
+    )
 }
 
 fn resize_edge(direction: CompassOctant, node: Node) -> impl Bundle {
-    return (
+    (
         WindowResizeEdge(direction),
         WindowChromeEntity,
         Pickable::default(),
         node,
         Hovered::default(),
         EntityCursor::System(resize_cursor_icon(direction)),
-    );
+    )
 }
 
 /// Disables resize-edge picking while the window cannot be resized.
@@ -160,7 +160,7 @@ pub(crate) fn sync_resize_overlay_pickability(
 }
 
 fn resize_cursor_icon(direction: CompassOctant) -> SystemCursorIcon {
-    return match direction {
+    match direction {
         CompassOctant::North => SystemCursorIcon::NResize,
         CompassOctant::South => SystemCursorIcon::SResize,
         CompassOctant::East => SystemCursorIcon::EResize,
@@ -169,7 +169,7 @@ fn resize_cursor_icon(direction: CompassOctant) -> SystemCursorIcon {
         CompassOctant::NorthWest => SystemCursorIcon::NwResize,
         CompassOctant::SouthEast => SystemCursorIcon::SeResize,
         CompassOctant::SouthWest => SystemCursorIcon::SwResize,
-    };
+    }
 }
 
 pub(crate) fn on_resize_edge_press(

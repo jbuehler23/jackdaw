@@ -16,7 +16,7 @@ pub struct WindowIconPlugin {
 impl WindowIconPlugin {
     /// Creates the plugin from the raw PNG bytes of the desired window icon.
     pub fn new(png_bytes: &'static [u8]) -> Self {
-        return Self { bytes: png_bytes };
+        Self { bytes: png_bytes }
     }
 }
 
@@ -56,7 +56,7 @@ fn load_icon_png(png_bytes: &[u8]) -> Option<Icon> {
             return None;
         }
     };
-    return Some(icon);
+    Some(icon)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -37,32 +37,32 @@ pub struct CaptionTheme {
 
 impl Default for CaptionTheme {
     fn default() -> Self {
-        return Self {
+        Self {
             icon_color: Color::srgb(0.925, 0.925, 0.925),
             button_hover_background: Color::srgb(0.165, 0.165, 0.180),
             close_hover_background: Color::srgb(220.0 / 255.0, 38.0 / 255.0, 38.0 / 255.0),
             button_width: 36.0,
             glyph_size: 10.0,
-        };
+        }
     }
 }
 
 impl Default for WindowChromeTheme {
     fn default() -> Self {
-        return Self {
+        Self {
             title_bar_height: 36.0,
             window_background: Color::srgb(0.122, 0.122, 0.141),
             macos_traffic_light_inset: 78.0,
             macos_traffic_light_position_x: 12.0,
             linux_corner_radius: 8.0,
             caption: CaptionTheme::default(),
-        };
+        }
     }
 }
 
 /// Plugin which handles the custom window chrome.
 ///
-/// The window itself must be created with primary_window: [`crate::primary_window_attributes`]
+/// The window itself must be created with `primary_window`: [`crate::primary_window_attributes`]
 /// into Bevy's `WindowPlugin`.
 pub struct WindowChromePlugin {
     pub theme: WindowChromeTheme,
@@ -70,7 +70,7 @@ pub struct WindowChromePlugin {
 
 impl WindowChromePlugin {
     pub fn new(theme: WindowChromeTheme) -> Self {
-        return Self { theme };
+        Self { theme }
     }
 }
 
