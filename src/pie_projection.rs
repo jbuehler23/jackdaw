@@ -38,6 +38,24 @@ const CHILD_OF_PATH: &str = "bevy_ecs::hierarchy::ChildOf";
 /// derives it from the remapped `ChildOf` inserts.
 const CHILDREN_PATH: &str = "bevy_ecs::hierarchy::Children";
 
+/// Component type-path prefixes never applied to preview entities. A streamed
+/// camera would become an ACTIVE render camera in the editor world: the game
+/// rig's camera fights the UI camera at the same order, and a render target
+/// whose nulled asset handle resolves to the default image aborts the render
+/// pass (the default image is not renderable). New game builds no longer send
+/// these, but the projector refuses them regardless so an older game binary
+/// cannot crash the editor.
+const PROJECTION_SKIP_PREFIXES: &[&str] = &["bevy_camera::camera::", "bevy_camera::components::"];
+
+/// True when a streamed component must not be applied to a preview entity.
+fn projection_skips(type_path: &str) -> bool {
+    type_path == CHILDREN_PATH
+        || crate::scene_io::should_skip_component(type_path)
+        || PROJECTION_SKIP_PREFIXES
+            .iter()
+            .any(|prefix| type_path.starts_with(prefix))
+}
+
 /// `ChildOf` is a single-field struct over `Entity`, and the snapshot
 /// serializer writes `Entity` as raw u64 bits, so the wire value is the bare
 /// number. The array/object arms tolerate the other reflect serialization
@@ -175,7 +193,14 @@ pub fn set_focused_instance(world: &mut World, key: crate::pie::InstanceKey) {
     {
         return;
     }
+    // The old focus keeps streaming frames nobody will consume; stop it
+    // before the focus moves.
+    crate::pie::send_control_to_focused(
+        world,
+        jackdaw_pie_protocol::ControlEvent::StopFrameStream,
+    );
     revert_preview(world);
+    crate::live_frame::clear_stream(world);
     world
         .resource_mut::<crate::pie_mirror::PieInstances>()
         .focused = Some(key.clone());
@@ -194,23 +219,27 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                         .resource::<SceneJsnAst>()
                         .entity_for_node_id(JsnNodeId(id))
                 })
-                .unwrap_or_else(|| world.spawn(PieEphemeral).id());
+                .unwrap_or_else(|| {
+                    // The transform/visibility backbone keeps child face meshes
+                    // and remapped children inheriting consistently; streamed
+                    // values overwrite the defaults.
+                    world
+                        .spawn((PieEphemeral, Transform::default(), Visibility::default()))
+                        .id()
+                });
             world
                 .resource_mut::<PieProjection>()
                 .by_bits
                 .insert(bits, preview);
             // Hierarchy is remapped, not applied: stash ChildOf for after the
-            // value components land, and never apply the derived Children list.
+            // value components land.
             let mut child_of: Option<serde_json::Value> = None;
             for (type_path, value) in entity.components {
-                if type_path == CHILDREN_PATH {
-                    continue;
-                }
                 if type_path == CHILD_OF_PATH {
                     child_of = Some(value);
                     continue;
                 }
-                if crate::scene_io::should_skip_component(&type_path) {
+                if projection_skips(&type_path) {
                     continue;
                 }
                 apply_component_value(world, preview, &type_path, &value);
@@ -234,7 +263,7 @@ pub fn project_event(world: &mut World, event: StateEvent) {
             type_path,
             value,
         } => {
-            if type_path == CHILDREN_PATH || crate::scene_io::should_skip_component(&type_path) {
+            if projection_skips(&type_path) {
                 return;
             }
             if let Some(preview) = world
@@ -775,6 +804,50 @@ mod tests {
             world.entity(child_preview).get::<ChildOf>().map(|c| c.0),
             Some(parent_preview)
         );
+    }
+
+    // ---- projection skip tests ----
+
+    #[test]
+    fn camera_components_are_never_projected() {
+        assert!(projection_skips("bevy_camera::camera::Camera"));
+        assert!(projection_skips("bevy_camera::camera::RenderTarget"));
+        assert!(projection_skips("bevy_camera::components::Camera3d"));
+        assert!(projection_skips("bevy_camera::components::Camera2d"));
+        assert!(!projection_skips("bevy_camera::projection::Projection"));
+        assert!(!projection_skips(
+            "bevy_transform::components::transform::Transform"
+        ));
+
+        // A streamed camera component is dropped, not applied, even when the
+        // type is registered editor-side.
+        let (mut world, _preview, _node_id) = build_projection_world();
+        {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            registry.write().register::<Camera>();
+        }
+        project_event(
+            &mut world,
+            spawn_event(
+                77,
+                vec![(
+                    "bevy_camera::camera::Camera".to_string(),
+                    serde_json::json!({}),
+                )],
+            ),
+        );
+        let preview = world.resource::<PieProjection>().by_bits[&77];
+        assert!(world.entity(preview).get::<Camera>().is_none());
+    }
+
+    #[test]
+    fn ephemeral_previews_carry_a_transform_and_visibility_backbone() {
+        let (mut world, _preview, _node_id) = build_projection_world();
+        project_event(&mut world, spawn_event(88, vec![]));
+        let preview = world.resource::<PieProjection>().by_bits[&88];
+        let entity = world.entity(preview);
+        assert!(entity.get::<Transform>().is_some());
+        assert!(entity.get::<Visibility>().is_some());
     }
 
     // ---- revert_preview tests ----

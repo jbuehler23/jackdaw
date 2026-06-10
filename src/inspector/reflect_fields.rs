@@ -1543,7 +1543,7 @@ fn try_route_pie_live_field_edit(
         );
     }
 
-    crate::pie::send_edit(
+    crate::pie::send_control_to_focused(
         world,
         ControlEvent::SetComponent {
             entity: bits,

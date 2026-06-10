@@ -34,6 +34,13 @@ const SKIP_PREFIXES: &[&str] = &[
     "bevy_ecs::observer::",
     "bevy_camera::primitives::",
     "bevy_camera::visibility::",
+    // Camera, RenderTarget, Camera2d/Camera3d: applying these to a preview
+    // entity would create an ACTIVE render camera in the editor world (worst
+    // case targeting a non-renderable image through a nulled handle, which
+    // aborts the render pass). The editor reconstructs camera state it needs
+    // from CameraRig and Projection instead.
+    "bevy_camera::camera::",
+    "bevy_camera::components::",
 ];
 
 /// Specific component type paths to skip.
@@ -200,6 +207,16 @@ pub fn build_snapshot(
 mod tests {
     use super::*;
     use bevy::prelude::{App, AppTypeRegistry, Name, Transform};
+
+    #[test]
+    fn camera_component_paths_are_skipped() {
+        assert!(should_skip("bevy_camera::camera::Camera"));
+        assert!(should_skip("bevy_camera::camera::RenderTarget"));
+        assert!(should_skip("bevy_camera::components::Camera3d"));
+        assert!(should_skip("bevy_camera::components::Camera2d"));
+        // The projection still streams: the editor's camera lock reads it.
+        assert!(!should_skip("bevy_camera::projection::Projection"));
+    }
 
     #[test]
     fn build_snapshot_serializes_named_transform_entity() {

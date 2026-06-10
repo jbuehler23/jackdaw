@@ -50,6 +50,8 @@ pub mod extensions_dialog;
 pub mod file_ops;
 pub mod hot_reload;
 pub mod layout;
+pub mod live_frame;
+pub mod live_frame_view;
 pub mod material_browser;
 pub mod material_preview;
 pub mod measure_tool;
@@ -338,6 +340,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(extensions_dialog::ExtensionsDialogPlugin)
         .add_plugins(hot_reload::HotReloadPlugin)
         .add_plugins(pie::PiePlugin)
+        .add_plugins(live_frame_view::LiveFrameViewPlugin)
         .add_plugins(pie_menu::PieMenuPlugin)
         .add_plugins(dock_ops::DockOpsPlugin)
         // Force-exit on `AppExit`: bypass wgpu device cleanup
@@ -406,6 +409,7 @@ impl Plugin for EditorCorePlugin {
                 layout::update_pie_view_header_accent,
                 layout::update_save_to_scene_button,
                 layout::update_pie_instance_cycle_button,
+                layout::update_live_camera_controls,
                 auto_hide_internal_entities,
                 decorate_timeline_tooltips,
                 discover_gltf_clips,

@@ -17,6 +17,8 @@ pub enum PieMode {
 pub enum PieChannel {
     Reliable,
     Unreliable,
+    /// Raw frame-view pixel messages (see `crate::frame`); never JSON.
+    Frames,
 }
 
 /// Game-to-editor messages.
@@ -70,6 +72,11 @@ pub enum ControlEvent {
         entity: u64,
         type_path: String,
     },
+    /// Begin (or resize) streaming rendered frames at the given pixel size.
+    /// The game clamps to its own limits; no frames flow until this arrives.
+    StartFrameStream { width: u32, height: u32 },
+    /// Stop streaming rendered frames and release the capture resources.
+    StopFrameStream,
 }
 
 /// Either direction, for transports that carry a single type.

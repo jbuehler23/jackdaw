@@ -26,6 +26,8 @@ pub use jackdaw_jsn::{
 
 #[cfg(feature = "pie")]
 mod pie;
+#[cfg(feature = "pie")]
+mod pie_frames;
 
 pub mod prelude {
     pub use crate::{

@@ -139,7 +139,7 @@ pub(crate) fn component_add(
         if let Some(bits) = pie_live_target_bits(world, entity) {
             let value =
                 default_component_json(world, &type_path).unwrap_or(serde_json::Value::Null);
-            crate::pie::send_edit(
+            crate::pie::send_control_to_focused(
                 world,
                 jackdaw_pie_protocol::ControlEvent::AddComponent {
                     entity: bits,
@@ -188,7 +188,7 @@ pub(crate) fn component_remove(
     commands.queue(move |world: &mut World| {
         // Live mode: stream the removal to the running game.
         if let Some(bits) = pie_live_target_bits(world, entity) {
-            crate::pie::send_edit(
+            crate::pie::send_control_to_focused(
                 world,
                 jackdaw_pie_protocol::ControlEvent::RemoveComponent {
                     entity: bits,

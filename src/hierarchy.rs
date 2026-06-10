@@ -592,9 +592,11 @@ fn on_entity_reparented(
 
         if let Some(tree_entity) = tree_index.get(container, entity) {
             if let Some(parent_children_container) = parent_children_container {
+                // Rows churn with live-mode despawns; a row can die between
+                // queueing and apply, and the row sync rebuilds it anyway.
                 commands
                     .entity(tree_entity)
-                    .insert(ChildOf(parent_children_container));
+                    .try_insert(ChildOf(parent_children_container));
             } else {
                 let container_for_remove = container;
                 let source = entity;
@@ -655,7 +657,7 @@ fn on_entity_deparented(
         return;
     }
     for (container, tree_entity) in tree_index.rows_for_source(entity) {
-        commands.entity(tree_entity).insert(ChildOf(container));
+        commands.entity(tree_entity).try_insert(ChildOf(container));
     }
 }
 
@@ -1011,7 +1013,7 @@ fn on_tree_row_dropped_on_root(
     // Move every Outliner panel's row for this source back under its
     // own root container.
     for (container, tree_entity) in tree_index.rows_for_source(dragged) {
-        commands.entity(tree_entity).insert(ChildOf(container));
+        commands.entity(tree_entity).try_insert(ChildOf(container));
     }
 }
 

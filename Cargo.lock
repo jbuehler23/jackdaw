@@ -5556,6 +5556,7 @@ name = "jackdaw_runtime"
 version = "0.4.1"
 dependencies = [
  "bevy",
+ "jackdaw_camera_rig",
  "jackdaw_geometry",
  "jackdaw_jsn",
  "jackdaw_pie_protocol",

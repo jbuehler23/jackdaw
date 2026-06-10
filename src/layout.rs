@@ -24,8 +24,11 @@ use crate::{
     gizmos::GizmoSpace,
     hierarchy::{HierarchyPanel, HierarchyShowAllButton, HierarchyTreeContainer},
     inspector::Inspector,
+    live_frame::LiveFrameStream,
+    live_frame_view::LiveCameraMode,
     measure_tool::MeasureDistanceOp,
     physics_tool::PhysicsActivateOp,
+    pie::PieLiveCameraToggleOp,
     pie_mirror::{PieViewHeader, PieViewMode, PieViewSegment},
     remote::ConnectionManager,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
@@ -601,6 +604,8 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
                     ),
                     pie_view_toggle(toggle_font),
                     pie_instance_cycle_button(),
+                    live_camera_toggle_button(),
+                    live_no_signal_chip(),
                     (
                         HierarchyShowAllButton,
                         Interaction::default(),
@@ -1480,6 +1485,143 @@ pub fn update_pie_instance_cycle_button(
                     tokens::TEXT_SECONDARY
                 };
             }
+        }
+    }
+}
+
+/// Marker on the Live camera toggle button in the hierarchy header.
+#[derive(Component)]
+pub struct LiveCameraToggleButton;
+
+/// Marker on the text node inside the camera toggle that names the current
+/// [`LiveCameraMode`].
+#[derive(Component)]
+pub struct LiveCameraToggleLabel;
+
+/// Marker on the "no signal" chip shown while the Live view waits on the
+/// frame stream.
+#[derive(Component)]
+pub struct LiveNoSignalChip;
+
+/// Build the Game/Free camera toggle for the Live view.
+///
+/// Hidden outside Live mode. Clicking dispatches `pie.live_camera_toggle`;
+/// the operator's availability check refuses the flip while no fresh frame
+/// stream exists, and [`update_live_camera_controls`] dims the label to
+/// match.
+fn live_camera_toggle_button() -> impl Bundle {
+    (
+        LiveCameraToggleButton,
+        Interaction::default(),
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
+            border: UiRect::all(px(1.0)),
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
+            // Hidden until Live mode; the appearance system flips this.
+            display: Display::None,
+            flex_shrink: 0.0,
+            ..Default::default()
+        },
+        BackgroundColor(tokens::ELEVATED_BG),
+        BorderColor::all(tokens::BORDER_SUBTLE),
+        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+            commands
+                .operator(PieLiveCameraToggleOp::ID)
+                .settings(CallOperatorSettings {
+                    execution_context: ExecutionContext::Invoke,
+                    creates_history_entry: false,
+                })
+                .call();
+        }),
+        children![(
+            LiveCameraToggleLabel,
+            Text::new(String::new()),
+            TextFont {
+                font_size: tokens::FONT_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+        )],
+    )
+}
+
+/// Build the "no signal" chip, shown while the Live view is locked to the
+/// game camera but no fresh frame has arrived.
+fn live_no_signal_chip() -> impl Bundle {
+    (
+        LiveNoSignalChip,
+        Node {
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
+            display: Display::None,
+            flex_shrink: 0.0,
+            ..Default::default()
+        },
+        BackgroundColor(tokens::ELEVATED_BG),
+        children![(
+            Text::new("no signal"),
+            TextFont {
+                font_size: tokens::FONT_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_DISABLED),
+        )],
+    )
+}
+
+/// Keep the Live camera toggle and the "no signal" chip in sync with the
+/// view mode, camera mode, and stream freshness.
+///
+/// Runs every frame without a change-detection short-circuit: freshness
+/// lapses by time alone, with no resource write to observe. The writes
+/// themselves are guarded so unchanged frames do not dirty the UI.
+pub fn update_live_camera_controls(
+    mode: Res<PieViewMode>,
+    camera_mode: Res<LiveCameraMode>,
+    stream: Res<LiveFrameStream>,
+    mut buttons: Query<(&mut Node, &Children), With<LiveCameraToggleButton>>,
+    mut chips: Query<&mut Node, (With<LiveNoSignalChip>, Without<LiveCameraToggleButton>)>,
+    mut labels: Query<(&mut Text, &mut TextColor), With<LiveCameraToggleLabel>>,
+) {
+    let live = *mode == PieViewMode::Live;
+    let fresh = stream.is_fresh();
+    let label = match *camera_mode {
+        LiveCameraMode::Game => "Game",
+        LiveCameraMode::Free => "Free",
+    };
+    let button_display = if live { Display::Flex } else { Display::None };
+    let label_color = if fresh {
+        tokens::TEXT_PRIMARY
+    } else {
+        tokens::TEXT_DISABLED
+    };
+    for (mut node, children) in &mut buttons {
+        if node.display != button_display {
+            node.display = button_display;
+        }
+        for child in children.iter() {
+            if let Ok((mut text, mut tc)) = labels.get_mut(child) {
+                if text.0 != label {
+                    text.0 = label.to_string();
+                }
+                if tc.0 != label_color {
+                    tc.0 = label_color;
+                }
+            }
+        }
+    }
+    let chip_display = if live && *camera_mode == LiveCameraMode::Game && !fresh {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    for mut node in &mut chips {
+        if node.display != chip_display {
+            node.display = chip_display;
         }
     }
 }

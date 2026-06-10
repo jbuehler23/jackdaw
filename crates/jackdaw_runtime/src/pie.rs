@@ -50,7 +50,7 @@ pub fn pie_config() -> Option<PieConfig> {
 /// Holds the editor link. `IpcChannelTransport` is `Send` but not `Sync` (its
 /// receiver wraps a `Cell`-held file descriptor), so it lives as a `NonSend`
 /// resource and the PIE systems run on the main thread.
-struct PieTransportRes(IpcChannelTransport);
+pub(crate) struct PieTransportRes(pub(crate) IpcChannelTransport);
 
 /// Tracks whether the initial full snapshot has been streamed, and the last
 /// serialized component values per entity for value-diff delta streaming.
@@ -68,7 +68,22 @@ struct PieStreamState {
 pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
     app.insert_non_send_resource(PieTransportRes(transport));
     app.init_resource::<PieStreamState>();
-    app.add_systems(Update, (stream_state, apply_control));
+    // The frame systems run after apply_control: a stop or restart despawns
+    // the readback entity, so pacing must not queue an insert against the old
+    // entity in the same tick, and flushing after control gives deterministic
+    // final-frame behavior.
+    app.add_systems(
+        Update,
+        (
+            stream_state,
+            (
+                apply_control,
+                crate::pie_frames::pace_frame_capture,
+                crate::pie_frames::flush_captured_frames,
+            )
+                .chain(),
+        ),
+    );
 }
 
 /// Lift the `JsnNodeId` component out of a snapshot's `components` map and
@@ -112,10 +127,16 @@ fn stream_state(world: &mut World) {
 
     let sent_initial = world.resource::<PieStreamState>().sent_initial;
 
-    // Derived face meshes are excluded: the editor regenerates faces from the
-    // streamed `Brush`, so these shells would only bloat the projection.
+    // Derived face meshes are excluded (the editor regenerates faces from the
+    // streamed `Brush`), as is the frame-capture camera (pure capture
+    // infrastructure the editor must never project).
+    type StreamFilter = (
+        With<Transform>,
+        Without<jackdaw_jsn::DerivedFaceMesh>,
+        Without<crate::pie_frames::FrameCaptureCamera>,
+    );
     let entities: Vec<Entity> = world
-        .query_filtered::<Entity, (With<Transform>, Without<jackdaw_jsn::DerivedFaceMesh>)>()
+        .query_filtered::<Entity, StreamFilter>()
         .iter(world)
         .collect();
     let registry = world.resource::<AppTypeRegistry>().clone();
@@ -280,6 +301,12 @@ fn apply_control(world: &mut World) {
             }
             ControlEvent::RemoveComponent { entity, type_path } => {
                 apply_remove_component(world, entity, &type_path);
+            }
+            ControlEvent::StartFrameStream { width, height } => {
+                crate::pie_frames::start_frame_stream(world, width, height);
+            }
+            ControlEvent::StopFrameStream => {
+                crate::pie_frames::stop_frame_stream(world);
             }
         }
     }

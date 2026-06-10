@@ -30,6 +30,8 @@ use jackdaw_pie_protocol::{
 
 use crate::build_status::BuildStatus;
 use crate::ext_build::{BuildProgress, BuildSpec};
+use crate::live_frame::LiveFrameStream;
+use crate::live_frame_view::LiveCameraMode;
 use crate::pie_mirror::{PieInstances, PieViewMode};
 use crate::run_config::{CargoMeta, RunConfigs, resolve_build_spec};
 
@@ -170,8 +172,12 @@ impl Plugin for PiePlugin {
             .init_resource::<PieViewMode>()
             .init_resource::<PieInstances>()
             .init_resource::<crate::pie_projection::PieProjection>()
+            .init_resource::<crate::live_frame::LiveFrameStream>()
             .add_systems(Update, (advance_pie_session, drain_game_events))
-            .add_systems(OnEnter(PlayState::Stopped), reset_view_mode_on_stop)
+            .add_systems(
+                OnEnter(PlayState::Stopped),
+                (reset_view_mode_on_stop, crate::live_frame::clear_stream),
+            )
             .add_observer(wire_pie_button);
     }
 }
@@ -185,7 +191,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<PiePlayOp>()
         .register_operator::<PiePauseOp>()
         .register_operator::<PieStopOp>()
-        .register_operator::<PieReloadOp>();
+        .register_operator::<PieReloadOp>()
+        .register_operator::<PieLiveCameraToggleOp>();
 }
 
 fn play_is_stopped_or_paused(state: Res<State<PlayState>>) -> bool {
@@ -246,6 +253,30 @@ pub(crate) fn pie_stop(_: In<OperatorParameters>, mut commands: Commands) -> Ope
 )]
 pub(crate) fn pie_reload(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(handle_reload);
+    OperatorResult::Finished
+}
+
+/// The camera toggle only means anything while the Live view shows the
+/// streamed frame, which needs a fresh stream to lock onto.
+fn live_view_with_fresh_stream(mode: Res<PieViewMode>, stream: Res<LiveFrameStream>) -> bool {
+    *mode == PieViewMode::Live && stream.is_fresh()
+}
+
+/// Toggle the Live viewport between the game-locked camera and free flight.
+#[operator(
+    id = "pie.live_camera_toggle",
+    label = "Toggle Live Camera",
+    description = "Switch the Live viewport between the game camera and free flight.",
+    is_available = live_view_with_fresh_stream
+)]
+pub(crate) fn pie_live_camera_toggle(
+    _: In<OperatorParameters>,
+    mut mode: ResMut<LiveCameraMode>,
+) -> OperatorResult {
+    *mode = match *mode {
+        LiveCameraMode::Game => LiveCameraMode::Free,
+        LiveCameraMode::Free => LiveCameraMode::Game,
+    };
     OperatorResult::Finished
 }
 
@@ -500,6 +531,7 @@ pub fn handle_stop(world: &mut World) {
             instances.buffers.clear();
             instances.focused = None;
         }
+        crate::live_frame::clear_stream(world);
         crate::pie_projection::revert_preview(world);
         info!("PIE: Stop");
     }
@@ -529,20 +561,38 @@ fn broadcast_control(world: &mut World, event: ControlEvent) {
     }
 }
 
-/// Send a live edit (`SetComponent` / `AddComponent` / `RemoveComponent`)
-/// only to the focused instance's child transport. If no instance is focused,
-/// or the focused child is not yet live, the edit is dropped with a debug log.
-pub(crate) fn send_edit(world: &mut World, edit: ControlEvent) {
-    let focused = world.resource::<PieInstances>().focused.clone();
+/// Send a control message (live edits, frame stream start/stop) only to the
+/// focused instance's child transport. If no instance is focused, or the
+/// focused child is not yet live, the message is dropped with a debug log.
+/// Safe no-op when `PieInstances` or `PieSession` are absent (headless worlds).
+pub(crate) fn send_control_to_focused(world: &mut World, event: ControlEvent) {
+    let focused = world
+        .get_resource::<PieInstances>()
+        .and_then(|instances| instances.focused.clone());
     let Some(key) = focused else {
-        debug!("PIE: send_edit dropped. No focused instance.");
+        debug!("PIE: control dropped. No focused instance.");
         return;
     };
-    let mut session = world.non_send_resource_mut::<PieSession>();
+    let Some(mut session) = world.get_non_send_resource_mut::<PieSession>() else {
+        debug!("PIE: control dropped. PieSession not present.");
+        return;
+    };
     if let Some(ChildStage::Live { transport, .. }) = session.children.get_mut(&key) {
-        send_control_to(transport, edit);
+        send_control_to(transport, event);
     } else {
-        debug!("PIE: send_edit dropped. Focused instance {key} is not live.");
+        debug!("PIE: control dropped. Focused instance {key} is not live.");
+    }
+}
+
+/// The focused instance's key, but only while its child process is connected
+/// and live. `None` when nothing is focused, the child is still connecting,
+/// or it has already been reaped.
+pub(crate) fn focused_live_instance(world: &World) -> Option<InstanceKey> {
+    let focused = world.get_resource::<PieInstances>()?.focused.clone()?;
+    let session = world.get_non_send_resource::<PieSession>()?;
+    match session.children.get(&focused) {
+        Some(ChildStage::Live { .. }) => Some(focused),
+        _ => None,
     }
 }
 
@@ -1111,6 +1161,7 @@ fn report_stderr_tail(stderr_tail: &StderrTail) {
 fn drain_game_events(world: &mut World) {
     // Collect all pending (key, events) pairs without holding the session borrow.
     let mut per_instance: Vec<(InstanceKey, Vec<StateEvent>)> = Vec::new();
+    let mut pixel_frames: Vec<(InstanceKey, Vec<u8>)> = Vec::new();
 
     {
         let mut session = world.non_send_resource_mut::<PieSession>();
@@ -1123,7 +1174,13 @@ fn drain_game_events(world: &mut World) {
                 continue;
             }
             let mut events: Vec<StateEvent> = Vec::with_capacity(frames.len());
-            for (_channel, bytes) in frames {
+            for (channel, bytes) in frames {
+                if channel == PieChannel::Frames {
+                    // Binary pixel payload routed to the live frame intake below,
+                    // after the focused instance is known.
+                    pixel_frames.push((key.clone(), bytes));
+                    continue;
+                }
                 match from_bytes::<StateEvent>(&bytes) {
                     Ok(event) => events.push(event),
                     Err(err) => warn!("PIE: {key} dropping malformed state event: {err}"),
@@ -1170,6 +1227,24 @@ fn drain_game_events(world: &mut World) {
         }
 
         debug!("PIE: {key} received {count} state event(s)");
+    }
+
+    // Upload the newest pixel frame from the focused instance; earlier frames
+    // in the same drain are superseded, and frames from unfocused instances
+    // (or arriving before any focus exists) are dropped.
+    let focused = world.resource::<PieInstances>().focused.clone();
+    if let Some(focused) = focused
+        && let Some((_, bytes)) = pixel_frames.iter().rev().find(|(key, _)| *key == focused)
+    {
+        match jackdaw_pie_protocol::decode_frame(bytes) {
+            Some(frame) => world.resource_scope(
+                |world, mut stream: Mut<crate::live_frame::LiveFrameStream>| {
+                    let mut images = world.resource_mut::<Assets<Image>>();
+                    crate::live_frame::apply_frame(&mut stream, &mut images, frame);
+                },
+            ),
+            None => warn!("PIE: dropping malformed pixel frame"),
+        }
     }
 }
 
