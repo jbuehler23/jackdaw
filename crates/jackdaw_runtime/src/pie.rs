@@ -112,8 +112,10 @@ fn stream_state(world: &mut World) {
 
     let sent_initial = world.resource::<PieStreamState>().sent_initial;
 
+    // Derived face meshes are excluded: the editor regenerates faces from the
+    // streamed `Brush`, so these shells would only bloat the projection.
     let entities: Vec<Entity> = world
-        .query_filtered::<Entity, With<Transform>>()
+        .query_filtered::<Entity, (With<Transform>, Without<jackdaw_jsn::DerivedFaceMesh>)>()
         .iter(world)
         .collect();
     let registry = world.resource::<AppTypeRegistry>().clone();

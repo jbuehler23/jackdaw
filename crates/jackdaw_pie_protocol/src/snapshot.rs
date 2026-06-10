@@ -5,11 +5,13 @@ use bevy::{
     asset::ReflectHandle,
     prelude::*,
     reflect::{
-        TypeRegistry,
-        serde::{ReflectSerializerProcessor, TypedReflectSerializer},
+        TypeRegistration, TypeRegistry,
+        serde::{ReflectDeserializerProcessor, ReflectSerializerProcessor, TypedReflectSerializer},
+        std_traits::ReflectDefault,
     },
 };
-use serde::{Serialize, Serializer};
+use serde::de::IgnoredAny;
+use serde::{Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 /// A single entity's full ECS state, serialized for remote inspection.
@@ -116,6 +118,36 @@ impl ReflectSerializerProcessor for RemoteSerializerProcessor {
         }
 
         Ok(Err(serializer))
+    }
+}
+
+/// Deserializer counterpart to [`RemoteSerializerProcessor`]. The serializer emits
+/// `null` for every `Handle<T>` (the game's assets are not loaded in the editor).
+/// A plain reflect deserializer rejects that `null` and fails the whole component,
+/// which drops any brush whose face materials serialized to null. This turns the
+/// `null` back into the handle type's default, so the component deserializes and
+/// brush faces fall back to the editor's own material in `regenerate_brush_meshes`.
+pub struct RemoteDeserializerProcessor;
+
+impl ReflectDeserializerProcessor for RemoteDeserializerProcessor {
+    fn try_deserialize<'de, D>(
+        &mut self,
+        registration: &TypeRegistration,
+        _registry: &TypeRegistry,
+        deserializer: D,
+    ) -> Result<Result<Box<dyn PartialReflect>, D>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Only intercept asset handles that can supply a default; everything else
+        // deserializes normally.
+        if registration.data::<ReflectHandle>().is_some()
+            && let Some(reflect_default) = registration.data::<ReflectDefault>()
+        {
+            deserializer.deserialize_option(IgnoredAny)?;
+            return Ok(Ok(reflect_default.default().into_partial_reflect()));
+        }
+        Ok(Err(deserializer))
     }
 }
 

@@ -1477,14 +1477,37 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
         let resolved_jsn = jsn_scene_from_ast(&resolved_ast);
         let spawned = load_scene_from_jsn(world, &resolved_jsn.scene, parent_path, &local_assets);
 
-        // Install the UNRESOLVED AST as the source of truth (so save still
-        // emits sparse references). Map the first N spawned entities (the
-        // authored ones) to the AST's node indices; the remaining spawned
-        // entities are inherited and live ECS-only until edited.
+        // Install the unresolved AST as the source of truth (so save still
+        // emits sparse references), binding the first N spawned entities (the
+        // authored ones) to its node indices; the remaining spawned entities
+        // are inherited and live ECS-only until edited. The AST is reused
+        // rather than rebuilt from `jsn`, because a second `from_jsn_scene`
+        // would re-mint a divergent id set and the live entities would no
+        // longer share ids with the installed AST.
         let authored_count = unresolved_ast.nodes.len();
         let authored_entities: Vec<_> = spawned.iter().copied().take(authored_count).collect();
-        let ast_with_ecs = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &authored_entities);
+        let mut ast_with_ecs = unresolved_ast;
+        for (i, entity) in authored_entities.iter().enumerate() {
+            if let Some(node) = ast_with_ecs.nodes.get_mut(i) {
+                node.ecs_entity = Some(*entity);
+            }
+            ast_with_ecs.ecs_to_jsn.insert(*entity, i);
+        }
         *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast_with_ecs;
+
+        // A healed scene holds re-minted ids that differ from disk until saved;
+        // flag the active tab so the dirty indicator prompts that save.
+        if jackdaw_jsn::needs_id_migration(&jsn) {
+            info!("scene node ids upgraded for uniqueness; save to persist them");
+            let active = world.resource::<crate::scenes::Scenes>().active;
+            if let Some(tab) = world
+                .resource_mut::<crate::scenes::Scenes>()
+                .tabs
+                .get_mut(active)
+            {
+                tab.dirty = true;
+            }
+        }
 
         // Restore the saved camera framing if present.
         if let Some(camera) = jsn.editor.as_ref().and_then(|e| e.camera.as_ref()) {

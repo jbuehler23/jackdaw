@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
+
+use rand::Rng;
 
 use bevy::reflect::{TypeRegistry, UnnamedField};
 use bevy::{prelude::*, reflect::NamedField};
@@ -22,16 +25,45 @@ pub struct JsnNodeId(pub u64);
 /// node id to and from the reflected-component representation.
 pub const JSN_NODE_ID_TYPE_PATH: &str = "jackdaw_jsn::ast::JsnNodeId";
 
-/// Process-global source of fresh node ids. Mirrors `BrushStableId`'s
-/// monotonic counter; an atomic is used (rather than a Bevy `Resource`) so
-/// ids can be minted from `SceneJsnAst` methods that have no `World`.
-static NEXT_NODE_ID: AtomicU64 = AtomicU64::new(1);
+/// Lower bound of the sparse id range. Ids below this are legacy values minted
+/// by the old monotonic-from-1 counter and can collide across sessions.
+pub const SPARSE_MIN: u64 = 1 << 32;
+/// Upper bound of the random seed draw. The counter is seeded below this and
+/// then advances freely, so minted ids are not clamped to it; the value leaves
+/// headroom below `u64::MAX` for a session to mint without wrapping.
+const SPARSE_MAX: u64 = 1 << 63;
+
+/// Process-global source of fresh node ids, seeded once from a random base in
+/// `[SPARSE_MIN, SPARSE_MAX)`. A random base keeps ids unique across processes
+/// and across independently-authored files: two sessions land in different
+/// ranges, so their ids never collide. Within a session ids stay monotonic.
+static NEXT_NODE_ID: LazyLock<AtomicU64> =
+    LazyLock::new(|| AtomicU64::new(rand::rng().random_range(SPARSE_MIN..SPARSE_MAX)));
 
 impl JsnNodeId {
-    /// Mint a fresh, process-unique node id by advancing the global counter.
+    /// Mint a fresh node id by advancing the global counter.
     pub fn next() -> Self {
         JsnNodeId(NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed))
     }
+}
+
+/// Report whether a loaded scene carries node ids that break the global-key
+/// invariant: any duplicate id, any id below `SPARSE_MIN` (minted by the old
+/// counter), or any missing id. Such scenes are re-minted on load.
+pub fn needs_id_migration(scene: &JsnScene) -> bool {
+    let mut seen = HashSet::new();
+    for entity in &scene.scene {
+        match entity.id {
+            Some(id) if id >= SPARSE_MIN => {
+                if !seen.insert(id) {
+                    return true;
+                }
+            }
+            // Below the sparse range, or no id at all: legacy, must heal.
+            _ => return true,
+        }
+    }
+    false
 }
 
 /// In-memory scene document  -- the single source of truth for scene data.
@@ -89,7 +121,7 @@ impl SceneJsnAst {
     /// `entity_map` maps JSN entity index -> spawned ECS entity.
     pub fn from_jsn_scene(scene: &JsnScene, entity_map: &[Entity]) -> Self {
         let mut ecs_to_jsn = HashMap::new();
-        let nodes = scene
+        let mut nodes: Vec<JsnEntityNode> = scene
             .scene
             .iter()
             .enumerate()
@@ -123,6 +155,17 @@ impl SceneJsnAst {
                 }
             })
             .collect();
+
+        // Older scenes minted ids from a per-process counter that reset every
+        // run, so a loaded scene can carry duplicate or low-range ids that
+        // collapse distinct nodes onto one entity in the by-id match. Re-mint
+        // every node to a sparse id when that is detected. Parent links are
+        // stored by index, so they are unaffected.
+        if needs_id_migration(scene) {
+            for node in &mut nodes {
+                node.id = Some(JsnNodeId::next());
+            }
+        }
 
         Self {
             nodes,
@@ -1011,6 +1054,103 @@ mod tests {
             ast.dirty_indices.contains(&node),
             "promote must mark the node dirty so the preview ECS re-syncs"
         );
+    }
+
+    /// Build a `JsnScene` from `(id, parent)` pairs. `id == None` omits the
+    /// structural id; `parent == None` omits the parent pointer.
+    fn scene_from_nodes(nodes: &[(Option<u64>, Option<usize>)]) -> JsnScene {
+        let scene: Vec<_> = nodes
+            .iter()
+            .map(|(id, parent)| {
+                let mut e = serde_json::json!({ "components": {} });
+                if let Some(id) = id {
+                    e["id"] = serde_json::json!(id);
+                }
+                if let Some(parent) = parent {
+                    e["parent"] = serde_json::json!(parent);
+                }
+                e
+            })
+            .collect();
+        let json = serde_json::json!({
+            "jsn": { "format_version": [3, 0, 0], "editor_version": "test", "bevy_version": "0.18" },
+            "metadata": { "name": "t" },
+            "assets": {},
+            "editor": null,
+            "scene": scene,
+        });
+        serde_json::from_value(json).expect("scene should parse")
+    }
+
+    #[test]
+    fn needs_migration_detects_duplicate_ids() {
+        let scene = scene_from_nodes(&[(Some(SPARSE_MIN), None), (Some(SPARSE_MIN), None)]);
+        assert!(needs_id_migration(&scene), "two equal ids must trigger migration");
+    }
+
+    #[test]
+    fn needs_migration_detects_legacy_low_ids() {
+        let scene = scene_from_nodes(&[(Some(9), None), (Some(10), None)]);
+        assert!(needs_id_migration(&scene), "ids below SPARSE_MIN must trigger migration");
+    }
+
+    #[test]
+    fn needs_migration_detects_missing_id() {
+        let scene = scene_from_nodes(&[(None, None)]);
+        assert!(needs_id_migration(&scene), "a node with no id must trigger migration");
+    }
+
+    #[test]
+    fn needs_migration_false_for_sparse_unique() {
+        let scene = scene_from_nodes(&[(Some(SPARSE_MIN), None), (Some(SPARSE_MIN + 1), None)]);
+        assert!(!needs_id_migration(&scene), "distinct sparse ids need no migration");
+    }
+
+    /// Minted ids land in the sparse range and never repeat back-to-back.
+    #[test]
+    fn minted_ids_are_sparse_and_unique() {
+        let a = JsnNodeId::next();
+        let b = JsnNodeId::next();
+        assert_ne!(a, b, "successive mints must differ");
+        assert!(a.0 >= SPARSE_MIN, "minted id must be in the sparse range");
+        assert!(b.0 >= SPARSE_MIN, "minted id must be in the sparse range");
+    }
+
+    /// Colliding ids are healed to unique sparse ids on load.
+    #[test]
+    fn from_jsn_scene_dedupes_colliding_ids() {
+        let scene = scene_from_nodes(&[(Some(10), None), (Some(10), None), (Some(10), None)]);
+        let ast = SceneJsnAst::from_jsn_scene(&scene, &[]);
+        let ids: Vec<u64> = ast.nodes.iter().map(|n| n.id.expect("healed id").0).collect();
+        let unique: HashSet<u64> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), ids.len(), "healed ids must be unique");
+        assert!(ids.iter().all(|id| *id >= SPARSE_MIN), "healed ids must be sparse");
+    }
+
+    /// Unique but legacy-low ids are lifted into the sparse range on load.
+    #[test]
+    fn from_jsn_scene_remints_legacy_low_ids() {
+        let scene = scene_from_nodes(&[(Some(1), None), (Some(2), None)]);
+        let ast = SceneJsnAst::from_jsn_scene(&scene, &[]);
+        assert!(ast.nodes.iter().all(|n| n.id.expect("healed id").0 >= SPARSE_MIN));
+    }
+
+    /// A scene whose ids are already sparse and unique loads untouched.
+    #[test]
+    fn from_jsn_scene_preserves_sparse_unique_ids() {
+        let scene = scene_from_nodes(&[(Some(SPARSE_MIN + 5), None), (Some(SPARSE_MIN + 6), None)]);
+        let ast = SceneJsnAst::from_jsn_scene(&scene, &[]);
+        assert_eq!(ast.nodes[0].id, Some(JsnNodeId(SPARSE_MIN + 5)));
+        assert_eq!(ast.nodes[1].id, Some(JsnNodeId(SPARSE_MIN + 6)));
+    }
+
+    /// Re-minting changes ids but leaves the index-based parent links intact.
+    #[test]
+    fn from_jsn_scene_remint_preserves_parent_links() {
+        let scene = scene_from_nodes(&[(Some(10), None), (Some(10), Some(0))]);
+        let ast = SceneJsnAst::from_jsn_scene(&scene, &[]);
+        assert_eq!(ast.nodes[1].parent, Some(0), "parent index survives re-mint");
+        assert_ne!(ast.nodes[0].id, ast.nodes[1].id, "ids are unique after heal");
     }
 
     /// A legacy `JsnScene` with no `id` field still loads, minting fresh ids

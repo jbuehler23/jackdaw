@@ -7,6 +7,7 @@
 //!
 //! Built on lightyear 0.26 with prediction OFF (server-authoritative + interpolation).
 
+mod camera_gate;
 mod client;
 mod lifecycle;
 mod rate_limit;

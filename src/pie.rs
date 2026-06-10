@@ -30,7 +30,7 @@ use jackdaw_pie_protocol::{
 
 use crate::build_status::BuildStatus;
 use crate::ext_build::{BuildProgress, BuildSpec};
-use crate::pie_mirror::{PieLiveSelection, PieMirror, PieViewMode};
+use crate::pie_mirror::{PieInstances, PieViewMode};
 use crate::run_config::{CargoMeta, RunConfigs, resolve_build_spec};
 
 /// How many trailing stderr lines to keep from a game process, so a
@@ -167,23 +167,18 @@ impl Plugin for PiePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<PlayState>()
             .init_non_send_resource::<PieSession>()
-            .init_resource::<PieMirror>()
             .init_resource::<PieViewMode>()
-            .init_resource::<PieLiveSelection>()
+            .init_resource::<PieInstances>()
+            .init_resource::<crate::pie_projection::PieProjection>()
             .add_systems(Update, (advance_pie_session, drain_game_events))
             .add_systems(OnEnter(PlayState::Stopped), reset_view_mode_on_stop)
             .add_observer(wire_pie_button);
     }
 }
 
-/// Reset the outliner/inspector view back to Scene when play stops, and
-/// drop any Live selection so the next play session starts clean.
-fn reset_view_mode_on_stop(
-    mut mode: ResMut<PieViewMode>,
-    mut live_selection: ResMut<PieLiveSelection>,
-) {
+/// Reset the outliner/inspector view back to Scene when play stops.
+fn reset_view_mode_on_stop(mut mode: ResMut<PieViewMode>) {
     *mode = PieViewMode::Scene;
-    live_selection.clear();
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -269,13 +264,15 @@ pub fn handle_reload(world: &mut World) {
         return;
     }
 
-    let run_configs = world.resource::<RunConfigs>().manifest.clone();
+    let Some(run_configs) = world
+        .get_resource::<RunConfigs>()
+        .map(|c| c.manifest.clone())
+    else {
+        warn!("PIE: Reload but run configurations are not loaded");
+        return;
+    };
 
     handle_stop(world);
-
-    if let Some(mut live_selection) = world.get_resource_mut::<PieLiveSelection>() {
-        live_selection.clear();
-    }
 
     for key in keys {
         let Some(run) = run_configs.run_by_name(&key.config).cloned() else {
@@ -428,12 +425,6 @@ pub(crate) fn stop_instance(world: &mut World, key: &InstanceKey) {
         world
             .resource_mut::<NextState<PlayState>>()
             .set(PlayState::Stopped);
-        if let Some(mut mirror) = world.get_resource_mut::<PieMirror>() {
-            mirror.clear();
-        }
-        if let Some(mut live_selection) = world.get_resource_mut::<PieLiveSelection>() {
-            live_selection.clear();
-        }
     }
 }
 
@@ -444,7 +435,11 @@ pub fn handle_play(world: &mut World) {
     let current = world.resource::<State<PlayState>>().get().clone();
     match current {
         PlayState::Stopped => {
-            let runs = world.resource::<RunConfigs>().manifest.runs.clone();
+            let Some(run_configs) = world.get_resource::<RunConfigs>() else {
+                warn!("PIE: run configurations not loaded");
+                return;
+            };
+            let runs = run_configs.manifest.runs.clone();
             let Some(first) = runs.into_iter().next() else {
                 warn!("PIE: no run configurations");
                 return;
@@ -501,12 +496,11 @@ pub fn handle_stop(world: &mut World) {
         world
             .resource_mut::<NextState<PlayState>>()
             .set(PlayState::Stopped);
-        if let Some(mut mirror) = world.get_resource_mut::<PieMirror>() {
-            mirror.clear();
+        if let Some(mut instances) = world.get_resource_mut::<PieInstances>() {
+            instances.buffers.clear();
+            instances.focused = None;
         }
-        if let Some(mut live_selection) = world.get_resource_mut::<PieLiveSelection>() {
-            live_selection.clear();
-        }
+        crate::pie_projection::revert_preview(world);
         info!("PIE: Stop");
     }
 }
@@ -536,99 +530,197 @@ fn broadcast_control(world: &mut World, event: ControlEvent) {
 }
 
 /// Send a live edit (`SetComponent` / `AddComponent` / `RemoveComponent`)
-/// to every live child. The owning game applies it; other children skip
-/// the unknown entity (their apply warns and skips), so broadcasting is
-/// fine while a single game runs.
+/// only to the focused instance's child transport. If no instance is focused,
+/// or the focused child is not yet live, the edit is dropped with a debug log.
 pub(crate) fn send_edit(world: &mut World, edit: ControlEvent) {
-    broadcast_control(world, edit);
+    let focused = world.resource::<PieInstances>().focused.clone();
+    let Some(key) = focused else {
+        debug!("PIE: send_edit dropped. No focused instance.");
+        return;
+    };
+    let mut session = world.non_send_resource_mut::<PieSession>();
+    if let Some(ChildStage::Live { transport, .. }) = session.children.get_mut(&key) {
+        send_control_to(transport, edit);
+    } else {
+        debug!("PIE: send_edit dropped. Focused instance {key} is not live.");
+    }
 }
 
 /// Whether the Live "Save to Scene" action can run right now: the inspector
-/// is in Live mode and the selected mirror entity maps back to an authored
-/// node (`scene_node_id` is `Some`). Runtime-only entities (spawned by the
-/// game with no authored origin) return `false` so the button stays dimmed.
+/// is in Live mode and a preview entity is selected (either an authored
+/// entity that maps back to an AST node, or an ephemeral runtime entity
+/// that would be promoted to a new node).
 pub(crate) fn can_save_live_to_scene(world: &World) -> bool {
     if *world.resource::<PieViewMode>() != PieViewMode::Live {
         return false;
     }
-    let Some(bits) = world.resource::<PieLiveSelection>().selected else {
+    let Some(preview) = world.resource::<crate::selection::Selection>().primary() else {
         return false;
     };
-    world
-        .resource::<PieMirror>()
-        .entities
-        .get(&bits)
-        .and_then(|entry| entry.scene_node_id)
+    // Only act on entities that are part of the current live projection.
+    let in_projection = world
+        .resource::<crate::pie_projection::PieProjection>()
+        .by_bits
+        .values()
+        .any(|&e| e == preview);
+    if !in_projection {
+        return false;
+    }
+    // Ephemeral entities can be promoted to new authored nodes (Path B).
+    if world
+        .get::<crate::pie_projection::PieEphemeral>(preview)
         .is_some()
+    {
+        return true;
+    }
+    // Authored entities are saveable when the AST still holds their node (Path A).
+    world
+        .resource::<jackdaw_jsn::SceneJsnAst>()
+        .contains_entity(preview)
 }
 
-/// Promote the selected running entity's current component values into the
-/// authored scene node it came from.
+/// Serialize all non-skipped reflected components from `entity` into a
+/// `Vec<(type_path, json_value)>`, using the same processor and filter that
+/// `register_entity_in_ast` uses when it first captures a live entity.
 ///
-/// Looks up the mirror entry for [`PieLiveSelection`], resolves its
-/// `scene_node_id` to the authored node (and that node's preview ECS entity)
-/// via [`SceneJsnAst::entity_for_node_id`], then writes each runtime
-/// component into the node through [`SetJsnField`] (full-component replace,
-/// empty field path). The edits are grouped into one undoable
-/// [`CommandGroup`] so the same path Scene edits use also refreshes the
-/// preview ECS entity (`apply_jsn_field_to_ecs` inside `SetJsnField`).
-///
-/// Runtime-only / internal components (render, picking, the structural node
-/// id, etc.) are filtered with [`should_skip_component`] so the authored
-/// node only gains values that round-trip through save.
-///
-/// A no-op with a `warn!` when nothing is selected or the matching node was
-/// deleted during play.
-pub(crate) fn save_live_entity_to_scene(world: &mut World) {
-    use jackdaw_jsn::ast::JsnNodeId;
+/// Components with no `ReflectComponent` data, types not registered in the
+/// `AppTypeRegistry`, and paths matched by [`should_skip_component`] are
+/// silently omitted. The result is sorted by type path for deterministic undo
+/// batching.
+fn serialize_preview_entity_components(
+    world: &World,
+    entity: Entity,
+) -> Vec<(String, serde_json::Value)> {
+    use std::any::TypeId;
 
-    use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
+    use bevy::reflect::serde::TypedReflectSerializer;
+    use bevy::{
+        ecs::reflect::AppTypeRegistry,
+        prelude::{ChildOf, Children, GlobalTransform, InheritedVisibility, ViewVisibility},
+    };
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let processor = crate::scene_io::AstSerializerProcessor;
+
+    let Ok(entity_ref) = world.get_entity(entity) else {
+        return Vec::new();
+    };
+
+    // The same structural/derived components that register_entity_in_ast skips.
+    let skip_ids = [
+        TypeId::of::<GlobalTransform>(),
+        TypeId::of::<InheritedVisibility>(),
+        TypeId::of::<ViewVisibility>(),
+        TypeId::of::<ChildOf>(),
+        TypeId::of::<Children>(),
+    ];
+
+    let mut out: Vec<(String, serde_json::Value)> = registry
+        .iter()
+        .filter(|reg| !skip_ids.contains(&reg.type_id()))
+        .filter_map(|reg| {
+            let type_path = reg.type_info().type_path_table().path();
+            if crate::scene_io::should_skip_component(type_path) {
+                return None;
+            }
+            let reflect_component = reg.data::<ReflectComponent>()?;
+            let component = reflect_component.reflect(entity_ref)?;
+            let serializer =
+                TypedReflectSerializer::with_processor(component, &registry, &processor);
+            let value = serde_json::to_value(&serializer).ok()?;
+            Some((type_path.to_string(), value))
+        })
+        .collect();
+
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Promote the selected preview entity's current component values into the
+/// authored scene (Path A) or create a new authored node from it (Path B).
+///
+/// Path A: the preview entity is already bound to an AST node (it is an
+/// authored entity with a live overlay). Each non-skipped reflected component
+/// is read from the preview entity, serialized, and written into the node
+/// through a [`SetJsnField`] command. The commands are grouped into one
+/// undoable [`CommandGroup`] so a single Ctrl+Z reverts the whole promote.
+///
+/// Path B: the preview entity carries [`PieEphemeral`] (the game spawned it
+/// at runtime with no authored counterpart). A new [`JsnEntityNode`] is
+/// appended to the AST, its `components` filled from the preview entity's
+/// reflected components, its `ecs_entity` bound to this entity. The entity
+/// receives a [`JsnNodeId`] component and loses [`PieEphemeral`] so it is
+/// now treated as an authored entity. Path B is not undoable in v1 (no
+/// remove-node command exists that mirrors the insert).
+///
+/// No-op with a `warn!` when nothing is selected, the preview entity is gone,
+/// or the entity carries neither a node binding nor `PieEphemeral`.
+pub(crate) fn save_live_entity_to_scene(world: &mut World) {
+    use crate::pie_projection::PieEphemeral;
 
     if *world.resource::<PieViewMode>() != PieViewMode::Live {
         return;
     }
-    let Some(bits) = world.resource::<PieLiveSelection>().selected else {
-        warn!("save to scene: no live entity selected");
+    let Some(preview) = world.resource::<crate::selection::Selection>().primary() else {
+        warn!("save to scene: no entity selected");
         return;
     };
 
-    let Some((node_id, components)) = world
-        .resource::<PieMirror>()
-        .entities
-        .get(&bits)
-        .and_then(|entry| entry.scene_node_id.map(|id| (id, entry.components.clone())))
-    else {
-        warn!("save to scene: live entity {bits:x} has no authored node to save into");
+    // Resolve the game-side bits for this preview entity from the projection map.
+    let bits = world
+        .resource::<crate::pie_projection::PieProjection>()
+        .by_bits
+        .iter()
+        .find_map(|(&b, &e)| if e == preview { Some(b) } else { None });
+    let Some(bits) = bits else {
+        warn!("save to scene: selected entity {preview:?} has no live projection entry");
         return;
     };
 
-    let Some(editor_entity) = world
-        .resource::<jackdaw_jsn::SceneJsnAst>()
-        .entity_for_node_id(JsnNodeId(node_id))
-    else {
-        warn!("save to scene: authored node {node_id} not found (deleted during play?)");
+    if world.get_entity(preview).is_err() {
+        warn!("save to scene: preview entity for live {bits:x} no longer exists");
+        return;
+    }
+
+    let is_ephemeral = world.get::<PieEphemeral>(preview).is_some();
+
+    if is_ephemeral {
+        promote_ephemeral_to_authored(world, preview, bits);
+    } else {
+        promote_authored_overlay(world, preview, bits);
+    }
+}
+
+/// Path A: preview entity is bound to an existing AST node. Serialize its
+/// current component values and write them through SetJsnField commands.
+fn promote_authored_overlay(world: &mut World, preview: Entity, bits: u64) {
+    use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
+
+    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
+    let Some(&node_idx) = ast.ecs_to_jsn.get(&preview) else {
+        warn!("save to scene: preview entity {preview:?} (bits {bits:x}) has no AST node");
         return;
     };
+    let node_id = ast
+        .nodes
+        .get(node_idx)
+        .and_then(|n| n.id)
+        .map(|id| id.0)
+        .unwrap_or(0);
 
-    // Stable iteration order keeps the grouped undo deterministic.
-    let mut entries: Vec<(String, serde_json::Value)> = components
-        .into_iter()
-        .filter(|(type_path, _)| !crate::scene_io::should_skip_component(type_path))
-        .collect();
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let entries = serialize_preview_entity_components(world, preview);
 
     let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
     for (type_path, new_value) in entries {
         let old_value = world
             .resource::<jackdaw_jsn::SceneJsnAst>()
-            .get_component(editor_entity, &type_path)
+            .get_component(preview, &type_path)
             .cloned()
             .unwrap_or(serde_json::Value::Null);
         sub_commands.push(Box::new(SetJsnField {
-            entity: editor_entity,
+            entity: preview,
             type_path,
-            // Empty field path replaces the whole component; `SetJsnField`
-            // then re-inserts it on the preview ECS entity.
             field_path: String::new(),
             old_value,
             new_value,
@@ -638,7 +730,7 @@ pub(crate) fn save_live_entity_to_scene(world: &mut World) {
 
     let count = sub_commands.len();
     let mut cmd: Box<dyn EditorCommand> = if count == 0 {
-        warn!("save to scene: live entity {bits:x} had no saveable components");
+        warn!("save to scene: preview entity {preview:?} had no saveable components");
         return;
     } else if count == 1 {
         match sub_commands.into_iter().next() {
@@ -654,6 +746,38 @@ pub(crate) fn save_live_entity_to_scene(world: &mut World) {
     cmd.execute(world);
     world.resource_mut::<CommandHistory>().push_executed(cmd);
     info!("save to scene: promoted runtime values into node {node_id}");
+}
+
+/// Path B: preview entity has no AST node (game-spawned runtime entity).
+/// Create a new authored node from its reflected components, bind it, and
+/// remove the ephemeral marker. Not undoable in v1.
+fn promote_ephemeral_to_authored(world: &mut World, preview: Entity, bits: u64) {
+    use crate::pie_projection::PieEphemeral;
+
+    let entries = serialize_preview_entity_components(world, preview);
+
+    let node_id = jackdaw_jsn::ast::JsnNodeId::next();
+    let idx = {
+        let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
+        let idx = ast.nodes.len();
+        ast.nodes.push(jackdaw_jsn::ast::JsnEntityNode {
+            id: Some(node_id),
+            parent: None,
+            components: entries.into_iter().collect(),
+            derived_components: std::collections::HashSet::new(),
+            ecs_entity: Some(preview),
+        });
+        ast.ecs_to_jsn.insert(preview, idx);
+        idx
+    };
+
+    world.entity_mut(preview).remove::<PieEphemeral>();
+    world.entity_mut(preview).insert(node_id);
+
+    info!(
+        "save to scene: promoted ephemeral {preview:?} (bits {bits:x}) to new AST node {} (idx {idx})",
+        node_id.0
+    );
 }
 
 /// Drive every instance forward each frame: advance finished builds
@@ -979,29 +1103,73 @@ fn report_stderr_tail(stderr_tail: &StderrTail) {
     }
 }
 
-/// Drain `StateEvent`s from every live child and apply them to [`PieMirror`].
-fn drain_game_events(mut session: NonSendMut<PieSession>, mut mirror: ResMut<PieMirror>) {
-    for (key, stage) in session.children.iter_mut() {
-        let ChildStage::Live { transport, .. } = stage else {
-            continue;
-        };
-        let frames = transport.drain_received();
-        if frames.is_empty() {
-            continue;
-        }
-        let mut count = 0usize;
-        for (_channel, bytes) in frames {
-            match from_bytes::<StateEvent>(&bytes) {
-                Ok(event) => {
-                    mirror.apply(event);
-                    count += 1;
+/// Drain `StateEvent`s from every live child. Events for every instance are
+/// always accumulated into that instance's [`InstanceBuffer`] regardless of
+/// view mode, so the buffers always hold current game state and a Scene->Live
+/// toggle re-projects fresh data. Additionally, events from the focused instance
+/// are projected into the preview ECS via `project_event`, but only in Live mode.
+fn drain_game_events(world: &mut World) {
+    // Collect all pending (key, events) pairs without holding the session borrow.
+    let mut per_instance: Vec<(InstanceKey, Vec<StateEvent>)> = Vec::new();
+
+    {
+        let mut session = world.non_send_resource_mut::<PieSession>();
+        for (key, stage) in session.children.iter_mut() {
+            let ChildStage::Live { transport, .. } = stage else {
+                continue;
+            };
+            let frames = transport.drain_received();
+            if frames.is_empty() {
+                continue;
+            }
+            let mut events: Vec<StateEvent> = Vec::with_capacity(frames.len());
+            for (_channel, bytes) in frames {
+                match from_bytes::<StateEvent>(&bytes) {
+                    Ok(event) => events.push(event),
+                    Err(err) => warn!("PIE: {key} dropping malformed state event: {err}"),
                 }
-                Err(err) => warn!("PIE: {key} dropping malformed state event: {err}"),
+            }
+            if !events.is_empty() {
+                per_instance.push((key.clone(), events));
             }
         }
-        if count > 0 {
-            debug!("PIE: {key} received {count} state event(s)");
+    }
+
+    let live_mode =
+        *world.resource::<crate::pie_mirror::PieViewMode>() == crate::pie_mirror::PieViewMode::Live;
+
+    for (key, events) in per_instance {
+        let count = events.len();
+
+        // Read focused before any mutable borrow so borrowck is satisfied.
+        let focused = world.resource::<PieInstances>().focused.clone();
+
+        // Establish focus on the first instance seen, regardless of view mode.
+        let focused = if focused.is_none() {
+            world.resource_mut::<PieInstances>().focused = Some(key.clone());
+            Some(key.clone())
+        } else {
+            focused
+        };
+
+        let is_focused = focused.as_ref() == Some(&key);
+
+        for event in events {
+            // Always accumulate into the per-instance buffer.
+            world
+                .resource_mut::<PieInstances>()
+                .buffers
+                .entry(key.clone())
+                .or_default()
+                .apply(&event);
+
+            // Project into the preview world only for the focused instance in Live mode.
+            if live_mode && is_focused {
+                crate::pie_projection::project_event(world, event);
+            }
         }
+
+        debug!("PIE: {key} received {count} state event(s)");
     }
 }
 
@@ -1011,101 +1179,96 @@ mod save_to_scene_tests {
     use bevy::reflect::serde::TypedReflectSerializer;
     use jackdaw_commands::CommandHistory;
     use jackdaw_jsn::SceneJsnAst;
+    use jackdaw_jsn::ast::JsnNodeId;
 
     use super::*;
-    use crate::pie_mirror::PieMirrorEntry;
+    use crate::pie_projection::{PieEphemeral, PieProjection};
+    use crate::selection::Selection;
 
     const TRANSFORM_PATH: &str = "bevy_transform::components::transform::Transform";
 
-    /// Canonical reflect JSON for a value, matching what the PIE mirror
-    /// stores and what `SetJsnField` deserializes back onto the ECS entity.
+    /// Canonical reflect JSON for a Transform, matching what
+    /// `TypedReflectSerializer` produces and `SetJsnField` deserializes back.
     fn canonical(value: &Transform, registry: &AppTypeRegistry) -> serde_json::Value {
         let reg = registry.read();
         let serializer = TypedReflectSerializer::new(value, &reg);
         serde_json::to_value(&serializer).expect("serialize transform")
     }
 
-    /// Build a minimal world wired the way the editor-side promote expects:
-    /// an authored node bound to a preview ECS entity that carries
-    /// `Transform`, plus the PIE resources in Live mode with one mirror
-    /// entry mapped back to that node.
-    fn setup(scene_node_id: Option<u64>) -> (World, Entity, u64, serde_json::Value) {
+    /// Build a minimal world for Path A tests: an authored preview entity
+    /// carrying the LIVE transform value, bound to an AST node that stores
+    /// the authored (identity) value, and a `PieProjection` entry mapping
+    /// `bits -> preview_entity`.
+    fn setup_path_a() -> (World, Entity, u64, serde_json::Value) {
         let mut world = World::new();
         let registry = AppTypeRegistry::default();
         registry.write().register::<Transform>();
         world.insert_resource(registry);
         world.init_resource::<CommandHistory>();
-        world.init_resource::<PieMirror>();
-        world.init_resource::<PieLiveSelection>();
+        world.init_resource::<PieProjection>();
         world.insert_resource(PieViewMode::Live);
 
-        // Authored preview entity starts at the origin.
-        let editor_entity = world.spawn(Transform::IDENTITY).id();
+        // Preview entity carries the LIVE value (as `project_event` would apply).
+        let live_transform = Transform::from_xyz(1.0, 2.0, 3.0);
+        let editor_entity = world.spawn(live_transform).id();
+
+        // AST node stores the authored (identity) value.
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let authored_json = canonical(&Transform::IDENTITY, &registry);
         let mut ast = SceneJsnAst::default();
         let node = ast.create_node(editor_entity, None);
-        let node_id = ast.nodes[node].id.expect("created node has an id");
-        // Seed the authored Transform so the promote has an old value to
-        // capture for undo.
-        let registry = world.resource::<AppTypeRegistry>().clone();
-        ast.set_component(
-            editor_entity,
-            TRANSFORM_PATH,
-            canonical(&Transform::IDENTITY, &registry),
-        );
-        // The mirror reports the node by its stable id, not the editor entity.
-        let on_disk_id = scene_node_id.unwrap_or(node_id.0);
+        ast.set_component(editor_entity, TRANSFORM_PATH, authored_json);
         world.insert_resource(ast);
 
-        // Mirror entry: runtime Transform moved to (1, 2, 3).
-        let runtime = canonical(&Transform::from_xyz(1.0, 2.0, 3.0), &registry);
+        // PieProjection: bits -> preview entity. Selection: preview entity is selected.
         let bits = 0xABCDu64;
-        let mut components = std::collections::HashMap::new();
-        components.insert(TRANSFORM_PATH.to_string(), runtime.clone());
-        world.resource_mut::<PieMirror>().entities.insert(
-            bits,
-            PieMirrorEntry {
-                components,
-                scene_node_id: Some(on_disk_id),
-            },
-        );
-        world.resource_mut::<PieLiveSelection>().selected = Some(bits);
+        world
+            .resource_mut::<PieProjection>()
+            .by_bits
+            .insert(bits, editor_entity);
+        world.insert_resource(Selection {
+            entities: vec![editor_entity],
+        });
 
-        (world, editor_entity, bits, runtime)
+        let live_json = canonical(&live_transform, &registry);
+        let _ = node;
+        (world, editor_entity, bits, live_json)
     }
 
+    // ---- Path A tests ---------------------------------------------------
+
     #[test]
-    fn promote_writes_runtime_values_to_ast_and_preview_ecs() {
-        let (mut world, editor_entity, _bits, runtime) = setup(None);
+    fn path_a_promote_writes_live_values_to_ast_and_preview_ecs() {
+        let (mut world, editor_entity, _bits, live_json) = setup_path_a();
 
         assert!(
             can_save_live_to_scene(&world),
-            "selection maps to an authored node, so the action is available"
+            "authored entity with an AST node is saveable"
         );
 
         save_live_entity_to_scene(&mut world);
 
-        // AST node now holds the runtime Transform.
+        // AST node now holds the live Transform.
         let stored = world
             .resource::<SceneJsnAst>()
             .get_component(editor_entity, TRANSFORM_PATH)
             .cloned()
             .expect("transform present in node after promote");
-        assert_eq!(stored, runtime);
+        assert_eq!(stored, live_json);
 
-        // The preview ECS entity was updated through the SetJsnField path.
+        // The preview ECS entity was refreshed through SetJsnField.
         let tf = world.get::<Transform>(editor_entity).copied().unwrap();
         assert_eq!(tf.translation, Vec3::new(1.0, 2.0, 3.0));
 
-        // One undoable command was recorded.
+        // One undoable command was pushed.
         assert_eq!(world.resource::<CommandHistory>().undo_stack.len(), 1);
     }
 
     #[test]
-    fn promote_is_undoable_back_to_authored_value() {
-        let (mut world, editor_entity, _bits, _runtime) = setup(None);
+    fn path_a_promote_is_undoable_back_to_authored_value() {
+        let (mut world, editor_entity, _bits, _live_json) = setup_path_a();
         save_live_entity_to_scene(&mut world);
 
-        // Undo the most recently pushed command.
         let mut cmd = world
             .resource_mut::<CommandHistory>()
             .undo_stack
@@ -1121,57 +1284,114 @@ mod save_to_scene_tests {
         );
     }
 
-    #[test]
-    fn runtime_only_entity_cannot_save_and_promote_is_noop() {
-        // scene_node_id None -> a runtime-only entity with no authored origin.
+    // ---- Path B tests ---------------------------------------------------
+
+    /// Build a minimal world for Path B: a `PieEphemeral` preview entity
+    /// carrying a Transform, with a `PieProjection` entry and no AST node.
+    fn setup_path_b() -> (World, Entity, u64) {
         let mut world = World::new();
         let registry = AppTypeRegistry::default();
         registry.write().register::<Transform>();
         world.insert_resource(registry);
         world.init_resource::<CommandHistory>();
-        world.init_resource::<PieMirror>();
-        world.init_resource::<PieLiveSelection>();
+        world.init_resource::<PieProjection>();
         world.insert_resource(PieViewMode::Live);
         world.insert_resource(SceneJsnAst::default());
 
-        let bits = 0x99u64;
-        let mut components = std::collections::HashMap::new();
-        components.insert(TRANSFORM_PATH.to_string(), serde_json::json!({}));
-        world.resource_mut::<PieMirror>().entities.insert(
-            bits,
-            PieMirrorEntry {
-                components,
-                scene_node_id: None,
-            },
-        );
-        world.resource_mut::<PieLiveSelection>().selected = Some(bits);
+        // Ephemeral entity: game-spawned at runtime, never in the AST.
+        let ephemeral = world
+            .spawn((Transform::from_xyz(5.0, 6.0, 7.0), PieEphemeral))
+            .id();
 
+        let bits = 0xEF01u64;
+        world
+            .resource_mut::<PieProjection>()
+            .by_bits
+            .insert(bits, ephemeral);
+        world.insert_resource(Selection {
+            entities: vec![ephemeral],
+        });
+
+        (world, ephemeral, bits)
+    }
+
+    #[test]
+    fn path_b_ephemeral_entity_is_saveable() {
+        let (world, _ephemeral, _bits) = setup_path_b();
         assert!(
-            !can_save_live_to_scene(&world),
-            "runtime-only entity has no authored node, so saving is disabled"
-        );
-
-        save_live_entity_to_scene(&mut world);
-        assert_eq!(
-            world.resource::<CommandHistory>().undo_stack.len(),
-            0,
-            "no authored node means nothing is recorded"
+            can_save_live_to_scene(&world),
+            "ephemeral entity can be promoted to a new authored node"
         );
     }
 
     #[test]
-    fn missing_node_is_noop_when_authored_node_deleted() {
-        // Mirror points at a stable id that no AST node carries (the node
-        // was deleted during play). Promote must warn and do nothing.
-        let (mut world, _editor_entity, _bits, _runtime) = setup(Some(987_654));
-        // Sanity: the gate is still "available" (scene_node_id is Some), but
-        // the node lookup fails, so the promote is inert.
-        assert!(can_save_live_to_scene(&world));
+    fn path_b_promote_creates_new_ast_node_with_components() {
+        let (mut world, ephemeral, _bits) = setup_path_b();
+
         save_live_entity_to_scene(&mut world);
+
+        // A new AST node should exist and be bound to the former ephemeral entity.
+        let ast = world.resource::<SceneJsnAst>();
+        assert_eq!(ast.nodes.len(), 1, "one node was created");
         assert_eq!(
-            world.resource::<CommandHistory>().undo_stack.len(),
-            0,
-            "an unresolved node id records no command"
+            ast.nodes[0].ecs_entity,
+            Some(ephemeral),
+            "node is bound to the promoted entity"
         );
+        assert!(
+            ast.nodes[0].components.contains_key(TRANSFORM_PATH),
+            "node carries the serialized Transform"
+        );
+
+        // The entity now has a JsnNodeId and no longer PieEphemeral.
+        assert!(
+            world.get::<JsnNodeId>(ephemeral).is_some(),
+            "promoted entity carries a JsnNodeId"
+        );
+        assert!(
+            world.get::<PieEphemeral>(ephemeral).is_none(),
+            "PieEphemeral is removed after promotion"
+        );
+
+        // The AST node's id matches the entity's JsnNodeId.
+        let node_id = world.get::<JsnNodeId>(ephemeral).copied().unwrap();
+        assert_eq!(ast.nodes[0].id, Some(node_id));
+    }
+
+    // ---- guard / no-op tests -------------------------------------------
+
+    #[test]
+    fn no_selection_is_noop() {
+        let mut world = World::new();
+        world.init_resource::<PieProjection>();
+        world.insert_resource(PieViewMode::Live);
+        world.insert_resource(SceneJsnAst::default());
+        world.init_resource::<CommandHistory>();
+        world.insert_resource(Selection::default());
+
+        assert!(!can_save_live_to_scene(&world));
+        save_live_entity_to_scene(&mut world);
+        assert_eq!(world.resource::<CommandHistory>().undo_stack.len(), 0);
+    }
+
+    #[test]
+    fn no_projection_entry_is_noop() {
+        // The selected entity has no entry in PieProjection (e.g. a normal
+        // authored entity, not a live projection). The gate returns false.
+        let mut world = World::new();
+        world.init_resource::<PieProjection>();
+        world.insert_resource(PieViewMode::Live);
+        world.insert_resource(SceneJsnAst::default());
+        world.init_resource::<CommandHistory>();
+
+        // Spawn a non-projected entity and select it.
+        let stale = world.spawn_empty().id();
+        world.insert_resource(Selection {
+            entities: vec![stale],
+        });
+
+        assert!(!can_save_live_to_scene(&world));
+        save_live_entity_to_scene(&mut world);
+        assert_eq!(world.resource::<CommandHistory>().undo_stack.len(), 0);
     }
 }

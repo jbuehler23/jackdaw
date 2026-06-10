@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 bevy = { workspace = true }
+jackdaw_camera_rig = { workspace = true }
 jackdaw_multiplayer = { workspace = true }
 # Needed to express the `Serialize + DeserializeOwned` registration bounds in
 # `MultiplayerAppExt` (mirrors lightyear's own `register_component` bounds).

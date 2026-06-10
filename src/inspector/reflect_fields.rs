@@ -1474,17 +1474,14 @@ fn spawn_editable_field(
     ));
 }
 
-/// Route a field edit to the running game when the inspector is showing
-/// the PIE live mirror, returning `true` when it was handled as a live
-/// edit (so the caller skips the Scene `SetJsnField` path entirely).
+/// When the inspector is in PIE Live mode, apply a field edit to the selected
+/// preview entity immediately (so the viewport reflects the change) and stream
+/// a `SetComponent` to the focused running game instance. Returns `true` when
+/// handled as a live edit so the caller skips the authored `SetJsnField` path.
 ///
-/// `source_entity` is the hidden proxy the live components were
-/// deserialized onto. When it matches an inspector's
-/// [`PieLiveInspectorProxy`], the current full component JSON is taken
-/// from [`PieMirror`], the edited field is merged into it (so the value
-/// stays canonical reflect JSON the game can deserialize), and a
-/// [`ControlEvent::SetComponent`] is broadcast. The next state delta
-/// from the game overwrites the mirror and confirms the change.
+/// The preview entity IS the normal `Selection` entity in Live mode (the
+/// projection has already applied the live overlay to it). A reverse-lookup
+/// through `PieProjection.by_bits` finds which game-side bits to address.
 fn try_route_pie_live_field_edit(
     world: &mut World,
     source_entity: Entity,
@@ -1492,35 +1489,49 @@ fn try_route_pie_live_field_edit(
     field_path: &str,
     field_value: serde_json::Value,
 ) -> bool {
-    use crate::inspector::component_display::PieLiveInspectorProxy;
-    use crate::pie_mirror::{PieLiveSelection, PieMirror, PieViewMode};
+    use crate::pie_mirror::PieViewMode;
     use jackdaw_pie_protocol::ControlEvent;
 
     if *world.resource::<PieViewMode>() != PieViewMode::Live {
         return false;
     }
-    // Confirm the edit targets a live proxy, not a Scene entity that
-    // happens to be selected behind the live view.
-    let is_live_proxy = {
-        let mut proxies = world.query::<&PieLiveInspectorProxy>();
-        proxies.iter(world).any(|p| p.0 == source_entity)
-    };
-    if !is_live_proxy {
+
+    // Find the game-entity bits that correspond to this preview entity.
+    let bits = world
+        .resource::<crate::pie_projection::PieProjection>()
+        .by_bits
+        .iter()
+        .find_map(|(b, &e)| if e == source_entity { Some(*b) } else { None });
+    let Some(bits) = bits else {
+        // Not a projected live entity; fall through to the authored path.
         return false;
-    }
-    let Some(bits) = world.resource::<PieLiveSelection>().selected else {
-        return true;
     };
 
-    let mut full_value = world
-        .resource::<PieMirror>()
-        .entities
-        .get(&bits)
-        .and_then(|entry| entry.components.get(type_path))
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-
+    // Read the full component value from the preview entity via reflection,
+    // then merge the edited field into it so the game receives a complete
+    // canonical component JSON.
     let registry = world.resource::<AppTypeRegistry>().clone();
+    let mut full_value = {
+        use bevy::ecs::reflect::ReflectComponent;
+        use bevy::reflect::serde::TypedReflectSerializer;
+        let reg = registry.read();
+        let registration = reg.get_with_type_path(type_path);
+        let entity_ref = world.get_entity(source_entity).ok();
+        match (registration, entity_ref) {
+            (Some(registration), Some(entity_ref)) => {
+                let reflect_component = registration.data::<ReflectComponent>();
+                reflect_component
+                    .and_then(|rc| rc.reflect(entity_ref))
+                    .and_then(|reflected| {
+                        let serializer = TypedReflectSerializer::new(reflected, &reg);
+                        serde_json::to_value(&serializer).ok()
+                    })
+                    .unwrap_or(serde_json::Value::Null)
+            }
+            _ => serde_json::Value::Null,
+        }
+    };
+
     {
         let reg = registry.read();
         jackdaw_jsn::ast::set_field_in_component_json(

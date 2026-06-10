@@ -17,6 +17,15 @@ pub use jackdaw_geometry::{
 #[reflect(Component, Default, @crate::EditorHidden)]
 pub struct BrushGroup;
 
+/// Marker for the face-mesh child entities the runtime mesh rebuild derives
+/// from a `Brush`. They are never authored, and the PIE stream excludes them:
+/// the editor regenerates faces from the `Brush` itself, so streaming them
+/// would only project meaningless `Transform`/`ChildOf` shells (their `Mesh3d`
+/// and material are stripped as render components). Deliberately not `Reflect`
+/// so it cannot leak into a snapshot or scene file.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct DerivedFaceMesh;
+
 /// Canonical brush data. Serialized. Geometry derived from this.
 #[derive(Component, Reflect, Clone, Debug, Default)]
 #[reflect(Component, Default, @crate::EditorCategory::new("Brush"), @crate::EditorHidden)]

@@ -121,6 +121,8 @@ pub enum EntityTemplate {
     DirectionalLight,
     SpotLight,
     Camera3d,
+    #[cfg(feature = "camera_rig")]
+    CameraRig,
     Plane,
     Cylinder,
     Wedge,
@@ -141,6 +143,8 @@ impl EntityTemplate {
             Self::DirectionalLight => "Directional Light",
             Self::SpotLight => "Spot Light",
             Self::Camera3d => "Camera",
+            #[cfg(feature = "camera_rig")]
+            Self::CameraRig => "Camera Rig",
             Self::Plane => "Plane",
             Self::Cylinder => "Cylinder",
             Self::Wedge => "Wedge",
@@ -245,6 +249,15 @@ pub fn create_entity(
                     size: UVec2::splat(1),
                 },
                 Transform::from_xyz(0.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+            ))
+            .id(),
+        #[cfg(feature = "camera_rig")]
+        EntityTemplate::CameraRig => commands
+            .spawn((
+                Name::new("Camera Rig"),
+                jackdaw_camera_rig::CameraRig::default(),
+                Transform::default(),
+                Visibility::default(),
             ))
             .id(),
         EntityTemplate::Plane => {
@@ -1262,7 +1275,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<EntityAddPointLightOp>()
         .register_operator::<EntityAddDirectionalLightOp>()
         .register_operator::<EntityAddSpotLightOp>()
-        .register_operator::<EntityAddCameraOp>()
+        .register_operator::<EntityAddCameraOp>();
+    #[cfg(feature = "camera_rig")]
+    ctx.register_operator::<EntityAddCameraRigOp>();
+    ctx
         .register_operator::<EntityAddEmptyOp>()
         .register_operator::<EntityAddNavmeshOp>()
         .register_operator::<EntityAddTerrainOp>()
@@ -1518,6 +1534,18 @@ pub(crate) fn entity_add_camera(
 ) -> OperatorResult {
     commands.queue(|world: &mut World| {
         create_entity_in_world(world, EntityTemplate::Camera3d);
+    });
+    OperatorResult::Finished
+}
+
+#[cfg(feature = "camera_rig")]
+#[operator(id = "entity.add.camera_rig", label = "Camera Rig")]
+pub(crate) fn entity_add_camera_rig(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::CameraRig);
     });
     OperatorResult::Finished
 }

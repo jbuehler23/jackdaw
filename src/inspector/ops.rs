@@ -32,26 +32,21 @@ fn has_primary_selection(selection: Res<Selection>) -> bool {
     selection.primary().is_some()
 }
 
-/// When the inspector is in PIE Live mode and `entity` is the hidden
-/// proxy backing the live view, returns the selected game entity's bits
-/// so component add/remove can be streamed to the running game instead
-/// of mutating the editor's Scene. Returns `None` for ordinary Scene
-/// edits.
+/// When the inspector is in PIE Live mode and `entity` is a projected
+/// preview entity, returns its game-side bits so component add/remove can
+/// be streamed to the running game instead of mutating the authored scene.
+/// Returns `None` for ordinary Scene edits.
 fn pie_live_target_bits(world: &mut World, entity: Entity) -> Option<u64> {
-    use crate::inspector::component_display::PieLiveInspectorProxy;
-    use crate::pie_mirror::{PieLiveSelection, PieViewMode};
+    use crate::pie_mirror::PieViewMode;
 
     if *world.resource::<PieViewMode>() != PieViewMode::Live {
         return None;
     }
-    let is_live_proxy = {
-        let mut proxies = world.query::<&PieLiveInspectorProxy>();
-        proxies.iter(world).any(|p| p.0 == entity)
-    };
-    if !is_live_proxy {
-        return None;
-    }
-    world.resource::<PieLiveSelection>().selected
+    world
+        .resource::<crate::pie_projection::PieProjection>()
+        .by_bits
+        .iter()
+        .find_map(|(bits, &e)| if e == entity { Some(*bits) } else { None })
 }
 
 /// Build a default value for `type_path` in canonical reflect JSON (the

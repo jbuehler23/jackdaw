@@ -127,11 +127,6 @@ impl Plugin for InspectorPlugin {
                     component_display::refresh_prefab_field_dots,
                     refresh_name_field,
                     flag_inspector_dirty_on_archetype_change,
-                    (
-                        component_display::pie_live_inspector_populate,
-                        component_display::pie_live_inspector_build,
-                    )
-                        .chain(),
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             );

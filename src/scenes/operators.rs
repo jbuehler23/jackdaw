@@ -158,7 +158,10 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     tab.kind = kind.clone();
     tab.path = Some(canonical.clone());
     tab.display_name = display_name;
-    tab.dirty = false;
+    tab.dirty = jackdaw_jsn::needs_id_migration(&jsn);
+    if tab.dirty {
+        info!("scene node ids upgraded for uniqueness; save to persist them");
+    }
     // Restore the saved viewport camera framing if the scene file
     // carried one; otherwise leave the default (0, 4, 8) from
     // `new_untitled`.

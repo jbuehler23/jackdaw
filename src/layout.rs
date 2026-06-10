@@ -600,6 +600,7 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
                         )],
                     ),
                     pie_view_toggle(toggle_font),
+                    pie_instance_cycle_button(),
                     (
                         HierarchyShowAllButton,
                         Interaction::default(),
@@ -1081,28 +1082,21 @@ fn save_to_scene_button(icon_font: Handle<Font>) -> impl Bundle {
             ..Default::default()
         },
         BackgroundColor(tokens::ELEVATED_BG),
-        observe(
-            |hover: On<Pointer<Over>>,
-             mut bg: Query<&mut BackgroundColor>,
-             mode: Res<PieViewMode>,
-             selection: Res<crate::pie_mirror::PieLiveSelection>,
-             mirror: Res<crate::pie_mirror::PieMirror>| {
-                // Only the enabled button reacts to hover; a dimmed one stays
-                // at its base color (the same condition the click path uses).
-                let enabled = *mode == PieViewMode::Live
-                    && selection
-                        .selected
-                        .and_then(|bits| mirror.entities.get(&bits))
-                        .and_then(|entry| entry.scene_node_id)
-                        .is_some();
-                if !enabled {
+        observe(|hover: On<Pointer<Over>>, mut commands: Commands| {
+            // Only the enabled button reacts to hover; a dimmed one stays
+            // at its base color (the same condition the click path uses).
+            let target = hover.event_target();
+            commands.queue(move |world: &mut World| {
+                if !crate::pie::can_save_live_to_scene(world) {
                     return;
                 }
-                if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                    bg.0 = tokens::TOOLBAR_ACTIVE_BG;
+                if let Ok(mut e) = world.get_entity_mut(target) {
+                    if let Some(mut bg) = e.get_mut::<BackgroundColor>() {
+                        bg.0 = tokens::TOOLBAR_ACTIVE_BG;
+                    }
                 }
-            },
-        ),
+            });
+        }),
         observe(
             |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
                 if let Ok(mut bg) = bg.get_mut(out.event_target()) {
@@ -1143,28 +1137,12 @@ fn save_to_scene_button(icon_font: Handle<Font>) -> impl Bundle {
 /// Show/enable the inspector's "Save to Scene" button.
 ///
 /// Hidden in Scene mode. In Live mode it is shown; enabled (full color) when
-/// the live selection maps to an authored node, otherwise dimmed (the click
-/// and hover paths gate on the same condition, so dimmed is inert).
-pub fn update_save_to_scene_button(
-    mode: Res<PieViewMode>,
-    selection: Res<crate::pie_mirror::PieLiveSelection>,
-    mirror: Res<crate::pie_mirror::PieMirror>,
-    mut buttons: Query<
-        (&mut Node, &mut BackgroundColor, &Children),
-        With<crate::inspector::SaveToSceneButton>,
-    >,
-    mut texts: Query<&mut TextColor>,
-) {
-    if !mode.is_changed() && !selection.is_changed() && !mirror.is_changed() {
-        return;
-    }
-    let live = *mode == PieViewMode::Live;
-    let enabled = live
-        && selection
-            .selected
-            .and_then(|bits| mirror.entities.get(&bits))
-            .and_then(|entry| entry.scene_node_id)
-            .is_some();
+/// `can_save_live_to_scene` is true (a projected entity is selected), otherwise
+/// dimmed (the click and hover paths gate on the same condition, so dimmed is inert).
+pub fn update_save_to_scene_button(world: &mut World) {
+    let mode = *world.resource::<PieViewMode>();
+    let live = mode == PieViewMode::Live;
+    let enabled = live && crate::pie::can_save_live_to_scene(world);
 
     let text_color = if enabled {
         tokens::TEXT_PRIMARY
@@ -1172,14 +1150,28 @@ pub fn update_save_to_scene_button(
         tokens::TEXT_DISABLED
     };
 
-    for (mut node, mut bg, children) in &mut buttons {
-        node.display = if live { Display::Flex } else { Display::None };
-        // Reset to the base color; the hover observer only brightens the
-        // enabled button, and `Out` restores this same value.
-        bg.0 = tokens::ELEVATED_BG;
-        for child in children.iter() {
-            if let Ok(mut tc) = texts.get_mut(child) {
-                tc.0 = text_color;
+    let mut buttons: Vec<(Entity, Vec<Entity>)> = world
+        .query_filtered::<(Entity, &Children), With<crate::inspector::SaveToSceneButton>>()
+        .iter(world)
+        .map(|(e, c)| (e, c.iter().collect()))
+        .collect();
+
+    for (button, children) in buttons.drain(..) {
+        if let Ok(mut e) = world.get_entity_mut(button) {
+            if let Some(mut node) = e.get_mut::<Node>() {
+                node.display = if live { Display::Flex } else { Display::None };
+            }
+            if let Some(mut bg) = e.get_mut::<BackgroundColor>() {
+                // Reset to the base color; the hover observer only brightens the
+                // enabled button, and `Out` restores this same value.
+                bg.0 = tokens::ELEVATED_BG;
+            }
+        }
+        for child in children {
+            if let Ok(mut e) = world.get_entity_mut(child) {
+                if let Some(mut tc) = e.get_mut::<TextColor>() {
+                    tc.0 = text_color;
+                }
             }
         }
     }
@@ -1232,16 +1224,37 @@ fn pie_view_segment(
         BackgroundColor(Color::NONE),
         observe(
             move |click: On<Pointer<Click>>,
-                  mut mode: ResMut<PieViewMode>,
+                  mut commands: Commands,
                   play_state: Res<State<PlayState>>| {
                 let _ = click;
                 if segment == PieViewSegment::Live && *play_state.get() == PlayState::Stopped {
                     return;
                 }
-                *mode = match segment {
-                    PieViewSegment::Scene => PieViewMode::Scene,
-                    PieViewSegment::Live => PieViewMode::Live,
-                };
+                commands.queue(move |world: &mut World| {
+                    let new_mode = match segment {
+                        PieViewSegment::Scene => PieViewMode::Scene,
+                        PieViewSegment::Live => PieViewMode::Live,
+                    };
+                    let current = *world.resource::<PieViewMode>();
+                    if current == new_mode {
+                        return;
+                    }
+                    *world.resource_mut::<PieViewMode>() = new_mode;
+                    match new_mode {
+                        PieViewMode::Live => {
+                            let focused = world
+                                .resource::<crate::pie_mirror::PieInstances>()
+                                .focused
+                                .clone();
+                            if let Some(key) = focused {
+                                crate::pie_projection::set_focused_instance(world, key);
+                            }
+                        }
+                        PieViewMode::Scene => {
+                            crate::pie_projection::revert_preview(world);
+                        }
+                    }
+                });
             },
         ),
         children![
@@ -1345,5 +1358,128 @@ pub fn update_pie_view_header_accent(
     };
     for mut bg in &mut headers {
         bg.0 = color;
+    }
+}
+
+/// Marker on the compact cycling button in the hierarchy header that steps
+/// through focused instances in Live mode.
+#[derive(Component)]
+pub struct PieInstanceCycleButton;
+
+/// Marker on the text node inside the cycle button that shows the focused
+/// instance label.
+#[derive(Component)]
+pub struct PieFocusedInstanceLabel;
+
+/// Build the compact cycling button that shows the focused instance label.
+///
+/// Hidden when not in Live mode. In Live mode, clicking it advances focus
+/// to the next running instance via [`crate::pie_projection::set_focused_instance`].
+/// Only visible/relevant when a play session is active.
+fn pie_instance_cycle_button() -> impl Bundle {
+    (
+        PieInstanceCycleButton,
+        Interaction::default(),
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
+            border: UiRect::all(px(1.0)),
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
+            // Hidden until Live mode; the appearance system flips this.
+            display: Display::None,
+            flex_shrink: 0.0,
+            ..Default::default()
+        },
+        BackgroundColor(tokens::ELEVATED_BG),
+        BorderColor::all(tokens::BORDER_SUBTLE),
+        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.queue(|world: &mut World| {
+                cycle_focused_instance(world);
+            });
+        }),
+        children![(
+            PieFocusedInstanceLabel,
+            Text::new(String::new()),
+            TextFont {
+                font_size: tokens::FONT_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+        )],
+    )
+}
+
+/// Advance focus to the next running instance, wrapping around. Called on
+/// cycle button click. A no-op when fewer than two instances are running.
+fn cycle_focused_instance(world: &mut World) {
+    let instances = world.resource::<crate::pie_mirror::PieInstances>();
+    let focused = instances.focused.clone();
+    let mut keys: Vec<crate::pie::InstanceKey> = instances.buffers.keys().cloned().collect();
+    if keys.len() <= 1 {
+        return;
+    }
+    keys.sort_by(|a, b| a.config.cmp(&b.config).then(a.instance.cmp(&b.instance)));
+    let next = match &focused {
+        None => keys.into_iter().next(),
+        Some(current) => {
+            let pos = keys.iter().position(|k| k == current);
+            match pos {
+                None => keys.into_iter().next(),
+                Some(idx) => {
+                    let next_idx = (idx + 1) % keys.len();
+                    keys.into_iter().nth(next_idx)
+                }
+            }
+        }
+    };
+    if let Some(key) = next {
+        crate::pie_projection::set_focused_instance(world, key);
+    }
+}
+
+/// Keep the instance cycle button's label and visibility in sync with the
+/// current [`PieViewMode`] and [`PieInstances`] state.
+///
+/// Hidden in Scene mode. In Live mode, shows the focused instance label;
+/// dims it when only one instance is running (cycling would be a no-op).
+pub fn update_pie_instance_cycle_button(
+    mode: Res<PieViewMode>,
+    instances: Res<crate::pie_mirror::PieInstances>,
+    play_state: Res<State<jackdaw_api::pie::PlayState>>,
+    mut buttons: Query<(&mut Node, &mut BackgroundColor, &Children), With<PieInstanceCycleButton>>,
+    mut labels: Query<(&mut Text, &mut TextColor), With<PieFocusedInstanceLabel>>,
+) {
+    if !mode.is_changed() && !instances.is_changed() && !play_state.is_changed() {
+        return;
+    }
+    let live =
+        *mode == PieViewMode::Live && *play_state.get() != jackdaw_api::pie::PlayState::Stopped;
+
+    let running_count = instances.buffers.len();
+    let label_text = instances
+        .focused
+        .as_ref()
+        .map(|k| k.to_string())
+        .unwrap_or_default();
+
+    for (mut node, mut bg, children) in &mut buttons {
+        node.display = if live && running_count >= 1 {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        bg.0 = tokens::ELEVATED_BG;
+        for child in children.iter() {
+            if let Ok((mut text, mut tc)) = labels.get_mut(child) {
+                text.0 = label_text.clone();
+                tc.0 = if running_count > 1 {
+                    tokens::TEXT_PRIMARY
+                } else {
+                    tokens::TEXT_SECONDARY
+                };
+            }
+        }
     }
 }

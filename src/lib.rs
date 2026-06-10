@@ -63,6 +63,7 @@ pub mod physics_tool;
 pub mod pie;
 pub mod pie_menu;
 pub mod pie_mirror;
+pub mod pie_projection;
 pub mod prefab;
 pub mod project;
 pub mod project_files;
@@ -404,6 +405,7 @@ impl Plugin for EditorCorePlugin {
                 layout::update_pie_view_toggle_appearance,
                 layout::update_pie_view_header_accent,
                 layout::update_save_to_scene_button,
+                layout::update_pie_instance_cycle_button,
                 auto_hide_internal_entities,
                 decorate_timeline_tooltips,
                 discover_gltf_clips,

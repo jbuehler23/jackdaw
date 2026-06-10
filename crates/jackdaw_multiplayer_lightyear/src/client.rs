@@ -66,6 +66,7 @@ impl Plugin for JackdawMultiplayerClientPlugin {
             client_id: self.client_id,
         });
         app.add_systems(Startup, connect_client);
+        app.add_systems(Update, crate::camera_gate::sync_active_camera);
     }
 }
 

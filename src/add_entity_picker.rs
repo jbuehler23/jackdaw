@@ -18,6 +18,8 @@ use crate::entity_ops::{
     EntityAddPrefabOp, EntityAddPyramidOp, EntityAddReflectionProbeOp, EntityAddSphereOp,
     EntityAddSpotLightOp, EntityAddTerrainOp, EntityAddWedgeOp,
 };
+#[cfg(feature = "camera_rig")]
+use crate::entity_ops::EntityAddCameraRigOp;
 #[cfg(feature = "multiplayer")]
 use crate::entity_ops::{EntityAddNetworkRoomOp, EntityAddSpawnPointOp, EntityAddZoneTransitionOp};
 
@@ -152,6 +154,12 @@ fn builtin_groups() -> Vec<AddMenuItem> {
         AddMenuItem {
             action: op_action::<EntityAddCameraOp>(),
             label: "Camera".into(),
+            category: cameras_entities.clone(),
+        },
+        #[cfg(feature = "camera_rig")]
+        AddMenuItem {
+            action: op_action::<EntityAddCameraRigOp>(),
+            label: "Camera Rig".into(),
             category: cameras_entities.clone(),
         },
         AddMenuItem {
