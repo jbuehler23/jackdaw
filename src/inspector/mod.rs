@@ -114,6 +114,8 @@ impl Plugin for InspectorPlugin {
             .add_observer(on_name_field_commit)
             .add_observer(material_display::on_material_text_commit)
             .add_observer(anim_diamond::on_diamond_click)
+            .init_resource::<component_display::LiveEditMenuTarget>()
+            .add_observer(component_display::on_live_edit_menu_action)
             .add_systems(
                 Update,
                 (
@@ -125,6 +127,7 @@ impl Plugin for InspectorPlugin {
                     anim_diamond::update_anim_diamond_highlights,
                     component_display::decorate_prefab_field_rows,
                     component_display::refresh_prefab_field_dots,
+                    component_display::refresh_live_edit_field_dots,
                     refresh_name_field,
                     flag_inspector_dirty_on_archetype_change,
                 )

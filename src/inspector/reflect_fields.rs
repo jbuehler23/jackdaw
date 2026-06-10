@@ -1497,11 +1497,10 @@ fn try_route_pie_live_field_edit(
     }
 
     // Find the game-entity bits that correspond to this preview entity.
-    let bits = world
-        .resource::<crate::pie_projection::PieProjection>()
-        .by_bits
-        .iter()
-        .find_map(|(b, &e)| if e == source_entity { Some(*b) } else { None });
+    let bits = crate::live_edits::live_bits_for_preview(
+        world.resource::<crate::pie_projection::PieProjection>(),
+        source_entity,
+    );
     let Some(bits) = bits else {
         // Not a projected live entity; fall through to the authored path.
         return false;
@@ -1511,29 +1510,16 @@ fn try_route_pie_live_field_edit(
     // then merge the edited field into it so the game receives a complete
     // canonical component JSON.
     let registry = world.resource::<AppTypeRegistry>().clone();
-    let mut full_value = {
-        use bevy::ecs::reflect::ReflectComponent;
-        use bevy::reflect::serde::TypedReflectSerializer;
-        let reg = registry.read();
-        let registration = reg.get_with_type_path(type_path);
-        let entity_ref = world.get_entity(source_entity).ok();
-        match (registration, entity_ref) {
-            (Some(registration), Some(entity_ref)) => {
-                let reflect_component = registration.data::<ReflectComponent>();
-                reflect_component
-                    .and_then(|rc| rc.reflect(entity_ref))
-                    .and_then(|reflected| {
-                        let serializer = TypedReflectSerializer::new(reflected, &reg);
-                        serde_json::to_value(&serializer).ok()
-                    })
-                    .unwrap_or(serde_json::Value::Null)
-            }
-            _ => serde_json::Value::Null,
-        }
-    };
+    let mut full_value =
+        crate::live_edits::serialize_component_json(world, source_entity, type_path);
 
+    // Log the field as it lands in the merged component (post-normalization),
+    // not the raw inspector input; fall back to the input when the field
+    // cannot be extracted back out.
+    let field_value_for_log;
     {
         let reg = registry.read();
+        let raw = field_value.clone();
         jackdaw_jsn::ast::set_field_in_component_json(
             &mut full_value,
             type_path,
@@ -1541,6 +1527,14 @@ fn try_route_pie_live_field_edit(
             field_value,
             &reg,
         );
+        field_value_for_log = jackdaw_jsn::ast::get_field_in_component_json(
+            &full_value,
+            type_path,
+            field_path,
+            &reg,
+        )
+        .cloned()
+        .unwrap_or(raw);
     }
 
     crate::pie::send_control_to_focused(
@@ -1550,6 +1544,14 @@ fn try_route_pie_live_field_edit(
             type_path: type_path.to_string(),
             value: full_value,
         },
+    );
+    crate::live_edits::record_live_edit(
+        world,
+        source_entity,
+        bits,
+        type_path,
+        field_path,
+        field_value_for_log,
     );
     true
 }

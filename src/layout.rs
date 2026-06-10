@@ -603,9 +603,11 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
                         )],
                     ),
                     pie_view_toggle(toggle_font),
+                    live_badge(),
                     pie_instance_cycle_button(),
                     live_camera_toggle_button(),
                     live_no_signal_chip(),
+                    crate::live_edits_ui::live_edits_badge(),
                     (
                         HierarchyShowAllButton,
                         Interaction::default(),
@@ -734,8 +736,12 @@ fn scene_view() -> impl Bundle {
         Node {
             width: percent(100),
             flex_grow: 1.0,
+            // Width reserved permanently so the Live accent border can be
+            // toggled by color alone without shifting the viewport bounds.
+            border: UiRect::all(px(2.0)),
             ..Default::default()
         },
+        BorderColor::all(Color::NONE),
     )
 }
 
@@ -939,7 +945,6 @@ fn editor_status_bar() -> impl Bundle {
 }
 
 pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
-    let toggle_font = icon_font.clone();
     let save_font = icon_font.clone();
     (
         Node {
@@ -985,7 +990,6 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
                                     ),
                                 )],
                             ),
-                            pie_view_toggle(toggle_font),
                         ],
                     ),
                     (
@@ -1182,9 +1186,6 @@ pub fn update_save_to_scene_button(world: &mut World) {
     }
 }
 
-/// Teal accent color used to signal Live mode in panel headers.
-const LIVE_ACCENT: Color = Color::srgba(0.0, 0.667, 0.733, 0.15);
-
 /// Build the two-segment Scene/Live toggle pill.
 ///
 /// Each segment carries [`PieViewSegment`]. The click observer and
@@ -1244,18 +1245,12 @@ fn pie_view_segment(
                     if current == new_mode {
                         return;
                     }
-                    *world.resource_mut::<PieViewMode>() = new_mode;
                     match new_mode {
                         PieViewMode::Live => {
-                            let focused = world
-                                .resource::<crate::pie_mirror::PieInstances>()
-                                .focused
-                                .clone();
-                            if let Some(key) = focused {
-                                crate::pie_projection::set_focused_instance(world, key);
-                            }
+                            crate::pie::enter_live_view(world);
                         }
                         PieViewMode::Scene => {
+                            *world.resource_mut::<PieViewMode>() = PieViewMode::Scene;
                             crate::pie_projection::revert_preview(world);
                         }
                     }
@@ -1348,21 +1343,114 @@ pub fn update_pie_view_toggle_appearance(
     }
 }
 
-/// Tint both panel header containers when [`PieViewMode`] is `Live`.
+/// Signal Live mode with a subtle ambient tint: wash both panel header
+/// containers toward the accent and draw the viewport border in the accent.
+/// Restores both to their Scene-mode appearance on return.
+///
+/// Runs every frame so a header or viewport node respawned by a dock
+/// rearrange picks the tint back up; the writes are guarded so unchanged
+/// frames do not dirty the UI.
 pub fn update_pie_view_header_accent(
     mode: Res<PieViewMode>,
     mut headers: Query<&mut BackgroundColor, With<PieViewHeader>>,
+    mut viewport_border: Query<&mut BorderColor, With<SceneViewport>>,
 ) {
-    if !mode.is_changed() {
-        return;
-    }
-    let color = if *mode == PieViewMode::Live {
-        LIVE_ACCENT
+    let live = *mode == PieViewMode::Live;
+    let header_color = if live {
+        crate::default_style::LIVE_HEADER_TINT
     } else {
         Color::NONE
     };
     for mut bg in &mut headers {
-        bg.0 = color;
+        if bg.0 != header_color {
+            bg.0 = header_color;
+        }
+    }
+    // The border width is reserved permanently on the viewport node, so only
+    // the color flips here; no layout shift on toggle.
+    let border_color = if live {
+        crate::default_style::LIVE_ACCENT
+    } else {
+        Color::NONE
+    };
+    let target_border = BorderColor::all(border_color);
+    for mut border in &mut viewport_border {
+        if *border != target_border {
+            *border = target_border;
+        }
+    }
+}
+
+/// Marker on the bold `LIVE` badge in the hierarchy header. Visible only
+/// while [`PieViewMode`] is `Live`; its text names the focused instance.
+#[derive(Component)]
+pub struct LiveBadge;
+
+/// Render the badge label for the focused instance: a bare `LIVE` when no
+/// instance is focused, otherwise `LIVE  <instance>` (the same instance
+/// label the picker shows, e.g. `LIVE  Client #1`).
+fn live_badge_label(focused: Option<&crate::pie::InstanceKey>) -> String {
+    match focused {
+        Some(key) => format!("LIVE  {key}"),
+        None => "LIVE".to_string(),
+    }
+}
+
+/// Build the bold `LIVE` badge that sits next to the consolidated mode
+/// control. Hidden outside Live mode; [`update_live_badge`] flips its
+/// display and keeps the focused-instance name current.
+fn live_badge() -> impl Bundle {
+    (
+        LiveBadge,
+        Node {
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
+            display: Display::None,
+            flex_shrink: 0.0,
+            ..Default::default()
+        },
+        BackgroundColor(tokens::ELEVATED_BG),
+        children![(
+            Text::new("LIVE"),
+            TextFont {
+                font_size: tokens::FONT_SM,
+                ..Default::default()
+            },
+            TextColor(crate::default_style::LIVE_ACCENT),
+        )],
+    )
+}
+
+/// Keep the `LIVE` badge's label and visibility in sync with the view mode
+/// and focused instance. Shown only in Live mode; the label tracks the
+/// focused instance the same way the instance picker renders it.
+///
+/// Runs every frame so a badge respawned by a dock rearrange recovers its
+/// state; the writes are guarded so unchanged frames do not dirty the UI.
+pub fn update_live_badge(
+    mode: Res<PieViewMode>,
+    instances: Res<crate::pie_mirror::PieInstances>,
+    mut badges: Query<(&mut Node, &Children), With<LiveBadge>>,
+    mut labels: Query<&mut Text>,
+) {
+    let display = if *mode == PieViewMode::Live {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    let label = live_badge_label(instances.focused.as_ref());
+    for (mut node, children) in &mut badges {
+        if node.display != display {
+            node.display = display;
+        }
+        for child in children.iter() {
+            if let Ok(mut text) = labels.get_mut(child) {
+                if text.0 != label {
+                    text.0 = label.clone();
+                }
+            }
+        }
     }
 }
 
@@ -1623,5 +1711,70 @@ pub fn update_live_camera_controls(
         if node.display != chip_display {
             node.display = chip_display;
         }
+    }
+}
+
+#[cfg(test)]
+mod live_badge_tests {
+    use super::*;
+    use crate::pie::InstanceKey;
+
+    #[test]
+    fn label_without_focus_is_bare_live() {
+        assert_eq!(live_badge_label(None), "LIVE");
+    }
+
+    #[test]
+    fn label_with_focus_names_the_instance() {
+        let key = InstanceKey {
+            config: "Client".to_string(),
+            instance: 1,
+        };
+        assert_eq!(live_badge_label(Some(&key)), "LIVE  Client #1");
+    }
+
+    #[test]
+    fn header_accent_tracks_view_mode() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        let header = world
+            .spawn((PieViewHeader, BackgroundColor(Color::NONE)))
+            .id();
+        let viewport = world
+            .spawn((SceneViewport, BorderColor::all(Color::NONE)))
+            .id();
+
+        world.insert_resource(PieViewMode::Live);
+        world
+            .run_system_once(update_pie_view_header_accent)
+            .expect("system runs");
+
+        assert_eq!(
+            world.get::<BackgroundColor>(header).unwrap().0,
+            crate::default_style::LIVE_HEADER_TINT,
+            "the header tints to the live wash"
+        );
+        assert_eq!(
+            world.get::<BorderColor>(viewport).unwrap().top,
+            crate::default_style::LIVE_ACCENT,
+            "the viewport border picks up the live accent"
+        );
+
+        world.insert_resource(PieViewMode::Scene);
+        world
+            .run_system_once(update_pie_view_header_accent)
+            .expect("system runs");
+
+        assert_eq!(
+            world.get::<BackgroundColor>(header).unwrap().0,
+            Color::NONE,
+            "the header clears back to transparent in Scene mode"
+        );
+        assert_eq!(
+            world.get::<BorderColor>(viewport).unwrap().top,
+            Color::NONE,
+            "the viewport border clears back to transparent in Scene mode"
+        );
     }
 }

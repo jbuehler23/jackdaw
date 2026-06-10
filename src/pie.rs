@@ -173,10 +173,19 @@ impl Plugin for PiePlugin {
             .init_resource::<PieInstances>()
             .init_resource::<crate::pie_projection::PieProjection>()
             .init_resource::<crate::live_frame::LiveFrameStream>()
+            .init_resource::<crate::live_edits::LiveEditLog>()
             .add_systems(Update, (advance_pie_session, drain_game_events))
             .add_systems(
                 OnEnter(PlayState::Stopped),
-                (reset_view_mode_on_stop, crate::live_frame::clear_stream),
+                (
+                    reset_view_mode_on_stop,
+                    crate::live_frame::clear_stream,
+                    crate::live_edits_ui::open_stop_prompt_if_dirty,
+                ),
+            )
+            .add_systems(
+                OnExit(PlayState::Stopped),
+                crate::live_edits_ui::review_handoff_on_replay,
             )
             .add_observer(wire_pie_button);
     }
@@ -187,12 +196,28 @@ fn reset_view_mode_on_stop(mut mode: ResMut<PieViewMode>) {
     *mode = PieViewMode::Scene;
 }
 
+/// Switch the outliner/inspector view to Live and project the focused
+/// instance's buffered state into the preview world.
+///
+/// Shared by the Scene/Live toggle and the auto-enter path that fires the
+/// moment a running instance first streams data. A no-op for the projection
+/// when no instance is focused yet. [`reset_view_mode_on_stop`] owns the
+/// revert when play stops.
+pub(crate) fn enter_live_view(world: &mut World) {
+    *world.resource_mut::<PieViewMode>() = PieViewMode::Live;
+    crate::pie_projection::reproject_focused(world);
+}
+
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<PiePlayOp>()
         .register_operator::<PiePauseOp>()
         .register_operator::<PieStopOp>()
         .register_operator::<PieReloadOp>()
-        .register_operator::<PieLiveCameraToggleOp>();
+        .register_operator::<PieLiveCameraToggleOp>()
+        .register_operator::<crate::live_edits::PieLiveEditSaveOp>()
+        .register_operator::<crate::live_edits::PieLiveEditRevertOp>()
+        .register_operator::<crate::live_edits::PieLiveEditsApplyAllOp>()
+        .register_operator::<crate::live_edits::PieLiveEditsDiscardAllOp>();
 }
 
 fn play_is_stopped_or_paused(state: Res<State<PlayState>>) -> bool {
@@ -801,7 +826,7 @@ fn promote_authored_overlay(world: &mut World, preview: Entity, bits: u64) {
 /// Path B: preview entity has no AST node (game-spawned runtime entity).
 /// Create a new authored node from its reflected components, bind it, and
 /// remove the ephemeral marker. Not undoable in v1.
-fn promote_ephemeral_to_authored(world: &mut World, preview: Entity, bits: u64) {
+pub(crate) fn promote_ephemeral_to_authored(world: &mut World, preview: Entity, bits: u64) {
     use crate::pie_projection::PieEphemeral;
 
     let entries = serialize_preview_entity_components(world, preview);
@@ -1192,9 +1217,6 @@ fn drain_game_events(world: &mut World) {
         }
     }
 
-    let live_mode =
-        *world.resource::<crate::pie_mirror::PieViewMode>() == crate::pie_mirror::PieViewMode::Live;
-
     for (key, events) in per_instance {
         let count = events.len();
 
@@ -1204,12 +1226,24 @@ fn drain_game_events(world: &mut World) {
         // Establish focus on the first instance seen, regardless of view mode.
         let focused = if focused.is_none() {
             world.resource_mut::<PieInstances>().focused = Some(key.clone());
+            // First streamed data: content exists to show, so auto-enter Live.
+            // `reset_view_mode_on_stop` owns the revert when play stops.
+            if *world.resource::<crate::pie_mirror::PieViewMode>()
+                == crate::pie_mirror::PieViewMode::Scene
+            {
+                enter_live_view(world);
+            }
             Some(key.clone())
         } else {
             focused
         };
 
         let is_focused = focused.as_ref() == Some(&key);
+
+        // Read after the auto-enter above so the first batch projects in the
+        // same drain it arrives.
+        let live_mode = *world.resource::<crate::pie_mirror::PieViewMode>()
+            == crate::pie_mirror::PieViewMode::Live;
 
         for event in events {
             // Always accumulate into the per-instance buffer.
@@ -1468,5 +1502,23 @@ mod save_to_scene_tests {
         assert!(!can_save_live_to_scene(&world));
         save_live_entity_to_scene(&mut world);
         assert_eq!(world.resource::<CommandHistory>().undo_stack.len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod enter_live_tests {
+    use super::*;
+    use crate::pie_projection::PieProjection;
+
+    #[test]
+    fn enter_live_view_flips_mode_to_live() {
+        let mut world = World::new();
+        world.insert_resource(PieViewMode::Scene);
+        world.init_resource::<PieInstances>();
+        world.init_resource::<PieProjection>();
+
+        enter_live_view(&mut world);
+
+        assert_eq!(*world.resource::<PieViewMode>(), PieViewMode::Live);
     }
 }

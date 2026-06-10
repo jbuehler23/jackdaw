@@ -201,6 +201,16 @@ pub fn set_focused_instance(world: &mut World, key: crate::pie::InstanceKey) {
     );
     revert_preview(world);
     crate::live_frame::clear_stream(world);
+    // The stop prompt owns the log while it is open.
+    let prompt_open = world
+        .get_resource::<crate::live_edits_ui::StopPrompt>()
+        .is_some_and(|prompt| prompt.0);
+    if !prompt_open
+        && let Some(mut log) = world.get_resource_mut::<crate::live_edits::LiveEditLog>()
+    {
+        log.entries.clear();
+        log.pending_action = None;
+    }
     world
         .resource_mut::<crate::pie_mirror::PieInstances>()
         .focused = Some(key.clone());
@@ -1135,6 +1145,57 @@ mod tests {
                 .by_bits
                 .contains_key(&0xA1),
             "no-op call must not revert projection"
+        );
+    }
+
+    fn log_with_one_entry() -> crate::live_edits::LiveEditLog {
+        let mut log = crate::live_edits::LiveEditLog::default();
+        log.entries.push((
+            crate::live_edits::LiveEditKey {
+                bits: 7,
+                type_path: "game::Health".to_string(),
+                field_path: "current".to_string(),
+            },
+            crate::live_edits::LiveEditEntry {
+                node_id: None,
+                baseline: None,
+                live_value: serde_json::json!(50.0),
+                label: "player / Health.current".to_string(),
+            },
+        ));
+        log
+    }
+
+    #[test]
+    fn focus_change_skips_log_clear_while_prompt_open() {
+        let mut world = build_focus_world();
+        world.insert_resource(log_with_one_entry());
+        world.insert_resource(crate::live_edits_ui::StopPrompt(true));
+
+        set_focused_instance(&mut world, instance_key("A"));
+
+        assert_eq!(
+            world
+                .resource::<crate::live_edits::LiveEditLog>()
+                .entries
+                .len(),
+            1,
+            "the stop prompt owns the log while it is open"
+        );
+
+        // With the prompt closed (or the resource absent entirely), the
+        // focus change clears the log as usual.
+        let mut world = build_focus_world();
+        world.insert_resource(log_with_one_entry());
+        world.insert_resource(crate::live_edits_ui::StopPrompt(false));
+
+        set_focused_instance(&mut world, instance_key("A"));
+
+        assert!(
+            world
+                .resource::<crate::live_edits::LiveEditLog>()
+                .is_empty(),
+            "a closed prompt does not block the clear"
         );
     }
 }

@@ -659,31 +659,46 @@ impl EditorCommand for SetJsnField {
     }
 
     fn undo(&mut self, world: &mut World) {
+        // An empty field path with a Null old value means execute authored a
+        // component that did not exist before; undo removes the entry rather
+        // than writing a literal null into the scene.
+        let removes_component = self.field_path.is_empty() && self.old_value.is_null();
         {
             let registry = world.resource::<AppTypeRegistry>().clone();
             let registry = registry.read();
             let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
-            ast.set_component_field(
+            if removes_component {
+                if let Some(node) = ast.node_for_entity_mut(self.entity) {
+                    node.components.remove(&self.type_path);
+                }
+                ast.mark_dirty(self.entity);
+            } else {
+                ast.set_component_field(
+                    self.entity,
+                    &self.type_path,
+                    &self.field_path,
+                    self.old_value.clone(),
+                    &registry,
+                );
+                // Restore derived state if execute promoted it to authored.
+                if self.was_derived
+                    && let Some(node) = ast.node_for_entity_mut(self.entity)
+                {
+                    node.derived_components.insert(self.type_path.clone());
+                }
+            }
+        }
+        if removes_component {
+            remove_component_from_ecs(world, self.entity, &self.type_path);
+        } else {
+            apply_jsn_field_to_ecs(
+                world,
                 self.entity,
                 &self.type_path,
                 &self.field_path,
-                self.old_value.clone(),
-                &registry,
+                &self.old_value,
             );
-            // Restore derived state if execute promoted it to authored.
-            if self.was_derived
-                && let Some(node) = ast.node_for_entity_mut(self.entity)
-            {
-                node.derived_components.insert(self.type_path.clone());
-            }
         }
-        apply_jsn_field_to_ecs(
-            world,
-            self.entity,
-            &self.type_path,
-            &self.field_path,
-            &self.old_value,
-        );
     }
 
     fn description(&self) -> &str {
@@ -730,6 +745,23 @@ fn apply_jsn_field_to_ecs(
             apply_json_to_reflect(field, value, &registry);
         }
     }
+}
+
+/// Remove a reflected component from an ECS entity by type path. A no-op when
+/// the type is unregistered or the entity is gone.
+fn remove_component_from_ecs(world: &mut World, entity: Entity, type_path: &str) {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let Some(registration) = registry.get_with_type_path(type_path) else {
+        return;
+    };
+    let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+        return;
+    };
+    let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+        return;
+    };
+    reflect_component.remove(&mut entity_mut);
 }
 
 /// Convert a `serde_json::Value` into the matching reflect primitive and apply it.

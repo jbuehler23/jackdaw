@@ -320,12 +320,13 @@ impl SceneJsnAst {
         registry: &TypeRegistry,
     ) -> Option<&serde_json::Value> {
         let component = self.get_component(entity, type_path)?;
-        let registration = registry.get_with_type_path(type_path)?;
-        typed_json_path_get(component, field_path, registration, registry)
+        get_field_in_component_json(component, type_path, field_path, registry)
     }
 
     /// Set a nested field within a component's JSON by dotted path, marking dirty.
     /// Uses the type registry to resolve named fields to array indices.
+    /// An empty `field_path` writes the whole component, inserting the entry
+    /// when the component is not yet authored on the node.
     pub fn set_component_field(
         &mut self,
         entity: Entity,
@@ -334,6 +335,13 @@ impl SceneJsnAst {
         value: serde_json::Value,
         registry: &TypeRegistry,
     ) {
+        if field_path.is_empty() {
+            if let Some(node) = self.node_for_entity_mut(entity) {
+                node.components.insert(type_path.to_string(), value);
+            }
+            self.mark_dirty(entity);
+            return;
+        }
         let registration = registry.get_with_type_path(type_path);
         if let Some(node) = self.node_for_entity_mut(entity)
             && let Some(component) = node.components.get_mut(type_path)
@@ -504,6 +512,23 @@ impl SceneJsnAst {
 // serializes as [x, y, z] but reflection paths use `translation.x`).
 
 use bevy::reflect::{EnumInfo, TypeInfo, TypeRegistration, VariantInfo};
+
+/// Read a nested field by dotted path from a standalone component JSON value,
+/// resolving named fields to array indices via the type registry. Uses the
+/// same path syntax as [`set_field_in_component_json`]: dot-separated
+/// segments, bracket notation for list elements (e.g. `faces[0]`), and
+/// automatic enum-variant unwrapping. An empty `field_path` returns the whole
+/// component value. Returns `None` when `type_path` is not registered or any
+/// path segment is absent.
+pub fn get_field_in_component_json<'a>(
+    component: &'a serde_json::Value,
+    type_path: &str,
+    field_path: &str,
+    registry: &TypeRegistry,
+) -> Option<&'a serde_json::Value> {
+    let registration = registry.get_with_type_path(type_path)?;
+    typed_json_path_get(component, field_path, registration, registry)
+}
 
 /// Set a nested field by dotted path inside a standalone component JSON
 /// value, resolving named fields to array indices via the type registry.
@@ -937,6 +962,130 @@ mod tests {
         );
 
         assert_eq!(component, before);
+    }
+
+    #[test]
+    fn get_field_reads_named_struct_field() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<Transform>();
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        let component = to_canonical_json(&Transform::from_xyz(1.0, 2.0, 3.0), &registry);
+
+        // `Vec3` serializes as `[x, y, z]`; the named segment resolves via the registry.
+        let x = get_field_in_component_json(&component, type_path, "translation.x", &registry);
+        assert_eq!(x, Some(&serde_json::json!(1.0)));
+
+        let translation =
+            get_field_in_component_json(&component, type_path, "translation", &registry);
+        assert_eq!(translation, Some(&serde_json::json!([1.0, 2.0, 3.0])));
+    }
+
+    #[test]
+    fn get_field_empty_path_returns_whole_component() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<Transform>();
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        let component = to_canonical_json(&Transform::IDENTITY, &registry);
+
+        let result = get_field_in_component_json(&component, type_path, "", &registry);
+        assert_eq!(result, Some(&component));
+    }
+
+    #[test]
+    fn get_field_missing_path_returns_none() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<Transform>();
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        let component = to_canonical_json(&Transform::IDENTITY, &registry);
+
+        let result =
+            get_field_in_component_json(&component, type_path, "does_not_exist", &registry);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_field_unregistered_type_returns_none() {
+        let registry = TypeRegistry::new();
+        let component = serde_json::json!({ "translation": [0.0, 0.0, 0.0] });
+
+        let result = get_field_in_component_json(
+            &component,
+            "not::A::RegisteredType",
+            "translation",
+            &registry,
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_field_round_trips_with_set_field() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<Transform>();
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        let mut component = to_canonical_json(&Transform::IDENTITY, &registry);
+
+        set_field_in_component_json(
+            &mut component,
+            type_path,
+            "translation.y",
+            serde_json::json!(7.0),
+            &registry,
+        );
+
+        let result =
+            get_field_in_component_json(&component, type_path, "translation.y", &registry);
+        assert_eq!(result, Some(&serde_json::json!(7.0)));
+    }
+
+    // Local enum for the enum-unwrap test. Mirrors the `ColliderConstructor`
+    // pattern referenced in `typed_json_path_get`.
+    #[derive(Reflect, Clone)]
+    enum TestShape {
+        Sphere { radius: f32 },
+        Box { half_x: f32, half_y: f32 },
+    }
+
+    // Local struct with a list field for the bracket-index test.
+    #[derive(Reflect, Clone)]
+    struct TestList {
+        items: Vec<f32>,
+    }
+
+    #[test]
+    fn get_field_unwraps_enum_variant_and_reads_field() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<TestShape>();
+        registry.register::<f32>();
+
+        let type_path = "jackdaw_jsn::ast::tests::TestShape";
+        // Bevy's reflect serializer emits struct-variants as `{"Sphere": {"radius": 1.0}}`.
+        let component = serde_json::json!({ "Sphere": { "radius": 1.0_f32 } });
+
+        let result = get_field_in_component_json(&component, type_path, "radius", &registry);
+        assert_eq!(result, Some(&serde_json::json!(1.0_f32)));
+    }
+
+    #[test]
+    fn get_field_bracket_index_reads_list_element() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<TestList>();
+        registry.register::<Vec<f32>>();
+        registry.register::<f32>();
+
+        let type_path = "jackdaw_jsn::ast::tests::TestList";
+        let component = to_canonical_json(
+            &TestList {
+                items: vec![10.0, 20.0, 30.0],
+            },
+            &registry,
+        );
+
+        let result = get_field_in_component_json(&component, type_path, "items[1]", &registry);
+        assert_eq!(result, Some(&serde_json::json!(20.0_f32)));
     }
 
     /// A freshly authored node gets a `JsnNodeId`, and a round-trip through
