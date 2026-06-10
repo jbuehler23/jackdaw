@@ -21,14 +21,11 @@ pub fn sync_active_camera(
                 break;
             }
         }
-        match (owned_by_local, is_active) {
-            (true, false) => {
-                commands.entity(rig).insert(ActiveCameraRig);
-            }
-            (false, true) => {
-                commands.entity(rig).remove::<ActiveCameraRig>();
-            }
-            _ => {}
+        if owned_by_local && !is_active {
+            // try_insert: the avatar (and its rig) can despawn the same frame.
+            commands.entity(rig).try_insert(ActiveCameraRig);
+        } else if !owned_by_local && is_active {
+            commands.entity(rig).remove::<ActiveCameraRig>();
         }
     }
 }

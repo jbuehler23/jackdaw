@@ -146,6 +146,21 @@ pub fn record_live_edit(
         entry.node_id = entry.node_id.or(node_id);
         return;
     }
+    // A zone hot-reload respawns the same authored node under new bits, so the
+    // exact-key lookup misses. Re-key the existing entry for this node and
+    // field instead of duplicating it, keeping its baseline and label.
+    if let Some(node_id) = node_id {
+        let mut log = world.resource_mut::<LiveEditLog>();
+        if let Some((existing_key, existing_entry)) = log.entries.iter_mut().find(|(k, e)| {
+            e.node_id == Some(node_id)
+                && k.type_path == type_path
+                && k.field_path == field_path
+        }) {
+            existing_key.bits = bits;
+            existing_entry.live_value = field_value;
+            return;
+        }
+    }
     let registry = world.resource::<AppTypeRegistry>().clone();
     let baseline = {
         let registry = registry.read();
@@ -358,6 +373,21 @@ pub fn revert_entry(world: &mut World, key: &LiveEditKey) {
         return;
     };
 
+    // The running game may have respawned the entity under new bits since the
+    // edit was recorded, so address the revert through the current projection
+    // rather than the bits stored in the key.
+    let current_bits = {
+        let projection = world.resource::<crate::pie_projection::PieProjection>();
+        live_bits_for_preview(projection, entity)
+    };
+    let Some(current_bits) = current_bits else {
+        warn!(
+            "revert live edit: '{}' has no live counterpart right now, keeping the entry",
+            entry.label
+        );
+        return;
+    };
+
     // Merge the baseline field into the entity's current full component
     // JSON so the game receives a complete canonical component value.
     let registry = world.resource::<AppTypeRegistry>().clone();
@@ -387,7 +417,7 @@ pub fn revert_entry(world: &mut World, key: &LiveEditKey) {
     crate::pie::send_control_to_focused(
         world,
         ControlEvent::SetComponent {
-            entity: key.bits,
+            entity: current_bits,
             type_path: key.type_path.clone(),
             value: merged.clone(),
         },
@@ -846,6 +876,42 @@ mod tests {
     }
 
     #[test]
+    fn re_edit_after_respawn_rekeys_instead_of_duplicating() {
+        let (mut world, preview, _node_id) = build_world();
+        record_live_edit(
+            &mut world,
+            preview,
+            0xA1,
+            TRANSFORM_PATH,
+            "translation",
+            serde_json::json!([4.0, 2.0, 3.0]),
+        );
+        // The zone hot-reload respawned the same authored node under new game
+        // bits; re-editing the same field must reuse the entry, not duplicate.
+        record_live_edit(
+            &mut world,
+            preview,
+            0xB2,
+            TRANSFORM_PATH,
+            "translation",
+            serde_json::json!([5.0, 2.0, 3.0]),
+        );
+        let log = world.resource::<LiveEditLog>();
+        assert_eq!(log.entries.len(), 1, "same logical field, one entry");
+        assert_eq!(log.entries[0].0.bits, 0xB2, "re-keyed to the live bits");
+        assert_eq!(
+            log.entries[0].1.baseline,
+            Some(serde_json::json!([1.0, 2.0, 3.0])),
+            "baseline survives the re-key"
+        );
+        assert_eq!(
+            log.entries[0].1.live_value,
+            serde_json::json!([5.0, 2.0, 3.0]),
+            "the latest live value is kept"
+        );
+    }
+
+    #[test]
     fn unnamed_entity_label_uses_bits() {
         let (mut world, _preview, _node_id) = build_world();
 
@@ -934,6 +1000,13 @@ mod tests {
     #[test]
     fn revert_requires_a_baseline() {
         let (mut world, preview, _node_id) = build_world();
+
+        // The running game still has a live counterpart for the preview entity;
+        // revert addresses it through the projection.
+        world
+            .resource_mut::<PieProjection>()
+            .by_bits
+            .insert(7, preview);
 
         // Unauthored component: no baseline, revert must keep the entry.
         record_live_edit(
@@ -1177,6 +1250,10 @@ mod tests {
             "translation",
             serde_json::json!([9.0, 2.0, 3.0]),
         );
+        world
+            .resource_mut::<PieProjection>()
+            .by_bits
+            .insert(7, preview);
         world.entity_mut(preview).remove::<Transform>();
 
         revert_entry(&mut world, &key_for(7, "translation"));
@@ -1185,6 +1262,37 @@ mod tests {
             world.resource::<LiveEditLog>().entries.len(),
             1,
             "the entry stays when the entity lost the component"
+        );
+    }
+
+    #[test]
+    fn revert_without_a_live_counterpart_keeps_the_entry() {
+        let (mut world, preview, _node_id) = build_world();
+
+        record_live_edit(
+            &mut world,
+            preview,
+            7,
+            TRANSFORM_PATH,
+            "translation",
+            serde_json::json!([9.0, 2.0, 3.0]),
+        );
+        // No projection mapping to the preview entity: the running game has no
+        // live counterpart right now, so revert keeps the entry and sends
+        // nothing.
+        assert!(world.resource::<PieProjection>().by_bits.is_empty());
+
+        revert_entry(&mut world, &key_for(7, "translation"));
+
+        assert_eq!(
+            world.resource::<LiveEditLog>().entries.len(),
+            1,
+            "an entry with no live counterpart is kept on revert"
+        );
+        assert_eq!(
+            world.get::<Transform>(preview).map(|t| t.translation),
+            Some(Vec3::new(1.0, 2.0, 3.0)),
+            "the preview entity is untouched: nothing was applied"
         );
     }
 

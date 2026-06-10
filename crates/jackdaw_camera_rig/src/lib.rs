@@ -79,6 +79,7 @@ impl Plugin for JackdawCameraRigPlugin {
         if !app.is_plugin_added::<JackdawCameraRigTypesPlugin>() {
             app.add_plugins(JackdawCameraRigTypesPlugin);
         }
+        app.init_resource::<CameraRigActivation>();
         // activate_lone_rig and materialize_active run in Update so Camera3d is inserted before
         // PostUpdate rendering systems inspect it.
         // drive_camera_rig runs in PostUpdate after TransformSystems::Propagate so it reads
@@ -96,35 +97,61 @@ impl Plugin for JackdawCameraRigPlugin {
     }
 }
 
-/// When no rig is active and exactly one rig exists in the world, automatically marks it active.
-/// Does nothing if a second rig is present (the game must choose explicitly).
+/// Who decides which rig is active.
+///
+/// `Automatic` (the default) keeps the single-player convenience: a lone rig
+/// activates itself. `Gated` hands ownership to an external system (the
+/// multiplayer local-player gate), which both grants AND revokes the marker;
+/// the convenience must then stay out of the way, or the two fight in an
+/// add/remove loop over any rig the gate refuses (the camera flickers on and
+/// off every frame).
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CameraRigActivation {
+    #[default]
+    Automatic,
+    Gated,
+}
+
+/// When activation is `Automatic`, no rig is active, and exactly one rig
+/// exists in the world, marks it active. Does nothing if a second rig is
+/// present (the game must choose explicitly) or when an external gate owns
+/// activation.
 fn activate_lone_rig(
     mut commands: Commands,
+    activation: Option<Res<CameraRigActivation>>,
     active: Query<(), With<ActiveCameraRig>>,
     rigs: Query<Entity, With<CameraRig>>,
 ) {
+    if activation.as_deref().copied().unwrap_or_default() == CameraRigActivation::Gated {
+        return;
+    }
     if !active.is_empty() {
         return;
     }
     let mut iter = rigs.iter();
     if let (Some(only), None) = (iter.next(), iter.next()) {
-        commands.entity(only).insert(ActiveCameraRig);
+        // try_insert: gameplay can despawn the rig in the same frame.
+        commands.entity(only).try_insert(ActiveCameraRig);
     }
 }
 
-/// Inserts `Camera3d` and `CameraLook` on any active rig that does not yet have them.
+/// Inserts `Camera3d` on any active rig that does not yet have one, plus a
+/// fresh `CameraLook` when the rig has never had one. A rig that is
+/// re-activated keeps its existing look, so a transient control loss does not
+/// snap the orbit back to its defaults.
 fn materialize_active(
     mut commands: Commands,
-    rigs: Query<(Entity, &CameraRig), (With<ActiveCameraRig>, Without<Camera3d>)>,
+    rigs: Query<(Entity, &CameraRig, Has<CameraLook>), (With<ActiveCameraRig>, Without<Camera3d>)>,
 ) {
-    for (e, rig) in &rigs {
-        commands.entity(e).insert((
-            Camera3d::default(),
-            CameraLook {
+    for (e, rig, has_look) in &rigs {
+        let mut entity = commands.entity(e);
+        entity.try_insert(Camera3d::default());
+        if !has_look {
+            entity.try_insert(CameraLook {
                 yaw: 0.0,
                 pitch: if rig.mode == CameraMode::ThirdPerson { rig.pitch } else { 0.0 },
-            },
-        ));
+            });
+        }
     }
 }
 
@@ -335,5 +362,21 @@ mod tests {
         let second = app.world_mut().spawn((CameraRig::default(), ChildOf(p))).id();
         app.update();
         assert!(!app.world().entity(second).contains::<ActiveCameraRig>());
+    }
+
+    #[test]
+    fn gated_activation_leaves_a_lone_rig_dormant() {
+        let mut app = App::new();
+        app.add_plugins((bevy::transform::TransformPlugin, JackdawCameraRigPlugin));
+        app.insert_resource(CameraRigActivation::Gated);
+        let p = app.world_mut().spawn(Transform::default()).id();
+        let only = app.world_mut().spawn((CameraRig::default(), ChildOf(p))).id();
+        app.update();
+        app.update();
+        assert!(
+            !app.world().entity(only).contains::<ActiveCameraRig>(),
+            "a gate owns activation; the lone-rig convenience must not fight it"
+        );
+        assert!(!app.world().entity(only).contains::<Camera3d>());
     }
 }

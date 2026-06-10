@@ -179,6 +179,7 @@ impl Plugin for PiePlugin {
                 OnEnter(PlayState::Stopped),
                 (
                     reset_view_mode_on_stop,
+                    cleanup_session_on_stop,
                     crate::live_frame::clear_stream,
                     crate::live_edits_ui::open_stop_prompt_if_dirty,
                 ),
@@ -194,6 +195,20 @@ impl Plugin for PiePlugin {
 /// Reset the outliner/inspector view back to Scene when play stops.
 fn reset_view_mode_on_stop(mut mode: ResMut<PieViewMode>) {
     *mode = PieViewMode::Scene;
+}
+
+/// Shared cleanup for every path into `Stopped`: the stop button, a crashed
+/// or self-exited child being reaped, and the last per-instance stop. Drops
+/// the buffered snapshots and focus, then reverts the preview to the authored
+/// scene. Without this on the reap path, ghost previews and a dead focus key
+/// survive a crash, and the dead key blocks the next session's auto-enter
+/// (focus is only established when none exists).
+fn cleanup_session_on_stop(world: &mut World) {
+    if let Some(mut instances) = world.get_resource_mut::<PieInstances>() {
+        instances.buffers.clear();
+        instances.focused = None;
+    }
+    crate::pie_projection::revert_preview(world);
 }
 
 /// Switch the outliner/inspector view to Live and project the focused
@@ -552,12 +567,6 @@ pub fn handle_stop(world: &mut World) {
         world
             .resource_mut::<NextState<PlayState>>()
             .set(PlayState::Stopped);
-        if let Some(mut instances) = world.get_resource_mut::<PieInstances>() {
-            instances.buffers.clear();
-            instances.focused = None;
-        }
-        crate::live_frame::clear_stream(world);
-        crate::pie_projection::revert_preview(world);
         info!("PIE: Stop");
     }
 }
@@ -1502,6 +1511,111 @@ mod save_to_scene_tests {
         assert!(!can_save_live_to_scene(&world));
         save_live_entity_to_scene(&mut world);
         assert_eq!(world.resource::<CommandHistory>().undo_stack.len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod stop_cleanup_tests {
+    use bevy::ecs::reflect::AppTypeRegistry;
+    use bevy::reflect::TypePath;
+    use jackdaw_commands::CommandHistory;
+    use jackdaw_jsn::SceneJsnAst;
+    use jackdaw_jsn::ast::{JsnEntityNode, JsnNodeId};
+
+    use super::*;
+    use crate::pie_mirror::{InstanceBuffer, PieMirrorEntry};
+    use crate::pie_projection::PieProjection;
+    use crate::scenes::Scenes;
+
+    #[derive(Component, Reflect, Default, PartialEq, Debug)]
+    #[reflect(Component)]
+    #[type_path = "stop_cleanup_tests"]
+    struct Mutable(i32);
+
+    fn instance_key(name: &str) -> InstanceKey {
+        InstanceKey {
+            config: name.to_string(),
+            instance: 1,
+        }
+    }
+
+    /// Minimal world that satisfies `cleanup_session_on_stop`: a registry with a
+    /// reflected component, a `PieProjection`, an authored AST node bound to a
+    /// preview entity, and the resources `revert_preview` touches. `Scenes` has
+    /// no tabs, so `respawn_scene_from_ast` no-ops while the despawn and map
+    /// clearing still run.
+    fn build_focus_world() -> World {
+        let mut world = World::new();
+        world.init_resource::<AppTypeRegistry>();
+        {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            registry.write().register::<Mutable>();
+        }
+        world.init_resource::<PieProjection>();
+
+        let preview_entity = world.spawn(Mutable(0)).id();
+        let node_id = JsnNodeId::next();
+        let mut ast = SceneJsnAst::default();
+        ast.nodes.push(JsnEntityNode {
+            id: Some(node_id),
+            parent: None,
+            components: std::collections::HashMap::new(),
+            derived_components: std::collections::HashSet::new(),
+            ecs_entity: Some(preview_entity),
+        });
+        ast.ecs_to_jsn.insert(preview_entity, 0);
+        world.insert_resource(ast);
+
+        world.init_resource::<CommandHistory>();
+        world.init_resource::<Scenes>();
+        world.init_resource::<PieInstances>();
+        world
+    }
+
+    fn make_buffer_with_entity(bits: u64) -> InstanceBuffer {
+        let mut buf = InstanceBuffer::default();
+        let mut components = std::collections::HashMap::new();
+        components.insert(
+            <Mutable as TypePath>::type_path().to_string(),
+            serde_json::json!(bits as i32),
+        );
+        buf.entities.insert(
+            bits,
+            PieMirrorEntry {
+                components,
+                scene_node_id: None,
+            },
+        );
+        buf
+    }
+
+    #[test]
+    fn stop_cleanup_clears_session_state() {
+        let mut world = build_focus_world();
+        let key = instance_key("game");
+        world
+            .resource_mut::<PieInstances>()
+            .buffers
+            .insert(key.clone(), make_buffer_with_entity(0xA0));
+        world.resource_mut::<PieInstances>().focused = Some(key);
+        let ephemeral = world.spawn(crate::pie_projection::PieEphemeral).id();
+        world
+            .resource_mut::<crate::pie_projection::PieProjection>()
+            .by_bits
+            .insert(0xA0, ephemeral);
+
+        cleanup_session_on_stop(&mut world);
+
+        let instances = world.resource::<PieInstances>();
+        assert!(instances.buffers.is_empty());
+        assert!(instances.focused.is_none());
+        assert!(world.get_entity(ephemeral).is_err());
+        assert!(
+            world
+                .resource::<crate::pie_projection::PieProjection>()
+                .by_bits
+                .is_empty()
+        );
     }
 }
 

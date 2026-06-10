@@ -47,8 +47,17 @@ const CHILDREN_PATH: &str = "bevy_ecs::hierarchy::Children";
 /// cannot crash the editor.
 const PROJECTION_SKIP_PREFIXES: &[&str] = &["bevy_camera::camera::", "bevy_camera::components::"];
 
+/// Streamed but never saved: these must reach the preview even though the
+/// save filter rejects them. The rig activation marker is how the Live
+/// camera lock finds the game's active rig; dropping it here would silently
+/// misalign picking and overlays against the streamed frame.
+const PROJECTION_ALLOW_PATHS: &[&str] = &["jackdaw_camera_rig::ActiveCameraRig"];
+
 /// True when a streamed component must not be applied to a preview entity.
 fn projection_skips(type_path: &str) -> bool {
+    if PROJECTION_ALLOW_PATHS.contains(&type_path) {
+        return false;
+    }
     type_path == CHILDREN_PATH
         || crate::scene_io::should_skip_component(type_path)
         || PROJECTION_SKIP_PREFIXES
@@ -241,6 +250,14 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                 .resource_mut::<PieProjection>()
                 .by_bits
                 .insert(bits, preview);
+            // A zone hot-reload respawns an authored node under new bits and
+            // sends the new spawn before the old despawn, so drop any other
+            // bits still aliasing this preview entity. Otherwise a reverse
+            // lookup could resolve dead bits.
+            world
+                .resource_mut::<PieProjection>()
+                .by_bits
+                .retain(|&b, &mut mapped| b == bits || mapped != preview);
             // Hierarchy is remapped, not applied: stash ChildOf for after the
             // value components land.
             let mut child_of: Option<serde_json::Value> = None;
@@ -294,10 +311,16 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                 .resource_mut::<PieProjection>()
                 .by_bits
                 .remove(&entity);
+            // Children queued for a parent that will never spawn again.
+            world
+                .resource_mut::<PieProjection>()
+                .pending_children
+                .remove(&entity);
             if let Some(preview) = preview {
                 // Only despawn entities this projector created; authored
                 // entities are reverted on stop, not despawned here.
                 if world.get::<PieEphemeral>(preview).is_some() {
+                    detach_authored_descendants(world, preview);
                     if let Ok(e) = world.get_entity_mut(preview) {
                         e.despawn();
                     }
@@ -305,6 +328,27 @@ pub fn project_event(world: &mut World, event: StateEvent) {
             }
         }
         StateEvent::Status { .. } | StateEvent::Log { .. } => {}
+    }
+}
+
+/// Rescue authored previews from an ephemeral subtree about to be despawned.
+///
+/// `despawn` takes descendants with it, and the game routinely reparents
+/// authored previews under ephemerals (zone roots, carried items). Detaching
+/// each non-ephemeral child keeps the authored entity alive (its own subtree
+/// goes with it); ephemeral children die with the parent, but their authored
+/// descendants are rescued first.
+fn detach_authored_descendants(world: &mut World, parent: Entity) {
+    let children: Vec<Entity> = world
+        .get::<Children>(parent)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    for child in children {
+        if world.get::<PieEphemeral>(child).is_some() {
+            detach_authored_descendants(world, child);
+        } else if let Ok(mut entity_mut) = world.get_entity_mut(child) {
+            entity_mut.remove::<ChildOf>();
+        }
     }
 }
 
@@ -816,6 +860,55 @@ mod tests {
         );
     }
 
+    fn spawn_event_with_node(bits: u64, node_id: u64) -> StateEvent {
+        StateEvent::EntitySpawned {
+            entity: RemoteEntity {
+                entity: bits,
+                components: std::collections::HashMap::new(),
+                scene_node_id: Some(node_id),
+            },
+        }
+    }
+
+    #[test]
+    fn respawn_with_new_bits_purges_the_old_alias() {
+        let (mut world, _preview, node_id) = build_projection_world();
+        // A zone hot-reload respawns the same authored node under new game
+        // bits; the new spawn arrives before the old despawn, so the old bits
+        // would otherwise still alias the same preview entity.
+        project_event(&mut world, spawn_event_with_node(0xA1, node_id.0));
+        project_event(&mut world, spawn_event_with_node(0xB2, node_id.0));
+        let projection = world.resource::<PieProjection>();
+        assert!(projection.by_bits.contains_key(&0xB2));
+        assert!(
+            !projection.by_bits.contains_key(&0xA1),
+            "the old bits must not alias the same preview"
+        );
+    }
+
+    #[test]
+    fn ephemeral_despawn_rescues_authored_descendants() {
+        let (mut world, authored, _node_id) = build_projection_world();
+        // The game parented the authored preview under an ephemeral (a zone
+        // root), with another ephemeral layered in between.
+        project_event(&mut world, spawn_event(0xE1, vec![]));
+        project_event(&mut world, spawn_event(0xE2, vec![]));
+        let outer = world.resource::<PieProjection>().by_bits[&0xE1];
+        let inner = world.resource::<PieProjection>().by_bits[&0xE2];
+        world.entity_mut(inner).insert(ChildOf(outer));
+        world.entity_mut(authored).insert(ChildOf(inner));
+
+        project_event(&mut world, StateEvent::EntityDespawned { entity: 0xE1 });
+
+        assert!(world.get_entity(outer).is_err(), "ephemeral despawned");
+        assert!(world.get_entity(inner).is_err(), "nested ephemeral despawned");
+        assert!(
+            world.get_entity(authored).is_ok(),
+            "authored preview must survive the ephemeral teardown"
+        );
+        assert!(world.get::<ChildOf>(authored).is_none());
+    }
+
     // ---- projection skip tests ----
 
     #[test]
@@ -827,6 +920,12 @@ mod tests {
         assert!(!projection_skips("bevy_camera::projection::Projection"));
         assert!(!projection_skips(
             "bevy_transform::components::transform::Transform"
+        ));
+        // Never saved, but MUST stream: the Live camera lock finds the game's
+        // active rig through this marker.
+        assert!(!projection_skips("jackdaw_camera_rig::ActiveCameraRig"));
+        assert!(crate::scene_io::should_skip_component(
+            "jackdaw_camera_rig::ActiveCameraRig"
         ));
 
         // A streamed camera component is dropped, not applied, even when the
