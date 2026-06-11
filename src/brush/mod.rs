@@ -7,6 +7,7 @@ mod hull;
 pub(crate) mod interaction;
 pub(crate) mod knife_mode;
 pub(crate) mod mesh;
+mod mesh_chunks;
 pub mod preview;
 pub mod topology_migration;
 pub mod topology_ops;
