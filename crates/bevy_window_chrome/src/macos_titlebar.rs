@@ -33,6 +33,8 @@ fn cached_theme() -> WindowChromeTheme {
 }
 
 thread_local! {
+    // Assumes a single, long-lived primary window; a recreated window would leave
+    // this observer pointing at the old one.
     static TRAFFIC_LIGHT_RESIZE_OBSERVER: RefCell<Option<Retained<TrafficLightResizeObserver>>> =
         const { RefCell::new(None) };
 }
