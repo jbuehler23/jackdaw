@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_length_mismatch() {
-        let bytes = encode_frame(1, 1, 1, &vec![0u8; 4]);
+        let bytes = encode_frame(1, 1, 1, &[0u8; 4]);
         let mut grown = bytes.clone();
         grown.push(0);
         assert!(decode_frame(&grown).is_none());

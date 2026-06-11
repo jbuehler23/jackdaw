@@ -128,7 +128,7 @@ impl ReflectSerializerProcessor for RemoteSerializerProcessor {
     }
 }
 
-/// Deserializer counterpart to [`RemoteSerializerProcessor`]. The serializer emits
+/// Deserializer counterpart to `RemoteSerializerProcessor`. The serializer emits
 /// `null` for every `Handle<T>` (the game's assets are not loaded in the editor).
 /// A plain reflect deserializer rejects that `null` and fails the whole component,
 /// which drops any brush whose face materials serialized to null. This turns the

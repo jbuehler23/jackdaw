@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn spawn_at_default_prefers_empty_tag_then_falls_back() {
-        let spawns = vec![
+        let spawns = [
             (
                 SpawnPoint {
                     zone: ZoneId::from("arena"),
@@ -256,7 +256,7 @@ mod tests {
             Some((ZoneId::from("lobby"), Vec3::new(1.0, 2.0, 3.0)))
         );
 
-        let only_named = vec![(
+        let only_named = [(
             SpawnPoint {
                 zone: ZoneId::from("arena"),
                 tag: "ring".to_string(),

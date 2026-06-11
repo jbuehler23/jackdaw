@@ -37,8 +37,7 @@ pub fn category_color(category: EntityCategory, inherited: bool) -> Color {
         EntityCategory::Scene => tokens::CATEGORY_SCENE,
         EntityCategory::Prefab => tokens::CATEGORY_PREFAB,
         EntityCategory::Inherited => tokens::CATEGORY_INHERITED,
-        EntityCategory::Group => tokens::CATEGORY_ENTITY,
-        EntityCategory::Entity => tokens::CATEGORY_ENTITY,
+        EntityCategory::Group | EntityCategory::Entity => tokens::CATEGORY_ENTITY,
     }
 }
 

@@ -88,7 +88,7 @@ fn tray_row_state(resolves: bool) -> RowState {
 
 /// Build the badge chip for the hierarchy header. Hidden until the log has
 /// entries and the view is Live (or play has stopped);
-/// [`update_live_edits_badge`] flips the display and keeps the count label
+/// `update_live_edits_badge` flips the display and keeps the count label
 /// current. Clicking toggles the tray.
 pub fn live_edits_badge() -> impl Bundle {
     (

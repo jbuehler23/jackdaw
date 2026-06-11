@@ -121,9 +121,10 @@ impl PieMirror {
                     self.structure_generation += 1;
                 }
             }
-            StateEvent::Status { .. } | StateEvent::Log { .. } => {}
-            StateEvent::CursorState { .. } => {}
-            StateEvent::PickResult { .. } => {}
+            StateEvent::Status { .. }
+            | StateEvent::Log { .. }
+            | StateEvent::CursorState { .. }
+            | StateEvent::PickResult { .. } => {}
         }
     }
 
@@ -200,9 +201,9 @@ impl InstanceBuffer {
                 self.entities.remove(entity);
             }
             jackdaw_pie_protocol::StateEvent::Status { .. }
-            | jackdaw_pie_protocol::StateEvent::Log { .. } => {}
-            jackdaw_pie_protocol::StateEvent::CursorState { .. } => {}
-            jackdaw_pie_protocol::StateEvent::PickResult { .. } => {}
+            | jackdaw_pie_protocol::StateEvent::Log { .. }
+            | jackdaw_pie_protocol::StateEvent::CursorState { .. }
+            | jackdaw_pie_protocol::StateEvent::PickResult { .. } => {}
         }
     }
 }

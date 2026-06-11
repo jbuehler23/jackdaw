@@ -8,7 +8,7 @@
 //!
 //! Instances are keyed by [`InstanceKey`] (config label plus 1-based
 //! instance number). Builds are deduped by
-//! [`BuildSpec`](crate::ext_build::BuildSpec): several instances of the
+//! [`BuildSpec`]: several instances of the
 //! same config wait on one build and spawn together when it finishes.
 
 use std::collections::{HashMap, VecDeque};
@@ -698,7 +698,7 @@ pub(crate) fn can_save_live_to_scene(world: &World) -> bool {
 /// `register_entity_in_ast` uses when it first captures a live entity.
 ///
 /// Components with no `ReflectComponent` data, types not registered in the
-/// `AppTypeRegistry`, and paths matched by [`should_skip_component`] are
+/// `AppTypeRegistry`, and paths matched by [`should_skip_component`](crate::scene_io::should_skip_component) are
 /// silently omitted. The result is sorted by type path for deterministic undo
 /// batching.
 fn serialize_preview_entity_components(
@@ -757,14 +757,14 @@ fn serialize_preview_entity_components(
 /// Path A: the preview entity is already bound to an AST node (it is an
 /// authored entity with a live overlay). Each non-skipped reflected component
 /// is read from the preview entity, serialized, and written into the node
-/// through a [`SetJsnField`] command. The commands are grouped into one
-/// undoable [`CommandGroup`] so a single Ctrl+Z reverts the whole promote.
+/// through a [`SetJsnField`](crate::commands::SetJsnField) command. The commands are grouped into one
+/// undoable [`CommandGroup`](jackdaw_commands::CommandGroup) so a single Ctrl+Z reverts the whole promote.
 ///
-/// Path B: the preview entity carries [`PieEphemeral`] (the game spawned it
-/// at runtime with no authored counterpart). A new [`JsnEntityNode`] is
+/// Path B: the preview entity carries [`PieEphemeral`](crate::pie_projection::PieEphemeral) (the game spawned it
+/// at runtime with no authored counterpart). A new [`JsnEntityNode`](jackdaw_jsn::ast::JsnEntityNode) is
 /// appended to the AST, its `components` filled from the preview entity's
 /// reflected components, its `ecs_entity` bound to this entity. The entity
-/// receives a [`JsnNodeId`] component and loses [`PieEphemeral`] so it is
+/// receives a [`JsnNodeId`](jackdaw_jsn::JsnNodeId) component and loses [`PieEphemeral`](crate::pie_projection::PieEphemeral) so it is
 /// now treated as an authored entity. Path B is not undoable in v1 (no
 /// remove-node command exists that mirrors the insert).
 ///
@@ -807,7 +807,7 @@ pub(crate) fn save_live_entity_to_scene(world: &mut World) {
 }
 
 /// Path A: preview entity is bound to an existing AST node. Serialize its
-/// current component values and write them through SetJsnField commands.
+/// current component values and write them through `SetJsnField` commands.
 fn promote_authored_overlay(world: &mut World, preview: Entity, bits: u64) {
     use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
 
@@ -1265,7 +1265,7 @@ pub(crate) fn handle_pick_result(world: &mut World, bits: Option<u64>) {
 }
 
 /// Drain `StateEvent`s from every live child. Events for every instance are
-/// always accumulated into that instance's [`InstanceBuffer`] regardless of
+/// always accumulated into that instance's [`InstanceBuffer`](crate::pie_mirror::InstanceBuffer) regardless of
 /// view mode, so the buffers always hold current game state and a Scene->Live
 /// toggle re-projects fresh data. Additionally, events from the focused instance
 /// are projected into the preview ECS via `project_event`, but only in Live mode.

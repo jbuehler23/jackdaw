@@ -1094,10 +1094,10 @@ fn save_to_scene_button(icon_font: Handle<Font>) -> impl Bundle {
                 if !crate::pie::can_save_live_to_scene(world) {
                     return;
                 }
-                if let Ok(mut e) = world.get_entity_mut(target) {
-                    if let Some(mut bg) = e.get_mut::<BackgroundColor>() {
-                        bg.0 = tokens::TOOLBAR_ACTIVE_BG;
-                    }
+                if let Ok(mut e) = world.get_entity_mut(target)
+                    && let Some(mut bg) = e.get_mut::<BackgroundColor>()
+                {
+                    bg.0 = tokens::TOOLBAR_ACTIVE_BG;
                 }
             });
         }),
@@ -1172,10 +1172,10 @@ pub fn update_save_to_scene_button(world: &mut World) {
             }
         }
         for child in children {
-            if let Ok(mut e) = world.get_entity_mut(child) {
-                if let Some(mut tc) = e.get_mut::<TextColor>() {
-                    tc.0 = text_color;
-                }
+            if let Ok(mut e) = world.get_entity_mut(child)
+                && let Some(mut tc) = e.get_mut::<TextColor>()
+            {
+                tc.0 = text_color;
             }
         }
     }
@@ -1449,10 +1449,10 @@ pub fn update_live_badge(
             node.display = display;
         }
         for child in children.iter() {
-            if let Ok(mut text) = labels.get_mut(child) {
-                if text.0 != label {
-                    text.0 = label.clone();
-                }
+            if let Ok(mut text) = labels.get_mut(child)
+                && text.0 != label
+            {
+                text.0 = label.clone();
             }
         }
     }
@@ -1537,7 +1537,7 @@ fn cycle_focused_instance(world: &mut World) {
 }
 
 /// Keep the instance cycle button's label and visibility in sync with the
-/// current [`PieViewMode`] and [`PieInstances`] state.
+/// current [`PieViewMode`] and [`PieInstances`](crate::pie_mirror::PieInstances) state.
 ///
 /// Hidden in Scene mode. In Live mode, shows the focused instance label;
 /// dims it when only one instance is running (cycling would be a no-op).
@@ -1558,7 +1558,7 @@ pub fn update_pie_instance_cycle_button(
     let label_text = instances
         .focused
         .as_ref()
-        .map(|k| k.to_string())
+        .map(ToString::to_string)
         .unwrap_or_default();
 
     for (mut node, mut bg, children) in &mut buttons {
@@ -1587,7 +1587,7 @@ pub fn update_pie_instance_cycle_button(
 pub struct WindowModeButton;
 
 /// Marker on the text node inside [`WindowModeButton`] that names the current
-/// [`PieWindowMode`].
+/// [`PieWindowMode`](crate::pie::PieWindowMode).
 #[derive(Component)]
 pub struct WindowModeLabel;
 

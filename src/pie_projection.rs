@@ -72,8 +72,8 @@ fn projection_skips(type_path: &str) -> bool {
 fn parent_bits_from_value(value: &serde_json::Value) -> Option<u64> {
     match value {
         serde_json::Value::Number(n) => n.as_u64(),
-        serde_json::Value::Array(a) => a.first().and_then(|v| v.as_u64()),
-        serde_json::Value::Object(o) => o.values().next().and_then(|v| v.as_u64()),
+        serde_json::Value::Array(a) => a.first().and_then(serde_json::Value::as_u64),
+        serde_json::Value::Object(o) => o.values().next().and_then(serde_json::Value::as_u64),
         _ => None,
     }
 }
@@ -349,9 +349,10 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                 }
             }
         }
-        StateEvent::Status { .. } | StateEvent::Log { .. } => {}
-        StateEvent::CursorState { .. } => {}
-        StateEvent::PickResult { .. } => {}
+        StateEvent::Status { .. }
+        | StateEvent::Log { .. }
+        | StateEvent::CursorState { .. }
+        | StateEvent::PickResult { .. } => {}
     }
 }
 
@@ -432,7 +433,7 @@ pub fn apply_component_value(
         .components()
         .get_id(type_id)
         .and_then(|id: ComponentId| world.components().get_info(id))
-        .map(|info| info.mutable())
+        .map(bevy::ecs::component::ComponentInfo::mutable)
         .unwrap_or(true);
 
     // Check presence while we still have shared world access (before the &mut borrow).
@@ -446,12 +447,9 @@ pub fn apply_component_value(
 
     drop(registry_guard);
 
-    let mut entity_mut = match world.get_entity_mut(entity) {
-        Ok(e) => e,
-        Err(_) => {
-            debug!("apply_component_value: entity {entity:?} was despawned concurrently");
-            return;
-        }
+    let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+        debug!("apply_component_value: entity {entity:?} was despawned concurrently");
+        return;
     };
 
     if !is_mutable || !present {
@@ -822,7 +820,7 @@ mod tests {
     // ---- ChildOf remapping tests ----
 
     /// Serialize a real parent/child pair through the snapshot pipeline and
-    /// return (parent bits, child bits, ChildOf type path, ChildOf wire value)
+    /// return (parent bits, child bits, `ChildOf` type path, `ChildOf` wire value)
     /// so the tests exercise the exact format the game sends.
     fn wire_child_of() -> (u64, u64, String, serde_json::Value) {
         use bevy::prelude::ChildOf;

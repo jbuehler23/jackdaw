@@ -49,7 +49,7 @@ fn scene_root_gains_a_name_from_the_scene_path() {
 
     let name = app.world().get::<Name>(root);
     assert_eq!(
-        name.map(|n| n.as_str()),
+        name.map(Name::as_str),
         Some("starter"),
         "scene root should be named from the source file stem"
     );
@@ -78,7 +78,7 @@ fn scene_root_keeps_an_author_supplied_name() {
 
     let name = app.world().get::<Name>(root);
     assert_eq!(
-        name.map(|n| n.as_str()),
+        name.map(Name::as_str),
         Some("Hand Picked"),
         "an author-supplied root name must not be overwritten"
     );

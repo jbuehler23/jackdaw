@@ -267,7 +267,7 @@ pub struct AddComponentButton;
 /// Marker for the "Save to Scene" button in the inspector header. Visible
 /// only in Live (PIE) mode; promotes the selected running entity's current
 /// component values into its authored scene node. See
-/// [`crate::pie::save_live_entity_to_scene`].
+/// `crate::pie::save_live_entity_to_scene`.
 #[derive(Component)]
 pub struct SaveToSceneButton;
 

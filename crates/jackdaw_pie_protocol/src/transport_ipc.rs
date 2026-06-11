@@ -6,7 +6,7 @@
 //! [`IpcChannelTransport`] carrying `(PieChannel, Vec<u8>)` frames.
 //!
 //! `ipc-channel` is reliable-ordered on every platform, so
-//! [`PieChannel::Unreliable`](crate::event::PieChannel::Unreliable) frames are
+//! [`PieChannel::Unreliable`] frames are
 //! delivered reliably here. The channel tag is preserved so transports that do
 //! distinguish the two (lightyear, raw sockets) can act on it.
 
