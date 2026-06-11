@@ -90,27 +90,24 @@ impl CaptionButton {
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
 pub(crate) fn load_caption_font(fonts: &mut Assets<Font>) -> CaptionFont {
-    let caption_font = {
-        #[cfg(target_os = "windows")]
-        {
-            if let Some(handle) = load_windows_segoe_font(fonts) {
-                CaptionFont {
-                    handle,
-                    icon_set: CaptionIconSet::Segoe,
-                }
-            } else {
-                bevy::log::warn!(
-                    "Segoe Fluent Icons and Segoe MDL2 Assets were not found; using embedded Lucide caption icons"
-                );
-                load_lucide_caption_font(fonts)
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(handle) = load_windows_segoe_font(fonts) {
+            CaptionFont {
+                handle,
+                icon_set: CaptionIconSet::Segoe,
             }
-        }
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        {
+        } else {
+            bevy::log::warn!(
+                "Segoe Fluent Icons and Segoe MDL2 Assets were not found; using embedded Lucide caption icons"
+            );
             load_lucide_caption_font(fonts)
         }
-    };
-    return caption_font;
+    }
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    {
+        load_lucide_caption_font(fonts)
+    }
 }
 
 #[cfg(target_os = "windows")]

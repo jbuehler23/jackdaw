@@ -10,12 +10,10 @@ pub use bevy_window_chrome::{
 pub use repo_link::{JackdawIcon, title_bar_repo_link};
 
 use bevy::prelude::*;
-use bevy_window_chrome::{CaptionTheme, WindowChromeEntity, WindowChromePlugin, WindowChromeTheme};
+use bevy_window_chrome::{CaptionTheme, WindowChromePlugin, WindowChromeTheme};
 use icon::WindowIconPlugin;
 use jackdaw_feathers::tokens;
 use time::{Month, OffsetDateTime};
-
-use crate::EditorEntity;
 
 const WINDOW_ICON_PNG: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),

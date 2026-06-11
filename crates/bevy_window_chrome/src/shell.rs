@@ -85,8 +85,8 @@ pub fn spawn_window_shell<S: Component + Copy>(
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
             shell.spawn(resize_edge_overlay());
         });
-    return WindowShellSlots {
+    WindowShellSlots {
         title_bar: title_bar_slot.expect("window shell title bar slot spawned"),
         body: body_slot.expect("window shell body slot spawned"),
-    };
+    }
 }
