@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use bevy::ecs::system::NonSendMarker;
-use bevy::prelude::{Commands, Component, Node, On, Query, Res, Val, With};
+use bevy::prelude::{Commands, Component, Entity, Node, On, Query, Res, Val, With};
 use bevy::window::{PrimaryWindow, Window, WindowCreated, WindowMode};
 use bevy::winit::WINIT_WINDOWS;
 
