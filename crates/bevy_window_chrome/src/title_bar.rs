@@ -191,5 +191,7 @@ fn on_double_click(
     };
     if now - previous <= DOUBLE_CLICK_THRESHOLD_S {
         toggle_primary_window_maximized(windows);
+        // Reset so a quick third click doesn't immediately toggle back.
+        tracker.0 = None;
     }
 }
