@@ -35,7 +35,9 @@ pub fn spawn_window_shell<S: Component + Copy>(
     commands.spawn((
         Camera2d,
         Camera {
-            // note that this does not work on Windows
+            // Transparent clear only matters where the surface is transparent
+            // (Linux/FreeBSD). On the opaque Windows window it's ignored; the
+            // shell's BackgroundColor fills the viewport and the OS rounds corners.
             clear_color: ClearColorConfig::Custom(Color::NONE),
             ..default()
         },
