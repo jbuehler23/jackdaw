@@ -69,9 +69,7 @@ pub(crate) struct FrameSender(pub(crate) Arc<FrameSlot>);
 
 /// Spawn the sender thread. It lives for the rest of the process; the game
 /// process is per-session, so teardown is process exit.
-pub(crate) fn spawn_frame_sender_thread(
-    lane: jackdaw_pie_protocol::IpcLaneSender,
-) -> FrameSender {
+pub(crate) fn spawn_frame_sender_thread(lane: jackdaw_pie_protocol::IpcLaneSender) -> FrameSender {
     let slot = Arc::new(FrameSlot::default());
     let sender = FrameSender(Arc::clone(&slot));
     if let Err(err) = std::thread::Builder::new()
@@ -219,10 +217,10 @@ fn start_windowless_stream(world: &mut World, size: UVec2) {
         let target = world.resource::<crate::pie_windowless::WindowlessTarget>();
         target.image.clone()
     };
-    if let Err(err) = world
-        .resource_mut::<Assets<Image>>()
-        .insert(image_handle.id(), crate::pie_windowless::make_target_image(size))
-    {
+    if let Err(err) = world.resource_mut::<Assets<Image>>().insert(
+        image_handle.id(),
+        crate::pie_windowless::make_target_image(size),
+    ) {
         error!("PIE frames: could not resize the windowless target: {err}");
         return;
     }
@@ -231,8 +229,8 @@ fn start_windowless_stream(world: &mut World, size: UVec2) {
         .size = size;
 
     {
-        let mut windows = world
-            .query_filtered::<&mut Window, With<crate::pie_windowless::PieVirtualWindow>>();
+        let mut windows =
+            world.query_filtered::<&mut Window, With<crate::pie_windowless::PieVirtualWindow>>();
         if let Ok(mut window) = windows.single_mut(world) {
             window.resolution.set_physical_resolution(size.x, size.y);
         }
@@ -460,11 +458,21 @@ mod tests {
             app.world().entity(camera).get::<ChildOf>().map(|c| c.0),
             Some(rig)
         );
-        assert!(app.world().resource::<Assets<Image>>().get(&target).is_some());
+        assert!(
+            app.world()
+                .resource::<Assets<Image>>()
+                .get(&target)
+                .is_some()
+        );
         stop_frame_stream(app.world_mut());
         assert!(app.world().get_resource::<FrameStream>().is_none());
         assert!(app.world().get_entity(camera).is_err());
-        assert!(app.world().resource::<Assets<Image>>().get(&target).is_none());
+        assert!(
+            app.world()
+                .resource::<Assets<Image>>()
+                .get(&target)
+                .is_none()
+        );
     }
 
     #[test]
@@ -480,7 +488,10 @@ mod tests {
                 .world()
                 .get_resource::<FrameStream>()
                 .expect("stream installed");
-            assert!(stream.camera.is_none(), "no capture camera in windowless mode");
+            assert!(
+                stream.camera.is_none(),
+                "no capture camera in windowless mode"
+            );
             assert!(stream.pace.is_none(), "no pace timer in windowless mode");
             assert_eq!(stream.size, UVec2::new(1024, 700));
             (stream.readback, stream.target.clone())
@@ -507,7 +518,10 @@ mod tests {
         assert!(app.world().get_resource::<FrameStream>().is_none());
         assert!(app.world().get_entity(readback).is_err());
         assert!(
-            app.world().resource::<Assets<Image>>().get(&target).is_some(),
+            app.world()
+                .resource::<Assets<Image>>()
+                .get(&target)
+                .is_some(),
             "windowless target image survives a stream stop"
         );
     }

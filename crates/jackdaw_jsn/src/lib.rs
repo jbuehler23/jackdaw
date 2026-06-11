@@ -11,15 +11,14 @@ use bevy::prelude::*;
 // Re-export core types for consumer convenience
 pub use editor_meta::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 pub use types::{
-    Brush, BrushFaceData, BrushGroup, BrushPlane, BrushTopology, CustomProperties,
-    DerivedFaceMesh, GltfSource, JsnPrefab, JsnPrefabBaseline, NavmeshRegion, PropertyValue,
-    SceneRootTag, Terrain,
+    Brush, BrushFaceData, BrushGroup, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
+    GltfSource, JsnPrefab, JsnPrefabBaseline, NavmeshRegion, PropertyValue, SceneRootTag, Terrain,
 };
 
 // Re-export geometry crate
 pub use jackdaw_geometry;
 
-pub use ast::{needs_id_migration, JsnNodeId, SceneJsnAst};
+pub use ast::{JsnNodeId, SceneJsnAst, needs_id_migration};
 pub use format::{JsnProject, JsnProjectConfig, JsnScene};
 pub use loader::JsnAssetLoader;
 

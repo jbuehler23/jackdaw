@@ -1527,14 +1527,10 @@ fn try_route_pie_live_field_edit(
             field_value,
             &reg,
         );
-        field_value_for_log = jackdaw_jsn::ast::get_field_in_component_json(
-            &full_value,
-            type_path,
-            field_path,
-            &reg,
-        )
-        .cloned()
-        .unwrap_or(raw);
+        field_value_for_log =
+            jackdaw_jsn::ast::get_field_in_component_json(&full_value, type_path, field_path, &reg)
+                .cloned()
+                .unwrap_or(raw);
     }
 
     crate::pie::send_control_to_focused(

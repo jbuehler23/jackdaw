@@ -1243,7 +1243,10 @@ pub(crate) fn handle_pick_result(world: &mut World, bits: Option<u64>) {
     if world.get_entity(preview).is_err() {
         return;
     }
-    let old_entities: Vec<Entity> = world.resource::<crate::selection::Selection>().entities.clone();
+    let old_entities: Vec<Entity> = world
+        .resource::<crate::selection::Selection>()
+        .entities
+        .clone();
     {
         let mut selection = world.resource_mut::<crate::selection::Selection>();
         selection.entities.clear();

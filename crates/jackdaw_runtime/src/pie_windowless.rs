@@ -86,8 +86,7 @@ pub(crate) struct WindowlessTarget {
 
 /// Build the render-target image for the given size.
 pub(crate) fn make_target_image(size: UVec2) -> Image {
-    let mut image =
-        Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
+    let mut image = Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
     image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
     image
 }
@@ -105,7 +104,12 @@ pub(crate) fn install_windowless_world(world: &mut World) {
     let size = world.resource::<WindowlessTarget>().size;
     let mut window = Window::default();
     window.resolution.set_physical_resolution(size.x, size.y);
-    world.spawn((window, PrimaryWindow, CursorOptions::default(), PieVirtualWindow));
+    world.spawn((
+        window,
+        PrimaryWindow,
+        CursorOptions::default(),
+        PieVirtualWindow,
+    ));
 }
 
 /// Point every window-targeting camera at the capture image. Because no
@@ -126,7 +130,9 @@ pub(crate) fn retarget_cameras(
         if matches!(*render_target, RenderTarget::Window(_)) {
             *render_target = RenderTarget::Image(target.image.clone().into());
             if !have_default_ui {
-                commands.entity(entity).try_insert(bevy::ui::IsDefaultUiCamera);
+                commands
+                    .entity(entity)
+                    .try_insert(bevy::ui::IsDefaultUiCamera);
                 have_default_ui = true;
             }
         }
@@ -183,7 +189,10 @@ mod tests {
             .query_filtered::<(), With<bevy::ui::IsDefaultUiCamera>>()
             .iter(&world)
             .count();
-        assert_eq!(count, 1, "exactly one camera marked as the default UI camera");
+        assert_eq!(
+            count, 1,
+            "exactly one camera marked as the default UI camera"
+        );
     }
 
     #[test]
@@ -230,7 +239,8 @@ mod tests {
         install_windowless_world(app.world_mut());
         let mut windows = app
             .world_mut()
-            .query_filtered::<&Window, (With<PieVirtualWindow>, With<bevy::window::PrimaryWindow>)>();
+            .query_filtered::<&Window, (With<PieVirtualWindow>, With<bevy::window::PrimaryWindow>)>(
+            );
         let window = windows.single(app.world()).expect("virtual window spawned");
         assert_eq!(window.physical_width(), DEFAULT_SIZE.x);
         assert_eq!(window.physical_height(), DEFAULT_SIZE.y);

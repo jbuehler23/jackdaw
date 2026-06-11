@@ -297,7 +297,10 @@ fn spawn_loaded_scenes(
 
         // Tag the container so the editor's outliner classifies it as a scene
         // root and shows the scene icon. The tag streams in the snapshot.
-        if world.get::<jackdaw_jsn::SceneRootTag>(root_entity).is_none() {
+        if world
+            .get::<jackdaw_jsn::SceneRootTag>(root_entity)
+            .is_none()
+        {
             world
                 .entity_mut(root_entity)
                 .insert(jackdaw_jsn::SceneRootTag);

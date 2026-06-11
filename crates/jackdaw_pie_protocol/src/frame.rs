@@ -41,10 +41,19 @@ pub fn decode_frame(bytes: &[u8]) -> Option<FrameRef<'_>> {
     let height = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
     let seq = u64::from_le_bytes(bytes[12..20].try_into().ok()?);
     let pixels = &bytes[HEADER_LEN..];
-    if pixels.len() != (width as usize).checked_mul(height as usize)?.checked_mul(4)? {
+    if pixels.len()
+        != (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)?
+    {
         return None;
     }
-    Some(FrameRef { width, height, seq, pixels })
+    Some(FrameRef {
+        width,
+        height,
+        seq,
+        pixels,
+    })
 }
 
 #[cfg(test)]

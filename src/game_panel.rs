@@ -109,7 +109,10 @@ fn surface_clicked(world: &mut World, surface: Entity, window_pos: Vec2) {
     }
     match *world.resource::<GamePanelMode>() {
         GamePanelMode::Play => {
-            if !world.resource::<crate::live_input::LiveInputCapture>().active {
+            if !world
+                .resource::<crate::live_input::LiveInputCapture>()
+                .active
+            {
                 crate::live_input::engage_capture(world, surface);
             }
         }
@@ -265,7 +268,9 @@ fn game_mode_segment(
                     GameModeSegment::Select => GamePanelMode::Select,
                 };
                 if next == GamePanelMode::Select
-                    && world.resource::<crate::live_input::LiveInputCapture>().active
+                    && world
+                        .resource::<crate::live_input::LiveInputCapture>()
+                        .active
                 {
                     world
                         .resource_mut::<crate::live_input::LiveInputCapture>()
@@ -584,7 +589,11 @@ mod tests {
         let surface = world.spawn_empty().id();
         // No LiveFrameStream resource: not fresh, so the click does nothing.
         surface_clicked(&mut world, surface, Vec2::new(10.0, 10.0));
-        assert!(!world.resource::<crate::live_input::LiveInputCapture>().active);
+        assert!(
+            !world
+                .resource::<crate::live_input::LiveInputCapture>()
+                .active
+        );
     }
 
     #[test]

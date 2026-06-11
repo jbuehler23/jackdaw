@@ -432,7 +432,10 @@ mod tests {
         world.insert_resource(icons);
 
         let cases: &[(Entity, Icon)] = &[
-            (world.spawn(jackdaw_jsn::Brush::default()).id(), Icon::Cuboid),
+            (
+                world.spawn(jackdaw_jsn::Brush::default()).id(),
+                Icon::Cuboid,
+            ),
             (
                 world.spawn(jackdaw_jsn::Terrain::default()).id(),
                 Icon::Mountain,

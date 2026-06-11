@@ -202,8 +202,14 @@ mod tests {
             last_start: None,
         };
         let now = Instant::now();
-        assert_eq!(next_stream_action(None, true, &mut req, now), StreamAction::Stop);
-        assert_eq!(next_stream_action(None, true, &mut req, now), StreamAction::None);
+        assert_eq!(
+            next_stream_action(None, true, &mut req, now),
+            StreamAction::Stop
+        );
+        assert_eq!(
+            next_stream_action(None, true, &mut req, now),
+            StreamAction::None
+        );
         assert!(req.requested.is_none());
         assert!(req.last_focus.is_none());
     }
@@ -238,8 +244,7 @@ mod tests {
             StreamAction::None
         );
         // At exactly t0 + 250 ms the >= boundary fires and the action is Start.
-        let at_boundary =
-            t0 + std::time::Duration::from_millis(RESIZE_DEBOUNCE_MS as u64);
+        let at_boundary = t0 + std::time::Duration::from_millis(RESIZE_DEBOUNCE_MS as u64);
         let mut req_boundary = StreamRequest::default();
         next_stream_action(Some((&k, size)), true, &mut req_boundary, t0);
         assert_eq!(

@@ -35,7 +35,9 @@ mod tests {
     use super::*;
 
     fn run(app: &mut App) {
-        app.world_mut().run_system_cached(sync_active_camera).unwrap();
+        app.world_mut()
+            .run_system_cached(sync_active_camera)
+            .unwrap();
     }
 
     #[test]
@@ -43,16 +45,24 @@ mod tests {
         let mut app = App::new();
         let local_actor = app.world_mut().spawn(Controlled).id();
         let local_body = app.world_mut().spawn(ChildOf(local_actor)).id();
-        let local_rig = app.world_mut().spawn((CameraRig::default(), ChildOf(local_body))).id();
+        let local_rig = app
+            .world_mut()
+            .spawn((CameraRig::default(), ChildOf(local_body)))
+            .id();
         let remote_actor = app.world_mut().spawn_empty().id();
         let remote_body = app.world_mut().spawn(ChildOf(remote_actor)).id();
-        let remote_rig = app.world_mut().spawn((CameraRig::default(), ChildOf(remote_body))).id();
+        let remote_rig = app
+            .world_mut()
+            .spawn((CameraRig::default(), ChildOf(remote_body)))
+            .id();
 
         run(&mut app);
         assert!(app.world().entity(local_rig).contains::<ActiveCameraRig>());
         assert!(!app.world().entity(remote_rig).contains::<ActiveCameraRig>());
 
-        app.world_mut().entity_mut(local_actor).remove::<Controlled>();
+        app.world_mut()
+            .entity_mut(local_actor)
+            .remove::<Controlled>();
         run(&mut app);
         assert!(!app.world().entity(local_rig).contains::<ActiveCameraRig>());
     }

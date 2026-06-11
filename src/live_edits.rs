@@ -152,9 +152,7 @@ pub fn record_live_edit(
     if let Some(node_id) = node_id {
         let mut log = world.resource_mut::<LiveEditLog>();
         if let Some((existing_key, existing_entry)) = log.entries.iter_mut().find(|(k, e)| {
-            e.node_id == Some(node_id)
-                && k.type_path == type_path
-                && k.field_path == field_path
+            e.node_id == Some(node_id) && k.type_path == type_path && k.field_path == field_path
         }) {
             existing_key.bits = bits;
             existing_entry.live_value = field_value;
@@ -317,7 +315,10 @@ pub fn save_entry_to_scene(world: &mut World, key: &LiveEditKey) {
         let ast = world.resource::<SceneJsnAst>();
         let projection = world.resource::<crate::pie_projection::PieProjection>();
         let Some(entity) = resolve_entry_entity(ast, projection, key, &entry) else {
-            warn!("save live edit: entity for '{}' no longer resolves", entry.label);
+            warn!(
+                "save live edit: entity for '{}' no longer resolves",
+                entry.label
+            );
             return;
         };
         let Some(mut cmd) = build_save_command(world, entity, key, &entry) else {
@@ -336,7 +337,10 @@ pub fn save_entry_to_scene(world: &mut World, key: &LiveEditKey) {
     // No authored node: promote the whole runtime entity into the scene,
     // which authors every tracked field on it at once.
     let Some(preview) = live_preview_for_bits(world, key.bits) else {
-        warn!("save live edit: entity for '{}' no longer resolves", entry.label);
+        warn!(
+            "save live edit: entity for '{}' no longer resolves",
+            entry.label
+        );
         return;
     };
     crate::pie::promote_ephemeral_to_authored(world, preview, key.bits);
@@ -360,7 +364,10 @@ pub fn revert_entry(world: &mut World, key: &LiveEditKey) {
         return;
     };
     let Some(baseline) = entry.baseline.clone() else {
-        warn!("revert live edit: '{}' has no authored baseline", entry.label);
+        warn!(
+            "revert live edit: '{}' has no authored baseline",
+            entry.label
+        );
         return;
     };
     let entity = {
@@ -369,7 +376,10 @@ pub fn revert_entry(world: &mut World, key: &LiveEditKey) {
         resolve_entry_entity(ast, projection, key, &entry)
     };
     let Some(entity) = entity else {
-        warn!("revert live edit: entity for '{}' no longer resolves", entry.label);
+        warn!(
+            "revert live edit: entity for '{}' no longer resolves",
+            entry.label
+        );
         return;
     };
 
@@ -523,8 +533,7 @@ pub(crate) fn pie_live_edit_save(
     mut commands: Commands,
 ) -> OperatorResult {
     commands.queue(|world: &mut World| {
-        let Some((action, key)) = world.resource_mut::<LiveEditLog>().pending_action.take()
-        else {
+        let Some((action, key)) = world.resource_mut::<LiveEditLog>().pending_action.take() else {
             warn!("live edit save: no pending action set");
             return;
         };
@@ -549,8 +558,7 @@ pub(crate) fn pie_live_edit_revert(
     mut commands: Commands,
 ) -> OperatorResult {
     commands.queue(|world: &mut World| {
-        let Some((action, key)) = world.resource_mut::<LiveEditLog>().pending_action.take()
-        else {
+        let Some((action, key)) = world.resource_mut::<LiveEditLog>().pending_action.take() else {
             warn!("live edit revert: no pending action set");
             return;
         };
@@ -934,14 +942,7 @@ mod tests {
     fn empty_field_path_label_omits_field_segment() {
         let (mut world, preview, _node_id) = build_world();
 
-        record_live_edit(
-            &mut world,
-            preview,
-            7,
-            TRANSFORM_PATH,
-            "",
-            transform_json(),
-        );
+        record_live_edit(&mut world, preview, 7, TRANSFORM_PATH, "", transform_json());
 
         let log = world.resource::<LiveEditLog>();
         let (_, entry) = &log.entries[0];

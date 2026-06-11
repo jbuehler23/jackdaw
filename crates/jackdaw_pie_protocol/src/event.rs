@@ -45,10 +45,15 @@ pub enum StateEvent {
     },
     /// The game's cursor options changed (mouse-look grabs); the editor
     /// mirrors this onto its own cursor while input capture is engaged.
-    CursorState { grabbed: bool, visible: bool },
+    CursorState {
+        grabbed: bool,
+        visible: bool,
+    },
     /// Answer to [`ControlEvent::Pick`]: the topmost streamable entity under
     /// the forwarded cursor, or `None` when nothing inspectable is hit.
-    PickResult { entity: Option<u64> },
+    PickResult {
+        entity: Option<u64>,
+    },
 }
 
 /// Editor-to-game messages.
@@ -80,7 +85,10 @@ pub enum ControlEvent {
     },
     /// Begin (or resize) streaming rendered frames at the given pixel size.
     /// The game clamps to its own limits; no frames flow until this arrives.
-    StartFrameStream { width: u32, height: u32 },
+    StartFrameStream {
+        width: u32,
+        height: u32,
+    },
     /// Stop streaming rendered frames and release the capture resources.
     StopFrameStream,
     /// Forwarded editor input while the Live viewport has input capture.
@@ -92,7 +100,9 @@ pub enum ControlEvent {
     /// Box the given entity in the game's own render (gizmo bounds), or
     /// clear the highlight with `None`. Sent when the editor selection
     /// changes while an instance is focused.
-    Highlight { entity: Option<u64> },
+    Highlight {
+        entity: Option<u64>,
+    },
 }
 
 /// Either direction, for transports that carry a single type.

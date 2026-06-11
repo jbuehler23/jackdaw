@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rand::Rng;
 
@@ -1036,8 +1036,7 @@ mod tests {
             &registry,
         );
 
-        let result =
-            get_field_in_component_json(&component, type_path, "translation.y", &registry);
+        let result = get_field_in_component_json(&component, type_path, "translation.y", &registry);
         assert_eq!(result, Some(&serde_json::json!(7.0)));
     }
 
@@ -1234,25 +1233,37 @@ mod tests {
     #[test]
     fn needs_migration_detects_duplicate_ids() {
         let scene = scene_from_nodes(&[(Some(SPARSE_MIN), None), (Some(SPARSE_MIN), None)]);
-        assert!(needs_id_migration(&scene), "two equal ids must trigger migration");
+        assert!(
+            needs_id_migration(&scene),
+            "two equal ids must trigger migration"
+        );
     }
 
     #[test]
     fn needs_migration_detects_legacy_low_ids() {
         let scene = scene_from_nodes(&[(Some(9), None), (Some(10), None)]);
-        assert!(needs_id_migration(&scene), "ids below SPARSE_MIN must trigger migration");
+        assert!(
+            needs_id_migration(&scene),
+            "ids below SPARSE_MIN must trigger migration"
+        );
     }
 
     #[test]
     fn needs_migration_detects_missing_id() {
         let scene = scene_from_nodes(&[(None, None)]);
-        assert!(needs_id_migration(&scene), "a node with no id must trigger migration");
+        assert!(
+            needs_id_migration(&scene),
+            "a node with no id must trigger migration"
+        );
     }
 
     #[test]
     fn needs_migration_false_for_sparse_unique() {
         let scene = scene_from_nodes(&[(Some(SPARSE_MIN), None), (Some(SPARSE_MIN + 1), None)]);
-        assert!(!needs_id_migration(&scene), "distinct sparse ids need no migration");
+        assert!(
+            !needs_id_migration(&scene),
+            "distinct sparse ids need no migration"
+        );
     }
 
     /// Minted ids land in the sparse range and never repeat back-to-back.
@@ -1270,10 +1281,17 @@ mod tests {
     fn from_jsn_scene_dedupes_colliding_ids() {
         let scene = scene_from_nodes(&[(Some(10), None), (Some(10), None), (Some(10), None)]);
         let ast = SceneJsnAst::from_jsn_scene(&scene, &[]);
-        let ids: Vec<u64> = ast.nodes.iter().map(|n| n.id.expect("healed id").0).collect();
+        let ids: Vec<u64> = ast
+            .nodes
+            .iter()
+            .map(|n| n.id.expect("healed id").0)
+            .collect();
         let unique: HashSet<u64> = ids.iter().copied().collect();
         assert_eq!(unique.len(), ids.len(), "healed ids must be unique");
-        assert!(ids.iter().all(|id| *id >= SPARSE_MIN), "healed ids must be sparse");
+        assert!(
+            ids.iter().all(|id| *id >= SPARSE_MIN),
+            "healed ids must be sparse"
+        );
     }
 
     /// Unique but legacy-low ids are lifted into the sparse range on load.
@@ -1281,7 +1299,11 @@ mod tests {
     fn from_jsn_scene_remints_legacy_low_ids() {
         let scene = scene_from_nodes(&[(Some(1), None), (Some(2), None)]);
         let ast = SceneJsnAst::from_jsn_scene(&scene, &[]);
-        assert!(ast.nodes.iter().all(|n| n.id.expect("healed id").0 >= SPARSE_MIN));
+        assert!(
+            ast.nodes
+                .iter()
+                .all(|n| n.id.expect("healed id").0 >= SPARSE_MIN)
+        );
     }
 
     /// A scene whose ids are already sparse and unique loads untouched.
@@ -1298,8 +1320,15 @@ mod tests {
     fn from_jsn_scene_remint_preserves_parent_links() {
         let scene = scene_from_nodes(&[(Some(10), None), (Some(10), Some(0))]);
         let ast = SceneJsnAst::from_jsn_scene(&scene, &[]);
-        assert_eq!(ast.nodes[1].parent, Some(0), "parent index survives re-mint");
-        assert_ne!(ast.nodes[0].id, ast.nodes[1].id, "ids are unique after heal");
+        assert_eq!(
+            ast.nodes[1].parent,
+            Some(0),
+            "parent index survives re-mint"
+        );
+        assert_ne!(
+            ast.nodes[0].id, ast.nodes[1].id,
+            "ids are unique after heal"
+        );
     }
 
     /// A legacy `JsnScene` with no `id` field still loads, minting fresh ids

@@ -95,7 +95,9 @@ fn collect_forwards(
             continue;
         }
         if pressed {
-            capture.held_keys.insert(key.key_code, key.logical_key.clone());
+            capture
+                .held_keys
+                .insert(key.key_code, key.logical_key.clone());
         } else {
             capture.held_keys.remove(&key.key_code);
         }
@@ -129,7 +131,9 @@ fn collect_forwards(
     }
 
     for event in motion.read() {
-        pending.0.push(PieInputEvent::MouseMotion { delta: event.delta });
+        pending
+            .0
+            .push(PieInputEvent::MouseMotion { delta: event.delta });
     }
 
     // Cursor positions remap into the streamed frame's pixel space through the
@@ -148,9 +152,11 @@ fn collect_forwards(
     match remap_inputs {
         Some((top_left, panel, stream_size)) => {
             for moved in cursor.read() {
-                let Some(position) =
-                    crate::game_panel::panel_to_stream(moved.position - top_left, panel, stream_size)
-                else {
+                let Some(position) = crate::game_panel::panel_to_stream(
+                    moved.position - top_left,
+                    panel,
+                    stream_size,
+                ) else {
                     continue;
                 };
                 pending.0.push(PieInputEvent::CursorMoved { position });
@@ -364,8 +370,12 @@ mod tests {
             let mut capture = app.world_mut().resource_mut::<LiveInputCapture>();
             capture.active = true;
             capture.held_keys.insert(KeyCode::ShiftLeft, Key::Shift);
-            capture.held_keys.insert(KeyCode::KeyW, Key::Character("w".into()));
-            capture.held_buttons.insert(bevy::input::mouse::MouseButton::Left);
+            capture
+                .held_keys
+                .insert(KeyCode::KeyW, Key::Character("w".into()));
+            capture
+                .held_buttons
+                .insert(bevy::input::mouse::MouseButton::Left);
         }
         let window = app.world_mut().spawn(()).id();
         app.world_mut().write_message(KeyboardInput {
@@ -384,7 +394,10 @@ mod tests {
         assert!(
             !pending.0.iter().any(|e| matches!(
                 e,
-                jackdaw_pie_protocol::PieInputEvent::Key { key: KeyCode::Escape, .. }
+                jackdaw_pie_protocol::PieInputEvent::Key {
+                    key: KeyCode::Escape,
+                    ..
+                }
             )),
             "the release chord itself is never forwarded"
         );
@@ -397,10 +410,16 @@ mod tests {
             let mut capture = app.world_mut().resource_mut::<LiveInputCapture>();
             capture.active = true;
             capture.release_requested = true;
-            capture.held_keys.insert(KeyCode::KeyW, Key::Character("w".into()));
-            capture.held_buttons.insert(bevy::input::mouse::MouseButton::Left);
+            capture
+                .held_keys
+                .insert(KeyCode::KeyW, Key::Character("w".into()));
+            capture
+                .held_buttons
+                .insert(bevy::input::mouse::MouseButton::Left);
         }
-        app.world_mut().run_system_cached(apply_release_requests).unwrap();
+        app.world_mut()
+            .run_system_cached(apply_release_requests)
+            .unwrap();
 
         let capture = app.world().resource::<LiveInputCapture>();
         assert!(!capture.active);
@@ -409,11 +428,18 @@ mod tests {
         use jackdaw_pie_protocol::PieInputEvent;
         assert!(pending.iter().any(|e| matches!(
             e,
-            PieInputEvent::Key { key: KeyCode::KeyW, pressed: false, .. }
+            PieInputEvent::Key {
+                key: KeyCode::KeyW,
+                pressed: false,
+                ..
+            }
         )));
         assert!(pending.iter().any(|e| matches!(
             e,
-            PieInputEvent::MouseButton { button: bevy::input::mouse::MouseButton::Left, pressed: false }
+            PieInputEvent::MouseButton {
+                button: bevy::input::mouse::MouseButton::Left,
+                pressed: false
+            }
         )));
         assert!(matches!(pending.last(), Some(PieInputEvent::FocusLost)));
     }
@@ -423,9 +449,7 @@ mod tests {
         use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
         let mut world = World::new();
         world.init_resource::<LiveInputCapture>();
-        let window = world
-            .spawn((PrimaryWindow, CursorOptions::default()))
-            .id();
+        let window = world.spawn((PrimaryWindow, CursorOptions::default())).id();
 
         // Inactive: only records, does not touch the editor cursor.
         note_game_cursor_state(&mut world, true, false);

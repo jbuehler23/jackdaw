@@ -230,10 +230,7 @@ pub fn set_focused_instance(world: &mut World, key: crate::pie::InstanceKey) {
     }
     // The old focus keeps streaming frames nobody will consume; stop it
     // before the focus moves.
-    crate::pie::send_control_to_focused(
-        world,
-        jackdaw_pie_protocol::ControlEvent::StopFrameStream,
-    );
+    crate::pie::send_control_to_focused(world, jackdaw_pie_protocol::ControlEvent::StopFrameStream);
     revert_preview(world);
     crate::live_frame::clear_stream(world);
     // The stop prompt owns the log while it is open.
@@ -265,9 +262,8 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                         .entity_for_node_id(JsnNodeId(id))
                 })
                 .unwrap_or_else(|| {
-                    // The transform/visibility backbone keeps child face meshes
-                    // and remapped children inheriting consistently; streamed
-                    // values overwrite the defaults.
+                    // Seed Transform/Visibility so children inherit before
+                    // streamed values overwrite the defaults.
                     world
                         .spawn((PieEphemeral, Transform::default(), Visibility::default()))
                         .id()
@@ -963,7 +959,10 @@ mod tests {
         project_event(&mut world, StateEvent::EntityDespawned { entity: 0xE1 });
 
         assert!(world.get_entity(outer).is_err(), "ephemeral despawned");
-        assert!(world.get_entity(inner).is_err(), "nested ephemeral despawned");
+        assert!(
+            world.get_entity(inner).is_err(),
+            "nested ephemeral despawned"
+        );
         assert!(
             world.get_entity(authored).is_ok(),
             "authored preview must survive the ephemeral teardown"

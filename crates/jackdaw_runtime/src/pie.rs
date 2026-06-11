@@ -76,17 +76,19 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
     app.insert_non_send_resource(PieTransportRes(transport));
     app.init_resource::<PieStreamState>();
     app.init_resource::<HighlightedEntity>();
-    // Draining control runs in PreUpdate ahead of input processing so forwarded
-    // editor input is built into `ButtonInput` the same frame it arrives, and
-    // ahead of the Update frame systems: a stop or restart despawns the readback
-    // entity, so pacing in Update never queues an insert against the old entity.
+    // Drain control in PreUpdate, before input processing so forwarded editor
+    // input lands in `ButtonInput` the same frame, and before Update where a
+    // stop or restart despawns the readback entity that pacing would target.
     app.add_systems(
         PreUpdate,
         (apply_control, stream_cursor_state)
             .chain()
             .before(bevy::input::InputSystems),
     );
-    app.add_systems(Update, (stream_state, crate::pie_frames::pace_frame_capture));
+    app.add_systems(
+        Update,
+        (stream_state, crate::pie_frames::pace_frame_capture),
+    );
 
     if crate::pie_windowless::windowless_active(app) {
         crate::pie_windowless::setup_windowless(app);
@@ -95,12 +97,10 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
         if !app.is_plugin_added::<bevy::picking::mesh_picking::MeshPickingPlugin>() {
             app.add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin);
         }
-        // The forwarded image-targeted pointer events fully own the mouse
-        // pointer. Without winit nothing derives window-targeted pointer
-        // events today, but if anything ever writes window events the two
-        // streams would fight over the pointer location, so the derivation
-        // is switched off outright. The pointer entity itself spawns
-        // unconditionally at startup and is unaffected.
+        // Forwarded image-targeted pointer events own the mouse pointer.
+        // Disable window-targeted pointer derivation outright so a stray
+        // window event can never fight the forwarded stream over the pointer
+        // location.
         app.insert_resource(bevy::picking::input::PointerInputSettings {
             is_mouse_enabled: false,
             is_touch_enabled: false,
@@ -602,11 +602,7 @@ fn pointer_button(
 /// locations are matched against camera render targets, and every camera
 /// renders into the image, so window-targeted locations would never hit UI.
 /// Skipped when picking is not present (the headless server).
-fn write_pointer(
-    world: &mut World,
-    window: Entity,
-    action: bevy::picking::pointer::PointerAction,
-) {
+fn write_pointer(world: &mut World, window: Entity, action: bevy::picking::pointer::PointerAction) {
     use bevy::picking::pointer::{Location, PointerId, PointerInput};
     if !world.contains_resource::<bevy::ecs::message::Messages<PointerInput>>() {
         return;
@@ -1084,7 +1080,10 @@ mod tests {
             .world_mut()
             .query_filtered::<&Window, With<crate::pie_windowless::PieVirtualWindow>>();
         let window = windows.single(app.world()).unwrap();
-        assert_eq!(window.physical_cursor_position(), Some(Vec2::new(100.0, 50.0)));
+        assert_eq!(
+            window.physical_cursor_position(),
+            Some(Vec2::new(100.0, 50.0))
+        );
 
         let target_handle = app
             .world()
@@ -1188,7 +1187,10 @@ mod tests {
         let count = world
             .run_system_cached_with(count_boxes, parent)
             .expect("one-shot system runs");
-        assert_eq!(count, 3, "self plus child plus grandchild, the whole subtree");
+        assert_eq!(
+            count, 3,
+            "self plus child plus grandchild, the whole subtree"
+        );
 
         // An entity with a transform but no Aabb (and no children) yields no
         // boxes, so the draw system falls back to a small cube.

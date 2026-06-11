@@ -11,6 +11,8 @@ use jackdaw_feathers::picker::{
 };
 use jackdaw_feathers::tooltip::Tooltip;
 
+#[cfg(feature = "camera_rig")]
+use crate::entity_ops::EntityAddCameraRigOp;
 use crate::entity_ops::{
     EntityAddAnimationPlayerOp, EntityAddAudioSourceOp, EntityAddCameraOp, EntityAddConeOp,
     EntityAddCubeOp, EntityAddCylinderOp, EntityAddDirectionalLightOp, EntityAddEmptyOp,
@@ -18,8 +20,6 @@ use crate::entity_ops::{
     EntityAddPrefabOp, EntityAddPyramidOp, EntityAddReflectionProbeOp, EntityAddSphereOp,
     EntityAddSpotLightOp, EntityAddTerrainOp, EntityAddWedgeOp,
 };
-#[cfg(feature = "camera_rig")]
-use crate::entity_ops::EntityAddCameraRigOp;
 #[cfg(feature = "multiplayer")]
 use crate::entity_ops::{EntityAddNetworkRoomOp, EntityAddSpawnPointOp, EntityAddZoneTransitionOp};
 

@@ -2666,8 +2666,8 @@ mod tests {
     /// Authored Transform is `[1, 2, 3]`; the live ECS Transform is `[9, 9, 9]`.
     /// The save must write the authored values.
     fn build_live_save_world() -> World {
-        use jackdaw_jsn::ast::{JsnEntityNode, SceneJsnAst};
         use jackdaw_jsn::JsnNodeId;
+        use jackdaw_jsn::ast::{JsnEntityNode, SceneJsnAst};
 
         let mut world = World::new();
         world.init_resource::<AppTypeRegistry>();

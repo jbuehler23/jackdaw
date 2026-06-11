@@ -87,12 +87,16 @@ impl Plugin for JackdawCameraRigPlugin {
         // and writes both the local Transform and GlobalTransform on the rig directly.
         app.add_systems(
             Update,
-            (activate_lone_rig, materialize_active, dematerialize_inactive).chain(),
+            (
+                activate_lone_rig,
+                materialize_active,
+                dematerialize_inactive,
+            )
+                .chain(),
         );
         app.add_systems(
             PostUpdate,
-            drive_camera_rig
-                .after(bevy::transform::TransformSystems::Propagate),
+            drive_camera_rig.after(bevy::transform::TransformSystems::Propagate),
         );
     }
 }
@@ -149,7 +153,11 @@ fn materialize_active(
         if !has_look {
             entity.try_insert(CameraLook {
                 yaw: 0.0,
-                pitch: if rig.mode == CameraMode::ThirdPerson { rig.pitch } else { 0.0 },
+                pitch: if rig.mode == CameraMode::ThirdPerson {
+                    rig.pitch
+                } else {
+                    0.0
+                },
             });
         }
     }
@@ -185,7 +193,9 @@ fn drive_camera_rig(
         Query<(&mut Transform, &mut GlobalTransform), With<ActiveCameraRig>>,
     )>,
 ) {
-    let rmb_held = mouse_buttons.as_deref().is_some_and(|b| b.pressed(MouseButton::Right));
+    let rmb_held = mouse_buttons
+        .as_deref()
+        .is_some_and(|b| b.pressed(MouseButton::Right));
     let delta = if rmb_held {
         motion.as_deref().map(|m| m.delta).unwrap_or_default()
     } else {
@@ -215,7 +225,9 @@ fn drive_camera_rig(
     {
         let mut cam = queries.p1();
         for (entity, parent_affine) in &parent_globals {
-            let Ok((_, rig, _, mut look)) = cam.get_mut(*entity) else { continue };
+            let Ok((_, rig, _, mut look)) = cam.get_mut(*entity) else {
+                continue;
+            };
 
             if rmb_held {
                 look.yaw -= delta.x * rig.sensitivity;
@@ -235,8 +247,8 @@ fn drive_camera_rig(
             let desired_world = match rig.mode {
                 CameraMode::ThirdPerson => {
                     let focus = parent_translation + Vec3::Y * THIRD_PERSON_FOCUS_LIFT;
-                    let offset =
-                        Quat::from_euler(EulerRot::YXZ, look.yaw, -look.pitch, 0.0) * (Vec3::Z * rig.distance);
+                    let offset = Quat::from_euler(EulerRot::YXZ, look.yaw, -look.pitch, 0.0)
+                        * (Vec3::Z * rig.distance);
                     Transform::from_translation(focus + offset).looking_at(focus, Vec3::Y)
                 }
                 CameraMode::FirstPerson => {
@@ -257,7 +269,9 @@ fn drive_camera_rig(
     // TransformSystems::Propagate and propagation will not re-run this frame.
     let mut rigs = queries.p2();
     for (entity, world_affine, local_affine) in writes {
-        let Ok((mut tf, mut global_tf)) = rigs.get_mut(entity) else { continue };
+        let Ok((mut tf, mut global_tf)) = rigs.get_mut(entity) else {
+            continue;
+        };
         *global_tf = GlobalTransform::from(world_affine);
         *tf = Transform::from_matrix(Mat4::from(local_affine));
     }
@@ -285,8 +299,14 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((bevy::transform::TransformPlugin, JackdawCameraRigPlugin));
         let parent = app.world_mut().spawn(Transform::default()).id();
-        let dormant = app.world_mut().spawn((CameraRig::default(), ChildOf(parent))).id();
-        let active = app.world_mut().spawn((CameraRig::default(), ActiveCameraRig, ChildOf(parent))).id();
+        let dormant = app
+            .world_mut()
+            .spawn((CameraRig::default(), ChildOf(parent)))
+            .id();
+        let active = app
+            .world_mut()
+            .spawn((CameraRig::default(), ActiveCameraRig, ChildOf(parent)))
+            .id();
         app.update();
         assert!(!app.world().entity(dormant).contains::<Camera3d>());
         assert!(app.world().entity(active).contains::<Camera3d>());
@@ -323,17 +343,47 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((bevy::transform::TransformPlugin, JackdawCameraRigPlugin));
         let parent = app.world_mut().spawn(Transform::default()).id();
-        let rig = app.world_mut().spawn((
-            CameraRig { mode: CameraMode::ThirdPerson, distance: 10.0, pitch: 0.0, eye_height: 1.6, sensitivity: 0.005 },
-            ActiveCameraRig, ChildOf(parent),
-        )).id();
+        let rig = app
+            .world_mut()
+            .spawn((
+                CameraRig {
+                    mode: CameraMode::ThirdPerson,
+                    distance: 10.0,
+                    pitch: 0.0,
+                    eye_height: 1.6,
+                    sensitivity: 0.005,
+                },
+                ActiveCameraRig,
+                ChildOf(parent),
+            ))
+            .id();
         app.update();
-        let world_a = app.world().entity(rig).get::<GlobalTransform>().unwrap().translation();
-        app.world_mut().entity_mut(parent).insert(Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)));
+        let world_a = app
+            .world()
+            .entity(rig)
+            .get::<GlobalTransform>()
+            .unwrap()
+            .translation();
+        app.world_mut()
+            .entity_mut(parent)
+            .insert(Transform::from_rotation(Quat::from_rotation_y(
+                std::f32::consts::FRAC_PI_2,
+            )));
         app.update();
-        let world_b = app.world().entity(rig).get::<GlobalTransform>().unwrap().translation();
-        assert!((world_a - world_b).length() < 1e-3, "camera world position must not follow parent rotation");
-        assert!((world_a - Vec3::new(0.0, 1.2, 10.0)).length() < 1e-2, "got {world_a:?}");
+        let world_b = app
+            .world()
+            .entity(rig)
+            .get::<GlobalTransform>()
+            .unwrap()
+            .translation();
+        assert!(
+            (world_a - world_b).length() < 1e-3,
+            "camera world position must not follow parent rotation"
+        );
+        assert!(
+            (world_a - Vec3::new(0.0, 1.2, 10.0)).length() < 1e-2,
+            "got {world_a:?}"
+        );
     }
 
     #[test]
@@ -342,13 +392,31 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((bevy::transform::TransformPlugin, JackdawCameraRigPlugin));
         let parent = app.world_mut().spawn(Transform::default()).id();
-        let rig = app.world_mut().spawn((
-            CameraRig { mode: CameraMode::FirstPerson, distance: 10.0, pitch: 0.0, eye_height: 1.6, sensitivity: 0.005 },
-            ActiveCameraRig, ChildOf(parent),
-        )).id();
+        let rig = app
+            .world_mut()
+            .spawn((
+                CameraRig {
+                    mode: CameraMode::FirstPerson,
+                    distance: 10.0,
+                    pitch: 0.0,
+                    eye_height: 1.6,
+                    sensitivity: 0.005,
+                },
+                ActiveCameraRig,
+                ChildOf(parent),
+            ))
+            .id();
         app.update();
-        let pos = app.world().entity(rig).get::<GlobalTransform>().unwrap().translation();
-        assert!((pos - Vec3::new(0.0, 1.6, 0.0)).length() < 1e-2, "got {pos:?}");
+        let pos = app
+            .world()
+            .entity(rig)
+            .get::<GlobalTransform>()
+            .unwrap()
+            .translation();
+        assert!(
+            (pos - Vec3::new(0.0, 1.6, 0.0)).length() < 1e-2,
+            "got {pos:?}"
+        );
     }
 
     #[test]
@@ -356,10 +424,16 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((bevy::transform::TransformPlugin, JackdawCameraRigPlugin));
         let p = app.world_mut().spawn(Transform::default()).id();
-        let only = app.world_mut().spawn((CameraRig::default(), ChildOf(p))).id();
+        let only = app
+            .world_mut()
+            .spawn((CameraRig::default(), ChildOf(p)))
+            .id();
         app.update();
         assert!(app.world().entity(only).contains::<ActiveCameraRig>());
-        let second = app.world_mut().spawn((CameraRig::default(), ChildOf(p))).id();
+        let second = app
+            .world_mut()
+            .spawn((CameraRig::default(), ChildOf(p)))
+            .id();
         app.update();
         assert!(!app.world().entity(second).contains::<ActiveCameraRig>());
     }
@@ -370,7 +444,10 @@ mod tests {
         app.add_plugins((bevy::transform::TransformPlugin, JackdawCameraRigPlugin));
         app.insert_resource(CameraRigActivation::Gated);
         let p = app.world_mut().spawn(Transform::default()).id();
-        let only = app.world_mut().spawn((CameraRig::default(), ChildOf(p))).id();
+        let only = app
+            .world_mut()
+            .spawn((CameraRig::default(), ChildOf(p)))
+            .id();
         app.update();
         app.update();
         assert!(

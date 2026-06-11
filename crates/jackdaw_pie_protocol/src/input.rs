@@ -22,10 +22,7 @@ pub enum PieInputEvent {
         repeat: bool,
     },
     /// A mouse button press or release.
-    MouseButton {
-        button: MouseButton,
-        pressed: bool,
-    },
+    MouseButton { button: MouseButton, pressed: bool },
     /// Absolute cursor position in stream pixels (the streamed frame's
     /// pixel space).
     CursorMoved { position: Vec2 },

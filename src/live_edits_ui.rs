@@ -105,14 +105,12 @@ pub fn live_edits_badge() -> impl Bundle {
         },
         BackgroundColor(tokens::ELEVATED_BG),
         BorderColor::all(tokens::BORDER_SUBTLE),
-        observe(
-            |click: On<Pointer<Click>>, mut open: ResMut<TrayOpen>| {
-                if click.event().button != PointerButton::Primary {
-                    return;
-                }
-                open.0 = !open.0;
-            },
-        ),
+        observe(|click: On<Pointer<Click>>, mut open: ResMut<TrayOpen>| {
+            if click.event().button != PointerButton::Primary {
+                return;
+            }
+            open.0 = !open.0;
+        }),
         children![(
             LiveEditsBadgeLabel,
             Text::new(String::new()),
@@ -156,7 +154,11 @@ fn update_live_edits_badge(
         open.0 = false;
     }
     let label = badge_label(count);
-    let display = if visible { Display::Flex } else { Display::None };
+    let display = if visible {
+        Display::Flex
+    } else {
+        Display::None
+    };
     for (mut node, children) in &mut badges {
         if node.display != display {
             node.display = display;
@@ -297,7 +299,12 @@ fn spawn_tray_row(
                     }),
                 )],
             ),
-            tray_entry_button("Save", key.clone(), LiveEditAction::Save, state.save_enabled),
+            tray_entry_button(
+                "Save",
+                key.clone(),
+                LiveEditAction::Save,
+                state.save_enabled
+            ),
             tray_entry_button(
                 "Revert",
                 key.clone(),
@@ -399,20 +406,18 @@ fn tray_footer_button(label: &'static str, operator_id: &'static str) -> impl Bu
         },
         BackgroundColor(tokens::ELEVATED_BG),
         BorderColor::all(tokens::BORDER_SUBTLE),
-        observe(
-            move |click: On<Pointer<Click>>, mut commands: Commands| {
-                if click.event().button != PointerButton::Primary {
-                    return;
-                }
-                commands
-                    .operator(operator_id)
-                    .settings(CallOperatorSettings {
-                        execution_context: ExecutionContext::Invoke,
-                        creates_history_entry: false,
-                    })
-                    .call();
-            },
-        ),
+        observe(move |click: On<Pointer<Click>>, mut commands: Commands| {
+            if click.event().button != PointerButton::Primary {
+                return;
+            }
+            commands
+                .operator(operator_id)
+                .settings(CallOperatorSettings {
+                    execution_context: ExecutionContext::Invoke,
+                    creates_history_entry: false,
+                })
+                .call();
+        }),
         children![(
             Text::new(label),
             TextFont {

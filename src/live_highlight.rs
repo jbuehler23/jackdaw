@@ -59,7 +59,10 @@ mod tests {
         world.init_resource::<LastHighlight>();
         world.init_resource::<PieInstances>();
         let preview = world.spawn_empty().id();
-        world.resource_mut::<PieProjection>().by_bits.insert(7, preview);
+        world
+            .resource_mut::<PieProjection>()
+            .by_bits
+            .insert(7, preview);
         (world, preview)
     }
 

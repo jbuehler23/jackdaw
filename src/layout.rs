@@ -972,22 +972,20 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
                             width: percent(100),
                             ..Default::default()
                         },
-                        children![
-                            (
-                                Node {
-                                    flex_grow: 1.0,
-                                    ..Default::default()
-                                },
-                                children![(
-                                    crate::inspector::InspectorSearch,
-                                    text_edit::text_edit(
-                                        TextEditProps::default()
-                                            .with_placeholder("Filter...")
-                                            .allow_empty()
-                                    ),
-                                )],
-                            ),
-                        ],
+                        children![(
+                            Node {
+                                flex_grow: 1.0,
+                                ..Default::default()
+                            },
+                            children![(
+                                crate::inspector::InspectorSearch,
+                                text_edit::text_edit(
+                                    TextEditProps::default()
+                                        .with_placeholder("Filter...")
+                                        .allow_empty()
+                                ),
+                            )],
+                        ),],
                     ),
                     (
                         crate::inspector::AddComponentButton,

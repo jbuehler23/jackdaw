@@ -33,14 +33,14 @@ fn headless_app() -> App {
 fn scene_root_gains_a_name_from_the_scene_path() {
     let mut app = headless_app();
 
-    let scene_handle = app
-        .world_mut()
-        .resource_mut::<Assets<JackdawScene>>()
-        .add(JackdawScene::with_stem(
-            empty_scene(),
-            PathBuf::new(),
-            Some("starter".to_string()),
-        ));
+    let scene_handle =
+        app.world_mut()
+            .resource_mut::<Assets<JackdawScene>>()
+            .add(JackdawScene::with_stem(
+                empty_scene(),
+                PathBuf::new(),
+                Some("starter".to_string()),
+            ));
 
     let root = app.world_mut().spawn(JackdawSceneRoot(scene_handle)).id();
 
@@ -59,14 +59,14 @@ fn scene_root_gains_a_name_from_the_scene_path() {
 fn scene_root_keeps_an_author_supplied_name() {
     let mut app = headless_app();
 
-    let scene_handle = app
-        .world_mut()
-        .resource_mut::<Assets<JackdawScene>>()
-        .add(JackdawScene::with_stem(
-            empty_scene(),
-            PathBuf::new(),
-            Some("starter".to_string()),
-        ));
+    let scene_handle =
+        app.world_mut()
+            .resource_mut::<Assets<JackdawScene>>()
+            .add(JackdawScene::with_stem(
+                empty_scene(),
+                PathBuf::new(),
+                Some("starter".to_string()),
+            ));
 
     let root = app
         .world_mut()

@@ -1278,8 +1278,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<EntityAddCameraOp>();
     #[cfg(feature = "camera_rig")]
     ctx.register_operator::<EntityAddCameraRigOp>();
-    ctx
-        .register_operator::<EntityAddEmptyOp>()
+    ctx.register_operator::<EntityAddEmptyOp>()
         .register_operator::<EntityAddNavmeshOp>()
         .register_operator::<EntityAddTerrainOp>()
         .register_operator::<EntityAddPrefabOp>()

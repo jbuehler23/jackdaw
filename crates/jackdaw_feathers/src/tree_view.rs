@@ -131,16 +131,13 @@ pub fn tree_row(
                             if let Ok(toggle_children) = toggle_query.get(cc) {
                                 for tc in toggle_children.iter() {
                                     if let Ok(mut text) = text_query.get_mut(tc) {
-                                        // Leaf rows render the toggle as a blank
-                                        // space. Only rows that already show a
-                                        // chevron (so, ones with children) flip
-                                        // between the open and closed glyphs; a
-                                        // leaf keeps its blank even when the
-                                        // reveal machinery marks it expanded.
+                                        // Only rows that already show a chevron
+                                        // flip glyphs; a childless leaf keeps its
+                                        // blank toggle even when the reveal
+                                        // machinery marks it expanded.
                                         let chevron_right =
                                             Icon::ChevronRight.unicode().to_string();
-                                        let chevron_down =
-                                            Icon::ChevronDown.unicode().to_string();
+                                        let chevron_down = Icon::ChevronDown.unicode().to_string();
                                         if text.0 == chevron_right || text.0 == chevron_down {
                                             text.0 = if expanded.0 {
                                                 chevron_down

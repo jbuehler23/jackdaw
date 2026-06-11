@@ -368,10 +368,7 @@ fn live_preview_set(world: &World) -> std::collections::HashSet<Entity> {
 /// Roots of the Live tree: live entities whose parent is missing or not
 /// itself live (the game hierarchy can hang under authored containers the
 /// game never spawned).
-fn live_tree_roots(
-    world: &mut World,
-    live: &std::collections::HashSet<Entity>,
-) -> Vec<Entity> {
+fn live_tree_roots(world: &mut World, live: &std::collections::HashSet<Entity>) -> Vec<Entity> {
     let mut roots: Vec<Entity> = live
         .iter()
         .copied()
@@ -401,10 +398,8 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
             ),
         >,
     ) {
-        // Every Outliner panel gets its own copy of the tree, so
-        // iterate every container that's currently mounted. Zero
-        // containers (headless tests, pre-Editor state) means there's
-        // nothing to rebuild against.
+        // Each Outliner panel owns its own tree copy; rebuild every mounted
+        // container. Zero containers (headless tests, pre-Editor) is a no-op.
         let containers: Vec<Entity> = containers.iter(world).collect();
         if containers.is_empty() {
             return;
@@ -2533,6 +2528,10 @@ mod tests {
         assert!(live.contains(&live_root) && live.contains(&live_child));
 
         let roots = live_tree_roots(&mut world, &live);
-        assert_eq!(roots, vec![live_root], "live child of a non-live parent is the root");
+        assert_eq!(
+            roots,
+            vec![live_root],
+            "live child of a non-live parent is the root"
+        );
     }
 }
