@@ -1,3 +1,4 @@
+use bevy::feathers::cursor::CursorIconPlugin;
 use bevy::prelude::*;
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
@@ -43,7 +44,7 @@ impl Default for CaptionTheme {
             icon_color: Color::srgb(0.925, 0.925, 0.925),
             button_hover_background: Color::srgb(0.165, 0.165, 0.180),
             close_hover_background: Color::srgb(220.0 / 255.0, 38.0 / 255.0, 38.0 / 255.0),
-            button_width: 36.0,
+            button_width: 46.0,
             glyph_size: 10.0,
         }
     }
@@ -90,6 +91,9 @@ impl Plugin for WindowChromePlugin {
 
         #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
         {
+            if !app.is_plugin_added::<CursorIconPlugin>() {
+                app.add_plugins(CursorIconPlugin);
+            }
             crate::title_bar::register_drag_region_handlers(app);
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
             {
