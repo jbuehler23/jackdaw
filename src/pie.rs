@@ -30,8 +30,6 @@ use jackdaw_pie_protocol::{
 
 use crate::build_status::BuildStatus;
 use crate::ext_build::{BuildProgress, BuildSpec};
-use crate::live_frame::LiveFrameStream;
-use crate::live_frame_view::LiveCameraMode;
 use crate::pie_mirror::{PieInstances, PieViewMode};
 use crate::run_config::{CargoMeta, RunConfigs, resolve_build_spec};
 
@@ -174,7 +172,16 @@ impl Plugin for PiePlugin {
             .init_resource::<crate::pie_projection::PieProjection>()
             .init_resource::<crate::live_frame::LiveFrameStream>()
             .init_resource::<crate::live_edits::LiveEditLog>()
-            .add_systems(Update, (advance_pie_session, drain_game_events))
+            .init_resource::<crate::live_highlight::LastHighlight>()
+            .init_resource::<PieWindowMode>()
+            .add_systems(
+                Update,
+                (
+                    advance_pie_session,
+                    drain_game_events,
+                    crate::live_highlight::sync_selection_highlight,
+                ),
+            )
             .add_systems(
                 OnEnter(PlayState::Stopped),
                 (
@@ -228,7 +235,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<PiePauseOp>()
         .register_operator::<PieStopOp>()
         .register_operator::<PieReloadOp>()
-        .register_operator::<PieLiveCameraToggleOp>()
+        .register_operator::<PieWindowModeToggleOp>()
+        .register_operator::<crate::live_input::PiePlayInputToggleOp>()
         .register_operator::<crate::live_edits::PieLiveEditSaveOp>()
         .register_operator::<crate::live_edits::PieLiveEditRevertOp>()
         .register_operator::<crate::live_edits::PieLiveEditsApplyAllOp>()
@@ -296,27 +304,49 @@ pub(crate) fn pie_reload(_: In<OperatorParameters>, mut commands: Commands) -> O
     OperatorResult::Finished
 }
 
-/// The camera toggle only means anything while the Live view shows the
-/// streamed frame, which needs a fresh stream to lock onto.
-fn live_view_with_fresh_stream(mode: Res<PieViewMode>, stream: Res<LiveFrameStream>) -> bool {
-    *mode == PieViewMode::Live && stream.is_fresh()
+/// Input capture needs a focused instance and a fresh frame to forward to;
+/// it no longer depends on the outliner view mode.
+pub(crate) fn focused_with_fresh_stream(
+    stream: Res<crate::live_frame::LiveFrameStream>,
+    instances: Res<PieInstances>,
+) -> bool {
+    instances.focused.is_some() && stream.is_fresh()
 }
 
-/// Toggle the Live viewport between the game-locked camera and free flight.
-#[operator(
-    id = "pie.live_camera_toggle",
-    label = "Toggle Live Camera",
-    description = "Switch the Live viewport between the game camera and free flight.",
-    is_available = live_view_with_fresh_stream
-)]
-pub(crate) fn pie_live_camera_toggle(
-    _: In<OperatorParameters>,
-    mut mode: ResMut<LiveCameraMode>,
-) -> OperatorResult {
+/// Where a launched game's window lives. Applies to the next launch.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PieWindowMode {
+    /// No OS window: the game renders into the Live viewport stream.
+    #[default]
+    Embedded,
+    /// The game opens its own OS window (debug fallback; no input capture).
+    Windowed,
+}
+
+/// Whether a launch under this mode sets `JACKDAW_PIE_WINDOWLESS`.
+fn wants_windowless_env(mode: PieWindowMode) -> bool {
+    mode == PieWindowMode::Embedded
+}
+
+fn toggle_window_mode(mode: &mut PieWindowMode) {
     *mode = match *mode {
-        LiveCameraMode::Game => LiveCameraMode::Free,
-        LiveCameraMode::Free => LiveCameraMode::Game,
+        PieWindowMode::Embedded => PieWindowMode::Windowed,
+        PieWindowMode::Windowed => PieWindowMode::Embedded,
     };
+}
+
+/// Switch the next launch between an embedded (viewport) game and a separate
+/// game window.
+#[operator(
+    id = "pie.window_mode_toggle",
+    label = "Toggle Game Window Mode",
+    description = "Switch the next launch between embedded (viewport) and a separate game window."
+)]
+pub(crate) fn pie_window_mode_toggle(
+    _: In<OperatorParameters>,
+    mut mode: ResMut<PieWindowMode>,
+) -> OperatorResult {
+    toggle_window_mode(&mut mode);
     OperatorResult::Finished
 }
 
@@ -1115,6 +1145,15 @@ fn spawn_instance(
         .args(&run.args)
         .stderr(Stdio::piped());
 
+    if world
+        .get_resource::<PieWindowMode>()
+        .copied()
+        .map(wants_windowless_env)
+        .unwrap_or(true)
+    {
+        command.env("JACKDAW_PIE_WINDOWLESS", "1");
+    }
+
     // Ask the kernel to SIGKILL this child when the editor (its parent) dies by
     // any means -- including a SIGKILL the editor can never trap, or the
     // `process::exit` the Ctrl+C handler takes (which skips `Drop`). Without
@@ -1187,6 +1226,41 @@ fn report_stderr_tail(stderr_tail: &StderrTail) {
     }
 }
 
+/// Apply a game pick answer: resolve the bits through the projection and
+/// select the preview entity. Stale or unstreamed hits resolve to nothing
+/// and are dropped.
+pub(crate) fn handle_pick_result(world: &mut World, bits: Option<u64>) {
+    let Some(bits) = bits else {
+        return;
+    };
+    let Some(&preview) = world
+        .resource::<crate::pie_projection::PieProjection>()
+        .by_bits
+        .get(&bits)
+    else {
+        return;
+    };
+    if world.get_entity(preview).is_err() {
+        return;
+    }
+    let old_entities: Vec<Entity> = world.resource::<crate::selection::Selection>().entities.clone();
+    {
+        let mut selection = world.resource_mut::<crate::selection::Selection>();
+        selection.entities.clear();
+        selection.entities.push(preview);
+    }
+    for e in old_entities {
+        if e != preview
+            && let Ok(mut entity_mut) = world.get_entity_mut(e)
+        {
+            entity_mut.remove::<crate::selection::Selected>();
+        }
+    }
+    if let Ok(mut entity_mut) = world.get_entity_mut(preview) {
+        entity_mut.insert(crate::selection::Selected);
+    }
+}
+
 /// Drain `StateEvent`s from every live child. Events for every instance are
 /// always accumulated into that instance's [`InstanceBuffer`] regardless of
 /// view mode, so the buffers always hold current game state and a Scene->Live
@@ -1255,6 +1329,24 @@ fn drain_game_events(world: &mut World) {
             == crate::pie_mirror::PieViewMode::Live;
 
         for event in events {
+            // Mirror the focused game's cursor grab onto the editor before any
+            // buffering or projection; the cursor state is not scene data.
+            if let StateEvent::CursorState { grabbed, visible } = &event {
+                if is_focused {
+                    crate::live_input::note_game_cursor_state(world, *grabbed, *visible);
+                }
+                continue;
+            }
+
+            // A pick answer resolves to a preview entity selection; it is not
+            // scene data, so it never reaches the buffer or the projector.
+            if let StateEvent::PickResult { entity } = &event {
+                if is_focused {
+                    handle_pick_result(world, *entity);
+                }
+                continue;
+            }
+
             // Always accumulate into the per-instance buffer.
             world
                 .resource_mut::<PieInstances>()
@@ -1617,6 +1709,28 @@ mod stop_cleanup_tests {
                 .is_empty()
         );
     }
+
+    #[test]
+    fn pick_result_selects_the_projected_entity() {
+        let mut world = build_focus_world();
+        let preview = world.spawn_empty().id();
+        world
+            .resource_mut::<crate::pie_projection::PieProjection>()
+            .by_bits
+            .insert(0xC3, preview);
+        world.init_resource::<crate::selection::Selection>();
+
+        crate::pie::handle_pick_result(&mut world, Some(0xC3));
+        assert!(
+            world
+                .resource::<crate::selection::Selection>()
+                .is_selected(preview)
+        );
+
+        // Unresolvable bits and None are no-ops, not panics.
+        crate::pie::handle_pick_result(&mut world, Some(0xDEAD));
+        crate::pie::handle_pick_result(&mut world, None);
+    }
 }
 
 #[cfg(test)]
@@ -1634,5 +1748,16 @@ mod enter_live_tests {
         enter_live_view(&mut world);
 
         assert_eq!(*world.resource::<PieViewMode>(), PieViewMode::Live);
+    }
+
+    #[test]
+    fn window_mode_toggle_flips_and_embedded_sets_the_env() {
+        assert!(wants_windowless_env(PieWindowMode::Embedded));
+        assert!(!wants_windowless_env(PieWindowMode::Windowed));
+        let mut mode = PieWindowMode::Embedded;
+        toggle_window_mode(&mut mode);
+        assert_eq!(mode, PieWindowMode::Windowed);
+        toggle_window_mode(&mut mode);
+        assert_eq!(mode, PieWindowMode::Embedded);
     }
 }

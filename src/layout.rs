@@ -24,11 +24,9 @@ use crate::{
     gizmos::GizmoSpace,
     hierarchy::{HierarchyPanel, HierarchyShowAllButton, HierarchyTreeContainer},
     inspector::Inspector,
-    live_frame::LiveFrameStream,
-    live_frame_view::LiveCameraMode,
     measure_tool::MeasureDistanceOp,
     physics_tool::PhysicsActivateOp,
-    pie::PieLiveCameraToggleOp,
+    pie::PieWindowModeToggleOp,
     pie_mirror::{PieViewHeader, PieViewMode, PieViewSegment},
     remote::ConnectionManager,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
@@ -348,6 +346,7 @@ fn play_pause_controls(icon_font: Handle<Font>) -> impl Bundle {
             pie_transport_button(crate::pie::PieButton::Pause, Icon::Pause, icon_font.clone(),),
             pie_transport_button(crate::pie::PieButton::Stop, Icon::Square, icon_font.clone(),),
             pie_transport_button(crate::pie::PieButton::Reload, Icon::RefreshCw, icon_font),
+            window_mode_button(),
         ],
     )
 }
@@ -605,8 +604,6 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
                     pie_view_toggle(toggle_font),
                     live_badge(),
                     pie_instance_cycle_button(),
-                    live_camera_toggle_button(),
-                    live_no_signal_chip(),
                     crate::live_edits_ui::live_edits_badge(),
                     (
                         HierarchyShowAllButton,
@@ -1245,6 +1242,15 @@ fn pie_view_segment(
                     if current == new_mode {
                         return;
                     }
+                    // Both directions despawn and replace the previewed
+                    // entities (revert respawns authored entities with new
+                    // ids; reproject despawns the ephemerals), so any
+                    // selected entity becomes invalid across the toggle.
+                    // Drop the selection before the teardown runs so the
+                    // `On<Remove, Selected>` -> `on_entity_deselected`
+                    // handler never tries to clear `TreeRowSelected` off a
+                    // row that `teardown_outliner_rows` already despawned.
+                    crate::selection::clear_selection_in_world(world);
                     match new_mode {
                         PieViewMode::Live => {
                             crate::pie::enter_live_view(world);
@@ -1577,29 +1583,24 @@ pub fn update_pie_instance_cycle_button(
     }
 }
 
-/// Marker on the Live camera toggle button in the hierarchy header.
+/// Marker on the button that picks whether the next launched game renders
+/// into the viewport or opens a separate window.
 #[derive(Component)]
-pub struct LiveCameraToggleButton;
+pub struct WindowModeButton;
 
-/// Marker on the text node inside the camera toggle that names the current
-/// [`LiveCameraMode`].
+/// Marker on the text node inside [`WindowModeButton`] that names the current
+/// [`PieWindowMode`].
 #[derive(Component)]
-pub struct LiveCameraToggleLabel;
+pub struct WindowModeLabel;
 
-/// Marker on the "no signal" chip shown while the Live view waits on the
-/// frame stream.
-#[derive(Component)]
-pub struct LiveNoSignalChip;
-
-/// Build the Game/Free camera toggle for the Live view.
+/// Build the button that flips the next launch between an embedded
+/// (viewport) game and a separate game window.
 ///
-/// Hidden outside Live mode. Clicking dispatches `pie.live_camera_toggle`;
-/// the operator's availability check refuses the flip while no fresh frame
-/// stream exists, and [`update_live_camera_controls`] dims the label to
-/// match.
-fn live_camera_toggle_button() -> impl Bundle {
+/// Always visible. Clicking dispatches `pie.window_mode_toggle`;
+/// [`update_window_mode_button`] keeps the label naming the current mode.
+fn window_mode_button() -> impl Bundle {
     (
-        LiveCameraToggleButton,
+        WindowModeButton,
         Interaction::default(),
         Node {
             flex_direction: FlexDirection::Row,
@@ -1608,16 +1609,16 @@ fn live_camera_toggle_button() -> impl Bundle {
             padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
             border: UiRect::all(px(1.0)),
             border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            // Hidden until Live mode; the appearance system flips this.
-            display: Display::None,
+            display: Display::Flex,
             flex_shrink: 0.0,
             ..Default::default()
         },
         BackgroundColor(tokens::ELEVATED_BG),
         BorderColor::all(tokens::BORDER_SUBTLE),
+        jackdaw_feathers::tooltip::Tooltip::title("Game window: embedded or separate window"),
         observe(|_: On<Pointer<Click>>, mut commands: Commands| {
             commands
-                .operator(PieLiveCameraToggleOp::ID)
+                .operator(PieWindowModeToggleOp::ID)
                 .settings(CallOperatorSettings {
                     execution_context: ExecutionContext::Invoke,
                     creates_history_entry: false,
@@ -1625,7 +1626,7 @@ fn live_camera_toggle_button() -> impl Bundle {
                 .call();
         }),
         children![(
-            LiveCameraToggleLabel,
+            WindowModeLabel,
             Text::new(String::new()),
             TextFont {
                 font_size: tokens::FONT_SM,
@@ -1636,80 +1637,23 @@ fn live_camera_toggle_button() -> impl Bundle {
     )
 }
 
-/// Build the "no signal" chip, shown while the Live view is locked to the
-/// game camera but no fresh frame has arrived.
-fn live_no_signal_chip() -> impl Bundle {
-    (
-        LiveNoSignalChip,
-        Node {
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            display: Display::None,
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        children![(
-            Text::new("no signal"),
-            TextFont {
-                font_size: tokens::FONT_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_DISABLED),
-        )],
-    )
-}
-
-/// Keep the Live camera toggle and the "no signal" chip in sync with the
-/// view mode, camera mode, and stream freshness.
-///
-/// Runs every frame without a change-detection short-circuit: freshness
-/// lapses by time alone, with no resource write to observe. The writes
-/// themselves are guarded so unchanged frames do not dirty the UI.
-pub fn update_live_camera_controls(
-    mode: Res<PieViewMode>,
-    camera_mode: Res<LiveCameraMode>,
-    stream: Res<LiveFrameStream>,
-    mut buttons: Query<(&mut Node, &Children), With<LiveCameraToggleButton>>,
-    mut chips: Query<&mut Node, (With<LiveNoSignalChip>, Without<LiveCameraToggleButton>)>,
-    mut labels: Query<(&mut Text, &mut TextColor), With<LiveCameraToggleLabel>>,
+/// Keep the window-mode button label current.
+pub fn update_window_mode_button(
+    mode: Res<crate::pie::PieWindowMode>,
+    buttons: Query<&Children, With<WindowModeButton>>,
+    mut labels: Query<&mut Text, With<WindowModeLabel>>,
 ) {
-    let live = *mode == PieViewMode::Live;
-    let fresh = stream.is_fresh();
-    let label = match *camera_mode {
-        LiveCameraMode::Game => "Game",
-        LiveCameraMode::Free => "Free",
+    let label = match *mode {
+        crate::pie::PieWindowMode::Embedded => "Embedded",
+        crate::pie::PieWindowMode::Windowed => "Windowed",
     };
-    let button_display = if live { Display::Flex } else { Display::None };
-    let label_color = if fresh {
-        tokens::TEXT_PRIMARY
-    } else {
-        tokens::TEXT_DISABLED
-    };
-    for (mut node, children) in &mut buttons {
-        if node.display != button_display {
-            node.display = button_display;
-        }
+    for children in &buttons {
         for child in children.iter() {
-            if let Ok((mut text, mut tc)) = labels.get_mut(child) {
-                if text.0 != label {
-                    text.0 = label.to_string();
-                }
-                if tc.0 != label_color {
-                    tc.0 = label_color;
-                }
+            if let Ok(mut text) = labels.get_mut(child)
+                && text.0 != label
+            {
+                text.0 = label.to_string();
             }
-        }
-    }
-    let chip_display = if live && *camera_mode == LiveCameraMode::Game && !fresh {
-        Display::Flex
-    } else {
-        Display::None
-    };
-    for mut node in &mut chips {
-        if node.display != chip_display {
-            node.display = chip_display;
         }
     }
 }

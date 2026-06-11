@@ -48,14 +48,49 @@ impl KeybindFocus<'_, '_> {
 pub(crate) fn disable_keyboard_input_when_typing(
     focus: KeybindFocus,
     numeric: Res<crate::numeric_transform::NumericTransformState>,
+    capture: Res<crate::live_input::LiveInputCapture>,
     mut sources: ResMut<ActionSources>,
 ) {
-    if !focus.is_changed() && !numeric.is_changed() {
+    if !focus.is_changed() && !numeric.is_changed() && !capture.is_changed() {
         return;
     }
 
-    // Suppress action keybinds while a text field is focused or a numeric
-    // transform entry is capturing the keyboard, so typed digits go to the
-    // entry instead of firing edit-mode and tool keybinds.
-    sources.keyboard = !focus.is_typing() && numeric.axis.is_none();
+    // Suppress action keybinds while a text field is focused, a numeric
+    // transform entry is capturing the keyboard, or Live input capture is
+    // forwarding to the game, so typed digits go to the entry and game
+    // input does not fire edit-mode and tool keybinds.
+    sources.keyboard = !focus.is_typing() && numeric.axis.is_none() && !capture.active;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_active_suppresses_action_keybinds() {
+        use bevy::input_focus::InputFocus;
+        use jackdaw_api::prelude::ActionSources;
+        let mut app = bevy::app::App::new();
+        app.init_resource::<InputFocus>();
+        app.init_resource::<crate::numeric_transform::NumericTransformState>();
+        app.init_resource::<ActionSources>();
+        app.init_resource::<crate::live_input::LiveInputCapture>();
+        app.world_mut()
+            .resource_mut::<crate::live_input::LiveInputCapture>()
+            .active = true;
+        app.world_mut()
+            .run_system_cached(disable_keyboard_input_when_typing)
+            .unwrap();
+        assert!(
+            !app.world().resource::<ActionSources>().keyboard,
+            "capture active suppresses action keybinds"
+        );
+        app.world_mut()
+            .resource_mut::<crate::live_input::LiveInputCapture>()
+            .active = false;
+        app.world_mut()
+            .run_system_cached(disable_keyboard_input_when_typing)
+            .unwrap();
+        assert!(app.world().resource::<ActionSources>().keyboard);
+    }
 }

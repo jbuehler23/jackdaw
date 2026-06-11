@@ -120,6 +120,9 @@ pub const LIVE_EDIT_ACCENT: Color = Color::srgb(0.30, 0.85, 0.45);
 /// [`LIVE_EDIT_ACCENT`] as the per-view live signal.
 pub const LIVE_ACCENT: Color = Color::srgb(0.0, 0.78, 0.85);
 
+/// Accent while Live input capture is engaged (forwarding to the game).
+pub const CAPTURE_ACCENT: Color = Color::srgb(1.0, 0.62, 0.1);
+
 /// Subtle teal wash applied over the editor header backgrounds while Live.
 pub const LIVE_HEADER_TINT: Color = Color::srgba(0.0, 0.667, 0.733, 0.15);
 

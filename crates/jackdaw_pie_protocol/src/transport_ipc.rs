@@ -117,6 +117,44 @@ impl PieTransport for IpcChannelTransport {
     }
 }
 
+/// A cloneable handle that sends on one fixed channel from any thread.
+///
+/// The frame capture's render-thread observer hands frames to a dedicated
+/// sender thread holding one of these, so frame sends never wait for the
+/// main thread (the full transport is a non-send resource pinned there).
+pub struct IpcLaneSender {
+    tx: IpcSender<Frame>,
+    channel: PieChannel,
+}
+
+impl IpcLaneSender {
+    /// Send one payload on this lane. A send failure (peer hung up) is
+    /// logged once per call and otherwise dropped, matching the transport.
+    pub fn send(&self, bytes: Vec<u8>) {
+        let frame = Frame {
+            channel: self.channel,
+            bytes,
+        };
+        if let Err(err) = self.tx.send(frame) {
+            warn!(
+                "PIE ipc transport: dropping {:?} frame, send failed: {err}",
+                self.channel
+            );
+        }
+    }
+}
+
+impl IpcChannelTransport {
+    /// Clone the underlying sender, fixed to one channel. `IpcSender` is
+    /// `Send + Clone`, so the handle can live on another thread.
+    pub fn lane_sender(&self, channel: PieChannel) -> IpcLaneSender {
+        IpcLaneSender {
+            tx: self.tx.clone(),
+            channel,
+        }
+    }
+}
+
 /// Map an `ipc-channel` error to `std::io::Error` so public APIs stay
 /// free of `ipc-channel` types (aside from [`IpcChannelTransport`] itself).
 fn ipc_error_to_io(err: IpcError) -> std::io::Error {
@@ -166,5 +204,29 @@ mod tests {
 
         child.join().unwrap();
         assert_eq!(echoed, Some((PieChannel::Reliable, b"ping".to_vec())));
+    }
+
+    #[test]
+    fn lane_sender_sends_from_another_thread() {
+        let (handle, name) = serve().unwrap();
+        let child = std::thread::spawn(move || {
+            let t = connect(&name).unwrap();
+            let lane = t.lane_sender(PieChannel::Frames);
+            let sender = std::thread::spawn(move || lane.send(vec![1, 2, 3]));
+            sender.join().unwrap();
+            // Keep the connection alive until the editor side drained.
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        });
+        let mut server = handle.accept().unwrap();
+        let mut got = None;
+        for _ in 0..100_000 {
+            if let Some(m) = server.drain_received().into_iter().next() {
+                got = Some(m);
+                break;
+            }
+            std::thread::yield_now();
+        }
+        child.join().unwrap();
+        assert_eq!(got, Some((PieChannel::Frames, vec![1, 2, 3])));
     }
 }

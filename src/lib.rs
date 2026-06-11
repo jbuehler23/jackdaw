@@ -25,6 +25,7 @@ pub mod draw_brush;
 pub mod edit_mode_ops;
 pub mod entity_ops;
 pub mod face_grid;
+pub mod game_panel;
 pub mod gizmo_ops;
 pub mod gizmos;
 pub mod grid_ops;
@@ -54,6 +55,8 @@ pub mod live_edits;
 pub mod live_edits_ui;
 pub mod live_frame;
 pub mod live_frame_view;
+pub mod live_highlight;
+pub mod live_input;
 pub mod material_browser;
 pub mod material_preview;
 pub mod measure_tool;
@@ -343,6 +346,8 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(hot_reload::HotReloadPlugin)
         .add_plugins(pie::PiePlugin)
         .add_plugins(live_frame_view::LiveFrameViewPlugin)
+        .add_plugins(live_input::LiveInputPlugin)
+        .add_plugins(game_panel::GamePanelPlugin)
         .add_plugins(live_edits_ui::LiveEditsUiPlugin)
         .add_plugins(pie_menu::PieMenuPlugin)
         .add_plugins(dock_ops::DockOpsPlugin)
@@ -412,7 +417,7 @@ impl Plugin for EditorCorePlugin {
                 layout::update_pie_view_header_accent,
                 layout::update_save_to_scene_button,
                 layout::update_pie_instance_cycle_button,
-                layout::update_live_camera_controls,
+                layout::update_window_mode_button,
                 layout::update_live_badge,
                 auto_hide_internal_entities,
                 decorate_timeline_tooltips,
@@ -489,6 +494,7 @@ impl Plugin for ExtensionPlugin {
                 .register_extension::<builtin_extensions::CoreWindowsExtension>()
                 .register_extension::<builtin_extensions::ViewportExtension>()
                 .register_extension::<builtin_extensions::AssetBrowserExtension>()
+                .register_extension::<builtin_extensions::GamePanelExtension>()
                 .register_extension::<builtin_extensions::TimelineExtension>()
                 .register_extension::<builtin_extensions::TerminalExtension>()
                 .register_extension::<builtin_extensions::InspectorExtension>();

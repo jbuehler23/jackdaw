@@ -156,6 +156,38 @@ impl JackdawExtension for AssetBrowserExtension {
     }
 }
 
+/// Game monitor in the bottom dock: shows the focused instance's streamed
+/// frame with a Play/Select mode bar.
+#[derive(Default)]
+pub struct GamePanelExtension;
+
+impl JackdawExtension for GamePanelExtension {
+    fn id(&self) -> String {
+        "jackdaw.game_panel".to_string()
+    }
+
+    fn label(&self) -> String {
+        "Game Panel".to_string()
+    }
+
+    fn kind(&self) -> ExtensionKind {
+        ExtensionKind::Builtin
+    }
+
+    fn register(&self, ctx: &mut ExtensionContext) {
+        ctx.register_window(
+            WindowDescriptor::new(crate::game_panel::GAME_WINDOW_ID)
+                .with_name("Game")
+                .with_icon(Icon::Play.unicode())
+                .with_default_area(DefaultArea::BottomDock)
+                .with_priority(2)
+                .with_build(|window| {
+                    window.spawn(crate::game_panel::game_panel_content());
+                }),
+        );
+    }
+}
+
 /// Animation timeline in the bottom dock.
 #[derive(Default)]
 pub struct TimelineExtension;

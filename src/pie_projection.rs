@@ -133,6 +133,11 @@ fn clear_projection(world: &mut World) {
         q.iter(world).collect()
     };
     for e in ephemerals {
+        // The game routinely parents authored previews under ephemerals (zone
+        // roots, network actors). `despawn` takes descendants with it, so detach
+        // the authored ones first or they die with the container and their node
+        // ids resolve to dead entities on the next replay.
+        detach_authored_descendants(world, e);
         if let Ok(em) = world.get_entity_mut(e) {
             em.despawn();
         }
@@ -328,6 +333,8 @@ pub fn project_event(world: &mut World, event: StateEvent) {
             }
         }
         StateEvent::Status { .. } | StateEvent::Log { .. } => {}
+        StateEvent::CursorState { .. } => {}
+        StateEvent::PickResult { .. } => {}
     }
 }
 
@@ -1245,6 +1252,116 @@ mod tests {
                 .contains_key(&0xA1),
             "no-op call must not revert projection"
         );
+    }
+
+    fn make_buffer_entry(
+        components: Vec<(String, serde_json::Value)>,
+        scene_node_id: Option<u64>,
+    ) -> crate::pie_mirror::PieMirrorEntry {
+        crate::pie_mirror::PieMirrorEntry {
+            components: components.into_iter().collect(),
+            scene_node_id,
+        }
+    }
+
+    #[test]
+    fn replay_reproduces_stream_parenting() {
+        use crate::pie_mirror::{InstanceBuffer, PieInstances, PieViewMode};
+        use bevy::prelude::ChildOf;
+
+        let (parent_bits, child_bits, path, value) = wire_child_of();
+
+        // Live stream: container (no node id) then a node-id child carrying
+        // ChildOf(container). The child preview must end up parented under the
+        // container preview.
+        let stream_child_parent = {
+            let (mut world, _preview, _node_id) = build_projection_world();
+            project_event(&mut world, spawn_event(parent_bits, vec![]));
+            project_event(
+                &mut world,
+                spawn_event(child_bits, vec![(path.clone(), value.clone())]),
+            );
+            let child_preview = world.resource::<PieProjection>().by_bits[&child_bits];
+            world.entity(child_preview).get::<ChildOf>().map(|c| c.0)
+        };
+        let stream_parent = world_parent_preview(parent_bits, child_bits, &path, &value);
+        assert_eq!(
+            stream_child_parent,
+            Some(stream_parent),
+            "live stream must parent the child under the container preview"
+        );
+
+        // Replay: install a buffer holding the same two entities, focus it,
+        // set Live view, then reproject. The child preview must again be
+        // parented under the container preview.
+        let mut world = build_focus_world();
+        world.init_resource::<PieViewMode>();
+        *world.resource_mut::<PieViewMode>() = PieViewMode::Live;
+        // The asserted child is an authored scene node streamed back, so on
+        // replay it resolves to the authored preview entity. The container has
+        // no node id and projects as an ephemeral.
+        let child_node_id = world.resource::<SceneJsnAst>().nodes[0].id.map(|id| id.0);
+
+        let key = instance_key("A");
+        let mut buf = InstanceBuffer::default();
+        buf.entities
+            .insert(parent_bits, make_buffer_entry(vec![], None));
+        buf.entities.insert(
+            child_bits,
+            make_buffer_entry(vec![(path.clone(), value.clone())], child_node_id),
+        );
+        // Many sibling children so the HashMap replay order is likely to place
+        // a child before the container, exercising the pending-children drain;
+        // the parenting assertion holds regardless of replay order.
+        for extra in 0..32u64 {
+            buf.entities.insert(
+                0x1000 + extra,
+                make_buffer_entry(vec![(path.clone(), value.clone())], None),
+            );
+        }
+        world
+            .resource_mut::<PieInstances>()
+            .buffers
+            .insert(key.clone(), buf);
+        world.resource_mut::<PieInstances>().focused = Some(key.clone());
+
+        // Mimic an already-running Live session before the toggle: the stream
+        // projected these same entities once already, leaving by_bits populated
+        // and ephemerals spawned. Toggling Scene -> Live calls reproject_focused,
+        // which clears and replays.
+        replay_buffer(&mut world, &key);
+
+        reproject_focused(&mut world);
+
+        let proj = world.resource::<PieProjection>();
+        assert!(
+            proj.by_bits.contains_key(&parent_bits),
+            "container preview must exist in by_bits after replay"
+        );
+        let child_preview = proj.by_bits[&child_bits];
+        let container_preview = proj.by_bits[&parent_bits];
+        assert_eq!(
+            world.entity(child_preview).get::<ChildOf>().map(|c| c.0),
+            Some(container_preview),
+            "replay must parent the child under the container, matching the live stream"
+        );
+    }
+
+    /// Project container then child as a live stream and return the container's
+    /// preview entity, so the parity test can compare the replay outcome.
+    fn world_parent_preview(
+        parent_bits: u64,
+        child_bits: u64,
+        path: &str,
+        value: &serde_json::Value,
+    ) -> Entity {
+        let (mut world, _preview, _node_id) = build_projection_world();
+        project_event(&mut world, spawn_event(parent_bits, vec![]));
+        project_event(
+            &mut world,
+            spawn_event(child_bits, vec![(path.to_string(), value.clone())]),
+        );
+        world.resource::<PieProjection>().by_bits[&parent_bits]
     }
 
     fn log_with_one_entry() -> crate::live_edits::LiveEditLog {

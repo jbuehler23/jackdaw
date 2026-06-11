@@ -45,6 +45,7 @@ pie = [
     "dep:jackdaw_camera_rig",
     "bevy/bevy_render",
     "bevy/bevy_image",
+    "bevy/mesh_picking",
 ]
 
 [lints]

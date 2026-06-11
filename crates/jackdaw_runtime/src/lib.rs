@@ -28,6 +28,10 @@ pub use jackdaw_jsn::{
 mod pie;
 #[cfg(feature = "pie")]
 mod pie_frames;
+#[cfg(feature = "pie")]
+mod pie_windowless;
+#[cfg(feature = "pie")]
+pub use pie_windowless::{maybe_windowless, windowless_requested};
 
 pub mod prelude {
     pub use crate::{
@@ -108,6 +112,11 @@ pub struct JackdawCatalogPath(pub PathBuf);
 pub struct JackdawScene {
     jsn: JsnScene,
     parent_path: PathBuf,
+    /// Source file stem (`starter` from `zones/starter.jsn`), captured at
+    /// load time. Used to give the spawned scene root a readable `Name` so
+    /// the editor's Live tree shows the scene name instead of an entity id.
+    /// `None` when the asset was built without a source path.
+    stem: Option<String>,
 }
 
 impl JackdawScene {
@@ -115,7 +124,21 @@ impl JackdawScene {
     /// Used by integration tests that drive scene-load codepaths
     /// without a real `.jsn` file on disk.
     pub fn new(jsn: JsnScene, parent_path: PathBuf) -> Self {
-        Self { jsn, parent_path }
+        Self {
+            jsn,
+            parent_path,
+            stem: None,
+        }
+    }
+
+    /// Like [`JackdawScene::new`] but with an explicit source file stem, so
+    /// tests can exercise the root-naming path without a real `.jsn` file.
+    pub fn with_stem(jsn: JsnScene, parent_path: PathBuf, stem: Option<String>) -> Self {
+        Self {
+            jsn,
+            parent_path,
+            stem,
+        }
     }
 }
 
@@ -171,14 +194,17 @@ impl AssetLoader for JackdawSceneLoader {
             },
         };
 
-        let parent_path = load_context
-            .path()
-            .path()
-            .parent()
-            .unwrap_or(Path::new(""))
-            .to_owned();
+        let source_path = load_context.path().path();
+        let parent_path = source_path.parent().unwrap_or(Path::new("")).to_owned();
+        let stem = source_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned());
 
-        Ok(JackdawScene { jsn, parent_path })
+        Ok(JackdawScene {
+            jsn,
+            parent_path,
+            stem,
+        })
     }
 
     fn extensions(&self) -> &[&str] {
@@ -246,6 +272,7 @@ fn spawn_loaded_scenes(
         };
         let jsn = scene.jsn.clone();
         let parent_path = scene.parent_path.clone();
+        let stem = scene.stem.clone();
 
         let catalog_assets = world.resource::<JackdawCatalog>().handles.clone();
         let local_assets = load_inline_assets(world, &jsn.assets, &parent_path, &catalog_assets);
@@ -257,6 +284,16 @@ fn spawn_loaded_scenes(
             &local_assets,
             &catalog_assets,
         );
+
+        // Give the container root a readable name from the scene's file
+        // stem so the editor's Live tree shows the scene name instead of an
+        // entity id. Never overwrite an author-supplied name, and never
+        // insert an empty one.
+        if world.get::<Name>(root_entity).is_none()
+            && let Some(stem) = stem.filter(|s| !s.is_empty())
+        {
+            world.entity_mut(root_entity).insert(Name::new(stem));
+        }
 
         world.entity_mut(root_entity).insert(SceneSpawned);
     }

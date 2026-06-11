@@ -95,9 +95,65 @@ impl Selection {
     }
 }
 
+/// Clear the selection directly against the world, removing the `Selected`
+/// marker from each entity through guarded access so a despawned entry is
+/// skipped rather than panicking. Used by paths that mutate selection inside
+/// a `&mut World` closure, such as the PIE Scene/Live view toggle, which must
+/// drop the selection before the previewed entities are despawned and
+/// replaced.
+pub fn clear_selection_in_world(world: &mut World) {
+    let entities: Vec<Entity> = std::mem::take(&mut world.resource_mut::<Selection>().entities);
+    for entity in entities {
+        if let Ok(mut em) = world.get_entity_mut(entity) {
+            em.remove::<Selected>();
+        }
+    }
+}
+
 /// Clean up the Selection resource when a Selected component is removed
 /// (e.g., entity despawned).
 fn on_selected_removed(trigger: On<Remove, Selected>, mut selection: ResMut<Selection>) {
     let entity = trigger.event_target();
     selection.entities.retain(|&e| e != entity);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clear_selection_in_world_empties_and_removes_markers() {
+        let mut world = World::new();
+        world.add_observer(on_selected_removed);
+        world.insert_resource(Selection::default());
+
+        let a = world.spawn(Selected).id();
+        let b = world.spawn(Selected).id();
+        world.resource_mut::<Selection>().entities = vec![a, b];
+
+        clear_selection_in_world(&mut world);
+
+        assert!(world.resource::<Selection>().entities.is_empty());
+        assert!(world.get::<Selected>(a).is_none());
+        assert!(world.get::<Selected>(b).is_none());
+    }
+
+    #[test]
+    fn clear_selection_in_world_skips_already_despawned_entity() {
+        let mut world = World::new();
+        world.insert_resource(Selection::default());
+
+        let live = world.spawn(Selected).id();
+        let dead = world.spawn(Selected).id();
+        world.resource_mut::<Selection>().entities = vec![live, dead];
+
+        // Mirror the toggle race: the previewed entity is despawned before
+        // the selection prune runs. Guarded access must not panic on it.
+        world.despawn(dead);
+
+        clear_selection_in_world(&mut world);
+
+        assert!(world.resource::<Selection>().entities.is_empty());
+        assert!(world.get::<Selected>(live).is_none());
+    }
 }
