@@ -63,12 +63,5 @@ impl Plugin for WindowingPlugin {
         app.add_plugins(WindowChromePlugin::new(window_chrome_theme()));
         app.add_plugins(WindowIconPlugin::new(window_icon_png_bytes()));
         app.add_plugins(repo_link::RepoLinkPlugin);
-        app.add_observer(tag_chrome_entity_as_editor);
     }
-}
-
-/// Stamps `EditorEntity` onto every chrome entity so jackdaw's cleanup, hierarchy, and viewport
-/// systems treat the window chrome as editor UI.
-fn tag_chrome_entity_as_editor(add: On<Add, WindowChromeEntity>, mut commands: Commands) {
-    commands.entity(add.event_target()).insert(EditorEntity);
 }
