@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 
+use crate::CaptionFont;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
 use crate::caption_controls::window_controls;
 use crate::window::toggle_primary_window_maximized;
@@ -26,15 +27,8 @@ pub struct WindowTitleBarDragRegion;
 pub fn spawn_window_title_bar(
     parent: &mut ChildSpawnerCommands,
     theme: &WindowChromeTheme,
-    caption_font: Handle<Font>,
+    caption_font: Option<&CaptionFont>,
 ) -> Entity {
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "freebsd")))]
-    let _ = caption_font;
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-    let caption_controls = window_controls(theme, caption_font);
-    #[cfg(target_os = "macos")]
-    let macos_traffic_light_inset = theme.macos_traffic_light_inset;
-
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     let title_bar_border_radius = BorderRadius::top(px(theme.linux_corner_radius));
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
@@ -55,22 +49,15 @@ pub fn spawn_window_title_bar(
     );
     let mut title_bar_slot = None::<Entity>;
     parent.spawn(title_bar_root).with_children(|title_bar| {
-        title_bar_slot = Some(spawn_foreground_row(
-            title_bar,
-            #[cfg(target_os = "macos")]
-            macos_traffic_light_inset,
-            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-            caption_controls,
-        ));
+        title_bar_slot = Some(spawn_foreground_row(title_bar, theme, caption_font));
     });
     title_bar_slot.expect("window title bar content slot spawned")
 }
 
 fn spawn_foreground_row(
     parent: &mut ChildSpawnerCommands,
-    #[cfg(target_os = "macos")] macos_traffic_light_inset: f32,
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-    caption_controls: impl Bundle,
+    theme: &WindowChromeTheme,
+    caption_font: Option<&CaptionFont>,
 ) -> Entity {
     let mut title_bar_slot = None::<Entity>;
     parent
@@ -93,12 +80,14 @@ fn spawn_foreground_row(
             title_bar_slot = Some(
                 row.spawn(title_bar_content_slot(
                     #[cfg(target_os = "macos")]
-                    macos_traffic_light_inset,
+                    theme.macos_traffic_light_inset,
                 ))
                 .id(),
             );
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-            row.spawn(caption_controls_slot(caption_controls));
+            if let Some(caption_font) = caption_font {
+                row.spawn(caption_controls_slot(window_controls(theme, caption_font)));
+            }
         });
     title_bar_slot.expect("window title bar content slot spawned")
 }

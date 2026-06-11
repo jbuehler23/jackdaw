@@ -7,7 +7,13 @@ repository = "https://github.com/jbuehler23/jackdaw"
 license = "MIT OR Apache-2.0"
 keywords = ["bevy", "window", "titlebar", "chrome", "decorations"]
 categories = ["game-development", "gui"]
-include = ["Cargo.toml", "LICENSE*", "README.md", "src/**/*"]
+include = [
+    "Cargo.toml",
+    "LICENSE*",
+    "README.md",
+    "src/**/*",
+    "caption-lucide.ttf",
+]
 
 [dependencies]
 bevy.workspace = true

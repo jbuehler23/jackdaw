@@ -10,11 +10,8 @@ pub use bevy_window_chrome::{
 pub use repo_link::{JackdawIcon, title_bar_repo_link};
 
 use bevy::prelude::*;
-use bevy_window_chrome::{
-    CaptionFont, CaptionTheme, WindowChromeEntity, WindowChromePlugin, WindowChromeTheme,
-};
+use bevy_window_chrome::{CaptionTheme, WindowChromeEntity, WindowChromePlugin, WindowChromeTheme};
 use icon::WindowIconPlugin;
-use jackdaw_feathers::icons::IconFont;
 use jackdaw_feathers::tokens;
 use time::{Month, OffsetDateTime};
 
@@ -46,7 +43,7 @@ pub(crate) fn is_pride_month() -> bool {
 }
 
 /// Window chrome theme built from jackdaw's design tokens.
-fn jackdaw_window_chrome_theme() -> WindowChromeTheme {
+fn window_chrome_theme() -> WindowChromeTheme {
     WindowChromeTheme {
         title_bar_height: tokens::WINDOW_TITLE_BAR_HEIGHT,
         window_background: tokens::WINDOW_BG,
@@ -63,7 +60,7 @@ pub struct WindowingPlugin;
 
 impl Plugin for WindowingPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(WindowChromePlugin::new(jackdaw_window_chrome_theme()));
+        app.add_plugins(WindowChromePlugin::new(window_chrome_theme()));
         app.add_plugins(WindowIconPlugin::new(window_icon_png_bytes()));
         app.add_plugins(repo_link::RepoLinkPlugin);
         app.add_observer(tag_chrome_entity_as_editor);
@@ -74,27 +71,4 @@ impl Plugin for WindowingPlugin {
 /// systems treat the window chrome as editor UI.
 fn tag_chrome_entity_as_editor(add: On<Add, WindowChromeEntity>, mut commands: Commands) {
     commands.entity(add.event_target()).insert(EditorEntity);
-}
-
-/// Spawns the jackdaw window shell, returning title bar and body content slots.
-pub fn spawn_window_shell<S: Component + Copy>(
-    commands: &mut Commands,
-    icon_font: &IconFont,
-    #[cfg(target_os = "windows")] caption_font: &CaptionFont,
-    screen: S,
-) -> WindowShellSlots {
-    #[cfg(target_os = "windows")]
-    let _ = icon_font;
-    let theme = jackdaw_window_chrome_theme();
-    let caption_font = {
-        #[cfg(target_os = "windows")]
-        {
-            caption_font.0.clone()
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            icon_font.0.clone()
-        }
-    };
-    bevy_window_chrome::spawn_window_shell(commands, &theme, caption_font, screen)
 }

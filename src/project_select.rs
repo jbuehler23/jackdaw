@@ -24,10 +24,9 @@ use crate::{
     project::{self, ProjectRoot},
     scene_io,
     scrolling_log::{self, ScrollingLog},
-    windowing::{JackdawIcon, spawn_window_shell, title_bar_repo_link},
+    windowing::{JackdawIcon, title_bar_repo_link},
 };
-#[cfg(target_os = "windows")]
-use bevy_window_chrome::CaptionFont;
+use bevy_window_chrome::{CaptionFont, WindowChromeTheme, spawn_window_shell};
 
 #[derive(Default)]
 enum ScaffoldState {
@@ -350,10 +349,11 @@ fn default_projects_dir() -> PathBuf {
 
 fn spawn_project_selector(
     mut commands: Commands,
+    theme: Res<WindowChromeTheme>,
     editor_font: Res<EditorFont>,
     icon_font: Res<jackdaw_feathers::icons::IconFont>,
     jackdaw_icon: Res<JackdawIcon>,
-    #[cfg(target_os = "windows")] caption_font: Res<CaptionFont>,
+    caption_font: Option<Res<CaptionFont>>,
     pending: Option<Res<PendingAutoOpen>>,
 ) {
     if let Some(pending) = pending {
@@ -378,13 +378,7 @@ fn spawn_project_selector(
         || cwd.join("project.jsn").is_file()
         || cwd.join("assets").is_dir();
 
-    let slots = spawn_window_shell(
-        &mut commands,
-        &icon_font,
-        #[cfg(target_os = "windows")]
-        &caption_font,
-        ProjectSelectorRoot,
-    );
+    let slots = spawn_window_shell(&mut commands, &theme, caption_font, ProjectSelectorRoot);
     fill_project_selector(
         &mut commands,
         slots.title_bar,

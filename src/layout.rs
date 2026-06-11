@@ -27,10 +27,9 @@ use crate::{
     remote::ConnectionManager,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
-    windowing::{JackdawIcon, spawn_window_shell, title_bar_repo_link},
+    windowing::{JackdawIcon, title_bar_repo_link},
 };
-#[cfg(target_os = "windows")]
-use bevy_window_chrome::CaptionFont;
+use bevy_window_chrome::{CaptionFont, WindowChromeTheme, spawn_window_shell};
 
 /// Discriminator for the header tab kinds the editor knows how to host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -211,18 +210,13 @@ pub fn spawn_editor(
 /// Editor entry: UI camera, window shell, then editor chrome/content.
 pub fn spawn_editor_layout(
     mut commands: Commands,
+    theme: Res<WindowChromeTheme>,
     icon_font: Res<IconFont>,
     editor_font: Res<EditorFont>,
     jackdaw_icon: Res<JackdawIcon>,
-    #[cfg(target_os = "windows")] caption_font: Res<CaptionFont>,
+    caption_font: Option<Res<CaptionFont>>,
 ) {
-    let slots = spawn_window_shell(
-        &mut commands,
-        &icon_font,
-        #[cfg(target_os = "windows")]
-        &caption_font,
-        EditorEntity,
-    );
+    let slots = spawn_window_shell(&mut commands, &theme, caption_font, EditorEntity);
     spawn_editor(
         &mut commands,
         slots.title_bar,

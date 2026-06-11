@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 
+use crate::CaptionFont;
 use crate::WindowChromeTheme;
 use crate::resize::resize_edge_overlay;
 use crate::title_bar::spawn_window_title_bar;
@@ -24,12 +25,11 @@ pub struct WindowShellSlots {
 /// Spawns a UI camera, the window shell, and returns title bar/body slots for screen content.
 ///
 /// `screen` is a caller marker copied onto the UI camera and shell root (useful for despawning
-/// screen's chrome as a unit). `caption_font` is the icon font for client-side caption buttons
-/// (Segoe on Windows; Lucide or compatible on Linux / FreeBSD).
+/// screen's chrome as a unit). `caption_font` is `None` on macOS.
 pub fn spawn_window_shell<S: Component + Copy>(
     commands: &mut Commands,
     theme: &WindowChromeTheme,
-    caption_font: Handle<Font>,
+    caption_font: Option<Res<CaptionFont>>,
     screen: S,
 ) -> WindowShellSlots {
     commands.spawn((
@@ -59,7 +59,11 @@ pub fn spawn_window_shell<S: Component + Copy>(
             },
         ))
         .with_children(|shell| {
-            title_bar_slot = Some(spawn_window_title_bar(shell, theme, caption_font));
+            title_bar_slot = Some(spawn_window_title_bar(
+                shell,
+                theme,
+                caption_font.as_deref(),
+            ));
             body_slot = Some(
                 shell
                     .spawn((
@@ -79,8 +83,8 @@ pub fn spawn_window_shell<S: Component + Copy>(
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
             shell.spawn(resize_edge_overlay());
         });
-    WindowShellSlots {
+    return WindowShellSlots {
         title_bar: title_bar_slot.expect("window shell title bar slot spawned"),
         body: body_slot.expect("window shell body slot spawned"),
-    }
+    };
 }

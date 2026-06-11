@@ -9,8 +9,8 @@
 //! - **macOS**: native traffic lights with a transparent integrated title bar.
 //!
 //! Colors and metrics come from a [`WindowChromeTheme`] you supply to [`WindowChromePlugin`].
-//! Client-side caption buttons (Windows, Linux, FreeBSD) expect a
-//! Segoe icon font on Windows and Lucide-compatible glyphs elsewhere.
+//! Client-side caption buttons (Windows, Linux, FreeBSD) load their own icon font: Segoe on
+//! Windows when available, otherwise a small embedded Lucide icon font.
 
 mod caption_controls;
 #[cfg(target_os = "macos")]
@@ -21,11 +21,10 @@ mod shell;
 mod title_bar;
 mod window;
 
+pub use caption_controls::CaptionButton;
+pub use caption_controls::CaptionFont;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
 pub use caption_controls::window_controls;
-pub use caption_controls::{
-    CaptionFont, WindowControlsClose, WindowControlsMaximize, WindowControlsMinimize,
-};
 pub use plugin::{CaptionTheme, WindowChromePlugin, WindowChromeTheme};
 pub use resize::resize_edge_overlay;
 pub use shell::{WindowShellContent, WindowShellRoot, WindowShellSlots, spawn_window_shell};

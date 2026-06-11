@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+use crate::caption_controls::load_caption_font;
 #[cfg(target_os = "macos")]
 use crate::macos_titlebar;
 
@@ -77,6 +79,14 @@ impl WindowChromePlugin {
 impl Plugin for WindowChromePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.theme.clone());
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+        {
+            let caption_font = {
+                let mut fonts = app.world_mut().resource_mut::<Assets<Font>>();
+                load_caption_font(&mut fonts)
+            };
+            app.insert_resource(caption_font);
+        }
 
         #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
         {
