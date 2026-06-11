@@ -13,7 +13,7 @@ pub use editor_meta::{EditorCategory, EditorDescription, EditorHidden, SkipSeria
 pub use types::{
     Brush, BrushFaceData, BrushGroup, BrushPlane, BrushTopology, CustomProperties,
     DerivedFaceMesh, GltfSource, JsnPrefab, JsnPrefabBaseline, NavmeshRegion, PropertyValue,
-    Terrain,
+    SceneRootTag, Terrain,
 };
 
 // Re-export geometry crate
@@ -45,6 +45,7 @@ impl Plugin for JsnPlugin {
         };
         app.register_type::<Brush>()
             .register_type::<BrushGroup>()
+            .register_type::<SceneRootTag>()
             .register_type::<BrushFaceData>()
             .register_type::<BrushPlane>()
             .register_type::<BrushTopology>()

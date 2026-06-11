@@ -79,12 +79,33 @@ fn parent_bits_from_value(value: &serde_json::Value) -> Option<u64> {
 }
 
 fn reparent_preview(world: &mut World, child: Entity, parent: Entity) {
-    if child == parent {
+    if child == parent || would_cycle(world, child, parent) {
         return;
     }
     if let Ok(mut entity_mut) = world.get_entity_mut(child) {
         entity_mut.insert(ChildOf(parent));
     }
+}
+
+/// True when parenting `child` under `parent` would form a `ChildOf` cycle,
+/// i.e. `parent` already sits under `child`. A streamed projection can briefly
+/// request this while entities respawn and reparent; a cycle would hang every
+/// per-frame hierarchy walk (transform propagation included), so the offending
+/// edge is dropped and a later consistent update sets the real parent. The walk
+/// terminates because the existing hierarchy is kept acyclic by this very
+/// guard; the bound is a backstop against an already-corrupt tree.
+fn would_cycle(world: &World, child: Entity, parent: Entity) -> bool {
+    let mut ancestor = parent;
+    for _ in 0..100_000 {
+        if ancestor == child {
+            return true;
+        }
+        match world.get::<ChildOf>(ancestor) {
+            Some(child_of) => ancestor = child_of.0,
+            None => return false,
+        }
+    }
+    true
 }
 
 /// Resolve a streamed `ChildOf` value to the parent's preview entity and
@@ -346,13 +367,28 @@ pub fn project_event(world: &mut World, event: StateEvent) {
 /// goes with it); ephemeral children die with the parent, but their authored
 /// descendants are rescued first.
 fn detach_authored_descendants(world: &mut World, parent: Entity) {
+    detach_authored_descendants_guarded(world, parent, &mut std::collections::HashSet::new());
+}
+
+/// Walk the ephemeral subtree, detaching authored descendants. The `seen` set
+/// guards against a parent cycle, which a streamed projection can momentarily
+/// form while entities respawn and reparent; without it the recursion would
+/// run forever.
+fn detach_authored_descendants_guarded(
+    world: &mut World,
+    parent: Entity,
+    seen: &mut std::collections::HashSet<Entity>,
+) {
+    if !seen.insert(parent) {
+        return;
+    }
     let children: Vec<Entity> = world
         .get::<Children>(parent)
         .map(|children| children.iter().collect())
         .unwrap_or_default();
     for child in children {
         if world.get::<PieEphemeral>(child).is_some() {
-            detach_authored_descendants(world, child);
+            detach_authored_descendants_guarded(world, child, seen);
         } else if let Ok(mut entity_mut) = world.get_entity_mut(child) {
             entity_mut.remove::<ChildOf>();
         }
@@ -437,6 +473,25 @@ pub fn apply_component_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reparent_preview_refuses_a_cycle() {
+        let mut world = World::new();
+        // a -> b -> c chain (c child of b, b child of a).
+        let a = world.spawn_empty().id();
+        let b = world.spawn(ChildOf(a)).id();
+        let c = world.spawn(ChildOf(b)).id();
+        // Reparenting `a` under `c` would close the cycle a -> b -> c -> a.
+        reparent_preview(&mut world, a, c);
+        assert!(
+            world.get::<ChildOf>(a).is_none(),
+            "the cycle-forming reparent is dropped, leaving `a` a root"
+        );
+        // A non-cyclic reparent still applies.
+        let d = world.spawn_empty().id();
+        reparent_preview(&mut world, d, c);
+        assert_eq!(world.get::<ChildOf>(d).map(|p| p.0), Some(c));
+    }
 
     #[derive(Component, Reflect, Default, PartialEq, Debug)]
     #[reflect(Component)]

@@ -17,6 +17,13 @@ pub use jackdaw_geometry::{
 #[reflect(Component, Default, @crate::EditorHidden)]
 pub struct BrushGroup;
 
+/// Marks the entity a loaded scene's content is spawned under, so tools can
+/// show it as a scene root. Reflectable so it streams over the play-in-editor
+/// link and projects onto the editor preview entity.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug)]
+#[reflect(Component, Default)]
+pub struct SceneRootTag;
+
 /// Marker for the face-mesh child entities the runtime mesh rebuild derives
 /// from a `Brush`. They are never authored, and the PIE stream excludes them:
 /// the editor regenerates faces from the `Brush` itself, so streaming them

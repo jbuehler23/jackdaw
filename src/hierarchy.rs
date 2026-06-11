@@ -4,6 +4,7 @@ use bevy::{input_focus::InputFocus, prelude::*, ui::ui_transform::UiGlobalTransf
 use bevy_enhanced_input::prelude::{Press, *};
 use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::entity_icons::{EntityIconRegistry, registered_icon};
 use jackdaw_feathers::{
     context_menu::spawn_context_menu,
     icons::IconFont,
@@ -96,6 +97,7 @@ impl Plugin for HierarchyPlugin {
             .init_resource::<PendingPrefabSave>()
             .init_resource::<HierarchyShowAll>()
             .init_resource::<RevealTarget>()
+            .init_resource::<EntityIconRegistry>()
             .add_systems(Startup, setup_tree_node_expanded_watcher)
             .add_systems(OnEnter(crate::AppState::Editor), setup_name_watcher)
             .add_systems(
@@ -164,8 +166,16 @@ fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
     if world.get::<Mesh3d>(entity).is_some() {
         return EntityCategory::Mesh;
     }
+    if world.get::<jackdaw_jsn::SceneRootTag>(entity).is_some() {
+        return EntityCategory::Scene;
+    }
     if world.get::<SceneRoot>(entity).is_some() {
         return EntityCategory::Scene;
+    }
+    // An entity with no type of its own but with children reads as a grouping
+    // container (a "Trees" or "Player" parent), so it gets the group icon.
+    if has_visible_children(world, entity) {
+        return EntityCategory::Group;
     }
     EntityCategory::Entity
 }
@@ -178,14 +188,64 @@ fn is_inherited_descendant(world: &World, entity: Entity) -> bool {
         && world.get::<crate::prefab::PrefabEntityId>(entity).is_some()
 }
 
-/// Check if an entity has any non-editor children.
+/// Check if an entity has any children that would actually produce an
+/// outliner row. This mirrors the expansion filter exactly, including the
+/// active view mode, so the expand chevron only appears when expanding the
+/// row would spawn something.
 fn has_visible_children(world: &World, entity: Entity) -> bool {
     let Some(children) = world.get::<Children>(entity) else {
         return false;
     };
-    children.iter().any(|child| {
-        world.get::<EditorEntity>(child).is_none() && world.get::<EditorHidden>(child).is_none()
-    })
+    let live = outliner_in_live_mode(world);
+    let live_set = if live {
+        live_preview_set(world)
+    } else {
+        std::collections::HashSet::new()
+    };
+    children
+        .iter()
+        .any(|child| child_visible_in_mode(world, child, live, &live_set))
+}
+
+/// True when the outliner is currently showing the Live (running game) tree.
+fn outliner_in_live_mode(world: &World) -> bool {
+    world
+        .get_resource::<crate::pie_mirror::PieViewMode>()
+        .copied()
+        .unwrap_or_default()
+        == crate::pie_mirror::PieViewMode::Live
+}
+
+/// Whether `child` should appear as an outliner row under the active view mode.
+/// Scene mode shows authored entities and hides live preview entities; Live mode
+/// shows only the entities the running game spawned. Editor-only and derived
+/// children are excluded in both modes via [`is_outliner_child`].
+fn child_visible_in_mode(
+    world: &World,
+    child: Entity,
+    live: bool,
+    live_set: &std::collections::HashSet<Entity>,
+) -> bool {
+    if !is_outliner_child(world, child) {
+        return false;
+    }
+    if live {
+        live_set.contains(&child)
+    } else {
+        world
+            .get::<crate::pie_projection::PieEphemeral>(child)
+            .is_none()
+    }
+}
+
+/// Whether a child entity should appear in the outliner. Editor-only entities,
+/// hidden entities, and the face meshes the editor re-derives from a `Brush`
+/// (a brush is one row, not a row plus a child per generated face) are all
+/// excluded.
+fn is_outliner_child(world: &World, child: Entity) -> bool {
+    world.get::<EditorEntity>(child).is_none()
+        && world.get::<EditorHidden>(child).is_none()
+        && world.get::<jackdaw_jsn::DerivedFaceMesh>(child).is_none()
 }
 
 /// Returns true if `entity` has `PrefabEntityId` but NOT `IsA` -- meaning
@@ -255,6 +315,7 @@ fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: En
     let inherited = is_inherited_descendant(world, source);
     let icon_font = world.resource::<IconFont>().0.clone();
     let style = TreeRowStyle { icon_font };
+    let icon_override = registered_icon(world, source);
 
     let tree_row_entity = world
         .spawn((
@@ -265,6 +326,7 @@ fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: En
                 source,
                 category,
                 inherited,
+                icon_override,
                 &style,
             ),
             ChildOf(parent_container),
@@ -447,10 +509,18 @@ fn sync_pie_live_outliner(mode: Res<crate::pie_mirror::PieViewMode>, mut command
 /// Expanding each in order spawns the next level until `target`'s row exists.
 fn reveal_path(world: &World, target: Entity) -> Vec<Entity> {
     let mut chain = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     let mut cursor = target;
+    seen.insert(cursor);
     while let Some(child_of) = world.get::<ChildOf>(cursor) {
-        chain.push(child_of.0);
-        cursor = child_of.0;
+        let parent = child_of.0;
+        // A streamed projection can momentarily form a parent cycle while
+        // entities respawn and reparent; stop rather than loop forever.
+        if !seen.insert(parent) {
+            break;
+        }
+        chain.push(parent);
+        cursor = parent;
     }
     chain.reverse();
     chain
@@ -909,12 +979,10 @@ fn on_tree_node_expanded(
 
         // In Live mode the tree shows only the running game's entities, so a
         // child that is not itself live (an authored container the game never
-        // spawned) is skipped alongside the editor-only markers.
-        let live = world
-            .get_resource::<crate::pie_mirror::PieViewMode>()
-            .copied()
-            .unwrap_or_default()
-            == crate::pie_mirror::PieViewMode::Live;
+        // spawned) is skipped. In Scene mode the inverse holds: live preview
+        // entities a running game parented under an authored counterpart are
+        // hidden so the authored tree stays clean.
+        let live = outliner_in_live_mode(world);
         let live_set = if live {
             live_preview_set(world)
         } else {
@@ -930,12 +998,7 @@ fn on_tree_node_expanded(
 
         let mut child_data: Vec<(Entity, String, EntityCategory)> = Vec::new();
         for child in source_children {
-            if world.get::<EditorEntity>(child).is_some()
-                || world.get::<EditorHidden>(child).is_some()
-            {
-                continue;
-            }
-            if live && !live_set.contains(&child) {
+            if !child_visible_in_mode(world, child, live, &live_set) {
                 continue;
             }
             // Skip children that already have a row under this
@@ -2279,6 +2342,31 @@ mod tests {
         let mut map = BTreeMap::new();
         map.insert(key.to_string(), PropertyValue::Entity(entity));
         OperatorParameters(map)
+    }
+
+    #[test]
+    fn scene_root_tag_classifies_as_scene() {
+        let mut world = World::new();
+        let root = world.spawn(jackdaw_jsn::SceneRootTag).id();
+        let plain = world.spawn_empty().id();
+        assert_eq!(classify_entity(&world, root), EntityCategory::Scene);
+        assert_ne!(classify_entity(&world, plain), EntityCategory::Scene);
+    }
+
+    #[test]
+    fn scene_mode_hides_live_preview_children() {
+        // An authored entity that a running game parented a preview entity
+        // under should read as a leaf in the Scene tree: the preview child is
+        // a Live-only artifact and must not give the authored row a chevron.
+        let mut world = World::new();
+        let authored = world.spawn_empty().id();
+        let plain_child = world.spawn(ChildOf(authored)).id();
+        let _ = plain_child;
+        assert!(has_visible_children(&world, authored));
+
+        let ephemeral_host = world.spawn_empty().id();
+        world.spawn((ChildOf(ephemeral_host), crate::pie_projection::PieEphemeral));
+        assert!(!has_visible_children(&world, ephemeral_host));
     }
 
     #[test]

@@ -357,10 +357,12 @@ fn apply_control(world: &mut World) {
 }
 
 /// World-space `(center, half_extents, rotation)` boxes to outline for the
-/// highlighted entity: its own mesh bounds plus its direct children's, each
-/// `Aabb` placed by the owning entity's `GlobalTransform`. Empty when the
-/// entity has no mesh bounds anywhere (the caller then draws a small fallback
-/// cube at the entity position).
+/// highlighted entity: a box for every mesh in its whole subtree (itself and
+/// all descendants), each `Aabb` placed by the owning entity's
+/// `GlobalTransform`. A multi-part model (a tree of foliage plus a trunk under
+/// it) is fully boxed, not just its top piece. Empty when the subtree has no
+/// mesh bounds anywhere (the caller then draws a small fallback cube at the
+/// entity position).
 fn highlight_boxes(
     entity: Entity,
     transforms: &Query<&GlobalTransform>,
@@ -380,15 +382,20 @@ fn highlight_boxes(
         Some((center, half, rotation))
     }
 
+    // Iterative subtree walk with a visited set, so a streamed parent cycle
+    // cannot loop forever.
     let mut boxes = Vec::new();
-    if let Some(b) = box_for(entity, transforms, aabbs) {
-        boxes.push(b);
-    }
-    if let Ok(kids) = children.get(entity) {
-        for &child in kids {
-            if let Some(b) = box_for(child, transforms, aabbs) {
-                boxes.push(b);
-            }
+    let mut seen = bevy::platform::collections::HashSet::new();
+    let mut stack = vec![entity];
+    while let Some(current) = stack.pop() {
+        if !seen.insert(current) {
+            continue;
+        }
+        if let Some(b) = box_for(current, transforms, aabbs) {
+            boxes.push(b);
+        }
+        if let Ok(kids) = children.get(current) {
+            stack.extend(kids.iter());
         }
     }
     boxes
@@ -1168,10 +1175,20 @@ mod tests {
             .add_child(child)
             .id();
 
+        // A grandchild mesh (a tree trunk under foliage under the root) must
+        // also be boxed, so the whole subtree is outlined, not just the top.
+        let grandchild = world
+            .spawn((
+                GlobalTransform::default(),
+                Aabb::from_min_max(Vec3::splat(-1.0), Vec3::splat(1.0)),
+            ))
+            .id();
+        world.entity_mut(child).add_child(grandchild);
+
         let count = world
             .run_system_cached_with(count_boxes, parent)
             .expect("one-shot system runs");
-        assert_eq!(count, 2, "self plus one mesh-bearing child");
+        assert_eq!(count, 3, "self plus child plus grandchild, the whole subtree");
 
         // An entity with a transform but no Aabb (and no children) yields no
         // boxes, so the draw system falls back to a small cube.
