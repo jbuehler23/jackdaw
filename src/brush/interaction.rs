@@ -358,7 +358,7 @@ pub(super) fn handle_clip_mode(
     }
 }
 
-/// Pick the closest face under the cursor on a given brush entity.
+/// Pick the closest face of `cache` under the cursor in screen space.
 fn pick_face_under_cursor(
     viewport_cursor: Vec2,
     camera: &Camera,
@@ -535,13 +535,9 @@ pub(super) fn brush_face_hover(
             return;
         };
 
-        if let Some(face_idx) = pick_face_under_cursor(
-            viewport_cursor,
-            camera,
-            cam_tf,
-            brush_global,
-            cache,
-        ) {
+        if let Some(face_idx) =
+            pick_face_under_cursor(viewport_cursor, camera, cam_tf, brush_global, cache)
+        {
             hover.entity = Some(brush_entity);
             hover.face_index = Some(face_idx);
             hover.vertex_index = None;

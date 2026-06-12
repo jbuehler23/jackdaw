@@ -554,7 +554,7 @@ fn auto_hide_internal_entities(
             Added<Transform>,
             Without<EditorEntity>,
             Without<EditorHidden>,
-            Without<brush::BrushFaceEntity>,
+            Without<brush::BrushMeshChunk>,
         ),
     >,
     parent_query: Query<&ChildOf>,

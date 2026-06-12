@@ -1,6 +1,6 @@
 use crate::{
     EditorEntity,
-    brush::{BrushFaceEntity, BrushMeshCache},
+    brush::BrushMeshCache,
     brush_drag_ops::cursor_over_brush_face,
     gizmos::handle_gizmo_hover,
     selection::Selection,
@@ -324,7 +324,7 @@ fn box_select_pending_trigger(
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     selection: Res<Selection>,
     brushes: Query<(), With<Brush>>,
-    face_entities: Query<(Entity, &BrushFaceEntity, &GlobalTransform)>,
+    transforms: Query<&GlobalTransform>,
     brush_caches: Query<&BrushMeshCache>,
 ) {
     // `gizmo_drag.active` doesn't flip until next frame because the
@@ -365,7 +365,7 @@ fn box_select_pending_trigger(
             viewport_cursor,
             camera,
             cam_tf,
-            &face_entities,
+            &transforms,
             &brush_caches,
         )
     {

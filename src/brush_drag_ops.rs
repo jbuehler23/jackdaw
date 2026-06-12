@@ -22,9 +22,8 @@ use crate::brush::interaction::{
     FaceExtrudeMode, PendingSubDrag, VertexDragConstraint, compute_brush_drag_offset,
 };
 use crate::brush::{
-    BrushDragCapture, BrushDragState, BrushEditMode, BrushFaceEntity, BrushMeshCache,
-    BrushSelection, BrushSubSelection, EdgeDragState, EditMode, VertexDragState,
-    rebuild_brush_from_vertices,
+    BrushDragCapture, BrushDragState, BrushEditMode, BrushMeshCache, BrushSelection,
+    BrushSubSelection, EdgeDragState, EditMode, VertexDragState, rebuild_brush_from_vertices,
 };
 use crate::draw_brush::DrawBrushState;
 use crate::keybind_focus::KeybindFocus;
@@ -44,7 +43,6 @@ const DRAG_THRESHOLD: f32 = 5.0;
 /// drag edit. Bundling keeps the operator under Bevy's system-param ceiling.
 #[derive(SystemParam)]
 struct FacePickParams<'w, 's> {
-    face_entities: Query<'w, 's, (Entity, &'static BrushFaceEntity, &'static GlobalTransform)>,
     brush_caches: Query<'w, 's, &'static BrushMeshCache>,
     brushes: Query<'w, 's, (&'static mut Brush, &'static GlobalTransform)>,
 }
@@ -90,17 +88,16 @@ pub(crate) fn cursor_over_brush_face(
     viewport_cursor: Vec2,
     camera: &Camera,
     cam_tf: &GlobalTransform,
-    face_entities: &Query<(Entity, &BrushFaceEntity, &GlobalTransform)>,
+    transforms: &Query<&GlobalTransform>,
     brush_caches: &Query<&BrushMeshCache>,
 ) -> bool {
     let Ok(cache) = brush_caches.get(brush_entity) else {
         return false;
     };
-    for (_, face_ent, face_global) in face_entities {
-        if face_ent.brush_entity != brush_entity {
-            continue;
-        }
-        let polygon = &cache.face_polygons[face_ent.face_index];
+    let Ok(brush_global) = transforms.get(brush_entity) else {
+        return false;
+    };
+    for polygon in &cache.face_polygons {
         if polygon.len() < 3 {
             continue;
         }
@@ -108,7 +105,7 @@ pub(crate) fn cursor_over_brush_face(
             .iter()
             .filter_map(|&vi| {
                 camera
-                    .world_to_viewport(cam_tf, face_global.transform_point(cache.vertices[vi]))
+                    .world_to_viewport(cam_tf, brush_global.transform_point(cache.vertices[vi]))
                     .ok()
             })
             .collect();
@@ -249,11 +246,10 @@ pub fn brush_face_drag(
                 let Ok(cache) = params.brush_caches.get(brush_entity) else {
                     continue;
                 };
-                for (_, face_ent, face_global) in &params.face_entities {
-                    if face_ent.brush_entity != brush_entity {
-                        continue;
-                    }
-                    let polygon = &cache.face_polygons[face_ent.face_index];
+                let Ok((_, brush_global)) = params.brushes.get(brush_entity) else {
+                    continue;
+                };
+                for (face_idx, polygon) in cache.face_polygons.iter().enumerate() {
                     if polygon.len() < 3 {
                         continue;
                     }
@@ -263,7 +259,7 @@ pub fn brush_face_drag(
                             camera
                                 .world_to_viewport(
                                     cam_tf,
-                                    face_global.transform_point(cache.vertices[vi]),
+                                    brush_global.transform_point(cache.vertices[vi]),
                                 )
                                 .ok()
                         })
@@ -275,11 +271,11 @@ pub fn brush_face_drag(
                         let centroid: Vec3 =
                             polygon.iter().map(|&vi| cache.vertices[vi]).sum::<Vec3>()
                                 / polygon.len() as f32;
-                        let depth = (cam_tf.translation() - face_global.transform_point(centroid))
+                        let depth = (cam_tf.translation() - brush_global.transform_point(centroid))
                             .length_squared();
                         if depth < best_depth {
                             best_depth = depth;
-                            best = Some((brush_entity, face_ent.face_index));
+                            best = Some((brush_entity, face_idx));
                         }
                     }
                 }
@@ -328,14 +324,11 @@ pub fn brush_face_drag(
             .primary()
             .filter(|&e| params.brushes.contains(e))?;
         let cache = params.brush_caches.get(brush_entity)?;
+        let (_, brush_global) = params.brushes.get(brush_entity)?;
 
         let mut best_face = None;
         let mut best_depth = f32::MAX;
-        for (_, face_ent, face_global) in &params.face_entities {
-            if face_ent.brush_entity != brush_entity {
-                continue;
-            }
-            let polygon = &cache.face_polygons[face_ent.face_index];
+        for (face_idx, polygon) in cache.face_polygons.iter().enumerate() {
             if polygon.len() < 3 {
                 continue;
             }
@@ -343,7 +336,7 @@ pub fn brush_face_drag(
                 .iter()
                 .filter_map(|&vi| {
                     camera
-                        .world_to_viewport(cam_tf, face_global.transform_point(cache.vertices[vi]))
+                        .world_to_viewport(cam_tf, brush_global.transform_point(cache.vertices[vi]))
                         .ok()
                 })
                 .collect();
@@ -353,11 +346,11 @@ pub fn brush_face_drag(
             if point_in_polygon_2d(viewport_cursor, &screen_verts) {
                 let centroid: Vec3 = polygon.iter().map(|&vi| cache.vertices[vi]).sum::<Vec3>()
                     / polygon.len() as f32;
-                let depth =
-                    (cam_tf.translation() - face_global.transform_point(centroid)).length_squared();
+                let depth = (cam_tf.translation() - brush_global.transform_point(centroid))
+                    .length_squared();
                 if depth < best_depth {
                     best_depth = depth;
-                    best_face = Some(face_ent.face_index);
+                    best_face = Some(face_idx);
                 }
             }
         }

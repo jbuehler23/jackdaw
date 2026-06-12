@@ -69,17 +69,6 @@ impl BrushMeshCache {
     }
 }
 
-/// Marker on child entities that render individual brush faces.
-/// Brush faces are derived from the parent brush's `Brush` data,
-/// so they're always hidden from the outliner and excluded from
-/// the saved scene.
-#[derive(Component)]
-#[require(crate::EditorHidden, crate::NonSerializable)]
-pub struct BrushFaceEntity {
-    pub brush_entity: Entity,
-    pub face_index: usize,
-}
-
 /// Marker on child entities that render a chunk of brush faces sharing
 /// one material. `face_of_tri` maps each triangle of the chunk's mesh
 /// (by triangle index) back to the authored face index so raycast hits
@@ -90,7 +79,9 @@ pub struct BrushFaceEntity {
 #[require(crate::EditorHidden, crate::NonSerializable)]
 pub struct BrushMeshChunk {
     pub brush_entity: Entity,
-    /// Authored face index for each triangle in the chunk mesh. Valid only for the `Brush` state at the last rebuild; consumers must resolve through `.get()` and treat out-of-range as a miss.
+    /// Authored face index for each triangle in the chunk mesh. Valid
+    /// only for the `Brush` state at the last rebuild; consumers must
+    /// resolve through `.get()` and treat out-of-range as a miss.
     pub face_of_tri: Vec<u32>,
     /// True when every face in this chunk uses the default palette
     /// material, making it eligible for selection/preview swaps.

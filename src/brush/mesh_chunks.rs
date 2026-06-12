@@ -58,10 +58,7 @@ pub(crate) fn build_mesh_chunks(
             continue;
         }
 
-        let chunk_idx = match chunks
-            .iter()
-            .position(|c| c.material == face_data.material)
-        {
+        let chunk_idx = match chunks.iter().position(|c| c.material == face_data.material) {
             Some(i) => i,
             None => {
                 chunks.push(ChunkBuffers::new(face_data.material.clone()));
@@ -139,16 +136,11 @@ mod tests {
     use super::*;
     use bevy::asset::uuid_handle;
 
-    /// (vertices, face_polygons, faces) for a unit cube, all faces on
+    /// (`vertices`, `face_polygons`, `faces`) for a unit cube, all faces on
     /// the default palette material.
     fn cube_inputs() -> (Vec<Vec3>, Vec<Vec<usize>>, Vec<BrushFaceData>) {
         let brush = jackdaw_jsn::Brush::cuboid(0.5, 0.5, 0.5);
-        let vertices: Vec<Vec3> = brush
-            .topology
-            .vertices
-            .iter()
-            .map(|v| v.position)
-            .collect();
+        let vertices: Vec<Vec3> = brush.topology.vertices.iter().map(|v| v.position).collect();
         let face_polygons: Vec<Vec<usize>> = (0..brush.topology.polygons.len())
             .map(|i| brush.topology.face_ring(i).map(|v| v as usize).collect())
             .collect();
@@ -172,11 +164,7 @@ mod tests {
         assert_eq!(chunk.tangents.len(), 36);
         // Every face contributes exactly 2 consecutive triangles.
         for face_idx in 0..6u32 {
-            let count = chunk
-                .face_of_tri
-                .iter()
-                .filter(|&&f| f == face_idx)
-                .count();
+            let count = chunk.face_of_tri.iter().filter(|&&f| f == face_idx).count();
             assert_eq!(count, 2, "face {face_idx} should map to 2 triangles");
         }
     }
@@ -184,8 +172,7 @@ mod tests {
     #[test]
     fn explicit_material_splits_into_second_chunk() {
         let (vertices, face_polygons, mut faces) = cube_inputs();
-        let red: Handle<StandardMaterial> =
-            uuid_handle!("8e6c3d2a-5b14-4f9e-9a77-c01d54a3b681");
+        let red: Handle<StandardMaterial> = uuid_handle!("8e6c3d2a-5b14-4f9e-9a77-c01d54a3b681");
         faces[0].material = red.clone();
 
         let chunks = build_mesh_chunks(&vertices, &face_polygons, &faces);
@@ -201,7 +188,13 @@ mod tests {
 
         // Indices must ramp from 0 within EACH chunk (a shared global
         // base counter would start chunk 1 at 6).
-        assert!(chunks[1].indices.iter().enumerate().all(|(i, &v)| v == i as u32));
+        assert!(
+            chunks[1]
+                .indices
+                .iter()
+                .enumerate()
+                .all(|(i, &v)| v == i as u32)
+        );
         assert_eq!(chunks[1].positions.len(), 30);
     }
 
@@ -237,7 +230,13 @@ mod tests {
 
         // Indices are a plain 0..n ramp (positions are deduplicated
         // nowhere; every triangle owns 3 verts for flat shading).
-        assert!(chunk.indices.iter().enumerate().all(|(i, &v)| v == i as u32));
+        assert!(
+            chunk
+                .indices
+                .iter()
+                .enumerate()
+                .all(|(i, &v)| v == i as u32)
+        );
     }
 
     #[test]

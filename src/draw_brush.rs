@@ -4,7 +4,7 @@ use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
 use crate::{
     EditorEntity,
-    brush::{BrushFaceEntity, BrushMaterialPalette},
+    brush::{BrushMaterialPalette, BrushMeshChunk},
     commands::{
         CommandGroup, CommandHistory, DespawnEntity, EditorCommand, collect_entity_ids,
         deselect_entities,
@@ -759,7 +759,7 @@ pub(crate) struct CutPreviewFace {
     pub is_cap: bool,
 }
 
-/// Marker for brush face entities hidden during cut preview.
+/// Marker on a brush whose render meshes are hidden during cut preview.
 #[derive(Component)]
 pub(crate) struct CutPreviewHidden;
 
@@ -830,7 +830,7 @@ fn draw_brush_update(
     keyboard: Res<ButtonInput<KeyCode>>,
     snap_settings: Res<SnapSettings>,
     mut ray_cast: MeshRayCast,
-    brush_faces: Query<(&BrushFaceEntity, &GlobalTransform)>,
+    brush_chunks: Query<&BrushMeshChunk>,
     brushes: Query<(&Brush, &GlobalTransform)>,
 ) {
     let Some(ref mut active) = draw_state.active else {
@@ -877,7 +877,7 @@ fn draw_brush_update(
             active.plane_locked = ctrl;
 
             if !active.plane_locked {
-                // Raycast against brush face meshes
+                // Raycast against brush chunk meshes
                 let settings =
                     MeshRayCastSettings::default().with_visibility(RayCastVisibility::Any);
                 let hits = ray_cast.cast_ray(ray, &settings);
@@ -887,10 +887,18 @@ fn draw_brush_update(
                 let mut best_facing = f32::MIN;
 
                 for (hit_entity, hit_data) in hits {
-                    if let Ok((face_ent, _face_tf)) = brush_faces.get(*hit_entity)
-                        && let Ok((brush, brush_tf)) = brushes.get(face_ent.brush_entity)
+                    if let Ok(chunk) = brush_chunks.get(*hit_entity)
+                        && let Ok((brush, brush_tf)) = brushes.get(chunk.brush_entity)
                     {
-                        let face = &brush.faces[face_ent.face_index];
+                        let Some(tri_idx) = hit_data.triangle_index else {
+                            continue;
+                        };
+                        let Some(&face_idx) = chunk.face_of_tri.get(tri_idx) else {
+                            continue;
+                        };
+                        let Some(face) = brush.faces.get(face_idx as usize) else {
+                            continue;
+                        };
                         let (_, brush_rot, _) = brush_tf.to_scale_rotation_translation();
                         let world_normal = (brush_rot * face.plane.normal).normalize();
                         let camera_facing = (-*ray.direction).dot(world_normal);
@@ -3544,7 +3552,7 @@ pub(crate) fn brush_extend_face_to_brush(
     mut brush_selection: ResMut<crate::brush::BrushSelection>,
     vp: ViewportCursor,
     mut ray_cast: MeshRayCast,
-    brush_faces: Query<&BrushFaceEntity>,
+    brush_chunks: Query<&BrushMeshChunk>,
     brush_query: Query<(), With<Brush>>,
     mut commands: Commands,
 ) -> OperatorResult {
@@ -3587,7 +3595,7 @@ pub(crate) fn brush_extend_face_to_brush(
                 .collect();
 
             // Try hover raycast first to find the face
-            let face_index = find_hovered_face_on_brush(primary, &vp, &mut ray_cast, &brush_faces)
+            let face_index = find_hovered_face_on_brush(primary, &vp, &mut ray_cast, &brush_chunks)
                 .or_else(|| {
                     // Fall back to remembered face
                     if brush_selection.last_face_entity == Some(primary) {
@@ -3616,13 +3624,13 @@ pub(crate) fn brush_extend_face_to_brush(
     OperatorResult::Finished
 }
 
-/// Raycast from cursor to find a hovered `BrushFaceEntity` belonging to the given brush.
-/// Returns the face index if found.
+/// Raycast from cursor to find a hovered brush face belonging to the given
+/// brush. Returns the face index if found.
 fn find_hovered_face_on_brush(
     brush_entity: Entity,
     vp: &ViewportCursor,
     ray_cast: &mut MeshRayCast,
-    brush_faces: &Query<&BrushFaceEntity>,
+    brush_chunks: &Query<&BrushMeshChunk>,
 ) -> Option<usize> {
     let cursor_pos = vp.cursor()?;
     let camera_entity = vp.camera_entity()?;
@@ -3634,12 +3642,20 @@ fn find_hovered_face_on_brush(
     let settings = MeshRayCastSettings::default().with_visibility(RayCastVisibility::Any);
     let hits = ray_cast.cast_ray(ray, &settings);
 
-    for (hit_entity, _) in hits {
-        if let Ok(face_ent) = brush_faces.get(*hit_entity)
-            && face_ent.brush_entity == brush_entity
-        {
-            return Some(face_ent.face_index);
+    for (hit_entity, hit_data) in hits {
+        let Ok(chunk) = brush_chunks.get(*hit_entity) else {
+            continue;
+        };
+        if chunk.brush_entity != brush_entity {
+            continue;
         }
+        let Some(tri_idx) = hit_data.triangle_index else {
+            continue;
+        };
+        let Some(&face_idx) = chunk.face_of_tri.get(tri_idx) else {
+            continue;
+        };
+        return Some(face_idx as usize);
     }
     None
 }

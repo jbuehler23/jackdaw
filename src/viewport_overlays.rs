@@ -135,8 +135,8 @@ fn draw_selection_bounding_boxes(
         if !inherited_vis.get() {
             continue;
         }
-        // Brushes get their selection highlight via face-material
-        // swap (`ensure_brush_face_materials`), so their AABB is
+        // Brushes get their selection highlight via chunk-material
+        // swap (`ensure_brush_chunk_materials`), so their AABB is
         // gated behind the explicit "show bounding boxes" overlay
         // setting to avoid double visual feedback. Non-brush mesh
         // entities (Cube/Sphere prefabs, user gltf imports, etc.)
