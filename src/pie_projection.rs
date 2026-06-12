@@ -163,7 +163,11 @@ fn clear_projection(world: &mut World) {
             em.despawn();
         }
     }
-    let mut projection = world.resource_mut::<PieProjection>();
+    // Absent when the PIE plugin isn't registered (headless harnesses,
+    // editors built without PIE); there is no projection to clear then.
+    let Some(mut projection) = world.get_resource_mut::<PieProjection>() else {
+        return;
+    };
     projection.by_bits.clear();
     projection.pending_children.clear();
 }
