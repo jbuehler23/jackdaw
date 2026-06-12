@@ -3,9 +3,8 @@
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window, WindowCloseRequested};
 
-use crate::window::toggle_primary_window_maximized;
-
 use super::CaptionButton;
+use crate::window::toggle_primary_window_maximized;
 
 pub(crate) fn register_pointer_handlers(app: &mut App) {
     app.add_observer(on_caption_button_press);

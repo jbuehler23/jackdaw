@@ -12,21 +12,22 @@
 //! Client-side caption buttons (Windows, Linux, FreeBSD) load their own icon font: Segoe on
 //! Windows when available, otherwise a small embedded Lucide icon font.
 
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
 mod caption_controls;
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+pub use caption_controls::{CaptionButton, CaptionFont, window_controls};
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+mod resize;
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+pub use resize::resize_edge_overlay;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
 mod plugin;
-mod resize;
 mod shell;
 mod title_bar;
 mod window;
 
-pub use caption_controls::CaptionButton;
-pub use caption_controls::CaptionFont;
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-pub use caption_controls::window_controls;
 pub use plugin::{CaptionTheme, WindowChromePlugin, WindowChromeTheme};
-pub use resize::resize_edge_overlay;
 pub use shell::{WindowShellContent, WindowShellRoot, WindowShellSlots, spawn_window_shell};
 pub use title_bar::{
     WindowTitleBarContentSlot, WindowTitleBarDragRegion, WindowTitleBarRoot, spawn_window_title_bar,

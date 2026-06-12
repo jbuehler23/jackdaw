@@ -23,13 +23,13 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 static WINDOW_CHROME_THEME: OnceLock<WindowChromeTheme> = OnceLock::new();
 
-/// Sets the window chrome theme for AppKit callbacks that cannot access Bevy resources.
+/// Sets the window chrome theme for `AppKit` callbacks that cannot access `Bevy` resources.
 pub(crate) fn set_theme(theme: WindowChromeTheme) {
     let _ = WINDOW_CHROME_THEME.set(theme);
 }
 
 fn cached_theme() -> WindowChromeTheme {
-    return WINDOW_CHROME_THEME.get().cloned().unwrap_or_default();
+    WINDOW_CHROME_THEME.get().cloned().unwrap_or_default()
 }
 
 thread_local! {
@@ -76,7 +76,7 @@ impl TrafficLightResizeObserver {
             window_entity_bits: window_entity.to_bits(),
         };
         let this = Self::alloc().set_ivars(ivars);
-        return unsafe { msg_send_id![super(this), init] };
+        unsafe { msg_send_id![super(this), init] }
     }
 }
 
@@ -142,9 +142,9 @@ pub fn is_native_fullscreen(window_entity: Entity) -> bool {
     let Some(ns_window) = ns_window_for_entity(window_entity, mtm) else {
         return false;
     };
-    return ns_window
+    ns_window
         .styleMask()
-        .contains(NSWindowStyleMask::FullScreen);
+        .contains(NSWindowStyleMask::FullScreen)
 }
 
 /// Registers a one-shot `NSWindowDidResizeNotification` observer for the primary window.
@@ -243,14 +243,14 @@ fn traffic_light_buttons(
     else {
         return None;
     };
-    return Some((close_button, minimize_button, zoom_button));
+    Some((close_button, minimize_button, zoom_button))
 }
 
 fn ns_window_for_entity(
     window_entity: Entity,
     _mtm: MainThreadMarker,
 ) -> Option<objc2::rc::Retained<NSWindow>> {
-    return WINIT_WINDOWS.with(|windows_cell| {
+    WINIT_WINDOWS.with(|windows_cell| {
         let winit_windows = windows_cell.borrow();
         let winit_window = winit_windows.get_window(window_entity)?;
         let handle = winit_window.window_handle().ok()?;
@@ -261,5 +261,5 @@ fn ns_window_for_entity(
         let view: objc2::rc::Retained<NSView> =
             unsafe { objc2::rc::Retained::retain(appkit.ns_view.as_ptr().cast())? };
         view.window()
-    });
+    })
 }

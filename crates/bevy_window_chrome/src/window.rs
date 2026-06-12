@@ -3,7 +3,9 @@
 use bevy::prelude::*;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use bevy::window::CompositeAlphaMode;
-use bevy::window::{PrimaryWindow, Window, WindowCreated};
+#[cfg(target_os = "windows")]
+use bevy::window::WindowCreated;
+use bevy::window::{PrimaryWindow, Window};
 use bevy::winit::WINIT_WINDOWS;
 
 pub fn primary_window_attributes() -> Window {
@@ -19,20 +21,21 @@ pub fn primary_window_attributes() -> Window {
 
     #[cfg(target_os = "macos")]
     {
-        return Window {
+        Window {
             decorations: true,
             titlebar_transparent: true,
             fullsize_content_view: true,
             titlebar_show_title: false,
             titlebar_show_buttons: true,
             ..default()
-        };
+        }
     }
 
-    Window {
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
+    return Window {
         decorations: false,
         ..default()
-    }
+    };
 }
 
 /// Toggles the primary window between maximized and restored.
@@ -65,7 +68,7 @@ pub fn primary_window_is_maximized(window_entity: Entity) -> bool {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            return false;
+            false
         }
     })
 }

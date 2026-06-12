@@ -5,9 +5,10 @@
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 use bevy::window::WindowPlugin;
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+use bevy_window_chrome::CaptionFont;
 use bevy_window_chrome::{
-    CaptionFont, WindowChromePlugin, WindowChromeTheme, primary_window_attributes,
-    spawn_window_shell,
+    WindowChromePlugin, WindowChromeTheme, primary_window_attributes, spawn_window_shell,
 };
 
 #[derive(Component, Copy, Clone)]
@@ -27,9 +28,16 @@ fn main() -> AppExit {
 fn setup(
     mut commands: Commands,
     theme: Res<WindowChromeTheme>,
-    caption_font: Option<Res<CaptionFont>>,
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+    caption_font: Res<CaptionFont>,
 ) {
-    let slots = spawn_window_shell(&mut commands, &theme, caption_font, DemoRoot);
+    let slots = spawn_window_shell(
+        &mut commands,
+        &theme,
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+        caption_font,
+        DemoRoot,
+    );
 
     commands.entity(slots.title_bar).with_children(|title_bar| {
         title_bar.spawn((
