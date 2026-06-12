@@ -321,7 +321,9 @@ jobs:
           shared-key: lints
 
       - name: Install Bevy linter
-        run: cargo install --git https://github.com/TheBevyFlock/bevy_cli --locked bevy_lint
+        # Pinned to a release tag: installing from HEAD lets upstream linter
+        # regressions break CI without any code change in this repo.
+        run: cargo install --git https://github.com/TheBevyFlock/bevy_cli --tag lint-v0.6.0 --locked bevy_lint
 
       - name: Add cranelift to rustc
         run: rustup component add rustc-codegen-cranelift-preview --toolchain ${{ env.toolchain }}

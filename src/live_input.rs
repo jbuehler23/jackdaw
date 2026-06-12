@@ -377,7 +377,7 @@ mod tests {
                 .held_buttons
                 .insert(bevy::input::mouse::MouseButton::Left);
         }
-        let window = app.world_mut().spawn(()).id();
+        let window = app.world_mut().spawn_empty().id();
         app.world_mut().write_message(KeyboardInput {
             key_code: KeyCode::Escape,
             logical_key: Key::Escape,
@@ -495,7 +495,7 @@ mod tests {
     fn plain_keys_forward_and_track_held_state() {
         let mut app = capture_app();
         app.world_mut().resource_mut::<LiveInputCapture>().active = true;
-        let window = app.world_mut().spawn(()).id();
+        let window = app.world_mut().spawn_empty().id();
         app.world_mut().write_message(KeyboardInput {
             key_code: KeyCode::KeyW,
             logical_key: Key::Character("w".into()),

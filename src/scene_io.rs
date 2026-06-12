@@ -1517,16 +1517,16 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
         *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast_with_ecs;
 
         // A healed scene holds re-minted ids that differ from disk until saved;
-        // flag the active tab so the dirty indicator prompts that save.
+        // flag the active tab so the dirty indicator prompts that save. The
+        // tab registry is absent in headless/prefab-cache loads, where there
+        // is no dirty indicator to drive.
         if jackdaw_jsn::needs_id_migration(&jsn) {
             info!("scene node ids upgraded for uniqueness; save to persist them");
-            let active = world.resource::<crate::scenes::Scenes>().active;
-            if let Some(tab) = world
-                .resource_mut::<crate::scenes::Scenes>()
-                .tabs
-                .get_mut(active)
-            {
-                tab.dirty = true;
+            if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
+                let active = scenes.active;
+                if let Some(tab) = scenes.tabs.get_mut(active) {
+                    tab.dirty = true;
+                }
             }
         }
 

@@ -1161,11 +1161,20 @@ fn spawn_instance(
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::process::CommandExt;
+
+        // `libc::prctl` is C-variadic; the workspace linter cannot analyze
+        // variadic calls, and `PR_SET_PDEATHSIG` only ever takes one
+        // argument, so declare that fixed-arity signature for the same
+        // symbol.
+        unsafe extern "C" {
+            fn prctl(option: libc::c_int, arg2: libc::c_ulong) -> libc::c_int;
+        }
+
         // SAFETY: the closure runs in the forked child before `exec`; `prctl`,
         // `getppid`, and `raise` are all async-signal-safe.
         unsafe {
             command.pre_exec(|| {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) == -1 {
+                if prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
                 // The editor may have already died in the window between fork
