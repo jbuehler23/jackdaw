@@ -14,6 +14,7 @@ include = [
     "examples/**/*",
     "src/**/*",
     "caption-lucide.ttf",
+    "assets/**/*",
 ]
 
 [dependencies]

@@ -17,7 +17,13 @@ cargo run -p bevy_window_chrome --example basic
 ## Platforms
 
 - **Windows** — client driven, Caption icons use Segoe when available, otherwise an embedded Lucide subset.
-- **Linux / FreeBSD** —  client driven, Caption icons use an embedded Lucide subset.
+
+[![Windows window chrome](https://raw.githubusercontent.com/jbuehler23/jackdaw/main/crates/bevy_window_chrome/assets/windows_screenshot.png)](https://raw.githubusercontent.com/jbuehler23/jackdaw/main/crates/bevy_window_chrome/assets/windows_screenshot.png)
+
+- **Linux / FreeBSD** — client driven, Caption icons use an embedded Lucide subset.
+
+[![Mac window chrome](https://raw.githubusercontent.com/jbuehler23/jackdaw/main/crates/bevy_window_chrome/assets/mac_screenshot.png)](https://raw.githubusercontent.com/jbuehler23/jackdaw/main/crates/bevy_window_chrome/assets/mac_screenshot.png)
+
 - **macOS** — native traffic lights with a transparent integrated title bar slot, native window resize.
 
 ## License
