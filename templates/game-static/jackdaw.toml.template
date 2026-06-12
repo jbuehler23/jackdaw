@@ -1,0 +1,9 @@
+# Run configurations for the editor's Play button.
+# Each [[run]] is one launchable mode; the artist picks it from the
+# Play dropdown. Only `bin` is required.
+[[run]]
+bin = "{{project-name}}"
+# name = "Play"              # dropdown label (defaults to bin)
+# features = []              # extra cargo features for this build
+# env = { KEY = "value" }    # env vars the game reads
+# instances = 1              # launchable copies

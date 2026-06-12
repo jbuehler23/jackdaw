@@ -1,7 +1,7 @@
 use crate::rooms::{CurrentZone, ZoneRooms, join_zone};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use jackdaw_multiplayer::{ReplTarget, Replication, SpawnPoint};
+use jackdaw_multiplayer::{ReplTarget, Replication, SpawnPoint, ZoneId};
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{
     Connected, ControlledBy, Disconnected, InterpolationTarget, Lifetime, LinkOf, NetworkTarget,
@@ -45,6 +45,21 @@ pub enum SpawnPolicy {
 #[derive(Component, Clone, Copy)]
 pub(crate) struct PlayerConnection(pub Entity);
 
+/// Choose the scene's default spawn: the empty-tag spawn point if present, else
+/// any spawn point. Returns its zone and world position.
+fn pick_default_spawn<'a>(
+    spawns: impl Iterator<Item = (&'a SpawnPoint, Vec3)>,
+) -> Option<(ZoneId, Vec3)> {
+    let mut fallback = None;
+    for (spawn, pos) in spawns {
+        if spawn.tag.is_empty() {
+            return Some((spawn.zone.clone(), pos));
+        }
+        fallback.get_or_insert((spawn.zone.clone(), pos));
+    }
+    fallback
+}
+
 /// Build the full networking bundle for a player owned by `connection`, place it at
 /// `pos`, and join it to `zone`'s room. Returns the player entity. Shared by the
 /// on-connect auto-spawn and the public [`PlayerSpawner`].
@@ -52,7 +67,7 @@ fn spawn_player_bundle(
     commands: &mut Commands,
     rooms: &mut ZoneRooms,
     connection: Entity,
-    zone: u64,
+    zone: &ZoneId,
     pos: Vec3,
 ) -> Entity {
     let player = commands
@@ -66,7 +81,7 @@ fn spawn_player_bundle(
             },
             InterpolationTarget::to_clients(NetworkTarget::All),
             PlayerConnection(connection),
-            CurrentZone(zone),
+            CurrentZone(zone.clone()),
         ))
         .id();
     join_zone(commands, rooms, zone, player, connection);
@@ -85,12 +100,12 @@ pub struct PlayerSpawner<'w, 's> {
 impl PlayerSpawner<'_, '_> {
     /// Spawn a player owned by `connection` at the `SpawnPoint` tagged `tag` in `zone`.
     /// Returns the player entity, or `None` if no matching `SpawnPoint` exists.
-    pub fn spawn(&mut self, connection: Entity, zone: u64, tag: &str) -> Option<Entity> {
+    pub fn spawn(&mut self, connection: Entity, zone: &ZoneId, tag: &str) -> Option<Entity> {
         let pos = {
             let (_, gtf) = self
                 .spawns
                 .iter()
-                .find(|(s, _)| s.zone == zone && s.tag == tag)?;
+                .find(|(s, _)| s.zone == *zone && s.tag == tag)?;
             gtf.translation()
         };
         Some(spawn_player_bundle(
@@ -100,6 +115,18 @@ impl PlayerSpawner<'_, '_> {
             zone,
             pos,
         ))
+    }
+
+    /// Spawn `connection`'s player at the scene's default spawn point (empty tag,
+    /// else any), taking the zone and position from that `SpawnPoint`. Returns the
+    /// player entity and its spawn world position, or `None` if the scene has no
+    /// `SpawnPoint`.
+    pub fn spawn_at_default(&mut self, connection: Entity) -> Option<(Entity, Vec3)> {
+        let (zone, pos) =
+            pick_default_spawn(self.spawns.iter().map(|(s, gtf)| (s, gtf.translation())))?;
+        let player =
+            spawn_player_bundle(&mut self.commands, &mut self.rooms, connection, &zone, pos);
+        Some((player, pos))
     }
 }
 
@@ -151,19 +178,13 @@ fn on_client_connected(
         return;
     }
 
-    // Prefer the default (empty-tag) spawn point; fall back to any spawn point.
-    let Some((spawn, gtf)) = spawns
-        .iter()
-        .find(|(s, _)| s.tag.is_empty())
-        .or_else(|| spawns.iter().next())
+    let Some((zone, pos)) =
+        pick_default_spawn(spawns.iter().map(|(s, gtf)| (s, gtf.translation())))
     else {
         warn!("client connected but the world has no SpawnPoint; no player spawned");
         return;
     };
-
-    let zone = spawn.zone;
-    let pos = gtf.translation();
-    spawn_player_bundle(&mut commands, &mut rooms, add.entity, zone, pos);
+    spawn_player_bundle(&mut commands, &mut rooms, add.entity, &zone, pos);
 }
 
 /// Emit `ClientDisconnected` when a server-side connection is torn down. Lightyear
@@ -207,6 +228,48 @@ fn apply_replication_proxies(
 
 #[cfg(test)]
 mod tests {
+    use super::pick_default_spawn;
+    use bevy::math::Vec3;
+    use jackdaw_multiplayer::{SpawnPoint, ZoneId};
+
+    #[test]
+    fn spawn_at_default_prefers_empty_tag_then_falls_back() {
+        let spawns = [
+            (
+                SpawnPoint {
+                    zone: ZoneId::from("arena"),
+                    tag: "ring".to_string(),
+                },
+                Vec3::new(9.0, 0.0, 0.0),
+            ),
+            (
+                SpawnPoint {
+                    zone: ZoneId::from("lobby"),
+                    tag: String::new(),
+                },
+                Vec3::new(1.0, 2.0, 3.0),
+            ),
+        ];
+        let chosen = pick_default_spawn(spawns.iter().map(|(s, p)| (s, *p)));
+        assert_eq!(
+            chosen,
+            Some((ZoneId::from("lobby"), Vec3::new(1.0, 2.0, 3.0)))
+        );
+
+        let only_named = [(
+            SpawnPoint {
+                zone: ZoneId::from("arena"),
+                tag: "ring".to_string(),
+            },
+            Vec3::new(9.0, 0.0, 0.0),
+        )];
+        let chosen = pick_default_spawn(only_named.iter().map(|(s, p)| (s, *p)));
+        assert_eq!(
+            chosen,
+            Some((ZoneId::from("arena"), Vec3::new(9.0, 0.0, 0.0)))
+        );
+    }
+
     use super::*;
     use bevy::MinimalPlugins;
     use bevy::state::app::StatesPlugin;

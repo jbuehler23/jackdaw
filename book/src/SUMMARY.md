@@ -17,6 +17,7 @@
 - [Terrain](user-guide/terrain.md)
 - [Physics](user-guide/physics.md)
 - [Scene Management](user-guide/scene-management.md)
+- [Play-in-editor](user-guide/play-in-editor.md)
 - [Keyboard Shortcuts](user-guide/keyboard-shortcuts.md)
 
 # Developer Guide

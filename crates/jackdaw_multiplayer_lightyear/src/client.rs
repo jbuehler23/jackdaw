@@ -66,6 +66,13 @@ impl Plugin for JackdawMultiplayerClientPlugin {
             client_id: self.client_id,
         });
         app.add_systems(Startup, connect_client);
+        // The gate owns rig activation: only the locally-controlled actor's
+        // rig is active. Without claiming ownership, the rig crate's lone-rig
+        // convenience re-activates any single non-player rig (e.g. one
+        // authored in a zone) every frame while the gate revokes it, and the
+        // camera flickers on and off.
+        app.insert_resource(jackdaw_camera_rig::CameraRigActivation::Gated);
+        app.add_systems(Update, crate::camera_gate::sync_active_camera);
     }
 }
 

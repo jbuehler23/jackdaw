@@ -14,7 +14,7 @@ use bevy::MinimalPlugins;
 use bevy::math::curve::{Curve, Ease};
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
-use jackdaw_multiplayer::SpawnPoint;
+use jackdaw_multiplayer::{SpawnPoint, ZoneId};
 use jackdaw_multiplayer_lightyear::{
     JackdawMultiplayerClientPlugin, JackdawMultiplayerServerPlugin, MultiplayerAppExt,
 };
@@ -136,7 +136,7 @@ fn networked_input_drives_server_movement_seen_interpolated_by_peer() {
     server.world_mut().spawn((
         Transform::default(),
         SpawnPoint {
-            zone: 1,
+            zone: ZoneId::from("1"),
             tag: String::new(),
         },
     ));

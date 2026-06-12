@@ -45,6 +45,7 @@
 //! }
 //! ```
 
+pub mod entity_icons;
 mod export;
 pub mod extensions_config;
 pub mod ffi;
@@ -70,9 +71,11 @@ use operator::{CallOperatorSettings, Operator};
 use registries::WindowExtensionRegistry;
 use snapshot::{ActiveSnapshotter, SceneSnapshot};
 
+pub use entity_icons::EntityIconRegistry;
 pub use jackdaw_api_macros as macros;
 pub use jackdaw_api_macros::operator;
 pub use jackdaw_jsn as jsn;
+pub use lucide_icons;
 
 use crate::lifecycle::{ExtensionResourceOf, OperatorAction, ResourceId};
 use crate::operator::OperatorCommandsExt as _;
@@ -402,6 +405,22 @@ impl<'a> ExtensionContext<'a> {
             label: O::LABEL.to_string(),
             operator_id: O::ID,
         })
+    }
+
+    /// Register the Lucide icon shown in the outliner for entities carrying
+    /// the given component type path. First registered match wins.
+    pub fn register_entity_icon(
+        &mut self,
+        type_path: impl Into<String>,
+        icon: lucide_icons::Icon,
+    ) -> &mut Self {
+        // Insert on demand so a seeding extension that registers before the
+        // outliner plugin inits the resource still lands its entries, rather
+        // than silently dropping them.
+        self.world
+            .get_resource_or_insert_with(EntityIconRegistry::default)
+            .register(type_path, icon);
+        self
     }
 }
 

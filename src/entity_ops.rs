@@ -121,6 +121,8 @@ pub enum EntityTemplate {
     DirectionalLight,
     SpotLight,
     Camera3d,
+    #[cfg(feature = "camera_rig")]
+    CameraRig,
     Plane,
     Cylinder,
     Wedge,
@@ -141,6 +143,8 @@ impl EntityTemplate {
             Self::DirectionalLight => "Directional Light",
             Self::SpotLight => "Spot Light",
             Self::Camera3d => "Camera",
+            #[cfg(feature = "camera_rig")]
+            Self::CameraRig => "Camera Rig",
             Self::Plane => "Plane",
             Self::Cylinder => "Cylinder",
             Self::Wedge => "Wedge",
@@ -245,6 +249,15 @@ pub fn create_entity(
                     size: UVec2::splat(1),
                 },
                 Transform::from_xyz(0.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+            ))
+            .id(),
+        #[cfg(feature = "camera_rig")]
+        EntityTemplate::CameraRig => commands
+            .spawn((
+                Name::new("Camera Rig"),
+                jackdaw_camera_rig::CameraRig::default(),
+                Transform::default(),
+                Visibility::default(),
             ))
             .id(),
         EntityTemplate::Plane => {
@@ -485,7 +498,13 @@ pub fn duplicate_selected(world: &mut World) {
             continue;
         }
 
-        // Snapshot the entity (and descendants) via DynamicSceneBuilder
+        // Snapshot the entity (and descendants) via DynamicSceneBuilder. The raw builder
+        // copies `Children`, which preserves real child entities (e.g. a tree's trunk
+        // brush). It also copies the brush's runtime mesh-face child refs, which
+        // DynamicScene remaps to dead placeholder entities; those dangling refs are harmless
+        // because every scene walk (`collect_entity_ids`, the serialize walk) skips
+        // despawned entities, and `Children` is never serialized. Denying `Children` here
+        // instead drops the real children, so the raw builder is correct.
         let mut snapshot_entities = Vec::new();
         crate::commands::collect_entity_ids(world, entity, &mut snapshot_entities);
         let scene = DynamicSceneBuilder::from_world(world)
@@ -774,6 +793,9 @@ fn copy_components(world: &mut World) {
         .filter_map(|&e| {
             ast.node_for_entity(e)
                 .map(|node| jackdaw_jsn::format::JsnEntity {
+                    // Paste mints fresh node ids, so the clipboard copy drops
+                    // the source id (mirrors `remap_stable_ids`).
+                    id: None,
                     parent: None,
                     components: node.components.clone(),
                 })
@@ -1253,8 +1275,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<EntityAddPointLightOp>()
         .register_operator::<EntityAddDirectionalLightOp>()
         .register_operator::<EntityAddSpotLightOp>()
-        .register_operator::<EntityAddCameraOp>()
-        .register_operator::<EntityAddEmptyOp>()
+        .register_operator::<EntityAddCameraOp>();
+    #[cfg(feature = "camera_rig")]
+    ctx.register_operator::<EntityAddCameraRigOp>();
+    ctx.register_operator::<EntityAddEmptyOp>()
         .register_operator::<EntityAddNavmeshOp>()
         .register_operator::<EntityAddTerrainOp>()
         .register_operator::<EntityAddPrefabOp>()
@@ -1509,6 +1533,18 @@ pub(crate) fn entity_add_camera(
 ) -> OperatorResult {
     commands.queue(|world: &mut World| {
         create_entity_in_world(world, EntityTemplate::Camera3d);
+    });
+    OperatorResult::Finished
+}
+
+#[cfg(feature = "camera_rig")]
+#[operator(id = "entity.add.camera_rig", label = "Camera Rig")]
+pub(crate) fn entity_add_camera_rig(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::CameraRig);
     });
     OperatorResult::Finished
 }
@@ -1809,6 +1845,7 @@ mod tests {
         let original_id: u64 = 7;
 
         let mut entities = vec![jackdaw_jsn::format::JsnEntity {
+            id: None,
             parent: None,
             components: {
                 let mut map = std::collections::HashMap::new();
@@ -1847,6 +1884,7 @@ mod tests {
         crate::draw_brush::init_stable_id_counter(&mut world);
 
         let mut entities = vec![jackdaw_jsn::format::JsnEntity {
+            id: None,
             parent: None,
             components: {
                 let mut map = std::collections::HashMap::new();

@@ -99,6 +99,7 @@ fn headless_brush_load() {
         assets: JsnAssets::default(),
         scene: vec![
             JsnEntity {
+                id: None,
                 parent: None,
                 components: [
                     (
@@ -118,6 +119,7 @@ fn headless_brush_load() {
                 .collect(),
             },
             JsnEntity {
+                id: None,
                 parent: None,
                 components: [(
                     brush_type_path,

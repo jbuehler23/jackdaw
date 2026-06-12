@@ -387,6 +387,91 @@ pub fn build_static_editor_with_progress(
     Ok(bin)
 }
 
+/// Inputs for building one game binary for PIE.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct BuildSpec {
+    /// Package owning the bin (`cargo build -p`).
+    pub package: String,
+    /// Binary target (`--bin`).
+    pub bin: String,
+    /// Fully resolved feature flags (already includes the pie feature).
+    pub features: Vec<String>,
+}
+
+/// Build the game binary described by `spec` with the PIE hook on.
+/// The resulting executable connects back to the editor over
+/// ipc-channel when launched with `JACKDAW_PIE` set. Builds into the
+/// project's own `target/`, the same directory the developer's `cargo
+/// build` uses, so Play reuses already-compiled dependencies and the
+/// binary lands where they expect it. Streams progress into `sink` and
+/// returns the path to `<target>/debug/<bin>`. Package, bin, and
+/// features all come from `spec`.
+pub fn build_game_bin_with_progress(
+    project_dir: &Path,
+    spec: &BuildSpec,
+    sink: Option<Arc<Mutex<BuildProgress>>>,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<PathBuf, BuildError> {
+    let project_dir = project_dir
+        .canonicalize()
+        .map_err(|_| BuildError::NotADirectory(project_dir.to_path_buf()))?;
+    if !project_dir.is_dir() {
+        return Err(BuildError::NotADirectory(project_dir));
+    }
+    let manifest = project_dir.join("Cargo.toml");
+    if !manifest.is_file() {
+        return Err(BuildError::MissingCargoToml(project_dir));
+    }
+
+    if let Some(ref s) = sink
+        && let Some(total) = estimate_total_artifacts(&project_dir)
+        && let Ok(mut g) = s.lock()
+    {
+        g.artifacts_total = Some(total);
+    }
+
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&project_dir);
+    cmd.args([
+        "build",
+        "--manifest-path",
+        manifest
+            .to_str()
+            .expect("Cargo.toml path must be valid UTF-8"),
+        "-p",
+        &spec.package,
+        "--bin",
+        &spec.bin,
+        "--message-format=json-render-diagnostics",
+    ]);
+    if !spec.features.is_empty() {
+        cmd.arg("--features").arg(spec.features.join(","));
+    }
+
+    // Build into the project's own `target/`, the same directory the
+    // developer's `cargo build` uses. Play then reuses the project's
+    // already-compiled dependencies, and the binary lands where they
+    // expect it rather than in a separate editor-owned directory.
+    let game_target_dir = project_dir.join("target");
+    let game_target_str = game_target_dir
+        .to_str()
+        .expect("CARGO_TARGET_DIR path must be valid UTF-8");
+    cmd.env("CARGO_TARGET_DIR", game_target_str);
+
+    run_cargo_with_progress(cmd, sink.as_ref(), cancel.as_ref())?;
+
+    let bin_name = if cfg!(target_os = "windows") {
+        format!("{}.exe", spec.bin)
+    } else {
+        spec.bin.clone()
+    };
+    let bin = game_target_dir.join("debug").join(bin_name);
+    if !bin.is_file() {
+        return Err(BuildError::OutputNotProduced { expected: bin });
+    }
+    Ok(bin)
+}
+
 /// Spawn `cmd` with stdout/stderr piped, pump cargo's JSON
 /// progress stream into `sink`, and wait for completion. Marks the
 /// sink `finished = true` on the way out (success or failure) and

@@ -4,6 +4,7 @@ use bevy::{input_focus::InputFocus, prelude::*, ui::ui_transform::UiGlobalTransf
 use bevy_enhanced_input::prelude::{Press, *};
 use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::entity_icons::{EntityIconRegistry, registered_icon};
 use jackdaw_feathers::{
     context_menu::spawn_context_menu,
     icons::IconFont,
@@ -95,6 +96,8 @@ impl Plugin for HierarchyPlugin {
             .init_resource::<PendingPrefabDefaultName>()
             .init_resource::<PendingPrefabSave>()
             .init_resource::<HierarchyShowAll>()
+            .init_resource::<RevealTarget>()
+            .init_resource::<EntityIconRegistry>()
             .add_systems(Startup, setup_tree_node_expanded_watcher)
             .add_systems(OnEnter(crate::AppState::Editor), setup_name_watcher)
             .add_systems(
@@ -106,8 +109,10 @@ impl Plugin for HierarchyPlugin {
                     toggle_show_all_button,
                     update_show_all_button_appearance,
                     on_show_all_changed,
+                    sync_pie_live_outliner,
+                    watch_selection_for_reveal,
+                    drive_reveal_target,
                     jackdaw_feathers::tree_view::tree_keyboard_navigation,
-                    style_game_spawned_rows,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             )
@@ -161,8 +166,16 @@ fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
     if world.get::<Mesh3d>(entity).is_some() {
         return EntityCategory::Mesh;
     }
+    if world.get::<jackdaw_jsn::SceneRootTag>(entity).is_some() {
+        return EntityCategory::Scene;
+    }
     if world.get::<SceneRoot>(entity).is_some() {
         return EntityCategory::Scene;
+    }
+    // An entity with no type of its own but with children reads as a grouping
+    // container (a "Trees" or "Player" parent), so it gets the group icon.
+    if has_visible_children(world, entity) {
+        return EntityCategory::Group;
     }
     EntityCategory::Entity
 }
@@ -175,14 +188,64 @@ fn is_inherited_descendant(world: &World, entity: Entity) -> bool {
         && world.get::<crate::prefab::PrefabEntityId>(entity).is_some()
 }
 
-/// Check if an entity has any non-editor children.
+/// Check if an entity has any children that would actually produce an
+/// outliner row. This mirrors the expansion filter exactly, including the
+/// active view mode, so the expand chevron only appears when expanding the
+/// row would spawn something.
 fn has_visible_children(world: &World, entity: Entity) -> bool {
     let Some(children) = world.get::<Children>(entity) else {
         return false;
     };
-    children.iter().any(|child| {
-        world.get::<EditorEntity>(child).is_none() && world.get::<EditorHidden>(child).is_none()
-    })
+    let live = outliner_in_live_mode(world);
+    let live_set = if live {
+        live_preview_set(world)
+    } else {
+        std::collections::HashSet::new()
+    };
+    children
+        .iter()
+        .any(|child| child_visible_in_mode(world, child, live, &live_set))
+}
+
+/// True when the outliner is currently showing the Live (running game) tree.
+fn outliner_in_live_mode(world: &World) -> bool {
+    world
+        .get_resource::<crate::pie_mirror::PieViewMode>()
+        .copied()
+        .unwrap_or_default()
+        == crate::pie_mirror::PieViewMode::Live
+}
+
+/// Whether `child` should appear as an outliner row under the active view mode.
+/// Scene mode shows authored entities and hides live preview entities; Live mode
+/// shows only the entities the running game spawned. Editor-only and derived
+/// children are excluded in both modes via [`is_outliner_child`].
+fn child_visible_in_mode(
+    world: &World,
+    child: Entity,
+    live: bool,
+    live_set: &std::collections::HashSet<Entity>,
+) -> bool {
+    if !is_outliner_child(world, child) {
+        return false;
+    }
+    if live {
+        live_set.contains(&child)
+    } else {
+        world
+            .get::<crate::pie_projection::PieEphemeral>(child)
+            .is_none()
+    }
+}
+
+/// Whether a child entity should appear in the outliner. Editor-only entities,
+/// hidden entities, and the face meshes the editor re-derives from a `Brush`
+/// (a brush is one row, not a row plus a child per generated face) are all
+/// excluded.
+fn is_outliner_child(world: &World, child: Entity) -> bool {
+    world.get::<EditorEntity>(child).is_none()
+        && world.get::<EditorHidden>(child).is_none()
+        && world.get::<jackdaw_jsn::DerivedFaceMesh>(child).is_none()
 }
 
 /// Returns true if `entity` has `PrefabEntityId` but NOT `IsA` -- meaning
@@ -252,6 +315,7 @@ fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: En
     let inherited = is_inherited_descendant(world, source);
     let icon_font = world.resource::<IconFont>().0.clone();
     let style = TreeRowStyle { icon_font };
+    let icon_override = registered_icon(world, source);
 
     let tree_row_entity = world
         .spawn((
@@ -262,6 +326,7 @@ fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: En
                 source,
                 category,
                 inherited,
+                icon_override,
                 &style,
             ),
             ChildOf(parent_container),
@@ -289,6 +354,36 @@ fn rebuild_hierarchy_on_container_added(
     }
 }
 
+/// Preview entities that exist in the focused game right now: the values of
+/// the projection's bits map. The Live tab shows exactly this set.
+fn live_preview_set(world: &World) -> std::collections::HashSet<Entity> {
+    world
+        .resource::<crate::pie_projection::PieProjection>()
+        .by_bits
+        .values()
+        .copied()
+        .collect()
+}
+
+/// Roots of the Live tree: live entities whose parent is missing or not
+/// itself live (the game hierarchy can hang under authored containers the
+/// game never spawned).
+fn live_tree_roots(world: &mut World, live: &std::collections::HashSet<Entity>) -> Vec<Entity> {
+    let mut roots: Vec<Entity> = live
+        .iter()
+        .copied()
+        .filter(|&entity| {
+            world.get_entity(entity).is_ok()
+                && match world.get::<ChildOf>(entity) {
+                    Some(child_of) => !live.contains(&child_of.0),
+                    None => true,
+                }
+        })
+        .collect();
+    roots.sort_by_key(|entity| entity.index());
+    roots
+}
+
 pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
     fn rebuild_hierarchy_inner(
         world: &mut World,
@@ -303,22 +398,37 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
             ),
         >,
     ) {
-        // Every Outliner panel gets its own copy of the tree, so
-        // iterate every container that's currently mounted. Zero
-        // containers (headless tests, pre-Editor state) means there's
-        // nothing to rebuild against.
+        // Each Outliner panel owns its own tree copy; rebuild every mounted
+        // container. Zero containers (headless tests, pre-Editor) is a no-op.
         let containers: Vec<Entity> = containers.iter(world).collect();
         if containers.is_empty() {
             return;
         }
 
-        // Collect all root scene entities (Transform, no ChildOf, no editor markers).
-        let roots: Vec<Entity> = roots.iter(world).collect();
-        let show_all = world.resource::<HierarchyShowAll>().0;
+        // In Live mode the roots are the live preview entities whose parent is
+        // not itself live, shown as-is (no Name/show-all filter). In Scene mode
+        // they are the authored root scene entities (Transform, no ChildOf, no
+        // editor markers), filtered by Name unless show-all is on.
+        let live = world
+            .get_resource::<crate::pie_mirror::PieViewMode>()
+            .copied()
+            .unwrap_or_default()
+            == crate::pie_mirror::PieViewMode::Live;
 
-        let mut root_data: Vec<(Entity, EntityCategory, String)> = roots
+        let root_entities: Vec<Entity> = if live {
+            let live_set = live_preview_set(world);
+            live_tree_roots(world, &live_set)
+        } else {
+            let roots: Vec<Entity> = roots.iter(world).collect();
+            let show_all = world.resource::<HierarchyShowAll>().0;
+            roots
+                .into_iter()
+                .filter(|&e| show_all || world.get::<Name>(e).is_some())
+                .collect()
+        };
+
+        let mut root_data: Vec<(Entity, EntityCategory, String)> = root_entities
             .into_iter()
-            .filter(|&e| show_all || world.get::<Name>(e).is_some())
             .map(|e| {
                 let category = classify_entity(world, e);
                 let name = world
@@ -345,6 +455,159 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
     world
         .run_system_cached(rebuild_hierarchy_inner)
         .map_err(BevyError::from)
+}
+
+/// Despawn every tree row in every Outliner container and forget those
+/// containers' `TreeIndex` entries. Used by the view-mode transition
+/// handler so a switch starts from a clean slate.
+fn teardown_outliner_rows(world: &mut World) {
+    let containers: Vec<Entity> = world
+        .run_system_cached(collect_hierarchy_containers)
+        .unwrap_or_default();
+    for container in &containers {
+        let children: Vec<Entity> = world
+            .get::<Children>(*container)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        for child in children {
+            if world.get::<TreeNode>(child).is_some()
+                && let Ok(ec) = world.get_entity_mut(child)
+            {
+                ec.despawn();
+            }
+        }
+        world
+            .resource_mut::<TreeIndex>()
+            .clear_container(*container);
+    }
+}
+
+/// Rebuild the outliner on view-mode transitions. When the mode changes to
+/// Scene, tear down any ephemeral rows left from Live and rebuild from the
+/// preview ECS. When the mode changes to Live, the preview ECS already holds
+/// the live overlay (projected by `drain_game_events`), so a normal rebuild
+/// picks it up without special handling.
+fn sync_pie_live_outliner(mode: Res<crate::pie_mirror::PieViewMode>, mut commands: Commands) {
+    if !mode.is_changed() {
+        return;
+    }
+    commands.queue(|world: &mut World| {
+        teardown_outliner_rows(world);
+        rebuild_hierarchy(world)
+    });
+}
+
+/// Ancestor entities whose rows must expand, top down, so that `target`'s
+/// row can be spawned in an Outliner container. Walks `ChildOf` from `target`
+/// up to a root, collecting ancestors; returns them ordered from the highest
+/// ancestor down to `target`'s direct parent. `target` itself is excluded.
+/// Expanding each in order spawns the next level until `target`'s row exists.
+fn reveal_path(world: &World, target: Entity) -> Vec<Entity> {
+    let mut chain = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut cursor = target;
+    seen.insert(cursor);
+    while let Some(child_of) = world.get::<ChildOf>(cursor) {
+        let parent = child_of.0;
+        // A streamed projection can momentarily form a parent cycle while
+        // entities respawn and reparent; stop rather than loop forever.
+        if !seen.insert(parent) {
+            break;
+        }
+        chain.push(parent);
+        cursor = parent;
+    }
+    chain.reverse();
+    chain
+}
+
+/// The entity the Live tree should reveal (expand ancestors to), with a
+/// countdown so a target that never resolves does not spin forever.
+#[derive(Resource, Default)]
+pub(crate) struct RevealTarget {
+    pub(crate) entity: Option<Entity>,
+    pub(crate) frames_left: u8,
+}
+
+/// When the primary selection lands on an entity whose Live-tree row has not
+/// been spawned yet (rows spawn lazily on expansion), arm [`RevealTarget`] so
+/// the driver expands its ancestors until the row appears. Only relevant in
+/// Live mode; in Scene mode the rebuild already covers the authored tree.
+fn watch_selection_for_reveal(
+    selection: Res<Selection>,
+    mode: Res<crate::pie_mirror::PieViewMode>,
+    tree_index: Res<TreeIndex>,
+    mut reveal: ResMut<RevealTarget>,
+) {
+    if !selection.is_changed() {
+        return;
+    }
+    if *mode != crate::pie_mirror::PieViewMode::Live {
+        return;
+    }
+    let Some(primary) = selection.primary() else {
+        return;
+    };
+    if tree_index.contains_anywhere(primary) {
+        return;
+    }
+    reveal.entity = Some(primary);
+    reveal.frames_left = 16;
+}
+
+/// While [`RevealTarget`] is armed, expand the nearest already-rowed ancestor
+/// of the target each frame. Expanding a row triggers `on_tree_node_expanded`,
+/// which spawns the next level on the following flush; the driver then advances
+/// to that newly rowed ancestor on the next frame. Clears the target once its
+/// own row exists or the countdown runs out.
+fn drive_reveal_target(world: &mut World) {
+    let target = world.resource::<RevealTarget>().entity;
+    let Some(target) = target else {
+        return;
+    };
+
+    if world.resource::<TreeIndex>().contains_anywhere(target) {
+        let mut reveal = world.resource_mut::<RevealTarget>();
+        reveal.entity = None;
+        reveal.frames_left = 0;
+        return;
+    }
+
+    let frames_left = world.resource::<RevealTarget>().frames_left;
+    if frames_left == 0 {
+        world.resource_mut::<RevealTarget>().entity = None;
+        return;
+    }
+    world.resource_mut::<RevealTarget>().frames_left = frames_left - 1;
+
+    // Highest-to-lowest ancestor chain. Expand the first ancestor that has a
+    // row somewhere but is not yet expanded; mutating `TreeNodeExpanded` fires
+    // `on_tree_node_expanded`, which spawns the next level on the next flush.
+    let path = reveal_path(world, target);
+    let mut row_to_expand = None;
+    'outer: for ancestor in path {
+        let rows: Vec<Entity> = world
+            .resource::<TreeIndex>()
+            .rows_for_source(ancestor)
+            .map(|(_container, row)| row)
+            .collect();
+        for row in rows {
+            if world.get::<TreeNodeExpanded>(row).map(|e| e.0) == Some(false) {
+                row_to_expand = Some(row);
+                break 'outer;
+            }
+        }
+    }
+
+    if let Some(row) = row_to_expand {
+        if let Some(mut expanded) = world.get_mut::<TreeNodeExpanded>(row) {
+            expanded.0 = true;
+        }
+    } else if world.resource::<RevealTarget>().frames_left == 0 {
+        // No rowed ancestor to expand and the budget is spent: give up so the
+        // target does not linger after it became unreachable.
+        world.resource_mut::<RevealTarget>().entity = None;
+    }
 }
 
 /// When a new entity gets Transform and has no parent, create a row
@@ -552,9 +815,11 @@ fn on_entity_reparented(
 
         if let Some(tree_entity) = tree_index.get(container, entity) {
             if let Some(parent_children_container) = parent_children_container {
+                // Rows churn with live-mode despawns; a row can die between
+                // queueing and apply, and the row sync rebuilds it anyway.
                 commands
                     .entity(tree_entity)
-                    .insert(ChildOf(parent_children_container));
+                    .try_insert(ChildOf(parent_children_container));
             } else {
                 let container_for_remove = container;
                 let source = entity;
@@ -615,7 +880,7 @@ fn on_entity_deparented(
         return;
     }
     for (container, tree_entity) in tree_index.rows_for_source(entity) {
-        commands.entity(tree_entity).insert(ChildOf(container));
+        commands.entity(tree_entity).try_insert(ChildOf(container));
     }
 }
 
@@ -707,6 +972,18 @@ fn on_tree_node_expanded(
             .map(|c| c.iter().collect())
             .unwrap_or_default();
 
+        // In Live mode the tree shows only the running game's entities, so a
+        // child that is not itself live (an authored container the game never
+        // spawned) is skipped. In Scene mode the inverse holds: live preview
+        // entities a running game parented under an authored counterpart are
+        // hidden so the authored tree stays clean.
+        let live = outliner_in_live_mode(world);
+        let live_set = if live {
+            live_preview_set(world)
+        } else {
+            std::collections::HashSet::new()
+        };
+
         // Resolve the `HierarchyTreeContainer` that owns this
         // expansion by walking up from the per-row children container.
         // `TreeIndex` keys rows by their owning `HierarchyTreeContainer`,
@@ -716,9 +993,7 @@ fn on_tree_node_expanded(
 
         let mut child_data: Vec<(Entity, String, EntityCategory)> = Vec::new();
         for child in source_children {
-            if world.get::<EditorEntity>(child).is_some()
-                || world.get::<EditorHidden>(child).is_some()
-            {
+            if !child_visible_in_mode(world, child, live, &live_set) {
                 continue;
             }
             // Skip children that already have a row under this
@@ -971,7 +1246,7 @@ fn on_tree_row_dropped_on_root(
     // Move every Outliner panel's row for this source back under its
     // own root container.
     for (container, tree_entity) in tree_index.rows_for_source(dragged) {
-        commands.entity(tree_entity).insert(ChildOf(container));
+        commands.entity(tree_entity).try_insert(ChildOf(container));
     }
 }
 
@@ -1919,59 +2194,6 @@ fn toggle_show_all_button(
     }
 }
 
-/// Style hierarchy rows whose source entity was spawned during
-/// `PlayState::Playing` (i.e. has the `GameSpawned` marker) in
-/// italic, so the user can tell at a glance which rows are
-/// authored vs transient runtime state that'll disappear on Stop.
-///
-/// Uses the `EditorFontItalic` handle loaded by
-/// `jackdaw_feathers::icons`. Text colour stays at the theme's
-/// primary foreground; only the font handle changes. Runs every
-/// frame while in `Editor` state; the body is a few pointer-chasing
-/// lookups per game-spawned entity; cheap enough to skip change
-/// detection. We only write when the font differs to keep bevy's
-/// `Changed<TextFont>` quiet for downstream consumers.
-fn style_game_spawned_rows(
-    game_spawned: Query<Entity, With<crate::pie::GameSpawned>>,
-    index: Res<jackdaw_widgets::tree_view::TreeIndex>,
-    italic_font: Option<Res<jackdaw_feathers::icons::EditorFontItalic>>,
-    children_q: Query<&Children>,
-    row_content_q: Query<(), With<jackdaw_widgets::tree_view::TreeRowContent>>,
-    label_q: Query<(), With<jackdaw_widgets::tree_view::TreeRowLabel>>,
-    mut text_fonts: Query<&mut TextFont>,
-) {
-    let Some(italic_font) = italic_font else {
-        return;
-    };
-    // Italicise the row in every Outliner panel that has one for the
-    // game-spawned source.
-    for source in &game_spawned {
-        for (_container, row_entity) in index.rows_for_source(source) {
-            let Ok(row_children) = children_q.get(row_entity) else {
-                continue;
-            };
-            for content in row_children.iter() {
-                if !row_content_q.contains(content) {
-                    continue;
-                }
-                let Ok(content_children) = children_q.get(content) else {
-                    continue;
-                };
-                for maybe_label in content_children.iter() {
-                    if !label_q.contains(maybe_label) {
-                        continue;
-                    }
-                    if let Ok(mut tf) = text_fonts.get_mut(maybe_label)
-                        && tf.font != italic_font.0
-                    {
-                        tf.font = italic_font.0.clone();
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Update the show-all button icon color based on active state.
 fn update_show_all_button_appearance(
     show_all: Res<HierarchyShowAll>,
@@ -2117,6 +2339,137 @@ mod tests {
         OperatorParameters(map)
     }
 
+    #[test]
+    fn scene_root_tag_classifies_as_scene() {
+        let mut world = World::new();
+        let root = world.spawn(jackdaw_jsn::SceneRootTag).id();
+        let plain = world.spawn_empty().id();
+        assert_eq!(classify_entity(&world, root), EntityCategory::Scene);
+        assert_ne!(classify_entity(&world, plain), EntityCategory::Scene);
+    }
+
+    #[test]
+    fn scene_mode_hides_live_preview_children() {
+        // An authored entity that a running game parented a preview entity
+        // under should read as a leaf in the Scene tree: the preview child is
+        // a Live-only artifact and must not give the authored row a chevron.
+        let mut world = World::new();
+        let authored = world.spawn_empty().id();
+        let plain_child = world.spawn(ChildOf(authored)).id();
+        let _ = plain_child;
+        assert!(has_visible_children(&world, authored));
+
+        let ephemeral_host = world.spawn_empty().id();
+        world.spawn((ChildOf(ephemeral_host), crate::pie_projection::PieEphemeral));
+        assert!(!has_visible_children(&world, ephemeral_host));
+    }
+
+    #[test]
+    fn reveal_path_walks_to_the_nearest_rowed_ancestor() {
+        // root -> mid -> leaf via ChildOf. `reveal_path` returns the ancestor
+        // chain from the highest ancestor down to leaf's direct parent, with
+        // leaf itself excluded: [root, mid]. The driver decides which of these
+        // already have rows and which still need expanding.
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let mid = world.spawn(ChildOf(root)).id();
+        let leaf = world.spawn(ChildOf(mid)).id();
+
+        assert_eq!(reveal_path(&world, leaf), vec![root, mid]);
+        // A root with no parent has an empty reveal path.
+        assert!(reveal_path(&world, root).is_empty());
+    }
+
+    #[test]
+    fn reveal_driver_expands_nearest_rowed_ancestor_and_counts_down() {
+        // Only `root` has a row in TreeIndex; the driver should set root's row
+        // to expanded and leave the countdown decremented.
+        let mut world = World::new();
+        world.init_resource::<TreeIndex>();
+
+        let container = world.spawn_empty().id();
+        let root = world.spawn_empty().id();
+        let mid = world.spawn(ChildOf(root)).id();
+        let leaf = world.spawn(ChildOf(mid)).id();
+
+        let root_row = world.spawn(TreeNodeExpanded(false)).id();
+        world
+            .resource_mut::<TreeIndex>()
+            .insert(container, root, root_row);
+
+        world.insert_resource(RevealTarget {
+            entity: Some(leaf),
+            frames_left: 16,
+        });
+
+        run_reveal_driver_once(&mut world);
+
+        assert!(
+            world.get::<TreeNodeExpanded>(root_row).map(|e| e.0) == Some(true),
+            "root's row should be expanded (nearest rowed ancestor)"
+        );
+        assert_eq!(
+            world.resource::<RevealTarget>().frames_left,
+            15,
+            "countdown decrements each driven frame"
+        );
+        assert_eq!(
+            world.resource::<RevealTarget>().entity,
+            Some(leaf),
+            "target stays set until its own row exists"
+        );
+    }
+
+    #[test]
+    fn reveal_driver_clears_when_target_has_a_row() {
+        let mut world = World::new();
+        world.init_resource::<TreeIndex>();
+        let container = world.spawn_empty().id();
+        let leaf = world.spawn_empty().id();
+        let leaf_row = world.spawn(TreeNodeExpanded(false)).id();
+        world
+            .resource_mut::<TreeIndex>()
+            .insert(container, leaf, leaf_row);
+        world.insert_resource(RevealTarget {
+            entity: Some(leaf),
+            frames_left: 16,
+        });
+
+        run_reveal_driver_once(&mut world);
+
+        assert!(
+            world.resource::<RevealTarget>().entity.is_none(),
+            "target clears once its own row exists"
+        );
+    }
+
+    #[test]
+    fn reveal_driver_clears_when_countdown_expires() {
+        let mut world = World::new();
+        world.init_resource::<TreeIndex>();
+        let _container = world.spawn_empty().id();
+        let leaf = world.spawn_empty().id();
+        // No row anywhere for leaf and no rowed ancestor; the countdown drains.
+        world.insert_resource(RevealTarget {
+            entity: Some(leaf),
+            frames_left: 1,
+        });
+
+        run_reveal_driver_once(&mut world);
+
+        assert!(
+            world.resource::<RevealTarget>().entity.is_none(),
+            "target clears when the countdown hits zero with no progress"
+        );
+    }
+
+    /// Run the reveal driver one tick against `world` via a cached system.
+    fn run_reveal_driver_once(world: &mut World) {
+        world
+            .run_system_cached(drive_reveal_target)
+            .expect("reveal driver runs");
+    }
+
     /// `RenameBeginOp` dispatched with an explicit `entity` param
     /// (the path the context-menu "Rename" item and the
     /// `TreeRowStartRename` event use) returns that entity. The
@@ -2156,5 +2509,29 @@ mod tests {
         let params = empty_params();
         let selection = Selection::default();
         assert_eq!(resolve_rename_target(&params, &selection), None);
+    }
+
+    #[test]
+    fn live_set_roots_are_live_entities_without_live_parents() {
+        let mut world = World::new();
+        world.init_resource::<crate::pie_projection::PieProjection>();
+        let authored_parent = world.spawn_empty().id();
+        let live_root = world.spawn(ChildOf(authored_parent)).id();
+        let live_child = world.spawn(ChildOf(live_root)).id();
+        let _not_live = world.spawn_empty().id();
+        {
+            let mut projection = world.resource_mut::<crate::pie_projection::PieProjection>();
+            projection.by_bits.insert(1, live_root);
+            projection.by_bits.insert(2, live_child);
+        }
+        let live = live_preview_set(&world);
+        assert!(live.contains(&live_root) && live.contains(&live_child));
+
+        let roots = live_tree_roots(&mut world, &live);
+        assert_eq!(
+            roots,
+            vec![live_root],
+            "live child of a non-live parent is the root"
+        );
     }
 }

@@ -2377,6 +2377,7 @@ fn load_scene_from_jsn_backfills_transform_require_chain() {
 
     let mut app = make_app_for_prefab_tests();
     let entity = JsnEntity {
+        id: None,
         parent: None,
         components: {
             let mut m = HashMap::new();
@@ -2423,6 +2424,7 @@ fn load_scene_from_jsn_backfills_visibility_require_chain() {
 
     let mut app = make_app_for_prefab_tests();
     let entity = JsnEntity {
+        id: None,
         parent: None,
         components: {
             let mut m = HashMap::new();

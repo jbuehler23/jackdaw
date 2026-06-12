@@ -94,3 +94,12 @@
 | Ctrl+Shift+N | New scene |
 | Ctrl+Z | Undo |
 | Ctrl+Shift+Z | Redo |
+
+## Play-in-editor
+
+| Key | Action |
+|-----|--------|
+| Esc | Forward to the game (opens its in-game menu) while capturing |
+| Shift+Esc | Release input capture, return control to the editor |
+
+See [Play-in-editor](play-in-editor.md) for the full workflow.

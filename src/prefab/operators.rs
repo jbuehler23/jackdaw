@@ -340,6 +340,7 @@ fn write_prefab_file(
         .unwrap_or("PrefabRoot")
         .to_string();
     let synthetic_entry = JsnEntity {
+        id: None,
         parent: None,
         components: synthetic_root_components(display_name),
     };
@@ -428,7 +429,11 @@ fn propagate_instance_to_prefab(world: &mut World, instance_key: usize, target_p
         let parent = resolved_node
             .parent
             .and_then(|p| old_to_new.get(&p).copied());
-        prefab_entries.push(JsnEntity { parent, components });
+        prefab_entries.push(JsnEntity {
+            id: None,
+            parent,
+            components,
+        });
     }
 
     // Assign fresh sequential PrefabEntityIds 1..N.
@@ -448,6 +453,7 @@ fn propagate_instance_to_prefab(world: &mut World, instance_key: usize, target_p
         .unwrap_or("PrefabRoot")
         .to_string();
     let synthetic_entry = JsnEntity {
+        id: None,
         parent: None,
         components: synthetic_root_components(display_name),
     };
@@ -751,6 +757,7 @@ pub fn save_scene_as_prefab(world: &mut World, target_path: &Path) {
             .unwrap_or("prefab")
             .to_string();
         let synthetic_node = JsnEntityNode {
+            id: Some(jackdaw_jsn::JsnNodeId::next()),
             parent: None,
             components: synthetic_root_components(synthetic_name),
             derived_components: Default::default(),

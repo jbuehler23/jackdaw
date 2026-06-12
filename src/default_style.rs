@@ -109,6 +109,23 @@ pub const TERRAIN_SCULPT_GIZMO: Color = Color::srgb(1.0, 0.8, 0.2);
 // -- Material preview --
 pub const MATERIAL_PREVIEW_BG: Color = Color::srgba(0.15, 0.15, 0.15, 1.0);
 
+// -- PIE live edits --
+/// Marker dot on inspector field rows whose value diverges from the
+/// authored scene during live play. Saturated green so it reads as
+/// "live", distinct from the amber prefab-override dot.
+pub const LIVE_EDIT_ACCENT: Color = Color::srgb(0.30, 0.85, 0.45);
+
+/// Saturated teal used for the bold `LIVE` badge in the outliner header and
+/// the viewport border while the Live view is active. Sits next to
+/// [`LIVE_EDIT_ACCENT`] as the per-view live signal.
+pub const LIVE_ACCENT: Color = Color::srgb(0.0, 0.78, 0.85);
+
+/// Accent while Live input capture is engaged (forwarding to the game).
+pub const CAPTURE_ACCENT: Color = Color::srgb(1.0, 0.62, 0.1);
+
+/// Subtle teal wash applied over the editor header backgrounds while Live.
+pub const LIVE_HEADER_TINT: Color = Color::srgba(0.0, 0.667, 0.733, 0.15);
+
 // -- Brush default material variants --
 pub const DEFAULT_MATERIAL_COLOR: Color = Color::srgba(0.980, 0.8549, 0.3686, 0.5);
 pub const DEFAULT_MATERIAL_SELECTED_COLOR: Color = Color::srgba(0.980, 0.8549, 0.3686, 0.75);

@@ -88,6 +88,11 @@ impl From<JsnVisibility> for Visibility {
 /// Only `parent` remains structural (serialization ordering).
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JsnEntity {
+    /// Stable node id (see `jackdaw_jsn::ast::JsnNodeId`). Absent in scenes
+    /// authored before node ids existed; a fresh id is minted for those on
+    /// first load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<usize>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -167,6 +172,7 @@ impl JsnSceneV2 {
                     );
                 }
                 JsnEntity {
+                    id: None,
                     parent: e.parent,
                     components,
                 }
