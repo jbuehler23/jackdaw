@@ -108,8 +108,13 @@ impl Plugin for WindowChromePlugin {
             #[cfg(target_os = "macos")]
             {
                 macos_titlebar::set_theme(self.theme.clone());
-                app.add_observer(macos_titlebar::on_macos_window_created);
-                app.add_systems(PostUpdate, macos_titlebar::sync_macos_window_shell_state);
+                app.add_systems(
+                    PostUpdate,
+                    (
+                        macos_titlebar::on_macos_window_created,
+                        macos_titlebar::sync_macos_window_shell_state,
+                    ),
+                );
             }
         }
     }

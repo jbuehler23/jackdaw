@@ -4,8 +4,8 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use bevy::ecs::system::NonSendMarker;
-use bevy::prelude::{Commands, Component, Entity, Node, On, Query, Res, Val, With};
-use bevy::window::{PrimaryWindow, Window, WindowCreated, WindowMode};
+use bevy::prelude::{Commands, Component, Entity, MessageReader, Node, Query, Res, Val, With};
+use bevy::window::{PrimaryWindow, WindowCreated};
 use bevy::winit::WINIT_WINDOWS;
 
 use crate::WindowChromeTheme;
@@ -25,7 +25,7 @@ static WINDOW_CHROME_THEME: OnceLock<WindowChromeTheme> = OnceLock::new();
 
 /// Sets the window chrome theme for AppKit callbacks that cannot access Bevy resources.
 pub(crate) fn set_theme(theme: WindowChromeTheme) {
-    WINDOW_CHROME_THEME.set(theme);
+    let _ = WINDOW_CHROME_THEME.set(theme);
 }
 
 fn cached_theme() -> WindowChromeTheme {
@@ -60,7 +60,7 @@ declare_class!(
         #[method(windowDidResize:)]
         fn window_did_resize(&self, _notification: &NSNotification) {
             let entity = Entity::from_bits(self.ivars().window_entity_bits);
-            if window_fills_work_area(entity) {
+            if is_native_fullscreen(entity) {
                 return;
             }
             reposition_traffic_lights(entity);
@@ -80,48 +80,44 @@ impl TrafficLightResizeObserver {
     }
 }
 
-const FRAME_MATCH_TOLERANCE_PX: f64 = 2.0;
-
-/// Cached macOS zoom state for the primary window (`window_fills_work_area`).
+/// Cached native fullscreen state for the primary window.
 #[derive(Component, Copy, Clone, Default)]
-pub(crate) struct MacosFillsWorkArea(pub bool);
+pub(crate) struct MacosNativeFullscreen(pub bool);
 
-/// Registers the resize observer and initial traffic-light state when the primary window is created.
+/// Registers the resize observer and initial traffic-light position when the primary window is created.
 pub(crate) fn on_macos_window_created(
     _main_thread: NonSendMarker,
-    trigger: On<WindowCreated>,
+    mut created: MessageReader<WindowCreated>,
     mut commands: Commands,
 ) {
-    let window_entity = trigger.window;
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    ensure_traffic_light_resize_observer(window_entity, mtm);
-    let fills_work_area = window_fills_work_area(window_entity);
-    commands
-        .entity(window_entity)
-        .insert(MacosFillsWorkArea(fills_work_area));
-    set_traffic_lights_hidden(window_entity, fills_work_area);
-    if !fills_work_area {
-        reposition_traffic_lights(window_entity);
+    for event in created.read() {
+        let window_entity = event.window;
+        ensure_traffic_light_resize_observer(window_entity, mtm);
+        let is_native_fullscreen = is_native_fullscreen(window_entity);
+        commands
+            .entity(window_entity)
+            .insert(MacosNativeFullscreen(is_native_fullscreen));
+        if !is_native_fullscreen {
+            reposition_traffic_lights(window_entity);
+        }
     }
 }
 
-/// Syncs traffic-light visibility, positioning, and title bar content inset with window state.
+/// Syncs title bar content inset with native fullscreen.
 pub(crate) fn sync_macos_window_shell_state(
     _main_thread: NonSendMarker,
     theme: Res<WindowChromeTheme>,
-    mut windows: Query<(Entity, &Window, &mut MacosFillsWorkArea), With<PrimaryWindow>>,
+    mut windows: Query<(Entity, &mut MacosNativeFullscreen), With<PrimaryWindow>>,
     mut title_bar_content_slots: Query<&mut Node, With<WindowTitleBarContentSlot>>,
 ) {
-    let Ok((window_entity, window, mut fills_work_area)) = windows.single_mut() else {
+    let Ok((window_entity, mut native_fullscreen)) = windows.single_mut() else {
         return;
     };
-    if !matches!(window.mode, WindowMode::Windowed) {
-        return;
-    }
 
-    let current = window_fills_work_area(window_entity);
+    let current = is_native_fullscreen(window_entity);
     let content_inset = if current {
         0.0
     } else {
@@ -130,59 +126,25 @@ pub(crate) fn sync_macos_window_shell_state(
     for mut node in title_bar_content_slots.iter_mut() {
         node.padding.left = Val::Px(content_inset);
     }
-    if fills_work_area.0 != current {
-        fills_work_area.0 = current;
-        set_traffic_lights_hidden(window_entity, current);
+    if native_fullscreen.0 != current {
+        native_fullscreen.0 = current;
         if !current {
             reposition_traffic_lights(window_entity);
         }
     }
 }
 
-/// Whether the window frame fills the display work area (green-button zoom).
-pub fn window_fills_work_area(window_entity: Entity) -> bool {
+/// Whether the window is in macOS native fullscreen (green-button enter full screen).
+pub fn is_native_fullscreen(window_entity: Entity) -> bool {
     let Some(mtm) = MainThreadMarker::new() else {
         return false;
     };
     let Some(ns_window) = ns_window_for_entity(window_entity, mtm) else {
         return false;
     };
-    let Some(screen) = ns_window.screen() else {
-        return false;
-    };
-    let window_frame = ns_window.frame();
-    let visible_frame = screen.visibleFrame();
-    let screen_frame = screen.frame();
-    if !sizes_match(
-        window_frame.size.width,
-        visible_frame.size.width,
-        FRAME_MATCH_TOLERANCE_PX,
-    ) {
-        return false;
-    }
-    return sizes_match(
-        window_frame.size.height,
-        visible_frame.size.height,
-        FRAME_MATCH_TOLERANCE_PX,
-    ) || sizes_match(
-        window_frame.size.height,
-        screen_frame.size.height,
-        FRAME_MATCH_TOLERANCE_PX,
-    );
-}
-
-/// Hide or show standard window buttons. When expanded, macOS reveals them at the top edge on hover.
-pub fn set_traffic_lights_hidden(window_entity: Entity, hidden: bool) {
-    let Some(mtm) = MainThreadMarker::new() else {
-        return;
-    };
-    let Some(buttons) = traffic_light_buttons(window_entity, mtm) else {
-        return;
-    };
-    let (close_button, minimize_button, zoom_button) = buttons;
-    for button in [&close_button, &minimize_button, &zoom_button] {
-        button.setHidden(hidden);
-    }
+    return ns_window
+        .styleMask()
+        .contains(NSWindowStyleMask::FullScreen);
 }
 
 /// Registers a one-shot `NSWindowDidResizeNotification` observer for the primary window.
@@ -282,10 +244,6 @@ fn traffic_light_buttons(
         return None;
     };
     return Some((close_button, minimize_button, zoom_button));
-}
-
-fn sizes_match(a: f64, b: f64, tolerance: f64) -> bool {
-    return (a - b).abs() <= tolerance;
 }
 
 fn ns_window_for_entity(
