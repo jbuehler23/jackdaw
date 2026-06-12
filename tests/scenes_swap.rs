@@ -870,6 +870,57 @@ fn open_prefab_file_sets_tab_kind_prefab() {
 }
 
 #[test]
+fn scene_open_flags_dirty_when_ids_need_migration() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(WgpuSettings {
+                    backends: None,
+                    ..default()
+                }),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_jsn::SceneJsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+    app.init_resource::<jackdaw::scenes::operators::UntitledCounter>();
+
+    // Start from an active tab so the swap inside scene_open has something to
+    // capture from.
+    app.world_mut()
+        .run_system_cached(jackdaw::scenes::operators::scene_new_system)
+        .unwrap();
+
+    // Two entities share id 10, so the scene needs migration.
+    let tmp_dir = std::env::temp_dir();
+    let path = tmp_dir.join("jackdaw_scene_open_dirty_migration_test.jsn");
+    std::fs::write(
+        &path,
+        r#"{"jsn":{"format_version":[3,0,0],"editor_version":"0.1.0","bevy_version":"0.18"},"metadata":{"name":"","description":"","author":"","created":"","modified":""},"assets":{},"scene":[{"id":10,"components":{}},{"id":10,"components":{}}]}"#,
+    )
+    .unwrap();
+
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &path);
+
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    let active = scenes.active;
+    assert!(
+        scenes.tabs[active].dirty,
+        "opening a scene with colliding ids must flag the tab dirty so the heal is saved"
+    );
+}
+
+#[test]
 fn open_regular_scene_file_sets_tab_kind_scene() {
     let tmp = tempfile::tempdir().unwrap();
     let scene_path = tmp.path().join("s.jsn");
@@ -973,4 +1024,79 @@ fn each_tab_has_its_own_undo_stack() {
         1,
         "tab B's stack persists across the round-trip"
     );
+}
+
+#[test]
+fn finish_load_scene_entities_and_ast_share_ids_after_heal() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(WgpuSettings {
+                    backends: None,
+                    ..default()
+                }),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_jsn::SceneJsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+    app.init_resource::<jackdaw::scene_io::SceneFilePath>();
+    app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
+    app.init_resource::<jackdaw::prefab::PrefabAstCache>();
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(1));
+        scenes.active = 0;
+    }
+
+    // Two entities sharing id 10: the heal path re-mints both to fresh sparse ids.
+    // The bug caused those healed ids in the AST to diverge from the ids stamped
+    // on the live entities, because `from_jsn_scene` was called a second time on
+    // the original (colliding) `jsn`, advancing the atomic counter past the values
+    // already assigned to the spawned entities.
+    let tmp_dir = std::env::temp_dir();
+    let path = tmp_dir.join("jackdaw_finish_load_scene_id_match_test.jsn");
+    std::fs::write(
+        &path,
+        r#"{"jsn":{"format_version":[3,0,0],"editor_version":"0.1.0","bevy_version":"0.18"},"metadata":{"name":"","description":"","author":"","created":"","modified":""},"assets":{},"scene":[{"id":10,"components":{}},{"id":10,"components":{}}]}"#,
+    )
+    .unwrap();
+
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &path);
+
+    let world = app.world();
+    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
+
+    let mut bound_count = 0usize;
+    for node in &ast.nodes {
+        let Some(entity) = node.ecs_entity else {
+            continue;
+        };
+        let node_id = node.id.expect("healed node must have an id");
+        let live = world
+            .get::<jackdaw_jsn::JsnNodeId>(entity)
+            .expect("spawned entity must have JsnNodeId");
+        assert_eq!(
+            live.0, node_id.0,
+            "entity {entity:?}: live JsnNodeId {} != AST node id {} after heal",
+            live.0, node_id.0,
+        );
+        bound_count += 1;
+    }
+    assert!(
+        bound_count >= 2,
+        "expected at least two bound nodes from the two-entity scene, got {bound_count}"
+    );
+
+    let _ = std::fs::remove_file(&path);
 }

@@ -18,6 +18,8 @@ bevy = { version = "0.18", default-features = false, features = [
 ] }
 jackdaw_jsn = { version = "0.4.1", path = "../jackdaw_jsn", default-features = false }
 jackdaw_geometry = { version = "0.4.1", path = "../jackdaw_geometry", default-features = false }
+jackdaw_pie_protocol = { path = "../jackdaw_pie_protocol", optional = true }
+jackdaw_camera_rig = { version = "0.4.1", path = "../jackdaw_camera_rig", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "2"
@@ -30,6 +32,20 @@ render = [
     "bevy/bevy_image",
     "jackdaw_jsn/render",
     "jackdaw_geometry/render",
+]
+# Play-in-editor: connect to the editor over ipc-channel, stream the
+# scene's ECS state, and apply control commands. Off by default so the
+# protocol and ipc-channel stay out of the standalone runtime build.
+# Frame capture renders the active camera rig offscreen and reads it
+# back, which needs bevy's gpu readback (bevy_render) and Image
+# (bevy_image) even when the `render` feature is off.
+pie = [
+    "dep:jackdaw_pie_protocol",
+    "jackdaw_pie_protocol/ipc",
+    "dep:jackdaw_camera_rig",
+    "bevy/bevy_render",
+    "bevy/bevy_image",
+    "bevy/mesh_picking",
 ]
 
 [lints]

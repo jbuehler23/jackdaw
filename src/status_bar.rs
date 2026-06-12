@@ -35,6 +35,7 @@ impl Plugin for StatusBarPlugin {
                 update_status_center,
                 update_status_right,
                 update_scene_stats,
+                update_build_bar,
             )
                 .run_if(in_state(crate::AppState::Editor)),
         );
@@ -42,10 +43,11 @@ impl Plugin for StatusBarPlugin {
         // build indicator becomes interactive (Reload / open log).
         // Attached on every entry into the editor; the launcher's
         // status bar is rebuilt across project re-opens, so this
-        // catches each fresh entity.
+        // catches each fresh entity. The build-progress bar is
+        // spawned alongside it, hidden until a build runs.
         app.add_systems(
             OnEnter(crate::AppState::Editor),
-            attach_status_bar_click_observer,
+            (attach_status_bar_click_observer, spawn_build_bar),
         );
     }
 }
@@ -326,5 +328,71 @@ pub fn update_scene_stats(
     );
     if text.0 != new_text {
         text.0 = new_text;
+    }
+}
+
+/// Width of the build-progress bar track in the footer.
+const BUILD_BAR_WIDTH: f32 = 180.0;
+
+/// Track (background) of the footer build-progress bar.
+#[derive(Component)]
+struct BuildBarTrack;
+
+/// Fill of the footer build-progress bar; its width follows the build
+/// fraction.
+#[derive(Component)]
+struct BuildBarFill;
+
+/// Spawn the build-progress bar once on entering the editor, hidden.
+/// `update_build_bar` shows it and sizes the fill while a build runs.
+/// It sits flush in the footer's bottom-right edge.
+fn spawn_build_bar(mut commands: Commands) {
+    commands.spawn((
+        BuildBarTrack,
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(0.0),
+            right: Val::Px(0.0),
+            width: Val::Px(BUILD_BAR_WIDTH),
+            height: Val::Px(2.0),
+            ..default()
+        },
+        BackgroundColor(jackdaw_feathers::tokens::BORDER_SUBTLE),
+        Visibility::Hidden,
+        ZIndex(1000),
+        children![(
+            BuildBarFill,
+            Node {
+                width: Val::Percent(0.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            BackgroundColor(jackdaw_feathers::tokens::TEXT_ACCENT),
+        )],
+    ));
+}
+
+/// Show the build bar while a build is active and size its fill to the
+/// build fraction; hide it otherwise.
+fn update_build_bar(
+    build_status: Res<BuildStatus>,
+    mut track: Query<&mut Visibility, With<BuildBarTrack>>,
+    mut fill: Query<&mut Node, With<BuildBarFill>>,
+) {
+    let Ok(mut visibility) = track.single_mut() else {
+        return;
+    };
+    if let BuildState::Building { progress, .. } = &build_status.state {
+        *visibility = Visibility::Visible;
+        let fraction = progress
+            .lock()
+            .ok()
+            .and_then(|g| g.fraction())
+            .unwrap_or(0.0);
+        if let Ok(mut node) = fill.single_mut() {
+            node.width = Val::Percent((fraction * 100.0).clamp(0.0, 100.0));
+        }
+    } else {
+        *visibility = Visibility::Hidden;
     }
 }

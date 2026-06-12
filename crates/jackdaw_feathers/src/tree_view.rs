@@ -37,7 +37,7 @@ pub fn category_color(category: EntityCategory, inherited: bool) -> Color {
         EntityCategory::Scene => tokens::CATEGORY_SCENE,
         EntityCategory::Prefab => tokens::CATEGORY_PREFAB,
         EntityCategory::Inherited => tokens::CATEGORY_INHERITED,
-        EntityCategory::Entity => tokens::CATEGORY_ENTITY,
+        EntityCategory::Group | EntityCategory::Entity => tokens::CATEGORY_ENTITY,
     }
 }
 
@@ -53,6 +53,7 @@ pub fn tree_row(
     source: Entity,
     category: EntityCategory,
     inherited: bool,
+    icon_override: Option<Icon>,
     style: &TreeRowStyle,
 ) -> impl Bundle {
     (
@@ -75,6 +76,7 @@ pub fn tree_row(
                 source,
                 category,
                 inherited,
+                icon_override,
                 style
             ),
             // Container for child rows (initially empty, populated lazily)
@@ -82,8 +84,12 @@ pub fn tree_row(
                 TreeRowChildren,
                 Node {
                     flex_direction: FlexDirection::Column,
-                    padding: UiRect::left(px(INDENT_WIDTH)),
-                    margin: UiRect::left(px(tokens::SPACING_SM)),
+                    // Indent via padding only. A left margin on a full-width box
+                    // is clamped to `parent_width - margin`, so each nesting
+                    // level would pull the row's right edge (and the eye toggle
+                    // anchored there) inward. Padding and a left border shift the
+                    // content rightward without moving the right edge.
+                    padding: UiRect::left(px(INDENT_WIDTH + tokens::SPACING_SM)),
                     border: UiRect::left(px(1.0)),
                     width: percent(100),
                     display: Display::None,
@@ -124,11 +130,20 @@ pub fn tree_row(
                             if let Ok(toggle_children) = toggle_query.get(cc) {
                                 for tc in toggle_children.iter() {
                                     if let Ok(mut text) = text_query.get_mut(tc) {
-                                        text.0 = if expanded.0 {
-                                            Icon::ChevronDown.unicode().to_string()
-                                        } else {
-                                            Icon::ChevronRight.unicode().to_string()
-                                        };
+                                        // Only rows that already show a chevron
+                                        // flip glyphs; a childless leaf keeps its
+                                        // blank toggle even when the reveal
+                                        // machinery marks it expanded.
+                                        let chevron_right =
+                                            Icon::ChevronRight.unicode().to_string();
+                                        let chevron_down = Icon::ChevronDown.unicode().to_string();
+                                        if text.0 == chevron_right || text.0 == chevron_down {
+                                            text.0 = if expanded.0 {
+                                                chevron_down
+                                            } else {
+                                                chevron_right
+                                            };
+                                        }
                                     }
                                 }
                             }
@@ -147,6 +162,7 @@ fn tree_row_content(
     source: Entity,
     category: EntityCategory,
     inherited: bool,
+    icon_override: Option<Icon>,
     style: &TreeRowStyle,
 ) -> impl Bundle {
     let bg = if selected {
@@ -177,7 +193,7 @@ fn tree_row_content(
             // Expand toggle (chevron)
             expand_toggle(has_children, &style.icon_font),
             // Category icon
-            category_dot(category, inherited, &style.icon_font),
+            category_dot(category, inherited, icon_override, &style.icon_font),
             // Label
             (
                 TreeRowLabel,
@@ -188,6 +204,7 @@ fn tree_row_content(
                 },
                 Node {
                     flex_grow: 1.0,
+                    margin: UiRect::left(px(tokens::SPACING_SM)),
                     ..default()
                 },
                 ThemedText,
@@ -416,24 +433,27 @@ fn visibility_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle {
     )
 }
 
-/// Icon indicating entity category (matches Figma reference). When
-/// `inherited` is true the row is drawn in the muted prefab-inherited
-/// color, but the icon still reflects the underlying category so an
-/// inherited light still looks like a light, an inherited camera still
-/// looks like a camera.
+/// Icon indicating entity category. When `inherited` is true the row is
+/// drawn in the muted prefab-inherited color, but the icon still reflects
+/// the underlying category so an inherited light still looks like a light,
+/// an inherited camera still looks like a camera. `icon_override`, when
+/// present, replaces the category glyph while keeping the category color.
 fn category_dot(
     category: EntityCategory,
     inherited: bool,
+    icon_override: Option<Icon>,
     icon_font: &Handle<Font>,
 ) -> impl Bundle {
     let color = category_color(category, inherited);
-    let icon_char = match category {
+    let icon_char = icon_override.unwrap_or(match category {
         EntityCategory::Camera => Icon::Video,
         EntityCategory::Light => Icon::Lightbulb,
         EntityCategory::Prefab => Icon::Package,
-        EntityCategory::Inherited | EntityCategory::Mesh | EntityCategory::Scene => Icon::Box,
+        EntityCategory::Scene => Icon::Clapperboard,
+        EntityCategory::Inherited | EntityCategory::Mesh => Icon::Box,
+        EntityCategory::Group => Icon::Folder,
         EntityCategory::Entity => Icon::Dot,
-    };
+    });
     (
         TreeRowDot,
         Node {

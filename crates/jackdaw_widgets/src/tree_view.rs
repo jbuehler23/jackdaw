@@ -60,6 +60,9 @@ pub enum EntityCategory {
     /// `IsA`). Drawn with a faint tinge to signal it's a materialized
     /// child of an instance rather than authored directly.
     Inherited,
+    /// A container entity: it has children but no more specific type of its
+    /// own, so it reads as a grouping node (e.g. a "Trees" parent).
+    Group,
     #[default]
     Entity,
 }

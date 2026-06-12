@@ -41,6 +41,13 @@ pub use jackdaw_api_internal::{
 
 pub use jackdaw_api_internal::lifecycle::ExtensionKind;
 
+/// Maps component type paths to the icon the outliner shows for entities
+/// carrying them. Extensions seed it through
+/// [`ExtensionContext::register_entity_icon`].
+pub mod entity_icons {
+    pub use jackdaw_api_internal::entity_icons::{EntityIconRegistry, registered_icon};
+}
+
 /// `#[operator]` attribute macro. See [`jackdaw_api_macros`] for the
 /// supported keys.
 pub use jackdaw_api_macros::operator;

@@ -4,6 +4,7 @@ use jackdaw_jsn::format::{ClipboardPayload, JsnAssets, JsnEntity};
 fn payload_round_trip_serde() {
     let payload = ClipboardPayload {
         entities: vec![JsnEntity {
+            id: None,
             parent: None,
             components: Default::default(),
         }],

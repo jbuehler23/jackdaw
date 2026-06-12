@@ -5,46 +5,70 @@
       0,
       0
     ],
-    "editor_version": "0.3.0",
+    "editor_version": "0.4.1",
     "bevy_version": "0.18"
   },
   "metadata": {
     "name": "Untitled",
     "description": "",
     "author": "",
-    "created": "2026-04-11T08:51:55Z",
-    "modified": "2026-04-11T08:51:55Z"
+    "created": "2026-06-09T07:56:03.297094949Z",
+    "modified": "2026-06-09T07:56:07.422948741Z"
   },
   "assets": {},
-  "editor": null,
+  "editor": {
+    "camera": {
+      "translation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  },
   "scene": [
     {
+      "id": 7835003537258136277,
       "parent": 4,
       "components": {
-        "bevy_ecs::name::Name": "Brush / translation",
-        "jackdaw_animation::clip::AnimationTrack": {
-          "component_type_path": "bevy_transform::components::transform::Transform",
-          "field_path": "translation",
-          "interpolation": "Linear",
-          "target_name": "Brush"
-        }
-      }
-    },
-    {
-      "parent": 0,
-      "components": {
         "jackdaw_animation::clip::Vec3Keyframe": {
-          "time": 0.0,
+          "time": 0.7564242482185364,
           "value": [
-            0.25,
+            10.75,
             1.625,
-            -0.625
+            -9.625
           ]
         }
       }
     },
     {
+      "id": 7835003537258136276,
+      "parent": 4,
       "components": {
+        "jackdaw_animation::clip::Vec3Keyframe": {
+          "time": 1.4522610902786255,
+          "value": [
+            -6.25,
+            1.625,
+            -10.625
+          ]
+        }
+      }
+    },
+    {
+      "id": 7835003537258136273,
+      "components": {
+        "bevy_ecs::name::Name": "Sun",
         "bevy_camera::visibility::Visibility": "Inherited",
         "bevy_light::cascade::CascadeShadowConfig": {
           "bounds": [
@@ -55,6 +79,21 @@
           ],
           "minimum_distance": 0.10000000149011612,
           "overlap_proportion": 0.20000000298023224
+        },
+        "bevy_light::directional_light::DirectionalLight": {
+          "affects_lightmapped_mesh_diffuse": true,
+          "color": {
+            "LinearRgba": {
+              "alpha": 1.0,
+              "blue": 1.0,
+              "green": 1.0,
+              "red": 1.0
+            }
+          },
+          "illuminance": 10000.0,
+          "shadow_depth_bias": 0.019999999552965164,
+          "shadow_normal_bias": 1.7999999523162842,
+          "shadows_enabled": true
         },
         "bevy_transform::components::transform::Transform": {
           "rotation": [
@@ -73,27 +112,12 @@
             20.0,
             10.0
           ]
-        },
-        "bevy_light::directional_light::DirectionalLight": {
-          "affects_lightmapped_mesh_diffuse": true,
-          "color": {
-            "LinearRgba": {
-              "alpha": 1.0,
-              "blue": 1.0,
-              "green": 1.0,
-              "red": 1.0
-            }
-          },
-          "illuminance": 10000.0,
-          "shadow_depth_bias": 0.019999999552965164,
-          "shadow_normal_bias": 1.7999999523162842,
-          "shadows_enabled": true
-        },
-        "bevy_ecs::name::Name": "Sun"
+        }
       }
     },
     {
-      "parent": 0,
+      "id": 7835003537258136274,
+      "parent": 4,
       "components": {
         "jackdaw_animation::clip::Vec3Keyframe": {
           "time": 1.9946538209915161,
@@ -106,41 +130,44 @@
       }
     },
     {
+      "id": 7835003537258136271,
+      "parent": 5,
       "components": {
+        "jackdaw_animation::clip::AnimationTrack": {
+          "component_type_path": "bevy_transform::components::transform::Transform",
+          "field_path": "translation",
+          "interpolation": "Linear"
+        },
+        "bevy_ecs::name::Name": "Brush / translation"
+      }
+    },
+    {
+      "id": 7835003537258136275,
+      "components": {
+        "bevy_ecs::name::Name": "Brush Clip",
         "jackdaw_animation::clip::Clip": {
           "duration": 2.0
-        },
-        "bevy_ecs::name::Name": "Brush Clip"
+        }
       }
     },
     {
-      "parent": 0,
+      "id": 7835003537258136272,
+      "parent": 4,
       "components": {
         "jackdaw_animation::clip::Vec3Keyframe": {
-          "time": 1.4522610902786255,
+          "time": 0.0,
           "value": [
-            -6.25,
+            0.25,
             1.625,
-            -10.625
+            -0.625
           ]
         }
       }
     },
     {
-      "parent": 0,
+      "id": 7835003537258136278,
       "components": {
-        "jackdaw_animation::clip::Vec3Keyframe": {
-          "time": 0.7564242482185364,
-          "value": [
-            10.75,
-            1.625,
-            -9.625
-          ]
-        }
-      }
-    },
-    {
-      "components": {
+        "bevy_camera::visibility::Visibility": "Inherited",
         "jackdaw_jsn::types::Brush": {
           "faces": [
             {
@@ -323,10 +350,274 @@
                 -0.0
               ]
             }
-          ]
+          ],
+          "topology": {
+            "attributes": {
+              "edge": {},
+              "face": {},
+              "loop_": {},
+              "vert": {}
+            },
+            "edges": [
+              {
+                "v": [
+                  0,
+                  1
+                ]
+              },
+              {
+                "v": [
+                  0,
+                  2
+                ]
+              },
+              {
+                "v": [
+                  2,
+                  3
+                ]
+              },
+              {
+                "v": [
+                  1,
+                  3
+                ]
+              },
+              {
+                "v": [
+                  4,
+                  5
+                ]
+              },
+              {
+                "v": [
+                  5,
+                  7
+                ]
+              },
+              {
+                "v": [
+                  6,
+                  7
+                ]
+              },
+              {
+                "v": [
+                  4,
+                  6
+                ]
+              },
+              {
+                "v": [
+                  0,
+                  4
+                ]
+              },
+              {
+                "v": [
+                  1,
+                  5
+                ]
+              },
+              {
+                "v": [
+                  2,
+                  6
+                ]
+              },
+              {
+                "v": [
+                  3,
+                  7
+                ]
+              }
+            ],
+            "loops": [
+              {
+                "edge": 0,
+                "vert": 1
+              },
+              {
+                "edge": 1,
+                "vert": 0
+              },
+              {
+                "edge": 2,
+                "vert": 2
+              },
+              {
+                "edge": 3,
+                "vert": 3
+              },
+              {
+                "edge": 4,
+                "vert": 4
+              },
+              {
+                "edge": 5,
+                "vert": 5
+              },
+              {
+                "edge": 6,
+                "vert": 7
+              },
+              {
+                "edge": 7,
+                "vert": 6
+              },
+              {
+                "edge": 8,
+                "vert": 4
+              },
+              {
+                "edge": 0,
+                "vert": 0
+              },
+              {
+                "edge": 9,
+                "vert": 1
+              },
+              {
+                "edge": 4,
+                "vert": 5
+              },
+              {
+                "edge": 10,
+                "vert": 2
+              },
+              {
+                "edge": 6,
+                "vert": 6
+              },
+              {
+                "edge": 11,
+                "vert": 7
+              },
+              {
+                "edge": 2,
+                "vert": 3
+              },
+              {
+                "edge": 8,
+                "vert": 0
+              },
+              {
+                "edge": 7,
+                "vert": 4
+              },
+              {
+                "edge": 10,
+                "vert": 6
+              },
+              {
+                "edge": 1,
+                "vert": 2
+              },
+              {
+                "edge": 9,
+                "vert": 5
+              },
+              {
+                "edge": 3,
+                "vert": 1
+              },
+              {
+                "edge": 11,
+                "vert": 3
+              },
+              {
+                "edge": 5,
+                "vert": 7
+              }
+            ],
+            "polygons": [
+              {
+                "loop_start": 0,
+                "loop_total": 4
+              },
+              {
+                "loop_start": 4,
+                "loop_total": 4
+              },
+              {
+                "loop_start": 8,
+                "loop_total": 4
+              },
+              {
+                "loop_start": 12,
+                "loop_total": 4
+              },
+              {
+                "loop_start": 16,
+                "loop_total": 4
+              },
+              {
+                "loop_start": 20,
+                "loop_total": 4
+              }
+            ],
+            "vertices": [
+              {
+                "position": [
+                  2.5,
+                  1.625,
+                  3.625
+                ]
+              },
+              {
+                "position": [
+                  2.5,
+                  1.625,
+                  -3.625
+                ]
+              },
+              {
+                "position": [
+                  2.5,
+                  -1.625,
+                  3.625
+                ]
+              },
+              {
+                "position": [
+                  2.5,
+                  -1.625,
+                  -3.625
+                ]
+              },
+              {
+                "position": [
+                  -2.5,
+                  1.625,
+                  3.625
+                ]
+              },
+              {
+                "position": [
+                  -2.5,
+                  1.625,
+                  -3.625
+                ]
+              },
+              {
+                "position": [
+                  -2.5,
+                  -1.625,
+                  3.625
+                ]
+              },
+              {
+                "position": [
+                  -2.5,
+                  -1.625,
+                  -3.625
+                ]
+              }
+            ]
+          }
         },
         "bevy_ecs::name::Name": "Brush",
-        "bevy_camera::visibility::Visibility": "Inherited",
+        "jackdaw::draw_brush::BrushStableId": 1,
         "bevy_transform::components::transform::Transform": {
           "rotation": [
             0.0,

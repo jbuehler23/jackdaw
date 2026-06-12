@@ -29,6 +29,9 @@ pub fn swap_active_tab(world: &mut World, target: usize) {
     capture_active_tab(world);
     clear_scene_entities(world);
     activate_tab(world, target);
+    // The respawn above replaced every authored entity, so any live game
+    // projection now points at stale ids; rebuild it against the new tab.
+    crate::pie_projection::reproject_focused(world);
 }
 
 /// Spawn the target tab's snapshot into a world that has just been
@@ -37,12 +40,32 @@ pub fn swap_active_tab(world: &mut World, target: usize) {
 /// re-capture a tab that's being dropped).
 pub fn reactivate_after_close(world: &mut World, target: usize) {
     activate_tab(world, target);
+    crate::pie_projection::reproject_focused(world);
+}
+
+/// Re-spawn the active tab's authored scene from the live AST, reverting any
+/// overlaid live values. Equivalent to a tab switch to the same tab: captures
+/// the current AST, clears scene entities, then re-spawns from the captured
+/// snapshot. The AST itself is never mutated; it is the baseline that comes
+/// back after the clear.
+///
+/// Used by PIE stop to revert projected live state after the game process ends.
+/// Safe to call when nothing is projected (clear + respawn of an unchanged
+/// scene is harmless).
+pub(crate) fn respawn_scene_from_ast(world: &mut World) {
+    let active = world.resource::<Scenes>().active;
+    if world.resource::<Scenes>().tabs.is_empty() {
+        return;
+    }
+    capture_active_tab(world);
+    clear_scene_entities(world);
+    activate_tab(world, active);
 }
 
 /// Capture the live AST into the active tab and stash the per-tab
 /// history and view state. Pre-condition: a tab exists at
 /// `Scenes.active`.
-fn capture_active_tab(world: &mut World) {
+pub(crate) fn capture_active_tab(world: &mut World) {
     let active = world.resource::<Scenes>().active;
     let ast_snapshot = std::mem::take(&mut *world.resource_mut::<jackdaw_jsn::SceneJsnAst>());
     let view_state = capture_view_state(world);

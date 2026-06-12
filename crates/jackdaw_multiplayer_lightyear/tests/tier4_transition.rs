@@ -12,7 +12,7 @@
 use bevy::MinimalPlugins;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
-use jackdaw_multiplayer::{SpawnPoint, ZoneTransition};
+use jackdaw_multiplayer::{SpawnPoint, ZoneId, ZoneTransition};
 use jackdaw_multiplayer_lightyear::{
     CurrentZone, JackdawMultiplayerClientPlugin, JackdawMultiplayerServerPlugin,
 };
@@ -51,7 +51,7 @@ fn authored_trigger_moves_player_to_destination_zone_and_spawn() {
     server.world_mut().spawn((
         Transform::from_translation(P1),
         SpawnPoint {
-            zone: 1,
+            zone: ZoneId::from("1"),
             tag: String::new(),
         },
     ));
@@ -59,16 +59,16 @@ fn authored_trigger_moves_player_to_destination_zone_and_spawn() {
     server.world_mut().spawn((
         Transform::from_translation(P2),
         SpawnPoint {
-            zone: 2,
+            zone: ZoneId::from("2"),
             tag: "gate".to_string(),
         },
     ));
     // The trigger volume, centered at P1 (so the just-spawned player is inside it).
-    // half_extents = 2.0 on each axis; the player sits at P1's center → local ≈ 0.
+    // half_extents = 2.0 on each axis; the player sits at P1's center, local ~= 0.
     server.world_mut().spawn((
         Transform::from_translation(P1),
         ZoneTransition {
-            dest_zone: 2,
+            dest_zone: ZoneId::from("2"),
             dest_spawn_tag: "gate".to_string(),
             half_extents: Vec3::splat(2.0),
         },
@@ -95,7 +95,7 @@ fn authored_trigger_moves_player_to_destination_zone_and_spawn() {
     // Budget: connect + handshake + auto-spawn (with CurrentZone) + one FixedUpdate
     // where the trigger fires. ~1000 ticks is ample.
     let mut transitioned = false;
-    let mut last_zone: Option<u64> = None;
+    let mut last_zone: Option<ZoneId> = None;
     let mut last_pos: Option<Vec3> = None;
     for _ in 0..1000 {
         server.update();
@@ -106,9 +106,9 @@ fn authored_trigger_moves_player_to_destination_zone_and_spawn() {
         // `CurrentZone`, so this query targets the player entity.
         let mut q = server.world_mut().query::<(&CurrentZone, &Transform)>();
         if let Some((zone, tf)) = q.iter(server.world()).next() {
-            last_zone = Some(zone.0);
+            last_zone = Some(zone.0.clone());
             last_pos = Some(tf.translation);
-            if zone.0 == 2 && tf.translation.distance(P2) < 1.0e-3 {
+            if zone.0 == ZoneId::from("2") && tf.translation.distance(P2) < 1.0e-3 {
                 transitioned = true;
                 break;
             }

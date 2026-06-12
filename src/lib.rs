@@ -25,6 +25,7 @@ pub mod draw_brush;
 pub mod edit_mode_ops;
 pub mod entity_ops;
 pub mod face_grid;
+pub mod game_panel;
 pub mod gizmo_ops;
 pub mod gizmos;
 pub mod grid_ops;
@@ -51,6 +52,12 @@ pub mod extensions_dialog;
 pub mod file_ops;
 pub mod hot_reload;
 pub mod layout;
+pub mod live_edits;
+pub mod live_edits_ui;
+pub mod live_frame;
+pub mod live_frame_view;
+pub mod live_highlight;
+pub mod live_input;
 pub mod material_browser;
 pub mod material_preview;
 pub mod measure_tool;
@@ -62,6 +69,9 @@ pub mod operator_tooltip;
 pub mod physics_brush_bridge;
 pub mod physics_tool;
 pub mod pie;
+pub mod pie_menu;
+pub mod pie_mirror;
+pub mod pie_projection;
 pub mod prefab;
 pub mod project;
 pub mod project_files;
@@ -69,6 +79,7 @@ pub mod project_select;
 pub mod reflect_default;
 pub mod remote;
 pub mod restart;
+pub mod run_config;
 pub mod scene_io;
 pub mod scene_ops;
 pub mod scenes;
@@ -336,6 +347,11 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(extensions_dialog::ExtensionsDialogPlugin)
         .add_plugins(hot_reload::HotReloadPlugin)
         .add_plugins(pie::PiePlugin)
+        .add_plugins(live_frame_view::LiveFrameViewPlugin)
+        .add_plugins(live_input::LiveInputPlugin)
+        .add_plugins(game_panel::GamePanelPlugin)
+        .add_plugins(live_edits_ui::LiveEditsUiPlugin)
+        .add_plugins(pie_menu::PieMenuPlugin)
         .add_plugins(dock_ops::DockOpsPlugin)
         // Force-exit on `AppExit`: bypass wgpu device cleanup
         // and AsyncComputeTaskPool shutdown that otherwise hang
@@ -359,7 +375,7 @@ impl Plugin for EditorCorePlugin {
             Update,
             EditorInteractionSystems
                 .run_if(in_state(AppState::Editor))
-                .run_if(no_dialog_open),
+                .run_if(no_dialog_open.and(crate::live_edits_ui::stop_prompt_closed)),
         )
         .configure_sets(
             PostUpdate,
@@ -387,6 +403,7 @@ impl Plugin for EditorCorePlugin {
             OnEnter(AppState::Editor),
             (spawn_layout, init_layout, populate_menu).chain(),
         )
+        .add_systems(OnEnter(AppState::Editor), run_config::read_run_configs)
         .add_systems(
             Update,
             rebuild_menu_if_dirty.run_if(in_state(AppState::Editor)),
@@ -399,6 +416,12 @@ impl Plugin for EditorCorePlugin {
                 layout::update_toolbar_button_variants,
                 layout::update_active_document_display,
                 layout::update_tab_strip_highlights,
+                layout::update_pie_view_toggle_appearance,
+                layout::update_pie_view_header_accent,
+                layout::update_save_to_scene_button,
+                layout::update_pie_instance_cycle_button,
+                layout::update_window_mode_button,
+                layout::update_live_badge,
                 auto_hide_internal_entities,
                 decorate_timeline_tooltips,
                 discover_gltf_clips,
@@ -474,6 +497,7 @@ impl Plugin for ExtensionPlugin {
                 .register_extension::<builtin_extensions::CoreWindowsExtension>()
                 .register_extension::<builtin_extensions::ViewportExtension>()
                 .register_extension::<builtin_extensions::AssetBrowserExtension>()
+                .register_extension::<builtin_extensions::GamePanelExtension>()
                 .register_extension::<builtin_extensions::TimelineExtension>()
                 .register_extension::<builtin_extensions::TerminalExtension>()
                 .register_extension::<builtin_extensions::InspectorExtension>();

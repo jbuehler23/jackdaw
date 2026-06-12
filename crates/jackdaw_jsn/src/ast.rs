@@ -1,9 +1,70 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use rand::Rng;
 
 use bevy::reflect::{TypeRegistry, UnnamedField};
 use bevy::{prelude::*, reflect::NamedField};
 
 use crate::format::{JsnAssets, JsnEntity, JsnMetadata, JsnScene};
+
+/// Stable per-node identifier that persists in the `.jsn` and is attached to
+/// the spawned ECS entity. Lets a running game map a live entity back to the
+/// authored scene node it came from (PIE "save runtime values" needs this).
+///
+/// Like `BrushStableId`, it survives the snapshot respawn cycle and the
+/// save/load round-trip; unlike `BrushStableId`, it is carried as a structural
+/// field on the node (see `JsnEntityNode::id`) so it is the canonical on-disk
+/// form rather than just another reflected component.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug, Reflect)]
+#[reflect(Component, @crate::EditorHidden)]
+pub struct JsnNodeId(pub u64);
+
+/// Reflect type path for [`JsnNodeId`], used when projecting the structural
+/// node id to and from the reflected-component representation.
+pub const JSN_NODE_ID_TYPE_PATH: &str = "jackdaw_jsn::ast::JsnNodeId";
+
+/// Lower bound of the sparse id range. Ids below this are legacy values minted
+/// by the old monotonic-from-1 counter and can collide across sessions.
+pub const SPARSE_MIN: u64 = 1 << 32;
+/// Upper bound of the random seed draw. The counter is seeded below this and
+/// then advances freely, so minted ids are not clamped to it; the value leaves
+/// headroom below `u64::MAX` for a session to mint without wrapping.
+const SPARSE_MAX: u64 = 1 << 63;
+
+/// Process-global source of fresh node ids, seeded once from a random base in
+/// `[SPARSE_MIN, SPARSE_MAX)`. A random base keeps ids unique across processes
+/// and across independently-authored files: two sessions land in different
+/// ranges, so their ids never collide. Within a session ids stay monotonic.
+static NEXT_NODE_ID: LazyLock<AtomicU64> =
+    LazyLock::new(|| AtomicU64::new(rand::rng().random_range(SPARSE_MIN..SPARSE_MAX)));
+
+impl JsnNodeId {
+    /// Mint a fresh node id by advancing the global counter.
+    pub fn next() -> Self {
+        JsnNodeId(NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// Report whether a loaded scene carries node ids that break the global-key
+/// invariant: any duplicate id, any id below `SPARSE_MIN` (minted by the old
+/// counter), or any missing id. Such scenes are re-minted on load.
+pub fn needs_id_migration(scene: &JsnScene) -> bool {
+    let mut seen = HashSet::new();
+    for entity in &scene.scene {
+        match entity.id {
+            Some(id) if id >= SPARSE_MIN => {
+                if !seen.insert(id) {
+                    return true;
+                }
+            }
+            // Below the sparse range, or no id at all: legacy, must heal.
+            _ => return true,
+        }
+    }
+    false
+}
 
 /// In-memory scene document  -- the single source of truth for scene data.
 ///
@@ -31,6 +92,10 @@ pub struct SceneJsnAst {
 /// lives in `components` as `serde_json::Value`.
 #[derive(Clone, PartialEq)]
 pub struct JsnEntityNode {
+    /// Stable id for this node, persisted in the `.jsn` and attached to the
+    /// spawned ECS entity. `None` only transiently before a fresh id is
+    /// minted (`from_jsn_scene`, `create_node`, `add_root`, `add_child`).
+    pub id: Option<JsnNodeId>,
     /// Parent index into `SceneJsnAst::nodes`.
     pub parent: Option<usize>,
     /// All component data keyed by type path (e.g. `"bevy_transform::components::transform::Transform"`).
@@ -56,7 +121,7 @@ impl SceneJsnAst {
     /// `entity_map` maps JSN entity index -> spawned ECS entity.
     pub fn from_jsn_scene(scene: &JsnScene, entity_map: &[Entity]) -> Self {
         let mut ecs_to_jsn = HashMap::new();
-        let nodes = scene
+        let mut nodes: Vec<JsnEntityNode> = scene
             .scene
             .iter()
             .enumerate()
@@ -65,14 +130,42 @@ impl SceneJsnAst {
                 if let Some(e) = ecs_entity {
                     ecs_to_jsn.insert(e, i);
                 }
+                // The structural `id` is canonical. Fall back to a stray
+                // `JsnNodeId` reflected into `components` (defensive against
+                // older save paths), and finally mint a fresh id so every
+                // loaded node is identifiable.
+                let mut components = jsn.components.clone();
+                let id = jsn
+                    .id
+                    .map(JsnNodeId)
+                    .or_else(|| {
+                        components
+                            .remove(JSN_NODE_ID_TYPE_PATH)
+                            .as_ref()
+                            .and_then(serde_json::Value::as_u64)
+                            .map(JsnNodeId)
+                    })
+                    .unwrap_or_else(JsnNodeId::next);
                 JsnEntityNode {
+                    id: Some(id),
                     parent: jsn.parent,
-                    components: jsn.components.clone(),
+                    components,
                     derived_components: HashSet::new(),
                     ecs_entity,
                 }
             })
             .collect();
+
+        // Older scenes minted ids from a per-process counter that reset every
+        // run, so a loaded scene can carry duplicate or low-range ids that
+        // collapse distinct nodes onto one entity in the by-id match. Re-mint
+        // every node to a sparse id when that is detected. Parent links are
+        // stored by index, so they are unaffected.
+        if needs_id_migration(scene) {
+            for node in &mut nodes {
+                node.id = Some(JsnNodeId::next());
+            }
+        }
 
         Self {
             nodes,
@@ -88,6 +181,7 @@ impl SceneJsnAst {
             .nodes
             .iter()
             .map(|node| JsnEntity {
+                id: node.id.map(|id| id.0),
                 parent: node.parent,
                 components: node.components.clone(),
             })
@@ -117,6 +211,23 @@ impl SceneJsnAst {
             .and_then(|idx| self.nodes.get_mut(idx))
     }
 
+    /// Find the index of the node carrying the given stable [`JsnNodeId`].
+    ///
+    /// Linear scan over `nodes`; ids are unique, so the first match is the
+    /// only one. Used to map a running game's live entity back to its
+    /// authored node (the PIE "save runtime values" path).
+    pub fn node_index_by_id(&self, id: JsnNodeId) -> Option<usize> {
+        self.nodes.iter().position(|n| n.id == Some(id))
+    }
+
+    /// Look up the editor preview ECS entity for the node carrying the given
+    /// stable [`JsnNodeId`]. `None` when no node has that id, or the matching
+    /// node has no preview entity (e.g. an inherited node spawned ECS-only).
+    pub fn entity_for_node_id(&self, id: JsnNodeId) -> Option<Entity> {
+        let idx = self.node_index_by_id(id)?;
+        self.nodes.get(idx).and_then(|n| n.ecs_entity)
+    }
+
     /// Mark a node as dirty so its ECS entity will be re-synced.
     pub fn mark_dirty(&mut self, entity: Entity) {
         if let Some(&idx) = self.ecs_to_jsn.get(&entity) {
@@ -140,6 +251,7 @@ impl SceneJsnAst {
         let parent_idx = parent.and_then(|p| self.ecs_to_jsn.get(&p).copied());
         let idx = self.nodes.len();
         self.nodes.push(JsnEntityNode {
+            id: Some(JsnNodeId::next()),
             parent: parent_idx,
             components: HashMap::new(),
             derived_components: HashSet::new(),
@@ -208,12 +320,13 @@ impl SceneJsnAst {
         registry: &TypeRegistry,
     ) -> Option<&serde_json::Value> {
         let component = self.get_component(entity, type_path)?;
-        let registration = registry.get_with_type_path(type_path)?;
-        typed_json_path_get(component, field_path, registration, registry)
+        get_field_in_component_json(component, type_path, field_path, registry)
     }
 
     /// Set a nested field within a component's JSON by dotted path, marking dirty.
     /// Uses the type registry to resolve named fields to array indices.
+    /// An empty `field_path` writes the whole component, inserting the entry
+    /// when the component is not yet authored on the node.
     pub fn set_component_field(
         &mut self,
         entity: Entity,
@@ -222,6 +335,13 @@ impl SceneJsnAst {
         value: serde_json::Value,
         registry: &TypeRegistry,
     ) {
+        if field_path.is_empty() {
+            if let Some(node) = self.node_for_entity_mut(entity) {
+                node.components.insert(type_path.to_string(), value);
+            }
+            self.mark_dirty(entity);
+            return;
+        }
         let registration = registry.get_with_type_path(type_path);
         if let Some(node) = self.node_for_entity_mut(entity)
             && let Some(component) = node.components.get_mut(type_path)
@@ -238,6 +358,7 @@ impl SceneJsnAst {
     pub fn add_root(&mut self) -> usize {
         let idx = self.nodes.len();
         self.nodes.push(JsnEntityNode {
+            id: Some(JsnNodeId::next()),
             parent: None,
             components: HashMap::new(),
             derived_components: HashSet::new(),
@@ -250,6 +371,7 @@ impl SceneJsnAst {
     pub fn add_child(&mut self, parent: usize) -> usize {
         let idx = self.nodes.len();
         self.nodes.push(JsnEntityNode {
+            id: Some(JsnNodeId::next()),
             parent: Some(parent),
             components: HashMap::new(),
             derived_components: HashSet::new(),
@@ -343,6 +465,9 @@ impl SceneJsnAst {
             };
             let dst_idx = self.nodes.len();
             self.nodes.push(JsnEntityNode {
+                // A clone is a new node, so it gets a fresh id rather than
+                // sharing the source's (mirrors paste minting fresh ids).
+                id: Some(JsnNodeId::next()),
                 parent: dst_parent,
                 components: src_node.components.clone(),
                 derived_components: src_node.derived_components.clone(),
@@ -387,6 +512,44 @@ impl SceneJsnAst {
 // serializes as [x, y, z] but reflection paths use `translation.x`).
 
 use bevy::reflect::{EnumInfo, TypeInfo, TypeRegistration, VariantInfo};
+
+/// Read a nested field by dotted path from a standalone component JSON value,
+/// resolving named fields to array indices via the type registry. Uses the
+/// same path syntax as [`set_field_in_component_json`]: dot-separated
+/// segments, bracket notation for list elements (e.g. `faces[0]`), and
+/// automatic enum-variant unwrapping. An empty `field_path` returns the whole
+/// component value. Returns `None` when `type_path` is not registered or any
+/// path segment is absent.
+pub fn get_field_in_component_json<'a>(
+    component: &'a serde_json::Value,
+    type_path: &str,
+    field_path: &str,
+    registry: &TypeRegistry,
+) -> Option<&'a serde_json::Value> {
+    let registration = registry.get_with_type_path(type_path)?;
+    typed_json_path_get(component, field_path, registration, registry)
+}
+
+/// Set a nested field by dotted path inside a standalone component JSON
+/// value, resolving named fields to array indices via the type registry.
+///
+/// This is the same navigation [`SceneJsnAst::set_component_field`] runs,
+/// exposed for callers that hold a component value outside the AST (the
+/// PIE live mirror keeps component JSON keyed by type path). `component`
+/// is mutated in place; a `field_path` of `""` replaces the whole value.
+/// A no-op when `type_path` isn't registered.
+pub fn set_field_in_component_json(
+    component: &mut serde_json::Value,
+    type_path: &str,
+    field_path: &str,
+    value: serde_json::Value,
+    registry: &TypeRegistry,
+) {
+    let Some(registration) = registry.get_with_type_path(type_path) else {
+        return;
+    };
+    typed_json_path_set(component, field_path, value, registration, registry);
+}
 
 /// Resolve a field name to an array index using type info.
 /// Returns `None` if the type doesn't have named fields or the name isn't found.
@@ -718,5 +881,484 @@ fn set_json_field(
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::reflect::serde::TypedReflectSerializer;
+
+    /// Build the canonical reflect JSON for a value, the same form the PIE
+    /// live mirror stores and the game's `TypedReflectDeserializer` expects.
+    fn to_canonical_json<T: bevy::reflect::PartialReflect>(
+        value: &T,
+        registry: &TypeRegistry,
+    ) -> serde_json::Value {
+        let serializer = TypedReflectSerializer::new(value, registry);
+        serde_json::to_value(&serializer).expect("serialize reflected value")
+    }
+
+    #[test]
+    fn set_field_in_component_json_sets_nested_array_field() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<Transform>();
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        let mut component = to_canonical_json(&Transform::from_xyz(1.0, 2.0, 3.0), &registry);
+
+        // `Vec3` serializes as `[x, y, z]`, so `translation.x` must resolve
+        // the named axis to array index 0 via the registry.
+        set_field_in_component_json(
+            &mut component,
+            type_path,
+            "translation.x",
+            serde_json::json!(9.5),
+            &registry,
+        );
+
+        // The edited axis changed; the siblings and other fields did not,
+        // so the merged value is still a full, deserializable component.
+        let translation = &component["translation"];
+        assert_eq!(translation[0], 9.5);
+        assert_eq!(translation[1], 2.0);
+        assert_eq!(translation[2], 3.0);
+        assert!(component.get("rotation").is_some());
+        assert!(component.get("scale").is_some());
+    }
+
+    #[test]
+    fn set_field_in_component_json_empty_path_replaces_value() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<Transform>();
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        let mut component = to_canonical_json(&Transform::IDENTITY, &registry);
+        let replacement = to_canonical_json(&Transform::from_xyz(4.0, 5.0, 6.0), &registry);
+
+        set_field_in_component_json(
+            &mut component,
+            type_path,
+            "",
+            replacement.clone(),
+            &registry,
+        );
+
+        assert_eq!(component, replacement);
+    }
+
+    #[test]
+    fn set_field_in_component_json_unregistered_type_is_noop() {
+        let registry = TypeRegistry::new();
+        let mut component = serde_json::json!({ "translation": [0.0, 0.0, 0.0] });
+        let before = component.clone();
+
+        set_field_in_component_json(
+            &mut component,
+            "not::A::RegisteredType",
+            "translation.x",
+            serde_json::json!(1.0),
+            &registry,
+        );
+
+        assert_eq!(component, before);
+    }
+
+    #[test]
+    fn get_field_reads_named_struct_field() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<Transform>();
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        let component = to_canonical_json(&Transform::from_xyz(1.0, 2.0, 3.0), &registry);
+
+        // `Vec3` serializes as `[x, y, z]`; the named segment resolves via the registry.
+        let x = get_field_in_component_json(&component, type_path, "translation.x", &registry);
+        assert_eq!(x, Some(&serde_json::json!(1.0)));
+
+        let translation =
+            get_field_in_component_json(&component, type_path, "translation", &registry);
+        assert_eq!(translation, Some(&serde_json::json!([1.0, 2.0, 3.0])));
+    }
+
+    #[test]
+    fn get_field_empty_path_returns_whole_component() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<Transform>();
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        let component = to_canonical_json(&Transform::IDENTITY, &registry);
+
+        let result = get_field_in_component_json(&component, type_path, "", &registry);
+        assert_eq!(result, Some(&component));
+    }
+
+    #[test]
+    fn get_field_missing_path_returns_none() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<Transform>();
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        let component = to_canonical_json(&Transform::IDENTITY, &registry);
+
+        let result =
+            get_field_in_component_json(&component, type_path, "does_not_exist", &registry);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_field_unregistered_type_returns_none() {
+        let registry = TypeRegistry::new();
+        let component = serde_json::json!({ "translation": [0.0, 0.0, 0.0] });
+
+        let result = get_field_in_component_json(
+            &component,
+            "not::A::RegisteredType",
+            "translation",
+            &registry,
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_field_round_trips_with_set_field() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<Transform>();
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        let mut component = to_canonical_json(&Transform::IDENTITY, &registry);
+
+        set_field_in_component_json(
+            &mut component,
+            type_path,
+            "translation.y",
+            serde_json::json!(7.0),
+            &registry,
+        );
+
+        let result = get_field_in_component_json(&component, type_path, "translation.y", &registry);
+        assert_eq!(result, Some(&serde_json::json!(7.0)));
+    }
+
+    // Local enum for the enum-unwrap test. Mirrors the `ColliderConstructor`
+    // pattern referenced in `typed_json_path_get`.
+    #[derive(Reflect, Clone)]
+    enum TestShape {
+        Sphere { radius: f32 },
+        Box { half_x: f32, half_y: f32 },
+    }
+
+    // Local struct with a list field for the bracket-index test.
+    #[derive(Reflect, Clone)]
+    struct TestList {
+        items: Vec<f32>,
+    }
+
+    #[test]
+    fn get_field_unwraps_enum_variant_and_reads_field() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<TestShape>();
+        registry.register::<f32>();
+
+        let type_path = "jackdaw_jsn::ast::tests::TestShape";
+        // Bevy's reflect serializer emits struct-variants as `{"Sphere": {"radius": 1.0}}`.
+        let component = serde_json::json!({ "Sphere": { "radius": 1.0_f32 } });
+
+        let result = get_field_in_component_json(&component, type_path, "radius", &registry);
+        assert_eq!(result, Some(&serde_json::json!(1.0_f32)));
+    }
+
+    #[test]
+    fn get_field_bracket_index_reads_list_element() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<TestList>();
+        registry.register::<Vec<f32>>();
+        registry.register::<f32>();
+
+        let type_path = "jackdaw_jsn::ast::tests::TestList";
+        let component = to_canonical_json(
+            &TestList {
+                items: vec![10.0, 20.0, 30.0],
+            },
+            &registry,
+        );
+
+        let result = get_field_in_component_json(&component, type_path, "items[1]", &registry);
+        assert_eq!(result, Some(&serde_json::json!(20.0_f32)));
+    }
+
+    /// A freshly authored node gets a `JsnNodeId`, and a round-trip through
+    /// `to_jsn_scene` / `from_jsn_scene` preserves each node's id.
+    #[test]
+    fn node_ids_survive_save_load_round_trip() {
+        let mut ast = SceneJsnAst::default();
+        let root = ast.add_root();
+        let child = ast.add_child(root);
+
+        let root_id = ast.nodes[root].id.expect("root node should have an id");
+        let child_id = ast.nodes[child].id.expect("child node should have an id");
+        assert_ne!(root_id, child_id, "minted ids must be distinct");
+
+        let scene = ast.to_jsn_scene(JsnMetadata::default());
+        assert_eq!(scene.scene[root].id, Some(root_id.0));
+        assert_eq!(scene.scene[child].id, Some(child_id.0));
+
+        let reloaded = SceneJsnAst::from_jsn_scene(&scene, &[]);
+        assert_eq!(reloaded.nodes[root].id, Some(root_id));
+        assert_eq!(reloaded.nodes[child].id, Some(child_id));
+    }
+
+    /// Reparenting a node keeps its id; only the parent pointer changes.
+    #[test]
+    fn reparent_keeps_node_id() {
+        let mut ast = SceneJsnAst::default();
+        let a = ast.add_root();
+        let b = ast.add_root();
+        let original = ast.nodes[b].id.expect("node should have an id");
+
+        ast.nodes[b].parent = Some(a);
+
+        assert_eq!(ast.nodes[b].id, Some(original));
+    }
+
+    /// `node_index_by_id` finds the node carrying a given stable id and
+    /// `entity_for_node_id` returns the preview entity bound to it.
+    #[test]
+    fn node_lookup_by_stable_id() {
+        let mut ast = SceneJsnAst::default();
+        let a = ast.add_root();
+        let b = ast.add_root();
+        let a_id = ast.nodes[a].id.expect("node should have an id");
+        let b_id = ast.nodes[b].id.expect("node should have an id");
+
+        // Bind a preview entity to node `b` only.
+        let b_entity = Entity::from_raw_u32(7).expect("valid entity");
+        ast.nodes[b].ecs_entity = Some(b_entity);
+        ast.ecs_to_jsn.insert(b_entity, b);
+
+        assert_eq!(ast.node_index_by_id(a_id), Some(a));
+        assert_eq!(ast.node_index_by_id(b_id), Some(b));
+        assert_eq!(ast.entity_for_node_id(b_id), Some(b_entity));
+        // Node `a` has no preview entity, so there is nothing to return.
+        assert_eq!(ast.entity_for_node_id(a_id), None);
+    }
+
+    /// An id that no node carries resolves to nothing for either lookup.
+    #[test]
+    fn node_lookup_missing_id_is_none() {
+        let mut ast = SceneJsnAst::default();
+        ast.add_root();
+        let absent = JsnNodeId::next();
+        assert_eq!(ast.node_index_by_id(absent), None);
+        assert_eq!(ast.entity_for_node_id(absent), None);
+    }
+
+    /// Promoting runtime values into an authored node (the PIE "save to
+    /// scene" path): given a node with a stable id and a preview entity,
+    /// writing a map of component values through `set_component` leaves the
+    /// node's `components` holding exactly those values and marks it dirty.
+    #[test]
+    fn promote_runtime_components_into_node_by_id() {
+        let mut ast = SceneJsnAst::default();
+        let node = ast.add_root();
+        let node_id = ast.nodes[node].id.expect("node should have an id");
+        // Seed a stale authored value to prove the promote overwrites it.
+        ast.nodes[node].components.insert(
+            "bevy_transform::components::transform::Transform".to_string(),
+            serde_json::json!({ "translation": [0.0, 0.0, 0.0] }),
+        );
+
+        let entity = Entity::from_raw_u32(3).expect("valid entity");
+        ast.nodes[node].ecs_entity = Some(entity);
+        ast.ecs_to_jsn.insert(entity, node);
+
+        // Runtime snapshot keyed by type path, as the PIE mirror stores it.
+        let runtime: Vec<(String, serde_json::Value)> = vec![
+            (
+                "bevy_transform::components::transform::Transform".to_string(),
+                serde_json::json!({ "translation": [1.0, 2.0, 3.0] }),
+            ),
+            (
+                "game::Health".to_string(),
+                serde_json::json!({ "current": 42 }),
+            ),
+        ];
+
+        let target = ast.entity_for_node_id(node_id).expect("preview entity");
+        for (type_path, value) in &runtime {
+            ast.set_component(target, type_path, value.clone());
+        }
+
+        let promoted = &ast.nodes[node].components;
+        assert_eq!(
+            promoted["bevy_transform::components::transform::Transform"],
+            serde_json::json!({ "translation": [1.0, 2.0, 3.0] }),
+        );
+        assert_eq!(
+            promoted["game::Health"],
+            serde_json::json!({ "current": 42 })
+        );
+        assert!(
+            ast.dirty_indices.contains(&node),
+            "promote must mark the node dirty so the preview ECS re-syncs"
+        );
+    }
+
+    /// Build a `JsnScene` from `(id, parent)` pairs. `id == None` omits the
+    /// structural id; `parent == None` omits the parent pointer.
+    fn scene_from_nodes(nodes: &[(Option<u64>, Option<usize>)]) -> JsnScene {
+        let scene: Vec<_> = nodes
+            .iter()
+            .map(|(id, parent)| {
+                let mut e = serde_json::json!({ "components": {} });
+                if let Some(id) = id {
+                    e["id"] = serde_json::json!(id);
+                }
+                if let Some(parent) = parent {
+                    e["parent"] = serde_json::json!(parent);
+                }
+                e
+            })
+            .collect();
+        let json = serde_json::json!({
+            "jsn": { "format_version": [3, 0, 0], "editor_version": "test", "bevy_version": "0.18" },
+            "metadata": { "name": "t" },
+            "assets": {},
+            "editor": null,
+            "scene": scene,
+        });
+        serde_json::from_value(json).expect("scene should parse")
+    }
+
+    #[test]
+    fn needs_migration_detects_duplicate_ids() {
+        let scene = scene_from_nodes(&[(Some(SPARSE_MIN), None), (Some(SPARSE_MIN), None)]);
+        assert!(
+            needs_id_migration(&scene),
+            "two equal ids must trigger migration"
+        );
+    }
+
+    #[test]
+    fn needs_migration_detects_legacy_low_ids() {
+        let scene = scene_from_nodes(&[(Some(9), None), (Some(10), None)]);
+        assert!(
+            needs_id_migration(&scene),
+            "ids below SPARSE_MIN must trigger migration"
+        );
+    }
+
+    #[test]
+    fn needs_migration_detects_missing_id() {
+        let scene = scene_from_nodes(&[(None, None)]);
+        assert!(
+            needs_id_migration(&scene),
+            "a node with no id must trigger migration"
+        );
+    }
+
+    #[test]
+    fn needs_migration_false_for_sparse_unique() {
+        let scene = scene_from_nodes(&[(Some(SPARSE_MIN), None), (Some(SPARSE_MIN + 1), None)]);
+        assert!(
+            !needs_id_migration(&scene),
+            "distinct sparse ids need no migration"
+        );
+    }
+
+    /// Minted ids land in the sparse range and never repeat back-to-back.
+    #[test]
+    fn minted_ids_are_sparse_and_unique() {
+        let a = JsnNodeId::next();
+        let b = JsnNodeId::next();
+        assert_ne!(a, b, "successive mints must differ");
+        assert!(a.0 >= SPARSE_MIN, "minted id must be in the sparse range");
+        assert!(b.0 >= SPARSE_MIN, "minted id must be in the sparse range");
+    }
+
+    /// Colliding ids are healed to unique sparse ids on load.
+    #[test]
+    fn from_jsn_scene_dedupes_colliding_ids() {
+        let scene = scene_from_nodes(&[(Some(10), None), (Some(10), None), (Some(10), None)]);
+        let ast = SceneJsnAst::from_jsn_scene(&scene, &[]);
+        let ids: Vec<u64> = ast
+            .nodes
+            .iter()
+            .map(|n| n.id.expect("healed id").0)
+            .collect();
+        let unique: HashSet<u64> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), ids.len(), "healed ids must be unique");
+        assert!(
+            ids.iter().all(|id| *id >= SPARSE_MIN),
+            "healed ids must be sparse"
+        );
+    }
+
+    /// Unique but legacy-low ids are lifted into the sparse range on load.
+    #[test]
+    fn from_jsn_scene_remints_legacy_low_ids() {
+        let scene = scene_from_nodes(&[(Some(1), None), (Some(2), None)]);
+        let ast = SceneJsnAst::from_jsn_scene(&scene, &[]);
+        assert!(
+            ast.nodes
+                .iter()
+                .all(|n| n.id.expect("healed id").0 >= SPARSE_MIN)
+        );
+    }
+
+    /// A scene whose ids are already sparse and unique loads untouched.
+    #[test]
+    fn from_jsn_scene_preserves_sparse_unique_ids() {
+        let scene = scene_from_nodes(&[(Some(SPARSE_MIN + 5), None), (Some(SPARSE_MIN + 6), None)]);
+        let ast = SceneJsnAst::from_jsn_scene(&scene, &[]);
+        assert_eq!(ast.nodes[0].id, Some(JsnNodeId(SPARSE_MIN + 5)));
+        assert_eq!(ast.nodes[1].id, Some(JsnNodeId(SPARSE_MIN + 6)));
+    }
+
+    /// Re-minting changes ids but leaves the index-based parent links intact.
+    #[test]
+    fn from_jsn_scene_remint_preserves_parent_links() {
+        let scene = scene_from_nodes(&[(Some(10), None), (Some(10), Some(0))]);
+        let ast = SceneJsnAst::from_jsn_scene(&scene, &[]);
+        assert_eq!(
+            ast.nodes[1].parent,
+            Some(0),
+            "parent index survives re-mint"
+        );
+        assert_ne!(
+            ast.nodes[0].id, ast.nodes[1].id,
+            "ids are unique after heal"
+        );
+    }
+
+    /// A legacy `JsnScene` with no `id` field still loads, minting fresh ids
+    /// for every node that lacks one.
+    #[test]
+    fn legacy_scene_without_id_mints_fresh_ids() {
+        let json = serde_json::json!({
+            "jsn": {
+                "format_version": [3, 0, 0],
+                "editor_version": "test",
+                "bevy_version": "0.18"
+            },
+            "metadata": { "name": "legacy" },
+            "assets": {},
+            "editor": null,
+            "scene": [
+                { "components": {} },
+                { "parent": 0, "components": {} }
+            ]
+        });
+        let scene: JsnScene = serde_json::from_value(json).expect("legacy scene should parse");
+        assert_eq!(scene.scene[0].id, None, "legacy entity has no on-disk id");
+
+        let ast = SceneJsnAst::from_jsn_scene(&scene, &[]);
+        let id0 = ast.nodes[0]
+            .id
+            .expect("legacy node 0 should be minted an id");
+        let id1 = ast.nodes[1]
+            .id
+            .expect("legacy node 1 should be minted an id");
+        assert_ne!(id0, id1, "minted ids must be distinct");
     }
 }

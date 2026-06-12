@@ -32,6 +32,39 @@ fn has_primary_selection(selection: Res<Selection>) -> bool {
     selection.primary().is_some()
 }
 
+/// When the inspector is in PIE Live mode and `entity` is a projected
+/// preview entity, returns its game-side bits so component add/remove can
+/// be streamed to the running game instead of mutating the authored scene.
+/// Returns `None` for ordinary Scene edits.
+fn pie_live_target_bits(world: &mut World, entity: Entity) -> Option<u64> {
+    use crate::pie_mirror::PieViewMode;
+
+    if *world.resource::<PieViewMode>() != PieViewMode::Live {
+        return None;
+    }
+    world
+        .resource::<crate::pie_projection::PieProjection>()
+        .by_bits
+        .iter()
+        .find_map(|(bits, &e)| if e == entity { Some(*bits) } else { None })
+}
+
+/// Build a default value for `type_path` in canonical reflect JSON (the
+/// form the game's `TypedReflectDeserializer` expects), for streaming an
+/// `AddComponent` to the running game. `None` when the type can't be
+/// default-constructed or serialized.
+fn default_component_json(world: &World, type_path: &str) -> Option<serde_json::Value> {
+    use bevy::reflect::serde::TypedReflectSerializer;
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let registration = registry.get_with_type_path(type_path)?;
+    let default =
+        crate::reflect_default::build_reflective_default(registration.type_id(), &registry)?;
+    let serializer = TypedReflectSerializer::new(default.as_partial_reflect(), &registry);
+    serde_json::to_value(&serializer).ok()
+}
+
 /// Look up `(ComponentId, TypeId)` for a type path, registering
 /// the component on a throwaway entity first if the world hasn't
 /// seen it yet. Without this, types only `register_type`'d
@@ -101,6 +134,21 @@ pub(crate) fn component_add(
     let entity = params.as_entity("entity")?;
     let type_path = params.as_str("type_path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
+        // Live mode: stream the add to the running game; the next state
+        // delta repopulates the mirror and the inspector.
+        if let Some(bits) = pie_live_target_bits(world, entity) {
+            let value =
+                default_component_json(world, &type_path).unwrap_or(serde_json::Value::Null);
+            crate::pie::send_control_to_focused(
+                world,
+                jackdaw_pie_protocol::ControlEvent::AddComponent {
+                    entity: bits,
+                    type_path,
+                    value,
+                },
+            );
+            return;
+        }
         let Some((component_id, type_id)) = component_id_for_path(world, &type_path) else {
             warn!(
                 "component.add: no registration for type_path '{type_path}'. \
@@ -138,6 +186,17 @@ pub(crate) fn component_remove(
     let entity = params.as_entity("entity")?;
     let type_path = params.as_str("type_path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
+        // Live mode: stream the removal to the running game.
+        if let Some(bits) = pie_live_target_bits(world, entity) {
+            crate::pie::send_control_to_focused(
+                world,
+                jackdaw_pie_protocol::ControlEvent::RemoveComponent {
+                    entity: bits,
+                    type_path,
+                },
+            );
+            return;
+        }
         let Some((component_id, _)) = component_id_for_path(world, &type_path) else {
             return;
         };

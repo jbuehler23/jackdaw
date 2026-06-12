@@ -24,6 +24,15 @@ pub use jackdaw_jsn::{
     GltfSource, PropertyValue, SkipSerialization,
 };
 
+#[cfg(feature = "pie")]
+mod pie;
+#[cfg(feature = "pie")]
+mod pie_frames;
+#[cfg(feature = "pie")]
+mod pie_windowless;
+#[cfg(feature = "pie")]
+pub use pie_windowless::{maybe_windowless, windowless_requested};
+
 pub mod prelude {
     pub use crate::{
         EditorCategory, EditorDescription, EditorHidden, JackdawCatalog, JackdawCatalogPath,
@@ -50,6 +59,17 @@ impl Plugin for JackdawPlugin {
             Update,
             (clear_modified_scene_roots, spawn_loaded_scenes).chain(),
         );
+
+        // When `JACKDAW_PIE` is set, open the ipc-channel link to the editor
+        // and attach the PIE stream / control systems. A connect failure logs
+        // and leaves the runtime untouched.
+        #[cfg(feature = "pie")]
+        if let Some(cfg) = pie::pie_config() {
+            match jackdaw_pie_protocol::connect(&cfg.server) {
+                Ok(transport) => pie::attach_pie(app, transport),
+                Err(err) => bevy::log::error!("PIE connect failed: {err}"),
+            }
+        }
     }
 }
 
@@ -92,6 +112,11 @@ pub struct JackdawCatalogPath(pub PathBuf);
 pub struct JackdawScene {
     jsn: JsnScene,
     parent_path: PathBuf,
+    /// Source file stem (`starter` from `zones/starter.jsn`), captured at
+    /// load time. Used to give the spawned scene root a readable `Name` so
+    /// the editor's Live tree shows the scene name instead of an entity id.
+    /// `None` when the asset was built without a source path.
+    stem: Option<String>,
 }
 
 impl JackdawScene {
@@ -99,7 +124,21 @@ impl JackdawScene {
     /// Used by integration tests that drive scene-load codepaths
     /// without a real `.jsn` file on disk.
     pub fn new(jsn: JsnScene, parent_path: PathBuf) -> Self {
-        Self { jsn, parent_path }
+        Self {
+            jsn,
+            parent_path,
+            stem: None,
+        }
+    }
+
+    /// Like [`JackdawScene::new`] but with an explicit source file stem, so
+    /// tests can exercise the root-naming path without a real `.jsn` file.
+    pub fn with_stem(jsn: JsnScene, parent_path: PathBuf, stem: Option<String>) -> Self {
+        Self {
+            jsn,
+            parent_path,
+            stem,
+        }
     }
 }
 
@@ -155,14 +194,17 @@ impl AssetLoader for JackdawSceneLoader {
             },
         };
 
-        let parent_path = load_context
-            .path()
-            .path()
-            .parent()
-            .unwrap_or(Path::new(""))
-            .to_owned();
+        let source_path = load_context.path().path();
+        let parent_path = source_path.parent().unwrap_or(Path::new("")).to_owned();
+        let stem = source_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned());
 
-        Ok(JackdawScene { jsn, parent_path })
+        Ok(JackdawScene {
+            jsn,
+            parent_path,
+            stem,
+        })
     }
 
     fn extensions(&self) -> &[&str] {
@@ -230,6 +272,7 @@ fn spawn_loaded_scenes(
         };
         let jsn = scene.jsn.clone();
         let parent_path = scene.parent_path.clone();
+        let stem = scene.stem.clone();
 
         let catalog_assets = world.resource::<JackdawCatalog>().handles.clone();
         let local_assets = load_inline_assets(world, &jsn.assets, &parent_path, &catalog_assets);
@@ -241,6 +284,27 @@ fn spawn_loaded_scenes(
             &local_assets,
             &catalog_assets,
         );
+
+        // Give the container root a readable name from the scene's file
+        // stem so the editor's Live tree shows the scene name instead of an
+        // entity id. Never overwrite an author-supplied name, and never
+        // insert an empty one.
+        if world.get::<Name>(root_entity).is_none()
+            && let Some(stem) = stem.filter(|s| !s.is_empty())
+        {
+            world.entity_mut(root_entity).insert(Name::new(stem));
+        }
+
+        // Tag the container so the editor's outliner classifies it as a scene
+        // root and shows the scene icon. The tag streams in the snapshot.
+        if world
+            .get::<jackdaw_jsn::SceneRootTag>(root_entity)
+            .is_none()
+        {
+            world
+                .entity_mut(root_entity)
+                .insert(jackdaw_jsn::SceneRootTag);
+        }
 
         world.entity_mut(root_entity).insert(SceneSpawned);
     }
@@ -310,9 +374,12 @@ fn spawn_scene_entities(
                 &registry_guard,
                 &mut processor,
             );
-            let Ok(reflected) = deserializer.deserialize(value) else {
-                warn!("Failed to deserialize '{type_path}'; skipping");
-                continue;
+            let reflected = match deserializer.deserialize(value) {
+                Ok(reflected) => reflected,
+                Err(err) => {
+                    warn!("Failed to deserialize '{type_path}': {err}; skipping");
+                    continue;
+                }
             };
 
             if type_path == TRANSFORM_TYPE_PATH {
@@ -360,6 +427,16 @@ fn spawn_scene_entities(
             ))
             .id();
         spawned[i] = entity;
+
+        // Attach the stable authored-node id so the PIE mirror can map
+        // this runtime entity back to its scene node. Present only when
+        // the scene was saved with node id support; legacy entries are
+        // left without a JsnNodeId rather than minting a new one here.
+        if let Some(raw_id) = jsn.id {
+            world
+                .entity_mut(entity)
+                .insert(jackdaw_jsn::JsnNodeId(raw_id));
+        }
 
         // User components on top. `On<Insert, T>` fires here with
         // GlobalTransform / InheritedVisibility already correct.

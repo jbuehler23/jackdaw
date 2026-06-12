@@ -5,7 +5,7 @@
 use bevy::MinimalPlugins;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
-use jackdaw_multiplayer::SpawnPoint;
+use jackdaw_multiplayer::{SpawnPoint, ZoneId};
 use jackdaw_multiplayer_lightyear::{
     JackdawMultiplayerClientPlugin, JackdawMultiplayerServerPlugin, PlayerSpawner, SpawnPolicy,
 };
@@ -29,7 +29,7 @@ fn manual_server(addr: std::net::SocketAddr) -> App {
     app.world_mut().spawn((
         Transform::default(),
         SpawnPoint {
-            zone: 1,
+            zone: ZoneId::from("1"),
             tag: String::new(),
         },
     ));
@@ -83,7 +83,7 @@ fn spawn_on_connected(
     mut spawner: PlayerSpawner,
     mut done: ResMut<Spawned>,
 ) {
-    if spawner.spawn(ev.client, 1, "").is_some() {
+    if spawner.spawn(ev.client, &ZoneId::from("1"), "").is_some() {
         done.0 = true;
     }
 }

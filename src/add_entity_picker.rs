@@ -11,6 +11,8 @@ use jackdaw_feathers::picker::{
 };
 use jackdaw_feathers::tooltip::Tooltip;
 
+#[cfg(feature = "camera_rig")]
+use crate::entity_ops::EntityAddCameraRigOp;
 use crate::entity_ops::{
     EntityAddAnimationPlayerOp, EntityAddAudioSourceOp, EntityAddCameraOp, EntityAddConeOp,
     EntityAddCubeOp, EntityAddCylinderOp, EntityAddDirectionalLightOp, EntityAddEmptyOp,
@@ -152,6 +154,12 @@ fn builtin_groups() -> Vec<AddMenuItem> {
         AddMenuItem {
             action: op_action::<EntityAddCameraOp>(),
             label: "Camera".into(),
+            category: cameras_entities.clone(),
+        },
+        #[cfg(feature = "camera_rig")]
+        AddMenuItem {
+            action: op_action::<EntityAddCameraRigOp>(),
+            label: "Camera Rig".into(),
             category: cameras_entities.clone(),
         },
         AddMenuItem {

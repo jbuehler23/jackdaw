@@ -1,0 +1,23 @@
+[package]
+name = "jackdaw_pie_protocol"
+version = "0.4.1"
+edition = "2024"
+description = "Transport-agnostic play-in-editor protocol for the Jackdaw 3D level editor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[features]
+# Production transport backed by `ipc-channel` for editor/game across processes.
+ipc = ["dep:ipc-channel"]
+
+[dependencies]
+bevy = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+ipc-channel = { version = "0.22", optional = true }
+
+[dev-dependencies]
+toml = "0.8"
+
+[lints]
+workspace = true

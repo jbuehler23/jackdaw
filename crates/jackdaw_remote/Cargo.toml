@@ -8,6 +8,7 @@ repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
 bevy.workspace = true
+jackdaw_pie_protocol = { path = "../jackdaw_pie_protocol" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 

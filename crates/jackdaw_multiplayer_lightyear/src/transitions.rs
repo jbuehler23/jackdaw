@@ -64,13 +64,13 @@ fn detect_zone_transitions(
                 set_zone(
                     &mut commands,
                     &mut rooms,
-                    zone.0,
-                    trigger.dest_zone,
+                    &zone.0,
+                    &trigger.dest_zone,
                     entity,
                     conn.0,
                 );
                 tf.translation = sgtf.translation();
-                zone.0 = trigger.dest_zone;
+                zone.0 = trigger.dest_zone.clone();
             } else {
                 warn!(
                     "ZoneTransition targets zone {} spawn {:?} but no matching SpawnPoint \

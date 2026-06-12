@@ -267,12 +267,17 @@ pub(crate) fn on_add_component_button_click(
         return;
     }
 
+    // The primary selection is the entity to add the component to in both
+    // Scene and Live mode. In Live mode it is the selected preview entity
+    // (which carries the projected live state), and the add operator
+    // routes the change to the running game via `pie_live_target_bits`.
     let Some(primary) = selection.primary() else {
         return;
     };
     let Ok(archetype) = entity_query.get(primary) else {
         return;
     };
+    let (target, archetype) = (primary, archetype);
 
     let existing_types: HashSet<TypeId> = archetype
         .iter_components()
@@ -314,7 +319,7 @@ pub(crate) fn on_add_component_button_click(
         picker,
         EditorEntity,
         crate::BlocksCameraInput,
-        ComponentPicker(primary),
+        ComponentPicker(target),
     ));
 }
 
