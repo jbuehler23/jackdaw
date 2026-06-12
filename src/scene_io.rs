@@ -1980,13 +1980,13 @@ pub(crate) fn despawn_scene_entities(world: &mut World) -> Result<(), BevyError>
         }
     }
 
-    // Sweep any leftover `BrushFaceEntity` mesh children. Despawning a
+    // Sweep any leftover brush face/chunk mesh children. Despawning a
     // parent brush does not always cascade through `ChildOf` in time;
     // orphan face meshes would otherwise survive, keep their
     // `Transform` and `MeshMaterial3d`, and render as a ghost box at
     // world origin in the next scene.
     let orphan_faces: Vec<Entity> = world
-        .query_filtered::<Entity, With<crate::brush::BrushFaceEntity>>()
+        .query_filtered::<Entity, Or<(With<crate::brush::BrushFaceEntity>, With<crate::brush::BrushMeshChunk>)>>()
         .iter(world)
         .collect();
     for entity in orphan_faces {

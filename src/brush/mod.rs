@@ -43,7 +43,8 @@ pub struct BrushMeshCache {
     pub vertices: Vec<Vec3>,
     /// Per-face: ordered vertex indices into `vertices`.
     pub face_polygons: Vec<Vec<usize>>,
-    pub face_entities: Vec<Entity>,
+    /// Child entities rendering this brush, one per material chunk.
+    pub chunk_entities: Vec<Entity>,
 }
 
 impl BrushMeshCache {
@@ -77,6 +78,23 @@ impl BrushMeshCache {
 pub struct BrushFaceEntity {
     pub brush_entity: Entity,
     pub face_index: usize,
+}
+
+/// Marker on child entities that render a chunk of brush faces sharing
+/// one material. `face_of_tri` maps each triangle of the chunk's mesh
+/// (by triangle index) back to the authored face index so raycast hits
+/// can resolve faces. Chunks are derived from the parent brush's
+/// `Brush` data; they're hidden from the outliner and excluded from
+/// the saved scene.
+#[derive(Component)]
+#[require(crate::EditorHidden, crate::NonSerializable)]
+pub struct BrushMeshChunk {
+    pub brush_entity: Entity,
+    /// Authored face index for each triangle in the chunk mesh. Valid only for the `Brush` state at the last rebuild; consumers must resolve through `.get()` and treat out-of-range as a miss.
+    pub face_of_tri: Vec<u32>,
+    /// True when every face in this chunk uses the default palette
+    /// material, making it eligible for selection/preview swaps.
+    pub uses_default_material: bool,
 }
 
 /// Marker: brush is being actively modified and should render with transparent preview materials.
@@ -367,7 +385,7 @@ impl Plugin for BrushPlugin {
                     ApplyDeferred,
                     mesh::regenerate_brush_meshes,
                     ApplyDeferred,
-                    mesh::ensure_brush_face_materials,
+                    mesh::ensure_brush_chunk_materials,
                     gizmo_overlay::draw_brush_edit_gizmos,
                     gizmo_overlay::draw_loop_cut_preview,
                     knife_mode::draw_knife_overlay,

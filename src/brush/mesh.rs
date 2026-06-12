@@ -7,13 +7,11 @@ use bevy::{
     prelude::*,
 };
 
-use super::{BrushFaceEntity, BrushMaterialPalette, BrushMeshCache, BrushPreview};
+use super::{BrushMaterialPalette, BrushMeshCache, BrushPreview};
 use crate::default_style;
 use crate::draw_brush::DrawBrushState;
 use crate::selection::Selected;
-use jackdaw_geometry::{
-    compute_brush_geometry_from_planes, compute_face_tangent_axes, triangulate_polygon,
-};
+use jackdaw_geometry::compute_brush_geometry_from_planes;
 
 pub(super) struct MeshPlugin;
 
@@ -202,125 +200,53 @@ pub fn regenerate_brush_meshes(
             compute_brush_geometry_from_planes(&brush.faces)
         };
 
-        let mut face_entities = Vec::with_capacity(brush.faces.len());
+        let chunks = super::mesh_chunks::build_mesh_chunks(&vertices, &face_polygons, &brush.faces);
+        let mut chunk_entities = Vec::with_capacity(chunks.len());
 
-        for (face_idx, face_data) in brush.faces.iter().enumerate() {
-            let indices = &face_polygons[face_idx];
-            if indices.len() < 3 {
-                face_entities.push(Entity::PLACEHOLDER);
-                continue;
-            }
-
-            // Build per-triangle (flat-shaded) mesh so non-planar faces render correctly.
-            // Each triangle in the fan gets its own computed normal; vertex positions are
-            // duplicated (3 per tri) so every vertex can carry an independent normal.
-            let (u_axis, v_axis) =
-                if face_data.uv_u_axis != Vec3::ZERO && face_data.uv_v_axis != Vec3::ZERO {
-                    (face_data.uv_u_axis, face_data.uv_v_axis)
-                } else {
-                    compute_face_tangent_axes(face_data.plane.normal)
-                };
-
-            // Concave / annulus-aware triangulation via earcut. Fan
-            // triangulation would silently mis-triangulate concave faces
-            // and fill keyhole-bridged holes with bogus geometry.
-            let ring_u32: Vec<u32> = indices.iter().map(|&i| i as u32).collect();
-            let tris = triangulate_polygon(&vertices, &ring_u32, face_data.plane.normal);
-
-            let mut positions: Vec<[f32; 3]> = Vec::with_capacity(tris.len() * 3);
-            let mut normals: Vec<[f32; 3]> = Vec::with_capacity(tris.len() * 3);
-            let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(tris.len() * 3);
-            let mut tangents: Vec<[f32; 4]> = Vec::with_capacity(tris.len() * 3);
-            let mut tri_indices: Vec<u32> = Vec::with_capacity(tris.len() * 3);
-
-            let cos_r = face_data.uv_rotation.cos();
-            let sin_r = face_data.uv_rotation.sin();
-
-            for tri in &tris {
-                let p_a = vertices[tri[0] as usize];
-                let p_b = vertices[tri[1] as usize];
-                let p_c = vertices[tri[2] as usize];
-
-                // Compute this triangle's actual normal for flat shading.
-                let cross = (p_b - p_a).cross(p_c - p_a);
-                let tri_normal = if cross.length_squared() > 1e-10 {
-                    cross.normalize()
-                } else {
-                    face_data.plane.normal
-                };
-                let tri_normal_arr = tri_normal.to_array();
-
-                // Tangent sign uses the face u/v axes (UV continuity is per-face).
-                let w = tri_normal.dot(u_axis.cross(v_axis)).signum();
-                let tangent = [u_axis.x, u_axis.y, u_axis.z, w];
-
-                let base = tri_indices.len() as u32;
-                for &vert_pos in &[p_a, p_b, p_c] {
-                    positions.push(vert_pos.to_array());
-                    normals.push(tri_normal_arr);
-
-                    // UV math matches compute_face_uvs exactly:
-                    // project -> rotate -> scale -> offset.
-                    let u = vert_pos.dot(u_axis);
-                    let v = vert_pos.dot(v_axis);
-                    let ru = u * cos_r - v * sin_r;
-                    let rv = u * sin_r + v * cos_r;
-                    let su = ru / face_data.uv_scale.x.max(0.001) + face_data.uv_offset.x;
-                    let sv = rv / face_data.uv_scale.y.max(0.001) + face_data.uv_offset.y;
-                    uvs.push([su, sv]);
-                    tangents.push(tangent);
-                }
-                tri_indices.push(base);
-                tri_indices.push(base + 1);
-                tri_indices.push(base + 2);
-            }
-
+        for chunk in chunks {
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
-            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-            mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, tangents);
-            mesh.insert_indices(Indices::U32(tri_indices));
-
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, chunk.positions);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, chunk.normals);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, chunk.uvs);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, chunk.tangents);
+            mesh.insert_indices(Indices::U32(chunk.indices));
             let mesh_handle = meshes.add(mesh);
 
-            // Use the face's material handle if set, otherwise fall back to grid default
-            let is_default = face_data.material == Handle::default();
-            let material = if !is_default {
-                face_data.material.clone()
+            // Explicit face material, or the palette default with the
+            // selection/preview variant applied at build time.
+            let material = if !chunk.uses_default_material {
+                chunk.material.clone()
             } else if effectively_selected || preview.is_some() {
                 palette.default_selected_material.clone()
             } else {
                 palette.default_material.clone()
             };
 
-            let face_entity = commands
+            let chunk_entity = commands
                 .spawn((
-                    BrushFaceEntity {
+                    super::BrushMeshChunk {
                         brush_entity: entity,
-                        face_index: face_idx,
+                        face_of_tri: chunk.face_of_tri,
+                        uses_default_material: chunk.uses_default_material,
                     },
                     Mesh3d(mesh_handle),
                     MeshMaterial3d(material),
                     Transform::default(),
                     ChildOf(entity),
-                    // `BrushFaceEntity` requires `EditorHidden +
-                    // NonSerializable`; nothing to insert here.
                 ))
                 .id();
-            if is_default {
+            if chunk.uses_default_material {
                 commands
-                    .entity(face_entity)
+                    .entity(chunk_entity)
                     .insert((NotShadowCaster, NotShadowReceiver));
             }
-
-            face_entities.push(face_entity);
+            chunk_entities.push(chunk_entity);
         }
 
         commands.entity(entity).insert(BrushMeshCache {
             vertices,
             face_polygons,
-            face_entities,
+            chunk_entities,
         });
     }
 }
@@ -357,14 +283,17 @@ pub(super) fn sync_brush_preview(
     }
 }
 
-/// Every frame, ensure each brush face entity has the correct default-palette material
-/// based on preview / selected state.  Uses direct mutation (no deferred commands) so
-/// swaps are visible immediately.
-pub(super) fn ensure_brush_face_materials(
+/// Every frame, ensure each brush mesh chunk has the correct default-palette
+/// material based on preview / selected state. Uses direct mutation (no
+/// deferred commands) so swaps are visible immediately. Chunks with explicit
+/// face materials are never touched.
+pub(super) fn ensure_brush_chunk_materials(
     palette: Res<BrushMaterialPalette>,
     brushes: Query<(Entity, &BrushMeshCache, Has<BrushPreview>, Has<Selected>), With<super::Brush>>,
-    brush_data: Query<&super::Brush>,
-    mut face_mats: Query<(&BrushFaceEntity, &mut MeshMaterial3d<StandardMaterial>)>,
+    mut chunk_mats: Query<(
+        &super::BrushMeshChunk,
+        &mut MeshMaterial3d<StandardMaterial>,
+    )>,
     parents: Query<&ChildOf>,
     selected_query: Query<(), With<Selected>>,
     group_edit: Res<crate::viewport_select::GroupEditState>,
@@ -383,21 +312,11 @@ pub(super) fn ensure_brush_face_materials(
         } else {
             &palette.default_material
         };
-        let Ok(brush) = brush_data.get(entity) else {
-            continue;
-        };
-        for &face_entity in &cache.face_entities {
-            if face_entity == Entity::PLACEHOLDER {
-                continue;
-            }
-            let Ok((face, mut mat)) = face_mats.get_mut(face_entity) else {
+        for &chunk_entity in &cache.chunk_entities {
+            let Ok((chunk, mut mat)) = chunk_mats.get_mut(chunk_entity) else {
                 continue;
             };
-            let Some(face_data) = brush.faces.get(face.face_index) else {
-                continue;
-            };
-            // Only touch faces that use the default palette (no explicit material)
-            if face_data.material != Handle::default() {
+            if !chunk.uses_default_material {
                 continue;
             }
             if mat.0 != *target {
