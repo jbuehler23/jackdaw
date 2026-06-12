@@ -361,28 +361,22 @@ pub(super) fn handle_clip_mode(
 /// Pick the closest face under the cursor on a given brush entity.
 fn pick_face_under_cursor(
     viewport_cursor: Vec2,
-    brush_entity: Entity,
     camera: &Camera,
     cam_tf: &GlobalTransform,
+    brush_global: &GlobalTransform,
     cache: &BrushMeshCache,
-    face_entities: &Query<(Entity, &super::BrushFaceEntity, &GlobalTransform)>,
 ) -> Option<usize> {
     let mut best_face = None;
     let mut best_depth = f32::MAX;
 
-    for (_, face_ent, face_global) in face_entities {
-        if face_ent.brush_entity != brush_entity {
-            continue;
-        }
-        let face_idx = face_ent.face_index;
-        let polygon = &cache.face_polygons[face_idx];
+    for (face_idx, polygon) in cache.face_polygons.iter().enumerate() {
         if polygon.len() < 3 {
             continue;
         }
         let screen_verts: Vec<Vec2> = polygon
             .iter()
             .filter_map(|&vi| {
-                let world = face_global.transform_point(cache.vertices[vi]);
+                let world = brush_global.transform_point(cache.vertices[vi]);
                 camera.world_to_viewport(cam_tf, world).ok()
             })
             .collect();
@@ -392,7 +386,7 @@ fn pick_face_under_cursor(
         if point_in_polygon_2d(viewport_cursor, &screen_verts) {
             let centroid: Vec3 =
                 polygon.iter().map(|&vi| cache.vertices[vi]).sum::<Vec3>() / polygon.len() as f32;
-            let world_centroid = face_global.transform_point(centroid);
+            let world_centroid = brush_global.transform_point(centroid);
             let depth = (cam_tf.translation() - world_centroid).length_squared();
             if depth < best_depth {
                 best_depth = depth;
@@ -418,7 +412,6 @@ pub(super) fn brush_face_hover(
     edit_mode: Res<EditMode>,
     keyboard: Res<ButtonInput<KeyCode>>,
     vp: crate::viewport::ViewportCursor,
-    face_entities: Query<(Entity, &super::BrushFaceEntity, &GlobalTransform)>,
     brush_selection: Res<BrushSelection>,
     brush_caches: Query<&BrushMeshCache>,
     brush_transforms: Query<&GlobalTransform>,
@@ -488,19 +481,14 @@ pub(super) fn brush_face_hover(
             let Ok(brush_global) = brush_transforms.get(brush_entity) else {
                 continue;
             };
-            for (_, face_ent, face_global) in &face_entities {
-                if face_ent.brush_entity != brush_entity {
-                    continue;
-                }
-                let face_idx = face_ent.face_index;
-                let polygon = &cache.face_polygons[face_idx];
+            for (face_idx, polygon) in cache.face_polygons.iter().enumerate() {
                 if polygon.len() < 3 {
                     continue;
                 }
                 let screen_verts: Vec<Vec2> = polygon
                     .iter()
                     .filter_map(|&vi| {
-                        let world = face_global.transform_point(cache.vertices[vi]);
+                        let world = brush_global.transform_point(cache.vertices[vi]);
                         camera.world_to_viewport(cam_tf, world).ok()
                     })
                     .collect();
@@ -542,13 +530,17 @@ pub(super) fn brush_face_hover(
             return;
         };
 
+        let Ok(brush_global) = brush_transforms.get(brush_entity) else {
+            clear_hover(&mut hover);
+            return;
+        };
+
         if let Some(face_idx) = pick_face_under_cursor(
             viewport_cursor,
-            brush_entity,
             camera,
             cam_tf,
+            brush_global,
             cache,
-            &face_entities,
         ) {
             hover.entity = Some(brush_entity);
             hover.face_index = Some(face_idx);
