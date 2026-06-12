@@ -100,7 +100,7 @@ pub(crate) fn load_caption_font(fonts: &mut Assets<Font>) -> CaptionFont {
         bevy::log::warn!(
             "Segoe Fluent Icons and Segoe MDL2 Assets were not found; using embedded Lucide caption icons"
         );
-        return load_lucide_caption_font(fonts);
+        load_lucide_caption_font(fonts)
     }
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
