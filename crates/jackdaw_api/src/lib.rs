@@ -68,6 +68,14 @@ pub mod op {
     };
 }
 
+/// Data-driven keymap presets for operator bindings.
+pub mod keymap {
+    pub use jackdaw_api_internal::keymap::{
+        DefaultKeymap, KeymapApplyReport, KeymapPreset, PresetBinding, PresetInput, PresetPhase,
+        PresetSpawnedBinding, apply_keymap_preset, key_code_from_name, key_code_name,
+    };
+}
+
 /// Play-In-Editor state shared by the editor and loaded games.
 pub mod pie {
     pub use jackdaw_api_internal::pie::PlayState;

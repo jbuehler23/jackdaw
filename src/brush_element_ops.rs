@@ -9,8 +9,8 @@
 use std::collections::HashSet;
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_jsn::Brush;
 
 use crate::brush::{
@@ -25,27 +25,14 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<BrushNudgeUpOp>()
         .register_operator::<BrushNudgeDownOp>();
 
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<BrushDeleteElementOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![
-                (KeyCode::Delete, Press::default()),
-                (KeyCode::Backspace, Press::default()),
-            ],
-        ));
-        world.spawn((
-            Action::<BrushNudgeUpOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::PageUp, Press::default())],
-        ));
-        world.spawn((
-            Action::<BrushNudgeDownOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::PageDown, Press::default())],
-        ));
-    });
+    ctx.bind_operator::<CoreExtensionInputContext, BrushDeleteElementOp>([
+        PresetInput::key("Delete"),
+        PresetInput::key("Backspace"),
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, BrushNudgeUpOp>([PresetInput::key("PageUp")]);
+    ctx.bind_operator::<CoreExtensionInputContext, BrushNudgeDownOp>([PresetInput::key(
+        "PageDown",
+    )]);
 }
 
 /// True when the operator is allowed to mutate brush elements: brush-edit

@@ -6,8 +6,8 @@
 //! Default keybinds: `1` vertex, `2` edge, `3` face, `4` clip, `K` knife.
 
 use bevy::{input_focus::InputFocus, prelude::*};
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::brush::{
     BrushDragState, BrushEditMode, BrushSelection, ClipState, EdgeDragState, EditMode, KnifeMode,
@@ -40,37 +40,14 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<EditModeKnifeOp>()
         .register_operator::<BrushExitEditModeOp>();
 
-    let ext = ctx.id();
-    ctx.spawn((
-        Action::<EditModeVertexOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Digit1, Press::default())],
-    ));
-    ctx.spawn((
-        Action::<EditModeEdgeOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Digit2, Press::default())],
-    ));
-    ctx.spawn((
-        Action::<EditModeFaceOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Digit3, Press::default())],
-    ));
-    ctx.spawn((
-        Action::<EditModeClipOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Digit4, Press::default())],
-    ));
-    ctx.spawn((
-        Action::<EditModeKnifeOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::KeyK, Press::default())],
-    ));
-    ctx.spawn((
-        Action::<BrushExitEditModeOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Escape, Press::default())],
-    ));
+    ctx.bind_operator::<CoreExtensionInputContext, EditModeVertexOp>([PresetInput::key("Digit1")]);
+    ctx.bind_operator::<CoreExtensionInputContext, EditModeEdgeOp>([PresetInput::key("Digit2")]);
+    ctx.bind_operator::<CoreExtensionInputContext, EditModeFaceOp>([PresetInput::key("Digit3")]);
+    ctx.bind_operator::<CoreExtensionInputContext, EditModeClipOp>([PresetInput::key("Digit4")]);
+    ctx.bind_operator::<CoreExtensionInputContext, EditModeKnifeOp>([PresetInput::key("KeyK")]);
+    ctx.bind_operator::<CoreExtensionInputContext, BrushExitEditModeOp>([PresetInput::key(
+        "Escape",
+    )]);
 }
 
 /// True only when the user is in `BrushEdit` and an Escape press

@@ -15,8 +15,8 @@ use bevy::{
     window::SystemCursorIcon,
 };
 
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::brush::{BrushSelection, EditMode};
 use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
@@ -49,20 +49,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<PhysicsActivateOp>()
         .register_operator::<PhysicsCommitOp>();
 
-    let ext = ctx.id();
-    ctx.spawn((
-        Action::<PhysicsActivateOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(
-            KeyCode::KeyP.with_mod_keys(ModKeys::SHIFT),
-            Press::default(),
-        )],
-    ));
-    ctx.spawn((
-        Action::<PhysicsCommitOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Space, Press::default())],
-    ));
+    ctx.bind_operator::<CoreExtensionInputContext, PhysicsActivateOp>([
+        PresetInput::key("KeyP").shift()
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, PhysicsCommitOp>([PresetInput::key("Space")]);
 }
 
 /// Enter the Physics Tool placement mode.

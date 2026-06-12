@@ -310,6 +310,9 @@ fn on_extension_checkbox_commit(
     commands.queue(move |world: &mut World| {
         if checked {
             enable_extension(world, &name);
+            // Re-apply the keymap so newly registered operator actions get
+            // bindings without requiring a restart.
+            crate::extension_lifecycle::apply_active_keymap(world);
         } else {
             disable_extension(world, &name);
         }

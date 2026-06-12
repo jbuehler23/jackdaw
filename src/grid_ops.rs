@@ -6,8 +6,8 @@
 //! handler in [`crate::snapping`].
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::{GRID_POWER_MAX, GRID_POWER_MIN, SnapSettings};
@@ -16,19 +16,12 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<GridIncreaseOp>()
         .register_operator::<GridDecreaseOp>();
 
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<GridIncreaseOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::BracketRight, Press::default())],
-        ));
-        world.spawn((
-            Action::<GridDecreaseOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::BracketLeft, Press::default())],
-        ));
-    });
+    ctx.bind_operator::<CoreExtensionInputContext, GridIncreaseOp>([PresetInput::key(
+        "BracketRight",
+    )]);
+    ctx.bind_operator::<CoreExtensionInputContext, GridDecreaseOp>([PresetInput::key(
+        "BracketLeft",
+    )]);
 }
 
 #[operator(id = "grid.increase", label = "Increase Grid")]

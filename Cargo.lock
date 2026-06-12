@@ -5322,7 +5322,6 @@ name = "jackdaw_camera"
 version = "0.4.1"
 dependencies = [
  "bevy",
- "jackdaw_commands",
 ]
 
 [[package]]

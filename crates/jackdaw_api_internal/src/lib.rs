@@ -48,6 +48,8 @@
 mod export;
 pub mod extensions_config;
 pub mod ffi;
+pub mod keymap;
+pub mod keymap_conditions;
 pub mod lifecycle;
 pub mod operator;
 pub mod paths;
@@ -61,7 +63,9 @@ use std::sync::Arc;
 
 use bevy::ecs::{system::IntoObserverSystem, world::EntityWorldMut};
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Action, Fire};
+use bevy_enhanced_input::prelude::{
+    Action, ActionOf, ActionSettings, Fire, InputConditionAppExt as _,
+};
 use jackdaw_panels::{
     DockWindowDescriptor, WindowRegistry, WorkspaceDescriptor, WorkspaceRegistry,
 };
@@ -85,6 +89,13 @@ use crate::{
 };
 
 pub use jackdaw_panels::area::{DefaultArea, ToAnchorId};
+pub use keymap::{
+    ActiveKeymapPreset, BuiltinActions, DefaultKeymap, KeymapApplyReport, KeymapPreset,
+    PresetBinding, PresetContext, PresetInput, PresetPhase, PresetSpawnedBinding,
+    apply_keymap_preset, load_active_keymap_preset, mouse_button_from_name, mouse_button_name,
+    save_active_keymap_preset,
+};
+pub use keymap_conditions::{DoubleClick, ScrollTick};
 pub use lifecycle::{ActiveModalOperator, Extension, ExtensionCatalog};
 pub use operator::{CallOperatorError, OperatorResult, OperatorWorldExt};
 pub use pie::PlayState;
@@ -353,6 +364,68 @@ impl<'a> ExtensionContext<'a> {
         self
     }
 
+    /// Record an operator's default key bindings into [`DefaultKeymap`] and
+    /// spawn its BEI action entity WITHOUT bindings. Bindings are attached
+    /// later by the keymap applier from the active preset, so presets are
+    /// the single source of binding truth. The action belongs to the
+    /// extension's input context `C`.
+    ///
+    /// Duplicate-input rows are silently skipped so that re-enabling an
+    /// extension after `apply_active_keymap` re-runs does not accumulate
+    /// duplicate entries in the defaults list.
+    ///
+    /// The context component `C` must live on the extension's root entity; that is where `ActionOf` points.
+    pub fn bind_operator<C: bevy::prelude::Component, O: crate::Operator>(
+        &mut self,
+        defaults: impl IntoIterator<Item = crate::keymap::PresetInput>,
+    ) -> &mut Self {
+        self.action_for::<C, O>();
+        let mut keymap = self
+            .world
+            .get_resource_or_init::<crate::keymap::DefaultKeymap>();
+        for input in defaults {
+            if keymap
+                .bindings
+                .iter()
+                .any(|b| b.operator == O::ID && b.input == input)
+            {
+                warn!(
+                    "duplicate default binding for operator '{}'; skipping (idempotent re-registration)",
+                    O::ID
+                );
+                continue;
+            }
+            keymap.bindings.push(crate::keymap::PresetBinding {
+                operator: O::ID.to_string(),
+                input,
+                phase: crate::keymap::PresetPhase::Press,
+                context: crate::keymap::PresetContext::Operators,
+            });
+        }
+        self
+    }
+
+    /// Spawn an operator's action entity with no default binding. The
+    /// operator stays reachable through menus and the command palette
+    /// and can be bound by presets or user rebinds.
+    ///
+    /// The context component `C` must live on the extension's root entity; that is where `ActionOf` points.
+    ///
+    /// `require_reset` guards against operators firing from already-held keys when bindings or
+    /// contexts are (re)applied.
+    pub fn action_for<C: bevy::prelude::Component, O: crate::Operator>(&mut self) -> &mut Self {
+        let ext = self.extension_entity;
+        self.spawn((
+            Action::<O>::new(),
+            ActionOf::<C>::new(ext),
+            ActionSettings {
+                require_reset: true,
+                ..Default::default()
+            },
+        ));
+        self
+    }
+
     /// Inject a section into an existing window (e.g. add a sub-section to
     /// the Inspector window). Section runs with `In<PanelContext>` each time
     /// the window re-renders.
@@ -583,5 +656,103 @@ pub struct ExtensionLoaderPlugin;
 impl Plugin for ExtensionLoaderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((lifecycle::plugin, operator::plugin, registries::plugin));
+        app.add_input_condition::<DoubleClick>();
+        app.add_input_condition::<ScrollTick>();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::prelude::*;
+    use bevy_enhanced_input::prelude::*;
+
+    use super::*;
+    use crate::keymap::{DefaultKeymap, PresetInput, PresetPhase};
+    use crate::operator::{Operator, OperatorParameters, OperatorResult, OperatorSystemId};
+
+    // Minimal input context used only in these tests.
+    #[derive(Component, Default)]
+    struct TestCtx;
+
+    // Minimal operator: no-op execute, manually implements Operator so the
+    // test stays self-contained without spawning SystemIds or running schedules.
+    #[derive(Default, InputAction)]
+    #[action_output(bool)]
+    struct TestOp;
+
+    impl Operator for TestOp {
+        const ID: &'static str = "test.op";
+        const LABEL: &'static str = "Test Op";
+
+        fn register_execute(commands: &mut Commands) -> OperatorSystemId {
+            commands.register_system(|_: In<OperatorParameters>| -> OperatorResult {
+                OperatorResult::Finished
+            })
+        }
+    }
+
+    fn make_ctx(world: &mut World) -> (Entity, ExtensionContext<'_>) {
+        let ext = world.spawn_empty().id();
+        let ctx = ExtensionContext::new(world, ext);
+        (ext, ctx)
+    }
+
+    #[test]
+    fn bind_operator_records_defaults_and_spawns_action() {
+        let mut world = World::default();
+        let (ext, mut ctx) = make_ctx(&mut world);
+
+        ctx.bind_operator::<TestCtx, TestOp>([
+            PresetInput::key("KeyQ"),
+            PresetInput::key("KeyT").ctrl(),
+        ]);
+
+        // DefaultKeymap has exactly 2 entries with the right operator id and inputs.
+        let keymap = world
+            .get_resource::<DefaultKeymap>()
+            .expect("DefaultKeymap must exist after bind_operator");
+        assert_eq!(keymap.bindings.len(), 2);
+        assert_eq!(keymap.bindings[0].operator, "test.op");
+        assert_eq!(keymap.bindings[0].input, PresetInput::key("KeyQ"));
+        assert_eq!(keymap.bindings[0].phase, PresetPhase::Press);
+        assert_eq!(keymap.bindings[1].operator, "test.op");
+        assert_eq!(keymap.bindings[1].input, PresetInput::key("KeyT").ctrl());
+        assert_eq!(keymap.bindings[1].phase, PresetPhase::Press);
+
+        // Exactly one Action<TestOp> entity exists.
+        let action_count = world.query::<&Action<TestOp>>().iter(&world).count();
+        assert_eq!(action_count, 1);
+
+        // No Binding components exist on any entity (action spawned without bindings).
+        let binding_count = world
+            .query::<&bevy_enhanced_input::prelude::Binding>()
+            .iter(&world)
+            .count();
+        assert_eq!(binding_count, 0);
+
+        // The spawned action entity is a child of the extension root entity.
+        let (_, child_of) = world
+            .query_filtered::<(Entity, &ChildOf), With<Action<TestOp>>>()
+            .single(&world)
+            .expect("exactly one Action<TestOp> must exist");
+        assert_eq!(child_of.parent(), ext);
+    }
+
+    #[test]
+    fn action_for_spawns_action_with_no_keymap_entry() {
+        let mut world = World::default();
+        let (_, mut ctx) = make_ctx(&mut world);
+
+        ctx.action_for::<TestCtx, TestOp>();
+
+        // No DefaultKeymap entry recorded.
+        let entry_count = world
+            .get_resource::<DefaultKeymap>()
+            .map_or(0, |km| km.bindings.len());
+        assert_eq!(entry_count, 0);
+
+        // Exactly one Action<TestOp> entity exists.
+        let action_count = world.query::<&Action<TestOp>>().iter(&world).count();
+        assert_eq!(action_count, 1);
     }
 }

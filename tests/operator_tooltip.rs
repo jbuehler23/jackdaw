@@ -70,9 +70,8 @@ fn action_entities_carry_operator_action_marker() {
     );
 }
 
-/// `view.toggle_wireframe` is bound to `Ctrl + Shift + W` in
-/// `view_ops::add_to_extension`. The tooltip pipeline should surface
-/// that exact string.
+/// `view.toggle_wireframe` is bound to `Ctrl + Shift + W` via the classic
+/// keymap preset, which the startup applier applies before the first frame.
 #[test]
 fn tooltip_picks_up_keyboard_modifier_binding() {
     let mut app = util::editor_test_app();
@@ -83,9 +82,9 @@ fn tooltip_picks_up_keyboard_modifier_binding() {
     );
 }
 
-/// `clip.delete_keyframes` binds both `Delete` and `Backspace`. The
-/// tooltip joins multiple bindings with `" / "`. `KeyCode::Delete`
-/// stringifies to `Del` via `key_display_name`.
+/// `clip.delete_keyframes` binds both `Delete` and `Backspace` in the
+/// classic preset. The tooltip joins multiple bindings with `" / "`.
+/// `KeyCode::Delete` stringifies to `Del` via `key_display_name`.
 #[test]
 fn tooltip_joins_multiple_bindings() {
     let mut app = util::editor_test_app();

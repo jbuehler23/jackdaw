@@ -7,8 +7,8 @@
 //! cancels and restores the pre-modal mesh.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::ops::inset_face::inset_face;
 use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh};
@@ -87,14 +87,7 @@ fn compute_face_max_inset(mesh: &HalfedgeMesh, face_key: FaceKey) -> f32 {
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushInsetOp>();
 
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<BrushInsetOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::KeyI, Press::default())],
-        ));
-    });
+    ctx.bind_operator::<CoreExtensionInputContext, BrushInsetOp>([PresetInput::key("KeyI")]);
 }
 
 /// Shrink each selected face inward along its plane, controlled by mouse displacement.
@@ -120,6 +113,7 @@ pub(crate) fn brush_inset(
     mut modal_state: ResMut<InsetModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    modal_inputs: crate::input_contexts::ModalInputs,
     cursor: crate::viewport::UiCursorPos,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
@@ -185,9 +179,8 @@ pub(crate) fn brush_inset(
 
     // --- Subsequent invokes: cancel, update amount, mutate preview, or commit ---
 
-    let escape = keyboard.just_pressed(KeyCode::Escape);
     let rmb = mouse.just_pressed(MouseButton::Right);
-    if escape || rmb {
+    if modal_inputs.cancel() || rmb {
         // Live brush has been mutated each frame, so restore from the snapshot
         // before clearing modal state.
         restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);

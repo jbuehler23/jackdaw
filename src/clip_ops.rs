@@ -7,8 +7,8 @@
 //! applies, Escape clears.
 
 use bevy::{prelude::*, ui::ui_transform::UiGlobalTransform};
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_jsn::{Brush, BrushFaceData, BrushGroup, BrushPlane};
 
 use crate::brush::{
@@ -34,24 +34,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ClipApplyOp>()
         .register_operator::<ClipClearOp>();
 
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<ClipCycleModeOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Tab, Press::default())],
-        ));
-        world.spawn((
-            Action::<ClipApplyOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Enter, Press::default())],
-        ));
-        world.spawn((
-            Action::<ClipClearOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Escape, Press::default())],
-        ));
-    });
+    ctx.bind_operator::<CoreExtensionInputContext, ClipCycleModeOp>([PresetInput::key("Tab")]);
+    ctx.bind_operator::<CoreExtensionInputContext, ClipApplyOp>([PresetInput::key("Enter")]);
+    ctx.bind_operator::<CoreExtensionInputContext, ClipClearOp>([PresetInput::key("Escape")]);
 }
 
 /// LMB in clip mode dispatches `brush.clip.place_point`. Mouse-button

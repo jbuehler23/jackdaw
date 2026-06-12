@@ -3,8 +3,8 @@
 
 use bevy::input::ButtonInput;
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::scene_io::{SceneDirtyState, SceneFilePath};
 use crate::scenes::{SceneTab, Scenes, swap::swap_active_tab};
@@ -27,42 +27,22 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_menu_entry::<SceneOpenOp>(TopLevelMenu::File)
         .register_menu_entry::<SceneSaveAllOp>(TopLevelMenu::File)
         .register_menu_entry::<SceneCloseOp>(TopLevelMenu::File);
-    let ext = ctx.id();
     ctx.entity_mut().world_scope(|w| {
         w.init_resource::<UntitledCounter>();
-        w.spawn((
-            Action::<SceneNewOp>::new(),
-            ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyT.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-        w.spawn((
-            Action::<SceneCloseOp>::new(),
-            ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyW.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-        w.spawn((
-            Action::<SceneCycleNextOp>::new(),
-            ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::Tab.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-        w.spawn((
-            Action::<SceneCyclePrevOp>::new(),
-            ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::Tab.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
-                Press::default(),
-            )],
-        ));
     });
+
+    ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneNewOp>([
+        PresetInput::key("KeyT").ctrl(),
+    ]);
+    ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneCloseOp>([
+        PresetInput::key("KeyW").ctrl(),
+    ]);
+    ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneCycleNextOp>([
+        PresetInput::key("Tab").ctrl(),
+    ]);
+    ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneCyclePrevOp>([
+        PresetInput::key("Tab").ctrl().shift(),
+    ]);
 }
 
 #[operator(id = "scene.new", label = "New Scene", allows_undo = false)]

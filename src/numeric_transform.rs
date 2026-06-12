@@ -16,6 +16,9 @@
 //!
 //! The input system only gates and accumulates; `transform.numeric_apply`
 //! applies the delta as a single undo entry.
+//!
+//! Typed digit / decimal / minus input is raw text input and is deliberately
+//! outside the keymap engine; it is not preset-bindable.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;

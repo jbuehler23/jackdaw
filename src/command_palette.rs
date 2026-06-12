@@ -18,6 +18,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ToggleCommandPaletteOp>();
     ctx.register_menu_entry::<ToggleCommandPaletteOp>(TopLevelMenu::Tools);
 
+    // Deferred: condition is not bare Press::default() (modifier chord + key).
     ctx.entity_mut()
         .with_related::<ActionOf<CoreExtensionInputContext>>((
             Action::<ToggleCommandPaletteOp>::new(),

@@ -21,6 +21,7 @@ use bevy::{
     prelude::*,
 };
 use bevy_enhanced_input::prelude::Press;
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_geometry::{
     brush_planes_to_world, clean_degenerate_faces, compute_brush_geometry_from_planes,
     compute_brush_topology, compute_face_tangent_axes, compute_face_uvs, triangulate_face,
@@ -59,11 +60,13 @@ fn topology_aabbs_overlap(a: &BrushTopology, b: &BrushTopology) -> bool {
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     let ext = ctx.id();
+    // ConfirmDrawBrushOp: deferred (MouseButton::Left binding).
     ctx.spawn((
         Action::<ConfirmDrawBrushOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
         bindings![(MouseButton::Left, Press::default()),],
     ));
+    // ActivateDrawBrushModalOp: deferred (MouseButton::Back binding present).
     ctx.spawn((
         Action::<ActivateDrawBrushModalOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
@@ -72,55 +75,13 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
             (KeyCode::KeyB, Press::default()),
         ],
     ));
-    ctx.spawn((
-        Action::<BrushJoinOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::KeyJ, Press::default())],
-    ));
-    ctx.spawn((
-        Action::<BrushCsgSubtractOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(
-            KeyCode::KeyK.with_mod_keys(ModKeys::CONTROL),
-            Press::default(),
-        )],
-    ));
-    ctx.spawn((
-        Action::<BrushCsgIntersectOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(
-            KeyCode::KeyK.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
-            Press::default(),
-        )],
-    ));
-    ctx.spawn((
-        Action::<BrushExtendFaceToBrushOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(
-            KeyCode::KeyE.with_mod_keys(ModKeys::CONTROL),
-            Press::default(),
-        )],
-    ));
-    ctx.spawn((
-        Action::<DrawBrushToggleModeOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Tab, Press::default())],
-    ));
-    ctx.spawn((
-        Action::<DrawBrushCommitPolygonOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Enter, Press::default())],
-    ));
-    ctx.spawn((
-        Action::<DrawBrushRemoveLastVertexOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Backspace, Press::default())],
-    ));
+    // DrawBrushCancelCutOp: deferred (MouseButton::Right binding).
     ctx.spawn((
         Action::<DrawBrushCancelCutOp>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
         bindings![(MouseButton::Right, Press::default())],
     ));
+    // StartDrawBrushAddAppendAction / StartDrawBrushCutAction: not operators; left unchanged.
     ctx.spawn((
         Action::<StartDrawBrushAddAppendAction>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
@@ -131,6 +92,28 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         ActionOf::<CoreExtensionInputContext>::new(ext),
         bindings![(KeyCode::KeyC, Press::default())],
     ));
+
+    ctx.bind_operator::<CoreExtensionInputContext, BrushJoinOp>([PresetInput::key("KeyJ")]);
+    ctx.bind_operator::<CoreExtensionInputContext, BrushCsgSubtractOp>([
+        PresetInput::key("KeyK").ctrl()
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, BrushCsgIntersectOp>([PresetInput::key("KeyK")
+        .ctrl()
+        .shift()]);
+    ctx.bind_operator::<CoreExtensionInputContext, BrushExtendFaceToBrushOp>([PresetInput::key(
+        "KeyE",
+    )
+    .ctrl()]);
+    ctx.bind_operator::<CoreExtensionInputContext, DrawBrushToggleModeOp>([PresetInput::key(
+        "Tab",
+    )]);
+    ctx.bind_operator::<CoreExtensionInputContext, DrawBrushCommitPolygonOp>([PresetInput::key(
+        "Enter",
+    )]);
+    ctx.bind_operator::<CoreExtensionInputContext, DrawBrushRemoveLastVertexOp>([
+        PresetInput::key("Backspace"),
+    ]);
+
     ctx.register_operator::<ActivateDrawBrushModalOp>()
         .register_operator::<AddBrushOp>()
         .register_operator::<ConfirmDrawBrushOp>()

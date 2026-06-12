@@ -67,12 +67,14 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     use crate::core_extension::CoreExtensionInputContext;
     use bevy_enhanced_input::prelude::Press;
 
+    // Deferred: condition is not bare Press::default() (key + Press).
     ctx.entity_mut()
         .with_related::<ActionOf<CoreExtensionInputContext>>((
             Action::<MeasureDistanceOp>::new(),
             bindings![(KeyCode::KeyM, Press::default())],
         ));
 
+    // Deferred: condition is not bare Press::default() (mouse button + Press).
     ctx.entity_mut()
         .with_related::<ActionOf<CoreExtensionInputContext>>((
             Action::<ConfirmMeasureDistanceOp>::new(),

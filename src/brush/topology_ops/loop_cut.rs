@@ -2,8 +2,8 @@
 
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::ops::loop_cut::loop_cut;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
@@ -25,17 +25,9 @@ pub struct LoopCutPreviewLines {
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushLoopCutOp>();
 
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<BrushLoopCutOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyR.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-    });
+    ctx.bind_operator::<CoreExtensionInputContext, BrushLoopCutOp>([
+        PresetInput::key("KeyR").ctrl()
+    ]);
 }
 
 /// Modal state for the loop cut operator.
@@ -78,6 +70,7 @@ pub(crate) fn brush_loop_cut(
     mut preview_lines: ResMut<LoopCutPreviewLines>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    modal_inputs: crate::input_contexts::ModalInputs,
     cursor: crate::viewport::UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
@@ -145,9 +138,8 @@ pub(crate) fn brush_loop_cut(
     // --- Subsequent invokes: cancel, update t, preview, or commit ---
 
     // Cancel on Escape or RMB.
-    let escape = keyboard.just_pressed(KeyCode::Escape);
     let rmb = mouse.just_pressed(MouseButton::Right);
-    if escape || rmb {
+    if modal_inputs.cancel() || rmb {
         clear_modal(&mut modal_state, &mut preview_lines);
         return OperatorResult::Cancelled;
     }

@@ -4,6 +4,7 @@ use bevy::{input_focus::InputFocus, prelude::*, ui::ui_transform::UiGlobalTransf
 use bevy_enhanced_input::prelude::{Press, *};
 use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_feathers::{
     context_menu::spawn_context_menu,
     icons::IconFont,
@@ -1426,16 +1427,15 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<crate::prefab::operators::PrefabUnbundleInstanceOp>()
         .register_operator::<crate::prefab::operators::PrefabRepairSelfCyclesOp>();
     let ext = ctx.id();
+    // Deferred: condition is not bare Press::default() (mouse button + Press).
     ctx.spawn((
         Action::<HierarchyOpenContextMenuOp>::new(),
         ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
         bindings![(MouseButton::Right, Press::default())],
     ));
-    ctx.spawn((
-        Action::<RenameBeginOp>::new(),
-        ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::F2, Press::default())],
-    ));
+    ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, RenameBeginOp>([
+        PresetInput::key("F2"),
+    ]);
 }
 
 /// Marker for inline rename `text_edit` entity, linking back to the label entity and source entity.

@@ -13,8 +13,8 @@
 
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::ops::extrude_face_region::extrude_face_region;
 use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh};
@@ -235,6 +235,7 @@ pub(crate) fn brush_extrude(
     mut modal_state: ResMut<ExtrudeModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    modal_inputs: crate::input_contexts::ModalInputs,
     cursor: crate::viewport::UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
@@ -302,9 +303,8 @@ pub(crate) fn brush_extrude(
 
     // --- Subsequent invokes: cancel, update amount, mutate preview, or commit ---
 
-    let escape = keyboard.just_pressed(KeyCode::Escape);
     let rmb = mouse.just_pressed(MouseButton::Right);
-    if escape || rmb {
+    if modal_inputs.cancel() || rmb {
         // Live brush has been mutated each frame, so restore from the snapshot
         // before clearing modal state.
         restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
@@ -665,12 +665,5 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushExtrudeRegionOp>();
     ctx.register_operator::<BrushExtrudeOp>();
 
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<BrushExtrudeOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::KeyE, Press::default())],
-        ));
-    });
+    ctx.bind_operator::<CoreExtensionInputContext, BrushExtrudeOp>([PresetInput::key("KeyE")]);
 }

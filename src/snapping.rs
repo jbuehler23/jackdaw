@@ -232,6 +232,10 @@ impl SnapSettings {
 /// to [`crate::grid_ops::GridIncreaseOp`] /
 /// [`crate::grid_ops::GridDecreaseOp`] (also bound to the bracket
 /// keys) so the clamp + translate-increment refresh live in one place.
+///
+/// Raw wheel read kept: grid-size stepping is gated behind a held modifier
+/// chord and predates the keymap engine; migrates with the binding-layer
+/// follow-up.
 fn handle_grid_size_scroll(
     keyboard: Res<ButtonInput<KeyCode>>,
     keybind_focus: crate::keybind_focus::KeybindFocus,

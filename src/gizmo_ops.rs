@@ -4,8 +4,8 @@
 //! Default keybind: L.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::core_extension::CoreExtensionInputContext;
 use crate::gizmos::GizmoSpace;
@@ -14,14 +14,7 @@ use crate::keybind_focus::KeybindFocus;
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<GizmoSpaceToggleOp>();
 
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<GizmoSpaceToggleOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::KeyL, Press::default())],
-        ));
-    });
+    ctx.bind_operator::<CoreExtensionInputContext, GizmoSpaceToggleOp>([PresetInput::key("KeyL")]);
 }
 
 /// Space toggle is allowed in any edit mode. Modal drags block it via

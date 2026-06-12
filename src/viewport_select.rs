@@ -13,8 +13,8 @@ use bevy::{
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
     prelude::*,
 };
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_jsn::{Brush, BrushGroup};
 
 /// Marker for the box-select visual overlay node.
@@ -44,12 +44,9 @@ impl Plugin for ViewportSelectPlugin {
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BoxSelectOp>()
         .register_operator::<ViewportExitGroupEditOp>();
-    let ext = ctx.id();
-    ctx.spawn((
-        Action::<ViewportExitGroupEditOp>::new(),
-        ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::Escape, Press::default())],
-    ));
+    ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, ViewportExitGroupEditOp>(
+        [PresetInput::key("Escape")],
+    );
 }
 
 fn group_edit_active(
@@ -131,7 +128,7 @@ pub(crate) struct LastClick {
 }
 
 pub(crate) fn handle_viewport_click(
-    mouse: Res<ButtonInput<MouseButton>>,
+    pointer: crate::input_contexts::PointerInputs,
     keyboard: Res<ButtonInput<KeyCode>>,
     vp: ViewportCursor,
     scene_entities: Query<(Entity, &GlobalTransform), (Without<EditorEntity>, With<Transform>)>,
@@ -157,7 +154,7 @@ pub(crate) fn handle_viewport_click(
 
     // Physics mode is intentionally not blocked: the user needs to
     // click-select entities to drag them in the physics tool.
-    if !mouse.just_pressed(MouseButton::Left)
+    if !pointer.pointer_primary_just_pressed()
         || guards.is_any_interaction_active()
         || guards.gizmo_hover.hovered_axis.is_some()
         || just_finished_draw
@@ -317,7 +314,7 @@ pub(crate) fn handle_viewport_click(
 /// face-drag because face-drag's hit-test runs inside its operator
 /// a frame later. See `cursor_over_brush_face`.
 fn box_select_pending_trigger(
-    mouse: Res<ButtonInput<MouseButton>>,
+    pointer: crate::input_contexts::PointerInputs,
     vp: ViewportCursor,
     guards: InteractionGuards,
     mut box_state: ResMut<BoxSelectState>,
@@ -332,7 +329,7 @@ fn box_select_pending_trigger(
     // the same-frame case.
     if box_state.active
         || box_state.pending.is_some()
-        || !mouse.just_pressed(MouseButton::Left)
+        || !pointer.pointer_primary_just_pressed()
         || guards.is_any_interaction_active()
         || guards.gizmo_hover.hovered_axis.is_some()
     {

@@ -8,8 +8,8 @@
 //! here.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::core_extension::CoreExtensionInputContext;
 
@@ -21,41 +21,14 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<SceneSaveSelectionAsPrefabOp>()
         .register_operator::<SceneOpenRecentOp>();
 
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<SceneNewOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyN.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
-                Press::default(),
-            )],
-        ));
-        world.spawn((
-            Action::<SceneOpenOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyO.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-        world.spawn((
-            Action::<SceneSaveOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyS.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-        world.spawn((
-            Action::<SceneSaveAsOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyS.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
-                Press::default(),
-            )],
-        ));
-    });
+    ctx.bind_operator::<CoreExtensionInputContext, SceneNewOp>([PresetInput::key("KeyN")
+        .ctrl()
+        .shift()]);
+    ctx.bind_operator::<CoreExtensionInputContext, SceneOpenOp>([PresetInput::key("KeyO").ctrl()]);
+    ctx.bind_operator::<CoreExtensionInputContext, SceneSaveOp>([PresetInput::key("KeyS").ctrl()]);
+    ctx.bind_operator::<CoreExtensionInputContext, SceneSaveAsOp>([PresetInput::key("KeyS")
+        .ctrl()
+        .shift()]);
 }
 
 #[operator(id = "scene.new", label = "New")]

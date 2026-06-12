@@ -1,7 +1,4 @@
-use bevy::{
-    input::mouse::{MouseScrollUnit, MouseWheel},
-    prelude::*,
-};
+use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 
@@ -262,7 +259,7 @@ fn cancel_terrain_sculpt(
 
 fn handle_brush_resize_scroll(
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut scroll_events: MessageReader<MouseWheel>,
+    nav_scroll: crate::input_contexts::NavScrollInputs,
     edit_mode: Res<TerrainEditMode>,
     mut brush_settings: ResMut<TerrainBrushSettings>,
 ) {
@@ -270,21 +267,18 @@ fn handle_brush_resize_scroll(
         return;
     }
 
+    // Resize only fires when Shift is held. The camera system already skips
+    // zoom when Shift is down, so resize and zoom remain mutually exclusive
+    // exactly as they were before the BEI migration.
     let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     if !shift {
         return;
     }
 
-    for event in scroll_events.read() {
-        let delta = match event.unit {
-            MouseScrollUnit::Line => event.y,
-            MouseScrollUnit::Pixel => event.y * 0.01,
-        };
-        if delta > 0.0 {
-            brush_settings.radius = f32::min(brush_settings.radius * 1.15, 50.0);
-        } else if delta < 0.0 {
-            brush_settings.radius = f32::max(brush_settings.radius * 0.87, 1.0);
-        }
+    if nav_scroll.resize_up() {
+        brush_settings.radius = f32::min(brush_settings.radius * 1.15, 50.0);
+    } else if nav_scroll.resize_down() {
+        brush_settings.radius = f32::max(brush_settings.radius * 0.87, 1.0);
     }
 }
 

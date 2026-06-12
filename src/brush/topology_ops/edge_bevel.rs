@@ -7,8 +7,8 @@
 //! RMB cancels and restores the pre-modal mesh.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::ops::edge_bevel::edge_bevel;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
@@ -48,17 +48,9 @@ pub struct EdgeBevelModalState {
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushEdgeBevelOp>();
 
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<BrushEdgeBevelOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyB.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-    });
+    ctx.bind_operator::<CoreExtensionInputContext, BrushEdgeBevelOp>([
+        PresetInput::key("KeyB").ctrl()
+    ]);
 }
 
 /// Chamfer each selected edge into a quad, controlled by cursor displacement
@@ -84,6 +76,7 @@ pub(crate) fn brush_edge_bevel(
     mut modal_state: ResMut<EdgeBevelModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    modal_inputs: crate::input_contexts::ModalInputs,
     cursor: crate::viewport::UiCursorPos,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
@@ -141,9 +134,8 @@ pub(crate) fn brush_edge_bevel(
 
     // --- Subsequent invokes: cancel, update width, mutate preview, or commit ---
 
-    let escape = keyboard.just_pressed(KeyCode::Escape);
     let rmb = mouse.just_pressed(MouseButton::Right);
-    if escape || rmb {
+    if modal_inputs.cancel() || rmb {
         // Live brush has been mutated each frame, so restore from the snapshot
         // before clearing modal state.
         restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);

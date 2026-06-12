@@ -10,8 +10,8 @@
 //!   panel the cursor is in.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::core_extension::CoreExtensionInputContext;
 use crate::selection::{Selected, Selection};
@@ -35,68 +35,29 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ViewUiZoomOutOp>()
         .register_operator::<ViewUiZoomResetOp>();
 
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<ViewToggleWireframeOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyW.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
-                Press::default(),
-            )],
-        ));
-        world.spawn((
-            Action::<ViewTogglePerspOrthoOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Numpad5, Press::default())],
-        ));
-        world.spawn((
-            Action::<ViewFrameSelectedOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::NumpadDecimal, Press::default())],
-        ));
-        world.spawn((
-            Action::<ViewFrameAllOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Home, Press::default())],
-        ));
-        world.spawn((
-            Action::<ViewUiZoomInOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![
-                (
-                    KeyCode::Equal.with_mod_keys(ModKeys::CONTROL),
-                    Press::default(),
-                ),
-                (
-                    KeyCode::NumpadAdd.with_mod_keys(ModKeys::CONTROL),
-                    Press::default(),
-                ),
-            ],
-        ));
-        world.spawn((
-            Action::<ViewUiZoomOutOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![
-                (
-                    KeyCode::Minus.with_mod_keys(ModKeys::CONTROL),
-                    Press::default(),
-                ),
-                (
-                    KeyCode::NumpadSubtract.with_mod_keys(ModKeys::CONTROL),
-                    Press::default(),
-                ),
-            ],
-        ));
-        world.spawn((
-            Action::<ViewUiZoomResetOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::Digit0.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-    });
+    ctx.bind_operator::<CoreExtensionInputContext, ViewToggleWireframeOp>([PresetInput::key(
+        "KeyW",
+    )
+    .ctrl()
+    .shift()]);
+    ctx.bind_operator::<CoreExtensionInputContext, ViewTogglePerspOrthoOp>([PresetInput::key(
+        "Numpad5",
+    )]);
+    ctx.bind_operator::<CoreExtensionInputContext, ViewFrameSelectedOp>([PresetInput::key(
+        "NumpadDecimal",
+    )]);
+    ctx.bind_operator::<CoreExtensionInputContext, ViewFrameAllOp>([PresetInput::key("Home")]);
+    ctx.bind_operator::<CoreExtensionInputContext, ViewUiZoomInOp>([
+        PresetInput::key("Equal").ctrl(),
+        PresetInput::key("NumpadAdd").ctrl(),
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, ViewUiZoomOutOp>([
+        PresetInput::key("Minus").ctrl(),
+        PresetInput::key("NumpadSubtract").ctrl(),
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, ViewUiZoomResetOp>([
+        PresetInput::key("Digit0").ctrl()
+    ]);
 }
 
 #[operator(id = "view.toggle_wireframe", label = "Toggle Wireframe")]

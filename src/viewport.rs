@@ -8,9 +8,9 @@ use bevy::{
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
     ui::{UiGlobalTransform, widget::ViewportNode},
 };
-use bevy_enhanced_input::prelude::{Press, *};
 use bevy_infinite_grid::{InfiniteGridBundle, InfiniteGridPlugin};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_camera::{JackdawCameraPlugin, JackdawCameraSettings};
 
 use bevy::ecs::system::SystemParam;
@@ -815,12 +815,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ViewportBookmarkSaveOp>()
         .register_operator::<ViewportBookmarkLoadOp>();
 
-    let ext = ctx.id();
-    ctx.spawn((
-        Action::<ViewportFocusSelectedOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(KeyCode::KeyF, Press::default())],
-    ));
+    ctx.bind_operator::<CoreExtensionInputContext, ViewportFocusSelectedOp>([PresetInput::key(
+        "KeyF",
+    )]);
 }
 
 fn has_primary_selection(selection: Res<Selection>) -> bool {

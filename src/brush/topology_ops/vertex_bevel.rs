@@ -7,8 +7,8 @@
 //! commits; Esc / RMB cancels and restores the pre-modal mesh.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::cycles::disk_walk;
 use jackdaw_geometry::halfedge::ops::vertex_bevel::vertex_bevel;
@@ -48,17 +48,9 @@ pub struct VertexBevelModalState {
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushVertexBevelOp>();
 
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<BrushVertexBevelOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyB.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-    });
+    ctx.bind_operator::<CoreExtensionInputContext, BrushVertexBevelOp>([
+        PresetInput::key("KeyB").ctrl()
+    ]);
 }
 
 /// Bevel the selected vertex into an N-gon face, controlled by cursor
@@ -84,6 +76,7 @@ pub(crate) fn brush_vertex_bevel(
     mut modal_state: ResMut<VertexBevelModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    modal_inputs: crate::input_contexts::ModalInputs,
     cursor: crate::viewport::UiCursorPos,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
@@ -127,9 +120,8 @@ pub(crate) fn brush_vertex_bevel(
 
     // --- Subsequent invokes: cancel, update width, mutate preview, or commit ---
 
-    let escape = keyboard.just_pressed(KeyCode::Escape);
     let rmb = mouse.just_pressed(MouseButton::Right);
-    if escape || rmb {
+    if modal_inputs.cancel() || rmb {
         // Live brush has been mutated each frame, so restore from the snapshot
         // before clearing modal state.
         restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
 use jackdaw_feathers::{
     button::{ButtonClickEvent, ButtonOperatorCall},
@@ -115,17 +116,11 @@ impl JackdawExtension for JackdawCoreExtension {
             .register_operator::<crate::ClipNewOp>()
             .register_operator::<crate::ClipNewBlendGraphOp>();
         let core_ext = ctx.id();
-        ctx.spawn((
-            Action::<crate::ClipDeleteKeyframesOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![
-                (KeyCode::Delete, Press::default()),
-                (KeyCode::Backspace, Press::default()),
-            ],
-        ));
-        // No `Press` on Step Left / Right: holding an arrow scrubs
-        // the timeline frame-by-frame. Shift+Arrow keyframe jumps
-        // below stay one-shot.
+        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipDeleteKeyframesOp>([
+            PresetInput::key("Delete"),
+            PresetInput::key("Backspace"),
+        ]);
+        // No Press on Step Left / Right: deferred (hold-to-repeat, not bare Press::default()).
         ctx.spawn((
             Action::<crate::ClipTimelineStepLeftOp>::new(),
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
@@ -136,48 +131,24 @@ impl JackdawExtension for JackdawCoreExtension {
             ActionOf::<CoreExtensionInputContext>::new(core_ext),
             bindings![KeyCode::ArrowRight],
         ));
-        ctx.spawn((
-            Action::<crate::ClipTimelineJumpPrevOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![(
-                KeyCode::ArrowLeft.with_mod_keys(ModKeys::SHIFT),
-                Press::default(),
-            )],
-        ));
-        ctx.spawn((
-            Action::<crate::ClipTimelineJumpNextOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![(
-                KeyCode::ArrowRight.with_mod_keys(ModKeys::SHIFT),
-                Press::default(),
-            )],
-        ));
-        ctx.spawn((
-            Action::<crate::ClipTimelineJumpStartOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![(KeyCode::Home, Press::default())],
-        ));
-        ctx.spawn((
-            Action::<crate::ClipTimelineJumpEndOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![(KeyCode::End, Press::default())],
-        ));
-        ctx.spawn((
-            Action::<crate::ClipCopyKeyframesOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![(
-                KeyCode::KeyC.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-        ctx.spawn((
-            Action::<crate::ClipPasteKeyframesOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(core_ext),
-            bindings![(
-                KeyCode::KeyV.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
+        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipTimelineJumpPrevOp>([
+            PresetInput::key("ArrowLeft").shift(),
+        ]);
+        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipTimelineJumpNextOp>([
+            PresetInput::key("ArrowRight").shift(),
+        ]);
+        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipTimelineJumpStartOp>([
+            PresetInput::key("Home"),
+        ]);
+        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipTimelineJumpEndOp>([
+            PresetInput::key("End"),
+        ]);
+        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipCopyKeyframesOp>([
+            PresetInput::key("KeyC").ctrl(),
+        ]);
+        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipPasteKeyframesOp>([
+            PresetInput::key("KeyV").ctrl(),
+        ]);
         crate::draw_brush::add_to_extension(ctx);
         crate::measure_tool::add_to_extension(ctx);
 

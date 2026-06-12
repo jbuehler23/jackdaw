@@ -127,7 +127,7 @@ pub(crate) fn cursor_over_brush_face(
 /// of: LMB while in face-edit mode, or Shift / Alt + LMB in object
 /// mode (auto-enters face-edit as a "quick action").
 pub(crate) fn face_drag_invoke_trigger(
-    mouse: Res<ButtonInput<MouseButton>>,
+    pointer: crate::input_contexts::PointerInputs,
     keyboard: Res<ButtonInput<KeyCode>>,
     edit_mode: Res<EditMode>,
     drag_state: Res<BrushDragState>,
@@ -138,7 +138,8 @@ pub(crate) fn face_drag_invoke_trigger(
     gizmo_hover: Res<crate::gizmos::GizmoHoverState>,
     mut commands: Commands,
 ) {
-    if !mouse.just_pressed(MouseButton::Left) || drag_state.active || drag_state.pending.is_some() {
+    if !pointer.pointer_primary_just_pressed() || drag_state.active || drag_state.pending.is_some()
+    {
         return;
     }
 
@@ -763,7 +764,7 @@ fn spawn_extruded_brush(
 // =====================================================================
 
 pub(crate) fn vertex_drag_invoke_trigger(
-    mouse: Res<ButtonInput<MouseButton>>,
+    pointer: crate::input_contexts::PointerInputs,
     edit_mode: Res<EditMode>,
     drag_state: Res<VertexDragState>,
     keybind_focus: KeybindFocus,
@@ -771,7 +772,7 @@ pub(crate) fn vertex_drag_invoke_trigger(
     gizmo_hover: Res<crate::gizmos::GizmoHoverState>,
     mut commands: Commands,
 ) {
-    if !mouse.just_pressed(MouseButton::Left)
+    if !pointer.pointer_primary_just_pressed()
         || !matches!(*edit_mode, EditMode::BrushEdit(BrushEditMode::Vertex))
         || drag_state.active
         || drag_state.pending.is_some()
@@ -807,6 +808,7 @@ pub fn brush_vertex_drag(
     _: In<OperatorParameters>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    modal_inputs: crate::input_contexts::ModalInputs,
     vp: ViewportCursor,
     brush_transforms: Query<&GlobalTransform>,
     mut brush_selection: ResMut<BrushSelection>,
@@ -966,13 +968,13 @@ pub fn brush_vertex_drag(
 
     // Subsequent invokes: constraint cycling, RMB cancel, release commit, drag math.
     if drag_state.active {
-        if keyboard.just_pressed(KeyCode::KeyX) {
+        if modal_inputs.axis_x() {
             drag_state.constraint =
                 toggle_constraint(drag_state.constraint, VertexDragConstraint::AxisX);
-        } else if keyboard.just_pressed(KeyCode::KeyY) {
+        } else if modal_inputs.axis_y() {
             drag_state.constraint =
                 toggle_constraint(drag_state.constraint, VertexDragConstraint::AxisY);
-        } else if keyboard.just_pressed(KeyCode::KeyZ) {
+        } else if modal_inputs.axis_z() {
             drag_state.constraint =
                 toggle_constraint(drag_state.constraint, VertexDragConstraint::AxisZ);
         }
@@ -1107,7 +1109,7 @@ fn toggle_constraint(
 // =====================================================================
 
 pub(crate) fn edge_drag_invoke_trigger(
-    mouse: Res<ButtonInput<MouseButton>>,
+    pointer: crate::input_contexts::PointerInputs,
     edit_mode: Res<EditMode>,
     drag_state: Res<EdgeDragState>,
     keybind_focus: KeybindFocus,
@@ -1115,7 +1117,7 @@ pub(crate) fn edge_drag_invoke_trigger(
     gizmo_hover: Res<crate::gizmos::GizmoHoverState>,
     mut commands: Commands,
 ) {
-    if !mouse.just_pressed(MouseButton::Left)
+    if !pointer.pointer_primary_just_pressed()
         || !matches!(*edit_mode, EditMode::BrushEdit(BrushEditMode::Edge))
         || drag_state.active
         || drag_state.pending.is_some()
@@ -1151,6 +1153,7 @@ pub fn brush_edge_drag(
     _: In<OperatorParameters>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    modal_inputs: crate::input_contexts::ModalInputs,
     vp: ViewportCursor,
     brush_transforms: Query<&GlobalTransform>,
     mut brush_selection: ResMut<BrushSelection>,
@@ -1265,13 +1268,13 @@ pub fn brush_edge_drag(
     let brush_global = brush_transforms.get(brush_entity)?;
 
     if drag_state.active {
-        if keyboard.just_pressed(KeyCode::KeyX) {
+        if modal_inputs.axis_x() {
             drag_state.constraint =
                 toggle_constraint(drag_state.constraint, VertexDragConstraint::AxisX);
-        } else if keyboard.just_pressed(KeyCode::KeyY) {
+        } else if modal_inputs.axis_y() {
             drag_state.constraint =
                 toggle_constraint(drag_state.constraint, VertexDragConstraint::AxisY);
-        } else if keyboard.just_pressed(KeyCode::KeyZ) {
+        } else if modal_inputs.axis_z() {
             drag_state.constraint =
                 toggle_constraint(drag_state.constraint, VertexDragConstraint::AxisZ);
         }

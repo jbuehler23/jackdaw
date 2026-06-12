@@ -11,8 +11,8 @@
 
 use bevy::input::ButtonInput;
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::core_extension::CoreExtensionInputContext;
 
@@ -20,25 +20,12 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<HistoryUndoOp>()
         .register_operator::<HistoryRedoOp>();
 
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<HistoryUndoOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyZ.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-        world.spawn((
-            Action::<HistoryRedoOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyZ.with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT),
-                Press::default(),
-            )],
-        ));
-    });
+    ctx.bind_operator::<CoreExtensionInputContext, HistoryUndoOp>(
+        [PresetInput::key("KeyZ").ctrl()],
+    );
+    ctx.bind_operator::<CoreExtensionInputContext, HistoryRedoOp>([PresetInput::key("KeyZ")
+        .ctrl()
+        .shift()]);
 }
 
 #[operator(id = "history.undo", label = "Undo", allows_undo = false)]

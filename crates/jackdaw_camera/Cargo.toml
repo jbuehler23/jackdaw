@@ -8,7 +8,6 @@ repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
 bevy.workspace = true
-jackdaw_commands.workspace = true
 
 [lints]
 workspace = true

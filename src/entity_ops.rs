@@ -1235,8 +1235,8 @@ fn get_assets_base_dir() -> Option<std::path::PathBuf> {
 // operator has the scene locked, matching the guards the legacy
 // `handle_entity_keys` applied.
 
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::core_extension::CoreExtensionInputContext;
 
@@ -1273,56 +1273,28 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<EntityAddZoneTransitionOp>()
         .register_operator::<EntityAddNetworkRoomOp>();
 
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        world.spawn((
-            Action::<EntityDeleteOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::Delete, Press::default())],
-        ));
-        world.spawn((
-            Action::<EntityDuplicateOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyD.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-        world.spawn((
-            Action::<EntityCopyComponentsOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyC.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-        world.spawn((
-            Action::<EntityPasteComponentsOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyV.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-        world.spawn((
-            Action::<EntityToggleVisibilityOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::KeyH, Press::default())],
-        ));
-        world.spawn((
-            Action::<EntityUnhideAllOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(
-                KeyCode::KeyH.with_mod_keys(ModKeys::CONTROL),
-                Press::default(),
-            )],
-        ));
-        world.spawn((
-            Action::<EntityHideUnselectedOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
-            bindings![(KeyCode::KeyH.with_mod_keys(ModKeys::ALT), Press::default(),)],
-        ));
-    });
+    ctx.bind_operator::<CoreExtensionInputContext, EntityDeleteOp>([PresetInput::key("Delete")]);
+    ctx.bind_operator::<CoreExtensionInputContext, EntityDuplicateOp>([
+        PresetInput::key("KeyD").ctrl()
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, EntityCopyComponentsOp>([PresetInput::key(
+        "KeyC",
+    )
+    .ctrl()]);
+    ctx.bind_operator::<CoreExtensionInputContext, EntityPasteComponentsOp>([PresetInput::key(
+        "KeyV",
+    )
+    .ctrl()]);
+    ctx.bind_operator::<CoreExtensionInputContext, EntityToggleVisibilityOp>([PresetInput::key(
+        "KeyH",
+    )]);
+    ctx.bind_operator::<CoreExtensionInputContext, EntityUnhideAllOp>([
+        PresetInput::key("KeyH").ctrl()
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, EntityHideUnselectedOp>([PresetInput::key(
+        "KeyH",
+    )
+    .alt()]);
 }
 
 /// Shared availability check for entity manipulation operators.

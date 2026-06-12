@@ -30,6 +30,7 @@ pub mod gizmos;
 pub mod grid_ops;
 pub mod hierarchy;
 pub mod history_ops;
+pub mod input_contexts;
 pub mod inspector;
 pub mod keybind_focus;
 pub mod keybind_settings;
@@ -329,6 +330,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(jackdaw_node_graph::NodeGraphPlugin)
         .add_plugins(jackdaw_animation::AnimationPlugin)
         .add_plugins(jackdaw_panels::DockPlugin)
+        .add_plugins(input_contexts::InputContextsPlugin)
         .add_plugins(jackdaw_api_internal::ExtensionLoaderPlugin)
         .add_plugins(extension_watcher::ExtensionWatcherPlugin)
         .add_plugins(extensions_dialog::ExtensionsDialogPlugin)
@@ -367,6 +369,7 @@ impl Plugin for EditorCorePlugin {
                 .run_if(in_state(crate::AppState::Editor)),
         )
         .insert_resource(UiTheme(create_dark_theme()))
+        .insert_resource(jackdaw_api_internal::load_active_keymap_preset())
         .init_resource::<layout::ActiveDocument>()
         .init_resource::<layout::SceneViewPreset>()
         .init_resource::<asset_catalog::AssetCatalog>()
