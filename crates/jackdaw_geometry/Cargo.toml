@@ -21,6 +21,7 @@ serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 jackdaw_jsn = { path = "../jackdaw_jsn", default-features = false }
+serde_json = { workspace = true }
 
 [features]
 default = ["render"]

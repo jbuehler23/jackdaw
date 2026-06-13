@@ -25,7 +25,12 @@ pub(crate) use self::hull::{merge_hull_triangles, rebuild_brush_from_vertices};
 pub(crate) use self::interaction::{
     BrushDragCapture, BrushDragState, ClipMode, ClipState, EdgeDragState, VertexDragState,
 };
+pub use self::mesh::{
+    ensure_brush_chunk_materials, mark_brushes_changed_on_mirror_removal, regenerate_brush_meshes,
+    setup_default_materials,
+};
 pub use edit_mode_systems::BrushHalfedge;
+pub use jackdaw_geometry::MeshMirror;
 pub use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
 pub use knife_mode::{KnifeMode, KnifePathPoint, KnifeSnapKind, KnifeSnapTarget};
 pub use preview::{ActivePreview, PreviewMesh, PreviewState};
@@ -45,9 +50,71 @@ pub struct BrushMeshCache {
     pub face_polygons: Vec<Vec<usize>>,
     /// Child entities rendering this brush, one per material chunk.
     pub chunk_entities: Vec<Entity>,
+    /// Evaluated face index -> authored face index. Empty when no mirror is active (identity).
+    pub face_source: Vec<u32>,
+    /// Evaluated vertex index -> authored vertex index. Empty when no mirror is active (identity).
+    pub vert_source: Vec<u32>,
 }
 
 impl BrushMeshCache {
+    /// Authored face index for a picked (possibly mirrored) face.
+    pub fn face_to_authored(&self, face: usize) -> usize {
+        self.face_source.get(face).map_or(face, |&f| f as usize)
+    }
+
+    /// Authored vertex index for a picked (possibly mirrored) vertex.
+    pub fn vert_to_authored(&self, vert: usize) -> usize {
+        self.vert_source.get(vert).map_or(vert, |&v| v as usize)
+    }
+
+    /// Authored normalized edge for a picked (possibly mirrored) edge.
+    pub fn edge_to_authored(&self, edge: (usize, usize)) -> (usize, usize) {
+        let a = self.vert_to_authored(edge.0);
+        let b = self.vert_to_authored(edge.1);
+        (a.min(b), a.max(b))
+    }
+
+    /// Number of authored vertices: the length of the identity prefix of
+    /// `vertices`. Mirrored copies, when present, are appended after it
+    /// and map back to a smaller index, so the prefix ends at the first
+    /// entry that does not map to itself.
+    pub fn authored_vertex_count(&self) -> usize {
+        if self.vert_source.is_empty() {
+            self.vertices.len()
+        } else {
+            self.vert_source
+                .iter()
+                .enumerate()
+                .take_while(|&(i, &src)| src as usize == i)
+                .count()
+        }
+    }
+
+    /// Number of authored faces: the length of the identity prefix of
+    /// `face_polygons`.
+    pub fn authored_face_count(&self) -> usize {
+        if self.face_source.is_empty() {
+            self.face_polygons.len()
+        } else {
+            self.face_source
+                .iter()
+                .enumerate()
+                .take_while(|&(i, &src)| src as usize == i)
+                .count()
+        }
+    }
+
+    /// The authored vertices only, excluding any appended mirrored copies.
+    pub fn authored_vertices(&self) -> &[Vec3] {
+        &self.vertices[..self.authored_vertex_count()]
+    }
+
+    /// The authored face polygons only, excluding any appended mirrored
+    /// copies.
+    pub fn authored_face_polygons(&self) -> &[Vec<usize>] {
+        &self.face_polygons[..self.authored_face_count()]
+    }
+
     /// Unique undirected edges as normalized `(min, max)` vertex-index pairs,
     /// derived from the face polygons. Order follows first appearance.
     pub fn unique_edges(&self) -> Vec<(usize, usize)> {
@@ -79,13 +146,19 @@ impl BrushMeshCache {
 #[require(crate::EditorHidden, crate::NonSerializable)]
 pub struct BrushMeshChunk {
     pub brush_entity: Entity,
-    /// Authored face index for each triangle in the chunk mesh. Valid
-    /// only for the `Brush` state at the last rebuild; consumers must
-    /// resolve through `.get()` and treat out-of-range as a miss.
+    /// Evaluated face index for each triangle in the chunk mesh (equal
+    /// to the authored index unless a `MeshMirror` is active; resolve
+    /// via `BrushMeshCache::face_to_authored`). Valid only for the
+    /// `Brush` state at the last rebuild; consumers must resolve
+    /// through `.get()` and treat out-of-range as a miss.
     pub face_of_tri: Vec<u32>,
     /// True when every face in this chunk uses the default palette
     /// material, making it eligible for selection/preview swaps.
     pub uses_default_material: bool,
+    /// The material resolved at rebuild time (explicit face material,
+    /// or the default/selected palette variant), kept so x-ray view
+    /// can restore the exact pre-toggle material.
+    pub material: Handle<StandardMaterial>,
 }
 
 /// Marker: brush is being actively modified and should render with transparent preview materials.
@@ -112,6 +185,10 @@ pub enum BrushEditMode {
 }
 
 /// Per-brush sub-element selection (faces, vertices, edges).
+///
+/// Indices are authored-space: valid into `Brush` data and the identity
+/// prefix of `BrushMeshCache`. Picking a mirrored copy selects its
+/// authored source, so the highlight appears on the authored half only.
 #[derive(Default, Clone)]
 pub struct BrushSubSelection {
     pub faces: Vec<usize>,
@@ -215,6 +292,10 @@ pub struct BrushMaterialPalette {
     pub default_material: Handle<StandardMaterial>,
     /// Grid-textured default material at high alpha.
     pub default_selected_material: Handle<StandardMaterial>,
+    /// Translucent unlit material applied to every chunk in x-ray view.
+    pub x_ray_material: Handle<StandardMaterial>,
+    /// X-ray variant for selected / preview brushes.
+    pub x_ray_selected_material: Handle<StandardMaterial>,
 }
 
 /// Remembers the last material applied via the texture/material browser, so new brushes inherit it.
@@ -325,6 +406,7 @@ impl Plugin for BrushPlugin {
         // `#[reflect(@EditorCategory("Brush"))]`.
         app.register_type::<EditMode>()
             .register_type::<BrushEditMode>()
+            .register_type::<MeshMirror>()
             .init_resource::<EditMode>()
             .init_resource::<BrushSelection>()
             .init_resource::<BrushMaterialPalette>()
@@ -346,9 +428,15 @@ impl Plugin for BrushPlugin {
             .init_resource::<LastUsedMaterial>()
             .add_plugins(mesh::MeshPlugin)
             .add_plugins(preview::PreviewPlugin)
+            .add_plugins(MaterialPlugin::<gizmo_overlay::OccludedHandleMaterial>::default())
+            .add_plugins(MaterialPlugin::<gizmo_overlay::FrontEdgeMaterial>::default())
             .add_systems(
                 OnEnter(crate::AppState::Editor),
-                mesh::setup_default_materials,
+                (
+                    mesh::setup_default_materials,
+                    gizmo_overlay::setup_vertex_handle_assets,
+                    gizmo_overlay::setup_edge_overlay,
+                ),
             )
             .add_systems(
                 Update,
@@ -372,13 +460,17 @@ impl Plugin for BrushPlugin {
                 (
                     mesh::sync_brush_preview,
                     ApplyDeferred,
+                    mesh::mark_brushes_changed_on_mirror_removal,
                     mesh::recenter_brush_origins,
                     ApplyDeferred,
                     mesh::regenerate_brush_meshes,
                     ApplyDeferred,
                     mesh::ensure_brush_chunk_materials,
                     gizmo_overlay::draw_brush_edit_gizmos,
+                    gizmo_overlay::update_vertex_handles,
+                    gizmo_overlay::update_edge_overlay,
                     gizmo_overlay::draw_loop_cut_preview,
+                    topology_ops::loop_cut::update_loop_cut_mid_label,
                     knife_mode::draw_knife_overlay,
                     box_select::update_brush_box_select_overlay,
                 )

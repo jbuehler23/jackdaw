@@ -4,7 +4,7 @@ use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
 use crate::{
     EditorEntity,
-    brush::{BrushMaterialPalette, BrushMeshChunk},
+    brush::{BrushMaterialPalette, BrushMeshCache, BrushMeshChunk},
     commands::{
         CommandGroup, CommandHistory, DespawnEntity, EditorCommand, collect_entity_ids,
         deselect_entities,
@@ -815,6 +815,7 @@ fn draw_brush_update(
     mut ray_cast: MeshRayCast,
     brush_chunks: Query<&BrushMeshChunk>,
     brushes: Query<(&Brush, &GlobalTransform)>,
+    brush_caches: Query<&BrushMeshCache>,
 ) {
     let Some(ref mut active) = draw_state.active else {
         return;
@@ -879,7 +880,15 @@ fn draw_brush_update(
                         let Some(&face_idx) = chunk.face_of_tri.get(tri_idx) else {
                             continue;
                         };
-                        let Some(face) = brush.faces.get(face_idx as usize) else {
+                        // `face_of_tri` is evaluated-space; resolve a hit on
+                        // a mirrored copy to its authored face so the lookup
+                        // into `brush.faces` stays in range.
+                        let face_idx = brush_caches
+                            .get(chunk.brush_entity)
+                            .map_or(face_idx as usize, |cache| {
+                                cache.face_to_authored(face_idx as usize)
+                            });
+                        let Some(face) = brush.faces.get(face_idx) else {
                             continue;
                         };
                         let (_, brush_rot, _) = brush_tf.to_scale_rotation_translation();
@@ -2745,6 +2754,13 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
         return;
     }
 
+    // Bake live mirrors into the authored topology before any vertex is
+    // read: the hull must include the mirrored halves, and the baked
+    // brushes must not keep a `MeshMirror` that would re-mirror the result.
+    for &entity in &selected_brushes {
+        crate::brush::topology_ops::mirror_ops::bake_mirror(world, entity);
+    }
+
     // Join (Convex Merge) wraps all selected brushes' vertices in a single
     // convex hull. This is well-defined for both convex and concave inputs:
     // we simply gather every vertex from each brush's topology (rather than
@@ -2958,6 +2974,12 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
 pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
     let selection = world.resource::<Selection>();
     let selected_set: Vec<Entity> = selection.entities.clone();
+
+    // Bake live mirrors into the authored topology before any geometry is
+    // read: cutters unconditionally, mirrored targets only when their
+    // evaluated bounds reach a cutter. Baking removes the `MeshMirror`, so
+    // the fragments below cannot get re-mirrored by the mesh rebuild.
+    crate::brush::topology_ops::mirror_ops::bake_engaged_mirrors(world, &selected_set);
 
     let mut brush_query = world.query::<(Entity, &Brush, &GlobalTransform)>();
     let all_brushes: Vec<(Entity, Brush, GlobalTransform)> = brush_query
@@ -3258,6 +3280,13 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
     let selection = world.resource::<Selection>();
     let selected_set: Vec<Entity> = selection.entities.clone();
 
+    // Bake live mirrors into the authored topology before any geometry is
+    // read, so the intersection sees both halves; baking removes the
+    // `MeshMirror`, which must not survive onto the result brush.
+    for &entity in &selected_set {
+        crate::brush::topology_ops::mirror_ops::bake_mirror(world, entity);
+    }
+
     let mut brush_query = world.query::<(Entity, &Brush, &GlobalTransform)>();
     let selected_brushes: Vec<(Entity, Brush, GlobalTransform)> = brush_query
         .iter(world)
@@ -3447,7 +3476,7 @@ pub(crate) fn brush_csg_intersect(
 /// Shared environment gate: brush-level operators never run mid-draw,
 /// mid-modal, or while a text input is focused. Each specific op
 /// composes this with its own selection-state precondition check.
-fn env_allows_brush_op(
+pub(crate) fn env_allows_brush_op(
     keybind_focus: &KeybindFocus,
     modal: &crate::modal_transform::ModalTransformState,
     draw_state: &DrawBrushState,
@@ -3536,49 +3565,52 @@ pub(crate) fn brush_extend_face_to_brush(
     vp: ViewportCursor,
     mut ray_cast: MeshRayCast,
     brush_chunks: Query<&BrushMeshChunk>,
+    brush_caches: Query<&BrushMeshCache>,
     brush_query: Query<(), With<Brush>>,
     mut commands: Commands,
 ) -> OperatorResult {
     // Resolve (primary, face_index, targets) depending on edit mode
-    let (primary, face_index, targets) =
-        if *edit_mode == crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face) {
-            // Face mode path: primary is the brush being edited, face is the selected face
-            let primary = brush_selection
-                .active_brush
-                .filter(|&e| brush_query.contains(e))?;
-            let face_index = brush_selection
-                .sub(primary)
-                .and_then(|s| s.faces.last().copied())?;
-            let targets: Vec<Entity> = selection
-                .entities
-                .iter()
-                .copied()
-                .filter(|&e| e != primary && brush_query.contains(e))
-                .collect();
-            if targets.is_empty() {
-                return OperatorResult::Cancelled;
-            }
-            (primary, face_index, targets)
-        } else if *edit_mode == crate::brush::EditMode::Object {
-            // Object mode: need 2+ brushes selected
-            let selected_brushes: Vec<Entity> = selection
-                .entities
-                .iter()
-                .copied()
-                .filter(|&e| brush_query.contains(e))
-                .collect();
-            if selected_brushes.len() < 2 {
-                return OperatorResult::Cancelled;
-            }
+    let (primary, face_index, targets) = if *edit_mode
+        == crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face)
+    {
+        // Face mode path: primary is the brush being edited, face is the selected face
+        let primary = brush_selection
+            .active_brush
+            .filter(|&e| brush_query.contains(e))?;
+        let face_index = brush_selection
+            .sub(primary)
+            .and_then(|s| s.faces.last().copied())?;
+        let targets: Vec<Entity> = selection
+            .entities
+            .iter()
+            .copied()
+            .filter(|&e| e != primary && brush_query.contains(e))
+            .collect();
+        if targets.is_empty() {
+            return OperatorResult::Cancelled;
+        }
+        (primary, face_index, targets)
+    } else if *edit_mode == crate::brush::EditMode::Object {
+        // Object mode: need 2+ brushes selected
+        let selected_brushes: Vec<Entity> = selection
+            .entities
+            .iter()
+            .copied()
+            .filter(|&e| brush_query.contains(e))
+            .collect();
+        if selected_brushes.len() < 2 {
+            return OperatorResult::Cancelled;
+        }
 
-            let primary = selection.primary().filter(|e| brush_query.contains(*e))?;
-            let targets: Vec<Entity> = selected_brushes
-                .into_iter()
-                .filter(|&e| e != primary)
-                .collect();
+        let primary = selection.primary().filter(|e| brush_query.contains(*e))?;
+        let targets: Vec<Entity> = selected_brushes
+            .into_iter()
+            .filter(|&e| e != primary)
+            .collect();
 
-            // Try hover raycast first to find the face
-            let face_index = find_hovered_face_on_brush(primary, &vp, &mut ray_cast, &brush_chunks)
+        // Try hover raycast first to find the face
+        let face_index =
+            find_hovered_face_on_brush(primary, &vp, &mut ray_cast, &brush_chunks, &brush_caches)
                 .or_else(|| {
                     // Fall back to remembered face
                     if brush_selection.last_face_entity == Some(primary) {
@@ -3588,11 +3620,11 @@ pub(crate) fn brush_extend_face_to_brush(
                     }
                 });
 
-            let face_index = face_index?;
-            (primary, face_index, targets)
-        } else {
-            return OperatorResult::Cancelled;
-        };
+        let face_index = face_index?;
+        (primary, face_index, targets)
+    } else {
+        return OperatorResult::Cancelled;
+    };
 
     // If we were in face mode, exit it (geometry is about to change, indices become invalid)
     if *edit_mode == crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face) {
@@ -3608,12 +3640,14 @@ pub(crate) fn brush_extend_face_to_brush(
 }
 
 /// Raycast from cursor to find a hovered brush face belonging to the given
-/// brush. Returns the face index if found.
+/// brush. Returns the authored face index if found; a hit on a mirrored
+/// copy resolves to its source face.
 fn find_hovered_face_on_brush(
     brush_entity: Entity,
     vp: &ViewportCursor,
     ray_cast: &mut MeshRayCast,
     brush_chunks: &Query<&BrushMeshChunk>,
+    brush_caches: &Query<&BrushMeshCache>,
 ) -> Option<usize> {
     let cursor_pos = vp.cursor()?;
     let camera_entity = vp.camera_entity()?;
@@ -3638,7 +3672,12 @@ fn find_hovered_face_on_brush(
         let Some(&face_idx) = chunk.face_of_tri.get(tri_idx) else {
             continue;
         };
-        return Some(face_idx as usize);
+        let face_idx = brush_caches
+            .get(brush_entity)
+            .map_or(face_idx as usize, |cache| {
+                cache.face_to_authored(face_idx as usize)
+            });
+        return Some(face_idx);
     }
     None
 }

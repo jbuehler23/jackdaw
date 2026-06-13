@@ -1,8 +1,9 @@
 //! View-mode toggles and per-viewport view operators.
 //!
 //! - Toggle ops (`view.toggle_*`, `view.cycle_*`) flip a resource.
-//!   Only `view.toggle_wireframe` has a default keybind
-//!   (`Ctrl+Shift+W`); the rest are menu-only.
+//!   Only `view.toggle_wireframe` (`Ctrl+Shift+W`) and
+//!   `view.toggle_x_ray` (`Alt+Z`) have default keybinds; the rest are
+//!   menu-only.
 //! - Per-viewport ops (`view.set_axis`, `view.toggle_persp_ortho`,
 //!   `view.frame_selected`, `view.frame_all`) act on the camera of
 //!   the hovered viewport (via [`crate::viewport::ActiveViewport`])
@@ -19,6 +20,7 @@ use crate::viewport::{ActiveViewport, MainViewportCamera, ViewportGrid};
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ViewToggleWireframeOp>()
+        .register_operator::<ViewToggleXrayOp>()
         .register_operator::<ViewToggleBoundingBoxesOp>()
         .register_operator::<ViewCycleBoundingBoxModeOp>()
         .register_operator::<ViewToggleFaceGridOp>()
@@ -40,6 +42,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     )
     .ctrl()
     .shift()]);
+    ctx.bind_operator::<CoreExtensionInputContext, ViewToggleXrayOp>([
+        PresetInput::key("KeyZ").alt()
+    ]);
     ctx.bind_operator::<CoreExtensionInputContext, ViewTogglePerspOrthoOp>([PresetInput::key(
         "Numpad5",
     )]);
@@ -66,6 +71,15 @@ pub(crate) fn view_toggle_wireframe(
     mut settings: ResMut<crate::view_modes::ViewModeSettings>,
 ) -> OperatorResult {
     settings.wireframe = !settings.wireframe;
+    OperatorResult::Finished
+}
+
+#[operator(id = "view.toggle_x_ray", label = "Toggle X-Ray")]
+pub(crate) fn view_toggle_xray(
+    _: In<OperatorParameters>,
+    mut settings: ResMut<crate::view_modes::ViewModeSettings>,
+) -> OperatorResult {
+    settings.x_ray = !settings.x_ray;
     OperatorResult::Finished
 }
 

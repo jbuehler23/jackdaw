@@ -57,12 +57,15 @@ pub const SELECTION_MARQUEE_BG: Color = Color::srgba(0.3, 0.5, 1.0, 0.1);
 pub const SELECTION_MARQUEE_BORDER: Color = Color::srgba(0.3, 0.5, 1.0, 0.7);
 
 // -- Brush edit mode --
-/// Things that are currently being edited
-pub const EDIT_SELECTED_COLOR: Color = Color::WHITE;
-/// For things that are not currently being edited, but could be if the user e.g. clicked on them
-pub const EDIT_AVAILABLE_COLOR: Color = Color::srgba(0.996, 0.996, 0.133333, 1.0);
-/// Hovered sub-element (distinct from selected and resting state)
-pub const EDIT_HOVER_COLOR: Color = Color::srgba(1.0, 0.55, 0.1, 1.0);
+// Edit palette follows the mesh-editor convention: a quiet resting wire so
+// selection and hover stand out, kept distinct from the object-selection
+// color. Resting = muted grey, selected = orange, hovered/active = white.
+/// Selected sub-elements.
+pub const EDIT_SELECTED_COLOR: Color = Color::srgba(1.0, 0.6, 0.0, 1.0);
+/// Resting sub-elements: not selected, but pickable.
+pub const EDIT_AVAILABLE_COLOR: Color = Color::srgba(0.55, 0.55, 0.6, 1.0);
+/// Hovered / active sub-element (distinct from selected and resting).
+pub const EDIT_HOVER_COLOR: Color = Color::WHITE;
 pub const EDIT_VERTEX_RADIUS: f32 = 0.04;
 pub const FACE_EXTRUDE_PREVIEW: Color = Color::srgb(0.0, 1.0, 0.5);
 
@@ -129,6 +132,8 @@ pub const LIVE_HEADER_TINT: Color = Color::srgba(0.0, 0.667, 0.733, 0.15);
 // -- Brush default material variants --
 pub const DEFAULT_MATERIAL_COLOR: Color = Color::srgba(0.980, 0.8549, 0.3686, 0.5);
 pub const DEFAULT_MATERIAL_SELECTED_COLOR: Color = Color::srgba(0.980, 0.8549, 0.3686, 0.75);
+pub const X_RAY_MATERIAL_COLOR: Color = Color::srgba(0.65, 0.75, 0.9, 0.35);
+pub const X_RAY_MATERIAL_SELECTED_COLOR: Color = Color::srgba(1.0, 0.6, 0.2, 0.45);
 
 // -- Brush material palette --
 pub const BRUSH_PALETTE: [Color; 8] = [

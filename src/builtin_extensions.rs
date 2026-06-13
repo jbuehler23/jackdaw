@@ -22,6 +22,7 @@ pub(crate) const WORLD_ENTITY_ICONS: &[(&str, Icon)] = &[
     ("jackdaw::entity_ops::SceneReflectionProbe", Icon::Sparkles),
     ("jackdaw::entity_ops::SceneAnimationPlayer", Icon::Play),
     ("jackdaw::entity_ops::SceneAudioSource", Icon::Volume2),
+    ("jackdaw::reference_image::ReferenceImage", Icon::Image),
 ];
 
 /// Icon for the camera-rig component, gated to match the `camera_rig`
@@ -419,6 +420,7 @@ mod tests {
             registry.register::<crate::entity_ops::SceneReflectionProbe>();
             registry.register::<crate::entity_ops::SceneAnimationPlayer>();
             registry.register::<crate::entity_ops::SceneAudioSource>();
+            registry.register::<crate::reference_image::ReferenceImage>();
             #[cfg(feature = "camera_rig")]
             registry.register::<jackdaw_camera_rig::CameraRig>();
         }
@@ -459,6 +461,12 @@ mod tests {
             (
                 world.spawn(crate::entity_ops::SceneAudioSource).id(),
                 Icon::Volume2,
+            ),
+            (
+                world
+                    .spawn(crate::reference_image::ReferenceImage::default())
+                    .id(),
+                Icon::Image,
             ),
         ];
         for (entity, expected) in cases {

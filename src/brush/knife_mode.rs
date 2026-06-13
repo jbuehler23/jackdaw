@@ -128,12 +128,15 @@ pub struct KnifeSnapTarget {
     /// Brush-local snap point (for stable mesh ops).
     pub local_pos: Vec3,
     pub kind: KnifeSnapKind,
-    /// Which face of the brush the snap was computed against.
+    /// Which face of the brush the snap was computed against. Authored
+    /// index: the knife snaps only to authored geometry, so the live
+    /// mirrored half is never a snap candidate.
     pub face_idx: usize,
     /// Canonical (min, max) vert indices of the edge the snap is on, or
-    /// `None` if the snap landed on an existing vert.
+    /// `None` if the snap landed on an existing vert. Authored indices.
     pub edge_pair: Option<(usize, usize)>,
-    /// Existing vert index if the snap reused a corner.
+    /// Existing vert index if the snap reused a corner. Authored index,
+    /// resolved against `Brush::topology` at commit.
     pub vert_idx: Option<usize>,
     /// When `kind == PathPoint`, the index into the live `path` that
     /// the cursor snapped to. `None` for every other kind.
@@ -727,7 +730,9 @@ fn compute_path_edge_intersections(
     }
 
     let mut seen_edges: std::collections::HashSet<(usize, usize)> = Default::default();
-    for polygon in &cache.face_polygons {
+    // Authored faces only: the commit splits authored edges, never the
+    // live mirrored half, so mirrored edges cannot be real crossings.
+    for polygon in cache.authored_face_polygons() {
         if polygon.len() < 3 {
             continue;
         }
@@ -798,7 +803,9 @@ fn segment_intersect_2d(p1: Vec2, p2: Vec2, p3: Vec2, p4: Vec2) -> Option<(f32, 
     Some((t1, t2))
 }
 
-/// Pick the closest face of `cache` under the cursor in screen space.
+/// Pick the closest authored face of `cache` under the cursor in screen
+/// space. Mirrored-half faces are not pickable: the live mirrored half
+/// is preview output and the knife only cuts authored geometry.
 fn pick_face_under_cursor(
     viewport_cursor: Vec2,
     cache: &BrushMeshCache,
@@ -809,7 +816,7 @@ fn pick_face_under_cursor(
     let mut best_face = None;
     let mut best_depth = f32::MAX;
 
-    for (face_idx, polygon) in cache.face_polygons.iter().enumerate() {
+    for (face_idx, polygon) in cache.authored_face_polygons().iter().enumerate() {
         if polygon.len() < 3 {
             continue;
         }
@@ -837,9 +844,12 @@ fn pick_face_under_cursor(
     best_face
 }
 
-/// Scan every face polygon's verts. Returns the closest vert within
-/// `KNIFE_SNAP_PIXELS` of the cursor, deduplicated by vert index so a
-/// shared vert isn't double-counted across faces.
+/// Scan every authored face polygon's verts. Returns the closest vert
+/// within `KNIFE_SNAP_PIXELS` of the cursor, deduplicated by vert index
+/// so a shared vert isn't double-counted across faces. Mirrored-half
+/// verts are never candidates: the knife only cuts authored geometry,
+/// so snapping to the live mirrored half would put the cut on the
+/// opposite side from the click.
 ///
 /// Candidates are ordered by camera-space depth (smallest `clip_z` first,
 /// i.e. closest to camera), with screen distance as the tiebreaker. This
@@ -870,7 +880,7 @@ fn compute_vert_snap_all(
     let mut best: Option<(usize, f32, f32, usize)> = None;
     let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
-    for (face_idx, polygon) in cache.face_polygons.iter().enumerate() {
+    for (face_idx, polygon) in cache.authored_face_polygons().iter().enumerate() {
         for &vi in polygon {
             if !seen.insert(vi) {
                 continue;
@@ -921,11 +931,14 @@ fn compute_vert_snap_all(
     })
 }
 
-/// Scan every face polygon's edges (deduplicated by canonical
+/// Scan every authored face polygon's edges (deduplicated by canonical
 /// `(min, max)` pair). Returns the best edge-midpoint snap (only when
 /// `shift` is held) and the best edge-point snap. Edges shared between
 /// faces are processed exactly once, so the snap target stays put when
-/// the cursor crosses a face boundary in screen space.
+/// the cursor crosses a face boundary in screen space. Mirrored-half
+/// edges are never candidates: the commit resolves edge snaps by
+/// position against the authored halfedge mesh, so a mirrored-space
+/// position would fail to resolve and abort the whole path.
 ///
 /// Candidates are ordered by camera-space depth at the snap point
 /// (smallest `clip_z` first, i.e. closest to camera), with screen
@@ -956,7 +969,7 @@ fn compute_edge_snap_all(
     let mut best_midpoint: Option<(usize, usize, f32, f32, usize)> = None;
     let mut seen: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
 
-    for (face_idx, polygon) in cache.face_polygons.iter().enumerate() {
+    for (face_idx, polygon) in cache.authored_face_polygons().iter().enumerate() {
         let n = polygon.len();
         if n < 2 {
             continue;

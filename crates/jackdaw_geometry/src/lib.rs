@@ -2,6 +2,9 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
+pub mod mirror;
+pub use mirror::{EvaluatedBrush, MeshMirror, MirrorAxes, evaluate_mirror, reflected_face_plane};
+
 pub mod topology;
 pub use topology::{
     AttributeData, AttributeStack, BrushTopology, EdgeFlag, MeshEdge, MeshLoop, MeshPoly, MeshVert,

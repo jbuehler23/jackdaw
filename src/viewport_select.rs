@@ -136,6 +136,7 @@ pub(crate) fn handle_viewport_click(
     parents: Query<&ChildOf>,
     brush_groups: Query<(), With<BrushGroup>>,
     brushes: Query<(), With<Brush>>,
+    reference_images: Query<&crate::reference_image::ReferenceImage>,
     guards: InteractionGuards,
     mut selection: ResMut<Selection>,
     mut input_focus: ResMut<InputFocus>,
@@ -194,7 +195,11 @@ pub(crate) fn handle_viewport_click(
         // `MeshRayCast` doesn't filter by render layer, so without
         // this guard the picker hits invisible meshes at world origin
         // and short-circuits before reaching the actual scene.
-        let editor_filter = |entity: Entity| !editor_entities.contains(entity);
+        // Locked reference images are also excluded so clicks pass
+        // through them to the geometry behind.
+        let editor_filter = |entity: Entity| {
+            !editor_entities.contains(entity) && !is_locked_reference(&reference_images, entity)
+        };
         let settings = MeshRayCastSettings::default()
             .with_visibility(RayCastVisibility::Any)
             .with_filter(&editor_filter);
@@ -208,6 +213,7 @@ pub(crate) fn handle_viewport_click(
                 &group_edit,
                 &brush_groups,
                 &brushes,
+                &reference_images,
             ) {
                 best_entity = Some(ancestor);
                 break;
@@ -228,6 +234,7 @@ pub(crate) fn handle_viewport_click(
                     &group_edit,
                     &brush_groups,
                     &brushes,
+                    &reference_images,
                 ) == Some(current_primary)
                 {
                     return;
@@ -240,6 +247,9 @@ pub(crate) fn handle_viewport_click(
     if best_entity.is_none() {
         let mut best_dist = 30.0_f32;
         for (entity, global_tf) in &scene_entities {
+            if is_locked_reference(&reference_images, entity) {
+                continue;
+            }
             let pos = global_tf.translation();
             if let Ok(screen_pos) = camera.world_to_viewport(cam_tf, pos) {
                 let dist = (screen_pos - local_cursor).length();
@@ -422,6 +432,7 @@ pub fn box_select(
     vp: ViewportCursor,
     mut box_state: ResMut<BoxSelectState>,
     scene_entities: Query<(Entity, &GlobalTransform), (Without<EditorEntity>, With<Name>)>,
+    reference_images: Query<&crate::reference_image::ReferenceImage>,
     mut selection: ResMut<Selection>,
     mut commands: Commands,
     active: ActiveModalQuery,
@@ -470,6 +481,11 @@ pub fn box_select(
     let selected: Vec<Entity> = scene_entities
         .iter()
         .filter_map(|(entity, tf)| {
+            // Locked reference images stay out of box selection, same
+            // as they stay out of click selection.
+            if is_locked_reference(&reference_images, entity) {
+                return None;
+            }
             let screen = camera.world_to_viewport(cam_tf, tf.translation()).ok()?;
             (screen.x >= min.x && screen.x <= max.x && screen.y >= min.y && screen.y <= max.y)
                 .then_some(entity)
@@ -510,6 +526,15 @@ fn update_box_select_overlay(
     }
 }
 
+/// Returns `true` when `entity` is a reference image with `locked = true`.
+/// Used in multiple selection paths to make locked boards pass-through.
+fn is_locked_reference(
+    refs: &Query<&crate::reference_image::ReferenceImage>,
+    entity: Entity,
+) -> bool {
+    refs.get(entity).is_ok_and(|r| r.locked)
+}
+
 /// Walk up the `ChildOf` hierarchy from a raycast hit entity to find the
 /// selectable ancestor. A brush resolves to itself regardless of nesting.
 /// A non-brush scene entity whose parent is also a scene entity walks up
@@ -517,6 +542,8 @@ fn update_box_select_overlay(
 /// When inside a group (`GroupEditState::active_group` is set), non-brush
 /// children of that group stop at the child so individual fragments can
 /// be selected; a brush child returns via the brush early-exit above.
+/// Locked reference images resolve to `None` so viewport clicks pass
+/// through to whatever sits behind them.
 fn find_selectable_ancestor(
     mut entity: Entity,
     scene_entities: &Query<(Entity, &GlobalTransform), (Without<EditorEntity>, With<Transform>)>,
@@ -524,8 +551,12 @@ fn find_selectable_ancestor(
     group_edit: &GroupEditState,
     brush_groups: &Query<(), With<BrushGroup>>,
     brushes: &Query<(), With<Brush>>,
+    reference_images: &Query<&crate::reference_image::ReferenceImage>,
 ) -> Option<Entity> {
     loop {
+        if is_locked_reference(reference_images, entity) {
+            return None;
+        }
         if scene_entities.contains(entity) {
             // A brush always resolves to itself; never walk past it to a parent.
             if brushes.contains(entity) {

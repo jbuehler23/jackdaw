@@ -5,6 +5,7 @@ pub mod bisect_plane;
 pub mod bridge_edge_loops;
 pub mod connect_verts;
 pub mod contextual_create;
+pub mod delete_elements;
 pub mod dissolve_edges;
 pub mod dissolve_faces;
 pub mod dissolve_verts;

@@ -1,4 +1,5 @@
 use bevy::{
+    anti_alias::fxaa::{Fxaa, Sensitivity},
     asset::{embedded_asset, load_embedded_asset},
     camera::{RenderTarget, visibility::RenderLayers},
     core_pipeline::oit::OrderIndependentTransparencySettings,
@@ -405,7 +406,15 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
             },
             RenderTarget::Image(image_handle.into()),
             Transform::from_xyz(0.0, 4.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y),
+            // Order-independent transparency forces MSAA off, so smooth the
+            // jagged gizmo lines and outlines with a post-process pass
+            // instead. Lower sensitivity keeps the thin edit lines sharp.
             Msaa::Off,
+            Fxaa {
+                edge_threshold: Sensitivity::Medium,
+                edge_threshold_min: Sensitivity::Medium,
+                ..default()
+            },
             JackdawCameraSettings::default(),
             ViewportConfig::default(),
             camera_layers,
@@ -523,23 +532,26 @@ fn handle_viewport_drop(
     mut drag: ResMut<crate::asset_browser::ActiveAssetDrag>,
     mut commands: Commands,
 ) {
-    // Walk up the hierarchy to find the FileBrowserItem component
-    let item = find_ancestor_component(event.dropped, &file_items, &parents);
-    let Some(item) = item else {
-        return;
-    };
-
-    let path_lower = item.path.to_lowercase();
-    let is_gltf = path_lower.ends_with(".gltf") || path_lower.ends_with(".glb");
-    let is_template = path_lower.ends_with(".template.json");
-    let is_jsn = path_lower.ends_with(".jsn");
     // The asset browser sets `ActiveAssetDrag.path` only for entries
     // whose underlying file actually carries a `Prefab` component, so a
     // present path here means "route this drop through the prefab
-    // system".
+    // system". `ActiveAssetDrag.image` is set for image-thumbnail
+    // drags, which spawn a reference image plane at the drop point.
     let prefab_drag = drag.path.take();
+    let image_drag = drag.image.take();
 
-    if !is_gltf && !is_template && !is_jsn && prefab_drag.is_none() {
+    // Walk up the hierarchy to find the FileBrowserItem component.
+    // Image thumbnails aren't FileBrowserItem rows, so an image drag
+    // carries its path in the resource instead.
+    let item = find_ancestor_component(event.dropped, &file_items, &parents);
+    let item_path = item.map(|item| item.path.clone());
+
+    let path_lower = item_path.as_deref().unwrap_or("").to_lowercase();
+    let is_gltf = path_lower.ends_with(".gltf") || path_lower.ends_with(".glb");
+    let is_template = path_lower.ends_with(".template.json");
+    let is_jsn = path_lower.ends_with(".jsn");
+
+    if !is_gltf && !is_template && !is_jsn && prefab_drag.is_none() && image_drag.is_none() {
         return;
     }
 
@@ -564,6 +576,14 @@ fn handle_viewport_drop(
     let ctrl = false; // No Ctrl check needed for drop placement
     let snapped_pos = snap_settings.snap_translate_vec3_if(position, ctrl);
 
+    if let Some(image_path) = image_drag {
+        let path = image_path.to_string_lossy().replace('\\', "/");
+        commands.queue(move |world: &mut World| {
+            crate::reference_image::spawn_reference_image_in_world(world, &path, snapped_pos);
+        });
+        return;
+    }
+
     if let Some(prefab_path) = prefab_drag {
         commands
             .operator("prefab.spawn_instance")
@@ -579,7 +599,9 @@ fn handle_viewport_drop(
         return;
     }
 
-    let path = item.path.clone();
+    let Some(path) = item_path else {
+        return;
+    };
     if is_jsn {
         warn!(
             "drag-spawning non-prefab .jsn files is no longer supported; \

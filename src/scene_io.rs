@@ -50,6 +50,12 @@ const SKIP_COMPONENT_PATHS: &[&str] = &[
     // multiplayer gate on clients). Persisting it plants a rig that fights
     // those systems on every load.
     "jackdaw_camera_rig::ActiveCameraRig",
+    // Render-state handles are always derived in the editor (brush chunks,
+    // terrain chunks, GLTF instances, reference-image quads) and rebuilt
+    // from the authored components on load; serializing them would inline
+    // runtime mesh/material assets into the scene.
+    "bevy_mesh::components::Mesh3d",
+    "bevy_pbr::mesh_material::MeshMaterial3d<bevy_pbr::pbr_material::StandardMaterial>",
 ];
 
 /// Paths that override the skip prefixes  -- these are always saved even if
@@ -70,6 +76,9 @@ const ALWAYS_SAVE_PATHS: &[&str] = &[
     "jackdaw::prefab::components::Prefab",
     "jackdaw::prefab::components::IsA",
     "jackdaw::prefab::components::PrefabEntityId",
+    // Reference image boards persist with the scene; the quad mesh and
+    // material are derived from this component at runtime.
+    "jackdaw::reference_image::ReferenceImage",
 ];
 
 pub fn should_skip_component(type_path: &str) -> bool {

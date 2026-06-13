@@ -232,8 +232,12 @@ pub fn brush_box_select(
                     let Some(screen) = screen_of(v) else {
                         continue;
                     };
-                    if inside(screen) && !sub.vertices.contains(&i) {
-                        sub.vertices.push(i);
+                    // Authored index: a box over both mirror halves picks
+                    // the same authored vertex twice; the contains check
+                    // dedupes.
+                    let vi = cache.vert_to_authored(i);
+                    if inside(screen) && !sub.vertices.contains(&vi) {
+                        sub.vertices.push(vi);
                         hit = true;
                     }
                 }
@@ -247,8 +251,9 @@ pub fn brush_box_select(
                     else {
                         continue;
                     };
-                    if inside(sa) && inside(sb) && !sub.edges.contains(&(a, b)) {
-                        sub.edges.push((a, b));
+                    let edge = cache.edge_to_authored((a, b));
+                    if inside(sa) && inside(sb) && !sub.edges.contains(&edge) {
+                        sub.edges.push(edge);
                         hit = true;
                     }
                 }
@@ -264,8 +269,9 @@ pub fn brush_box_select(
                     let Some(screen) = screen_of(centroid) else {
                         continue;
                     };
-                    if inside(screen) && !sub.faces.contains(&f) {
-                        sub.faces.push(f);
+                    let face = cache.face_to_authored(f);
+                    if inside(screen) && !sub.faces.contains(&face) {
+                        sub.faces.push(face);
                         hit = true;
                     }
                 }

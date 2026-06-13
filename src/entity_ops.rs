@@ -1279,6 +1279,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     #[cfg(feature = "camera_rig")]
     ctx.register_operator::<EntityAddCameraRigOp>();
     ctx.register_operator::<EntityAddEmptyOp>()
+        .register_operator::<EntityAddImageOp>()
         .register_operator::<EntityAddNavmeshOp>()
         .register_operator::<EntityAddTerrainOp>()
         .register_operator::<EntityAddPrefabOp>()
@@ -1518,6 +1519,12 @@ pub(crate) fn entity_add_camera_rig(
     commands.queue(|world: &mut World| {
         create_entity_in_world(world, EntityTemplate::CameraRig);
     });
+    OperatorResult::Finished
+}
+
+#[operator(id = "entity.add.image", label = "Image")]
+pub fn entity_add_image(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(crate::reference_image::open_reference_image_picker);
     OperatorResult::Finished
 }
 

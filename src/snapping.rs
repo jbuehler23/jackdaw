@@ -98,11 +98,13 @@ impl Default for SnapSettings {
     fn default() -> Self {
         let grid_power = -2;
         Self {
-            translate_snap: true,
+            // Snapping ships off; the viewport magnet toggle turns it on,
+            // and Ctrl inverts it per operation (loop cut, slides, gizmo).
+            translate_snap: false,
             translate_increment: 2.0_f32.powi(grid_power),
-            rotate_snap: true,
+            rotate_snap: false,
             rotate_increment: 15.0_f32.to_radians(),
-            scale_snap: true,
+            scale_snap: false,
             scale_increment: 0.1,
             grid_power,
         }

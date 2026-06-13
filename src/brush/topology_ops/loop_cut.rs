@@ -43,6 +43,10 @@ pub struct LoopCutModalState {
     pub start_v0_window: Vec2,
     /// Window-space pixel position of the start edge's canonical `v[1]`.
     pub start_v1_window: Vec2,
+    /// World-space endpoints of the start edge, used to place the "MID"
+    /// label at the loop's position along the edge.
+    pub start_a_world: Vec3,
+    pub start_b_world: Vec3,
 }
 
 /// Insert a new edge loop across a strip of quad faces. Walks the edge ring
@@ -117,6 +121,15 @@ pub(crate) fn brush_loop_cut(
             &viewport_query,
         );
 
+        // World-space endpoints of the start edge for the "MID" label.
+        let (a_world, b_world) = match brush_transforms.get(brush_entity) {
+            Ok(g) => (
+                g.transform_point(halfedge.mesh.verts.get(va).map_or(Vec3::ZERO, |v| v.co)),
+                g.transform_point(halfedge.mesh.verts.get(vb).map_or(Vec3::ZERO, |v| v.co)),
+            ),
+            Err(_) => (Vec3::ZERO, Vec3::ZERO),
+        };
+
         // Snapshot the HalfedgeMesh before any mutation.
         let mesh_snapshot = halfedge.mesh.clone();
 
@@ -128,6 +141,8 @@ pub(crate) fn brush_loop_cut(
         modal_state.start_mesh = Some(mesh_snapshot);
         modal_state.start_v0_window = v0_window;
         modal_state.start_v1_window = v1_window;
+        modal_state.start_a_world = a_world;
+        modal_state.start_b_world = b_world;
 
         // Draw the initial preview lines at t=0.5.
         update_preview_lines(&modal_state, &brush_transforms, &mut preview_lines);
@@ -439,4 +454,84 @@ fn snap_to_fractions(t: f32) -> f32 {
 pub(crate) fn can_run_loop_cut(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
     *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge)
         && selection.active_sub().is_some_and(|s| !s.edges.is_empty())
+}
+
+/// Marks the floating "MID" badge shown while a loop cut is snapped to
+/// the middle of its edge.
+#[derive(Component)]
+pub struct LoopCutMidLabel;
+
+/// Show a small "MID" badge at the loop position while the loop cut is
+/// snapped to the middle of the edge (t = 0.5). Mirrors the measure
+/// tool's world-to-panel label placement.
+pub fn update_loop_cut_mid_label(
+    mut commands: Commands,
+    modal_state: Res<LoopCutModalState>,
+    cameras: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    viewports: Query<(Entity, &ComputedNode), With<SceneViewport>>,
+    editor_font: Res<jackdaw_feathers::icons::EditorFont>,
+    mut labels: Query<(&mut Node, &mut Visibility, &mut TextFont), With<LoopCutMidLabel>>,
+) {
+    let at_mid = modal_state.active && (modal_state.current_t - 0.5).abs() < 1.0e-3;
+
+    if !at_mid {
+        if let Ok((_, mut vis, _)) = labels.single_mut() {
+            *vis = Visibility::Hidden;
+        }
+        return;
+    }
+
+    let Ok((camera, cam_tf)) = cameras.single() else {
+        return;
+    };
+    let Ok((viewport_entity, viewport_node)) = viewports.single() else {
+        return;
+    };
+
+    // Spawn the badge the first time it is needed, parented to the
+    // viewport panel so its absolute position is panel-local.
+    if labels.is_empty() {
+        commands.spawn((
+            LoopCutMidLabel,
+            crate::EditorEntity,
+            crate::NonSerializable,
+            Text::new("MID"),
+            TextFont {
+                font: editor_font.0.clone(),
+                font_size: jackdaw_feathers::tokens::FONT_SM,
+                ..default()
+            },
+            TextColor(jackdaw_feathers::tokens::TEXT_ACCENT),
+            Node {
+                position_type: PositionType::Absolute,
+                ..default()
+            },
+            Visibility::Hidden,
+            ChildOf(viewport_entity),
+        ));
+        return;
+    }
+    let Ok((mut node, mut vis, mut font)) = labels.single_mut() else {
+        return;
+    };
+
+    let mid = modal_state
+        .start_a_world
+        .lerp(modal_state.start_b_world, modal_state.current_t);
+    let vp_node_size = viewport_node.size();
+    let scale = viewport_node.inverse_scale_factor();
+    let render_target_size = camera
+        .logical_viewport_size()
+        .unwrap_or(vp_node_size * scale);
+    if let Ok(vp_coords) = camera.world_to_viewport(cam_tf, mid) {
+        let ui_pos = vp_coords * vp_node_size / render_target_size * scale;
+        node.left = Val::Px(ui_pos.x + 8.0);
+        node.top = Val::Px(ui_pos.y - 8.0);
+        *vis = Visibility::Inherited;
+    } else {
+        *vis = Visibility::Hidden;
+    }
+    if font.font != editor_font.0 {
+        font.font = editor_font.0.clone();
+    }
 }

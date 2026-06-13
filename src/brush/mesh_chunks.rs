@@ -240,6 +240,70 @@ mod tests {
     }
 
     #[test]
+    fn mirrored_face_with_recomputed_plane_flips_chunk_normals() {
+        use jackdaw_geometry::{BrushPlane, MeshMirror, evaluate_mirror, reflected_face_plane};
+
+        // A single +X cap quad at x=1, mirrored across the default x=0 plane.
+        let vertices = vec![
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1.0, 0.0, 1.0),
+        ];
+        let face_polygons = vec![vec![0, 1, 2, 3]];
+        let (u, v) = compute_face_tangent_axes(Vec3::X);
+        let faces = [BrushFaceData {
+            plane: BrushPlane {
+                normal: Vec3::X,
+                distance: 1.0,
+            },
+            uv_scale: Vec2::ONE,
+            uv_u_axis: u,
+            uv_v_axis: v,
+            ..Default::default()
+        }];
+
+        let eval = evaluate_mirror(&vertices, &face_polygons, &MeshMirror::default());
+        assert_eq!(eval.face_polygons.len(), 2);
+
+        // Same construction as regenerate_brush_meshes: mirrored entries
+        // (past the identity prefix) clone the authored data and recompute
+        // the plane from the evaluated ring.
+        let evaluated_faces: Vec<BrushFaceData> = eval
+            .face_source
+            .iter()
+            .enumerate()
+            .map(|(i, &src)| {
+                let mut face = faces[src as usize].clone();
+                if src as usize != i
+                    && let Some(plane) =
+                        reflected_face_plane(&eval.vertices, &eval.face_polygons[i])
+                {
+                    face.plane = plane;
+                }
+                face
+            })
+            .collect();
+
+        let chunks = build_mesh_chunks(&eval.vertices, &eval.face_polygons, &evaluated_faces);
+        assert_eq!(chunks.len(), 1);
+        let chunk = &chunks[0];
+
+        // Flat-shaded normals come from each emitted triangle's winding,
+        // so this checks the triangulator wound the mirrored face toward
+        // -X, not merely that the hint normal was copied through.
+        for (tri_idx, &face_idx) in chunk.face_of_tri.iter().enumerate() {
+            for n in &chunk.normals[tri_idx * 3..tri_idx * 3 + 3] {
+                if face_idx == 0 {
+                    assert!(n[0] > 0.0, "authored cap must face +X, got {n:?}");
+                } else {
+                    assert!(n[0] < 0.0, "mirrored cap must face -X, got {n:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn uv_math_matches_reference_formula() {
         let (vertices, face_polygons, mut faces) = cube_inputs();
         // Non-trivial transform so each term of the formula matters.

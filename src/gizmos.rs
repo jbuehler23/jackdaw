@@ -663,6 +663,7 @@ struct EditGizmoBrushParams<'w, 's> {
     globals: Query<'w, 's, &'static GlobalTransform>,
     brushes: Query<'w, 's, &'static mut jackdaw_jsn::Brush>,
     halfedges: Query<'w, 's, &'static mut crate::brush::BrushHalfedge>,
+    mirrors: Query<'w, 's, &'static jackdaw_geometry::MeshMirror>,
 }
 
 #[operator(
@@ -869,6 +870,7 @@ pub fn gizmo_drag_edit(
         crate::brush_drag_ops::apply_vertex_deltas(
             &mut brush,
             halfedge_opt.as_deref_mut(),
+            brush_params.mirrors.get(entity).ok(),
             &capture.start_brush,
             &capture.start_all_vertices,
             &capture.start_face_polygons,

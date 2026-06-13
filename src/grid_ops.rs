@@ -14,7 +14,8 @@ use crate::snapping::{GRID_POWER_MAX, GRID_POWER_MIN, SnapSettings};
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<GridIncreaseOp>()
-        .register_operator::<GridDecreaseOp>();
+        .register_operator::<GridDecreaseOp>()
+        .register_operator::<GridToggleSnapOp>();
 
     ctx.bind_operator::<CoreExtensionInputContext, GridIncreaseOp>([PresetInput::key(
         "BracketRight",
@@ -41,5 +42,19 @@ pub(crate) fn grid_decrease(
 ) -> OperatorResult {
     snap.grid_power = i32::max(snap.grid_power - 1, GRID_POWER_MIN);
     snap.translate_increment = snap.grid_size();
+    OperatorResult::Finished
+}
+
+#[operator(id = "snap.toggle", label = "Toggle Snapping")]
+pub(crate) fn grid_toggle_snap(
+    _: In<OperatorParameters>,
+    mut snap: ResMut<SnapSettings>,
+) -> OperatorResult {
+    // Master toggle: flip every snap type together so the magnet reads
+    // as a single on/off. `translate_snap` is the representative state.
+    let enabled = !snap.translate_snap;
+    snap.translate_snap = enabled;
+    snap.rotate_snap = enabled;
+    snap.scale_snap = enabled;
     OperatorResult::Finished
 }

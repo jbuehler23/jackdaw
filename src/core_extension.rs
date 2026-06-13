@@ -192,6 +192,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::brush::topology_ops::loop_cut::add_to_extension(ctx);
         crate::brush::topology_ops::make_edge_face::add_to_extension(ctx);
         crate::brush::topology_ops::merge_by_distance::add_to_extension(ctx);
+        crate::brush::topology_ops::mirror_ops::add_to_extension(ctx);
         crate::brush::topology_ops::subdivide::add_to_extension(ctx);
         crate::brush::topology_ops::vertex_slide::add_to_extension(ctx);
         crate::brush::topology_ops::vertex_slide_modal::add_to_extension(ctx);

@@ -76,6 +76,7 @@ pub mod prefab;
 pub mod project;
 pub mod project_files;
 pub mod project_select;
+pub mod reference_image;
 pub mod reflect_default;
 pub mod remote;
 pub mod restart;
@@ -329,6 +330,7 @@ impl Plugin for EditorCorePlugin {
             alignment_guides::AlignmentGuidesPlugin,
             navmesh::NavmeshPlugin,
             terrain::TerrainPlugin,
+            reference_image::ReferenceImagePlugin,
             remote::RemoteConnectionPlugin,
         ))
         .add_plugins(jackdaw_avian_integration::PhysicsOverlaysPlugin::<
@@ -414,6 +416,7 @@ impl Plugin for EditorCorePlugin {
             (
                 send_scroll_events,
                 layout::update_toolbar_button_variants,
+                layout::update_grid_size_label,
                 layout::update_active_document_display,
                 layout::update_tab_strip_highlights,
                 layout::update_pie_view_toggle_appearance,
@@ -2193,6 +2196,7 @@ fn populate_menu(
             TopLevelMenu::View,
             vec![
                 op_entry::<view_ops::ViewToggleWireframeOp>("Toggle Wireframe"),
+                op_entry::<view_ops::ViewToggleXrayOp>("Toggle X-Ray"),
                 op_entry::<view_ops::ViewToggleBoundingBoxesOp>("Toggle Bounding Boxes"),
                 op_entry::<view_ops::ViewCycleBoundingBoxModeOp>("Cycle Bounding Box Mode"),
                 op_entry::<view_ops::ViewToggleFaceGridOp>("Toggle Face Grid"),

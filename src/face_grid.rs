@@ -129,6 +129,24 @@ fn draw_brush_wireframe(
             .is_some_and(|group| parents.get(entity).is_ok_and(|c| c.0 == group));
         let is_selected = is_brush_selected || in_active_group || is_parent_selected;
 
+        // While editing this brush, the per-element overlay is the wireframe
+        // (resting / selected / hover colors), so skip the object wireframe
+        // for it to avoid drawing over those colors. Clip mode keeps its own
+        // handling above.
+        if is_selected
+            && matches!(
+                *edit_mode,
+                EditMode::BrushEdit(
+                    BrushEditMode::Vertex
+                        | BrushEditMode::Edge
+                        | BrushEditMode::Face
+                        | BrushEditMode::Knife
+                )
+            )
+        {
+            continue;
+        }
+
         // we use the same color for wireframe and outline, outlines are just thicker and not drawn in front of geo
         let color: Color = if is_brush_selected {
             if in_clip_mode {

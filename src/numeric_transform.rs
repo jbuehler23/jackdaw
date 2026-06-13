@@ -114,8 +114,21 @@ fn digit_char(key: KeyCode) -> Option<char> {
     }
 }
 
-/// The axis a freshly pressed key selects, if any.
+/// The axis a freshly pressed key selects, if any. Bare X / Y / Z only:
+/// a modified press is some other binding (Ctrl+Z undo, Ctrl+Y redo,
+/// Alt+Z x-ray) and must not arm an axis.
 fn pressed_axis(keyboard: &ButtonInput<KeyCode>) -> Option<GizmoAxis> {
+    let modifier = keyboard.any_pressed([
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+        KeyCode::SuperLeft,
+        KeyCode::SuperRight,
+        KeyCode::AltLeft,
+        KeyCode::AltRight,
+    ]);
+    if modifier {
+        return None;
+    }
     if keyboard.just_pressed(KeyCode::KeyX) {
         Some(GizmoAxis::X)
     } else if keyboard.just_pressed(KeyCode::KeyY) {
@@ -394,6 +407,7 @@ struct NumericBrushParams<'w, 's> {
     globals: Query<'w, 's, &'static GlobalTransform>,
     brushes: Query<'w, 's, &'static mut jackdaw_jsn::Brush>,
     halfedges: Query<'w, 's, &'static mut crate::brush::BrushHalfedge>,
+    mirrors: Query<'w, 's, &'static jackdaw_geometry::MeshMirror>,
 }
 
 #[operator(
@@ -535,6 +549,7 @@ fn apply_sub_elements(
                 axis_dir * value,
                 &mut brush_params.brushes,
                 &mut brush_params.halfedges,
+                &brush_params.mirrors,
             );
         }
         ActiveTool::Rotate => {
@@ -589,6 +604,7 @@ fn apply_capture_plan(
         apply_vertex_deltas(
             &mut brush,
             halfedge_opt.as_deref_mut(),
+            brush_params.mirrors.get(entity).ok(),
             &capture.start_brush,
             &capture.start_all_vertices,
             &capture.start_face_polygons,
@@ -652,6 +668,28 @@ mod tests {
         state.clear();
         assert!(state.axis.is_none());
         assert!(state.input.is_empty());
+    }
+
+    #[test]
+    fn pressed_axis_arms_on_bare_key_and_ignores_modified_presses() {
+        let mut keyboard = ButtonInput::<KeyCode>::default();
+
+        keyboard.press(KeyCode::KeyZ);
+        assert_eq!(pressed_axis(&keyboard), Some(GizmoAxis::Z));
+
+        // Ctrl+Z is undo: it must not arm the Z axis.
+        keyboard.press(KeyCode::ControlLeft);
+        assert_eq!(pressed_axis(&keyboard), None);
+        keyboard.release(KeyCode::ControlLeft);
+
+        // Alt+Z is the x-ray toggle: also no axis.
+        keyboard.press(KeyCode::AltLeft);
+        assert_eq!(pressed_axis(&keyboard), None);
+        keyboard.release(KeyCode::AltLeft);
+
+        keyboard.clear();
+        keyboard.press(KeyCode::KeyX);
+        assert_eq!(pressed_axis(&keyboard), Some(GizmoAxis::X));
     }
 
     #[test]

@@ -362,7 +362,7 @@ pub(crate) fn clip_apply(
 /// the cap slot from the first surviving face (so checker tiling
 /// inherits from the cut's neighbor) before zeroing UV axes so
 /// `ensure_uv_axes` derives proper tangents from the cap's plane.
-fn bisect_brush(brush: &Brush, plane: &BrushPlane, keep: BisectKeep) -> Option<Brush> {
+pub(crate) fn bisect_brush(brush: &Brush, plane: &BrushPlane, keep: BisectKeep) -> Option<Brush> {
     let mut mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let result = bisect_plane(&mut mesh, plane, keep).ok()?;
     if mesh.face_count() == 0 {

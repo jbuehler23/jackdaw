@@ -93,7 +93,7 @@ fn snapshot_notices_editor_state_changes() {
         .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));
 
     // Flip each editor-state resource the snapshot should cover.
-    *world.resource_mut::<ViewModeSettings>() = ViewModeSettings { wireframe: true };
+    world.resource_mut::<ViewModeSettings>().wireframe = true;
     *world.resource_mut::<EditMode>() = EditMode::BrushEdit(BrushEditMode::Face);
     *world.resource_mut::<ActiveTool>() = ActiveTool::Rotate;
     *world.resource_mut::<GizmoSpace>() = GizmoSpace::Local;

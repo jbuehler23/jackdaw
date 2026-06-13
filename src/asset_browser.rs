@@ -89,6 +89,11 @@ fn setup_directory_watcher(root: &Path, commands: &mut Commands) {
 #[derive(Resource, Default)]
 pub struct ActiveAssetDrag {
     pub path: Option<PathBuf>,
+    /// Set when the drag started on a 2D image thumbnail. Dropping it
+    /// on the viewport spawns a reference image plane at the drop
+    /// point; image thumbnails aren't `FileBrowserItem` rows, so the
+    /// drop handler can't recover the path from the dropped entity.
+    pub image: Option<PathBuf>,
 }
 
 pub struct AssetBrowserPlugin;
@@ -594,6 +599,23 @@ fn refresh_browser_on_change(
                     }
                 },
             );
+
+            // 2D textures: track drag start so the viewport's drop
+            // handler can spawn a reference image plane at the drop
+            // point. Clear on DragEnd if nothing consumed it.
+            if !tex_info.is_cubemap && !tex_info.is_array {
+                let drag_path = entry.path.clone();
+                commands.entity(thumb_entity).observe(
+                    move |_: On<Pointer<DragStart>>, mut drag: ResMut<ActiveAssetDrag>| {
+                        drag.image = Some(drag_path.clone());
+                    },
+                );
+                commands.entity(thumb_entity).observe(
+                    |_: On<Pointer<DragEnd>>, mut drag: ResMut<ActiveAssetDrag>| {
+                        drag.image = None;
+                    },
+                );
+            }
         } else {
             // Non-image file or directory: use standard file browser item
             let item = FileBrowserItem {

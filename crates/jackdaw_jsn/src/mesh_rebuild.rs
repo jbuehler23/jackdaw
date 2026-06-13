@@ -8,15 +8,22 @@ use bevy::{
 
 use crate::types::Brush;
 use jackdaw_geometry::{
-    compute_brush_geometry_from_planes, compute_face_tangent_axes, compute_face_uvs,
-    triangulate_polygon,
+    MeshMirror, compute_brush_geometry_from_planes, compute_face_tangent_axes, compute_face_uvs,
+    evaluate_mirror, reflected_face_plane, triangulate_polygon,
 };
 
 pub(super) struct MeshRebuildPlugin;
 
 impl Plugin for MeshRebuildPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, remesh_changed_brushes);
+        app.add_systems(
+            Update,
+            (
+                mark_brushes_changed_on_mirror_removal,
+                remesh_changed_brushes,
+            )
+                .chain(),
+        );
         embedded_asset!(app, "../assets/jd_grid.png");
     }
 }
@@ -33,13 +40,17 @@ impl Plugin for MeshRebuildPlugin {
 /// pre-date the topology field - that path is convex-only and silently
 /// distorts non-convex faces.
 ///
-/// Runs on `Changed<Brush>`, which fires both when a brush is first inserted
-/// and when its value is mutated in place. The clear-then-rebuild pass is
+/// Runs on `Changed<Brush>` (which fires both when a brush is first inserted
+/// and when its value is mutated in place) and `Changed<MeshMirror>` so live
+/// mirror edits re-mesh without a brush touch. The clear-then-rebuild pass is
 /// idempotent: existing face-mesh children (those with `Mesh3d`) are despawned
 /// before the new ones are built, so there is no double-mesh on the insert frame.
 pub fn remesh_changed_brushes(
     mut commands: Commands,
-    changed: Query<(Entity, &Brush, Option<&Children>), Changed<Brush>>,
+    changed: Query<
+        (Entity, &Brush, Option<&MeshMirror>, Option<&Children>),
+        Or<(Changed<Brush>, Changed<MeshMirror>)>,
+    >,
     face_meshes: Query<(), With<Mesh3d>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
@@ -53,7 +64,7 @@ pub fn remesh_changed_brushes(
         return;
     };
 
-    for (entity, brush, children) in &changed {
+    for (entity, brush, mirror, children) in &changed {
         // Clear existing face-mesh children so re-runs are idempotent and a
         // mutated brush does not accumulate stale face entities.
         if let Some(children) = children {
@@ -67,6 +78,7 @@ pub fn remesh_changed_brushes(
         build_brush_meshes(
             entity,
             brush,
+            mirror,
             &mut commands,
             &mut meshes,
             &mut materials,
@@ -75,9 +87,24 @@ pub fn remesh_changed_brushes(
     }
 }
 
+/// `remesh_changed_brushes` only reacts to change ticks, so removing a
+/// `MeshMirror` would leave the stale mirrored half rendered. Touch the
+/// `Brush` change tick of affected entities so the next rebuild drops it.
+pub fn mark_brushes_changed_on_mirror_removal(
+    mut removed: RemovedComponents<MeshMirror>,
+    mut brushes: Query<&mut Brush>,
+) {
+    for entity in removed.read() {
+        if let Ok(mut brush) = brushes.get_mut(entity) {
+            brush.set_changed();
+        }
+    }
+}
+
 fn build_brush_meshes(
     entity: Entity,
     brush: &Brush,
+    mirror: Option<&MeshMirror>,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -94,9 +121,49 @@ fn build_brush_meshes(
     } else {
         compute_brush_geometry_from_planes(&brush.faces)
     };
+
+    // Apply live mirror: append reflected copies after the authored elements.
+    // Authored indices are unchanged (identity prefix); face_source maps
+    // evaluated face indices back to authored face indices for face-data lookup.
+    let (vertices, face_polygons, face_source) =
+        if let Some(mirror) = mirror.filter(|m| !m.axes().is_empty()) {
+            let eval = evaluate_mirror(&vertices, &face_polygons, mirror);
+            (eval.vertices, eval.face_polygons, eval.face_source)
+        } else {
+            (vertices, face_polygons, Vec::new())
+        };
+
+    // Build the face-data slice to iterate: mirrored faces (entries past
+    // the identity prefix, where face_source[i] != i) clone their authored
+    // source entry but get their plane recomputed from the evaluated ring,
+    // since the authored normal is un-reflected and would wind the
+    // triangulation and shade the face inside out. Faces without authored
+    // data fall back to default.
+    let mirrored_faces: Option<Vec<crate::types::BrushFaceData>> = if face_source.is_empty() {
+        None
+    } else {
+        Some(
+            face_source
+                .iter()
+                .enumerate()
+                .map(|(evaluated_idx, &src)| {
+                    let mut face = brush.faces.get(src as usize).cloned().unwrap_or_default();
+                    if src as usize != evaluated_idx
+                        && let Some(plane) =
+                            reflected_face_plane(&vertices, &face_polygons[evaluated_idx])
+                    {
+                        face.plane = plane;
+                    }
+                    face
+                })
+                .collect(),
+        )
+    };
+    let evaluated_faces = mirrored_faces.as_deref().unwrap_or(&brush.faces);
+
     let mut fallback_material: Option<Handle<StandardMaterial>> = None;
 
-    for (face_idx, face_data) in brush.faces.iter().enumerate() {
+    for (face_idx, face_data) in evaluated_faces.iter().enumerate() {
         let indices = &face_polygons[face_idx];
         if indices.len() < 3 {
             continue;
@@ -185,6 +252,7 @@ mod tests {
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
     use bevy::pbr::StandardMaterial;
+    use jackdaw_geometry::{BrushFaceData, BrushPlane, compute_brush_topology};
 
     fn make_app() -> App {
         let mut app = App::new();
@@ -260,5 +328,141 @@ mod tests {
         // frame must not produce double the expected face count.
         let count = face_mesh_child_count(&mut app, brush_entity);
         assert_eq!(count, 6, "cuboid must produce exactly 6 children, not 12");
+    }
+
+    /// A half-cube occupying x >= 0: five open faces plus the seam cap at
+    /// x=0. With default `MeshMirror` (`mirror_x`, offset=0, `merge_dist`=0.001)
+    /// the seam cap welds to itself (no mirrored copy) and the other five
+    /// faces each get a mirrored counterpart.
+    fn half_cube_brush() -> Brush {
+        let hx = 0.5_f32;
+        let hy = 0.5_f32;
+        let hz = 0.5_f32;
+        let make_face = |normal: Vec3, distance: f32| -> BrushFaceData {
+            let (u, v) = compute_face_tangent_axes(normal);
+            BrushFaceData {
+                plane: BrushPlane { normal, distance },
+                uv_scale: bevy::math::Vec2::ONE,
+                uv_u_axis: u,
+                uv_v_axis: v,
+                ..default()
+            }
+        };
+        let faces = vec![
+            make_face(Vec3::X, hx),
+            make_face(Vec3::Y, hy),
+            make_face(Vec3::NEG_Y, hy),
+            make_face(Vec3::Z, hz),
+            make_face(Vec3::NEG_Z, hz),
+            // seam cap: normal -X at the mirror plane x=0
+            make_face(Vec3::NEG_X, 0.0),
+        ];
+        let topology = compute_brush_topology(&faces);
+        Brush { faces, topology }
+    }
+
+    #[test]
+    fn mirror_x_half_cube_produces_eleven_face_meshes() {
+        let mut app = make_app();
+
+        // 5 authored + 5 mirrored + 1 seam = 11 face-mesh children.
+        let brush_entity = app
+            .world_mut()
+            .spawn((half_cube_brush(), MeshMirror::default()))
+            .id();
+        app.update();
+
+        let count = face_mesh_child_count(&mut app, brush_entity);
+        assert_eq!(
+            count, 11,
+            "half-cube with default X mirror must produce 11 face-mesh children"
+        );
+
+        // Mutating the component alone must re-mesh: Changed<MeshMirror>
+        // fires with no brush touch.
+        {
+            let mut mirror = app
+                .world_mut()
+                .get_mut::<MeshMirror>(brush_entity)
+                .expect("mirror component exists");
+            mirror.mirror_x = false;
+        }
+        app.update();
+
+        let count = face_mesh_child_count(&mut app, brush_entity);
+        assert_eq!(
+            count, 6,
+            "disabling the mirror axis must rebuild with authored faces only"
+        );
+
+        {
+            let mut mirror = app
+                .world_mut()
+                .get_mut::<MeshMirror>(brush_entity)
+                .expect("mirror component exists");
+            mirror.mirror_x = true;
+        }
+        app.update();
+
+        let count = face_mesh_child_count(&mut app, brush_entity);
+        assert_eq!(count, 11, "re-enabling the mirror axis must re-mesh");
+
+        // Removal alone must drop the mirrored half; no brush touch.
+        app.world_mut()
+            .entity_mut(brush_entity)
+            .remove::<MeshMirror>();
+        app.update();
+
+        let count = face_mesh_child_count(&mut app, brush_entity);
+        assert_eq!(
+            count, 6,
+            "removing the mirror must rebuild with authored faces only"
+        );
+    }
+
+    #[test]
+    fn mirrored_cap_face_normals_point_outward() {
+        let mut app = make_app();
+
+        let brush_entity = app
+            .world_mut()
+            .spawn((half_cube_brush(), MeshMirror::default()))
+            .id();
+        app.update();
+
+        // The mirrored copy of the +X cap is the only face whose verts all
+        // sit at x = -0.5. Its face data clones the authored entry, whose
+        // un-reflected +X normal would shade and wind it inside out; the
+        // build must recompute the plane from the evaluated ring.
+        let children: Vec<Entity> = app
+            .world()
+            .get::<Children>(brush_entity)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        let meshes = app.world().resource::<Assets<Mesh>>();
+        let mut found = false;
+        for child in children {
+            let Some(mesh3d) = app.world().get::<Mesh3d>(child) else {
+                continue;
+            };
+            let mesh = meshes.get(&mesh3d.0).expect("face mesh asset exists");
+            let positions = mesh
+                .attribute(Mesh::ATTRIBUTE_POSITION)
+                .and_then(|a| a.as_float3())
+                .expect("position attribute");
+            if !positions.iter().all(|p| (p[0] + 0.5).abs() < 1e-5) {
+                continue;
+            }
+            found = true;
+            let normals = mesh
+                .attribute(Mesh::ATTRIBUTE_NORMAL)
+                .and_then(|a| a.as_float3())
+                .expect("normal attribute");
+            assert!(
+                normals.iter().all(|n| n[0] < 0.0),
+                "mirrored -X cap normals must point toward -X, got {normals:?}"
+            );
+        }
+        assert!(found, "a face mesh with all verts at x = -0.5 must exist");
     }
 }
