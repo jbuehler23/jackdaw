@@ -5,6 +5,7 @@ pub mod component_picker;
 pub(crate) mod component_tooltip;
 mod custom_props_display;
 mod material_display;
+mod modifier_display;
 pub(crate) mod ops;
 pub(crate) mod physics_display;
 pub(crate) mod prefab_menu;

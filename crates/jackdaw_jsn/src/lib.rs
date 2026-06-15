@@ -41,6 +41,7 @@ impl Plugin for JsnPlugin {
     fn build(&self, app: &mut App) {
         use jackdaw_geometry::{
             AttributeData, AttributeStack, MeshEdge, MeshLoop, MeshMirror, MeshPoly, MeshVert,
+            Modifier, ModifierEntry, ModifierStack,
         };
         app.register_type::<Brush>()
             .register_type::<BrushGroup>()
@@ -62,6 +63,9 @@ impl Plugin for JsnPlugin {
             .register_type::<NavmeshRegion>()
             .register_type::<Terrain>()
             .register_type::<MeshMirror>()
+            .register_type::<ModifierStack>()
+            .register_type::<ModifierEntry>()
+            .register_type::<Modifier>()
             .init_asset_loader::<JsnAssetLoader>();
 
         #[cfg(feature = "render")]

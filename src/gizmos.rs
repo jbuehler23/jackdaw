@@ -366,6 +366,7 @@ fn gizmo_drag_invoke_trigger(
     modal: Res<ModalTransformState>,
     edit_mode: Res<crate::brush::EditMode>,
     draw_state: Res<crate::draw_brush::DrawBrushState>,
+    mirror_plane_hover: Res<crate::brush::mirror_plane_overlay::MirrorPlaneHover>,
     mut commands: Commands,
 ) {
     if drag_state.active
@@ -375,6 +376,9 @@ fn gizmo_drag_invoke_trigger(
         || modal.active.is_some()
         || *edit_mode != crate::brush::EditMode::Object
         || draw_state.active.is_some()
+        // A hovered mirror-plane handle wins the press, so the object transform
+        // gizmo must not also grab it and move the whole brush.
+        || mirror_plane_hover.target.is_some()
     {
         return;
     }
@@ -663,7 +667,7 @@ struct EditGizmoBrushParams<'w, 's> {
     globals: Query<'w, 's, &'static GlobalTransform>,
     brushes: Query<'w, 's, &'static mut jackdaw_jsn::Brush>,
     halfedges: Query<'w, 's, &'static mut crate::brush::BrushHalfedge>,
-    mirrors: Query<'w, 's, &'static jackdaw_geometry::MeshMirror>,
+    mirrors: Query<'w, 's, &'static jackdaw_geometry::ModifierStack>,
 }
 
 #[operator(
@@ -870,7 +874,11 @@ pub fn gizmo_drag_edit(
         crate::brush_drag_ops::apply_vertex_deltas(
             &mut brush,
             halfedge_opt.as_deref_mut(),
-            brush_params.mirrors.get(entity).ok(),
+            brush_params
+                .mirrors
+                .get(entity)
+                .ok()
+                .and_then(|stack| stack.first_enabled_mirror()),
             &capture.start_brush,
             &capture.start_all_vertices,
             &capture.start_face_polygons,

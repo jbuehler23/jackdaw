@@ -136,10 +136,18 @@ pub(crate) fn face_drag_invoke_trigger(
     draw_state: Res<DrawBrushState>,
     vp: ViewportCursor,
     gizmo_hover: Res<crate::gizmos::GizmoHoverState>,
+    mirror_plane_hover: Res<crate::brush::mirror_plane_overlay::MirrorPlaneHover>,
     mut commands: Commands,
 ) {
     if !pointer.pointer_primary_just_pressed() || drag_state.active || drag_state.pending.is_some()
     {
+        return;
+    }
+
+    // A hovered mirror-plane handle owns the click: `mirror.plane.drag` grabs
+    // it (its hit-test ran last frame), so yield rather than race it for the
+    // same press and push/pull a face instead.
+    if mirror_plane_hover.target.is_some() {
         return;
     }
 
@@ -274,9 +282,11 @@ pub fn brush_face_drag(
                                 / polygon.len() as f32;
                         let depth = (cam_tf.translation() - brush_global.transform_point(centroid))
                             .length_squared();
-                        if depth < best_depth {
+                        if depth < best_depth
+                            && let Some(authored) = cache.authored_face(face_idx)
+                        {
                             best_depth = depth;
-                            best = Some((brush_entity, cache.face_to_authored(face_idx)));
+                            best = Some((brush_entity, authored));
                         }
                     }
                 }
@@ -349,9 +359,11 @@ pub fn brush_face_drag(
                     / polygon.len() as f32;
                 let depth = (cam_tf.translation() - brush_global.transform_point(centroid))
                     .length_squared();
-                if depth < best_depth {
+                if depth < best_depth
+                    && let Some(authored) = cache.authored_face(face_idx)
+                {
                     best_depth = depth;
-                    best_face = Some(cache.face_to_authored(face_idx));
+                    best_face = Some(authored);
                 }
             }
         }
@@ -771,6 +783,7 @@ pub(crate) fn vertex_drag_invoke_trigger(
     keybind_focus: KeybindFocus,
     vp: ViewportCursor,
     gizmo_hover: Res<crate::gizmos::GizmoHoverState>,
+    mirror_plane_hover: Res<crate::brush::mirror_plane_overlay::MirrorPlaneHover>,
     mut commands: Commands,
 ) {
     if !pointer.pointer_primary_just_pressed()
@@ -782,6 +795,10 @@ pub(crate) fn vertex_drag_invoke_trigger(
         // A hovered gizmo axis owns the click; the sub-element gizmo drag
         // takes it via `gizmo.drag_edit`.
         || gizmo_hover.hovered_axis.is_some()
+        // A hovered mirror-plane handle owns the click: `mirror.plane.drag`
+        // grabs it (its hit-test ran last frame), so yield rather than race it
+        // for the same press and drag a vertex instead.
+        || mirror_plane_hover.target.is_some()
     {
         return;
     }
@@ -819,7 +836,7 @@ pub fn brush_vertex_drag(
     mut drag_state: ResMut<VertexDragState>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
-    mirror_q: Query<&jackdaw_geometry::MeshMirror>,
+    mirror_q: Query<&jackdaw_geometry::ModifierStack>,
     snap_settings: Res<SnapSettings>,
     mut override_cursor: ResMut<OverrideCursor>,
 ) -> OperatorResult {
@@ -921,9 +938,11 @@ pub fn brush_vertex_drag(
                     camera.world_to_viewport(cam_tf, brush_global.transform_point(*v))
                 {
                     let dist = (screen - viewport_cursor).length();
-                    if dist < best_dist {
+                    if dist < best_dist
+                        && let Some(authored) = cache.authored_vert(vi)
+                    {
                         best_dist = dist;
-                        best = Some((brush_entity, cache.vert_to_authored(vi)));
+                        best = Some((brush_entity, authored));
                     }
                 }
             }
@@ -1126,6 +1145,7 @@ pub(crate) fn edge_drag_invoke_trigger(
     keybind_focus: KeybindFocus,
     vp: ViewportCursor,
     gizmo_hover: Res<crate::gizmos::GizmoHoverState>,
+    mirror_plane_hover: Res<crate::brush::mirror_plane_overlay::MirrorPlaneHover>,
     mut commands: Commands,
 ) {
     if !pointer.pointer_primary_just_pressed()
@@ -1137,6 +1157,10 @@ pub(crate) fn edge_drag_invoke_trigger(
         // A hovered gizmo axis owns the click; the sub-element gizmo drag
         // takes it via `gizmo.drag_edit`.
         || gizmo_hover.hovered_axis.is_some()
+        // A hovered mirror-plane handle owns the click: `mirror.plane.drag`
+        // grabs it (its hit-test ran last frame), so yield rather than race it
+        // for the same press and drag an edge instead.
+        || mirror_plane_hover.target.is_some()
     {
         return;
     }
@@ -1174,7 +1198,7 @@ pub fn brush_edge_drag(
     mut drag_state: ResMut<EdgeDragState>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
-    mirror_q: Query<&jackdaw_geometry::MeshMirror>,
+    mirror_q: Query<&jackdaw_geometry::ModifierStack>,
     snap_settings: Res<SnapSettings>,
     mut override_cursor: ResMut<OverrideCursor>,
 ) -> OperatorResult {
@@ -1226,9 +1250,11 @@ pub fn brush_edge_drag(
                     continue;
                 };
                 let dist = point_to_segment_dist(viewport_cursor, sa, sb);
-                if dist < best_dist {
+                if dist < best_dist
+                    && let Some(authored) = cache.authored_edge((a, b))
+                {
                     best_dist = dist;
-                    best = Some((brush_entity, cache.edge_to_authored((a, b))));
+                    best = Some((brush_entity, authored));
                 }
             }
         }
@@ -1481,7 +1507,7 @@ fn apply_shared_drag(
     captures: &[BrushDragCapture],
     brushes: &mut Query<&mut Brush>,
     halfedge_q: &mut Query<&mut crate::brush::BrushHalfedge>,
-    mirrors: &Query<&jackdaw_geometry::MeshMirror>,
+    mirrors: &Query<&jackdaw_geometry::ModifierStack>,
 ) {
     // Calibrate the cursor-to-world scale at the dragged element's depth.
     let anchor_world = brush_global.transform_point(primary_start);
@@ -1519,7 +1545,7 @@ pub(crate) fn broadcast_drag_to_captures(
     world_offset: Vec3,
     brushes: &mut Query<&mut Brush>,
     halfedge_q: &mut Query<&mut crate::brush::BrushHalfedge>,
-    mirrors: &Query<&jackdaw_geometry::MeshMirror>,
+    mirrors: &Query<&jackdaw_geometry::ModifierStack>,
 ) {
     for capture in captures {
         let new_positions: Vec<Vec3> = capture
@@ -1538,7 +1564,10 @@ pub(crate) fn broadcast_drag_to_captures(
         apply_vertex_deltas(
             &mut brush,
             halfedge_opt.as_deref_mut(),
-            mirrors.get(capture.entity).ok(),
+            mirrors
+                .get(capture.entity)
+                .ok()
+                .and_then(|stack| stack.first_enabled_mirror()),
             &capture.start_brush,
             &capture.start_all_vertices,
             &capture.start_face_polygons,

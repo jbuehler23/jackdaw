@@ -62,6 +62,7 @@ pub mod material_browser;
 pub mod material_preview;
 pub mod measure_tool;
 pub mod modal_transform;
+pub mod modifier_ops;
 pub mod navmesh;
 pub mod new_project;
 pub mod numeric_transform;
@@ -327,6 +328,7 @@ impl Plugin for EditorCorePlugin {
             measure_tool::MeasureToolPlugin,
             draw_brush::DrawBrushPlugin,
             face_grid::FaceGridPlugin,
+            brush::mirror_plane_overlay::MirrorPlaneOverlayPlugin,
             alignment_guides::AlignmentGuidesPlugin,
             navmesh::NavmeshPlugin,
             terrain::TerrainPlugin,

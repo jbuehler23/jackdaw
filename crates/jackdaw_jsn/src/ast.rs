@@ -612,6 +612,19 @@ fn variant_field_type_registration<'a>(
     registry.get(field_type_id)
 }
 
+/// Whether `segment` addresses field 0 of a single-field (newtype) tuple
+/// variant. Bevy serializes such a variant with its one field flattened
+/// (`{"Mirror": {..}}`, not `{"Mirror": [{..}]}`), so the path navigator must
+/// treat index 0 as the inner value itself rather than looking for an array
+/// element or an object key named "0".
+fn is_newtype_index0(enum_info: &EnumInfo, variant_name: &str, segment: &str) -> bool {
+    segment == "0"
+        && matches!(
+            enum_info.variant(variant_name),
+            Some(VariantInfo::Tuple(t)) if t.field_len() == 1
+        )
+}
+
 /// Get the [`TypeRegistration`] for a field by name, advancing through the type tree.
 fn field_type_registration<'a>(
     type_info: &TypeInfo,
@@ -655,13 +668,20 @@ fn typed_json_path_get<'a>(
             let (variant_name, inner) = enum_variant_from_json(current)?;
             let next_reg =
                 variant_field_type_registration(enum_info, variant_name, segment, registry)?;
-            let next_val = match inner {
-                serde_json::Value::Object(_) => inner.get(segment)?,
-                serde_json::Value::Array(_) => {
-                    let idx: usize = segment.parse().ok()?;
-                    inner.get(idx)?
+            let next_val = if is_newtype_index0(enum_info, variant_name, segment) {
+                // A single-field (newtype) tuple variant is serialized with the
+                // inner value flattened, not wrapped in a one-element array, so
+                // index 0 is the inner value itself.
+                inner
+            } else {
+                match inner {
+                    serde_json::Value::Object(_) => inner.get(segment)?,
+                    serde_json::Value::Array(_) => {
+                        let idx: usize = segment.parse().ok()?;
+                        inner.get(idx)?
+                    }
+                    _ => return None,
                 }
-                _ => return None,
             };
             current = next_val;
             current_reg = next_reg;
@@ -757,7 +777,14 @@ fn typed_json_path_set(
             else {
                 return;
             };
+            let newtype_index0 = is_newtype_index0(enum_info, &variant_name, segment);
             if is_last {
+                if newtype_index0 {
+                    // Setting index 0 of a newtype variant replaces the inner
+                    // value directly (it is flattened, not array-wrapped).
+                    *inner = value;
+                    return;
+                }
                 // Set the field inside the variant's inner value.
                 match inner {
                     serde_json::Value::Object(map) => {
@@ -774,14 +801,19 @@ fn typed_json_path_set(
                 }
                 return;
             }
-            // Descend into the variant's field and continue.
-            let field_val = match inner {
-                serde_json::Value::Object(map) => map.get_mut(*segment),
-                serde_json::Value::Array(arr) => match segment.parse::<usize>() {
-                    Ok(idx) => arr.get_mut(idx),
-                    Err(_) => return,
-                },
-                _ => None,
+            // Descend into the variant's field and continue. A newtype variant
+            // flattens its single field, so index 0 is the inner value itself.
+            let field_val = if newtype_index0 {
+                Some(inner)
+            } else {
+                match inner {
+                    serde_json::Value::Object(map) => map.get_mut(*segment),
+                    serde_json::Value::Array(arr) => match segment.parse::<usize>() {
+                        Ok(idx) => arr.get_mut(idx),
+                        Err(_) => return,
+                    },
+                    _ => None,
+                }
             };
             let Some(next) = field_val else { return };
             current = next;
@@ -1066,6 +1098,58 @@ mod tests {
 
         let result = get_field_in_component_json(&component, type_path, "radius", &registry);
         assert_eq!(result, Some(&serde_json::json!(1.0_f32)));
+    }
+
+    // Newtype tuple variant wrapping a struct, mirroring the
+    // `Modifier::Mirror(MeshMirror)` shape the modifier stack uses. Bevy
+    // serializes it flattened: `{"Wrap": {"flag": false, ...}}`.
+    #[derive(Reflect, Clone)]
+    enum TestModifier {
+        Wrap(TestInner),
+    }
+
+    #[derive(Reflect, Clone)]
+    struct TestInner {
+        flag: bool,
+        amount: f32,
+    }
+
+    #[test]
+    fn newtype_variant_field_round_trips_through_index_zero() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<TestModifier>();
+        registry.register::<TestInner>();
+        registry.register::<bool>();
+        registry.register::<f32>();
+
+        let type_path = "jackdaw_jsn::ast::tests::TestModifier";
+        let mut component = to_canonical_json(
+            &TestModifier::Wrap(TestInner {
+                flag: false,
+                amount: 1.5,
+            }),
+            &registry,
+        );
+
+        // Reading the inner field through `.0` resolves the flattened newtype.
+        let read = get_field_in_component_json(&component, type_path, "0.flag", &registry);
+        assert_eq!(read, Some(&serde_json::json!(false)));
+
+        // Writing through `.0` sets the inner field and reads back the new
+        // value (the bug: this used to be a silent no-op so the edit reverted).
+        set_field_in_component_json(
+            &mut component,
+            type_path,
+            "0.flag",
+            serde_json::json!(true),
+            &registry,
+        );
+        let read_back = get_field_in_component_json(&component, type_path, "0.flag", &registry);
+        assert_eq!(read_back, Some(&serde_json::json!(true)));
+
+        // The sibling field is untouched.
+        let amount = get_field_in_component_json(&component, type_path, "0.amount", &registry);
+        assert_eq!(amount, Some(&serde_json::json!(1.5_f32)));
     }
 
     #[test]

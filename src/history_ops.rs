@@ -54,6 +54,11 @@ pub(crate) fn history_undo(_: In<OperatorParameters>, mut commands: Commands) ->
         world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
             history.undo(world);
         });
+        // Undo restores components without re-triggering the outliner's
+        // targeted rebuilds, so a row can keep a stale icon (e.g. a brush whose
+        // `Brush` component was briefly absent). Rebuild so each row re-resolves
+        // its icon from the now-current components.
+        refresh_views_after_history(world);
     });
     OperatorResult::Finished
 }
@@ -71,8 +76,20 @@ pub(crate) fn history_redo(_: In<OperatorParameters>, mut commands: Commands) ->
         world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
             history.redo(world);
         });
+        refresh_views_after_history(world);
     });
     OperatorResult::Finished
+}
+
+/// Refresh derived view state after an undo or redo: rebuild the outliner so
+/// rows re-resolve their icons, and touch every brush's change tick so the
+/// viewport mesh cache and edit overlays regenerate from the restored topology.
+fn refresh_views_after_history(world: &mut World) {
+    let _ = crate::hierarchy::rebuild_hierarchy(world);
+    let mut brushes = world.query::<&mut jackdaw_jsn::Brush>();
+    for mut brush in brushes.iter_mut(world) {
+        brush.set_changed();
+    }
 }
 
 fn cancel_active_modal_if_any(world: &mut World) {

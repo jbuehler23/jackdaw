@@ -11,9 +11,7 @@ use super::{BrushMaterialPalette, BrushMeshCache, BrushPreview};
 use crate::default_style;
 use crate::draw_brush::DrawBrushState;
 use crate::selection::Selected;
-use jackdaw_geometry::{
-    MeshMirror, compute_brush_geometry_from_planes, evaluate_mirror, reflected_face_plane,
-};
+use jackdaw_geometry::{compute_brush_geometry_from_planes, reflected_face_plane};
 
 pub(super) struct MeshPlugin;
 
@@ -108,9 +106,9 @@ pub fn setup_default_materials(
 /// Skipped while a vertex / edge / face drag or the edit-mode gizmo drag
 /// is active so mid-drag world coordinates remain stable.
 ///
-/// Mirrored brushes are excluded: the mirror plane passes through the
-/// brush-local origin/offset and recentering would shift it relative to
-/// the geometry every edit.
+/// Brushes carrying a modifier stack are excluded: a modifier (e.g. the
+/// mirror plane) is anchored to the brush-local origin/offset, and
+/// recentering would shift it relative to the geometry every edit.
 pub fn recenter_brush_origins(
     mut brushes: Query<
         (
@@ -120,7 +118,7 @@ pub fn recenter_brush_origins(
         ),
         (
             Or<(Changed<super::Brush>, Changed<crate::brush::BrushHalfedge>)>,
-            Without<MeshMirror>,
+            Without<jackdaw_geometry::ModifierStack>,
         ),
     >,
     vertex_drag: Res<super::VertexDragState>,
@@ -164,10 +162,11 @@ pub fn recenter_brush_origins(
 }
 
 /// `regenerate_brush_meshes` only reacts to change ticks, so removing a
-/// `MeshMirror` would leave the stale mirrored half rendered. Touch the
-/// `Brush` change tick of affected entities so the next rebuild drops it.
-pub fn mark_brushes_changed_on_mirror_removal(
-    mut removed: RemovedComponents<MeshMirror>,
+/// `ModifierStack` would leave the stale evaluated geometry rendered.
+/// Touch the `Brush` change tick of affected entities so the next
+/// rebuild drops it.
+pub fn mark_brushes_changed_on_modifier_removal(
+    mut removed: RemovedComponents<jackdaw_geometry::ModifierStack>,
     mut brushes: Query<&mut super::Brush>,
 ) {
     for entity in removed.read() {
@@ -183,7 +182,7 @@ pub fn regenerate_brush_meshes(
         (
             Entity,
             &super::Brush,
-            Option<&MeshMirror>,
+            Option<&jackdaw_geometry::ModifierStack>,
             Option<&Children>,
             Option<&super::BrushPreview>,
             Has<Selected>,
@@ -191,7 +190,7 @@ pub fn regenerate_brush_meshes(
         Or<(
             Changed<super::Brush>,
             Changed<crate::brush::BrushHalfedge>,
-            Changed<MeshMirror>,
+            Changed<jackdaw_geometry::ModifierStack>,
         )>,
     >,
     mesh3d_query: Query<(), With<Mesh3d>>,
@@ -202,7 +201,7 @@ pub fn regenerate_brush_meshes(
     group_edit: Res<crate::viewport_select::GroupEditState>,
     halfedge_q: Query<&crate::brush::BrushHalfedge>,
 ) {
-    for (entity, brush, mirror, children, preview, is_selected) in &changed_brushes {
+    for (entity, brush, stack, children, preview, is_selected) in &changed_brushes {
         let in_active_group = group_edit
             .active_group
             .is_some_and(|group| parents.get(entity).is_ok_and(|c| c.0 == group));
@@ -247,41 +246,65 @@ pub fn regenerate_brush_meshes(
             compute_brush_geometry_from_planes(&brush.faces)
         };
 
-        // Live mirror: append reflected copies after the authored
-        // elements. Authored indices are unchanged (identity prefix);
-        // the source maps let pickers resolve mirrored picks back to
-        // authored elements. Empty maps mean identity (no mirror).
-        let (vertices, face_polygons, face_source, vert_source) =
-            if let Some(mirror) = mirror.filter(|m| !m.axes().is_empty()) {
-                let eval = evaluate_mirror(&vertices, &face_polygons, mirror);
-                (
-                    eval.vertices,
-                    eval.face_polygons,
-                    eval.face_source,
-                    eval.vert_source,
-                )
-            } else {
-                (vertices, face_polygons, Vec::new(), Vec::new())
-            };
+        // Editor-enabled modifiers append their evaluated copies after
+        // the authored elements. Authored indices are unchanged (identity
+        // prefix); the source maps let pickers resolve evaluated picks
+        // back to authored elements. Empty maps mean identity (no stack).
+        let editor_mods: Vec<&jackdaw_geometry::Modifier> = stack
+            .map(|s| {
+                s.modifiers
+                    .iter()
+                    .filter(|e| e.enabled)
+                    .map(|e| &e.modifier)
+                    .collect()
+            })
+            .unwrap_or_default();
+        // The authored (pre-modifier) geometry, kept so the editable-geometry
+        // accessors return the base mesh directly instead of recovering it from
+        // the evaluated prefix, which a bisect modifier invalidates by dropping
+        // and clipping faces.
+        let base_vertices = vertices.clone();
+        let base_face_polygons = face_polygons.clone();
+        let (vertices, face_polygons, face_source, vert_source) = if editor_mods.is_empty() {
+            (vertices, face_polygons, Vec::new(), Vec::new())
+        } else {
+            let eval = jackdaw_geometry::evaluate_modifier_stack(
+                &vertices,
+                &face_polygons,
+                &brush.faces,
+                &editor_mods,
+            );
+            (
+                eval.vertices,
+                eval.face_polygons,
+                eval.face_source,
+                eval.vert_source,
+            )
+        };
 
-        // The authored-prefix accessors on `BrushMeshCache` require the
-        // source maps to be an identity prefix followed only by entries
-        // mapping back into that prefix.
+        // The vertex source map keeps an identity prefix (the clip never
+        // reorders authored verts) followed only by entries mapping back
+        // into that prefix. Cut geometry (bisect split verts) carries the
+        // `NO_SOURCE` sentinel and is allowed past the prefix; it has no
+        // authored origin and stays non-editable.
         debug_assert!(
             vert_source
                 .iter()
                 .enumerate()
                 .skip_while(|&(i, &s)| s as usize == i)
-                .all(|(i, &s)| (s as usize) < i),
-            "vert_source must be prefix-identity"
+                .all(|(i, &s)| s == jackdaw_geometry::NO_SOURCE || (s as usize) < i),
+            "vert_source must be prefix-identity (NO_SOURCE sentinel permitted)"
         );
+        // The face source map need not stay prefix-identity: a bisect drops
+        // the authored faces fully on the discarded side, so the kept faces
+        // ascend but may start above index 0. Every entry must still be a
+        // valid authored back-reference or the `NO_SOURCE` cut sentinel.
         debug_assert!(
             face_source
                 .iter()
-                .enumerate()
-                .skip_while(|&(i, &s)| s as usize == i)
-                .all(|(i, &s)| (s as usize) < i),
-            "face_source must be prefix-identity"
+                .all(|&s| s == jackdaw_geometry::NO_SOURCE
+                    || (s as usize) < base_face_polygons.len()),
+            "face_source entries must reference an authored face or be NO_SOURCE"
         );
 
         // `build_mesh_chunks` pairs `faces[i]` with `face_polygons[i]`,
@@ -361,6 +384,8 @@ pub fn regenerate_brush_meshes(
             chunk_entities,
             face_source,
             vert_source,
+            base_vertices,
+            base_face_polygons,
         });
     }
 }

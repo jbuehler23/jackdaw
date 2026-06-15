@@ -8,8 +8,8 @@ use bevy::{
 
 use crate::types::Brush;
 use jackdaw_geometry::{
-    MeshMirror, compute_brush_geometry_from_planes, compute_face_tangent_axes, compute_face_uvs,
-    evaluate_mirror, reflected_face_plane, triangulate_polygon,
+    compute_brush_geometry_from_planes, compute_face_tangent_axes, compute_face_uvs,
+    reflected_face_plane, triangulate_polygon,
 };
 
 pub(super) struct MeshRebuildPlugin;
@@ -19,7 +19,7 @@ impl Plugin for MeshRebuildPlugin {
         app.add_systems(
             Update,
             (
-                mark_brushes_changed_on_mirror_removal,
+                mark_brushes_changed_on_modifier_removal,
                 remesh_changed_brushes,
             )
                 .chain(),
@@ -41,15 +41,20 @@ impl Plugin for MeshRebuildPlugin {
 /// distorts non-convex faces.
 ///
 /// Runs on `Changed<Brush>` (which fires both when a brush is first inserted
-/// and when its value is mutated in place) and `Changed<MeshMirror>` so live
-/// mirror edits re-mesh without a brush touch. The clear-then-rebuild pass is
+/// and when its value is mutated in place) and `Changed<ModifierStack>` so live
+/// modifier edits re-mesh without a brush touch. The clear-then-rebuild pass is
 /// idempotent: existing face-mesh children (those with `Mesh3d`) are despawned
 /// before the new ones are built, so there is no double-mesh on the insert frame.
 pub fn remesh_changed_brushes(
     mut commands: Commands,
     changed: Query<
-        (Entity, &Brush, Option<&MeshMirror>, Option<&Children>),
-        Or<(Changed<Brush>, Changed<MeshMirror>)>,
+        (
+            Entity,
+            &Brush,
+            Option<&jackdaw_geometry::ModifierStack>,
+            Option<&Children>,
+        ),
+        Or<(Changed<Brush>, Changed<jackdaw_geometry::ModifierStack>)>,
     >,
     face_meshes: Query<(), With<Mesh3d>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
@@ -64,7 +69,7 @@ pub fn remesh_changed_brushes(
         return;
     };
 
-    for (entity, brush, mirror, children) in &changed {
+    for (entity, brush, stack, children) in &changed {
         // Clear existing face-mesh children so re-runs are idempotent and a
         // mutated brush does not accumulate stale face entities.
         if let Some(children) = children {
@@ -78,7 +83,7 @@ pub fn remesh_changed_brushes(
         build_brush_meshes(
             entity,
             brush,
-            mirror,
+            stack,
             &mut commands,
             &mut meshes,
             &mut materials,
@@ -88,10 +93,10 @@ pub fn remesh_changed_brushes(
 }
 
 /// `remesh_changed_brushes` only reacts to change ticks, so removing a
-/// `MeshMirror` would leave the stale mirrored half rendered. Touch the
+/// `ModifierStack` would leave the stale evaluated geometry rendered. Touch the
 /// `Brush` change tick of affected entities so the next rebuild drops it.
-pub fn mark_brushes_changed_on_mirror_removal(
-    mut removed: RemovedComponents<MeshMirror>,
+pub fn mark_brushes_changed_on_modifier_removal(
+    mut removed: RemovedComponents<jackdaw_geometry::ModifierStack>,
     mut brushes: Query<&mut Brush>,
 ) {
     for entity in removed.read() {
@@ -104,7 +109,7 @@ pub fn mark_brushes_changed_on_mirror_removal(
 fn build_brush_meshes(
     entity: Entity,
     brush: &Brush,
-    mirror: Option<&MeshMirror>,
+    stack: Option<&jackdaw_geometry::ModifierStack>,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -122,16 +127,30 @@ fn build_brush_meshes(
         compute_brush_geometry_from_planes(&brush.faces)
     };
 
-    // Apply live mirror: append reflected copies after the authored elements.
+    // Fold the game-enabled modifiers (the `in_game` entries) over the
+    // authored geometry: evaluated copies append after the authored elements.
     // Authored indices are unchanged (identity prefix); face_source maps
     // evaluated face indices back to authored face indices for face-data lookup.
-    let (vertices, face_polygons, face_source) =
-        if let Some(mirror) = mirror.filter(|m| !m.axes().is_empty()) {
-            let eval = evaluate_mirror(&vertices, &face_polygons, mirror);
-            (eval.vertices, eval.face_polygons, eval.face_source)
-        } else {
-            (vertices, face_polygons, Vec::new())
-        };
+    let game_mods: Vec<&jackdaw_geometry::Modifier> = stack
+        .map(|s| {
+            s.modifiers
+                .iter()
+                .filter(|e| e.in_game)
+                .map(|e| &e.modifier)
+                .collect()
+        })
+        .unwrap_or_default();
+    let (vertices, face_polygons, face_source) = if game_mods.is_empty() {
+        (vertices, face_polygons, Vec::new())
+    } else {
+        let eval = jackdaw_geometry::evaluate_modifier_stack(
+            &vertices,
+            &face_polygons,
+            &brush.faces,
+            &game_mods,
+        );
+        (eval.vertices, eval.face_polygons, eval.face_source)
+    };
 
     // Build the face-data slice to iterate: mirrored faces (entries past
     // the identity prefix, where face_source[i] != i) clone their authored
@@ -252,7 +271,10 @@ mod tests {
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
     use bevy::pbr::StandardMaterial;
-    use jackdaw_geometry::{BrushFaceData, BrushPlane, compute_brush_topology};
+    use jackdaw_geometry::{
+        BrushFaceData, BrushPlane, MeshMirror, Modifier, ModifierEntry, ModifierStack,
+        compute_brush_topology,
+    };
 
     fn make_app() -> App {
         let mut app = App::new();
@@ -361,6 +383,12 @@ mod tests {
         Brush { faces, topology }
     }
 
+    fn mirror_stack() -> ModifierStack {
+        ModifierStack {
+            modifiers: vec![ModifierEntry::new(Modifier::Mirror(MeshMirror::default()))],
+        }
+    }
+
     #[test]
     fn mirror_x_half_cube_produces_eleven_face_meshes() {
         let mut app = make_app();
@@ -368,23 +396,24 @@ mod tests {
         // 5 authored + 5 mirrored + 1 seam = 11 face-mesh children.
         let brush_entity = app
             .world_mut()
-            .spawn((half_cube_brush(), MeshMirror::default()))
+            .spawn((half_cube_brush(), mirror_stack()))
             .id();
         app.update();
 
         let count = face_mesh_child_count(&mut app, brush_entity);
         assert_eq!(
             count, 11,
-            "half-cube with default X mirror must produce 11 face-mesh children"
+            "half-cube with a default X-mirror modifier must produce 11 face-mesh children"
         );
 
-        // Mutating the component alone must re-mesh: Changed<MeshMirror>
+        // Mutating the stack alone must re-mesh: Changed<ModifierStack>
         // fires with no brush touch.
         {
-            let mut mirror = app
+            let mut stack = app
                 .world_mut()
-                .get_mut::<MeshMirror>(brush_entity)
-                .expect("mirror component exists");
+                .get_mut::<ModifierStack>(brush_entity)
+                .expect("stack component exists");
+            let Modifier::Mirror(mirror) = &mut stack.modifiers[0].modifier;
             mirror.mirror_x = false;
         }
         app.update();
@@ -396,10 +425,11 @@ mod tests {
         );
 
         {
-            let mut mirror = app
+            let mut stack = app
                 .world_mut()
-                .get_mut::<MeshMirror>(brush_entity)
-                .expect("mirror component exists");
+                .get_mut::<ModifierStack>(brush_entity)
+                .expect("stack component exists");
+            let Modifier::Mirror(mirror) = &mut stack.modifiers[0].modifier;
             mirror.mirror_x = true;
         }
         app.update();
@@ -410,13 +440,32 @@ mod tests {
         // Removal alone must drop the mirrored half; no brush touch.
         app.world_mut()
             .entity_mut(brush_entity)
-            .remove::<MeshMirror>();
+            .remove::<ModifierStack>();
         app.update();
 
         let count = face_mesh_child_count(&mut app, brush_entity);
         assert_eq!(
             count, 6,
-            "removing the mirror must rebuild with authored faces only"
+            "removing the modifier stack must rebuild with authored faces only"
+        );
+    }
+
+    #[test]
+    fn in_game_disabled_modifier_is_skipped_for_game_mesh() {
+        let mut app = make_app();
+
+        // Same X-mirror modifier, but flagged off for the in-game mesh: the
+        // game rebuild folds only `in_game` entries, so it must produce the
+        // six authored faces with no mirrored half.
+        let mut stack = mirror_stack();
+        stack.modifiers[0].in_game = false;
+        let brush_entity = app.world_mut().spawn((half_cube_brush(), stack)).id();
+        app.update();
+
+        let count = face_mesh_child_count(&mut app, brush_entity);
+        assert_eq!(
+            count, 6,
+            "an in_game=false modifier must be skipped for the game mesh"
         );
     }
 
@@ -426,7 +475,7 @@ mod tests {
 
         let brush_entity = app
             .world_mut()
-            .spawn((half_cube_brush(), MeshMirror::default()))
+            .spawn((half_cube_brush(), mirror_stack()))
             .id();
         app.update();
 

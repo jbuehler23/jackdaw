@@ -140,7 +140,7 @@ pub(super) fn setup_vertex_handle_assets(
 
 /// World size of one screen pixel at `dist` from the camera, for either
 /// projection. Lets world geometry hold a constant on-screen size.
-fn units_per_pixel(projection: &Projection, dist: f32, viewport_height: f32) -> f32 {
+pub(crate) fn units_per_pixel(projection: &Projection, dist: f32, viewport_height: f32) -> f32 {
     match projection {
         Projection::Perspective(p) => (2.0 * dist * (p.fov * 0.5).tan()) / viewport_height,
         Projection::Orthographic(o) => o.area.height() / viewport_height,
@@ -206,6 +206,11 @@ pub(super) fn update_vertex_handles(
                 None
             };
             for (vi, v) in cache.vertices.iter().enumerate() {
+                // Bisect-introduced cut geometry has no authored origin and
+                // draws no editable handle.
+                if cache.authored_vert(vi).is_none() {
+                    continue;
+                }
                 let selected = sub.is_some_and(|s| s.vertices.contains(&vi));
                 let state = if hover_vi == Some(vi) && !selected {
                     HandleState::Hovered
@@ -459,6 +464,11 @@ pub(super) fn update_edge_overlay(
                 None
             };
             for (a, b) in cache.unique_edges() {
+                // A cut/cap edge (either endpoint is bisect geometry) has no
+                // authored origin and draws no selectable edit edge.
+                if cache.authored_edge((a, b)).is_none() {
+                    continue;
+                }
                 let selected = edges_selectable && sub.is_some_and(|s| s.edges.contains(&(a, b)));
                 let state =
                     if hover_edge.is_some_and(|he| he == (a, b) || he == (b, a)) && !selected {
@@ -519,6 +529,39 @@ pub(super) fn update_edge_overlay(
     }
 }
 
+/// Draw the outline of `face_index` from `cache`, bounds-checking both the
+/// face index and every vertex index. A destructive edit (e.g. face delete)
+/// shrinks the topology while a stale hover or selection index lingers for a
+/// frame, so indexing has to tolerate an out-of-range value instead of
+/// panicking.
+fn draw_face_outline(
+    gizmos: &mut Gizmos<BrushOutlineSelectedGizmoGroup>,
+    brush_global: &GlobalTransform,
+    cache: &BrushMeshCache,
+    face_index: usize,
+    color: Color,
+) {
+    let Some(polygon) = cache.face_polygons.get(face_index) else {
+        return;
+    };
+    if polygon.len() < 3 {
+        return;
+    }
+    for i in 0..polygon.len() {
+        let (Some(a), Some(b)) = (
+            cache.vertices.get(polygon[i]),
+            cache.vertices.get(polygon[(i + 1) % polygon.len()]),
+        ) else {
+            continue;
+        };
+        gizmos.line(
+            brush_global.transform_point(*a),
+            brush_global.transform_point(*b),
+            color,
+        );
+    }
+}
+
 pub(super) fn draw_brush_edit_gizmos(
     edit_mode: Res<EditMode>,
     brush_selection: Res<BrushSelection>,
@@ -536,21 +579,18 @@ pub(super) fn draw_brush_edit_gizmos(
         && let Ok(cache) = brush_caches.get(hover_entity)
         && let Ok(brush_global) = brush_transforms.get(hover_entity)
     {
-        let polygon = &cache.face_polygons[hover_face];
-        if polygon.len() >= 3 {
-            // Skip if face is already selected (avoid double highlight)
-            let is_selected = brush_selection
-                .sub(hover_entity)
-                .is_some_and(|s| s.faces.contains(&hover_face));
-            if !is_selected {
-                let color = default_style::EDIT_HOVER_COLOR;
-                for i in 0..polygon.len() {
-                    let a = brush_global.transform_point(cache.vertices[polygon[i]]);
-                    let b = brush_global
-                        .transform_point(cache.vertices[polygon[(i + 1) % polygon.len()]]);
-                    gizmos.line(a, b, color);
-                }
-            }
+        // Skip if face is already selected (avoid double highlight).
+        let is_selected = brush_selection
+            .sub(hover_entity)
+            .is_some_and(|s| s.faces.contains(&hover_face));
+        if !is_selected {
+            draw_face_outline(
+                &mut gizmos,
+                brush_global,
+                cache,
+                hover_face,
+                default_style::EDIT_HOVER_COLOR,
+            );
         }
     }
 
@@ -587,16 +627,13 @@ pub(super) fn draw_brush_edit_gizmos(
         if mode == BrushEditMode::Face {
             let faces = sub.map(|s| s.faces.as_slice()).unwrap_or(&[]);
             for &face_idx in faces {
-                let polygon = &cache.face_polygons[face_idx];
-                if polygon.len() < 3 {
-                    continue;
-                }
-                for i in 0..polygon.len() {
-                    let a = brush_global.transform_point(cache.vertices[polygon[i]]);
-                    let b = brush_global
-                        .transform_point(cache.vertices[polygon[(i + 1) % polygon.len()]]);
-                    gizmos.line(a, b, default_style::EDIT_SELECTED_COLOR);
-                }
+                draw_face_outline(
+                    &mut gizmos,
+                    brush_global,
+                    cache,
+                    face_idx,
+                    default_style::EDIT_SELECTED_COLOR,
+                );
             }
         }
     }

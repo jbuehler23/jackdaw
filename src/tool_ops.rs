@@ -66,6 +66,20 @@ fn can_change_tool(keybind_focus: KeybindFocus, active: ActiveModalQuery) -> boo
     !keybind_focus.is_typing() && !active.is_modal_running()
 }
 
+/// The Rotate tool shares `KeyE` with brush face Extrude. To keep both from
+/// firing on the same press, the Rotate tool is unavailable in Face edit mode
+/// (Extrude's home), so E means Extrude there; it stays available (keybind and
+/// palette) in object / vertex / edge modes. Until the planned keymap-preset
+/// switch lands, this is the context-aware split.
+fn can_rotate_tool(
+    keybind_focus: KeybindFocus,
+    active: ActiveModalQuery,
+    edit_mode: Res<crate::brush::EditMode>,
+) -> bool {
+    can_change_tool(keybind_focus, active)
+        && *edit_mode != crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face)
+}
+
 pub(crate) fn tool_select_impl(world: &mut World) {
     world.insert_resource(ActiveTool::Select);
     crate::edit_mode_ops::set_edit_mode_object(world);
@@ -99,7 +113,7 @@ pub fn tool_translate(_: In<OperatorParameters>, world: &mut World) -> OperatorR
     OperatorResult::Finished
 }
 
-#[operator(id = "tool.rotate", label = "Rotate Tool", is_available = can_change_tool)]
+#[operator(id = "tool.rotate", label = "Rotate Tool", is_available = can_rotate_tool)]
 pub fn tool_rotate(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
     tool_rotate_impl(world);
     OperatorResult::Finished

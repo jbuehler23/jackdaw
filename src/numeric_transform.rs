@@ -407,7 +407,7 @@ struct NumericBrushParams<'w, 's> {
     globals: Query<'w, 's, &'static GlobalTransform>,
     brushes: Query<'w, 's, &'static mut jackdaw_jsn::Brush>,
     halfedges: Query<'w, 's, &'static mut crate::brush::BrushHalfedge>,
-    mirrors: Query<'w, 's, &'static jackdaw_geometry::MeshMirror>,
+    mirrors: Query<'w, 's, &'static jackdaw_geometry::ModifierStack>,
 }
 
 #[operator(
@@ -604,7 +604,11 @@ fn apply_capture_plan(
         apply_vertex_deltas(
             &mut brush,
             halfedge_opt.as_deref_mut(),
-            brush_params.mirrors.get(entity).ok(),
+            brush_params
+                .mirrors
+                .get(entity)
+                .ok()
+                .and_then(|stack| stack.first_enabled_mirror()),
             &capture.start_brush,
             &capture.start_all_vertices,
             &capture.start_face_polygons,

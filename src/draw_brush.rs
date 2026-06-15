@@ -882,12 +882,17 @@ fn draw_brush_update(
                         };
                         // `face_of_tri` is evaluated-space; resolve a hit on
                         // a mirrored copy to its authored face so the lookup
-                        // into `brush.faces` stays in range.
-                        let face_idx = brush_caches
-                            .get(chunk.brush_entity)
-                            .map_or(face_idx as usize, |cache| {
-                                cache.face_to_authored(face_idx as usize)
-                            });
+                        // into `brush.faces` stays in range. A hit on a
+                        // bisect cut cap has no authored face and is skipped.
+                        let face_idx = match brush_caches.get(chunk.brush_entity) {
+                            Ok(cache) => {
+                                let Some(authored) = cache.authored_face(face_idx as usize) else {
+                                    continue;
+                                };
+                                authored
+                            }
+                            Err(_) => face_idx as usize,
+                        };
                         let Some(face) = brush.faces.get(face_idx) else {
                             continue;
                         };
@@ -3672,11 +3677,16 @@ fn find_hovered_face_on_brush(
         let Some(&face_idx) = chunk.face_of_tri.get(tri_idx) else {
             continue;
         };
-        let face_idx = brush_caches
-            .get(brush_entity)
-            .map_or(face_idx as usize, |cache| {
-                cache.face_to_authored(face_idx as usize)
-            });
+        // A hit on a bisect cut cap has no authored face and is skipped.
+        let face_idx = match brush_caches.get(brush_entity) {
+            Ok(cache) => {
+                let Some(authored) = cache.authored_face(face_idx as usize) else {
+                    continue;
+                };
+                authored
+            }
+            Err(_) => face_idx as usize,
+        };
         return Some(face_idx);
     }
     None

@@ -8,6 +8,8 @@ pub(crate) mod interaction;
 pub(crate) mod knife_mode;
 pub(crate) mod mesh;
 mod mesh_chunks;
+pub mod mirror_plane_ops;
+pub mod mirror_plane_overlay;
 pub mod preview;
 pub mod topology_migration;
 pub mod topology_ops;
@@ -26,8 +28,8 @@ pub(crate) use self::interaction::{
     BrushDragCapture, BrushDragState, ClipMode, ClipState, EdgeDragState, VertexDragState,
 };
 pub use self::mesh::{
-    ensure_brush_chunk_materials, mark_brushes_changed_on_mirror_removal, regenerate_brush_meshes,
-    setup_default_materials,
+    ensure_brush_chunk_materials, mark_brushes_changed_on_modifier_removal,
+    regenerate_brush_meshes, setup_default_materials,
 };
 pub use edit_mode_systems::BrushHalfedge;
 pub use jackdaw_geometry::MeshMirror;
@@ -54,6 +56,12 @@ pub struct BrushMeshCache {
     pub face_source: Vec<u32>,
     /// Evaluated vertex index -> authored vertex index. Empty when no mirror is active (identity).
     pub vert_source: Vec<u32>,
+    /// Authored (pre-modifier) vertex positions: the editable base mesh.
+    /// Editing reads these directly, so a bisect modifier that clips the
+    /// evaluated geometry does not disturb the editable vertex set.
+    pub base_vertices: Vec<Vec3>,
+    /// Authored (pre-modifier) face rings, parallel to the base brush faces.
+    pub base_face_polygons: Vec<Vec<usize>>,
 }
 
 impl BrushMeshCache {
@@ -74,45 +82,56 @@ impl BrushMeshCache {
         (a.min(b), a.max(b))
     }
 
-    /// Number of authored vertices: the length of the identity prefix of
-    /// `vertices`. Mirrored copies, when present, are appended after it
-    /// and map back to a smaller index, so the prefix ends at the first
-    /// entry that does not map to itself.
+    /// Authored vertex index for an evaluated vertex, or `None` when the
+    /// vertex is bisect-introduced cut geometry (no authored origin) and so
+    /// must not be edited or selected.
+    pub fn authored_vert(&self, vert: usize) -> Option<usize> {
+        match self.vert_source.get(vert) {
+            Some(&s) if s == jackdaw_geometry::NO_SOURCE => None,
+            Some(&s) => Some(s as usize),
+            None => Some(vert), // identity (no source map): every vert is authored
+        }
+    }
+
+    /// Authored face index for an evaluated face, or `None` when the face is
+    /// bisect-introduced cut geometry (no authored origin) and so must not be
+    /// edited or selected.
+    pub fn authored_face(&self, face: usize) -> Option<usize> {
+        match self.face_source.get(face) {
+            Some(&s) if s == jackdaw_geometry::NO_SOURCE => None,
+            Some(&s) => Some(s as usize),
+            None => Some(face), // identity (no source map): every face is authored
+        }
+    }
+
+    /// Authored normalized edge for an evaluated edge, or `None` when either
+    /// endpoint is cut geometry.
+    pub fn authored_edge(&self, edge: (usize, usize)) -> Option<(usize, usize)> {
+        let a = self.authored_vert(edge.0)?;
+        let b = self.authored_vert(edge.1)?;
+        Some((a.min(b), a.max(b)))
+    }
+
+    /// Number of authored vertices in the editable base mesh.
     pub fn authored_vertex_count(&self) -> usize {
-        if self.vert_source.is_empty() {
-            self.vertices.len()
-        } else {
-            self.vert_source
-                .iter()
-                .enumerate()
-                .take_while(|&(i, &src)| src as usize == i)
-                .count()
-        }
+        self.base_vertices.len()
     }
 
-    /// Number of authored faces: the length of the identity prefix of
-    /// `face_polygons`.
+    /// Number of authored faces in the editable base mesh.
     pub fn authored_face_count(&self) -> usize {
-        if self.face_source.is_empty() {
-            self.face_polygons.len()
-        } else {
-            self.face_source
-                .iter()
-                .enumerate()
-                .take_while(|&(i, &src)| src as usize == i)
-                .count()
-        }
+        self.base_face_polygons.len()
     }
 
-    /// The authored vertices only, excluding any appended mirrored copies.
+    /// The authored vertices: the editable base mesh, excluding every
+    /// modifier-evaluated element (mirrored copies, bisect cut geometry).
     pub fn authored_vertices(&self) -> &[Vec3] {
-        &self.vertices[..self.authored_vertex_count()]
+        &self.base_vertices
     }
 
-    /// The authored face polygons only, excluding any appended mirrored
-    /// copies.
+    /// The authored face polygons: the editable base mesh, excluding every
+    /// modifier-evaluated element.
     pub fn authored_face_polygons(&self) -> &[Vec<usize>] {
-        &self.face_polygons[..self.authored_face_count()]
+        &self.base_face_polygons
     }
 
     /// Unique undirected edges as normalized `(min, max)` vertex-index pairs,
@@ -393,6 +412,53 @@ fn sync_changed_brushes_to_ast(
     });
 }
 
+/// Mirror `ModifierStack` changes and removals into the scene AST, the same
+/// way [`sync_changed_brushes_to_ast`] does for `Brush`. The modifier
+/// operators insert the component directly (rather than through the
+/// component picker's AST-aware path), so without this the stack would be
+/// invisible to the inspector, uneditable through the reflected-field path,
+/// and dropped on save. `InspectorDirty` forces the card to appear the frame
+/// the stack is added or removed.
+fn sync_changed_modifier_stacks_to_ast(
+    changed: Query<
+        (Entity, &jackdaw_geometry::ModifierStack),
+        Changed<jackdaw_geometry::ModifierStack>,
+    >,
+    mut removed: RemovedComponents<jackdaw_geometry::ModifierStack>,
+    mut commands: Commands,
+) {
+    let type_path = <jackdaw_geometry::ModifierStack as bevy::reflect::TypePath>::type_path();
+    let entries: Vec<(Entity, jackdaw_geometry::ModifierStack)> =
+        changed.iter().map(|(e, s)| (e, s.clone())).collect();
+    let removed_entities: Vec<Entity> = removed.read().collect();
+    if entries.is_empty() && removed_entities.is_empty() {
+        return;
+    }
+    for &(entity, _) in &entries {
+        commands
+            .entity(entity)
+            .insert(crate::inspector::InspectorDirty);
+    }
+    for &entity in &removed_entities {
+        if let Ok(mut ec) = commands.get_entity(entity) {
+            ec.insert(crate::inspector::InspectorDirty);
+        }
+    }
+    commands.queue(move |world: &mut World| {
+        for (entity, stack) in entries {
+            crate::commands::sync_component_to_ast(world, entity, type_path, &stack);
+        }
+        for entity in removed_entities {
+            if let Some(node) = world
+                .resource_mut::<jackdaw_jsn::SceneJsnAst>()
+                .node_for_entity_mut(entity)
+            {
+                node.components.remove(type_path);
+            }
+        }
+    });
+}
+
 // `impl EditorMeta for Brush` lives in `jackdaw_jsn` so the orphan
 // rule is satisfied (trait and type share a crate); the category
 // is "Brush", same as before.
@@ -407,6 +473,9 @@ impl Plugin for BrushPlugin {
         app.register_type::<EditMode>()
             .register_type::<BrushEditMode>()
             .register_type::<MeshMirror>()
+            .register_type::<jackdaw_geometry::ModifierStack>()
+            .register_type::<jackdaw_geometry::ModifierEntry>()
+            .register_type::<jackdaw_geometry::Modifier>()
             .init_resource::<EditMode>()
             .init_resource::<BrushSelection>()
             .init_resource::<BrushMaterialPalette>()
@@ -414,6 +483,7 @@ impl Plugin for BrushPlugin {
             .init_resource::<BrushDragState>()
             .init_resource::<VertexDragState>()
             .init_resource::<EdgeDragState>()
+            .init_resource::<mirror_plane_ops::MirrorPlaneDragState>()
             .init_resource::<box_select::BrushBoxSelectState>()
             .init_resource::<ClipState>()
             .init_resource::<InsetModalState>()
@@ -444,6 +514,10 @@ impl Plugin for BrushPlugin {
                     interaction::drop_brush_edit_on_deselect,
                     interaction::brush_face_hover,
                     interaction::brush_vertex_edge_hover,
+                    // Runs before the sub-element drag triggers: a hovered plane
+                    // handle grabs the press, and those triggers bail when the
+                    // handle is hovered, so the plane drag wins the gesture.
+                    mirror_plane_ops::mirror_plane_drag_invoke_trigger,
                     crate::brush_drag_ops::face_drag_invoke_trigger,
                     crate::brush_drag_ops::vertex_drag_invoke_trigger,
                     crate::brush_drag_ops::edge_drag_invoke_trigger,
@@ -460,7 +534,7 @@ impl Plugin for BrushPlugin {
                 (
                     mesh::sync_brush_preview,
                     ApplyDeferred,
-                    mesh::mark_brushes_changed_on_mirror_removal,
+                    mesh::mark_brushes_changed_on_modifier_removal,
                     mesh::recenter_brush_origins,
                     ApplyDeferred,
                     mesh::regenerate_brush_meshes,
@@ -481,6 +555,10 @@ impl Plugin for BrushPlugin {
             .add_systems(
                 Update,
                 sync_changed_brushes_to_ast.run_if(in_state(crate::AppState::Editor)),
+            )
+            .add_systems(
+                Update,
+                sync_changed_modifier_stacks_to_ast.run_if(in_state(crate::AppState::Editor)),
             )
             .add_systems(
                 Update,

@@ -3,7 +3,15 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 
 pub mod mirror;
-pub use mirror::{EvaluatedBrush, MeshMirror, MirrorAxes, evaluate_mirror, reflected_face_plane};
+pub use mirror::{
+    EvaluatedBrush, MeshMirror, MirrorAxes, NO_SOURCE, evaluate_mirror, reflected_face_plane,
+};
+
+pub mod halfspace_clip;
+pub use halfspace_clip::clip_to_halfspace;
+
+pub mod modifiers;
+pub use modifiers::{Modifier, ModifierEntry, ModifierStack, evaluate_modifier_stack};
 
 pub mod topology;
 pub use topology::{

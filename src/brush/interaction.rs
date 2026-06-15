@@ -517,10 +517,12 @@ pub(super) fn brush_face_hover(
                         / polygon.len() as f32;
                     let world_centroid = brush_global.transform_point(centroid);
                     let depth = (cam_tf.translation() - world_centroid).length_squared();
-                    if depth < best_depth {
+                    if depth < best_depth
+                        && let Some(authored) = cache.authored_face(face_idx)
+                    {
                         best_depth = depth;
                         best_entity = Some(brush_entity);
-                        best_face = Some(cache.face_to_authored(face_idx));
+                        best_face = Some(authored);
                     }
                 }
             }
@@ -554,9 +556,10 @@ pub(super) fn brush_face_hover(
 
         if let Some(face_idx) =
             pick_face_under_cursor(viewport_cursor, camera, cam_tf, brush_global, cache)
+            && let Some(authored) = cache.authored_face(face_idx)
         {
             hover.entity = Some(brush_entity);
-            hover.face_index = Some(cache.face_to_authored(face_idx));
+            hover.face_index = Some(authored);
             hover.vertex_index = None;
             hover.edge = None;
             hover.intent = intent;
@@ -635,10 +638,12 @@ pub(super) fn brush_vertex_edge_hover(
                     continue;
                 };
                 let dist = (screen - viewport_cursor).length();
-                if dist < best_dist {
+                if dist < best_dist
+                    && let Some(authored) = cache.authored_vert(vi)
+                {
                     best_dist = dist;
                     best_entity = Some(brush_entity);
-                    best_vi = Some(cache.vert_to_authored(vi));
+                    best_vi = Some(authored);
                 }
             }
         }
@@ -675,10 +680,12 @@ pub(super) fn brush_vertex_edge_hover(
                     continue;
                 };
                 let dist = point_to_segment_dist(viewport_cursor, sa, sb);
-                if dist < best_dist {
+                if dist < best_dist
+                    && let Some(authored) = cache.authored_edge((a, b))
+                {
                     best_dist = dist;
                     best_entity = Some(brush_entity);
-                    best_edge = Some(cache.edge_to_authored((a, b)));
+                    best_edge = Some(authored);
                 }
             }
         }

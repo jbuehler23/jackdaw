@@ -10,13 +10,23 @@
 use bevy::prelude::*;
 use jackdaw::brush::{
     Brush, BrushMaterialPalette, BrushMeshCache, BrushMeshChunk, MeshMirror,
-    ensure_brush_chunk_materials, mark_brushes_changed_on_mirror_removal, regenerate_brush_meshes,
-    setup_default_materials,
+    ensure_brush_chunk_materials, mark_brushes_changed_on_modifier_removal,
+    regenerate_brush_meshes, setup_default_materials,
 };
 use jackdaw::view_modes::ViewModeSettings;
 use jackdaw_api::prelude::*;
+use jackdaw_geometry::{Modifier, ModifierEntry, ModifierStack};
 
 mod util;
+
+/// Wrap a `MeshMirror` as a single-entry editor modifier stack, the
+/// component the brush mesh systems now read in place of the standalone
+/// mirror.
+fn mirror_stack(mirror: MeshMirror) -> ModifierStack {
+    ModifierStack {
+        modifiers: vec![ModifierEntry::new(Modifier::Mirror(mirror))],
+    }
+}
 
 /// Spawn a half-cube occupying x in [0, 1]: a unit cube shifted so its
 /// -X face lies exactly on the X = 0 mirror plane.
@@ -39,8 +49,8 @@ fn spawn_half_cube(app: &mut App) -> Entity {
 /// order the editor schedules them.
 fn tick_brush_meshes(app: &mut App) {
     app.world_mut()
-        .run_system_cached(mark_brushes_changed_on_mirror_removal)
-        .expect("mirror removal marker ran");
+        .run_system_cached(mark_brushes_changed_on_modifier_removal)
+        .expect("modifier removal marker ran");
     app.world_mut()
         .run_system_cached(regenerate_brush_meshes)
         .expect("regenerate_brush_meshes ran");
@@ -53,6 +63,20 @@ fn cache_of(app: &App, entity: Entity) -> &BrushMeshCache {
         .expect("brush has a BrushMeshCache after regenerate")
 }
 
+/// Spawn a unit cube centered on the origin (x in [-0.5, 0.5]) so it
+/// straddles the X = 0 mirror plane; a bisecting mirror must then cut it
+/// and introduce cap/split geometry.
+fn spawn_straddle_cube(app: &mut App) -> Entity {
+    app.world_mut()
+        .spawn((
+            Name::new("StraddleCube"),
+            Brush::cuboid(0.5, 0.5, 0.5),
+            Transform::default(),
+            Visibility::default(),
+        ))
+        .id()
+}
+
 #[test]
 fn mirrored_brush_cache_holds_both_halves_with_source_maps() {
     let mut app = util::headless_app();
@@ -62,7 +86,7 @@ fn mirrored_brush_cache_holds_both_halves_with_source_maps() {
     let entity = spawn_half_cube(&mut app);
     app.world_mut()
         .entity_mut(entity)
-        .insert(MeshMirror::default());
+        .insert(mirror_stack(MeshMirror::default()));
     tick_brush_meshes(&mut app);
 
     let cache = cache_of(&app, entity);
@@ -92,7 +116,7 @@ fn picking_remaps_to_authored_space() {
     let entity = spawn_half_cube(&mut app);
     app.world_mut()
         .entity_mut(entity)
-        .insert(MeshMirror::default());
+        .insert(mirror_stack(MeshMirror::default()));
     tick_brush_meshes(&mut app);
 
     let cache = cache_of(&app, entity);
@@ -127,19 +151,117 @@ fn removing_mirror_restores_authored_only_cache() {
     let entity = spawn_half_cube(&mut app);
     app.world_mut()
         .entity_mut(entity)
-        .insert(MeshMirror::default());
+        .insert(mirror_stack(MeshMirror::default()));
     tick_brush_meshes(&mut app);
     assert_eq!(cache_of(&app, entity).face_polygons.len(), 11);
 
     // Removal alone must trigger the rebuild, within a single
     // marker + regenerate pass; no manual Brush touch.
-    app.world_mut().entity_mut(entity).remove::<MeshMirror>();
+    app.world_mut().entity_mut(entity).remove::<ModifierStack>();
     tick_brush_meshes(&mut app);
 
     let cache = cache_of(&app, entity);
     assert_eq!(cache.face_polygons.len(), 6);
     assert!(cache.face_source.is_empty());
     assert!(cache.vert_source.is_empty());
+}
+
+#[test]
+fn bisect_cut_geometry_is_not_editable() {
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+
+    // A cube straddling the mirror plane with a bisecting X mirror: the
+    // clip caps the cut and splits verts onto x=0, all carrying NO_SOURCE.
+    let entity = spawn_straddle_cube(&mut app);
+    app.world_mut()
+        .entity_mut(entity)
+        .insert(mirror_stack(MeshMirror {
+            mirror_x: true,
+            bisect: [true, false, false],
+            ..MeshMirror::default()
+        }));
+    tick_brush_meshes(&mut app);
+
+    let cache = cache_of(&app, entity);
+
+    // The cap/split verts exist as NO_SOURCE entries.
+    assert!(
+        cache.vert_source.contains(&jackdaw_geometry::NO_SOURCE),
+        "bisect must introduce NO_SOURCE cut verts"
+    );
+
+    // authored_vert returns None for at least one cut vertex and Some for
+    // an authored vertex (index 0 lies in the authored identity prefix).
+    assert_eq!(cache.authored_vert(0), Some(0));
+    let cut_index = cache
+        .vert_source
+        .iter()
+        .position(|&s| s == jackdaw_geometry::NO_SOURCE)
+        .expect("a NO_SOURCE vert exists");
+    assert_eq!(
+        cache.authored_vert(cut_index),
+        None,
+        "cut geometry must not map to an authored vertex"
+    );
+
+    // Editable verts (authored origin) are strictly fewer than the total,
+    // so cut geometry is excluded from editing.
+    let editable = (0..cache.vertices.len())
+        .filter(|&v| cache.authored_vert(v).is_some())
+        .count();
+    assert!(
+        editable < cache.vertices.len(),
+        "editable verts ({editable}) must exclude the {} cut verts",
+        cache.vertices.len() - editable
+    );
+
+    // The cut cap face is likewise non-editable: a NO_SOURCE face index maps
+    // to no authored face, so the face picker skips it.
+    let cap_face = cache
+        .face_source
+        .iter()
+        .position(|&s| s == jackdaw_geometry::NO_SOURCE)
+        .expect("a NO_SOURCE cap face exists");
+    assert_eq!(
+        cache.authored_face(cap_face),
+        None,
+        "the cut cap face must not map to an authored face"
+    );
+}
+
+#[test]
+fn non_bisecting_mirror_leaves_every_vert_editable() {
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+
+    // The same straddling cube with bisect disabled: a plain reflect adds
+    // mirrored copies but no NO_SOURCE cut geometry, so every vert stays
+    // editable. This pins the cut-only behavior to the bisect flag.
+    let entity = spawn_straddle_cube(&mut app);
+    app.world_mut()
+        .entity_mut(entity)
+        .insert(mirror_stack(MeshMirror {
+            mirror_x: true,
+            bisect: [false; 3],
+            ..MeshMirror::default()
+        }));
+    tick_brush_meshes(&mut app);
+
+    let cache = cache_of(&app, entity);
+    assert!(
+        cache
+            .vert_source
+            .iter()
+            .all(|&s| s != jackdaw_geometry::NO_SOURCE),
+        "a non-bisecting mirror introduces no cut geometry"
+    );
+    assert!(
+        (0..cache.vertices.len()).all(|v| cache.authored_vert(v).is_some()),
+        "every vert is editable without a bisect"
+    );
 }
 
 /// Select `entity` and clear the headless placeholder `InputFocus`,
@@ -187,7 +309,7 @@ fn mirror_ops_gate_on_selection_and_component() {
     // With a mirror present: apply replaces add / bisect.
     app.world_mut()
         .entity_mut(entity)
-        .insert(MeshMirror::default());
+        .insert(mirror_stack(MeshMirror::default()));
     app.update();
     assert_available(&mut app, "mesh.mirror.add", false);
     assert_available(&mut app, "mesh.mirror.apply", true);
@@ -204,7 +326,7 @@ fn apply_bakes_mirror_into_authored_topology() {
     let entity = spawn_half_cube(&mut app);
     app.world_mut()
         .entity_mut(entity)
-        .insert(MeshMirror::default());
+        .insert(mirror_stack(MeshMirror::default()));
     select_for_operators(&mut app, entity);
 
     let result = app
@@ -217,7 +339,7 @@ fn apply_bakes_mirror_into_authored_topology() {
     // The component is gone and the authored topology now holds both
     // halves: 6 authored faces + 5 mirrored (the on-plane face welds
     // away), 8 authored verts + 4 mirrored.
-    assert!(app.world().entity(entity).get::<MeshMirror>().is_none());
+    assert!(app.world().entity(entity).get::<ModifierStack>().is_none());
     let brush = app
         .world()
         .entity(entity)
@@ -256,7 +378,7 @@ fn symmetrize_x_bakes_authored_topology() {
     // Half cube occupies x in [0, 1]; the default bisect keeps all of it
     // (positive side). X-mirror welds the 4 on-plane verts (x=0) so the
     // -X face produces no mirrored copy: 6 + 5 = 11 faces, 8 + 4 = 12 verts.
-    assert!(app.world().entity(entity).get::<MeshMirror>().is_none());
+    assert!(app.world().entity(entity).get::<ModifierStack>().is_none());
     let brush = app
         .world()
         .entity(entity)
@@ -395,12 +517,14 @@ fn symmetrize_x_bakes_prior_live_y_mirror() {
     app.update();
 
     let entity = spawn_half_cube(&mut app);
-    app.world_mut().entity_mut(entity).insert(MeshMirror {
-        mirror_x: false,
-        mirror_y: true,
-        mirror_z: false,
-        ..MeshMirror::default()
-    });
+    app.world_mut()
+        .entity_mut(entity)
+        .insert(mirror_stack(MeshMirror {
+            mirror_x: false,
+            mirror_y: true,
+            mirror_z: false,
+            ..MeshMirror::default()
+        }));
     select_for_operators(&mut app, entity);
 
     let result = app
@@ -410,7 +534,7 @@ fn symmetrize_x_bakes_prior_live_y_mirror() {
         .expect("mesh.symmetrize dispatched");
     assert_eq!(result, OperatorResult::Finished);
 
-    assert!(app.world().entity(entity).get::<MeshMirror>().is_none());
+    assert!(app.world().entity(entity).get::<ModifierStack>().is_none());
     let brush = app
         .world()
         .entity(entity)
@@ -428,6 +552,174 @@ fn symmetrize_x_bakes_prior_live_y_mirror() {
     );
     assert_eq!(brush.topology.polygons.len(), 21);
     assert_eq!(brush.faces.len(), 21);
+}
+
+/// Read the entity's modifier stack, panicking if absent.
+fn stack_of(app: &App, entity: Entity) -> &ModifierStack {
+    app.world()
+        .entity(entity)
+        .get::<ModifierStack>()
+        .expect("brush has a ModifierStack")
+}
+
+#[test]
+fn modifier_add_mirror_matches_standalone_cache() {
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+
+    let entity = spawn_half_cube(&mut app);
+    select_for_operators(&mut app, entity);
+
+    let result = app
+        .world_mut()
+        .operator("modifier.add")
+        .param("kind", "mirror")
+        .call()
+        .expect("modifier.add dispatched");
+    assert_eq!(result, OperatorResult::Finished);
+    tick_brush_meshes(&mut app);
+
+    // The evaluated cache matches the standalone-mirror result: 6 authored
+    // faces + 5 mirrored, 8 authored verts + 4 mirrored, non-empty maps.
+    let cache = cache_of(&app, entity);
+    assert_eq!(cache.face_polygons.len(), 11);
+    assert_eq!(cache.vertices.len(), 12);
+    assert!(!cache.face_source.is_empty());
+    assert!(!cache.vert_source.is_empty());
+    assert_eq!(cache.face_to_authored(0), 0);
+}
+
+#[test]
+fn modifier_toggle_flips_flag() {
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+
+    let entity = spawn_half_cube(&mut app);
+    app.world_mut()
+        .entity_mut(entity)
+        .insert(mirror_stack(MeshMirror::default()));
+    select_for_operators(&mut app, entity);
+    assert!(stack_of(&app, entity).modifiers[0].in_game);
+
+    let result = app
+        .world_mut()
+        .operator("modifier.toggle")
+        .param("index", 0_i64)
+        .param("flag", "in_game")
+        .call()
+        .expect("modifier.toggle dispatched");
+    assert_eq!(result, OperatorResult::Finished);
+
+    assert!(!stack_of(&app, entity).modifiers[0].in_game);
+}
+
+#[test]
+fn modifier_move_reorders() {
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+
+    let entity = spawn_half_cube(&mut app);
+    app.world_mut().entity_mut(entity).insert(ModifierStack {
+        modifiers: vec![
+            ModifierEntry::new(Modifier::Mirror(MeshMirror {
+                mirror_x: true,
+                mirror_y: false,
+                mirror_z: false,
+                ..MeshMirror::default()
+            })),
+            ModifierEntry::new(Modifier::Mirror(MeshMirror {
+                mirror_x: false,
+                mirror_y: true,
+                mirror_z: false,
+                ..MeshMirror::default()
+            })),
+        ],
+    });
+    select_for_operators(&mut app, entity);
+
+    let result = app
+        .world_mut()
+        .operator("modifier.move_down")
+        .param("index", 0_i64)
+        .call()
+        .expect("modifier.move_down dispatched");
+    assert_eq!(result, OperatorResult::Finished);
+
+    // The X-axis mirror that started at index 0 is now at index 1.
+    let stack = stack_of(&app, entity);
+    let Modifier::Mirror(first) = &stack.modifiers[0].modifier;
+    let Modifier::Mirror(second) = &stack.modifiers[1].modifier;
+    assert!(
+        first.mirror_y && !first.mirror_x,
+        "Y mirror moved to the top"
+    );
+    assert!(second.mirror_x && !second.mirror_y, "X mirror moved down");
+}
+
+#[test]
+fn modifier_apply_bakes_and_removes_entry() {
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+
+    let entity = spawn_half_cube(&mut app);
+    app.world_mut()
+        .entity_mut(entity)
+        .insert(mirror_stack(MeshMirror::default()));
+    select_for_operators(&mut app, entity);
+
+    let result = app
+        .world_mut()
+        .operator("modifier.apply")
+        .param("index", 0_i64)
+        .call()
+        .expect("modifier.apply dispatched");
+    assert_eq!(result, OperatorResult::Finished);
+
+    // The baked topology holds both halves and the drained stack is gone.
+    let brush = app
+        .world()
+        .entity(entity)
+        .get::<Brush>()
+        .expect("brush survives apply");
+    assert_eq!(brush.topology.polygons.len(), 11);
+    assert_eq!(brush.topology.vertices.len(), 12);
+    assert_eq!(brush.faces.len(), 11);
+    assert!(app.world().entity(entity).get::<ModifierStack>().is_none());
+}
+
+#[test]
+fn modifier_remove_restores_base_cache() {
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+
+    let entity = spawn_half_cube(&mut app);
+    app.world_mut()
+        .entity_mut(entity)
+        .insert(mirror_stack(MeshMirror::default()));
+    select_for_operators(&mut app, entity);
+    tick_brush_meshes(&mut app);
+    assert_eq!(cache_of(&app, entity).face_polygons.len(), 11);
+
+    let result = app
+        .world_mut()
+        .operator("modifier.remove")
+        .param("index", 0_i64)
+        .call()
+        .expect("modifier.remove dispatched");
+    assert_eq!(result, OperatorResult::Finished);
+    tick_brush_meshes(&mut app);
+
+    // Removing the last entry drops the stack and restores the base cache.
+    assert!(app.world().entity(entity).get::<ModifierStack>().is_none());
+    let cache = cache_of(&app, entity);
+    assert_eq!(cache.face_polygons.len(), 6);
+    assert!(cache.face_source.is_empty());
+    assert!(cache.vert_source.is_empty());
 }
 
 const REFERENCE_IMAGE_TYPE_PATH: &str = "jackdaw::reference_image::ReferenceImage";

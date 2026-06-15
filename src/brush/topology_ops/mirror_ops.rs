@@ -1,11 +1,14 @@
-//! `mesh.mirror.*` and `mesh.symmetrize` operators: manage the live
-//! `MeshMirror` component and bake its evaluated geometry into the
+//! `mesh.mirror.*` and `mesh.symmetrize` operators: manage the brush's
+//! `ModifierStack` Mirror entries and bake their evaluated geometry into the
 //! authored topology.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::bisect_plane::BisectKeep;
-use jackdaw_geometry::{MeshMirror, build_topology_from_face_polygons, evaluate_mirror};
+use jackdaw_geometry::{
+    EvaluatedBrush, MeshMirror, Modifier, ModifierEntry, ModifierStack,
+    build_topology_from_face_polygons, evaluate_mirror,
+};
 use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
 
 use crate::brush::BrushHalfedge;
@@ -13,11 +16,12 @@ use crate::clip_ops::bisect_brush;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::draw_brush::{DrawBrushState, env_allows_brush_op};
 use crate::keybind_focus::KeybindFocus;
+use crate::modifier_ops::bake_modifier_stack;
 use crate::selection::Selection;
 
 /// Authored vertex positions + per-face vertex rings from `brush.topology`,
-/// the input shape `evaluate_mirror` expects.
-fn authored_geometry(brush: &Brush) -> (Vec<Vec3>, Vec<Vec<usize>>) {
+/// the input shape `evaluate_mirror` and `evaluate_modifier_stack` expect.
+pub(crate) fn authored_geometry(brush: &Brush) -> (Vec<Vec3>, Vec<Vec<usize>>) {
     let vertices: Vec<Vec3> = brush.topology.vertices.iter().map(|v| v.position).collect();
     let face_polygons: Vec<Vec<usize>> = (0..brush.topology.polygons.len())
         .map(|i| brush.topology.face_ring(i).map(|v| v as usize).collect())
@@ -25,16 +29,16 @@ fn authored_geometry(brush: &Brush) -> (Vec<Vec3>, Vec<Vec<usize>>) {
     (vertices, face_polygons)
 }
 
-/// Bake `mirror` into the brush's authored topology: evaluate the mirror,
-/// rebuild `brush.topology` from the evaluated verts + rings, and duplicate
-/// authored face data into the appended mirrored slots via `face_source`.
-/// Shared by `mesh.mirror.apply`, `mesh.symmetrize`, and the CSG impls.
-pub(crate) fn apply_mirror_to_brush(brush: &mut Brush, mirror: &MeshMirror) {
-    if mirror.axes().is_empty() || brush.topology.polygons.is_empty() {
+/// Rebuild `brush.topology` + `brush.faces` + face planes + edge flags from
+/// an evaluated result: duplicate authored face data into the appended slots
+/// via `face_source`, carry edge flags through `vert_source`, and recompute
+/// each face plane from the new topology. Shared by the single-mirror bake
+/// and the full `ModifierStack` bake. Does nothing when the evaluation was
+/// identity (empty source maps).
+pub(crate) fn rebuild_brush_from_eval(brush: &mut Brush, eval: &EvaluatedBrush) {
+    if eval.vert_source.is_empty() {
         return;
     }
-    let (vertices, face_polygons) = authored_geometry(brush);
-    let eval = evaluate_mirror(&vertices, &face_polygons, mirror);
 
     debug_assert_eq!(
         brush.faces.len(),
@@ -46,7 +50,8 @@ pub(crate) fn apply_mirror_to_brush(brush: &mut Brush, mirror: &MeshMirror) {
         .iter()
         .map(|&src| brush.faces.get(src as usize).cloned().unwrap_or_default())
         .collect();
-    let mut new_topology = build_topology_from_face_polygons(eval.vertices, eval.face_polygons);
+    let mut new_topology =
+        build_topology_from_face_polygons(eval.vertices.clone(), eval.face_polygons.clone());
 
     // Carry edge flags (sharp / seam) over: map each rebuilt edge's verts
     // back to authored verts through `vert_source` and look the pair up in
@@ -77,33 +82,37 @@ pub(crate) fn apply_mirror_to_brush(brush: &mut Brush, mirror: &MeshMirror) {
     brush.topology = new_topology;
 }
 
-/// Bake `entity`'s live mirror into its authored topology and remove the
-/// component. After baking, the authored topology holds both halves, so the
-/// component must go or the next mesh rebuild would mirror the result again.
-/// A stale `BrushHalfedge` would overwrite the new topology on its next
-/// flatten, so it is re-lifted when present (same handling as `apply_brush`).
-pub(crate) fn bake_mirror(world: &mut World, entity: Entity) {
-    let Some(mirror) = world.get::<MeshMirror>(entity).cloned() else {
+/// Bake `mirror` into the brush's authored topology: evaluate the mirror and
+/// rebuild from the result. Shared by `mesh.symmetrize` and the CSG impls.
+pub(crate) fn apply_mirror_to_brush(brush: &mut Brush, mirror: &MeshMirror) {
+    if mirror.axes().is_empty() || brush.topology.polygons.is_empty() {
         return;
-    };
-    let relift = world.get::<BrushHalfedge>(entity).is_some();
-    let Some(mut brush) = world.get_mut::<Brush>(entity) else {
-        return;
-    };
-    apply_mirror_to_brush(&mut brush, &mirror);
-    let topology = relift.then(|| brush.topology.clone());
-    if let Some(topology) = topology {
-        world
-            .entity_mut(entity)
-            .insert(BrushHalfedge::from_topology(&topology));
     }
-    world.entity_mut(entity).remove::<MeshMirror>();
+    let (vertices, face_polygons) = authored_geometry(brush);
+    let eval = evaluate_mirror(&vertices, &face_polygons, mirror);
+    rebuild_brush_from_eval(brush, &eval);
 }
 
-/// Bake mirrors ahead of a CSG pass that reads the whole scene: `cutters`
-/// bake unconditionally; other mirrored brushes bake only when their
-/// mirror-evaluated bounds reach a cutter, so far-away brushes keep their
-/// live mirror instead of getting silently baked by an unrelated cut.
+/// Whether `stack` carries at least one `Modifier::Mirror` entry.
+fn stack_has_mirror(stack: Option<&ModifierStack>) -> bool {
+    stack.is_some_and(|s| {
+        s.modifiers
+            .iter()
+            .any(|e| matches!(e.modifier, Modifier::Mirror(_)))
+    })
+}
+
+/// Bake `entity`'s modifier stack into its authored topology and remove the
+/// component. After baking, the authored topology holds the evaluated result,
+/// so the stack must go or the next mesh rebuild would fold it again.
+pub(crate) fn bake_mirror(world: &mut World, entity: Entity) {
+    crate::modifier_ops::bake_modifier_stack_entity(world, entity);
+}
+
+/// Bake modifier stacks ahead of a CSG pass that reads the whole scene:
+/// `cutters` bake unconditionally; other stacked brushes bake only when their
+/// evaluated bounds reach a cutter, so far-away brushes keep their live stack
+/// instead of getting silently baked by an unrelated cut.
 pub(crate) fn bake_engaged_mirrors(world: &mut World, cutters: &[Entity]) {
     for &entity in cutters {
         bake_mirror(world, entity);
@@ -121,13 +130,19 @@ pub(crate) fn bake_engaged_mirrors(world: &mut World, cutters: &[Entity]) {
         return;
     }
 
-    let mut mirrored_query = world.query::<(Entity, &Brush, &MeshMirror, &GlobalTransform)>();
-    let engaged: Vec<Entity> = mirrored_query
+    let mut stacked_query = world.query::<(Entity, &Brush, &ModifierStack, &GlobalTransform)>();
+    let engaged: Vec<Entity> = stacked_query
         .iter(world)
         .filter(|(entity, ..)| !cutters.contains(entity))
-        .filter_map(|(entity, brush, mirror, gt)| {
+        .filter_map(|(entity, brush, stack, gt)| {
             let (vertices, face_polygons) = authored_geometry(brush);
-            let eval = evaluate_mirror(&vertices, &face_polygons, mirror);
+            let mods: Vec<&Modifier> = stack.modifiers.iter().map(|e| &e.modifier).collect();
+            let eval = jackdaw_geometry::evaluate_modifier_stack(
+                &vertices,
+                &face_polygons,
+                &brush.faces,
+                &mods,
+            );
             let aabb = world_aabb(eval.vertices.into_iter(), gt)?;
             cutter_aabbs
                 .iter()
@@ -164,7 +179,7 @@ fn aabbs_overlap(a: &(Vec3, Vec3), b: &(Vec3, Vec3)) -> bool {
         && a.1.z >= b.0.z - E
 }
 
-/// Add a default live mirror (X axis, clipped) to every selected brush that
+/// Add a default mirror entry (X axis, clipped) to every selected brush that
 /// doesn't already carry one. Available with a mirror-less brush selected.
 #[operator(
     id = "mesh.mirror.add",
@@ -175,15 +190,23 @@ fn aabbs_overlap(a: &(Vec3, Vec3), b: &(Vec3, Vec3)) -> bool {
 pub(crate) fn mesh_mirror_add(
     _: In<OperatorParameters>,
     selection: Res<Selection>,
-    candidates: Query<(), (With<Brush>, Without<MeshMirror>)>,
+    candidates: Query<(Entity, Option<&ModifierStack>), With<Brush>>,
     mut commands: Commands,
 ) -> OperatorResult {
     let mut added = false;
     for &entity in &selection.entities {
-        if candidates.contains(entity) {
-            commands.entity(entity).insert(MeshMirror::default());
-            added = true;
+        let Ok((_, stack)) = candidates.get(entity) else {
+            continue;
+        };
+        if stack_has_mirror(stack) {
+            continue;
         }
+        let mut stack = stack.cloned().unwrap_or_default();
+        stack
+            .modifiers
+            .push(ModifierEntry::new(Modifier::Mirror(MeshMirror::default())));
+        commands.entity(entity).insert(stack);
+        added = true;
     }
     if added {
         OperatorResult::Finished
@@ -192,7 +215,7 @@ pub(crate) fn mesh_mirror_add(
     }
 }
 
-/// Bake the live mirror of every selected mirrored brush into its authored
+/// Bake the modifier stack of every selected mirrored brush into its authored
 /// topology and remove the component. Available with a mirrored brush
 /// selected.
 #[operator(
@@ -204,22 +227,23 @@ pub(crate) fn mesh_mirror_add(
 pub(crate) fn mesh_mirror_apply(
     _: In<OperatorParameters>,
     selection: Res<Selection>,
-    mut brushes: Query<(&mut Brush, &MeshMirror)>,
+    mut brushes: Query<(&mut Brush, &ModifierStack)>,
     halfedges: Query<(), With<BrushHalfedge>>,
     mut commands: Commands,
 ) -> OperatorResult {
     let mut applied = false;
     for &entity in &selection.entities {
-        let Ok((mut brush, mirror)) = brushes.get_mut(entity) else {
+        let Ok((mut brush, stack)) = brushes.get_mut(entity) else {
             continue;
         };
-        apply_mirror_to_brush(&mut brush, mirror);
+        let mods: Vec<&Modifier> = stack.modifiers.iter().map(|e| &e.modifier).collect();
+        bake_modifier_stack(&mut brush, &mods);
         if halfedges.contains(entity) {
             commands
                 .entity(entity)
                 .insert(BrushHalfedge::from_topology(&brush.topology));
         }
-        commands.entity(entity).remove::<MeshMirror>();
+        commands.entity(entity).remove::<ModifierStack>();
         applied = true;
     }
     if applied {
@@ -230,8 +254,8 @@ pub(crate) fn mesh_mirror_apply(
 }
 
 /// Cut every selected mirror-less brush at the default mirror plane (brush
-/// local X through zero), keep the positive side, and add a default live
-/// mirror so the discarded half re-appears as the mirrored copy. Available
+/// local X through zero), keep the positive side, and add a default mirror
+/// entry so the discarded half re-appears as the mirrored copy. Available
 /// with a mirror-less brush selected.
 #[operator(
     id = "mesh.mirror.bisect",
@@ -242,7 +266,7 @@ pub(crate) fn mesh_mirror_apply(
 pub(crate) fn mesh_mirror_bisect(
     _: In<OperatorParameters>,
     selection: Res<Selection>,
-    mut brushes: Query<&mut Brush, Without<MeshMirror>>,
+    mut brushes: Query<(&mut Brush, Option<&ModifierStack>)>,
     halfedges: Query<(), With<BrushHalfedge>>,
     mut commands: Commands,
 ) -> OperatorResult {
@@ -252,9 +276,12 @@ pub(crate) fn mesh_mirror_bisect(
     };
     let mut cut = false;
     for &entity in &selection.entities {
-        let Ok(mut brush) = brushes.get_mut(entity) else {
+        let Ok((mut brush, stack)) = brushes.get_mut(entity) else {
             continue;
         };
+        if stack_has_mirror(stack) {
+            continue;
+        }
         let Some(half) = bisect_brush(&brush, &plane, BisectKeep::Front) else {
             continue;
         };
@@ -264,7 +291,11 @@ pub(crate) fn mesh_mirror_bisect(
                 .entity(entity)
                 .insert(BrushHalfedge::from_topology(&brush.topology));
         }
-        commands.entity(entity).insert(MeshMirror::default());
+        let mut stack = stack.cloned().unwrap_or_default();
+        stack
+            .modifiers
+            .push(ModifierEntry::new(Modifier::Mirror(MeshMirror::default())));
+        commands.entity(entity).insert(stack);
         cut = true;
     }
     if cut {
@@ -292,7 +323,7 @@ pub(crate) fn mesh_mirror_bisect(
 pub(crate) fn mesh_symmetrize(
     params: In<OperatorParameters>,
     selection: Res<Selection>,
-    mut brushes: Query<(&mut Brush, Option<&MeshMirror>)>,
+    mut brushes: Query<(&mut Brush, Option<&ModifierStack>)>,
     halfedges: Query<(), With<BrushHalfedge>>,
     mut commands: Commands,
 ) -> OperatorResult {
@@ -321,12 +352,13 @@ pub(crate) fn mesh_symmetrize(
 
     let mut symmetrized = false;
     for &entity in &selection.entities {
-        let Ok((mut brush, existing_mirror)) = brushes.get_mut(entity) else {
+        let Ok((mut brush, existing_stack)) = brushes.get_mut(entity) else {
             continue;
         };
-        let had_mirror = existing_mirror.is_some();
-        if let Some(existing) = existing_mirror {
-            apply_mirror_to_brush(&mut brush, existing);
+        let had_stack = existing_stack.is_some();
+        if let Some(existing) = existing_stack {
+            let mods: Vec<&Modifier> = existing.modifiers.iter().map(|e| &e.modifier).collect();
+            bake_modifier_stack(&mut brush, &mods);
         }
         let Some(half) = bisect_brush(&brush, &plane, BisectKeep::Front) else {
             continue;
@@ -338,8 +370,8 @@ pub(crate) fn mesh_symmetrize(
                 .entity(entity)
                 .insert(BrushHalfedge::from_topology(&brush.topology));
         }
-        if had_mirror {
-            commands.entity(entity).remove::<MeshMirror>();
+        if had_stack {
+            commands.entity(entity).remove::<ModifierStack>();
         }
         symmetrized = true;
     }
@@ -351,28 +383,36 @@ pub(crate) fn mesh_symmetrize(
 }
 
 /// `mesh.mirror.add` / `mesh.mirror.bisect` need a selected brush without
-/// a live mirror.
+/// a Mirror entry in its stack.
 pub(crate) fn can_add_mirror(
     keybind_focus: KeybindFocus,
     modal: Res<crate::modal_transform::ModalTransformState>,
     draw_state: Res<DrawBrushState>,
     selection: Res<Selection>,
-    candidates: Query<(), (With<Brush>, Without<MeshMirror>)>,
+    candidates: Query<(Entity, Option<&ModifierStack>), With<Brush>>,
 ) -> bool {
     env_allows_brush_op(&keybind_focus, &modal, &draw_state)
-        && selection.entities.iter().any(|&e| candidates.contains(e))
+        && selection.entities.iter().any(|&e| {
+            candidates
+                .get(e)
+                .is_ok_and(|(_, stack)| !stack_has_mirror(stack))
+        })
 }
 
-/// `mesh.mirror.apply` needs a selected brush carrying a live mirror.
+/// `mesh.mirror.apply` needs a selected brush carrying a Mirror entry.
 pub(crate) fn can_apply_mirror(
     keybind_focus: KeybindFocus,
     modal: Res<crate::modal_transform::ModalTransformState>,
     draw_state: Res<DrawBrushState>,
     selection: Res<Selection>,
-    candidates: Query<(), (With<Brush>, With<MeshMirror>)>,
+    candidates: Query<(Entity, Option<&ModifierStack>), With<Brush>>,
 ) -> bool {
     env_allows_brush_op(&keybind_focus, &modal, &draw_state)
-        && selection.entities.iter().any(|&e| candidates.contains(e))
+        && selection.entities.iter().any(|&e| {
+            candidates
+                .get(e)
+                .is_ok_and(|(_, stack)| stack_has_mirror(stack))
+        })
 }
 
 /// `mesh.symmetrize` needs any selected brush.

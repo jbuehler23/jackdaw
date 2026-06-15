@@ -16,7 +16,7 @@ use bevy::{
     reflect::serde::TypedReflectSerializer,
 };
 use jackdaw_feathers::{
-    button::ButtonOperatorCall,
+    button::{ButtonOperatorCall, ButtonProps, ButtonVariant, button},
     icons::{EditorFont, Icon, IconFont},
     tokens,
 };
@@ -38,7 +38,7 @@ use super::{
     AddComponentButton, ComponentDisplay, ComponentDisplayBody, ComponentName, ComponentPicker,
     Inspector, InspectorDirty, InspectorFieldRow, InspectorGroupSection, InspectorSearch,
     InspectorTarget, ReflectDisplayable, brush_display, component_tooltip::ReflectedTypeTooltip,
-    custom_props_display, extract_module_group, material_display, reflect_fields,
+    custom_props_display, extract_module_group, material_display, modifier_display, reflect_fields,
 };
 use crate::prefab::PrefabAstCache;
 use bevy::picking::hover::Hovered;
@@ -284,6 +284,7 @@ pub(crate) fn build_inspector_displays(
                 let full_path = table.path();
                 if full_path.starts_with("jackdaw")
                     && !full_path.starts_with("jackdaw_jsn")
+                    && !full_path.starts_with("jackdaw_geometry")
                     && !full_path.starts_with("jackdaw_avian_integration")
                     && !full_path.starts_with("jackdaw_animation")
                     && !full_path.starts_with("jackdaw_multiplayer")
@@ -339,6 +340,7 @@ pub(crate) fn build_inspector_displays(
             let name = components.get_name(component_id)?;
             if name.starts_with("jackdaw")
                 && !name.starts_with("jackdaw_jsn")
+                && !name.starts_with("jackdaw_geometry")
                 && !name.starts_with("jackdaw_avian_integration")
                 && !name.starts_with("jackdaw_animation")
             {
@@ -567,6 +569,51 @@ pub(crate) fn build_inspector_displays(
                             ChildOf(body_entity),
                         ));
                     }
+                }
+                // First-add entry point: a brush with no ModifierStack
+                // shows no modifier card, so surface an Add Mirror button
+                // in the brush card. Once a stack exists the modifier card
+                // owns the affordance and this is skipped.
+                if !entity_ref.contains::<jackdaw_geometry::ModifierStack>() {
+                    // The button bundle carries its own Node, so the top
+                    // margin lives on a wrapping container.
+                    let footer = commands
+                        .spawn((
+                            Node {
+                                margin: UiRect::top(Val::Px(tokens::SPACING_SM)),
+                                width: Val::Percent(100.0),
+                                ..Default::default()
+                            },
+                            ChildOf(body_entity),
+                        ))
+                        .id();
+                    commands.spawn((
+                        button(
+                            ButtonProps::new("Add Mirror")
+                                .with_variant(ButtonVariant::Default)
+                                .with_left_icon(Icon::Plus)
+                                .align_left(),
+                        ),
+                        ButtonOperatorCall::new("modifier.add").with_param("kind", "mirror"),
+                        ChildOf(footer),
+                    ));
+                }
+                continue;
+            }
+
+            // Priority 3b2: ModifierStack, the modifier-card UI
+            if type_id == TypeId::of::<jackdaw_geometry::ModifierStack>() {
+                if let Some(stack) = reflected.downcast_ref::<jackdaw_geometry::ModifierStack>() {
+                    modifier_display::spawn_modifier_display(
+                        commands,
+                        body_entity,
+                        source_entity,
+                        stack,
+                        names,
+                        type_registry,
+                        &editor_font.0,
+                        &icon_font.0,
+                    );
                 }
                 continue;
             }

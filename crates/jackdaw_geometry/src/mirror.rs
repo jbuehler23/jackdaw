@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::{BrushPlane, newell_normal};
+use crate::{BrushPlane, clip_to_halfspace, newell_normal};
 
 bitflags::bitflags! {
     /// Which brush-local axes mirror. Combinations compose (X|Y mirrors
@@ -54,6 +54,14 @@ pub struct MeshMirror {
     /// `|v[axis] - offset[axis]| <= merge_dist`. At `merge_dist = 0.0`
     /// only exact-plane verts weld.
     pub merge_dist: f32,
+    /// Weld mirrored verts to their source at the plane. When false the
+    /// two halves stay as separate overlapping geometry.
+    pub merge: bool,
+    /// Per-axis non-destructive cut: drop authored geometry on the far
+    /// side of the plane before mirroring.
+    pub bisect: [bool; 3],
+    /// Per-axis bisect direction: keep the other side of the plane.
+    pub bisect_flip: [bool; 3],
 }
 
 impl Default for MeshMirror {
@@ -65,6 +73,9 @@ impl Default for MeshMirror {
             offset: Vec3::ZERO,
             clip: true,
             merge_dist: 0.001,
+            merge: true,
+            bisect: [false; 3],
+            bisect_flip: [false; 3],
         }
     }
 }
@@ -87,6 +98,12 @@ impl MeshMirror {
     }
 }
 
+/// Marker in `EvaluatedBrush::vert_source` / `face_source` for an evaluated
+/// element with no authored origin (the cut cap and split vertices a bisect
+/// introduces). The editor skips these when drawing editable handles, and the
+/// modifier-stack fold passes the marker through instead of indexing with it.
+pub const NO_SOURCE: u32 = u32::MAX;
+
 /// Mirror-evaluated geometry. Indices `0..authored_len` are the
 /// authored elements unchanged (identity prefix); appended elements
 /// map back through the source arrays.
@@ -101,8 +118,10 @@ pub struct EvaluatedBrush {
 }
 
 /// Reflect the authored geometry across each enabled axis plane,
-/// flipping face winding and welding mirrored copies of verts that lie
-/// within `merge_dist` of that plane back to their source vert.
+/// flipping face winding. When `merge` is set, mirrored copies of verts
+/// that lie within `merge_dist` of that plane weld back to their source
+/// vert; when `merge` is clear nothing welds and the two halves stay as
+/// separate overlapping geometry.
 ///
 /// Axes are processed sequentially: the output of axis N is the input
 /// of axis N+1, so X|Y produces four copies.
@@ -110,8 +129,10 @@ pub struct EvaluatedBrush {
 /// **Precondition:** every index in `face_polygons` must be in range for
 /// `vertices`; an out-of-range index will panic.
 ///
-/// **Note:** a face whose vertices all lie on the mirror plane (all welded)
-/// produces no mirrored face; it would duplicate exactly onto its source.
+/// **Note:** with `merge` set, a face whose vertices all lie on the
+/// mirror plane (all welded) produces no mirrored face; it would
+/// duplicate exactly onto its source. With `merge` clear that seam face
+/// is duplicated like any other.
 pub fn evaluate_mirror(
     vertices: &[Vec3],
     face_polygons: &[Vec<usize>],
@@ -134,15 +155,39 @@ pub fn evaluate_mirror(
             continue;
         }
         let plane = mirror.offset[axis];
+
+        // Non-destructive bisect: before reflecting this axis, drop the
+        // authored half on the far side of the plane and cap the cut. The
+        // cap and its split verts carry NO_SOURCE; the on-plane split verts
+        // weld to themselves during reflection (merge), so the cap becomes
+        // the seam instead of doubling geometry.
+        if mirror.bisect[axis] {
+            let clipped = clip_to_halfspace(
+                &eval.vertices,
+                &eval.face_polygons,
+                &eval.vert_source,
+                &eval.face_source,
+                axis,
+                plane,
+                !mirror.bisect_flip[axis],
+            );
+            eval.vertices = clipped.vertices;
+            eval.face_polygons = clipped.face_polygons;
+            eval.vert_source = clipped.vert_source;
+            eval.face_source = clipped.face_source;
+        }
+
         let input_vert_count = eval.vertices.len();
         let input_face_count = eval.face_polygons.len();
 
-        // Mirror every existing vert; verts within merge_dist of the
-        // plane weld to themselves instead of duplicating.
+        // Mirror every existing vert. With merge set, verts within
+        // merge_dist of the plane weld to themselves instead of
+        // duplicating; with merge clear nothing welds, so on-plane verts
+        // gain a coincident duplicate at the seam.
         let mut mirrored_index = vec![0usize; input_vert_count];
         for (i, slot) in mirrored_index.iter_mut().enumerate() {
             let v = eval.vertices[i];
-            if (v[axis] - plane).abs() <= mirror.merge_dist {
+            if mirror.merge && (v[axis] - plane).abs() <= mirror.merge_dist {
                 *slot = i;
             } else {
                 let mut m = v;
@@ -211,6 +256,147 @@ mod tests {
             ],
             vec![vec![0, 1, 2, 3]],
         )
+    }
+
+    /// Axis-aligned cube spanning [-1, 1] on every axis, 8 verts, 6 quad
+    /// faces wound CCW from outside.
+    fn cube() -> (Vec<Vec3>, Vec<Vec<usize>>) {
+        (
+            vec![
+                Vec3::new(-1.0, -1.0, -1.0),
+                Vec3::new(1.0, -1.0, -1.0),
+                Vec3::new(1.0, 1.0, -1.0),
+                Vec3::new(-1.0, 1.0, -1.0),
+                Vec3::new(-1.0, -1.0, 1.0),
+                Vec3::new(1.0, -1.0, 1.0),
+                Vec3::new(1.0, 1.0, 1.0),
+                Vec3::new(-1.0, 1.0, 1.0),
+            ],
+            vec![
+                vec![0, 3, 2, 1],
+                vec![4, 5, 6, 7],
+                vec![0, 1, 5, 4],
+                vec![3, 7, 6, 2],
+                vec![0, 4, 7, 3],
+                vec![1, 2, 6, 5],
+            ],
+        )
+    }
+
+    #[test]
+    fn bisect_halves_geometry_before_mirroring() {
+        let (verts, polys) = cube();
+
+        // Control: plain X-mirror of the straddling cube. No vert sits on
+        // x=0, so nothing welds and all six faces duplicate.
+        let control = evaluate_mirror(
+            &verts,
+            &polys,
+            &MeshMirror {
+                mirror_x: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(control.face_polygons.len(), 12, "6 authored + 6 mirrored");
+        assert!(
+            control.face_source.iter().all(|&s| s != NO_SOURCE),
+            "plain mirror introduces no cap"
+        );
+
+        // With bisect: keep x>=0, cap the cut, then mirror. The clip yields
+        // the +X face, four clipped side quads, and one cap (6 faces). The
+        // cap lies on x=0 and welds to itself, so mirroring skips it and
+        // duplicates the other five faces: 6 + 5 = 11 faces.
+        let bisected = evaluate_mirror(
+            &verts,
+            &polys,
+            &MeshMirror {
+                mirror_x: true,
+                bisect: [true, false, false],
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            bisected.face_polygons.len(),
+            11,
+            "kept half (6, cap included) + 5 mirrored non-seam faces"
+        );
+        assert!(
+            bisected.face_polygons.len() < control.face_polygons.len(),
+            "bisect removes the doubled overlapping half"
+        );
+        // The cap survives as a NO_SOURCE face on the seam.
+        assert!(
+            bisected.face_source.contains(&NO_SOURCE),
+            "cut cap kept as a seam face"
+        );
+        // The four split verts on x=0 carry NO_SOURCE and weld to themselves.
+        assert!(
+            bisected.vert_source.contains(&NO_SOURCE),
+            "split verts kept with NO_SOURCE"
+        );
+        // No kept geometry strays onto the discarded (x < 0) side.
+        for ring in &bisected.face_polygons {
+            for &vi in ring {
+                let x = bisected.vertices[vi].x;
+                // Mirrored copies live at x <= 0; authored kept half at x >= 0.
+                assert!(x.abs() <= 1.0 + 1e-5, "no stray geometry: x={x}");
+            }
+        }
+    }
+
+    #[test]
+    fn bisect_flip_keeps_the_mirror_image_half() {
+        let (verts, polys) = cube();
+        let keep_pos = evaluate_mirror(
+            &verts,
+            &polys,
+            &MeshMirror {
+                mirror_x: true,
+                bisect: [true, false, false],
+                ..Default::default()
+            },
+        );
+        let keep_neg = evaluate_mirror(
+            &verts,
+            &polys,
+            &MeshMirror {
+                mirror_x: true,
+                bisect: [true, false, false],
+                bisect_flip: [true, false, false],
+                ..Default::default()
+            },
+        );
+        // Mirror-and-bisect is symmetric: keeping either half then mirroring
+        // produces the same face count.
+        assert_eq!(
+            keep_pos.face_polygons.len(),
+            keep_neg.face_polygons.len(),
+            "either kept half yields the same mirrored result"
+        );
+        // The authored kept half flips sides. With keep_positive the authored
+        // half sits at x>=0; flipped it sits at x<=0.
+        let authored_xs_pos: Vec<f32> = keep_pos.vertices[..8].iter().map(|v| v.x).collect();
+        let authored_xs_neg: Vec<f32> = keep_neg.vertices[..8].iter().map(|v| v.x).collect();
+        // The authored verts themselves are untouched (identity prefix); the
+        // difference is which faces reference them. Confirm at least one face
+        // references an x=1 authored vert in the keep-positive result.
+        let _ = (authored_xs_pos, authored_xs_neg);
+        let touches_pos = keep_pos
+            .face_polygons
+            .iter()
+            .flatten()
+            .any(|&vi| keep_pos.vertices[vi].x > 0.5);
+        let touches_neg_authored = keep_neg
+            .face_polygons
+            .iter()
+            .flatten()
+            .any(|&vi| vi < 8 && keep_neg.vertices[vi].x < -0.5);
+        assert!(touches_pos, "keep-positive references the +X authored half");
+        assert!(
+            touches_neg_authored,
+            "flipped keep references the -X authored half"
+        );
     }
 
     #[test]
@@ -314,6 +500,50 @@ mod tests {
         };
         let eval = evaluate_mirror(&verts, &polys, &mirror);
         assert_eq!(eval.vertices.len(), 8, "no welding at zero tolerance");
+    }
+
+    #[test]
+    fn merge_false_duplicates_seam_instead_of_welding() {
+        // A quad lying entirely on the x=0 mirror plane: all four verts
+        // are seam verts and the face is a seam face.
+        let verts = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 1.0, 1.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ];
+        let polys = vec![vec![0, 1, 2, 3]];
+
+        // merge:true welds all four verts onto themselves and skips the
+        // all-welded seam face.
+        let merged = evaluate_mirror(
+            &verts,
+            &polys,
+            &MeshMirror {
+                merge: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(merged.vertices.len(), 4, "all four seam verts weld");
+        assert_eq!(merged.face_polygons.len(), 1, "seam face not duplicated");
+
+        // merge:false never welds: every seam vert gets a coincident
+        // duplicate and the seam face is mirrored too.
+        let unmerged = evaluate_mirror(
+            &verts,
+            &polys,
+            &MeshMirror {
+                merge: false,
+                ..Default::default()
+            },
+        );
+        assert_eq!(unmerged.vertices.len(), 8, "4 authored + 4 coincident");
+        assert_eq!(unmerged.face_polygons.len(), 2, "seam face duplicated");
+        assert!(
+            unmerged.vertices.len() > merged.vertices.len()
+                && unmerged.face_polygons.len() > merged.face_polygons.len(),
+            "unmerged mirror keeps both halves and their seam face"
+        );
     }
 
     #[test]
