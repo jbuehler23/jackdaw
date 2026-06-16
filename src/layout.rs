@@ -1013,120 +1013,83 @@ fn editor_status_bar() -> impl Bundle {
 }
 
 pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
-    let save_font = icon_font.clone();
+    let save_font = icon_font;
+    // Outer horizontal row: [strip | content column]
     (
         Node {
-            flex_direction: FlexDirection::Column,
+            flex_direction: FlexDirection::Row,
             flex_grow: 1.0,
             min_height: px(0.0),
             ..Default::default()
         },
         children![
+            // Strip mount: the category tab rail is spawned here by the
+            // On<Add, InspectorCategoryStripMount> observer in InspectorPlugin.
+            (crate::inspector::category_strip::InspectorCategoryStripMount,),
+            // Content column: add-header + search header + scrollable card list.
             (
-                PieViewHeader,
                 Node {
                     flex_direction: FlexDirection::Column,
-                    width: percent(100),
-                    padding: UiRect::all(px(tokens::SPACING_SM)),
-                    row_gap: px(tokens::SPACING_XS),
-                    flex_shrink: 0.0,
-                    border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-                    ..Default::default()
-                },
-                BackgroundColor(Color::NONE),
-                children![
-                    (
-                        Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: px(tokens::SPACING_XS),
-                            width: percent(100),
-                            ..Default::default()
-                        },
-                        children![(
-                            Node {
-                                flex_grow: 1.0,
-                                ..Default::default()
-                            },
-                            children![(
-                                crate::inspector::InspectorSearch,
-                                text_edit::text_edit(
-                                    TextEditProps::default()
-                                        .with_placeholder("Filter...")
-                                        .allow_empty()
-                                ),
-                            )],
-                        ),],
-                    ),
-                    (
-                        crate::inspector::AddComponentButton,
-                        Interaction::default(),
-                        Node {
-                            flex_direction: FlexDirection::Row,
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            width: percent(100),
-                            height: px(tokens::ROW_HEIGHT),
-                            column_gap: px(tokens::SPACING_SM),
-                            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
-                            flex_shrink: 0.0,
-                            ..Default::default()
-                        },
-                        BackgroundColor(tokens::ELEVATED_BG),
-                        observe(
-                            |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
-                                if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                                    bg.0 = tokens::TOOLBAR_ACTIVE_BG;
-                                }
-                            },
-                        ),
-                        observe(
-                            |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-                                if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                                    bg.0 = tokens::ELEVATED_BG;
-                                }
-                            },
-                        ),
-                        children![
-                            (
-                                Text::new(String::from(Icon::PackagePlus.unicode())),
-                                TextFont {
-                                    font: icon_font,
-                                    font_size: tokens::ICON_SM,
-                                    ..Default::default()
-                                },
-                                TextColor(tokens::TEXT_PRIMARY),
-                            ),
-                            (
-                                LocalizedText::new("add-component"),
-                                TextFont {
-                                    font_size: tokens::TEXT_SIZE,
-                                    weight: FontWeight::MEDIUM,
-                                    ..Default::default()
-                                },
-                                TextColor(tokens::TEXT_PRIMARY),
-                            ),
-                        ],
-                        observe(|click: On<Pointer<Click>>, mut commands: Commands| {
-                            commands.trigger(jackdaw_feathers::button::ButtonClickEvent {
-                                entity: click.event_target(),
-                            });
-                        },),
-                    ),
-                    save_to_scene_button(save_font),
-                ],
-            ),
-            (
-                Inspector,
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(tokens::SPACING_SM),
-                    overflow: Overflow::scroll_y(),
                     flex_grow: 1.0,
                     min_height: px(0.0),
-                    padding: UiRect::all(px(tokens::SPACING_SM)),
                     ..Default::default()
-                }
+                },
+                children![
+                    // Add-header mount: per-category add UI populated by
+                    // `rebuild_add_header` whenever `ActiveInspectorCategory` changes.
+                    (crate::inspector::add_header::InspectorAddHeaderMount,),
+                    (
+                        PieViewHeader,
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            width: percent(100),
+                            padding: UiRect::all(px(tokens::SPACING_SM)),
+                            row_gap: px(tokens::SPACING_XS),
+                            flex_shrink: 0.0,
+                            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
+                            ..Default::default()
+                        },
+                        BackgroundColor(Color::NONE),
+                        children![
+                            (
+                                Node {
+                                    flex_direction: FlexDirection::Row,
+                                    align_items: AlignItems::Center,
+                                    column_gap: px(tokens::SPACING_XS),
+                                    width: percent(100),
+                                    ..Default::default()
+                                },
+                                children![(
+                                    Node {
+                                        flex_grow: 1.0,
+                                        ..Default::default()
+                                    },
+                                    children![(
+                                        crate::inspector::InspectorSearch,
+                                        text_edit::text_edit(
+                                            TextEditProps::default()
+                                                .with_placeholder("Filter...")
+                                                .allow_empty()
+                                        ),
+                                    )],
+                                ),],
+                            ),
+                            save_to_scene_button(save_font),
+                        ],
+                    ),
+                    (
+                        Inspector,
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(tokens::SPACING_SM),
+                            overflow: Overflow::scroll_y(),
+                            flex_grow: 1.0,
+                            min_height: px(0.0),
+                            padding: UiRect::all(px(tokens::SPACING_SM)),
+                            ..Default::default()
+                        }
+                    ),
+                ],
             ),
         ],
     )

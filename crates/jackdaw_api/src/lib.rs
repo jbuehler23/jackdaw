@@ -48,6 +48,12 @@ pub mod entity_icons {
     pub use jackdaw_api_internal::entity_icons::{EntityIconRegistry, registered_icon};
 }
 
+/// Inspector category registry: route components to category tabs and register
+/// new tabs. The six built-in categories are pre-registered.
+pub mod inspector {
+    pub use jackdaw_api_internal::inspector::{InspectorCategory, InspectorRegistry};
+}
+
 /// `#[operator]` attribute macro. See [`jackdaw_api_macros`] for the
 /// supported keys.
 pub use jackdaw_api_macros::operator;
@@ -119,6 +125,26 @@ pub mod ui {
     pub use jackdaw_feathers::button::{ButtonProps, button};
     pub use jackdaw_feathers::icons::Icon;
 
+    /// Radial (pie) quick-menu widget. Open a ring of [`RadialMenuItem`]s at
+    /// a screen anchor with [`open_radial_menu`], let the highlight follow the
+    /// cursor, then [`confirm_radial_menu`] the highlighted wedge (which fires
+    /// a [`RadialMenuSelect`] observer event the extension reacts to) or
+    /// [`cancel_radial_menu`] to dismiss. `action` on each item is an opaque
+    /// string the extension routes to its own behavior (e.g. an operator id).
+    /// Add [`RadialMenuPlugin`] once if the host has not already; the editor
+    /// registers it for its own mesh quick-menu.
+    pub use jackdaw_widgets::{
+        RadialMenuItem, RadialMenuPlugin, RadialMenuSelect, cancel_radial_menu,
+        confirm_radial_menu, open_radial_menu,
+    };
+
+    /// Build inspector cards matching the editor's look (header bar + bordered body)
+    /// and standard field rows.
+    pub use jackdaw_feathers::inspector_card::{
+        InspectorCardEntities, InspectorCardOpts, InspectorCardRemoveButton, spawn_inspector_card,
+        spawn_inspector_field_row,
+    };
+
     use crate::op::Operator;
     use std::borrow::Cow;
 
@@ -169,6 +195,12 @@ pub mod prelude {
     /// `ButtonProps::from_operator::<MyOp>()` works without a manual
     /// `use jackdaw_api::ui::ButtonPropsOpExt`.
     pub use crate::ui::{ButtonProps, ButtonPropsOpExt as _, Icon, button};
+
+    /// Radial quick-menu primitives so an extension can open its own pie
+    /// menu and react to selections without an explicit `ui` import.
+    pub use crate::ui::{
+        RadialMenuItem, RadialMenuSelect, cancel_radial_menu, confirm_radial_menu, open_radial_menu,
+    };
 
     /// BEI types extension authors need for `actions!` / `bindings!`
     /// and observer callbacks.

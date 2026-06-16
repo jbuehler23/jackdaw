@@ -10,8 +10,8 @@ use jackdaw_avian_integration::AvianCollider;
 
 use crate::commands::{AddComponent, CommandGroup, CommandHistory, EditorCommand};
 
-const RIGID_BODY_TYPE_PATH: &str = "avian3d::dynamics::rigid_body::RigidBody";
-const AVIAN_COLLIDER_TYPE_PATH: &str = "jackdaw_avian_integration::AvianCollider";
+pub(crate) const RIGID_BODY_TYPE_PATH: &str = "avian3d::dynamics::rigid_body::RigidBody";
+pub(crate) const AVIAN_COLLIDER_TYPE_PATH: &str = "jackdaw_avian_integration::AvianCollider";
 
 /// Command that disables physics on an entity. Captures the full pre-disable
 /// state (`RigidBody`, `AvianCollider`, and all derived avian components in the

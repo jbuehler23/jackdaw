@@ -1,5 +1,7 @@
+pub(crate) mod add_header;
 pub(crate) mod anim_diamond;
 mod brush_display;
+pub(crate) mod category_strip;
 pub(crate) mod component_display;
 pub mod component_picker;
 pub(crate) mod component_tooltip;
@@ -17,6 +19,18 @@ use bevy::ecs::archetype::ArchetypeId;
 use bevy::prelude::*;
 
 const MAX_REFLECT_DEPTH: usize = 4;
+
+/// Remembers each inspector card's collapsed state across rebuilds, keyed by
+/// the card's display name. A name not present defaults to collapsed.
+#[derive(Resource, Default)]
+pub struct InspectorCollapseState(pub(crate) std::collections::HashMap<String, bool>);
+
+impl InspectorCollapseState {
+    /// Collapsed state for `name`; unknown names default to collapsed (true).
+    pub(crate) fn collapsed(&self, name: &str) -> bool {
+        self.0.get(name).copied().unwrap_or(true)
+    }
+}
 
 /// Extract a human-readable module group name from a module path.
 /// e.g., "`bevy_pbr::material`" -> "Render", "`bevy_transform`" -> "Transform"
@@ -96,6 +110,15 @@ pub struct InspectorPlugin;
 
 impl Plugin for InspectorPlugin {
     fn build(&self, app: &mut App) {
+        app.world_mut().get_resource_or_insert_with(|| {
+            let mut r = jackdaw_api_internal::inspector::InspectorRegistry::default();
+            jackdaw_api_internal::inspector::seed_default_categories(&mut r);
+            r
+        });
+
+        app.init_resource::<category_strip::ActiveInspectorCategory>();
+        app.init_resource::<InspectorCollapseState>();
+
         let mut denylist = component_picker::PickerDenylist::default();
         component_picker::populate_avian_picker_denylist(&mut denylist);
         app.insert_resource(denylist);
@@ -117,13 +140,19 @@ impl Plugin for InspectorPlugin {
             .add_observer(anim_diamond::on_diamond_click)
             .init_resource::<component_display::LiveEditMenuTarget>()
             .add_observer(component_display::on_live_edit_menu_action)
+            .add_observer(on_category_strip_mount_added)
+            .add_observer(add_header::on_add_header_mount_added)
+            .add_observer(add_header::on_physics_chip_click)
+            .add_observer(add_header::on_material_new_click)
             .add_systems(
                 Update,
                 (
                     reflect_fields::refresh_inspector_fields,
                     reflect_fields::refresh_enum_variants,
                     brush_display::update_brush_face_properties,
-                    component_display::filter_inspector_components,
+                    category_strip::resolve_active_on_rebuild,
+                    component_display::filter_inspector_components
+                        .after(category_strip::resolve_active_on_rebuild),
                     anim_diamond::decorate_animatable_fields,
                     anim_diamond::update_anim_diamond_highlights,
                     component_display::decorate_prefab_field_rows,
@@ -131,9 +160,30 @@ impl Plugin for InspectorPlugin {
                     component_display::refresh_live_edit_field_dots,
                     refresh_name_field,
                     flag_inspector_dirty_on_archetype_change,
+                    flag_inspector_dirty_on_modifier_stack_change,
+                    category_strip::paint_category_tabs,
+                    add_header::rebuild_add_header,
+                    persist_inspector_collapse,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             );
+    }
+}
+
+/// Write back each card's collapsed state when it changes so the next rebuild
+/// can restore it.
+fn persist_inspector_collapse(
+    mut state: ResMut<InspectorCollapseState>,
+    changed: Query<
+        (
+            &ComponentName,
+            &jackdaw_widgets::collapsible::CollapsibleSection,
+        ),
+        Changed<jackdaw_widgets::collapsible::CollapsibleSection>,
+    >,
+) {
+    for (name, section) in &changed {
+        state.0.insert(name.0.clone(), section.collapsed);
     }
 }
 
@@ -282,7 +332,13 @@ pub(super) struct InspectorSearch;
 
 /// Stores the component short name on a `ComponentDisplay` for search filtering.
 #[derive(Component)]
-pub(super) struct ComponentName(pub(super) String);
+pub(crate) struct ComponentName(pub(crate) String);
+
+/// Stores the reflect type path on a `ComponentDisplay` card so category
+/// filters can call `InspectorRegistry::category_for` without re-deriving
+/// the path from the archetype.
+#[derive(Component)]
+pub(crate) struct ComponentDisplayTypePath(pub(crate) String);
 
 /// Marker for a group section (the `CollapsibleSection` that wraps a group header + body).
 #[derive(Component)]
@@ -377,6 +433,23 @@ pub(super) fn rebuild_inspector(world: &mut World, source_entity: Entity) {
     world.entity_mut(source_entity).insert(InspectorDirty);
 }
 
+/// Flag the inspector dirty when the displayed entity's `ModifierStack`
+/// changes in-place. Mutations such as adding or removing modifiers do not
+/// change the archetype, so `flag_inspector_dirty_on_archetype_change` misses
+/// them. This system catches those in-place `Changed` ticks and inserts
+/// `InspectorDirty` so the inspector rebuilds on the same frame.
+fn flag_inspector_dirty_on_modifier_stack_change(
+    inspectors: Query<&InspectorTarget, With<Inspector>>,
+    changed: Query<(), Changed<jackdaw_geometry::ModifierStack>>,
+    mut commands: Commands,
+) {
+    for target in &inspectors {
+        if changed.contains(target.0) {
+            commands.entity(target.0).insert(InspectorDirty);
+        }
+    }
+}
+
 /// Rebuild the inspector when the displayed entity's archetype changes.
 ///
 /// Some component picks pull in extra components asynchronously (e.g.
@@ -417,4 +490,20 @@ fn flag_inspector_dirty_on_archetype_change(
     }
 
     *last = current.map(|arch| (target, arch));
+}
+
+/// When an `InspectorCategoryStripMount` entity is added to the world,
+/// spawn the category tab rail as a child.
+fn on_category_strip_mount_added(
+    trigger: On<Add, category_strip::InspectorCategoryStripMount>,
+    registry: Res<jackdaw_api_internal::inspector::InspectorRegistry>,
+    icon_font: Res<jackdaw_feathers::icons::IconFont>,
+    mut commands: Commands,
+) {
+    category_strip::spawn_category_strip(
+        &mut commands,
+        trigger.event_target(),
+        &registry,
+        &icon_font.0,
+    );
 }

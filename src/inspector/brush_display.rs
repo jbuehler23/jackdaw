@@ -356,7 +356,11 @@ pub(crate) fn update_brush_face_properties(
     mut local_state: Local<BrushFacePropsState>,
     materials: Res<Assets<StandardMaterial>>,
 ) {
-    let Ok((container_entity, container_children)) = container_query.single() else {
+    // `iter().next()` rather than `single()`: during an inspector rebuild the
+    // old container is despawned while the new one spawns, so there is a window
+    // with 0 or 2 containers where `single()` would error and skip the update,
+    // leaving the face-property fields stale.
+    let Some((container_entity, container_children)) = container_query.iter().next() else {
         return;
     };
 

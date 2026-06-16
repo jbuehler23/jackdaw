@@ -377,7 +377,11 @@ fn recolor_button_icon(
     };
     for child in children.iter() {
         if let Ok(mut tc) = text_colors.get_mut(child) {
-            tc.0 = color;
+            // Only write on a real change so the diamond icon's `TextColor`
+            // isn't marked changed every frame (this system runs each frame).
+            if tc.0 != color {
+                tc.0 = color;
+            }
         }
         // Feathers sometimes wraps the icon in an extra container;
         // recurse one level to be safe.

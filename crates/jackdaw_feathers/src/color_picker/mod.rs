@@ -7,6 +7,7 @@ mod visuals;
 
 use bevy::asset::embedded_asset;
 use bevy::prelude::*;
+use bevy::shader::load_shader_library;
 
 use color_math::{hsv_to_rgb, rgb_to_hsv};
 pub use materials::{
@@ -27,7 +28,12 @@ const BORDER_RADIUS: f32 = 4.0;
 const POPOVER_WIDTH: f32 = 256.0;
 
 pub fn plugin(app: &mut App) {
-    embedded_asset!(app, "shaders/common.wgsl");
+    // `common.wgsl` is a shader library imported by the four picker shaders
+    // (`editor_feathers::color_picker_common`). It must be loaded (not just
+    // embedded) so its `#define_import_path` registers with the shader
+    // composer; otherwise every picker shader fails to compile and renders
+    // blank. `load_shader_library!` embeds, loads, and leaks the handle.
+    load_shader_library!(app, "shaders/common.wgsl");
     embedded_asset!(app, "shaders/color_picker_hsv_rect.wgsl");
     embedded_asset!(app, "shaders/color_picker_hue.wgsl");
     embedded_asset!(app, "shaders/color_picker_alpha.wgsl");
@@ -45,6 +51,7 @@ pub fn plugin(app: &mut App) {
                 setup::setup_color_picker,
                 setup::setup_trigger_swatch,
                 setup::setup_color_picker_content,
+                setup::despawn_orphaned_color_picker_popovers,
                 visuals::update_color_picker_visuals,
                 input_fields::handle_input_field_blur,
                 visuals::update_trigger_display,

@@ -32,6 +32,14 @@ impl Default for SystemClipboard {
     }
 }
 
+impl SystemClipboard {
+    /// The OS clipboard image as owned RGBA8, or an error when the clipboard
+    /// holds no image. Mirrors how the paste path reaches the inner clipboard.
+    pub(crate) fn get_image(&mut self) -> Result<arboard::ImageData<'static>, arboard::Error> {
+        self.clipboard.get_image()
+    }
+}
+
 // Re-export from jackdaw_jsn
 pub use jackdaw_jsn::GltfSource;
 
@@ -979,6 +987,10 @@ fn remap_stable_ids(
 
 /// Paste entities from system clipboard JSN text.
 fn paste_components(world: &mut World) {
+    if crate::asset_ingest::paste_clipboard_image(world) {
+        return;
+    }
+
     let jsn_text = {
         let Some(mut cb) = world.get_resource_mut::<SystemClipboard>() else {
             return;

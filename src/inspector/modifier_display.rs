@@ -14,12 +14,13 @@ use bevy::reflect::TypePath;
 use jackdaw_feathers::{
     button::{ButtonOperatorCall, ButtonProps, ButtonSize, ButtonVariant, button},
     icons::Icon,
+    inspector_card::{InspectorCardOpts, spawn_inspector_card},
     tokens,
 };
 
 use jackdaw_geometry::{Modifier, ModifierEntry, ModifierStack};
 
-use super::reflect_fields;
+use super::{ComponentDisplay, ComponentDisplayTypePath, ComponentName, reflect_fields};
 
 /// Capitalize the modifier kind label for the sub-card header.
 fn kind_label(modifier: &Modifier) -> String {
@@ -31,27 +32,30 @@ fn kind_label(modifier: &Modifier) -> String {
     }
 }
 
-/// Render the modifier-stack card under `body_entity`.
+/// Render one top-level inspector card per modifier entry under `parent`.
+/// The "Add Modifier" button lives in the Modifiers tab header (see
+/// `add_header.rs`), so no footer is emitted here.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors the reflected-field call site; threading the registry, names query, and fonts is unavoidable"
 )]
 pub(super) fn spawn_modifier_display(
     commands: &mut Commands,
-    body_entity: Entity,
+    parent: Entity,
     source_entity: Entity,
     stack: &ModifierStack,
     entity_names: &Query<&Name>,
     type_registry: &AppTypeRegistry,
     editor_font: &Handle<Font>,
     icon_font: &Handle<Font>,
+    collapse_state: &super::InspectorCollapseState,
 ) {
     let stack_type_path = <ModifierStack as TypePath>::type_path();
 
     for (i, entry) in stack.modifiers.iter().enumerate() {
         spawn_entry_card(
             commands,
-            body_entity,
+            parent,
             source_entity,
             i,
             entry,
@@ -60,32 +64,9 @@ pub(super) fn spawn_modifier_display(
             type_registry,
             editor_font,
             icon_font,
+            collapse_state,
         );
     }
-
-    // Footer affordance to append another modifier. Mirror is the only
-    // kind, so a single button is enough. The button bundle carries its own
-    // Node, so the top margin lives on a wrapping container.
-    let footer = commands
-        .spawn((
-            Node {
-                margin: UiRect::top(px(tokens::SPACING_SM)),
-                width: Val::Percent(100.0),
-                ..Default::default()
-            },
-            ChildOf(body_entity),
-        ))
-        .id();
-    commands.spawn((
-        button(
-            ButtonProps::new("Add Mirror")
-                .with_variant(ButtonVariant::Default)
-                .with_left_icon(Icon::Plus)
-                .align_left(),
-        ),
-        ButtonOperatorCall::new("modifier.add").with_param("kind", "mirror"),
-        ChildOf(footer),
-    ));
 }
 
 #[expect(
@@ -103,51 +84,31 @@ fn spawn_entry_card(
     type_registry: &AppTypeRegistry,
     editor_font: &Handle<Font>,
     icon_font: &Handle<Font>,
+    collapse_state: &super::InspectorCollapseState,
 ) {
-    let card = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                width: Val::Percent(100.0),
-                row_gap: px(tokens::SPACING_XS),
-                padding: UiRect::all(px(tokens::SPACING_SM)),
-                margin: UiRect::top(px(tokens::SPACING_XS)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::COMPONENT_CARD_RADIUS)),
-                ..Default::default()
-            },
-            BackgroundColor(tokens::COMPONENT_CARD_HEADER_BG),
-            BorderColor::all(tokens::COMPONENT_CARD_BORDER),
-            ChildOf(parent),
-        ))
-        .id();
-
-    // Header row: kind label on the left, flag toggles on the right.
-    let header = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceBetween,
-                column_gap: px(tokens::SPACING_XS),
-                width: Val::Percent(100.0),
-                ..Default::default()
-            },
-            ChildOf(card),
-        ))
-        .id();
-
-    commands.spawn((
-        Text::new(kind_label(&entry.modifier)),
-        TextFont {
-            font: editor_font.clone(),
-            font_size: tokens::FONT_SM,
-            weight: FontWeight::MEDIUM,
+    let label = kind_label(&entry.modifier);
+    let card_ents = spawn_inspector_card(
+        commands,
+        parent,
+        &label,
+        icon_font,
+        InspectorCardOpts {
+            collapsible: true,
+            removable: false,
+            collapsed: collapse_state.collapsed(&label),
             ..Default::default()
         },
-        TextColor(tokens::TEXT_PRIMARY),
-        ChildOf(header),
+    );
+
+    // Tag the section so the category filter places it in the Modifiers tab.
+    commands.entity(card_ents.section).insert((
+        ComponentDisplay,
+        ComponentName(label.clone()),
+        ComponentDisplayTypePath(stack_type_path.to_string()),
     ));
+
+    let card = card_ents.body;
+    let header = card_ents.header;
 
     let flags = commands
         .spawn((

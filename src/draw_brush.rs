@@ -800,7 +800,17 @@ fn dispatch_start_add_append(_: On<Start<StartDrawBrushAddAppendAction>>, mut co
         .call();
 }
 
-fn dispatch_start_cut(_: On<Start<StartDrawBrushCutAction>>, mut commands: Commands) {
+fn dispatch_start_cut(
+    _: On<Start<StartDrawBrushCutAction>>,
+    edit_mode: Res<crate::brush::EditMode>,
+    mut commands: Commands,
+) {
+    // In a brush edit sub-mode, C opens the mesh quick-menu instead. Starting a
+    // cut brush there would force Object mode and pull the user out of the edit
+    // they are in; the cut gesture still works from object mode.
+    if matches!(*edit_mode, crate::brush::EditMode::BrushEdit(_)) {
+        return;
+    }
     commands
         .operator(ActivateDrawBrushModalOp::ID)
         .param("mode", "Cut")

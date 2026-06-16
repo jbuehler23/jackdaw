@@ -465,3 +465,22 @@ pub(super) fn setup_color_picker_content(
         });
     }
 }
+
+/// Despawn a color-picker popover once its owning picker entity is gone.
+///
+/// The popover is a root overlay (high z-index), not a child of the picker, so
+/// it does not cascade-despawn when the picker's host (e.g. an inspector card)
+/// is rebuilt. Left alone it lingers with stale references: clicks on its
+/// controls resolve a dead picker entity and do nothing. This reaps those
+/// orphans so a rebuilt host starts clean.
+pub(super) fn despawn_orphaned_color_picker_popovers(
+    mut commands: Commands,
+    popovers: Query<(Entity, &ColorPickerPopover)>,
+    pickers: Query<(), With<EditorColorPicker>>,
+) {
+    for (popover_entity, popover) in &popovers {
+        if pickers.get(popover.0).is_err() {
+            commands.entity(popover_entity).try_despawn();
+        }
+    }
+}

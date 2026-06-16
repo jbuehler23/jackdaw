@@ -29,6 +29,20 @@ fn spawn_material_fields(world: &mut World, body_entity: Entity, source_entity: 
         mat.0.clone()
     };
 
+    spawn_material_fields_for_handle(world, body_entity, handle);
+}
+
+/// Spawn the full material editor into `body_entity` for the given `Handle<StandardMaterial>`.
+///
+/// All read-backs and write-backs go through the asset directly, so edits
+/// update the rendered faces live. This function is the single implementation
+/// used for both entity-bound materials (via `spawn_material_fields`) and
+/// brush-face materials (injected by `component_display`).
+pub(super) fn spawn_material_fields_for_handle(
+    world: &mut World,
+    body_entity: Entity,
+    handle: Handle<StandardMaterial>,
+) {
     let mat_data = {
         let materials = world.resource::<Assets<StandardMaterial>>();
         materials.get(&handle).map(|material| {
@@ -58,15 +72,21 @@ fn spawn_material_fields(world: &mut World, body_entity: Entity, source_entity: 
         return;
     };
 
-    // base_color (Color picker)
+    // base_color (inline color picker)
+    //
+    // The picker is INLINE (not the popover/trigger variant) on purpose. A
+    // popover is a root overlay that outlives the card; applying a material
+    // inserts `InspectorDirty`, which rebuilds the inspector and despawns the
+    // picker entity, leaving the popover orphaned (unclickable, stale refs).
+    // Inline keeps the picker inside the card so it is rebuilt with it.
     {
         let srgba = base_color.to_srgba();
-        let row = world
+        let col = world
             .spawn((
                 Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(tokens::SPACING_XS),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(tokens::SPACING_XS),
+                    width: Val::Percent(100.0),
                     ..Default::default()
                 },
                 ChildOf(body_entity),
@@ -79,31 +99,25 @@ fn spawn_material_fields(world: &mut World, body_entity: Entity, source_entity: 
                 ..Default::default()
             },
             TextColor(tokens::TEXT_SECONDARY),
-            Node {
-                min_width: Val::Px(20.0),
-                flex_shrink: 0.0,
-                ..Default::default()
-            },
-            ChildOf(row),
+            ChildOf(col),
         ));
         let rgba = [srgba.red, srgba.green, srgba.blue, srgba.alpha];
         let picker = world
             .spawn((
                 jackdaw_feathers::color_picker::color_picker(
-                    jackdaw_feathers::color_picker::ColorPickerProps::new().with_color(rgba),
+                    jackdaw_feathers::color_picker::ColorPickerProps::new()
+                        .with_color(rgba)
+                        .inline(),
                 ),
                 MaterialFieldMarker,
-                ChildOf(row),
+                ChildOf(col),
             ))
             .id();
+        let picker_handle = handle.clone();
         world.entity_mut(picker).observe(
             move |event: On<jackdaw_feathers::color_picker::ColorPickerCommitEvent>,
-                  mut materials: ResMut<Assets<StandardMaterial>>,
-                  mat_query: Query<&MeshMaterial3d<StandardMaterial>>| {
-                let Ok(mat_comp) = mat_query.get(source_entity) else {
-                    return;
-                };
-                if let Some(material) = materials.get_mut(&mat_comp.0) {
+                  mut materials: ResMut<Assets<StandardMaterial>>| {
+                if let Some(material) = materials.get_mut(&picker_handle) {
                     let c = event.color;
                     material.base_color = Color::srgba(c[0], c[1], c[2], c[3]);
                 }
@@ -117,7 +131,7 @@ fn spawn_material_fields(world: &mut World, body_entity: Entity, source_entity: 
         body_entity,
         "metallic",
         metallic as f64,
-        source_entity,
+        handle.clone(),
         |mat, val| {
             mat.metallic = val as f32;
         },
@@ -129,7 +143,7 @@ fn spawn_material_fields(world: &mut World, body_entity: Entity, source_entity: 
         body_entity,
         "roughness",
         perceptual_roughness as f64,
-        source_entity,
+        handle.clone(),
         |mat, val| {
             mat.perceptual_roughness = val as f32;
         },
@@ -141,13 +155,13 @@ fn spawn_material_fields(world: &mut World, body_entity: Entity, source_entity: 
         body_entity,
         "reflectance",
         reflectance as f64,
-        source_entity,
+        handle.clone(),
         |mat, val| {
             mat.reflectance = val as f32;
         },
     );
 
-    // emissive (show as text for now - it's LinearRgba which is complex)
+    // emissive (shown read-only; LinearRgba is complex to edit inline)
     {
         let emissive_text = format!(
             "emissive: ({:.2}, {:.2}, {:.2})",
@@ -176,10 +190,10 @@ fn spawn_material_fields(world: &mut World, body_entity: Entity, source_entity: 
     ));
 }
 
-/// Binding that links a material `text_edit` to a source entity and material field mutator.
+/// Binding that links a material `text_edit` to a material asset handle and field mutator.
 #[derive(Component)]
 pub(super) struct MaterialFieldBinding {
-    pub(super) source_entity: Entity,
+    pub(super) material_handle: Handle<StandardMaterial>,
     pub(super) apply_fn: fn(&mut StandardMaterial, f64),
 }
 
@@ -189,7 +203,6 @@ pub(super) fn on_material_text_commit(
     bindings: Query<&MaterialFieldBinding>,
     child_of_query: Query<&ChildOf>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mat_query: Query<&MeshMaterial3d<StandardMaterial>>,
 ) {
     let mut current = event.entity;
     for _ in 0..4 {
@@ -198,10 +211,7 @@ pub(super) fn on_material_text_commit(
         };
         if let Ok(binding) = bindings.get(child_of.parent()) {
             let value: f64 = event.text.parse().unwrap_or(0.0);
-            let Ok(mat_comp) = mat_query.get(binding.source_entity) else {
-                return;
-            };
-            if let Some(material) = materials.get_mut(&mat_comp.0) {
+            if let Some(material) = materials.get_mut(&binding.material_handle) {
                 (binding.apply_fn)(material, value);
             }
             return;
@@ -215,7 +225,7 @@ fn spawn_material_numeric_field(
     parent: Entity,
     label: &str,
     value: f64,
-    source_entity: Entity,
+    material_handle: Handle<StandardMaterial>,
     apply_fn: fn(&mut StandardMaterial, f64),
 ) {
     let row = world
@@ -253,7 +263,7 @@ fn spawn_material_numeric_field(
                 .with_default_value(value.to_string()),
         ),
         MaterialFieldBinding {
-            source_entity,
+            material_handle,
             apply_fn,
         },
         ChildOf(row),

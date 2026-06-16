@@ -5326,6 +5326,7 @@ dependencies = [
  "jackdaw_feathers",
  "jackdaw_jsn",
  "jackdaw_panels",
+ "jackdaw_widgets",
 ]
 
 [[package]]
@@ -5410,6 +5411,7 @@ version = "0.4.1"
 dependencies = [
  "bevy",
  "bevy_easings",
+ "bevy_enhanced_input 0.24.3",
  "bevy_monitors",
  "bevy_ui_text_input",
  "cosmic-text 0.16.0",
@@ -5598,6 +5600,7 @@ dependencies = [
  "bevy",
  "bevy_enhanced_input 0.24.3",
  "bevy_monitors",
+ "lucide-icons",
 ]
 
 [[package]]

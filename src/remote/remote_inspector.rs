@@ -216,6 +216,7 @@ pub fn build_remote_inspector_displays(
     inspector_query: Query<(Entity, &RemoteInspectorNeedsRebuild), With<RemoteInspector>>,
     entity_query: Query<(&Archetype, EntityRef)>,
     materials: Res<Assets<StandardMaterial>>,
+    collapse_state: Res<crate::inspector::InspectorCollapseState>,
 ) {
     let Ok((inspector_entity, rebuild)) = inspector_query.single() else {
         return;
@@ -253,6 +254,7 @@ pub fn build_remote_inspector_displays(
         &empty_jsn_paths,
         None,
         None,
+        &collapse_state,
     );
 
     // Spawn JSON fallback section for unregistered components
@@ -264,6 +266,7 @@ pub fn build_remote_inspector_displays(
             &fallback_components,
             &icon_font,
             &editor_font,
+            &collapse_state,
         );
     }
 }
@@ -275,6 +278,7 @@ pub(crate) fn spawn_fallback_section(
     fallback_components: &[(String, serde_json::Value)],
     icon_font: &IconFont,
     editor_font: &EditorFont,
+    collapse_state: &crate::inspector::InspectorCollapseState,
 ) {
     let section = commands
         .spawn((
@@ -372,6 +376,7 @@ pub(crate) fn spawn_fallback_section(
                 revert_through_prefab: false,
                 icon_font: &icon_font.0,
                 editor_font: &editor_font.0,
+                collapse_state,
             },
         );
         commands.entity(display_entity).insert(ChildOf(group_body));

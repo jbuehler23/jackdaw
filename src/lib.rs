@@ -10,6 +10,7 @@ pub mod alignment_guides;
 pub mod app_ops;
 pub mod asset_browser;
 pub mod asset_catalog;
+pub mod asset_ingest;
 pub mod brush;
 pub mod brush_drag_ops;
 pub mod brush_element_ops;
@@ -61,6 +62,7 @@ pub mod live_input;
 pub mod material_browser;
 pub mod material_preview;
 pub mod measure_tool;
+pub mod mesh_quick_menu;
 pub mod modal_transform;
 pub mod modifier_ops;
 pub mod navmesh;
@@ -329,10 +331,13 @@ impl Plugin for EditorCorePlugin {
             draw_brush::DrawBrushPlugin,
             face_grid::FaceGridPlugin,
             brush::mirror_plane_overlay::MirrorPlaneOverlayPlugin,
+            asset_ingest::AssetIngestPlugin,
             alignment_guides::AlignmentGuidesPlugin,
             navmesh::NavmeshPlugin,
             terrain::TerrainPlugin,
             reference_image::ReferenceImagePlugin,
+            jackdaw_widgets::RadialMenuPlugin,
+            mesh_quick_menu::MeshQuickMenuPlugin,
             remote::RemoteConnectionPlugin,
         ))
         .add_plugins(jackdaw_avian_integration::PhysicsOverlaysPlugin::<

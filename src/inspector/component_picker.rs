@@ -18,7 +18,13 @@ use bevy::reflect::{TypeInfo, attributes::CustomAttributes};
 use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden};
 
-use super::{AddComponentButton, ComponentPicker};
+use super::ComponentPicker;
+
+/// Marker on the "Add Component" button inside the Components add-header.
+/// `on_add_component_button_click` guards on this to avoid reacting to
+/// unrelated button clicks.
+#[derive(Component)]
+pub struct InspectorAddComponentButton;
 
 // `custom_attributes()` lives on the variant types
 // (`StructInfo`, `EnumInfo`, etc.), not on `TypeInfo` itself.
@@ -246,10 +252,12 @@ impl Matchable for ComponentInfo {
     }
 }
 
-/// Handle click on the "+" button to open the component picker.
+/// Handle click on the Components-category "Add Component" button in the
+/// per-category add-header. Opens the unscoped component picker listing all
+/// addable components for the selected entity.
 pub(crate) fn on_add_component_button_click(
     event: On<jackdaw_feathers::button::ButtonClickEvent>,
-    add_buttons: Query<&ChildOf, With<AddComponentButton>>,
+    add_buttons: Query<(), With<InspectorAddComponentButton>>,
     existing_pickers: Query<Entity, With<ComponentPicker>>,
     mut commands: Commands,
     selection: Res<Selection>,
@@ -289,6 +297,7 @@ pub(crate) fn on_add_component_button_click(
         .collect();
 
     let registry = type_registry.read();
+
     let searchable_components: Vec<ComponentInfo> =
         enumerate_pickable_components(&registry, &existing_types, &denylist)
             .into_iter()

@@ -25,7 +25,10 @@ impl Default for ReferenceImage {
         Self {
             path: String::new(),
             opacity: 0.7,
-            locked: true,
+            // Selectable and click-draggable like any object until the user
+            // opts into locking (which makes the board pass-through for
+            // modeling against it).
+            locked: false,
         }
     }
 }
@@ -86,7 +89,7 @@ pub fn spawn_reference_image(
 ) -> Entity {
     let entity = commands
         .spawn((
-            Name::new("Reference Image"),
+            Name::new("Image"),
             ReferenceImage {
                 path: path.to_string(),
                 ..default()

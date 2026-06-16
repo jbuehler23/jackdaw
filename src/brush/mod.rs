@@ -434,11 +434,12 @@ fn sync_changed_modifier_stacks_to_ast(
     if entries.is_empty() && removed_entities.is_empty() {
         return;
     }
-    for &(entity, _) in &entries {
-        commands
-            .entity(entity)
-            .insert(crate::inspector::InspectorDirty);
-    }
+    // Stack REMOVAL must flag the inspector here so the modifier card
+    // disappears: `Changed` does not fire on remove, so the inspector's own
+    // `flag_inspector_dirty_on_modifier_stack_change` cannot catch it. For
+    // *Changed* stacks that inspector-side system already flags the inspected
+    // entity (and the archetype watcher catches adds), so flagging every
+    // changed entity here too would double the rebuild — skip it.
     for &entity in &removed_entities {
         if let Ok(mut ec) = commands.get_entity(entity) {
             ec.insert(crate::inspector::InspectorDirty);

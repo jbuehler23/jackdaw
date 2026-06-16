@@ -16,7 +16,7 @@ use bevy::{
     reflect::serde::TypedReflectSerializer,
 };
 use jackdaw_feathers::{
-    button::{ButtonOperatorCall, ButtonProps, ButtonVariant, button},
+    button::ButtonOperatorCall,
     icons::{EditorFont, Icon, IconFont},
     tokens,
 };
@@ -35,9 +35,10 @@ use jackdaw_geometry::is_convex_topology;
 use jackdaw_runtime::EditorCategory;
 
 use super::{
-    AddComponentButton, ComponentDisplay, ComponentDisplayBody, ComponentName, ComponentPicker,
-    Inspector, InspectorDirty, InspectorFieldRow, InspectorGroupSection, InspectorSearch,
-    InspectorTarget, ReflectDisplayable, brush_display, component_tooltip::ReflectedTypeTooltip,
+    ComponentDisplay, ComponentDisplayBody, ComponentDisplayTypePath, ComponentName,
+    ComponentPicker, Inspector, InspectorDirty, InspectorFieldRow, InspectorGroupSection,
+    InspectorSearch, InspectorTarget, ReflectDisplayable, brush_display,
+    category_strip::ActiveInspectorCategory, component_tooltip::ReflectedTypeTooltip,
     custom_props_display, extract_module_group, material_display, modifier_display, reflect_fields,
 };
 use crate::prefab::PrefabAstCache;
@@ -142,6 +143,7 @@ pub(crate) fn add_component_displays(
     prefab_cache: Res<PrefabAstCache>,
     child_of_query: Query<&bevy::ecs::hierarchy::ChildOf>,
     isa_query: Query<&crate::prefab::IsA>,
+    collapse_state: Res<super::InspectorCollapseState>,
 ) {
     let Some(primary) = selection.primary() else {
         return;
@@ -183,6 +185,7 @@ pub(crate) fn add_component_displays(
             &jsn_type_paths,
             Some(&ast),
             Some(&prefab_cache),
+            &collapse_state,
         );
 
         // Set up monitoring: watch the selected entity for InspectorDirty
@@ -215,6 +218,7 @@ pub(crate) fn build_inspector_displays(
     jsn_type_paths: &HashSet<String>,
     scene_ast: Option<&SceneJsnAst>,
     prefab_cache: Option<&PrefabAstCache>,
+    collapse_state: &super::InspectorCollapseState,
 ) {
     // Show multi-selection header when multiple entities are selected
     if selection_count > 1 {
@@ -285,6 +289,7 @@ pub(crate) fn build_inspector_displays(
                 if full_path.starts_with("jackdaw")
                     && !full_path.starts_with("jackdaw_jsn")
                     && !full_path.starts_with("jackdaw_geometry")
+                    && !full_path.starts_with("jackdaw::reference_image")
                     && !full_path.starts_with("jackdaw_avian_integration")
                     && !full_path.starts_with("jackdaw_animation")
                     && !full_path.starts_with("jackdaw_multiplayer")
@@ -341,6 +346,7 @@ pub(crate) fn build_inspector_displays(
             if name.starts_with("jackdaw")
                 && !name.starts_with("jackdaw_jsn")
                 && !name.starts_with("jackdaw_geometry")
+                && !name.starts_with("jackdaw::reference_image")
                 && !name.starts_with("jackdaw_avian_integration")
                 && !name.starts_with("jackdaw_animation")
             {
@@ -379,58 +385,7 @@ pub(crate) fn build_inspector_displays(
             .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
     });
 
-    // Spawn components with subtle group dividers
-    let mut current_group = String::new();
-    for (name, module_group, component_id, type_path) in &comp_list {
-        // Category group divider with icon
-        if *module_group != current_group {
-            current_group = module_group.clone();
-            let group_icon = if custom_groups.contains(module_group) {
-                Icon::Tag
-            } else {
-                Icon::Package
-            };
-            commands.spawn((
-                ComponentDisplay,
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    column_gap: Val::Px(tokens::SPACING_SM),
-                    width: Val::Percent(100.0),
-                    padding: UiRect::new(
-                        Val::Px(tokens::SPACING_XS),
-                        Val::ZERO,
-                        Val::Px(tokens::SPACING_MD),
-                        Val::ZERO,
-                    ),
-                    ..Default::default()
-                },
-                ChildOf(inspector_entity),
-                children![
-                    (
-                        Text::new(String::from(group_icon.unicode())),
-                        TextFont {
-                            font: icon_font.0.clone(),
-                            font_size: tokens::TEXT_SIZE,
-                            ..Default::default()
-                        },
-                        TextColor(tokens::TEXT_SECONDARY),
-                    ),
-                    (
-                        Text::new(module_group.clone()),
-                        TextFont {
-                            font: editor_font.0.clone(),
-                            font_size: tokens::FONT_SM,
-                            weight: FontWeight::MEDIUM,
-                            ..Default::default()
-                        },
-                        TextColor(tokens::TEXT_SECONDARY),
-                    ),
-                ],
-            ));
-        }
-
+    for (name, _module_group, component_id, type_path) in &comp_list {
         let component_id = *component_id;
 
         // Detect override: compare current component value vs baseline
@@ -481,6 +436,36 @@ pub(crate) fn build_inspector_displays(
         let spec_prefab_ctx = prefab_ctx.clone();
         let revert_through_prefab = is_overridden_prefab;
 
+        // ModifierStack gets its own top-level cards (one per modifier entry)
+        // rather than a single generic wrapper. Detect it here, before creating
+        // the generic card, and emit per-modifier cards directly under the
+        // inspector scroll body.
+        if *type_path == *<jackdaw_geometry::ModifierStack as bevy::reflect::TypePath>::type_path()
+        {
+            let type_id = components
+                .get_info(component_id)
+                .and_then(ComponentInfo::type_id);
+            if let Some(type_id) = type_id
+                && let Some(registration) = registry.get(type_id)
+                && let Some(reflect_component) = registration.data::<ReflectComponent>()
+                && let Some(reflected) = reflect_component.reflect(entity_ref)
+                && let Some(stack) = reflected.downcast_ref::<jackdaw_geometry::ModifierStack>()
+            {
+                modifier_display::spawn_modifier_display(
+                    commands,
+                    inspector_entity,
+                    source_entity,
+                    stack,
+                    names,
+                    type_registry,
+                    &editor_font.0,
+                    &icon_font.0,
+                    collapse_state,
+                );
+            }
+            continue;
+        }
+
         let (display_entity, body_entity) = spawn_component_display(
             commands,
             ComponentDisplaySpec {
@@ -493,6 +478,7 @@ pub(crate) fn build_inspector_displays(
                 revert_through_prefab,
                 icon_font: &icon_font.0,
                 editor_font: &editor_font.0,
+                collapse_state,
             },
         );
         commands
@@ -570,51 +556,6 @@ pub(crate) fn build_inspector_displays(
                         ));
                     }
                 }
-                // First-add entry point: a brush with no ModifierStack
-                // shows no modifier card, so surface an Add Mirror button
-                // in the brush card. Once a stack exists the modifier card
-                // owns the affordance and this is skipped.
-                if !entity_ref.contains::<jackdaw_geometry::ModifierStack>() {
-                    // The button bundle carries its own Node, so the top
-                    // margin lives on a wrapping container.
-                    let footer = commands
-                        .spawn((
-                            Node {
-                                margin: UiRect::top(Val::Px(tokens::SPACING_SM)),
-                                width: Val::Percent(100.0),
-                                ..Default::default()
-                            },
-                            ChildOf(body_entity),
-                        ))
-                        .id();
-                    commands.spawn((
-                        button(
-                            ButtonProps::new("Add Mirror")
-                                .with_variant(ButtonVariant::Default)
-                                .with_left_icon(Icon::Plus)
-                                .align_left(),
-                        ),
-                        ButtonOperatorCall::new("modifier.add").with_param("kind", "mirror"),
-                        ChildOf(footer),
-                    ));
-                }
-                continue;
-            }
-
-            // Priority 3b2: ModifierStack, the modifier-card UI
-            if type_id == TypeId::of::<jackdaw_geometry::ModifierStack>() {
-                if let Some(stack) = reflected.downcast_ref::<jackdaw_geometry::ModifierStack>() {
-                    modifier_display::spawn_modifier_display(
-                        commands,
-                        body_entity,
-                        source_entity,
-                        stack,
-                        names,
-                        type_registry,
-                        &editor_font.0,
-                        &icon_font.0,
-                    );
-                }
                 continue;
             }
 
@@ -656,20 +597,272 @@ pub(crate) fn build_inspector_displays(
 
     // Add Component button is in the static layout header (layout.rs entity_inspector)
     // so we don't spawn a dynamic one here.
+
+    // If the selected entity is a brush, inject a Material card into the Material tab.
+    // The brush entity itself carries no MeshMaterial3d; its face data carries the handles.
+    // We resolve the handle here (selected face first, then first face with a material)
+    // and spawn a deferred card so Assets<StandardMaterial> is accessible.
+    if entity_ref.contains::<crate::brush::Brush>() {
+        let brush_entity = source_entity;
+        let collapsed = collapse_state.collapsed("Material");
+        // Spawn the card SHELL synchronously (buffered, same flush as every
+        // other card) so the "material" category is present on this rebuild
+        // frame. A fully-deferred card would land a pass later, after
+        // `resolve_active_on_rebuild` already moved the active tab away from
+        // Material (the "lost tabs" bug). Only the body fill, which needs
+        // `Assets<StandardMaterial>` and the brush face selection, is deferred.
+        let body_entity = spawn_brush_material_card_shell(
+            commands,
+            inspector_entity,
+            &icon_font.0,
+            &editor_font.0,
+            collapsed,
+        );
+        commands.queue(move |world: &mut World| {
+            fill_brush_material_card_body(world, brush_entity, body_entity);
+        });
+    }
+}
+
+/// The type path used to route the brush material card to the Material inspector tab.
+const BRUSH_MATERIAL_TYPE_PATH: &str =
+    "bevy_pbr::mesh_material::MeshMaterial3d<bevy_pbr::pbr_material::StandardMaterial>";
+
+/// Resolve which `Handle<StandardMaterial>` to display for a brush entity.
+///
+/// Priority: selected face (face edit mode + at least one face selected) ->
+/// first face that has a non-default material handle -> None.
+pub(crate) fn resolve_brush_material_handle(
+    world: &World,
+    brush_entity: Entity,
+) -> Option<Handle<StandardMaterial>> {
+    let brush = world.get::<crate::brush::Brush>(brush_entity)?;
+
+    // Try to read the selected faces from BrushSelection.
+    let selection = world.get_resource::<crate::brush::BrushSelection>();
+    let edit_mode = world
+        .get_resource::<crate::brush::EditMode>()
+        .copied()
+        .unwrap_or(crate::brush::EditMode::Object);
+
+    if edit_mode == crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face)
+        && let Some(sel) = selection.and_then(|s| s.active_sub())
+        && !sel.faces.is_empty()
+    {
+        let face_idx = sel.faces[0];
+        if let Some(face) = brush.faces.get(face_idx) {
+            let h = face.material.clone();
+            if h != Handle::default() {
+                return Some(h);
+            }
+        }
+    }
+
+    // Fall back to the first face that has an explicit (non-default) material.
+    for face in &brush.faces {
+        if face.material != Handle::default() {
+            return Some(face.material.clone());
+        }
+    }
+
+    None
+}
+
+/// Spawn the SHELL of the brush Material card (section + header + body) under
+/// `inspector_entity` and return the body entity for deferred filling.
+///
+/// The shell carries `ComponentDisplay`, `ComponentName("Material")`, and
+/// `ComponentDisplayTypePath` (the `MeshMaterial3d` path) so the category filter
+/// routes it to the Material tab. It is spawned via `Commands` (buffered, the
+/// same flush as every other card) instead of a deferred world closure, so the
+/// "material" category is present on the rebuild frame and the active tab is not
+/// moved away before the card lands. `fill_brush_material_card_body` fills it.
+fn spawn_brush_material_card_shell(
+    commands: &mut Commands,
+    inspector_entity: Entity,
+    icon_font: &Handle<Font>,
+    editor_font: &Handle<Font>,
+    collapsed: bool,
+) -> Entity {
+    use jackdaw_feathers::tokens;
+    use jackdaw_widgets::collapsible::{
+        CollapsibleBody, CollapsibleHeader, CollapsibleSection, ToggleCollapsible,
+    };
+
+    let body_display = if collapsed {
+        Display::None
+    } else {
+        Display::Flex
+    };
+
+    let body_entity = commands
+        .spawn((
+            ComponentDisplayBody,
+            CollapsibleBody,
+            Node {
+                padding: UiRect::new(
+                    Val::Px(tokens::SPACING_MD),
+                    Val::Px(tokens::SPACING_SM),
+                    Val::Px(tokens::SPACING_XS),
+                    Val::Px(tokens::SPACING_XS),
+                ),
+                flex_direction: FlexDirection::Column,
+                width: Val::Percent(100.0),
+                display: body_display,
+                ..Default::default()
+            },
+        ))
+        .id();
+
+    let section_entity = commands
+        .spawn((
+            ComponentDisplay,
+            ComponentName("Material".to_string()),
+            ComponentDisplayTypePath(BRUSH_MATERIAL_TYPE_PATH.to_string()),
+            CollapsibleSection { collapsed },
+            Node {
+                flex_direction: FlexDirection::Column,
+                width: Val::Percent(100.0),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::COMPONENT_CARD_RADIUS)),
+                ..Default::default()
+            },
+            BackgroundColor(tokens::COMPONENT_CARD_BG),
+            BorderColor::all(tokens::COMPONENT_CARD_BORDER),
+            BoxShadow(vec![ShadowStyle {
+                x_offset: Val::ZERO,
+                y_offset: Val::ZERO,
+                blur_radius: Val::Px(1.0),
+                spread_radius: Val::ZERO,
+                color: tokens::SHADOW_COLOR,
+            }]),
+            ChildOf(inspector_entity),
+        ))
+        .id();
+
+    let header_entity = commands
+        .spawn((
+            CollapsibleHeader,
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
+                width: Val::Percent(100.0),
+                padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_SM)),
+                column_gap: Val::Px(tokens::SPACING_SM),
+                border_radius: BorderRadius::top(Val::Px(tokens::COMPONENT_CARD_RADIUS)),
+                ..Default::default()
+            },
+            BackgroundColor(tokens::COMPONENT_CARD_HEADER_BG),
+            ChildOf(section_entity),
+        ))
+        .id();
+
+    let toggle_area = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(tokens::SPACING_SM),
+                flex_grow: 1.0,
+                ..Default::default()
+            },
+            ChildOf(header_entity),
+        ))
+        .id();
+
+    commands.spawn((
+        Text::new(String::from(Icon::ChevronDown.unicode())),
+        TextFont {
+            font: icon_font.clone(),
+            font_size: tokens::FONT_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        ChildOf(toggle_area),
+    ));
+
+    commands.spawn((
+        Text::new(String::from(Icon::Palette.unicode())),
+        TextFont {
+            font: icon_font.clone(),
+            font_size: tokens::TEXT_SIZE,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        ChildOf(toggle_area),
+    ));
+
+    commands.spawn((
+        Text::new("Material".to_string()),
+        TextFont {
+            font: editor_font.clone(),
+            font_size: tokens::FONT_SM,
+            weight: FontWeight::MEDIUM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_DISPLAY_COLOR.into()),
+        ChildOf(toggle_area),
+    ));
+
+    commands
+        .entity(toggle_area)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.trigger(ToggleCollapsible {
+                entity: section_entity,
+            });
+        });
+
+    commands.entity(header_entity).observe(
+        |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor, With<CollapsibleHeader>>| {
+            if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
+                bg.0 = tokens::HOVER_BG;
+            }
+        },
+    );
+    commands.entity(header_entity).observe(
+        |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor, With<CollapsibleHeader>>| {
+            if let Ok(mut bg) = bg.get_mut(out.event_target()) {
+                bg.0 = tokens::COMPONENT_CARD_HEADER_BG;
+            }
+        },
+    );
+
+    commands.entity(body_entity).insert(ChildOf(section_entity));
+
+    body_entity
+}
+
+/// Resolve the brush's current material handle and fill the Material card body
+/// with the editable fields (or a short note when no material is set). Deferred
+/// (world-exclusive) because it reads `Assets<StandardMaterial>` and the brush
+/// face selection; the shell already established the card and its category.
+fn fill_brush_material_card_body(world: &mut World, brush_entity: Entity, body_entity: Entity) {
+    // A later rebuild may have torn down the shell before this queued closure
+    // runs; bail rather than parent children under a despawned body.
+    if world.get_entity(body_entity).is_err() {
+        return;
+    }
+    if let Some(handle) = resolve_brush_material_handle(world, brush_entity) {
+        super::material_display::spawn_material_fields_for_handle(world, body_entity, handle);
+    } else {
+        world.spawn((
+            Text::new("No material assigned"),
+            TextFont {
+                font_size: jackdaw_feathers::tokens::FONT_SM,
+                ..Default::default()
+            },
+            TextColor(jackdaw_feathers::tokens::TEXT_SECONDARY),
+            ChildOf(body_entity),
+        ));
+    }
 }
 
 pub(crate) fn remove_component_displays(
     _: On<Remove, Selected>,
     mut commands: Commands,
     inspectors: Query<(Entity, Option<&Children>), With<Inspector>>,
-    displays: Query<
-        Entity,
-        Or<(
-            With<ComponentDisplay>,
-            With<AddComponentButton>,
-            With<ComponentPicker>,
-        )>,
-    >,
+    displays: Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
 ) {
     // Multi-instance: every inspector tab needs its own monitoring
     // teardown and its own children despawned.
@@ -711,19 +904,13 @@ pub(crate) fn on_inspector_dirty(
     names: Query<&Name>,
     icon_font: Res<IconFont>,
     editor_font: Res<EditorFont>,
-    displays: Query<
-        Entity,
-        Or<(
-            With<ComponentDisplay>,
-            With<AddComponentButton>,
-            With<ComponentPicker>,
-        )>,
-    >,
+    displays: Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
     materials: Res<Assets<StandardMaterial>>,
     ast: Res<jackdaw_jsn::SceneJsnAst>,
     prefab_cache: Res<PrefabAstCache>,
     child_of_query: Query<&bevy::ecs::hierarchy::ChildOf>,
     isa_query: Query<&crate::prefab::IsA>,
+    collapse_state: Res<super::InspectorCollapseState>,
 ) {
     // Multi-instance: rebuild every Inspector tab in lockstep. Each
     // inspector entity carries its own `InspectorTarget`; the dirty
@@ -731,10 +918,7 @@ pub(crate) fn on_inspector_dirty(
     // and applies to every inspector watching that source.
     let mut clear_dirty_for: Option<Entity> = None;
     for (inspector_entity, target, children) in &inspectors {
-        let source_entity = target.0;
-        if clear_dirty_for.is_none() {
-            clear_dirty_for = Some(source_entity);
-        }
+        let mut source_entity = target.0;
 
         // Collect the old display children, then queue a
         // world-exclusive closure that despawns them synchronously.
@@ -757,10 +941,31 @@ pub(crate) fn on_inspector_dirty(
             }
         });
 
-        // Rebuild this inspector's contents.
-        let Ok((archetype, entity_ref)) = entity_query.get(source_entity) else {
-            continue;
+        // Rebuild this inspector's contents. If the monitored target is gone
+        // (despawned/respawned by CSG, undo, or prefab install), fall back to
+        // the live primary selection and re-point this inspector, rather than
+        // despawning the cards and rebuilding an empty panel.
+        let (archetype, entity_ref) = match entity_query.get(source_entity) {
+            Ok(found) => found,
+            Err(_) => {
+                let Some(primary) = selection.primary() else {
+                    continue;
+                };
+                let Ok(found) = entity_query.get(primary) else {
+                    continue;
+                };
+                commands.entity(inspector_entity).insert((
+                    InspectorTarget(primary),
+                    Monitor(primary),
+                    NotifyAdded::<InspectorDirty>::default(),
+                ));
+                source_entity = primary;
+                found
+            }
         };
+        if clear_dirty_for.is_none() {
+            clear_dirty_for = Some(source_entity);
+        }
         let sel_count = selection.entities.len();
 
         let jsn_type_paths = inspector_type_paths_for(
@@ -789,6 +994,7 @@ pub(crate) fn on_inspector_dirty(
             &jsn_type_paths,
             Some(&ast),
             Some(&prefab_cache),
+            &collapse_state,
         );
     }
 
@@ -824,6 +1030,9 @@ pub(crate) struct ComponentDisplaySpec<'a> {
     pub revert_through_prefab: bool,
     pub icon_font: &'a Handle<Font>,
     pub editor_font: &'a Handle<Font>,
+    /// Per-session collapsed-state map; used to restore the card's
+    /// open/closed state across inspector rebuilds.
+    pub collapse_state: &'a super::InspectorCollapseState,
 }
 
 pub(crate) fn spawn_component_display(
@@ -840,9 +1049,17 @@ pub(crate) fn spawn_component_display(
         revert_through_prefab,
         icon_font,
         editor_font,
+        collapse_state,
     } = spec;
     let font = icon_font.clone();
     let body_font = editor_font.clone();
+
+    let collapsed = collapse_state.collapsed(name);
+    let body_display = if collapsed {
+        Display::None
+    } else {
+        Display::Flex
+    };
 
     let body_entity = commands
         .spawn((
@@ -857,6 +1074,7 @@ pub(crate) fn spawn_component_display(
                 ),
                 flex_direction: FlexDirection::Column,
                 width: Val::Percent(100.0),
+                display: body_display,
                 ..Default::default()
             },
         ))
@@ -866,7 +1084,8 @@ pub(crate) fn spawn_component_display(
         .spawn((
             ComponentDisplay,
             ComponentName(name.to_string()),
-            CollapsibleSection { collapsed: false },
+            ComponentDisplayTypePath(type_path.to_string()),
+            CollapsibleSection { collapsed },
             Node {
                 flex_direction: FlexDirection::Column,
                 width: Val::Percent(100.0),
@@ -1155,46 +1374,65 @@ pub(crate) fn spawn_component_display(
     (section_entity, body_entity)
 }
 
-/// Filter inspector components based on the search input.
+/// Filter inspector component cards based on both the active category and the
+/// search input. A card is visible only when its category matches the active
+/// category AND its short name passes the search text predicate (either the
+/// search field is empty or the name contains the filter string).
+///
+/// The system re-runs whenever the search text changes OR the active category
+/// changes. Group-section visibility follows: a group hides when all of its
+/// cards are hidden.
 pub(crate) fn filter_inspector_components(
-    search_query: Query<&TextEditValue, (With<InspectorSearch>, Changed<TextEditValue>)>,
-    components: Query<(Entity, &ComponentName), With<ComponentDisplay>>,
+    search_query: Query<&TextEditValue, With<InspectorSearch>>,
+    active: Res<ActiveInspectorCategory>,
+    registry: Res<jackdaw_api_internal::inspector::InspectorRegistry>,
+    components: Query<(Entity, &ComponentName, &ComponentDisplayTypePath), With<ComponentDisplay>>,
     groups: Query<(Entity, &Children), With<InspectorGroupSection>>,
     mut node_query: Query<&mut Node>,
+    changed_search: Query<(), (With<InspectorSearch>, Changed<TextEditValue>)>,
 ) {
-    let Ok(search) = search_query.single() else {
+    // Re-run only when the search text or the active category changed.
+    // Running every frame is cheap but this avoids unnecessary Node mutations.
+    if changed_search.is_empty() && !active.is_changed() {
         return;
-    };
-    let filter = search.0.trim().to_lowercase();
+    }
 
-    // Track which component entities are visible
+    let filter = search_query
+        .single()
+        .map(|v| v.0.trim().to_lowercase())
+        .unwrap_or_default();
+
+    let active_cat = active.0.as_ref();
+
+    // Track which component entities are visible.
     let mut visible_components: HashSet<Entity> = HashSet::new();
 
-    // Filter individual component displays by name
-    for (entity, comp_name) in &components {
-        let matches = filter.is_empty() || comp_name.0.to_lowercase().contains(&filter);
+    for (entity, comp_name, type_path) in &components {
+        let category_ok = registry.category_for(&type_path.0) == active_cat;
+        let search_ok = filter.is_empty() || comp_name.0.to_lowercase().contains(&filter);
+        let visible = category_ok && search_ok;
 
         if let Ok(mut node) = node_query.get_mut(entity) {
-            node.display = if matches {
+            node.display = if visible {
                 Display::Flex
             } else {
                 Display::None
             };
         }
 
-        if matches {
+        if visible {
             visible_components.insert(entity);
         }
     }
 
-    // Hide group sections where all children are hidden
+    // Hide group sections where all children are hidden.
     for (group_entity, children) in &groups {
         let has_visible_child = children
             .iter()
             .any(|child| visible_components.contains(&child));
 
         if let Ok(mut node) = node_query.get_mut(group_entity) {
-            node.display = if filter.is_empty() || has_visible_child {
+            node.display = if has_visible_child {
                 Display::Flex
             } else {
                 Display::None

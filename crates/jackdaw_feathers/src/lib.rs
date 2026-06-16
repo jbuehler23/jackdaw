@@ -9,6 +9,7 @@ pub mod cursor;
 pub mod dialog;
 pub mod file_browser;
 pub mod icons;
+pub mod inspector_card;
 pub mod inspector_field;
 pub mod list_view;
 pub mod menu_bar;

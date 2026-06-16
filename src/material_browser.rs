@@ -691,9 +691,6 @@ fn handle_apply_material(
             commands.queue(move |world: &mut World| {
                 crate::brush::sync_brush_to_ast(world, entity, &new_brush);
             });
-            commands
-                .entity(entity)
-                .insert(crate::inspector::InspectorDirty);
         }
     } else {
         // Collect targets, expanding BrushGroups into their child brushes
@@ -730,9 +727,6 @@ fn handle_apply_material(
                 commands.queue(move |world: &mut World| {
                     crate::brush::sync_brush_to_ast(world, entity, &new_brush);
                 });
-                commands
-                    .entity(entity)
-                    .insert(crate::inspector::InspectorDirty);
             }
         }
         if !group_commands.is_empty() {
@@ -741,6 +735,16 @@ fn handle_apply_material(
                 label: "Apply material".into(),
             }));
         }
+    }
+
+    // The inspector only ever shows the primary selection, so flag exactly one
+    // entity dirty (not one per applied brush). A multi-brush / BrushGroup apply
+    // previously inserted InspectorDirty N times, each triggering a full-panel
+    // rebuild; now it triggers a single rebuild.
+    if let Some(primary) = selection.primary() {
+        commands
+            .entity(primary)
+            .insert(crate::inspector::InspectorDirty);
     }
 }
 

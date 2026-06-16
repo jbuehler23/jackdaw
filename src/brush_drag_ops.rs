@@ -131,6 +131,7 @@ pub(crate) fn face_drag_invoke_trigger(
     keyboard: Res<ButtonInput<KeyCode>>,
     edit_mode: Res<EditMode>,
     drag_state: Res<BrushDragState>,
+    radial: Res<jackdaw_widgets::RadialMenuState>,
     keybind_focus: KeybindFocus,
     modal: Res<ModalTransformState>,
     draw_state: Res<DrawBrushState>,
@@ -146,8 +147,9 @@ pub(crate) fn face_drag_invoke_trigger(
 
     // A hovered mirror-plane handle owns the click: `mirror.plane.drag` grabs
     // it (its hit-test ran last frame), so yield rather than race it for the
-    // same press and push/pull a face instead.
-    if mirror_plane_hover.target.is_some() {
+    // same press and push/pull a face instead. The radial quick-menu likewise
+    // owns the pointer while open, so a click on a wedge must not push a face.
+    if mirror_plane_hover.target.is_some() || radial.open.is_some() {
         return;
     }
 
@@ -780,6 +782,7 @@ pub(crate) fn vertex_drag_invoke_trigger(
     pointer: crate::input_contexts::PointerInputs,
     edit_mode: Res<EditMode>,
     drag_state: Res<VertexDragState>,
+    radial: Res<jackdaw_widgets::RadialMenuState>,
     keybind_focus: KeybindFocus,
     vp: ViewportCursor,
     gizmo_hover: Res<crate::gizmos::GizmoHoverState>,
@@ -799,6 +802,9 @@ pub(crate) fn vertex_drag_invoke_trigger(
         // grabs it (its hit-test ran last frame), so yield rather than race it
         // for the same press and drag a vertex instead.
         || mirror_plane_hover.target.is_some()
+        // The radial quick-menu owns the pointer while open: a click on a wedge
+        // must not also start a sub-element drag in the viewport beneath it.
+        || radial.open.is_some()
     {
         return;
     }
@@ -1142,6 +1148,7 @@ pub(crate) fn edge_drag_invoke_trigger(
     pointer: crate::input_contexts::PointerInputs,
     edit_mode: Res<EditMode>,
     drag_state: Res<EdgeDragState>,
+    radial: Res<jackdaw_widgets::RadialMenuState>,
     keybind_focus: KeybindFocus,
     vp: ViewportCursor,
     gizmo_hover: Res<crate::gizmos::GizmoHoverState>,
@@ -1161,6 +1168,9 @@ pub(crate) fn edge_drag_invoke_trigger(
         // grabs it (its hit-test ran last frame), so yield rather than race it
         // for the same press and drag an edge instead.
         || mirror_plane_hover.target.is_some()
+        // The radial quick-menu owns the pointer while open: a click on a wedge
+        // must not also start a sub-element drag in the viewport beneath it.
+        || radial.open.is_some()
     {
         return;
     }

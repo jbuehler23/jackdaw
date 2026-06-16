@@ -49,6 +49,7 @@ pub mod entity_icons;
 mod export;
 pub mod extensions_config;
 pub mod ffi;
+pub mod inspector;
 pub mod keymap;
 pub mod keymap_conditions;
 pub mod lifecycle;
@@ -493,6 +494,39 @@ impl<'a> ExtensionContext<'a> {
         self.world
             .get_resource_or_insert_with(EntityIconRegistry::default)
             .register(type_path, icon);
+        self
+    }
+
+    /// Add an inspector category tab. The six built-in categories are
+    /// pre-registered; this appends or replaces by id.
+    pub fn register_inspector_category(
+        &mut self,
+        category: crate::inspector::InspectorCategory,
+    ) -> &mut Self {
+        self.world
+            .get_resource_or_insert_with(|| {
+                let mut r = crate::inspector::InspectorRegistry::default();
+                crate::inspector::seed_default_categories(&mut r);
+                r
+            })
+            .register_category(category);
+        self
+    }
+
+    /// Route a component type into an inspector category by id. The default
+    /// category for unmapped components is "components".
+    pub fn register_component_category<T: bevy::reflect::TypePath>(
+        &mut self,
+        category_id: impl Into<std::borrow::Cow<'static, str>>,
+    ) -> &mut Self {
+        let type_path = T::type_path().to_string();
+        self.world
+            .get_resource_or_insert_with(|| {
+                let mut r = crate::inspector::InspectorRegistry::default();
+                crate::inspector::seed_default_categories(&mut r);
+                r
+            })
+            .set_component_category(type_path, category_id);
         self
     }
 }
