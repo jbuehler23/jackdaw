@@ -22,14 +22,8 @@ const SEGOE_MDL2_ASSETS_FILE: &str = "segmdl2.ttf";
 #[derive(Resource, Clone)]
 pub struct CaptionFont {
     pub handle: Handle<Font>,
-    icon_set: CaptionIconSet,
-}
-
-/// Which glyph mapping the loaded caption icon font uses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CaptionIconSet {
-    Segoe,
-    Lucide,
+    #[cfg(target_os = "windows")]
+    use_segoe_glyphs: bool,
 }
 
 /// Identifies each caption button for hover/pressed styling.
@@ -38,6 +32,29 @@ pub enum CaptionButton {
     Minimize,
     Maximize,
     Close,
+}
+
+impl CaptionFont {
+    fn glyph(&self, kind: CaptionButton, is_maximized: bool) -> String {
+        #[cfg(target_os = "windows")]
+        if self.use_segoe_glyphs {
+            return kind.segoe_glyph(is_maximized).to_string();
+        }
+        kind.lucide_glyph(is_maximized).to_string()
+    }
+
+    fn glyph_scale(&self, kind: CaptionButton) -> f32 {
+        #[cfg(target_os = "windows")]
+        if self.use_segoe_glyphs {
+            return 1.0;
+        }
+        match kind {
+            CaptionButton::Maximize => {
+                LUCIDE_MAXIMIZE_RESTORE_GLYPH_SCALE * LUCIDE_CAPTION_GLYPH_SCALE
+            }
+            CaptionButton::Close | CaptionButton::Minimize => LUCIDE_CAPTION_GLYPH_SCALE,
+        }
+    }
 }
 
 impl CaptionButton {
@@ -55,6 +72,7 @@ impl CaptionButton {
         }
     }
 
+    #[cfg(target_os = "windows")]
     fn segoe_glyph(self, is_maximized: bool) -> &'static str {
         match self {
             Self::Close => "\u{e8bb}",
@@ -68,24 +86,6 @@ impl CaptionButton {
             Self::Minimize => "\u{e921}",
         }
     }
-
-    fn glyph(self, icon_set: CaptionIconSet, is_maximized: bool) -> String {
-        match icon_set {
-            CaptionIconSet::Lucide => self.lucide_glyph(is_maximized),
-            CaptionIconSet::Segoe => self.segoe_glyph(is_maximized),
-        }
-        .to_string()
-    }
-
-    fn glyph_scale(self, icon_set: CaptionIconSet) -> f32 {
-        match icon_set {
-            CaptionIconSet::Lucide => match self {
-                Self::Maximize => LUCIDE_MAXIMIZE_RESTORE_GLYPH_SCALE * LUCIDE_CAPTION_GLYPH_SCALE,
-                Self::Close | Self::Minimize => LUCIDE_CAPTION_GLYPH_SCALE,
-            },
-            CaptionIconSet::Segoe => 1.0,
-        }
-    }
 }
 
 pub(crate) fn load_caption_font(fonts: &mut Assets<Font>) -> CaptionFont {
@@ -94,7 +94,7 @@ pub(crate) fn load_caption_font(fonts: &mut Assets<Font>) -> CaptionFont {
         if let Some(handle) = load_windows_segoe_font(fonts) {
             return CaptionFont {
                 handle,
-                icon_set: CaptionIconSet::Segoe,
+                use_segoe_glyphs: true,
             };
         }
         bevy::log::warn!(
@@ -134,7 +134,8 @@ fn load_lucide_caption_font(fonts: &mut Assets<Font>) -> CaptionFont {
         .expect("embedded Lucide caption font should be valid");
     CaptionFont {
         handle: fonts.add(font),
-        icon_set: CaptionIconSet::Lucide,
+        #[cfg(target_os = "windows")]
+        use_segoe_glyphs: false,
     }
 }
 
@@ -143,8 +144,6 @@ pub fn window_controls(theme: &WindowChromeTheme, caption_font: &CaptionFont) ->
     let button_width = theme.caption.button_width;
     let base_glyph_size = theme.caption.glyph_size;
     let foreground = theme.caption.icon_color;
-    let icon_set = caption_font.icon_set;
-    let caption_font_handle = caption_font.handle.clone();
     (
         WindowChromeEntity,
         Node {
@@ -157,27 +156,24 @@ pub fn window_controls(theme: &WindowChromeTheme, caption_font: &CaptionFont) ->
         Pickable::IGNORE,
         children![
             caption_button_bundle(
-                caption_font_handle.clone(),
+                caption_font,
                 button_width,
                 base_glyph_size,
                 foreground,
-                icon_set,
                 CaptionButton::Minimize,
             ),
             caption_button_bundle(
-                caption_font_handle.clone(),
+                caption_font,
                 button_width,
                 base_glyph_size,
                 foreground,
-                icon_set,
                 CaptionButton::Maximize,
             ),
             caption_button_bundle(
-                caption_font_handle,
+                caption_font,
                 button_width,
                 base_glyph_size,
                 foreground,
-                icon_set,
                 CaptionButton::Close,
             ),
         ],
@@ -185,14 +181,13 @@ pub fn window_controls(theme: &WindowChromeTheme, caption_font: &CaptionFont) ->
 }
 
 fn caption_button_bundle(
-    caption_font: Handle<Font>,
+    caption_font: &CaptionFont,
     button_width: f32,
     base_glyph_size: f32,
     foreground: Color,
-    icon_set: CaptionIconSet,
     kind: CaptionButton,
 ) -> impl Bundle {
-    let glyph_size = base_glyph_size * kind.glyph_scale(icon_set);
+    let glyph_size = base_glyph_size * caption_font.glyph_scale(kind);
     (
         kind,
         WindowChromeEntity,
@@ -207,9 +202,9 @@ fn caption_button_bundle(
         },
         BackgroundColor(Color::NONE),
         children![(
-            Text::new(kind.glyph(icon_set, false)),
+            Text::new(caption_font.glyph(kind, false)),
             TextFont {
-                font: caption_font,
+                font: caption_font.handle.clone(),
                 font_size: glyph_size,
                 ..default()
             },
@@ -249,7 +244,7 @@ pub(crate) fn sync_caption_chrome(
             caption_colors(*kind, highlighted, &theme.caption);
         background.0 = background_color;
 
-        let icon_label = kind.glyph(caption_font.icon_set, is_maximized);
+        let icon_label = caption_font.glyph(*kind, is_maximized);
         for child in children.iter() {
             if let Ok(mut text) = texts.get_mut(child)
                 && text.0 != icon_label
