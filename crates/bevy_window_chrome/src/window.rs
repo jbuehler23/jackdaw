@@ -11,12 +11,12 @@ use bevy::winit::WINIT_WINDOWS;
 pub fn primary_window_attributes() -> Window {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
-        return Window {
+        Window {
             decorations: false,
             transparent: true,
             composite_alpha_mode: CompositeAlphaMode::PreMultiplied,
             ..default()
-        };
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -32,10 +32,10 @@ pub fn primary_window_attributes() -> Window {
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
-    return Window {
+    Window {
         decorations: false,
         ..default()
-    };
+    }
 }
 
 /// Toggles the primary window between maximized and restored.

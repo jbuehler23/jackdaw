@@ -104,7 +104,7 @@ pub(crate) fn load_caption_font(fonts: &mut Assets<Font>) -> CaptionFont {
     }
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
-        return load_lucide_caption_font(fonts);
+        load_lucide_caption_font(fonts)
     }
 }
 
