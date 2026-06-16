@@ -124,6 +124,7 @@ use selection::Selection;
 
 /// Everything needed to start using Jackdaw.
 pub mod prelude {
+    pub use crate::windowing::{editor_window_plugin, primary_window_attributes};
     pub use crate::{
         DylibLoaderPlugin, EditorCategory, EditorDescription, EditorHidden, EditorPlugins,
         ExtensionPlugin, SkipSerialization,

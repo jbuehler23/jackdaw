@@ -12,7 +12,7 @@ A typical editor binary looks like:
 
 ```rust
 App::new()
-    .add_plugins(DefaultPlugins)
+    .add_plugins(DefaultPlugins.set(editor_window_plugin()))
     .add_plugins((PhysicsPlugins::default(), EnhancedInputPlugin))
     .add_plugins(EditorPlugins::default())
     .add_plugins(your_crate::MyGamePlugin)
@@ -29,6 +29,8 @@ standalone version doesn't add `EditorPlugins`; it adds
 `JackdawPlugin` from `jackdaw_runtime`, which is a much smaller
 plugin that knows how to load `.jsn` scenes but doesn't include
 any UI.
+
+`WindowPlugin` is set by `editor_window_plugin()`.
 
 ## App states
 

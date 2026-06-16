@@ -133,7 +133,7 @@ fn main() -> AppExit {
         .or_else(|| std::env::current_dir().ok());
 
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins)
+    app.add_plugins(DefaultPlugins.set(editor_window_plugin()))
         .add_plugins((PhysicsPlugins::default(), EnhancedInputPlugin))
         .add_plugins(EditorPlugins::default())
         .add_plugins(your_crate::MyGamePlugin);

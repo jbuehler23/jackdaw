@@ -6,7 +6,7 @@ fn main() -> AppExit {
         // log errors instead of panicking
         .set_error_handler(bevy::ecs::error::error)
         .add_plugins((
-            DefaultPlugins,
+            DefaultPlugins.set(editor_window_plugin()),
             EnhancedInputPlugin,
             PhysicsPlugins::default(),
             EditorPlugins::default(),

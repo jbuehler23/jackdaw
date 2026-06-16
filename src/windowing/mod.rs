@@ -6,10 +6,12 @@ mod repo_link;
 
 pub use bevy_window_chrome::{
     WindowShellContent, WindowShellSlots, WindowTitleBarContentSlot, WindowTitleBarRoot,
+    primary_window_attributes,
 };
 pub use repo_link::{JackdawIcon, title_bar_repo_link};
 
 use bevy::prelude::*;
+use bevy::window::{ExitCondition, WindowPlugin};
 use bevy_window_chrome::{CaptionTheme, WindowChromePlugin, WindowChromeTheme};
 use icon::WindowIconPlugin;
 use jackdaw_feathers::tokens;
@@ -51,6 +53,20 @@ fn window_chrome_theme() -> WindowChromeTheme {
             ..CaptionTheme::default()
         },
         ..Default::default()
+    }
+}
+
+/// [`WindowPlugin`] for editor binaries.
+///
+/// Configures jackdaw's custom chrome window and disables Bevy's default
+/// close-to-exit wiring so [`crate::scenes::intercept_window_close`] can
+/// show the unsaved-changes dialog before quitting.
+pub fn editor_window_plugin() -> WindowPlugin {
+    WindowPlugin {
+        exit_condition: ExitCondition::DontExit,
+        close_when_requested: false,
+        primary_window: Some(primary_window_attributes()),
+        ..default()
     }
 }
 
