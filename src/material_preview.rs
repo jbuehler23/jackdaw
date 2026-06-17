@@ -1,6 +1,7 @@
 use bevy::{
     asset::{embedded_asset, load_embedded_asset},
     camera::{RenderTarget, visibility::RenderLayers},
+    ecs::error::BevyError,
     prelude::*,
     render::render_resource::TextureFormat,
 };
@@ -28,9 +29,43 @@ impl Plugin for MaterialPreviewPlugin {
             (
                 update_preview_camera_transform,
                 update_active_preview_material,
+                update_preview_shape,
             )
                 .run_if(in_state(crate::AppState::Editor)),
         );
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PreviewShape {
+    #[default]
+    Sphere,
+    Cube,
+    Plane,
+}
+
+impl PreviewShape {
+    pub const ALL: [PreviewShape; 3] = [
+        PreviewShape::Sphere,
+        PreviewShape::Cube,
+        PreviewShape::Plane,
+    ];
+}
+
+#[derive(Resource)]
+pub struct PreviewShapeMeshes {
+    pub sphere: Handle<Mesh>,
+    pub cube: Handle<Mesh>,
+    pub plane: Handle<Mesh>,
+}
+
+impl PreviewShapeMeshes {
+    pub fn get(&self, shape: PreviewShape) -> Handle<Mesh> {
+        match shape {
+            PreviewShape::Sphere => self.sphere.clone(),
+            PreviewShape::Cube => self.cube.clone(),
+            PreviewShape::Plane => self.plane.clone(),
+        }
     }
 }
 
@@ -47,6 +82,7 @@ pub struct MaterialPreviewState {
     pub orbit_pitch: f32,
     pub zoom_distance: f32,
     pub preview_image: Handle<Image>,
+    pub preview_shape: PreviewShape,
 }
 
 impl Default for MaterialPreviewState {
@@ -57,6 +93,7 @@ impl Default for MaterialPreviewState {
             orbit_pitch: -0.3,
             zoom_distance: 3.0,
             preview_image: Handle::default(),
+            preview_shape: PreviewShape::default(),
         }
     }
 }
@@ -81,6 +118,26 @@ fn setup_material_preview_scene(
             .with_generated_tangents()
             .unwrap(),
     );
+    let cube = meshes.add(
+        Cuboid::new(1.6, 1.6, 1.6)
+            .mesh()
+            .build()
+            .with_generated_tangents()
+            .unwrap(),
+    );
+    let plane = meshes.add(
+        Plane3d::default()
+            .mesh()
+            .size(2.0, 2.0)
+            .build()
+            .with_generated_tangents()
+            .unwrap(),
+    );
+    commands.insert_resource(PreviewShapeMeshes {
+        sphere: sphere.clone(),
+        cube,
+        plane,
+    });
     let mat = materials.add(StandardMaterial::default());
 
     commands.spawn((
@@ -178,5 +235,43 @@ fn update_active_preview_material(
                 cam.is_active = false;
             }
         }
+    }
+}
+
+fn update_preview_shape(
+    preview_state: Res<MaterialPreviewState>,
+    shapes: Option<Res<PreviewShapeMeshes>>,
+    mut sphere_q: Query<&mut Mesh3d, With<PreviewSphere>>,
+) -> Result<(), BevyError> {
+    if !preview_state.is_changed() {
+        return Ok(());
+    }
+    let Some(shapes) = shapes else {
+        return Ok(());
+    };
+    if let Ok(mut mesh) = sphere_q.single_mut() {
+        let wanted = shapes.get(preview_state.preview_shape);
+        if mesh.0 != wanted {
+            mesh.0 = wanted;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod preview_shape_tests {
+    use super::PreviewShape;
+
+    #[test]
+    fn shapes_cycle_in_order() {
+        assert_eq!(
+            PreviewShape::ALL,
+            [
+                PreviewShape::Sphere,
+                PreviewShape::Cube,
+                PreviewShape::Plane
+            ]
+        );
+        assert_eq!(PreviewShape::default(), PreviewShape::Sphere);
     }
 }

@@ -157,7 +157,7 @@ enum MaterialParamInput {
 
 /// Identifies a texture slot on `StandardMaterial`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum TextureSlot {
+pub(crate) enum TextureSlot {
     BaseColorTexture,
     NormalMapTexture,
     MetallicRoughnessTexture,
@@ -737,14 +737,19 @@ fn handle_apply_material(
         }
     }
 
-    // The inspector only ever shows the primary selection, so flag exactly one
-    // entity dirty (not one per applied brush). A multi-brush / BrushGroup apply
-    // previously inserted InspectorDirty N times, each triggering a full-panel
-    // rebuild; now it triggers a single rebuild.
+    // The inspector only ever shows the primary selection, and applying a
+    // material only changes the assigned handle (not the component set), so
+    // refresh all material card bodies at once rather than tearing down and
+    // rebuilding the whole panel per applied brush. The full rebuild is reserved
+    // for archetype changes; the targeted refresh falls back to it if no
+    // material card is currently mounted.
     if let Some(primary) = selection.primary() {
-        commands
-            .entity(primary)
-            .insert(crate::inspector::InspectorDirty);
+        commands.trigger(
+            crate::inspector::component_display::RefreshInspectorCardBody {
+                source: primary,
+                type_path: "material_card::".to_string(),
+            },
+        );
     }
 }
 
@@ -1659,9 +1664,9 @@ fn rescan_button(icon_font: Handle<Font>) -> impl Bundle {
 /// fit `PropertyValue`, so we route it through a sidecar resource the
 /// same way `hierarchy.rename_begin` uses `PendingRenameTarget`.
 #[derive(Resource, Default)]
-struct PendingTextureSlot {
-    slot: Option<TextureSlot>,
-    material_handle: Option<Handle<StandardMaterial>>,
+pub(crate) struct PendingTextureSlot {
+    pub(crate) slot: Option<TextureSlot>,
+    pub(crate) material_handle: Option<Handle<StandardMaterial>>,
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

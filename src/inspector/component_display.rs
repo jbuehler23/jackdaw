@@ -466,6 +466,21 @@ pub(crate) fn build_inspector_displays(
             continue;
         }
 
+        // MeshMaterial3d<StandardMaterial> gets four dedicated material cards
+        // (Preview, Surface, Textures, Settings) rather than a single generic
+        // wrapper. Skip the generic card and inject the four cards directly.
+        if *type_path == BRUSH_MATERIAL_TYPE_PATH {
+            material_display::inject_material_cards(
+                commands,
+                source_entity,
+                inspector_entity,
+                &icon_font.0,
+                &editor_font.0,
+                collapse_state,
+            );
+            continue;
+        }
+
         let (display_entity, body_entity) = spawn_component_display(
             commands,
             ComponentDisplaySpec {
@@ -504,17 +519,7 @@ pub(crate) fn build_inspector_displays(
                 continue;
             }
 
-            // Priority 2: MeshMaterial3d<StandardMaterial>, display material fields
-            if type_id == TypeId::of::<MeshMaterial3d<StandardMaterial>>() {
-                material_display::spawn_material_display_deferred(
-                    commands,
-                    body_entity,
-                    source_entity,
-                );
-                continue;
-            }
-
-            // Priority 3: CustomProperties, specialized property editor
+            // Priority 2: CustomProperties, specialized property editor
             if type_id == TypeId::of::<CustomProperties>() {
                 if let Some(cp) = reflected.downcast_ref::<CustomProperties>() {
                     custom_props_display::spawn_custom_properties_display(
@@ -598,34 +603,27 @@ pub(crate) fn build_inspector_displays(
     // Add Component button is in the static layout header (layout.rs entity_inspector)
     // so we don't spawn a dynamic one here.
 
-    // If the selected entity is a brush, inject a Material card into the Material tab.
-    // The brush entity itself carries no MeshMaterial3d; its face data carries the handles.
-    // We resolve the handle here (selected face first, then first face with a material)
-    // and spawn a deferred card so Assets<StandardMaterial> is accessible.
+    // If the selected entity is a brush, inject the four material cards into the
+    // Material tab. The brush entity itself carries no MeshMaterial3d; its face
+    // data carries the handles. Shells are spawned synchronously (same flush as
+    // every other card) so the "material" category is present on the rebuild
+    // frame before `resolve_active_on_rebuild` runs. Body fills are deferred.
     if entity_ref.contains::<crate::brush::Brush>() {
-        let brush_entity = source_entity;
-        let collapsed = collapse_state.collapsed("Material");
-        // Spawn the card SHELL synchronously (buffered, same flush as every
-        // other card) so the "material" category is present on this rebuild
-        // frame. A fully-deferred card would land a pass later, after
-        // `resolve_active_on_rebuild` already moved the active tab away from
-        // Material (the "lost tabs" bug). Only the body fill, which needs
-        // `Assets<StandardMaterial>` and the brush face selection, is deferred.
-        let body_entity = spawn_brush_material_card_shell(
+        material_display::inject_material_cards(
             commands,
+            source_entity,
             inspector_entity,
             &icon_font.0,
             &editor_font.0,
-            collapsed,
+            collapse_state,
         );
-        commands.queue(move |world: &mut World| {
-            fill_brush_material_card_body(world, brush_entity, body_entity);
-        });
     }
 }
 
 /// The type path used to route the brush material card to the Material inspector tab.
-const BRUSH_MATERIAL_TYPE_PATH: &str =
+/// Also the `ComponentDisplayTypePath` of the entity-bound `MeshMaterial3d` card,
+/// so a targeted refresh keyed on this string finds both material card variants.
+pub(crate) const BRUSH_MATERIAL_TYPE_PATH: &str =
     "bevy_pbr::mesh_material::MeshMaterial3d<bevy_pbr::pbr_material::StandardMaterial>";
 
 /// Resolve which `Handle<StandardMaterial>` to display for a brush entity.
@@ -668,18 +666,18 @@ pub(crate) fn resolve_brush_material_handle(
     None
 }
 
-/// Spawn the SHELL of the brush Material card (section + header + body) under
-/// `inspector_entity` and return the body entity for deferred filling.
+/// Spawn a material card SHELL (section + header + body) under `inspector_entity`
+/// with parameterized title, icon, and `type_path`, and return the body entity.
 ///
-/// The shell carries `ComponentDisplay`, `ComponentName("Material")`, and
-/// `ComponentDisplayTypePath` (the `MeshMaterial3d` path) so the category filter
-/// routes it to the Material tab. It is spawned via `Commands` (buffered, the
-/// same flush as every other card) instead of a deferred world closure, so the
-/// "material" category is present on the rebuild frame and the active tab is not
-/// moved away before the card lands. `fill_brush_material_card_body` fills it.
-fn spawn_brush_material_card_shell(
+/// The shell carries `ComponentDisplay`, `ComponentName(title)`, and
+/// `ComponentDisplayTypePath(type_path)` so the category filter routes it to the
+/// correct inspector tab. The body entity is returned for deferred filling.
+pub(crate) fn spawn_material_card_shell(
     commands: &mut Commands,
     inspector_entity: Entity,
+    title: &str,
+    icon: jackdaw_feathers::icons::Icon,
+    type_path: &str,
     icon_font: &Handle<Font>,
     editor_font: &Handle<Font>,
     collapsed: bool,
@@ -717,8 +715,8 @@ fn spawn_brush_material_card_shell(
     let section_entity = commands
         .spawn((
             ComponentDisplay,
-            ComponentName("Material".to_string()),
-            ComponentDisplayTypePath(BRUSH_MATERIAL_TYPE_PATH.to_string()),
+            ComponentName(title.to_string()),
+            ComponentDisplayTypePath(type_path.to_string()),
             CollapsibleSection { collapsed },
             Node {
                 flex_direction: FlexDirection::Column,
@@ -783,7 +781,7 @@ fn spawn_brush_material_card_shell(
     ));
 
     commands.spawn((
-        Text::new(String::from(Icon::Palette.unicode())),
+        Text::new(String::from(icon.unicode())),
         TextFont {
             font: icon_font.clone(),
             font_size: tokens::TEXT_SIZE,
@@ -794,7 +792,7 @@ fn spawn_brush_material_card_shell(
     ));
 
     commands.spawn((
-        Text::new("Material".to_string()),
+        Text::new(title.to_string()),
         TextFont {
             font: editor_font.clone(),
             font_size: tokens::FONT_SM,
@@ -833,28 +831,92 @@ fn spawn_brush_material_card_shell(
     body_entity
 }
 
-/// Resolve the brush's current material handle and fill the Material card body
-/// with the editable fields (or a short note when no material is set). Deferred
-/// (world-exclusive) because it reads `Assets<StandardMaterial>` and the brush
-/// face selection; the shell already established the card and its category.
-fn fill_brush_material_card_body(world: &mut World, brush_entity: Entity, body_entity: Entity) {
-    // A later rebuild may have torn down the shell before this queued closure
-    // runs; bail rather than parent children under a despawned body.
-    if world.get_entity(body_entity).is_err() {
-        return;
+/// True if a card with `card_type_path` should be refreshed by a trigger for
+/// `trigger_type_path`. Exact match, OR a prefix trigger (ending in "::") that
+/// the card's path starts with (so `"material_card::"` refreshes every material card).
+pub(crate) fn refresh_card_matches(card_type_path: &str, trigger_type_path: &str) -> bool {
+    card_type_path == trigger_type_path
+        || (trigger_type_path.ends_with("::") && card_type_path.starts_with(trigger_type_path))
+}
+
+/// Map a card `type_path` (from `ComponentDisplayTypePath`) to its `MaterialCardKind`.
+/// Returns `None` when the path does not belong to a material card.
+fn material_card_kind_for(
+    type_path: &str,
+) -> Option<crate::inspector::material_display::MaterialCardKind> {
+    use crate::inspector::material_display::MaterialCardKind;
+    MaterialCardKind::ALL
+        .into_iter()
+        .find(|k| k.type_path() == type_path)
+}
+
+/// Targeted single-card refresh. Rebuilds only the BODY of the card(s) whose
+/// `ComponentDisplayTypePath` equals `type_path`, for the inspector(s) showing
+/// `source`. In-place edits that change just one card's content (e.g. a material
+/// apply re-resolving the assigned handle) trigger this instead of the
+/// full-panel teardown in `on_inspector_dirty`.
+#[derive(Event)]
+pub(crate) struct RefreshInspectorCardBody {
+    pub(crate) source: Entity,
+    pub(crate) type_path: String,
+}
+
+pub(crate) fn on_refresh_inspector_card_body(
+    refresh: On<RefreshInspectorCardBody>,
+    mut commands: Commands,
+    inspectors: Query<&InspectorTarget, With<Inspector>>,
+    cards: Query<
+        (
+            &ComponentDisplayTypePath,
+            &bevy::ecs::hierarchy::ChildOf,
+            &Children,
+        ),
+        With<ComponentDisplay>,
+    >,
+    bodies: Query<(), With<ComponentDisplayBody>>,
+    children_q: Query<&Children>,
+) {
+    let source = refresh.source;
+    let mut matched = false;
+    for (type_path, child_of, card_children) in &cards {
+        if !refresh_card_matches(&type_path.0, &refresh.type_path) {
+            continue;
+        }
+        // The card section is a child of its inspector; only refresh cards in an
+        // inspector that targets `source`.
+        let Ok(target) = inspectors.get(child_of.parent()) else {
+            continue;
+        };
+        if target.0 != source {
+            continue;
+        }
+        let Some(body) = card_children.iter().find(|&child| bodies.contains(child)) else {
+            continue;
+        };
+        matched = true;
+        let card_tp = type_path.0.clone();
+        let body_children: Vec<Entity> = children_q
+            .get(body)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        commands.queue(move |world: &mut World| {
+            for child in body_children {
+                if let Ok(ec) = world.get_entity_mut(child) {
+                    ec.despawn();
+                }
+            }
+            if let Some(kind) = material_card_kind_for(&card_tp) {
+                crate::inspector::material_display::fill_material_card_body(
+                    world, source, body, kind,
+                );
+            }
+        });
     }
-    if let Some(handle) = resolve_brush_material_handle(world, brush_entity) {
-        super::material_display::spawn_material_fields_for_handle(world, body_entity, handle);
-    } else {
-        world.spawn((
-            Text::new("No material assigned"),
-            TextFont {
-                font_size: jackdaw_feathers::tokens::FONT_SM,
-                ..Default::default()
-            },
-            TextColor(jackdaw_feathers::tokens::TEXT_SECONDARY),
-            ChildOf(body_entity),
-        ));
+
+    // No card mounted for this type path (e.g. the inspector has not been built
+    // for this selection yet): fall back to a full rebuild so the edit shows.
+    if !matched {
+        commands.entity(source).insert(InspectorDirty);
     }
 }
 
@@ -1891,4 +1953,38 @@ pub(crate) fn on_live_edit_menu_action(
         ec.despawn();
     }
     state.target_entity = None;
+}
+
+#[cfg(test)]
+mod refresh_card_matches_tests {
+    use super::refresh_card_matches;
+
+    #[test]
+    fn exact_match_is_true() {
+        assert!(refresh_card_matches(
+            "material_card::surface",
+            "material_card::surface"
+        ));
+    }
+
+    #[test]
+    fn prefix_trigger_matches_card_under_it() {
+        assert!(refresh_card_matches(
+            "material_card::surface",
+            "material_card::"
+        ));
+    }
+
+    #[test]
+    fn prefix_trigger_does_not_match_unrelated_card() {
+        assert!(!refresh_card_matches("transform", "material_card::"));
+    }
+
+    #[test]
+    fn exact_match_settings_card() {
+        assert!(refresh_card_matches(
+            "material_card::settings",
+            "material_card::settings"
+        ));
+    }
 }

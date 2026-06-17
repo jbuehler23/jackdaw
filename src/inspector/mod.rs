@@ -129,6 +129,7 @@ impl Plugin for InspectorPlugin {
             .add_observer(component_display::remove_component_displays)
             .add_observer(component_display::add_component_displays)
             .add_observer(component_display::on_inspector_dirty)
+            .add_observer(component_display::on_refresh_inspector_card_body)
             .add_observer(component_picker::on_add_component_button_click)
             .add_observer(reflect_fields::on_checkbox_commit)
             .add_observer(reflect_fields::on_text_edit_commit)
@@ -137,6 +138,8 @@ impl Plugin for InspectorPlugin {
             .add_observer(brush_display::on_brush_face_text_commit)
             .add_observer(on_name_field_commit)
             .add_observer(material_display::on_material_text_commit)
+            .add_observer(material_display::on_material_checkbox_commit)
+            .add_observer(material_display::on_preview_shape_button_click)
             .add_observer(anim_diamond::on_diamond_click)
             .init_resource::<component_display::LiveEditMenuTarget>()
             .add_observer(component_display::on_live_edit_menu_action)
@@ -164,6 +167,8 @@ impl Plugin for InspectorPlugin {
                     category_strip::paint_category_tabs,
                     add_header::rebuild_add_header,
                     persist_inspector_collapse,
+                    material_display::refresh_preview_shape_buttons,
+                    material_display::preview_zoom_from_scroll,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             );

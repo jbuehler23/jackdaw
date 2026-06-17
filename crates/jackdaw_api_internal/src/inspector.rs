@@ -152,6 +152,9 @@ pub fn seed_default_categories(r: &mut InspectorRegistry) {
     // Exact entries above take precedence (they are checked first in `category_for`).
     r.set_component_category_prefix("avian3d::", "physics");
     r.set_component_category_prefix("jackdaw_avian_integration::", "physics");
+    // All `material_card::*` cards (Preview/Surface/Textures/Settings, and future
+    // advanced cards) belong to the Material tab.
+    r.set_component_category_prefix("material_card::", "material");
 }
 
 #[cfg(test)]
@@ -224,6 +227,14 @@ mod tests {
         );
         // Unrelated path still falls back to components.
         assert_eq!(r.category_for("my_game::Health"), "components");
+    }
+
+    #[test]
+    fn material_card_prefix_routes_to_material() {
+        let mut r = InspectorRegistry::default();
+        seed_default_categories(&mut r);
+        assert_eq!(r.category_for("material_card::surface"), "material");
+        assert_eq!(r.category_for("material_card::preview"), "material");
     }
 
     #[test]
