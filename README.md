@@ -8,7 +8,7 @@
 [![Crates.io](https://img.shields.io/crates/v/jackdaw.svg)](https://crates.io/crates/jackdaw)
 [![Downloads](https://img.shields.io/crates/d/jackdaw.svg)](https://crates.io/crates/jackdaw)
 [![Docs](https://docs.rs/jackdaw/badge.svg)](https://docs.rs/jackdaw/latest/jackdaw/)
-[![Discord](https://img.shields.io/discord/1486394042563428388.svg?label=&logo=discord&logoColor=ffffff&color=7389D8&labelColor=6A7EC2)](https://discord.gg/NgyEVW5tWG)
+[![Discord](https://img.shields.io/discord/1486394042563428388.svg?label=&logo=discord&logoColor=ffffff&color=7389D8&labelColor=6A7EC2)](https://discord.gg/sDUPhWtGSM)
 
 A 3D editor built for and with [Bevy](https://bevyengine.org/).
 Very early in dev, expect bugs and changes! A BSN-friendly branch exists on the bsn-editor branch (the flow is to read/write to the BSN AST and then sync to the ECS for rendering the UI and viewport).
