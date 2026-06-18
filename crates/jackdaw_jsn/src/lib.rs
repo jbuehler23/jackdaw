@@ -1,4 +1,5 @@
 pub mod ast;
+mod brush_chunks;
 pub mod editor_meta;
 pub mod format;
 mod loader;
@@ -19,6 +20,7 @@ pub use types::{
 pub use jackdaw_geometry;
 
 pub use ast::{JsnNodeId, SceneJsnAst, needs_id_migration};
+pub use brush_chunks::{MeshChunk, build_brush_chunks};
 pub use format::{JsnProject, JsnProjectConfig, JsnScene};
 pub use loader::JsnAssetLoader;
 

@@ -17,6 +17,7 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_log",
 ] }
 jackdaw_geometry = { version = "0.4.1", path = "../jackdaw_geometry", default-features = false }
+glam = { version = "0.30", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 rand.workspace = true

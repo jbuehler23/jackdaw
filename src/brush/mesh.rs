@@ -11,7 +11,7 @@ use super::{BrushMaterialPalette, BrushMeshCache, BrushPreview};
 use crate::default_style;
 use crate::draw_brush::DrawBrushState;
 use crate::selection::Selected;
-use jackdaw_geometry::{compute_brush_geometry_from_planes, reflected_face_plane};
+use jackdaw_geometry::compute_brush_geometry_from_planes;
 
 pub(super) struct MeshPlugin;
 
@@ -307,37 +307,26 @@ pub fn regenerate_brush_meshes(
             "face_source entries must reference an authored face or be NO_SOURCE"
         );
 
-        // `build_mesh_chunks` pairs `faces[i]` with `face_polygons[i]`,
-        // so mirrored polygons need their authored face data repeated at
-        // the evaluated index, with the plane recomputed from the
-        // evaluated ring: the authored normal is un-reflected and would
-        // wind the triangulation and shade the face inside out. Mirrored
-        // entries are those past the identity prefix (face_source[i] != i).
-        // Sources without authored data (a live halfedge mesh can carry
-        // more polygons than `brush.faces`) fall back to default face
-        // data instead of indexing out of range.
-        let chunks = if face_source.is_empty() {
-            super::mesh_chunks::build_mesh_chunks(&vertices, &face_polygons, &brush.faces)
+        // Resolve the evaluated face data (mirrored polygons get their plane
+        // recomputed from the reflected ring) and mesh it into per-material
+        // chunks. `build_brush_chunks` is the shared editor / runtime build.
+        // A live halfedge mesh can carry more polygons than `brush.faces`; the
+        // build pairs `faces[i]` with `face_polygons[i]` and skips the surplus.
+        let evaluated_faces = if face_source.is_empty() {
+            brush.faces.clone()
         } else {
-            let evaluated_faces: Vec<super::BrushFaceData> = face_source
-                .iter()
-                .enumerate()
-                .map(|(evaluated_idx, &src)| {
-                    let mut face = brush.faces.get(src as usize).cloned().unwrap_or_default();
-                    if src as usize != evaluated_idx
-                        && let Some(plane) =
-                            reflected_face_plane(&vertices, &face_polygons[evaluated_idx])
-                    {
-                        face.plane = plane;
-                    }
-                    face
-                })
-                .collect();
-            super::mesh_chunks::build_mesh_chunks(&vertices, &face_polygons, &evaluated_faces)
+            jackdaw_geometry::resolve_evaluated_faces(
+                &face_source,
+                &vertices,
+                &face_polygons,
+                &brush.faces,
+            )
         };
+        let chunks = jackdaw_jsn::build_brush_chunks(&vertices, &face_polygons, &evaluated_faces);
         let mut chunk_entities = Vec::with_capacity(chunks.len());
 
         for chunk in chunks {
+            let uses_default = chunk.material == Handle::default();
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, chunk.positions);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, chunk.normals);
@@ -348,7 +337,7 @@ pub fn regenerate_brush_meshes(
 
             // Explicit face material, or the palette default with the
             // selection/preview variant applied at build time.
-            let material = if !chunk.uses_default_material {
+            let material = if !uses_default {
                 chunk.material.clone()
             } else if effectively_selected || preview.is_some() {
                 palette.default_selected_material.clone()
@@ -361,7 +350,7 @@ pub fn regenerate_brush_meshes(
                     super::BrushMeshChunk {
                         brush_entity: entity,
                         face_of_tri: chunk.face_of_tri,
-                        uses_default_material: chunk.uses_default_material,
+                        uses_default_material: uses_default,
                         material: material.clone(),
                     },
                     Mesh3d(mesh_handle),
@@ -370,7 +359,7 @@ pub fn regenerate_brush_meshes(
                     ChildOf(entity),
                 ))
                 .id();
-            if chunk.uses_default_material {
+            if uses_default {
                 commands
                     .entity(chunk_entity)
                     .insert((NotShadowCaster, NotShadowReceiver));

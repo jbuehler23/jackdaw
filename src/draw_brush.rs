@@ -24,8 +24,7 @@ use bevy_enhanced_input::prelude::Press;
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_geometry::{
     brush_planes_to_world, clean_degenerate_faces, compute_brush_geometry_from_planes,
-    compute_brush_topology, compute_face_tangent_axes, compute_face_uvs, triangulate_face,
-    triangulate_polygon,
+    compute_brush_topology, compute_face_tangent_axes, triangulate_face,
 };
 use jackdaw_jsn::{Brush, BrushFaceData, BrushGroup, BrushPlane, BrushTopology};
 
@@ -1594,15 +1593,7 @@ fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
 
 /// Intersect a ray with a plane defined by a point and normal.
 fn ray_plane_intersection(ray: Ray3d, plane_point: Vec3, plane_normal: Vec3) -> Option<Vec3> {
-    let denom = ray.direction.dot(plane_normal);
-    if denom.abs() < 1e-6 {
-        return None;
-    }
-    let t = (plane_point - ray.origin).dot(plane_normal) / denom;
-    if t < 0.0 {
-        return None;
-    }
-    Some(ray.origin + *ray.direction * t)
+    jackdaw_geometry::ray_plane_intersection(ray.origin, *ray.direction, plane_point, plane_normal)
 }
 
 /// Draw a grid of small crosses on the drawing plane, centered near `center`.
@@ -2112,44 +2103,19 @@ fn manage_draw_preview_mesh(
                         continue;
                     }
 
-                    let positions: Vec<[f32; 3]> = indices
-                        .iter()
-                        .map(|&vi| frag_verts[vi].to_array())
-                        .collect();
-                    let normals: Vec<[f32; 3]> =
-                        vec![face_data.plane.normal.to_array(); indices.len()];
-                    let (u_axis, v_axis) =
-                        if face_data.uv_u_axis != Vec3::ZERO && face_data.uv_v_axis != Vec3::ZERO {
-                            (face_data.uv_u_axis, face_data.uv_v_axis)
-                        } else {
-                            compute_face_tangent_axes(face_data.plane.normal)
-                        };
-                    let uvs = compute_face_uvs(
+                    // CSG fragment faces may be concave or keyhole-bridged; the
+                    // shared per-face build earcut-triangulates and flat-shades them.
+                    let buf = jackdaw_geometry::build_face_render_buffers(
                         &frag_verts,
                         &indices,
-                        u_axis,
-                        v_axis,
-                        face_data.uv_offset,
-                        face_data.uv_scale,
-                        face_data.uv_rotation,
+                        face_data,
                     );
 
-                    // CSG fragment faces may be concave or keyhole-bridged
-                    // (annulus with hole). Fan triangulation would fill the
-                    // hole; use earcut.
-                    let face_verts_3d: Vec<Vec3> =
-                        indices.iter().map(|&vi| frag_verts[vi]).collect();
-                    let identity_ring: Vec<u32> = (0..indices.len() as u32).collect();
-                    let local_tris =
-                        triangulate_polygon(&face_verts_3d, &identity_ring, face_data.plane.normal);
-                    let flat_indices: Vec<u32> =
-                        local_tris.iter().flat_map(|t| t.iter().copied()).collect();
-
                     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
-                    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-                    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-                    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-                    mesh.insert_indices(Indices::U32(flat_indices));
+                    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, buf.positions);
+                    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, buf.normals);
+                    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, buf.uvs);
+                    mesh.insert_indices(Indices::U32(buf.indices));
 
                     let material = if face_data.material != Handle::default() {
                         face_data.material.clone()

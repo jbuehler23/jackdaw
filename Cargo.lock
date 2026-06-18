@@ -5449,6 +5449,7 @@ name = "jackdaw_jsn"
 version = "0.4.1"
 dependencies = [
  "bevy",
+ "glam 0.30.10",
  "jackdaw_geometry",
  "rand 0.9.4",
  "serde",

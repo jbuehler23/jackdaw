@@ -1136,15 +1136,12 @@ fn compute_grid_snap(
     let centroid_local: Vec3 = ring_local.iter().copied().sum::<Vec3>() / ring_local.len() as f32;
     let centroid_world = brush_global.transform_point(centroid_local);
     let ray = camera.viewport_to_world(cam_tf, viewport_cursor).ok()?;
-    let denom = world_normal.dot(*ray.direction);
-    if denom.abs() < 1e-6 {
-        return None;
-    }
-    let t = (centroid_world - ray.origin).dot(world_normal) / denom;
-    if t < 0.0 {
-        return None;
-    }
-    let hit_world = ray.origin + *ray.direction * t;
+    let hit_world = jackdaw_geometry::ray_plane_intersection(
+        ray.origin,
+        *ray.direction,
+        centroid_world,
+        world_normal,
+    )?;
 
     // Snap the WORLD position to the grid: the grid lives in world
     // space (it's a global setting; the visible InfiniteGrid is in
@@ -1249,15 +1246,12 @@ fn compute_face_interior_snap(
     let centroid_world = brush_global.transform_point(centroid_local);
 
     let ray = camera.viewport_to_world(cam_tf, viewport_cursor).ok()?;
-    let denom = world_normal.dot(*ray.direction);
-    if denom.abs() < 1e-6 {
-        return None;
-    }
-    let t = (centroid_world - ray.origin).dot(world_normal) / denom;
-    if t < 0.0 {
-        return None;
-    }
-    let hit_world = ray.origin + *ray.direction * t;
+    let hit_world = jackdaw_geometry::ray_plane_intersection(
+        ray.origin,
+        *ray.direction,
+        centroid_world,
+        world_normal,
+    )?;
 
     // Brush-local hit: invert the brush's global transform on the world
     // hit. `transform_point` uses scale + rotation + translation, so

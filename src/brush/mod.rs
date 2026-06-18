@@ -7,7 +7,6 @@ mod hull;
 pub(crate) mod interaction;
 pub(crate) mod knife_mode;
 pub(crate) mod mesh;
-mod mesh_chunks;
 pub mod mirror_plane_ops;
 pub mod mirror_plane_overlay;
 pub mod preview;

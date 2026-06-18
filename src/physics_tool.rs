@@ -414,23 +414,24 @@ fn physics_tool_drag(
     if let Some(ref drag) = tool_state.drag {
         if mouse.pressed(MouseButton::Left) {
             // Project cursor ray onto the drag plane
-            let denom = ray.direction.dot(drag.plane_normal);
-            if denom.abs() > 1e-6 {
-                let t = (drag.plane_origin - ray.origin).dot(drag.plane_normal) / denom;
-                if t > 0.0 {
-                    let target = ray.origin + ray.direction * t + drag.grab_offset;
-                    // Compute movement delta from the primary dragged entity
-                    let delta = target - drag.drag_start_pos;
+            if let Some(hit) = jackdaw_geometry::ray_plane_intersection(
+                ray.origin,
+                *ray.direction,
+                drag.plane_origin,
+                drag.plane_normal,
+            ) {
+                let target = hit + drag.grab_offset;
+                // Compute movement delta from the primary dragged entity
+                let delta = target - drag.drag_start_pos;
 
-                    // Apply delta to ALL selected entities in the group
-                    for (&entity, &start_pos) in &drag.start_positions {
-                        if let Ok(mut tf) = transforms.get_mut(entity) {
-                            tf.translation = start_pos + delta;
-                        }
-                        if let Ok((mut lv, mut av)) = velocities.get_mut(entity) {
-                            lv.0 = Vec3::ZERO;
-                            av.0 = Vec3::ZERO;
-                        }
+                // Apply delta to ALL selected entities in the group
+                for (&entity, &start_pos) in &drag.start_positions {
+                    if let Ok(mut tf) = transforms.get_mut(entity) {
+                        tf.translation = start_pos + delta;
+                    }
+                    if let Ok((mut lv, mut av)) = velocities.get_mut(entity) {
+                        lv.0 = Vec3::ZERO;
+                        av.0 = Vec3::ZERO;
                     }
                 }
             }

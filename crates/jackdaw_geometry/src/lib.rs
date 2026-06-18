@@ -25,6 +25,9 @@ pub mod halfedge;
 pub mod newell;
 pub use newell::newell_normal;
 
+pub mod ray;
+pub use ray::ray_plane_intersection;
+
 pub mod triangulate;
 pub use triangulate::{
     triangulate_face_polygon, triangulate_polygon, triangulate_polygon_with_holes,
@@ -32,6 +35,9 @@ pub use triangulate::{
 
 pub mod topology_convexity;
 pub use topology_convexity::is_convex_topology;
+
+mod face_mesh;
+pub use face_mesh::{FaceRenderBuffers, build_face_render_buffers, resolve_evaluated_faces};
 
 pub const EPSILON: f32 = 1e-4;
 

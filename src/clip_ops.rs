@@ -20,7 +20,7 @@ use crate::draw_brush::{CreateBrushCommand, brush_data_from_entity};
 use crate::viewport::{ActiveViewport, MainViewportCamera, SceneViewport};
 use crate::viewport_util::window_to_viewport_cursor_for;
 use jackdaw_geometry::{
-    EPSILON, compute_face_tangent_axes,
+    compute_face_tangent_axes,
     halfedge::{
         HalfedgeMesh,
         ops::bisect_plane::{BisectKeep, bisect_plane},
@@ -159,13 +159,17 @@ pub(crate) fn clip_place_point(
             polygon.iter().map(|&vi| cache.vertices[vi]).sum::<Vec3>() / polygon.len() as f32;
         let world_centroid = brush_global.transform_point(face_centroid);
 
-        let denom = world_normal.dot(*ray.direction);
-        if denom.abs() < EPSILON {
+        let Some(hit) = jackdaw_geometry::ray_plane_intersection(
+            ray.origin,
+            *ray.direction,
+            world_centroid,
+            world_normal,
+        ) else {
             continue;
-        }
-        let t = (world_centroid - ray.origin).dot(world_normal) / denom;
-        if t > 0.0 && t < best_t {
-            let hit = ray.origin + *ray.direction * t;
+        };
+        // The ray direction is unit length, so the dot is the distance along it.
+        let t = (hit - ray.origin).dot(*ray.direction);
+        if t < best_t {
             let local_hit = brush_rot.inverse() * (hit - brush_trans);
             if point_inside_all_planes(local_hit, &brush.faces) {
                 best_t = t;

@@ -283,11 +283,19 @@ pub(super) fn reconcile_billboard_pools<FrontMarker, OccludedMarker, FrontFilter
     cam_pos: Vec3,
     desired: &[BillboardHandle],
     front_handles: &mut Query<
-        (Entity, &mut Transform, &mut MeshMaterial3d<StandardMaterial>),
+        (
+            Entity,
+            &mut Transform,
+            &mut MeshMaterial3d<StandardMaterial>,
+        ),
         FrontFilter,
     >,
     occluded_handles: &mut Query<
-        (Entity, &mut Transform, &mut MeshMaterial3d<OccludedHandleMaterial>),
+        (
+            Entity,
+            &mut Transform,
+            &mut MeshMaterial3d<OccludedHandleMaterial>,
+        ),
         OccludedFilter,
     >,
 ) where

@@ -7,10 +7,7 @@ use bevy::{
 };
 
 use crate::types::Brush;
-use jackdaw_geometry::{
-    compute_brush_geometry_from_planes, compute_face_tangent_axes, compute_face_uvs,
-    reflected_face_plane, triangulate_polygon,
-};
+use jackdaw_geometry::compute_brush_geometry_from_planes;
 
 pub(super) struct MeshRebuildPlugin;
 
@@ -28,11 +25,11 @@ impl Plugin for MeshRebuildPlugin {
     }
 }
 
-/// Runtime brush rebuild. Builds one mesh + child entity per face so each
-/// face can carry its own `StandardMaterial` (from `BrushFaceData.material`,
-/// typically a catalog `@Name` reference). Faces with an unset handle fall
-/// back to the embedded grid texture so brushes still render before any
-/// material is assigned.
+/// Runtime brush rebuild. Meshes a brush into one mesh + child entity per
+/// material chunk: faces are grouped by their `StandardMaterial` (from
+/// `BrushFaceData.material`, typically a catalog `@Name` reference). Faces with
+/// an unset handle fall back to the embedded grid texture so brushes still
+/// render before any material is assigned.
 ///
 /// Prefers `brush.topology` for face vertex positions (so concave / beveled
 /// brushes render with the exact rings authored by edit-mesh ops). Falls
@@ -150,51 +147,38 @@ fn build_brush_meshes(
         (eval.vertices, eval.face_polygons, eval.face_source)
     };
 
-    // Build the face-data slice to iterate: mirrored faces (entries past
-    // the identity prefix, where face_source[i] != i) clone their authored
-    // source entry but get their plane recomputed from the evaluated ring,
-    // since the authored normal is un-reflected and would wind the
-    // triangulation and shade the face inside out. Faces without authored
-    // data fall back to default.
-    let mirrored_faces: Option<Vec<crate::types::BrushFaceData>> = if face_source.is_empty() {
-        None
+    // Resolve the evaluated face data (mirrored polygons get their plane
+    // recomputed from the reflected ring) and mesh it into per-material chunks.
+    // `build_brush_chunks` is the shared editor / runtime build.
+    let evaluated_faces = if face_source.is_empty() {
+        brush.faces.clone()
     } else {
-        Some(
-            face_source
-                .iter()
-                .enumerate()
-                .map(|(evaluated_idx, &src)| {
-                    let mut face = brush.faces.get(src as usize).cloned().unwrap_or_default();
-                    if src as usize != evaluated_idx
-                        && let Some(plane) =
-                            reflected_face_plane(&vertices, &face_polygons[evaluated_idx])
-                    {
-                        face.plane = plane;
-                    }
-                    face
-                })
-                .collect(),
+        jackdaw_geometry::resolve_evaluated_faces(
+            &face_source,
+            &vertices,
+            &face_polygons,
+            &brush.faces,
         )
     };
-    let evaluated_faces = mirrored_faces.as_deref().unwrap_or(&brush.faces);
+    let chunks = crate::build_brush_chunks(&vertices, &face_polygons, &evaluated_faces);
 
     let mut fallback_material: Option<Handle<StandardMaterial>> = None;
+    for chunk in chunks {
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, chunk.positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, chunk.normals);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, chunk.uvs);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, chunk.tangents);
+        mesh.insert_indices(Indices::U32(chunk.indices));
+        let mesh_handle = meshes.add(mesh);
 
-    for (face_idx, face_data) in evaluated_faces.iter().enumerate() {
-        let indices = &face_polygons[face_idx];
-        if indices.len() < 3 {
-            continue;
-        }
-
-        let (mesh_handle, material) = build_face_mesh(
-            &vertices,
-            indices,
-            face_data,
-            meshes,
-            materials,
-            assets,
-            &mut fallback_material,
-        );
+        let material = if chunk.material != Handle::default() {
+            chunk.material.clone()
+        } else {
+            fallback_material
+                .get_or_insert_with(|| grid_material(materials, assets))
+                .clone()
+        };
 
         commands.spawn((
             crate::DerivedFaceMesh,
@@ -206,86 +190,33 @@ fn build_brush_meshes(
     }
 }
 
-/// Build one face's `Mesh` (positions/normals/uvs/tangents/indices) and resolve
-/// its material handle, falling back to the shared embedded grid texture when
-/// the face has no assigned material. `fallback_material` caches the grid
-/// material across the per-face loop so it is created at most once per rebuild.
-fn build_face_mesh(
-    vertices: &[Vec3],
-    indices: &[usize],
-    face_data: &crate::types::BrushFaceData,
-    meshes: &mut Assets<Mesh>,
+/// The shared grid material applied to faces with no assigned material, built
+/// from the embedded grid texture. Cached by the caller's `get_or_insert_with`
+/// so it is created at most once per rebuild.
+fn grid_material(
     materials: &mut Assets<StandardMaterial>,
     assets: &AssetServer,
-    fallback_material: &mut Option<Handle<StandardMaterial>>,
-) -> (Handle<Mesh>, Handle<StandardMaterial>) {
-    let positions: Vec<[f32; 3]> = indices.iter().map(|&vi| vertices[vi].to_array()).collect();
-    let normals: Vec<[f32; 3]> = vec![face_data.plane.normal.to_array(); indices.len()];
-    let (u_axis, v_axis) =
-        if face_data.uv_u_axis != Vec3::ZERO && face_data.uv_v_axis != Vec3::ZERO {
-            (face_data.uv_u_axis, face_data.uv_v_axis)
-        } else {
-            compute_face_tangent_axes(face_data.plane.normal)
-        };
-    let uvs = compute_face_uvs(
-        vertices,
-        indices,
-        u_axis,
-        v_axis,
-        face_data.uv_offset,
-        face_data.uv_scale,
-        face_data.uv_rotation,
+) -> Handle<StandardMaterial> {
+    let grid = load_embedded_asset!(
+        assets,
+        "../assets/jd_grid.png",
+        |settings: &mut ImageLoaderSettings| {
+            let sampler = settings.sampler.get_or_init_descriptor();
+            sampler.mag_filter = ImageFilterMode::Nearest;
+            sampler.min_filter = ImageFilterMode::Nearest;
+            sampler.mipmap_filter = ImageFilterMode::Nearest;
+            sampler.address_mode_u = ImageAddressMode::Repeat;
+            sampler.address_mode_v = ImageAddressMode::Repeat;
+            sampler.address_mode_w = ImageAddressMode::Repeat;
+        }
     );
-    let w = face_data.plane.normal.dot(u_axis.cross(v_axis)).signum();
-    let tangent = [u_axis.x, u_axis.y, u_axis.z, w];
-    let tangents: Vec<[f32; 4]> = vec![tangent; indices.len()];
-
-    // Concave / keyhole-bridged faces need a real triangulator; fan
-    // triangulation would fill holes and mis-tile L-shapes.
-    let face_verts_3d: Vec<Vec3> = indices.iter().map(|&vi| vertices[vi]).collect();
-    let identity_ring: Vec<u32> = (0..indices.len() as u32).collect();
-    let local_tris =
-        triangulate_polygon(&face_verts_3d, &identity_ring, face_data.plane.normal);
-    let flat_indices: Vec<u32> = local_tris.iter().flat_map(|t| t.iter().copied()).collect();
-
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, tangents);
-    mesh.insert_indices(Indices::U32(flat_indices));
-    let mesh_handle = meshes.add(mesh);
-
-    let material = if face_data.material != Handle::default() {
-        face_data.material.clone()
-    } else {
-        fallback_material
-            .get_or_insert_with(|| {
-                let grid = load_embedded_asset!(
-                    assets,
-                    "../assets/jd_grid.png",
-                    |settings: &mut ImageLoaderSettings| {
-                        let sampler = settings.sampler.get_or_init_descriptor();
-                        sampler.mag_filter = ImageFilterMode::Nearest;
-                        sampler.min_filter = ImageFilterMode::Nearest;
-                        sampler.mipmap_filter = ImageFilterMode::Nearest;
-                        sampler.address_mode_u = ImageAddressMode::Repeat;
-                        sampler.address_mode_v = ImageAddressMode::Repeat;
-                        sampler.address_mode_w = ImageAddressMode::Repeat;
-                    }
-                );
-                materials.add(StandardMaterial {
-                    base_color: Color::WHITE,
-                    base_color_texture: Some(grid),
-                    alpha_mode: AlphaMode::Opaque,
-                    uv_transform: Affine2::from_scale(Vec2::splat(2.0)),
-                    ..default()
-                })
-            })
-            .clone()
-    };
-
-    (mesh_handle, material)
+    materials.add(StandardMaterial {
+        base_color: Color::WHITE,
+        base_color_texture: Some(grid),
+        alpha_mode: AlphaMode::Opaque,
+        uv_transform: Affine2::from_scale(Vec2::splat(2.0)),
+        ..default()
+    })
 }
 
 #[cfg(test)]
@@ -297,7 +228,7 @@ mod tests {
     use bevy::pbr::StandardMaterial;
     use jackdaw_geometry::{
         BrushFaceData, BrushPlane, MeshMirror, Modifier, ModifierEntry, ModifierStack,
-        compute_brush_topology,
+        compute_brush_topology, compute_face_tangent_axes,
     };
 
     fn make_app() -> App {
@@ -323,43 +254,65 @@ mod tests {
             .count()
     }
 
+    /// Whether any chunk mesh of the brush has a vertex on the mirrored (-X)
+    /// side. With per-material chunking the whole brush is one mesh, so an
+    /// X-mirror is observed through the meshed extent rather than a child count.
+    fn has_mirrored_geometry(app: &mut App, brush_entity: Entity) -> bool {
+        let children: Vec<Entity> = app
+            .world()
+            .get::<Children>(brush_entity)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        let meshes = app.world().resource::<Assets<Mesh>>();
+        children.iter().any(|&child| {
+            let Some(mesh3d) = app.world().get::<Mesh3d>(child) else {
+                return false;
+            };
+            let Some(mesh) = meshes.get(&mesh3d.0) else {
+                return false;
+            };
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+                .and_then(|a| a.as_float3())
+                .is_some_and(|positions| positions.iter().any(|p| p[0] < -1e-5))
+        })
+    }
+
     #[test]
     fn changed_brush_remeshes_on_mutation() {
         let mut app = make_app();
 
-        // Spawn a cuboid brush with 6 faces; the insert frame runs the Changed
-        // system and meshes it.
+        // A uniform cuboid: all six faces share the default material, so the
+        // insert frame meshes it into a single material chunk.
         let brush_entity = app.world_mut().spawn(Brush::cuboid(0.5, 0.5, 0.5)).id();
         app.update();
 
         let count_after_insert = face_mesh_child_count(&mut app, brush_entity);
         assert_eq!(
-            count_after_insert, 6,
-            "cuboid must produce exactly 6 face-mesh children on insert"
+            count_after_insert, 1,
+            "a uniform cuboid meshes into one material chunk on insert"
         );
 
-        // Mutate the brush via get_mut. This does NOT re-insert, so the old
-        // insert observer (had it been left in place) would never fire.
-        // Changed<Brush> must detect the mutation and rebuild.
+        // Give one face a distinct material via get_mut. This does NOT re-insert,
+        // so Changed<Brush> must detect the mutation and rebuild; the face splits
+        // into its own chunk, and the old child must be cleared.
+        let distinct = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
         {
             let mut brush = app
                 .world_mut()
                 .get_mut::<Brush>(brush_entity)
                 .expect("brush entity exists");
-            // Extend to 7 faces by duplicating the last face.
-            let extra = brush.faces.last().cloned().expect("at least one face");
-            brush.faces.push(extra);
-            // Also keep topology in sync so the topology path is used.
-            let extra_poly = brush.topology.polygons.last().cloned().expect("poly");
-            brush.topology.polygons.push(extra_poly);
+            brush.faces[0].material = distinct;
         }
 
         app.update();
 
         let count_after_mutation = face_mesh_child_count(&mut app, brush_entity);
         assert_eq!(
-            count_after_mutation, 7,
-            "mutated brush must produce 7 face-mesh children; old children must be cleared"
+            count_after_mutation, 2,
+            "a distinct-material face splits into its own chunk; old children cleared"
         );
     }
 
@@ -370,10 +323,13 @@ mod tests {
         let brush_entity = app.world_mut().spawn(Brush::cuboid(0.5, 0.5, 0.5)).id();
         app.update();
 
-        // No duplicate children: the clear-then-rebuild pass on the insert
-        // frame must not produce double the expected face count.
+        // No double-spawn: the clear-then-rebuild pass on the insert frame must
+        // not produce two chunks. A uniform cuboid is exactly one material chunk.
         let count = face_mesh_child_count(&mut app, brush_entity);
-        assert_eq!(count, 6, "cuboid must produce exactly 6 children, not 12");
+        assert_eq!(
+            count, 1,
+            "a uniform cuboid meshes into exactly one chunk, not two"
+        );
     }
 
     /// A half-cube occupying x >= 0: five open faces plus the seam cap at
@@ -414,24 +370,22 @@ mod tests {
     }
 
     #[test]
-    fn mirror_x_half_cube_produces_eleven_face_meshes() {
+    fn modifier_stack_changes_remesh_the_game_brush() {
         let mut app = make_app();
 
-        // 5 authored + 5 mirrored + 1 seam = 11 face-mesh children.
+        // A half-cube (all verts at x >= 0) with a default X-mirror. The mirror
+        // adds a -X half, observed through the meshed extent.
         let brush_entity = app
             .world_mut()
             .spawn((half_cube_brush(), mirror_stack()))
             .id();
         app.update();
-
-        let count = face_mesh_child_count(&mut app, brush_entity);
-        assert_eq!(
-            count, 11,
-            "half-cube with a default X-mirror modifier must produce 11 face-mesh children"
+        assert!(
+            has_mirrored_geometry(&mut app, brush_entity),
+            "a default X-mirror must mesh a -X half"
         );
 
-        // Mutating the stack alone must re-mesh: Changed<ModifierStack>
-        // fires with no brush touch.
+        // Changed<ModifierStack> must re-mesh with no brush touch.
         {
             let mut stack = app
                 .world_mut()
@@ -441,11 +395,9 @@ mod tests {
             mirror.mirror_x = false;
         }
         app.update();
-
-        let count = face_mesh_child_count(&mut app, brush_entity);
-        assert_eq!(
-            count, 6,
-            "disabling the mirror axis must rebuild with authored faces only"
+        assert!(
+            !has_mirrored_geometry(&mut app, brush_entity),
+            "disabling the mirror axis drops the -X half"
         );
 
         {
@@ -457,20 +409,19 @@ mod tests {
             mirror.mirror_x = true;
         }
         app.update();
-
-        let count = face_mesh_child_count(&mut app, brush_entity);
-        assert_eq!(count, 11, "re-enabling the mirror axis must re-mesh");
+        assert!(
+            has_mirrored_geometry(&mut app, brush_entity),
+            "re-enabling the mirror axis restores the -X half"
+        );
 
         // Removal alone must drop the mirrored half; no brush touch.
         app.world_mut()
             .entity_mut(brush_entity)
             .remove::<ModifierStack>();
         app.update();
-
-        let count = face_mesh_child_count(&mut app, brush_entity);
-        assert_eq!(
-            count, 6,
-            "removing the modifier stack must rebuild with authored faces only"
+        assert!(
+            !has_mirrored_geometry(&mut app, brush_entity),
+            "removing the modifier stack drops the -X half"
         );
     }
 
@@ -486,11 +437,32 @@ mod tests {
         let brush_entity = app.world_mut().spawn((half_cube_brush(), stack)).id();
         app.update();
 
-        let count = face_mesh_child_count(&mut app, brush_entity);
-        assert_eq!(
-            count, 6,
-            "an in_game=false modifier must be skipped for the game mesh"
-        );
+        // The authored half-cube sits entirely at x >= 0. If the disabled mirror
+        // had been applied, the game mesh would carry mirrored geometry at x < 0,
+        // so no chunk vertex may have a negative x.
+        let children: Vec<Entity> = app
+            .world()
+            .get::<Children>(brush_entity)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        let meshes = app.world().resource::<Assets<Mesh>>();
+        let mut any = false;
+        for child in children {
+            let Some(mesh3d) = app.world().get::<Mesh3d>(child) else {
+                continue;
+            };
+            any = true;
+            let mesh = meshes.get(&mesh3d.0).expect("chunk mesh asset exists");
+            let positions = mesh
+                .attribute(Mesh::ATTRIBUTE_POSITION)
+                .and_then(|a| a.as_float3())
+                .expect("position attribute");
+            assert!(
+                positions.iter().all(|p| p[0] >= -1e-5),
+                "an in_game=false mirror must add no -X geometry"
+            );
+        }
+        assert!(any, "the brush must still mesh its authored faces");
     }
 
     #[test]
@@ -503,39 +475,50 @@ mod tests {
             .id();
         app.update();
 
-        // The mirrored copy of the +X cap is the only face whose verts all
-        // sit at x = -0.5. Its face data clones the authored entry, whose
-        // un-reflected +X normal would shade and wind it inside out; the
-        // build must recompute the plane from the evaluated ring.
+        // All faces share the default material, so they mesh into one chunk.
+        // The mirrored copy of the +X cap is the quad whose verts sit at
+        // x = -0.5; its face data clones the authored entry, whose un-reflected
+        // +X normal would shade and wind it inside out, so the build must
+        // recompute the plane from the reflected ring. No vertex on the x = -0.5
+        // plane may keep a +X normal, and the recomputed -X cap must be present.
         let children: Vec<Entity> = app
             .world()
             .get::<Children>(brush_entity)
             .map(|c| c.iter().collect())
             .unwrap_or_default();
         let meshes = app.world().resource::<Assets<Mesh>>();
-        let mut found = false;
+        let mut found_neg_x_cap = false;
+        let mut any = false;
         for child in children {
             let Some(mesh3d) = app.world().get::<Mesh3d>(child) else {
                 continue;
             };
-            let mesh = meshes.get(&mesh3d.0).expect("face mesh asset exists");
+            any = true;
+            let mesh = meshes.get(&mesh3d.0).expect("chunk mesh asset exists");
             let positions = mesh
                 .attribute(Mesh::ATTRIBUTE_POSITION)
                 .and_then(|a| a.as_float3())
                 .expect("position attribute");
-            if !positions.iter().all(|p| (p[0] + 0.5).abs() < 1e-5) {
-                continue;
-            }
-            found = true;
             let normals = mesh
                 .attribute(Mesh::ATTRIBUTE_NORMAL)
                 .and_then(|a| a.as_float3())
                 .expect("normal attribute");
-            assert!(
-                normals.iter().all(|n| n[0] < 0.0),
-                "mirrored -X cap normals must point toward -X, got {normals:?}"
-            );
+            for (p, n) in positions.iter().zip(normals.iter()) {
+                if (p[0] + 0.5).abs() < 1e-5 {
+                    assert!(
+                        n[0] <= 1e-5,
+                        "no vertex at x = -0.5 may keep the un-reflected +X normal, got {n:?}"
+                    );
+                    if n[0] < -0.5 {
+                        found_neg_x_cap = true;
+                    }
+                }
+            }
         }
-        assert!(found, "a face mesh with all verts at x = -0.5 must exist");
+        assert!(any, "the mirrored brush must mesh");
+        assert!(
+            found_neg_x_cap,
+            "the recomputed mirrored -X cap (normal -X) must be present"
+        );
     }
 }
