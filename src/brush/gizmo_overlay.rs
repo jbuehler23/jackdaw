@@ -80,11 +80,11 @@ enum HandleState {
 }
 
 /// Marks the front (visible) disc of a vertex handle.
-#[derive(Component)]
+#[derive(Component, Default)]
 pub(super) struct VertexHandle;
 
 /// Marks the occluded (behind-geometry) disc of a vertex handle.
-#[derive(Component)]
+#[derive(Component, Default)]
 pub(super) struct OccludedVertexHandle;
 
 /// Shared render assets: one disc mesh plus a full-opacity material and a
@@ -224,12 +224,14 @@ pub(super) fn update_vertex_handles(
         }
     }
 
-    let front_existing: Vec<Entity> = front_handles.iter().map(|(e, ..)| e).collect();
-    let occluded_existing: Vec<Entity> = occluded_handles.iter().map(|(e, ..)| e).collect();
-
     // Without a viewport camera there is nothing to billboard against; clear.
     let Ok((cam_global, projection, cam)) = camera.single() else {
-        for &entity in front_existing.iter().chain(&occluded_existing) {
+        let stale: Vec<Entity> = front_handles
+            .iter()
+            .map(|(e, ..)| e)
+            .chain(occluded_handles.iter().map(|(e, ..)| e))
+            .collect();
+        for entity in stale {
             commands.entity(entity).despawn();
         }
         return;
@@ -237,58 +239,116 @@ pub(super) fn update_vertex_handles(
     let cam_pos = cam_global.translation();
     let viewport_height = cam.logical_viewport_size().map_or(1080.0, |s| s.y);
 
-    for (i, (world_pos, state)) in desired.iter().enumerate() {
-        let to_cam = cam_pos - *world_pos;
+    let billboards: Vec<BillboardHandle> = desired
+        .iter()
+        .map(|(world_pos, state)| {
+            let dist = (cam_pos - *world_pos).length().max(1e-4);
+            let si = *state as usize;
+            BillboardHandle {
+                world: *world_pos,
+                radius: handle_world_radius(projection, dist, viewport_height),
+                front: assets.front[si].clone(),
+                occluded: assets.occluded[si].clone(),
+            }
+        })
+        .collect();
+
+    reconcile_billboard_pools::<VertexHandle, OccludedVertexHandle, _, _>(
+        &mut commands,
+        &assets.disc,
+        cam_pos,
+        &billboards,
+        &mut front_handles,
+        &mut occluded_handles,
+    );
+}
+
+/// One billboarded handle to reconcile: its world position, billboard radius,
+/// and the resolved front / occluded material handles.
+pub(super) struct BillboardHandle {
+    pub world: Vec3,
+    pub radius: f32,
+    pub front: Handle<StandardMaterial>,
+    pub occluded: Handle<OccludedHandleMaterial>,
+}
+
+/// Reconcile two pools of billboarded disc handles against `desired`: a
+/// depth-tested front pass nudged toward the camera, and an inverted-depth
+/// occluded pass on the point. Updates the i-th existing handle in place,
+/// spawns when a pool is short, and despawns the surplus. `FrontMarker` /
+/// `OccludedMarker` tag the spawned entities so the caller's queries find them.
+pub(super) fn reconcile_billboard_pools<FrontMarker, OccludedMarker, FrontFilter, OccludedFilter>(
+    commands: &mut Commands,
+    disc: &Handle<Mesh>,
+    cam_pos: Vec3,
+    desired: &[BillboardHandle],
+    front_handles: &mut Query<
+        (Entity, &mut Transform, &mut MeshMaterial3d<StandardMaterial>),
+        FrontFilter,
+    >,
+    occluded_handles: &mut Query<
+        (Entity, &mut Transform, &mut MeshMaterial3d<OccludedHandleMaterial>),
+        OccludedFilter,
+    >,
+) where
+    FrontMarker: Component + Default,
+    OccludedMarker: Component + Default,
+    FrontFilter: bevy::ecs::query::QueryFilter,
+    OccludedFilter: bevy::ecs::query::QueryFilter,
+{
+    let front_existing: Vec<Entity> = front_handles.iter().map(|(e, ..)| e).collect();
+    let occluded_existing: Vec<Entity> = occluded_handles.iter().map(|(e, ..)| e).collect();
+
+    for (i, handle) in desired.iter().enumerate() {
+        let to_cam = cam_pos - handle.world;
         let dist = to_cam.length().max(1e-4);
         let dir = to_cam / dist;
-        let radius = handle_world_radius(projection, dist, viewport_height);
         let rotation = Quat::from_rotation_arc(Vec3::Z, dir);
-        let si = *state as usize;
 
-        // Front pass: nudge toward the camera so an on-surface vertex wins
-        // the depth test instead of z-fighting the face it sits on.
+        // Front pass: nudged toward the camera so a handle on a face wins the
+        // depth test instead of z-fighting it.
         let front_t = Transform {
-            translation: *world_pos + dir * radius * 0.5,
+            translation: handle.world + dir * handle.radius * 0.5,
             rotation,
-            scale: Vec3::splat(radius),
+            scale: Vec3::splat(handle.radius),
         };
         if let Some(&entity) = front_existing.get(i) {
             if let Ok((_, mut t, mut m)) = front_handles.get_mut(entity) {
                 *t = front_t;
-                if m.0 != assets.front[si] {
-                    m.0 = assets.front[si].clone();
+                if m.0 != handle.front {
+                    m.0 = handle.front.clone();
                 }
             }
         } else {
             commands.spawn((
-                VertexHandle,
+                FrontMarker::default(),
                 crate::EditorEntity,
-                Mesh3d(assets.disc.clone()),
-                MeshMaterial3d::<StandardMaterial>(assets.front[si].clone()),
+                Mesh3d(disc.clone()),
+                MeshMaterial3d::<StandardMaterial>(handle.front.clone()),
                 front_t,
             ));
         }
 
-        // Occluded pass: sits on the vertex; its inverted depth test only
+        // Occluded pass: sits on the point; its inverted depth test only
         // rasterizes where the disc is behind other geometry.
         let occ_t = Transform {
-            translation: *world_pos,
+            translation: handle.world,
             rotation,
-            scale: Vec3::splat(radius),
+            scale: Vec3::splat(handle.radius),
         };
         if let Some(&entity) = occluded_existing.get(i) {
             if let Ok((_, mut t, mut m)) = occluded_handles.get_mut(entity) {
                 *t = occ_t;
-                if m.0 != assets.occluded[si] {
-                    m.0 = assets.occluded[si].clone();
+                if m.0 != handle.occluded {
+                    m.0 = handle.occluded.clone();
                 }
             }
         } else {
             commands.spawn((
-                OccludedVertexHandle,
+                OccludedMarker::default(),
                 crate::EditorEntity,
-                Mesh3d(assets.disc.clone()),
-                MeshMaterial3d::<OccludedHandleMaterial>(assets.occluded[si].clone()),
+                Mesh3d(disc.clone()),
+                MeshMaterial3d::<OccludedHandleMaterial>(handle.occluded.clone()),
                 occ_t,
             ));
         }

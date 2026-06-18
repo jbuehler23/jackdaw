@@ -17,6 +17,7 @@ pub mod loop_cut;
 pub mod make_edge_face;
 pub mod merge_by_distance;
 pub mod mirror_ops;
+pub mod modal_edit;
 pub mod reconvexify;
 pub mod select_invert;
 pub mod select_less;

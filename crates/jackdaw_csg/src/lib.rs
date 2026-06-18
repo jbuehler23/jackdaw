@@ -39,11 +39,10 @@
 //! See `project_remote_game_integration.md` and the concave-by-default
 //! audit doc in MEMORY.md for the broader rollout plan.
 
-use bevy::math::{Quat, Vec2, Vec3};
-use bevy::prelude::{Handle, StandardMaterial};
+use glam::{Quat, Vec2, Vec3};
 use jackdaw_geometry::{
-    BrushFaceData, BrushPlane, BrushTopology, EPSILON, compute_face_tangent_axes, newell_normal,
-    triangulate_face_polygon, triangulate_polygon_with_holes,
+    BrushFaceData, BrushPlane, BrushTopology, EPSILON, FaceMaterial, compute_face_tangent_axes,
+    newell_normal, triangulate_face_polygon, triangulate_polygon_with_holes,
 };
 use manifold_csg::manifold::Manifold;
 
@@ -88,7 +87,10 @@ impl std::error::Error for CsgError {}
 #[derive(Clone, Debug)]
 struct FaceSlot {
     plane: BrushPlane,
-    material: Handle<StandardMaterial>,
+    /// Same type as `BrushFaceData.material` (a Bevy handle under `render`, a
+    /// material id string in the core build); referencing the shared alias keeps
+    /// the two crates in agreement so the material round-trips through the boolean.
+    material: FaceMaterial,
     uv_offset: Vec2,
     uv_scale: Vec2,
     uv_rotation: f32,

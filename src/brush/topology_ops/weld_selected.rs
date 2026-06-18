@@ -5,7 +5,7 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::halfedge::HalfedgeMesh;
+use jackdaw_geometry::halfedge::apply_topology_edit;
 use jackdaw_geometry::halfedge::ops::remove_doubles::remove_doubles;
 use jackdaw_jsn::Brush;
 
@@ -68,66 +68,18 @@ pub(crate) fn brush_weld_selected(
         }
     }
 
-    // Run remove_doubles to weld coincident verts into one. The tiny threshold
-    // ensures only verts we just moved together are merged, not distant ones.
-    let _ = remove_doubles(&mut halfedge.mesh, 0.0001);
+    // Weld the coincident verts and reconcile. The tiny threshold merges only
+    // the verts just moved together, not distant ones.
+    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    apply_topology_edit(
+        &mut brush.faces,
+        &mut brush.topology,
+        &mut halfedge.0,
+        |mesh| {
+            let _ = remove_doubles(mesh, 0.0001);
+        },
+    );
 
-    // Re-cache all face normals.
-    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
-    for fk in face_keys_all {
-        let face = &halfedge.mesh.faces[fk];
-        let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
-        let mut cur = face.loop_first;
-        for _ in 0..face.loop_count {
-            let lp = &halfedge.mesh.loops[cur];
-            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
-            cur = lp.next;
-        }
-        let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        halfedge.mesh.faces[fk].normal_cache = new_normal;
-    }
-
-    // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
-    let new_topology = halfedge.mesh.flatten_to_topology();
-    let mut brush = brushes.get_mut(brush_entity)?;
-
-    let new_face_count = new_topology.polygons.len();
-    if brush.faces.len() > new_face_count {
-        brush.faces.truncate(new_face_count);
-    }
-    while brush.faces.len() < new_face_count {
-        let template = brush.faces.last().cloned().unwrap_or_default();
-        brush.faces.push(template);
-    }
-
-    let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
-    for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
-        if face_idx < new_topology.polygons.len() {
-            let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
-                .vert as usize;
-            let distance = positions[v0_idx].dot(normal);
-            face_data.plane.normal = normal;
-            face_data.plane.distance = distance;
-        }
-    }
-    brush.topology = new_topology;
-
-    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
-    let new_mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
-    let new_vert_keys: Vec<_> = new_mesh.verts.keys().collect();
-    let mut new_face_keys = vec![Default::default(); new_mesh.faces.len()];
-    for (k, f) in new_mesh.faces.iter() {
-        let slot = f.material_idx as usize;
-        if slot < new_face_keys.len() {
-            new_face_keys[slot] = k;
-        }
-    }
-    halfedge.mesh = new_mesh;
-    halfedge.vert_keys = new_vert_keys;
-    halfedge.face_keys = new_face_keys;
-
-    // Push undo entry.
     OperatorResult::Finished
 }
 

@@ -14,7 +14,7 @@ use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_geometry::halfedge::ops::delete_elements::{
     DeleteResult, delete_edges, delete_faces, delete_verts,
 };
-use jackdaw_geometry::halfedge::{EdgeKey, FaceKey, HalfedgeMesh, VertKey};
+use jackdaw_geometry::halfedge::{EdgeKey, FaceKey, HalfedgeMesh, VertKey, apply_topology_edit};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{
@@ -113,8 +113,9 @@ pub(crate) fn brush_delete_element(
 
         // Guard: a vertex / edge delete must leave at least one polygon so the
         // brush is never reduced to a loose vertex cloud. A face delete may go
-        // down to the last face.
-        let result = match mode {
+        // down to the last face. The gate runs the delete on a clone; the live
+        // delete runs inside the reconcile closure below.
+        let edit: Box<dyn FnOnce(&mut HalfedgeMesh) -> DeleteResult> = match mode {
             BrushEditMode::Vertex => {
                 let keys: Vec<VertKey> = sub_verts
                     .iter()
@@ -127,7 +128,7 @@ pub(crate) fn brush_delete_element(
                 if preview == 0 {
                     continue;
                 }
-                delete_verts(&mut halfedge.mesh, &keys)
+                Box::new(move |mesh| delete_verts(mesh, &keys))
             }
             BrushEditMode::Edge => {
                 let keys: Vec<EdgeKey> = sub_edges
@@ -141,7 +142,7 @@ pub(crate) fn brush_delete_element(
                 if preview == 0 {
                     continue;
                 }
-                delete_edges(&mut halfedge.mesh, &keys)
+                Box::new(move |mesh| delete_edges(mesh, &keys))
             }
             BrushEditMode::Face => {
                 let keys: Vec<FaceKey> = sub_faces
@@ -151,12 +152,12 @@ pub(crate) fn brush_delete_element(
                 if keys.is_empty() {
                     continue;
                 }
-                delete_faces(&mut halfedge.mesh, &keys)
+                Box::new(move |mesh| delete_faces(mesh, &keys))
             }
             BrushEditMode::Clip | BrushEditMode::Knife => continue,
         };
 
-        apply_delete_to_brush(&mut brush, &mut halfedge, &result);
+        apply_delete_to_brush(&mut brush, &mut halfedge, edit);
 
         if let Some(sub) = brush_selection.brushes.get_mut(&entity) {
             sub.vertices.clear();
@@ -198,31 +199,19 @@ fn edge_key_between(halfedge: &BrushHalfedge, a: usize, b: usize) -> Option<Edge
         .map(|(k, _)| k)
 }
 
-/// After a destructive delete on `halfedge.mesh`, flatten back to topology,
-/// rebuild `brush.faces` parallel to the surviving polygons (re-indexed through
-/// `surviving_faces` so each face keeps its material + plane source), refresh
-/// per-face planes, set `brush.topology`, and re-lift the live half-edge mesh so
-/// `vert_keys` / `face_keys` stay consistent for the next edit.
-fn apply_delete_to_brush(brush: &mut Brush, halfedge: &mut BrushHalfedge, result: &DeleteResult) {
-    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
-    for fk in face_keys_all {
-        let face = &halfedge.mesh.faces[fk];
-        let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
-        let mut cur = face.loop_first;
-        for _ in 0..face.loop_count {
-            let lp = &halfedge.mesh.loops[cur];
-            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
-            cur = lp.next;
-        }
-        let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        halfedge.mesh.faces[fk].normal_cache = new_normal;
-    }
-
-    let new_topology = halfedge.mesh.flatten_to_topology();
-
-    // Rebuild brush.faces parallel to new_topology.polygons by re-indexing the
-    // old per-face data through the surviving original polygon indices.
+/// Run a destructive delete and reconcile the brush. Applies `edit` through the
+/// topology seam (recache normals, flatten, recompute planes, re-lift binding),
+/// then rebuilds `brush.faces` parallel to the surviving polygons by re-indexing
+/// the old per-face data through `surviving_faces` so each face keeps its
+/// material + uv source rather than being default-filled.
+fn apply_delete_to_brush(
+    brush: &mut Brush,
+    halfedge: &mut BrushHalfedge,
+    edit: impl FnOnce(&mut HalfedgeMesh) -> DeleteResult,
+) {
     let old_faces = brush.faces.clone();
+    let result = apply_topology_edit(&mut brush.faces, &mut brush.topology, &mut halfedge.0, edit);
+
     let mut new_faces: Vec<jackdaw_jsn::BrushFaceData> =
         Vec::with_capacity(result.surviving_faces.len());
     for &old_idx in &result.surviving_faces {
@@ -233,32 +222,7 @@ fn apply_delete_to_brush(brush: &mut Brush, halfedge: &mut BrushHalfedge, result
         new_faces.push(old);
     }
     brush.faces = new_faces;
-
-    let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
-    for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
-        if face_idx < new_topology.polygons.len() {
-            let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
-                .vert as usize;
-            let distance = positions[v0_idx].dot(normal);
-            face_data.plane.normal = normal;
-            face_data.plane.distance = distance;
-        }
-    }
-    brush.topology = new_topology;
-
-    let new_mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
-    let new_vert_keys: Vec<_> = new_mesh.verts.keys().collect();
-    let mut new_face_keys = vec![FaceKey::default(); new_mesh.faces.len()];
-    for (k, f) in new_mesh.faces.iter() {
-        let slot = f.material_idx as usize;
-        if slot < new_face_keys.len() {
-            new_face_keys[slot] = k;
-        }
-    }
-    halfedge.mesh = new_mesh;
-    halfedge.vert_keys = new_vert_keys;
-    halfedge.face_keys = new_face_keys;
+    brush.topology.recompute_face_planes(&mut brush.faces);
 }
 
 #[operator(

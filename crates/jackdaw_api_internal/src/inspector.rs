@@ -131,17 +131,13 @@ pub fn seed_default_categories(r: &mut InspectorRegistry) {
         ("jackdaw_jsn::types::Brush", "mesh"),
         ("jackdaw_jsn::Brush", "mesh"),
         // Modifier stack lives in the Modifiers tab.
-        // Confirmed path: jackdaw_geometry::modifiers::ModifierStack
         ("jackdaw_geometry::modifiers::ModifierStack", "modifiers"),
         // Standard material component lives in the Material tab.
-        // Confirmed path from scene_io.rs line 58.
         (
             "bevy_pbr::mesh_material::MeshMaterial3d<bevy_pbr::pbr_material::StandardMaterial>",
             "material",
         ),
-        // Physics components. AvianCollider path confirmed from
-        // jackdaw_avian_integration::AvianCollider (no custom type_path attr).
-        // RigidBody path confirmed from physics_display.rs line 13.
+        // Physics components.
         ("jackdaw_avian_integration::AvianCollider", "physics"),
         ("avian3d::dynamics::rigid_body::RigidBody", "physics"),
     ] {

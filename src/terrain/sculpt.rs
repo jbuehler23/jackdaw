@@ -259,7 +259,7 @@ fn cancel_terrain_sculpt(
 
 fn handle_brush_resize_scroll(
     keyboard: Res<ButtonInput<KeyCode>>,
-    nav_scroll: crate::input_contexts::NavScrollInputs,
+    nav_scroll: crate::modal_inputs::NavScrollInputs,
     edit_mode: Res<TerrainEditMode>,
     mut brush_settings: ResMut<TerrainBrushSettings>,
 ) {

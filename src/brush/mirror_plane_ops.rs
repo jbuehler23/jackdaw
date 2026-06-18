@@ -247,7 +247,7 @@ pub struct MirrorPlaneDragState {
 /// [`crate::brush_drag_ops::vertex_drag_invoke_trigger`]: the operator captures
 /// its start state on the first invoke and runs modal from there.
 pub(crate) fn mirror_plane_drag_invoke_trigger(
-    pointer: crate::input_contexts::PointerInputs,
+    pointer: crate::modal_inputs::PointerInputs,
     hover: Res<MirrorPlaneHover>,
     drag_state: Res<MirrorPlaneDragState>,
     keybind_focus: KeybindFocus,

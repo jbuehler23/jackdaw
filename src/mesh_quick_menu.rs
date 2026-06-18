@@ -97,8 +97,7 @@ pub fn items_for_submode(menu: &MeshQuickMenu, mode: BrushEditMode) -> Vec<Radia
 /// running. Bound to C, which is context-aware: in a brush edit sub-mode it
 /// opens this menu, while in object mode it stays the cut-brush gesture (the
 /// cut handler yields in edit mode). It avoids the axis-constraint keys (X/Y/Z)
-/// so the hold never arms a constrained transform. The key is fixed here until
-/// the keymap-preset rebinding lands.
+/// so the hold never arms a constrained transform.
 fn mesh_quick_menu_input(
     keys: Res<ButtonInput<KeyCode>>,
     edit_mode: Res<EditMode>,

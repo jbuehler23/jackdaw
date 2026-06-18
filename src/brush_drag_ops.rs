@@ -1,9 +1,7 @@
 //! Modal operators for the per-element brush drags: face / vertex /
-//! edge. Each one wraps the corresponding interaction state machine
-//! that used to run as an unconditional system in
-//! `brush::interaction`. The drag math itself is unchanged; this file
-//! owns the modal lifecycle (trigger on click, per-frame invoke,
-//! release commit, Escape cancel) and Right-click cancel.
+//! edge. This file owns the modal lifecycle (trigger on click,
+//! per-frame invoke, release commit, Escape cancel) and Right-click
+//! cancel.
 //!
 //! Constraint cycling (X / Y / Z) for vertex / edge drag is handled
 //! inline in the operator body. Escape goes through the global
@@ -127,7 +125,7 @@ pub(crate) fn cursor_over_brush_face(
 /// of: LMB while in face-edit mode, or Shift / Alt + LMB in object
 /// mode (auto-enters face-edit as a "quick action").
 pub(crate) fn face_drag_invoke_trigger(
-    pointer: crate::input_contexts::PointerInputs,
+    pointer: crate::modal_inputs::PointerInputs,
     keyboard: Res<ButtonInput<KeyCode>>,
     edit_mode: Res<EditMode>,
     drag_state: Res<BrushDragState>,
@@ -554,19 +552,7 @@ pub fn brush_face_drag(
                     }
                     // Sync brush.faces[i].plane and brush.topology.
                     let new_topology = halfedge.mesh.flatten_to_topology();
-                    let positions: Vec<bevy::math::Vec3> =
-                        new_topology.vertices.iter().map(|v| v.position).collect();
-                    for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
-                        if face_idx < new_topology.polygons.len() {
-                            let normal = new_topology.face_normal_with(&positions, face_idx);
-                            let v0_idx = new_topology.loops
-                                [new_topology.polygons[face_idx].loop_start as usize]
-                                .vert as usize;
-                            let distance = positions[v0_idx].dot(normal);
-                            face_data.plane.normal = normal;
-                            face_data.plane.distance = distance;
-                        }
-                    }
+                    new_topology.recompute_face_planes(&mut brush.faces);
                     brush.topology = new_topology;
                 } else {
                     // Legacy convex path: just shift plane.distance.
@@ -779,7 +765,7 @@ fn spawn_extruded_brush(
 // =====================================================================
 
 pub(crate) fn vertex_drag_invoke_trigger(
-    pointer: crate::input_contexts::PointerInputs,
+    pointer: crate::modal_inputs::PointerInputs,
     edit_mode: Res<EditMode>,
     drag_state: Res<VertexDragState>,
     radial: Res<jackdaw_widgets::RadialMenuState>,
@@ -832,7 +818,7 @@ pub fn brush_vertex_drag(
     _: In<OperatorParameters>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    modal_inputs: crate::input_contexts::ModalInputs,
+    modal_inputs: crate::modal_inputs::ModalInputs,
     vp: ViewportCursor,
     brush_transforms: Query<&GlobalTransform>,
     mut brush_selection: ResMut<BrushSelection>,
@@ -1145,7 +1131,7 @@ fn toggle_constraint(
 // =====================================================================
 
 pub(crate) fn edge_drag_invoke_trigger(
-    pointer: crate::input_contexts::PointerInputs,
+    pointer: crate::modal_inputs::PointerInputs,
     edit_mode: Res<EditMode>,
     drag_state: Res<EdgeDragState>,
     radial: Res<jackdaw_widgets::RadialMenuState>,
@@ -1198,7 +1184,7 @@ pub fn brush_edge_drag(
     _: In<OperatorParameters>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    modal_inputs: crate::input_contexts::ModalInputs,
+    modal_inputs: crate::modal_inputs::ModalInputs,
     vp: ViewportCursor,
     brush_transforms: Query<&GlobalTransform>,
     mut brush_selection: ResMut<BrushSelection>,
@@ -1718,17 +1704,7 @@ pub(crate) fn apply_vertex_deltas(
             halfedge.mesh.faces[fk].normal_cache = new_normal;
         }
         let new_topology = halfedge.mesh.flatten_to_topology();
-        let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
-        for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
-            if face_idx < new_topology.polygons.len() {
-                let normal = new_topology.face_normal_with(&positions, face_idx);
-                let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
-                    .vert as usize;
-                let distance = positions[v0_idx].dot(normal);
-                face_data.plane.normal = normal;
-                face_data.plane.distance = distance;
-            }
-        }
+        new_topology.recompute_face_planes(&mut brush.faces);
         brush.topology = new_topology;
     } else {
         let mut new_verts = all_vertices.to_vec();
@@ -1748,24 +1724,9 @@ pub(crate) fn apply_vertex_deltas(
 #[cfg(test)]
 mod apply_vertex_deltas_tests {
     use super::*;
-    use jackdaw_geometry::halfedge::HalfedgeMesh;
 
     fn make_halfedge(brush: &Brush) -> crate::brush::BrushHalfedge {
-        let mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
-        let vert_keys: Vec<_> = mesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
-            vec![Default::default(); mesh.faces.len()];
-        for (k, f) in mesh.faces.iter() {
-            let slot = f.material_idx as usize;
-            if slot < face_keys.len() {
-                face_keys[slot] = k;
-            }
-        }
-        crate::brush::BrushHalfedge {
-            mesh,
-            vert_keys,
-            face_keys,
-        }
+        crate::brush::BrushHalfedge::from_topology(&brush.topology)
     }
 
     #[test]

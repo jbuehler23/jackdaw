@@ -198,12 +198,17 @@ pub fn open_radial_menu(commands: &mut Commands, anchor: Vec2, items: Vec<Radial
                 highlighted: None,
             });
 
-        if let Some(prev) = prev
-            && let Ok(e) = world.get_entity_mut(prev.root)
-        {
-            e.despawn();
+        if let Some(prev) = prev {
+            despawn_root(world, prev.root);
         }
     });
+}
+
+/// Despawn a radial-menu root entity if it still exists.
+fn despawn_root(world: &mut World, root: Entity) {
+    if let Ok(e) = world.get_entity_mut(root) {
+        e.despawn();
+    }
 }
 
 /// Confirm the currently-highlighted wedge. Fires `RadialMenuSelect` if a
@@ -216,9 +221,7 @@ pub fn confirm_radial_menu(world: &mut World) {
         let action = open.items[i].action.clone();
         world.trigger(RadialMenuSelect { action });
     }
-    if let Ok(e) = world.get_entity_mut(open.root) {
-        e.despawn();
-    }
+    despawn_root(world, open.root);
 }
 
 /// Dismiss the currently-open menu without firing any selection event.
@@ -226,9 +229,7 @@ pub fn cancel_radial_menu(world: &mut World) {
     let Some(open) = world.resource_mut::<RadialMenuState>().open.take() else {
         return;
     };
-    if let Ok(e) = world.get_entity_mut(open.root) {
-        e.despawn();
-    }
+    despawn_root(world, open.root);
 }
 
 /// Per-frame system: update `RadialMenuOpen::highlighted` from cursor position

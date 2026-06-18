@@ -7,40 +7,20 @@
 //! directly).
 
 use bevy::prelude::*;
-use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{BrushEditMode, BrushSelection, EditMode};
 
-/// In-memory `HalfedgeMesh` edit form for the brush currently in V/E/F edit mode.
-#[derive(Component)]
-pub struct BrushHalfedge {
-    pub mesh: HalfedgeMesh,
-    /// Parallel to `BrushTopology::vertices` index at lift time.
-    pub vert_keys: Vec<VertKey>,
-    /// Parallel to `BrushTopology::polygons` index at lift time.
-    pub face_keys: Vec<FaceKey>,
-}
+/// In-memory `HalfedgeBinding` edit form for the brush currently in V/E/F edit
+/// mode. A thin component wrapper over the kernel binding (see ADR 0001). Field
+/// accesses (`mesh`, `vert_keys`, `face_keys`) resolve through `Deref`.
+#[derive(Component, Deref, DerefMut, Clone)]
+pub struct BrushHalfedge(pub jackdaw_geometry::halfedge::HalfedgeBinding);
 
 impl BrushHalfedge {
-    /// Lift a brush topology into an edit-time half-edge mesh, keeping
-    /// `vert_keys` parallel to `topology.vertices` and `face_keys` indexed by
-    /// `material_idx` so callers can map topology indices to mesh keys.
+    /// Lift a brush topology into an edit-time binding.
     pub fn from_topology(topology: &jackdaw_jsn::BrushTopology) -> Self {
-        let mesh = HalfedgeMesh::lift_from_topology(topology);
-        let vert_keys: Vec<VertKey> = mesh.verts.keys().collect();
-        let mut face_keys: Vec<FaceKey> = vec![FaceKey::default(); mesh.faces.len()];
-        for (k, f) in mesh.faces.iter() {
-            let slot = f.material_idx as usize;
-            if slot < face_keys.len() {
-                face_keys[slot] = k;
-            }
-        }
-        Self {
-            mesh,
-            vert_keys,
-            face_keys,
-        }
+        Self(jackdaw_geometry::halfedge::HalfedgeBinding::lift_from_topology(topology))
     }
 }
 

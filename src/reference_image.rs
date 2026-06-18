@@ -214,30 +214,14 @@ pub fn maintain_reference_images(
             None => true,
         };
         if stale || material.is_none() {
-            // Path changed or render components are absent: full reload.
-            let texture = if reference.path.is_empty() {
-                // Once per change, not per frame: the runtime insert
-                // below stops this branch from re-running.
-                warn!("Reference image {entity} has no image path; showing placeholder");
-                None
-            } else {
-                let asset_path = crate::entity_ops::to_asset_path(&reference.path);
-                Some(asset_server.load::<Image>(asset_path))
-            };
-            let new_material = reference_material(&reference, texture.clone());
-            match material.and_then(|handle| materials.get_mut(&handle.0)) {
-                Some(existing) => *existing = new_material,
-                None => {
-                    let handle = materials.add(new_material);
-                    commands.entity(entity).insert(MeshMaterial3d(handle));
-                }
-            }
-            commands.entity(entity).insert(ReferenceImageRuntime {
-                loaded_path: reference.path.clone(),
-                image: texture,
-                aspect_applied: false,
-                warned: false,
-            });
+            reload_reference_render(
+                &mut commands,
+                &asset_server,
+                &mut materials,
+                entity,
+                &reference,
+                material,
+            );
             continue;
         }
 
@@ -257,34 +241,95 @@ pub fn maintain_reference_images(
         let Some(mut runtime) = runtime else {
             continue;
         };
-        let Some(image_handle) = runtime.image.clone() else {
-            continue;
-        };
-        if runtime.aspect_applied {
-            continue;
+        poll_reference_aspect(
+            &asset_server,
+            &images,
+            &mut materials,
+            entity,
+            &reference,
+            &mut runtime,
+            material,
+            &mut transform,
+        );
+    }
+}
+
+/// Full reload of a reference image's render: (re)load the texture from the
+/// authored path (or warn for an empty path), rebuild or insert the material,
+/// and reset the runtime tracking so the aspect-ratio poll re-runs.
+fn reload_reference_render(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    materials: &mut Assets<StandardMaterial>,
+    entity: Entity,
+    reference: &ReferenceImage,
+    material: Option<&MeshMaterial3d<StandardMaterial>>,
+) {
+    let texture = if reference.path.is_empty() {
+        // Once per change, not per frame: the runtime insert
+        // below stops this branch from re-running.
+        warn!("Reference image {entity} has no image path; showing placeholder");
+        None
+    } else {
+        let asset_path = crate::entity_ops::to_asset_path(&reference.path);
+        Some(asset_server.load::<Image>(asset_path))
+    };
+    let new_material = reference_material(reference, texture.clone());
+    match material.and_then(|handle| materials.get_mut(&handle.0)) {
+        Some(existing) => *existing = new_material,
+        None => {
+            let handle = materials.add(new_material);
+            commands.entity(entity).insert(MeshMaterial3d(handle));
         }
-        if let Some(image) = images.get(&image_handle) {
-            let size = image.size().as_vec2();
-            if size.y > 0.0 {
-                let aspect = size.x / size.y;
-                transform.scale.x = transform.scale.y * aspect;
-            }
-            runtime.aspect_applied = true;
-        } else if !runtime.warned
-            && matches!(
-                asset_server.get_load_state(image_handle.id()),
-                Some(LoadState::Failed(_))
-            )
-        {
-            warn!(
-                "Reference image {entity}: failed to load '{}'; showing placeholder",
-                runtime.loaded_path
-            );
-            runtime.warned = true;
-            runtime.image = None;
-            if let Some(existing) = material.and_then(|handle| materials.get_mut(&handle.0)) {
-                *existing = reference_material(&reference, None);
-            }
+    }
+    commands.entity(entity).insert(ReferenceImageRuntime {
+        loaded_path: reference.path.clone(),
+        image: texture,
+        aspect_applied: false,
+        warned: false,
+    });
+}
+
+/// Poll the pending texture for a reference image: apply the aspect ratio to
+/// `Transform::scale` once it decodes, or fall back to the placeholder material
+/// if the load failed.
+fn poll_reference_aspect(
+    asset_server: &AssetServer,
+    images: &Assets<Image>,
+    materials: &mut Assets<StandardMaterial>,
+    entity: Entity,
+    reference: &ReferenceImage,
+    runtime: &mut ReferenceImageRuntime,
+    material: Option<&MeshMaterial3d<StandardMaterial>>,
+    transform: &mut Transform,
+) {
+    let Some(image_handle) = runtime.image.clone() else {
+        return;
+    };
+    if runtime.aspect_applied {
+        return;
+    }
+    if let Some(image) = images.get(&image_handle) {
+        let size = image.size().as_vec2();
+        if size.y > 0.0 {
+            let aspect = size.x / size.y;
+            transform.scale.x = transform.scale.y * aspect;
+        }
+        runtime.aspect_applied = true;
+    } else if !runtime.warned
+        && matches!(
+            asset_server.get_load_state(image_handle.id()),
+            Some(LoadState::Failed(_))
+        )
+    {
+        warn!(
+            "Reference image {entity}: failed to load '{}'; showing placeholder",
+            runtime.loaded_path
+        );
+        runtime.warned = true;
+        runtime.image = None;
+        if let Some(existing) = material.and_then(|handle| materials.get_mut(&handle.0)) {
+            *existing = reference_material(reference, None);
         }
     }
 }

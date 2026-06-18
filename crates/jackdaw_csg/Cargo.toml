@@ -7,19 +7,28 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-bevy.workspace = true
-jackdaw_geometry.workspace = true
+glam = { version = "0.30", features = ["serde"] }
+jackdaw_geometry = { path = "../jackdaw_geometry", default-features = false }
 # manifold-csg pulls in manifold3d (C++ via cmake). Build prereqs:
 # cmake, a C++ compiler, git. See the crate README for details.
-manifold-csg = { version = "0.1", default-features = false, features = ["parallel"] }
+manifold-csg = { version = "0.1", default-features = false }
 # Pin the FFI crate: `manifold-csg 0.1.8` has a too-loose constraint on
 # `manifold-csg-sys` and resolves against 3.5.x, which renamed several
 # FFI symbols and breaks the build. Constrain transitively to the last
 # compatible sys version. Drop once `manifold-csg` upgrades.
-manifold-csg-sys = "=3.4.107"
+manifold-csg-sys = { version = "=3.4.107", default-features = false }
 
 [dev-dependencies]
 jackdaw_jsn.workspace = true
+
+[features]
+default = ["render", "parallel"]
+render = ["jackdaw_geometry/render"]
+# Manifold's TBB-backed parallelism. Statically linking TBB is fine in a normal
+# executable (the editor), but TBB's static initializer crashes when this kernel
+# is loaded as a dlopen'd Godot GDExtension. The Godot addon builds this crate
+# with default-features off, so it gets Manifold's serial backend and no TBB.
+parallel = ["manifold-csg/parallel"]
 
 [lints]
 workspace = true

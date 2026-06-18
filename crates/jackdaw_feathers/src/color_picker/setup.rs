@@ -73,15 +73,30 @@ pub(super) fn setup_color_picker(
 ) {
     for (entity, config, state) in &mut pickers {
         if config.inline {
-            commands.entity(entity).with_child((
-                ColorPickerContent(entity),
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(12.0),
-                    width: percent(100),
-                    ..default()
-                },
-            ));
+            // Spawn the inline content through a liveness-checked world closure so
+            // it cannot be parented to a despawned picker. A plain deferred
+            // `with_child` races against rapid inspector rebuilds (duplicate /
+            // undo): if the picker is despawned before the command flushes, the
+            // content lands with a dangling `ChildOf`, gets orphaned to the UI
+            // root, and renders full-width at the window origin.
+            let picker = entity;
+            commands.queue(move |world: &mut World| {
+                if world.get_entity(picker).is_err() {
+                    return;
+                }
+                let content = world
+                    .spawn((
+                        ColorPickerContent(picker),
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(12.0),
+                            width: percent(100),
+                            ..default()
+                        },
+                    ))
+                    .id();
+                world.entity_mut(picker).add_child(content);
+            });
         } else {
             let rgba = state.to_rgba();
             let srgba = Srgba::new(rgba[0], rgba[1], rgba[2], rgba[3]);
@@ -285,11 +300,14 @@ pub(super) fn setup_color_picker_content(
 
             // Sliders + preview swatch row
             parent
-                .spawn(Node {
-                    column_gap: px(12.0),
-                    align_items: AlignItems::Center,
-                    ..default()
-                })
+                .spawn((
+                    ColorPickerContentRow,
+                    Node {
+                        column_gap: px(12.0),
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                ))
                 .with_children(|slider_row| {
                     // Hue + Alpha sliders column
                     slider_row
@@ -482,5 +500,37 @@ pub(super) fn despawn_orphaned_color_picker_popovers(
         if pickers.get(popover.0).is_err() {
             commands.entity(popover_entity).try_despawn();
         }
+    }
+}
+
+/// Marker on the picker content's slider/swatch row so it can be reaped if it
+/// orphans (it is a plain layout node with no other identifying component).
+#[derive(Component)]
+pub(super) struct ColorPickerContentRow;
+
+/// Despawn color-picker UI that has been orphaned to the UI root. The inline
+/// content and its direct children (the HSV rectangle, the slider/swatch row,
+/// and the input-fields row) are always parented to a card, the picker, or a
+/// popover; they are never legitimately a root node. If a rapid host rebuild
+/// despawns the content while these children are mid-spawn, Bevy strips their
+/// dangling `ChildOf` and each renders full-width at the window origin. Reaping
+/// any that reach the root (despawning their subtree) removes that artifact.
+pub(super) fn despawn_orphaned_color_picker_roots(
+    mut commands: Commands,
+    orphans: Query<
+        Entity,
+        (
+            Without<ChildOf>,
+            Or<(
+                With<ColorPickerContent>,
+                With<HsvRectangle>,
+                With<ColorInputRow>,
+                With<ColorPickerContentRow>,
+            )>,
+        ),
+    >,
+) {
+    for entity in &orphans {
+        commands.entity(entity).try_despawn();
     }
 }

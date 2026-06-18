@@ -2,14 +2,20 @@
 //! the flags that decide where it is evaluated (editor viewport, exported
 //! mesh) and whether its output carries editable handles.
 
-use bevy::prelude::*;
+#[cfg(feature = "render")]
+use bevy::prelude::ReflectComponent;
+use glam::Vec3;
 
 use crate::{BrushFaceData, EvaluatedBrush, MeshMirror, NO_SOURCE, evaluate_mirror};
 
 /// Ordered list of modifiers applied to a brush. Evaluation folds the
 /// authored geometry through each enabled entry in order.
-#[derive(Component, Reflect, Clone, Default, Debug, PartialEq)]
-#[reflect(Component)]
+#[derive(Clone, Default, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "render",
+    derive(bevy::ecs::component::Component, bevy::reflect::Reflect)
+)]
+#[cfg_attr(feature = "render", reflect(Component))]
 pub struct ModifierStack {
     pub modifiers: Vec<ModifierEntry>,
 }
@@ -40,7 +46,8 @@ impl ModifierStack {
 }
 
 /// One modifier plus the flags controlling where it evaluates.
-#[derive(Reflect, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "render", derive(bevy::reflect::Reflect))]
 pub struct ModifierEntry {
     pub modifier: Modifier,
     /// Evaluate for the editor viewport.
@@ -63,7 +70,8 @@ impl ModifierEntry {
 }
 
 /// A single brush modifier.
-#[derive(Reflect, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "render", derive(bevy::reflect::Reflect))]
 pub enum Modifier {
     Mirror(MeshMirror),
 }
@@ -93,6 +101,16 @@ pub fn evaluate_modifier_stack(
     base_faces: &[BrushFaceData],
     modifiers: &[&Modifier],
 ) -> EvaluatedBrush {
+    // Chain a source index through the running map; a NO_SOURCE marker (a bisect
+    // cap or split vert) has no authored origin and passes straight through.
+    fn remap_index(table: &[u32], prev: u32) -> u32 {
+        if prev == NO_SOURCE {
+            NO_SOURCE
+        } else {
+            table[prev as usize]
+        }
+    }
+
     let mut vertices = base_vertices.to_vec();
     let mut face_polygons = base_face_polygons.to_vec();
     let mut vert_to_base: Vec<u32> = (0..vertices.len() as u32).collect();
@@ -108,31 +126,16 @@ pub fn evaluate_modifier_stack(
             Modifier::Mirror(_) => continue,
         };
         any = true;
-        // The step's source maps index the previous geometry; chain them
-        // through the running maps to reach the base index. A NO_SOURCE entry
-        // (a bisect cap or split vert) has no authored origin, so it passes
-        // the marker through instead of indexing the running maps.
+        // Chain each step's source maps through the running maps to the base index.
         let new_vert_to_base: Vec<u32> = step
             .vert_source
             .iter()
-            .map(|&prev| {
-                if prev == NO_SOURCE {
-                    NO_SOURCE
-                } else {
-                    vert_to_base[prev as usize]
-                }
-            })
+            .map(|&prev| remap_index(&vert_to_base, prev))
             .collect();
         let new_face_to_base: Vec<u32> = step
             .face_source
             .iter()
-            .map(|&prev| {
-                if prev == NO_SOURCE {
-                    NO_SOURCE
-                } else {
-                    face_to_base[prev as usize]
-                }
-            })
+            .map(|&prev| remap_index(&face_to_base, prev))
             .collect();
         faces = step
             .face_source
@@ -340,9 +343,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "render")]
     fn modifier_stack_round_trips_through_reflection() {
         use bevy::reflect::{
-            TypeRegistry,
+            FromReflect, TypeRegistry,
             serde::{TypedReflectDeserializer, TypedReflectSerializer},
         };
         use serde::de::DeserializeSeed;

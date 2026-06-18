@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::dissolve_verts::dissolve_verts;
-use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey};
+use jackdaw_geometry::halfedge::{VertKey, apply_topology_edit};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
@@ -47,43 +47,30 @@ pub(crate) fn brush_dissolve_verts(
         return OperatorResult::Cancelled;
     }
 
-    // Run dissolve_verts on the selected vertices.
-    dissolve_verts(&mut halfedge.mesh, &vert_keys)?;
-
-    // Re-cache all face normals.
-    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
-    for fk in face_keys_all {
-        let face = &halfedge.mesh.faces[fk];
-        let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
-        let mut cur = face.loop_first;
-        for _ in 0..face.loop_count {
-            let lp = &halfedge.mesh.loops[cur];
-            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
-            cur = lp.next;
-        }
-        let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        halfedge.mesh.faces[fk].normal_cache = new_normal;
-    }
-
-    // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
-    let new_topology = halfedge.mesh.flatten_to_topology();
-    let mut brush = brushes.get_mut(brush_entity)?;
-
-    // Collect the HalfedgeMesh's material_idxes sorted in ascending order: this matches
-    // the ordering that flatten_to_topology uses for new_topology.polygons.
-    let mut sorted_mat_idxes: Vec<u32> = halfedge
-        .mesh
-        .faces
-        .values()
-        .map(|f| f.material_idx)
-        .collect();
-    sorted_mat_idxes.sort_unstable();
-
-    // Rebuild brush.faces parallel to new_topology.polygons.  For each slot,
-    // look up the old BrushFaceData by the face's material_idx.  If the index
-    // is out of range (e.g. the merged face inherited a large material_idx),
-    // fall back to the last entry.
+    // Apply the dissolve and reconcile the brush's faces, topology, and binding.
+    // Merging faces leaves the surviving faces' `material_idx` values gapped, so
+    // capture the appearance from the source slot keyed on `material_idx` instead
+    // of letting the reconcile default-fill. The closure returns the post-edit
+    // material_idxes sorted ascending, matching the order `flatten_to_topology`
+    // lays out the new polygons. `into_inner` reborrows the change-detected
+    // `Mut<Brush>` as `&mut Brush` so the two fields can be borrowed disjointly.
+    let brush = brushes.get_mut(brush_entity)?.into_inner();
     let old_faces = brush.faces.clone();
+    let sorted_mat_idxes = apply_topology_edit(
+        &mut brush.faces,
+        &mut brush.topology,
+        &mut halfedge.0,
+        |mesh| {
+            let result = dissolve_verts(mesh, &vert_keys);
+            let mut idxes: Vec<u32> = mesh.faces.values().map(|f| f.material_idx).collect();
+            idxes.sort_unstable();
+            result.map(|_| idxes)
+        },
+    )?;
+
+    // Rebuild brush.faces parallel to the new polygons. For each slot, look up
+    // the old appearance by the face's material_idx, falling back to the last
+    // entry if the index is out of range.
     let mut new_faces: Vec<jackdaw_jsn::BrushFaceData> = Vec::with_capacity(sorted_mat_idxes.len());
     for &mat_idx in &sorted_mat_idxes {
         let old = old_faces
@@ -93,34 +80,7 @@ pub(crate) fn brush_dissolve_verts(
         new_faces.push(old);
     }
     brush.faces = new_faces;
-
-    // Update plane data per face from new topology.
-    let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
-    for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
-        if face_idx < new_topology.polygons.len() {
-            let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
-                .vert as usize;
-            let distance = positions[v0_idx].dot(normal);
-            face_data.plane.normal = normal;
-            face_data.plane.distance = distance;
-        }
-    }
-    brush.topology = new_topology;
-
-    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
-    let new_mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
-    let new_vert_keys: Vec<_> = new_mesh.verts.keys().collect();
-    let mut new_face_keys = vec![Default::default(); new_mesh.faces.len()];
-    for (k, f) in new_mesh.faces.iter() {
-        let slot = f.material_idx as usize;
-        if slot < new_face_keys.len() {
-            new_face_keys[slot] = k;
-        }
-    }
-    halfedge.mesh = new_mesh;
-    halfedge.vert_keys = new_vert_keys;
-    halfedge.face_keys = new_face_keys;
+    brush.topology.recompute_face_planes(&mut brush.faces);
 
     OperatorResult::Finished
 }

@@ -211,14 +211,19 @@ fn image_placement_under_cursor(
         None => ray.origin + *ray.direction * DROP_FALLBACK_DISTANCE,
     };
 
-    let to_camera = (cam_tf.translation() - position).normalize_or_zero();
-    let rotation = if to_camera == Vec3::ZERO {
+    let rotation = facing_rotation(position, cam_tf.translation());
+
+    Some(ImagePlacement { position, rotation })
+}
+
+/// Rotation that aims a `+Z`-forward plane at the camera from `position`.
+fn facing_rotation(position: Vec3, camera: Vec3) -> Quat {
+    let to_camera = (camera - position).normalize_or_zero();
+    if to_camera == Vec3::ZERO {
         Quat::IDENTITY
     } else {
         Quat::from_rotation_arc(Vec3::Z, to_camera)
-    };
-
-    Some(ImagePlacement { position, rotation })
+    }
 }
 
 /// Spawn a reference-image plane and orient it to face the camera.
@@ -271,12 +276,7 @@ fn viewport_center_placement(
 ) -> Option<ImagePlacement> {
     let cam_tf = cameras.iter().next()?;
     let position = cam_tf.translation() + cam_tf.forward() * DROP_FALLBACK_DISTANCE;
-    let to_camera = (cam_tf.translation() - position).normalize_or_zero();
-    let rotation = if to_camera == Vec3::ZERO {
-        Quat::IDENTITY
-    } else {
-        Quat::from_rotation_arc(Vec3::Z, to_camera)
-    };
+    let rotation = facing_rotation(position, cam_tf.translation());
     Some(ImagePlacement { position, rotation })
 }
 

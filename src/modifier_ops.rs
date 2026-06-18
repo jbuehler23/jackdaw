@@ -16,9 +16,7 @@ use crate::keybind_focus::KeybindFocus;
 use crate::selection::Selection;
 
 /// Fold `modifiers` over the brush's authored topology and write the result
-/// back as the new authored topology. A no-op when the fold is identity
-/// (no modifier runs), so single-mirror bakes stay byte-for-byte identical
-/// to the standalone-mirror path.
+/// back as the new authored topology. A no-op when the fold is identity.
 pub(crate) fn bake_modifier_stack(brush: &mut Brush, modifiers: &[&Modifier]) {
     if brush.topology.polygons.is_empty() {
         return;

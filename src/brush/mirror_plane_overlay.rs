@@ -1,20 +1,17 @@
-//! Viewport overlay that draws the mirror plane(s) of a selected brush's live
-//! Mirror modifier. The plane location is otherwise invisible (especially once
-//! `offset` slides it off the brush origin), so a faint axis-colored grid is
-//! drawn at each enabled mirror plane while the brush is selected, with a
-//! grab handle at the plane center.
-//!
-//! The grid is an immediate-mode gizmo, but the grab handle is a billboarded
-//! disc mesh drawn in two passes (front + occluded), the same way the brush
-//! vertex handles are: a plane center that sits inside the brush would hide a
-//! depth-tested gizmo, leaving nothing to grab, so the occluded pass draws the
-//! handle dimmed through solid geometry.
+//! Viewport overlay for a selected brush's live Mirror modifier: a faint
+//! axis-colored grid at each enabled mirror plane (otherwise invisible,
+//! especially once `offset` slides it off the brush origin) with a grab handle
+//! at the plane center. The handle reuses the two-pass billboarded-disc
+//! approach from `gizmo_overlay` (front + occluded) so it stays grabbable when
+//! the plane sits inside the brush.
 
 use bevy::prelude::*;
 
 use jackdaw_geometry::{MeshMirror, ModifierStack};
 
-use super::gizmo_overlay::{OccludedHandleMaterial, units_per_pixel};
+use super::gizmo_overlay::{
+    BillboardHandle, OccludedHandleMaterial, reconcile_billboard_pools, units_per_pixel,
+};
 use crate::brush::Brush;
 use crate::selection::Selected;
 use crate::viewport::{MainViewportCamera, ViewportCursor};
@@ -122,11 +119,11 @@ fn handle_color(axis: usize) -> Color {
 }
 
 /// Marks the front (visible) disc of a mirror-plane grab handle.
-#[derive(Component)]
+#[derive(Component, Default)]
 struct MirrorPlaneHandleVisual;
 
 /// Marks the occluded (behind-geometry) disc of a mirror-plane grab handle.
-#[derive(Component)]
+#[derive(Component, Default)]
 struct MirrorPlaneHandleVisualOccluded;
 
 /// Shared render assets for the grab handles: one disc mesh, a full-opacity
@@ -348,12 +345,14 @@ fn update_mirror_plane_handles(
         }
     }
 
-    let front_existing: Vec<Entity> = front_handles.iter().map(|(e, ..)| e).collect();
-    let occluded_existing: Vec<Entity> = occluded_handles.iter().map(|(e, ..)| e).collect();
-
     // Without a viewport camera there is nothing to billboard against; clear.
     let Ok((cam_global, projection, cam)) = camera.single() else {
-        for &entity in front_existing.iter().chain(&occluded_existing) {
+        let stale: Vec<Entity> = front_handles
+            .iter()
+            .map(|(e, ..)| e)
+            .chain(occluded_handles.iter().map(|(e, ..)| e))
+            .collect();
+        for entity in stale {
             commands.entity(entity).despawn();
         }
         return;
@@ -361,83 +360,40 @@ fn update_mirror_plane_handles(
     let cam_pos = cam_global.translation();
     let viewport_height = cam.logical_viewport_size().map_or(1080.0, |s| s.y);
 
-    for (i, handle) in desired.iter().enumerate() {
-        let to_cam = cam_pos - handle.world;
-        let dist = to_cam.length().max(1e-4);
-        let dir = to_cam / dist;
-        let pixels = if handle.hovered {
-            HANDLE_HOVER_PIXELS
-        } else {
-            HANDLE_PIXELS
-        };
-        let radius = pixels * units_per_pixel(projection, dist, viewport_height);
-        let rotation = Quat::from_rotation_arc(Vec3::Z, dir);
-        let front_mat = if handle.hovered {
-            assets.hover_front.clone()
-        } else {
-            assets.front[handle.axis].clone()
-        };
-        let occluded_mat = if handle.hovered {
-            assets.hover_occluded.clone()
-        } else {
-            assets.occluded[handle.axis].clone()
-        };
-
-        // Front pass: nudged toward the camera so a handle sitting on a face
-        // wins the depth test instead of z-fighting it.
-        let front_t = Transform {
-            translation: handle.world + dir * radius * 0.5,
-            rotation,
-            scale: Vec3::splat(radius),
-        };
-        if let Some(&entity) = front_existing.get(i) {
-            if let Ok((_, mut t, mut m)) = front_handles.get_mut(entity) {
-                *t = front_t;
-                if m.0 != front_mat {
-                    m.0 = front_mat;
-                }
+    let billboards: Vec<BillboardHandle> = desired
+        .iter()
+        .map(|handle| {
+            let dist = (cam_pos - handle.world).length().max(1e-4);
+            let pixels = if handle.hovered {
+                HANDLE_HOVER_PIXELS
+            } else {
+                HANDLE_PIXELS
+            };
+            let (front, occluded) = if handle.hovered {
+                (assets.hover_front.clone(), assets.hover_occluded.clone())
+            } else {
+                (
+                    assets.front[handle.axis].clone(),
+                    assets.occluded[handle.axis].clone(),
+                )
+            };
+            BillboardHandle {
+                world: handle.world,
+                radius: pixels * units_per_pixel(projection, dist, viewport_height),
+                front,
+                occluded,
             }
-        } else {
-            commands.spawn((
-                MirrorPlaneHandleVisual,
-                crate::EditorEntity,
-                Mesh3d(assets.disc.clone()),
-                MeshMaterial3d::<StandardMaterial>(front_mat),
-                front_t,
-            ));
-        }
+        })
+        .collect();
 
-        // Occluded pass: sits on the plane center; its inverted depth test
-        // only rasterizes where the disc is behind other geometry.
-        let occ_t = Transform {
-            translation: handle.world,
-            rotation,
-            scale: Vec3::splat(radius),
-        };
-        if let Some(&entity) = occluded_existing.get(i) {
-            if let Ok((_, mut t, mut m)) = occluded_handles.get_mut(entity) {
-                *t = occ_t;
-                if m.0 != occluded_mat {
-                    m.0 = occluded_mat;
-                }
-            }
-        } else {
-            commands.spawn((
-                MirrorPlaneHandleVisualOccluded,
-                crate::EditorEntity,
-                Mesh3d(assets.disc.clone()),
-                MeshMaterial3d::<OccludedHandleMaterial>(occluded_mat),
-                occ_t,
-            ));
-        }
-    }
-
-    for &entity in front_existing.iter().skip(desired.len()) {
-        commands.entity(entity).despawn();
-    }
-    for &entity in occluded_existing.iter().skip(desired.len()) {
-        commands.entity(entity).despawn();
-    }
+    reconcile_billboard_pools::<MirrorPlaneHandleVisual, MirrorPlaneHandleVisualOccluded, _, _>(
+        &mut commands,
+        &assets.disc,
+        cam_pos,
+        &billboards,
+        &mut front_handles,
+        &mut occluded_handles,
+    );
 }
 
 /// Draw a grid (border included) on the plane perpendicular to `axis` at

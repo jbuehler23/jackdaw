@@ -63,6 +63,7 @@ pub mod material_browser;
 pub mod material_preview;
 pub mod measure_tool;
 pub mod mesh_quick_menu;
+pub mod modal_inputs;
 pub mod modal_transform;
 pub mod modifier_ops;
 pub mod navmesh;

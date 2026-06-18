@@ -128,7 +128,7 @@ pub(crate) struct LastClick {
 }
 
 pub(crate) fn handle_viewport_click(
-    pointer: crate::input_contexts::PointerInputs,
+    pointer: crate::modal_inputs::PointerInputs,
     keyboard: Res<ButtonInput<KeyCode>>,
     vp: ViewportCursor,
     scene_entities: Query<(Entity, &GlobalTransform), (Without<EditorEntity>, With<Transform>)>,
@@ -324,7 +324,7 @@ pub(crate) fn handle_viewport_click(
 /// face-drag because face-drag's hit-test runs inside its operator
 /// a frame later. See `cursor_over_brush_face`.
 fn box_select_pending_trigger(
-    pointer: crate::input_contexts::PointerInputs,
+    pointer: crate::modal_inputs::PointerInputs,
     vp: ViewportCursor,
     guards: InteractionGuards,
     mut box_state: ResMut<BoxSelectState>,

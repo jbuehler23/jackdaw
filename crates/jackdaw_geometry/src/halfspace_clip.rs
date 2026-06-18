@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use bevy::prelude::*;
+use glam::Vec3;
 
 use crate::{EvaluatedBrush, NO_SOURCE, newell_normal};
 

@@ -6,9 +6,12 @@ pub(crate) mod component_display;
 pub mod component_picker;
 pub(crate) mod component_tooltip;
 mod custom_props_display;
+mod live_edit_dots;
+pub(crate) mod material_card_routing;
 mod material_display;
 mod modifier_display;
 pub(crate) mod ops;
+mod prefab_field_dots;
 pub(crate) mod physics_display;
 pub(crate) mod prefab_menu;
 pub(crate) mod reflect_fields;
@@ -129,7 +132,7 @@ impl Plugin for InspectorPlugin {
             .add_observer(component_display::remove_component_displays)
             .add_observer(component_display::add_component_displays)
             .add_observer(component_display::on_inspector_dirty)
-            .add_observer(component_display::on_refresh_inspector_card_body)
+            .add_observer(material_card_routing::on_refresh_inspector_card_body)
             .add_observer(component_picker::on_add_component_button_click)
             .add_observer(reflect_fields::on_checkbox_commit)
             .add_observer(reflect_fields::on_text_edit_commit)
@@ -141,8 +144,8 @@ impl Plugin for InspectorPlugin {
             .add_observer(material_display::on_material_checkbox_commit)
             .add_observer(material_display::on_preview_shape_button_click)
             .add_observer(anim_diamond::on_diamond_click)
-            .init_resource::<component_display::LiveEditMenuTarget>()
-            .add_observer(component_display::on_live_edit_menu_action)
+            .init_resource::<live_edit_dots::LiveEditMenuTarget>()
+            .add_observer(live_edit_dots::on_live_edit_menu_action)
             .add_observer(on_category_strip_mount_added)
             .add_observer(add_header::on_add_header_mount_added)
             .add_observer(add_header::on_physics_chip_click)
@@ -158,9 +161,9 @@ impl Plugin for InspectorPlugin {
                         .after(category_strip::resolve_active_on_rebuild),
                     anim_diamond::decorate_animatable_fields,
                     anim_diamond::update_anim_diamond_highlights,
-                    component_display::decorate_prefab_field_rows,
-                    component_display::refresh_prefab_field_dots,
-                    component_display::refresh_live_edit_field_dots,
+                    prefab_field_dots::decorate_prefab_field_rows,
+                    prefab_field_dots::refresh_prefab_field_dots,
+                    live_edit_dots::refresh_live_edit_field_dots,
                     refresh_name_field,
                     flag_inspector_dirty_on_archetype_change,
                     flag_inspector_dirty_on_modifier_stack_change,

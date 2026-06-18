@@ -92,7 +92,6 @@ pub(crate) fn build_mesh_chunks(
             let p_b = vertices[tri[1] as usize];
             let p_c = vertices[tri[2] as usize];
 
-            // Compute this triangle's actual normal for flat shading.
             let cross = (p_b - p_a).cross(p_c - p_a);
             let tri_normal = if cross.length_squared() > 1e-10 {
                 cross.normalize()

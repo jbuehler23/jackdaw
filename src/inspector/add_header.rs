@@ -280,7 +280,7 @@ fn spawn_material_header(world: &mut World, host: Entity) {
         .get_resource::<Selection>()
         .and_then(Selection::primary);
     let current = primary
-        .and_then(|entity| super::component_display::resolve_brush_material_handle(world, entity));
+        .and_then(|entity| super::material_card_routing::resolve_brush_material_handle(world, entity));
 
     let selected = material_combobox_selected_index(&entries, current.as_ref());
 

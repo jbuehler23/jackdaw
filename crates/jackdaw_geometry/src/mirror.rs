@@ -4,7 +4,9 @@
 //! authored half needs no remapping and mirrored elements map back
 //! through the source arrays.
 
-use bevy::prelude::*;
+#[cfg(feature = "render")]
+use bevy::prelude::ReflectComponent;
+use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
 use crate::{BrushPlane, clip_to_halfspace, newell_normal};
@@ -37,8 +39,12 @@ impl<'de> Deserialize<'de> for MirrorAxes {
 ///
 /// Three bools so the fields reflect, serialize, and render as
 /// inspector checkboxes.
-#[derive(Component, Reflect, Clone, Debug, PartialEq)]
-#[reflect(Component)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "render",
+    derive(bevy::ecs::component::Component, bevy::reflect::Reflect)
+)]
+#[cfg_attr(feature = "render", reflect(Component))]
 pub struct MeshMirror {
     pub mirror_x: bool,
     pub mirror_y: bool,
@@ -81,8 +87,7 @@ impl Default for MeshMirror {
 }
 
 impl MeshMirror {
-    /// Enabled axes as flags; `mirror_x/y/z` stay plain bools so they
-    /// reflect, serialize, and render as inspector checkboxes.
+    /// Enabled axes as flags.
     pub fn axes(&self) -> MirrorAxes {
         let mut a = MirrorAxes::empty();
         if self.mirror_x {
@@ -590,9 +595,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "render")]
     fn mesh_mirror_round_trips_through_reflection() {
         use bevy::reflect::{
-            TypeRegistry,
+            FromReflect, TypeRegistry,
             serde::{TypedReflectDeserializer, TypedReflectSerializer},
         };
         use serde::de::DeserializeSeed;

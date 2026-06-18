@@ -20,6 +20,7 @@ use jackdaw_geometry::halfedge::ops::edge_slide::edge_slide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
 use jackdaw_jsn::Brush;
 
+use super::modal_edit::ModalTopologyEdit;
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -47,9 +48,9 @@ pub struct SlideSideInfo {
 pub struct EdgeSlideModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// `HalfedgeMesh` `EdgeKeys` of the edges being slid. Resolved against
-    /// `start_mesh`; we re-resolve them from `start_mesh` each frame
-    /// because the live mesh is reset to the snapshot before running the op.
+    /// `HalfedgeMesh` `EdgeKeys` of the edges being slid. Slotmap keys stay
+    /// valid across the snapshot's clones, so they re-resolve each frame after
+    /// the snapshot is restored.
     pub edge_keys: Vec<EdgeKey>,
     /// Window-space cursor position at the moment the modal started.
     pub start_cursor: Vec2,
@@ -60,8 +61,8 @@ pub struct EdgeSlideModalState {
     pub neg_side: Option<SlideSideInfo>,
     /// Current factor in `[-1, +1]`. Sign flips slide side; 0 is no slide.
     pub current_factor: f32,
-    pub start_brush: Option<Brush>,
-    pub start_mesh: Option<HalfedgeMesh>,
+    /// Pre-edit snapshot driving restore and per-frame re-apply.
+    pub edit: Option<ModalTopologyEdit>,
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -98,7 +99,7 @@ pub(crate) fn brush_edge_slide_modal(
     mut modal_state: ResMut<EdgeSlideModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    modal_inputs: crate::input_contexts::ModalInputs,
+    modal_inputs: crate::modal_inputs::ModalInputs,
     cursor: crate::viewport::UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
@@ -143,7 +144,6 @@ pub(crate) fn brush_edge_slide_modal(
             return OperatorResult::Cancelled;
         }
 
-        let mesh_snapshot = halfedge.mesh.clone();
         let brush_xform = brush_transforms.get(brush_entity).ok();
 
         // Compute cursor-tracks-edge projection info for both adjacent faces of
@@ -151,7 +151,7 @@ pub(crate) fn brush_edge_slide_modal(
         // lengths so that 1 pixel of cursor = 1 pixel of edge movement on that
         // side, and grid snap can convert factor back to a world distance.
         let (pos_side, neg_side) = compute_slide_sides(
-            &mesh_snapshot,
+            &halfedge.mesh,
             edge_keys[0],
             brush_xform,
             &camera_query,
@@ -165,8 +165,7 @@ pub(crate) fn brush_edge_slide_modal(
         modal_state.pos_side = pos_side;
         modal_state.neg_side = neg_side;
         modal_state.current_factor = 0.0;
-        modal_state.start_brush = Some(brush_before);
-        modal_state.start_mesh = Some(mesh_snapshot);
+        modal_state.edit = Some(ModalTopologyEdit::begin(&brush_before, halfedge));
 
         return OperatorResult::Running;
     }
@@ -286,28 +285,16 @@ fn restore_brush_from_snapshot(
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
     };
-    let Some(ref start_brush) = modal_state.start_brush else {
+    let Some(edit) = modal_state.edit.as_ref() else {
         return;
     };
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return;
     };
-    *brush = start_brush.clone();
-    if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
-        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = mesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
-            vec![Default::default(); mesh.faces.len()];
-        for (k, f) in mesh.faces.iter() {
-            let slot = f.material_idx as usize;
-            if slot < face_keys.len() {
-                face_keys[slot] = k;
-            }
-        }
-        halfedge.mesh = mesh;
-        halfedge.vert_keys = vert_keys;
-        halfedge.face_keys = face_keys;
-    }
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
+        return;
+    };
+    edit.restore(&mut brush, &mut halfedge);
 }
 
 /// Re-run `edge_slide` against the snapshot at the current factor and write
@@ -322,99 +309,31 @@ fn apply_live_edge_slide(
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
     };
-    let Some(ref start_mesh) = modal_state.start_mesh else {
+    let Some(edit) = modal_state.edit.as_ref() else {
         return;
     };
-    let Some(ref start_brush) = modal_state.start_brush else {
+    let Ok(brush_mut) = brushes.get_mut(brush_entity) else {
         return;
     };
     let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return;
     };
+    let brush = brush_mut.into_inner();
 
-    // Sub-threshold factors: snap the live mesh back to the start state.
+    // Sub-threshold factors: snap the live brush back to the snapshot.
     if modal_state.current_factor.abs() < 1e-4 {
-        let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-            return;
-        };
-        *brush = start_brush.clone();
-        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = mesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
-            vec![Default::default(); mesh.faces.len()];
-        for (k, f) in mesh.faces.iter() {
-            let slot = f.material_idx as usize;
-            if slot < face_keys.len() {
-                face_keys[slot] = k;
-            }
-        }
-        halfedge.mesh = mesh;
-        halfedge.vert_keys = vert_keys;
-        halfedge.face_keys = face_keys;
+        edit.restore(brush, &mut halfedge);
         return;
     }
 
-    // Always start the per-frame op from the clean snapshot.
-    halfedge.mesh = start_mesh.clone();
-
-    if edge_slide(
-        &mut halfedge.mesh,
-        &modal_state.edge_keys,
-        modal_state.current_factor,
-    )
-    .is_err()
-    {
-        return;
-    }
-
-    // Re-cache all face normals (slid verts can rotate face planes).
-    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
-    for fk in face_keys_all {
-        let face = &halfedge.mesh.faces[fk];
-        let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
-        let mut cur = face.loop_first;
-        for _ in 0..face.loop_count {
-            let lp = &halfedge.mesh.loops[cur];
-            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
-            cur = lp.next;
-        }
-        let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        halfedge.mesh.faces[fk].normal_cache = new_normal;
-    }
-
-    // Flatten HalfedgeMesh -> topology, sync Brush.
-    let new_topology = halfedge.mesh.flatten_to_topology();
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return;
-    };
-
-    // Edge slide does not add new faces; no need to grow brush.faces.
-    let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
-    for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
-        if face_idx < new_topology.polygons.len() {
-            let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
-                .vert as usize;
-            let distance = positions[v0_idx].dot(normal);
-            face_data.plane.normal = normal;
-            face_data.plane.distance = distance;
-        }
-    }
-    brush.topology = new_topology;
-
-    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
-    let new_mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
-    let new_vert_keys: Vec<_> = new_mesh.verts.keys().collect();
-    let mut new_face_keys = vec![Default::default(); new_mesh.faces.len()];
-    for (k, f) in new_mesh.faces.iter() {
-        let slot = f.material_idx as usize;
-        if slot < new_face_keys.len() {
-            new_face_keys[slot] = k;
-        }
-    }
-    halfedge.mesh = new_mesh;
-    halfedge.vert_keys = new_vert_keys;
-    halfedge.face_keys = new_face_keys;
+    // Restore to the snapshot, re-run the slide at the current factor, and
+    // reconcile. Slide is a pure vertex transform: it adds no faces, so there
+    // is no appearance fixup.
+    let edge_keys = modal_state.edge_keys.clone();
+    let factor = modal_state.current_factor;
+    edit.apply(brush, &mut halfedge, |mesh| {
+        let _ = edge_slide(mesh, &edge_keys, factor);
+    });
 }
 
 /// Compute cursor-tracks-edge projection info for both adjacent quad faces of

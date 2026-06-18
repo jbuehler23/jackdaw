@@ -42,9 +42,7 @@ impl Plugin for MeshRebuildPlugin {
 ///
 /// Runs on `Changed<Brush>` (which fires both when a brush is first inserted
 /// and when its value is mutated in place) and `Changed<ModifierStack>` so live
-/// modifier edits re-mesh without a brush touch. The clear-then-rebuild pass is
-/// idempotent: existing face-mesh children (those with `Mesh3d`) are despawned
-/// before the new ones are built, so there is no double-mesh on the insert frame.
+/// modifier edits re-mesh without a brush touch.
 pub fn remesh_changed_brushes(
     mut commands: Commands,
     changed: Query<
@@ -115,8 +113,8 @@ fn build_brush_meshes(
     materials: &mut Assets<StandardMaterial>,
     assets: &AssetServer,
 ) {
-    // Plane-intersection fallback covers the runtime / preview path
-    // where the editor's migration system has not yet run.
+    // Plane-intersection fallback for brushes without authored topology
+    // (plane-only legacy data).
     let (vertices, face_polygons) = if !brush.topology.polygons.is_empty() {
         let verts: Vec<Vec3> = brush.topology.vertices.iter().map(|v| v.position).collect();
         let polys: Vec<Vec<usize>> = (0..brush.topology.polygons.len())
@@ -188,71 +186,15 @@ fn build_brush_meshes(
             continue;
         }
 
-        let positions: Vec<[f32; 3]> = indices.iter().map(|&vi| vertices[vi].to_array()).collect();
-        let normals: Vec<[f32; 3]> = vec![face_data.plane.normal.to_array(); indices.len()];
-        let (u_axis, v_axis) =
-            if face_data.uv_u_axis != Vec3::ZERO && face_data.uv_v_axis != Vec3::ZERO {
-                (face_data.uv_u_axis, face_data.uv_v_axis)
-            } else {
-                compute_face_tangent_axes(face_data.plane.normal)
-            };
-        let uvs = compute_face_uvs(
+        let (mesh_handle, material) = build_face_mesh(
             &vertices,
             indices,
-            u_axis,
-            v_axis,
-            face_data.uv_offset,
-            face_data.uv_scale,
-            face_data.uv_rotation,
+            face_data,
+            meshes,
+            materials,
+            assets,
+            &mut fallback_material,
         );
-        let w = face_data.plane.normal.dot(u_axis.cross(v_axis)).signum();
-        let tangent = [u_axis.x, u_axis.y, u_axis.z, w];
-        let tangents: Vec<[f32; 4]> = vec![tangent; indices.len()];
-
-        // Concave / keyhole-bridged faces need a real triangulator; fan
-        // triangulation would fill holes and mis-tile L-shapes.
-        let face_verts_3d: Vec<Vec3> = indices.iter().map(|&vi| vertices[vi]).collect();
-        let identity_ring: Vec<u32> = (0..indices.len() as u32).collect();
-        let local_tris =
-            triangulate_polygon(&face_verts_3d, &identity_ring, face_data.plane.normal);
-        let flat_indices: Vec<u32> = local_tris.iter().flat_map(|t| t.iter().copied()).collect();
-
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, tangents);
-        mesh.insert_indices(Indices::U32(flat_indices));
-        let mesh_handle = meshes.add(mesh);
-
-        let material = if face_data.material != Handle::default() {
-            face_data.material.clone()
-        } else {
-            fallback_material
-                .get_or_insert_with(|| {
-                    let grid = load_embedded_asset!(
-                        assets,
-                        "../assets/jd_grid.png",
-                        |settings: &mut ImageLoaderSettings| {
-                            let sampler = settings.sampler.get_or_init_descriptor();
-                            sampler.mag_filter = ImageFilterMode::Nearest;
-                            sampler.min_filter = ImageFilterMode::Nearest;
-                            sampler.mipmap_filter = ImageFilterMode::Nearest;
-                            sampler.address_mode_u = ImageAddressMode::Repeat;
-                            sampler.address_mode_v = ImageAddressMode::Repeat;
-                            sampler.address_mode_w = ImageAddressMode::Repeat;
-                        }
-                    );
-                    materials.add(StandardMaterial {
-                        base_color: Color::WHITE,
-                        base_color_texture: Some(grid),
-                        alpha_mode: AlphaMode::Opaque,
-                        uv_transform: Affine2::from_scale(Vec2::splat(2.0)),
-                        ..default()
-                    })
-                })
-                .clone()
-        };
 
         commands.spawn((
             crate::DerivedFaceMesh,
@@ -262,6 +204,88 @@ fn build_brush_meshes(
             ChildOf(entity),
         ));
     }
+}
+
+/// Build one face's `Mesh` (positions/normals/uvs/tangents/indices) and resolve
+/// its material handle, falling back to the shared embedded grid texture when
+/// the face has no assigned material. `fallback_material` caches the grid
+/// material across the per-face loop so it is created at most once per rebuild.
+fn build_face_mesh(
+    vertices: &[Vec3],
+    indices: &[usize],
+    face_data: &crate::types::BrushFaceData,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    assets: &AssetServer,
+    fallback_material: &mut Option<Handle<StandardMaterial>>,
+) -> (Handle<Mesh>, Handle<StandardMaterial>) {
+    let positions: Vec<[f32; 3]> = indices.iter().map(|&vi| vertices[vi].to_array()).collect();
+    let normals: Vec<[f32; 3]> = vec![face_data.plane.normal.to_array(); indices.len()];
+    let (u_axis, v_axis) =
+        if face_data.uv_u_axis != Vec3::ZERO && face_data.uv_v_axis != Vec3::ZERO {
+            (face_data.uv_u_axis, face_data.uv_v_axis)
+        } else {
+            compute_face_tangent_axes(face_data.plane.normal)
+        };
+    let uvs = compute_face_uvs(
+        vertices,
+        indices,
+        u_axis,
+        v_axis,
+        face_data.uv_offset,
+        face_data.uv_scale,
+        face_data.uv_rotation,
+    );
+    let w = face_data.plane.normal.dot(u_axis.cross(v_axis)).signum();
+    let tangent = [u_axis.x, u_axis.y, u_axis.z, w];
+    let tangents: Vec<[f32; 4]> = vec![tangent; indices.len()];
+
+    // Concave / keyhole-bridged faces need a real triangulator; fan
+    // triangulation would fill holes and mis-tile L-shapes.
+    let face_verts_3d: Vec<Vec3> = indices.iter().map(|&vi| vertices[vi]).collect();
+    let identity_ring: Vec<u32> = (0..indices.len() as u32).collect();
+    let local_tris =
+        triangulate_polygon(&face_verts_3d, &identity_ring, face_data.plane.normal);
+    let flat_indices: Vec<u32> = local_tris.iter().flat_map(|t| t.iter().copied()).collect();
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, tangents);
+    mesh.insert_indices(Indices::U32(flat_indices));
+    let mesh_handle = meshes.add(mesh);
+
+    let material = if face_data.material != Handle::default() {
+        face_data.material.clone()
+    } else {
+        fallback_material
+            .get_or_insert_with(|| {
+                let grid = load_embedded_asset!(
+                    assets,
+                    "../assets/jd_grid.png",
+                    |settings: &mut ImageLoaderSettings| {
+                        let sampler = settings.sampler.get_or_init_descriptor();
+                        sampler.mag_filter = ImageFilterMode::Nearest;
+                        sampler.min_filter = ImageFilterMode::Nearest;
+                        sampler.mipmap_filter = ImageFilterMode::Nearest;
+                        sampler.address_mode_u = ImageAddressMode::Repeat;
+                        sampler.address_mode_v = ImageAddressMode::Repeat;
+                        sampler.address_mode_w = ImageAddressMode::Repeat;
+                    }
+                );
+                materials.add(StandardMaterial {
+                    base_color: Color::WHITE,
+                    base_color_texture: Some(grid),
+                    alpha_mode: AlphaMode::Opaque,
+                    uv_transform: Affine2::from_scale(Vec2::splat(2.0)),
+                    ..default()
+                })
+            })
+            .clone()
+    };
+
+    (mesh_handle, material)
 }
 
 #[cfg(test)]

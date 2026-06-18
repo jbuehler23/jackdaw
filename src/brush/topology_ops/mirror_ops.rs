@@ -66,18 +66,8 @@ pub(crate) fn rebuild_brush_from_eval(brush: &mut Brush, eval: &EvaluatedBrush) 
 
     // Update plane data per face from the new topology; mirrored faces
     // have reflected normals relative to their source.
-    let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
     let mut faces = new_faces;
-    for (face_idx, face_data) in faces.iter_mut().enumerate() {
-        if face_idx < new_topology.polygons.len() {
-            let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
-                .vert as usize;
-            let distance = positions[v0_idx].dot(normal);
-            face_data.plane.normal = normal;
-            face_data.plane.distance = distance;
-        }
-    }
+    new_topology.recompute_face_planes(&mut faces);
     brush.faces = faces;
     brush.topology = new_topology;
 }

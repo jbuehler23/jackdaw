@@ -52,6 +52,7 @@ pub fn plugin(app: &mut App) {
                 setup::setup_trigger_swatch,
                 setup::setup_color_picker_content,
                 setup::despawn_orphaned_color_picker_popovers,
+                setup::despawn_orphaned_color_picker_roots,
                 visuals::update_color_picker_visuals,
                 input_fields::handle_input_field_blur,
                 visuals::update_trigger_display,

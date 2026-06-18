@@ -5389,7 +5389,7 @@ dependencies = [
 name = "jackdaw_csg"
 version = "0.4.1"
 dependencies = [
- "bevy",
+ "glam 0.30.10",
  "jackdaw_geometry",
  "jackdaw_jsn",
  "manifold-csg",
@@ -5437,6 +5437,7 @@ dependencies = [
  "bitflags 2.11.1",
  "cdt",
  "earcutr",
+ "glam 0.30.10",
  "jackdaw_jsn",
  "serde",
  "serde_json",

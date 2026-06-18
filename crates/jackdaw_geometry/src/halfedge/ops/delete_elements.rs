@@ -239,7 +239,7 @@ fn vert_key_to_topology_index(mesh: &HalfedgeMesh) -> std::collections::HashMap<
 mod tests {
     use super::*;
     use crate::build_topology_from_face_polygons;
-    use bevy::math::Vec3;
+    use glam::Vec3;
 
     /// A unit cube: 8 corner verts, 6 quad faces. Each corner is shared by
     /// three faces and each edge by two, so the delete counts are fixed.

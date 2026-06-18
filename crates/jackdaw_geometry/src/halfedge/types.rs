@@ -1,5 +1,5 @@
-use bevy::math::Vec3;
 use bitflags::bitflags;
+use glam::Vec3;
 use slotmap::{SlotMap, new_key_type};
 
 new_key_type! {

@@ -17,9 +17,10 @@ use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::ops::extrude_face_region::extrude_face_region;
-use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh};
+use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh, apply_topology_edit};
 use jackdaw_jsn::Brush;
 
+use super::modal_edit::ModalTopologyEdit;
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -38,15 +39,14 @@ const EXTRUDE_SENSITIVITY: f32 = 0.01;
 pub struct ExtrudeModalState {
     pub active: bool,
     pub brush_entity: Option<Entity>,
-    /// `HalfedgeMesh` `FaceKeys` of the faces being extruded. Resolved against
-    /// `start_mesh`; we re-resolve them from `start_mesh` each frame
-    /// because the live mesh is reset to the snapshot before running the op.
+    /// `HalfedgeMesh` `FaceKeys` of the faces being extruded. Slotmap keys stay
+    /// valid across the snapshot's clones, so they re-resolve each frame after
+    /// the snapshot is restored.
     pub face_keys: Vec<FaceKey>,
-    /// Brush face indices of the faces being extruded, captured at modal
-    /// entry. Used by the live-preview path to clone the correct template
-    /// (preserving the parent face's UV scale/rotation/offset) when growing
-    /// brush.faces for new wall faces, rather than picking up some unrelated
-    /// face's UV settings via `start_brush.faces.last()`.
+    /// Brush face indices of the faces being extruded, captured at modal entry.
+    /// The live-preview path seeds new wall faces from the first of these so
+    /// they inherit the parent face's material and UV projection rather than an
+    /// unrelated face's.
     pub face_indices: Vec<usize>,
     /// Window-space cursor position at the moment the modal started.
     pub start_cursor: Vec2,
@@ -57,8 +57,8 @@ pub struct ExtrudeModalState {
     /// Current signed extrude amount in world-space units. Positive = along
     /// face normal; negative = against face normal.
     pub current_amount: f32,
-    pub start_brush: Option<Brush>,
-    pub start_mesh: Option<HalfedgeMesh>,
+    /// Pre-edit snapshot driving restore and per-frame re-apply.
+    pub edit: Option<ModalTopologyEdit>,
 }
 
 /// Duplicate each selected face along its normal by a fixed depth and
@@ -101,81 +101,36 @@ pub(crate) fn brush_extrude_region(
         return OperatorResult::Cancelled;
     }
 
-    // Run extrude_face_region on each selected face. Capture each successful
-    // extrusion's top-face `material_idx` so we can resolve the post-flatten
-    // face index for the new top ring (see chaining block below).
-    //
-    // `extrude_face_region` reuses the input face as the new top cap (i.e.
-    // `result.top_face == fk`), preserving its `material_idx`. The N side
-    // quads it adds inherit the same `material_idx`. Among ties on a given M
-    // the original (now top) face sits first in slotmap iteration order, so
-    // the top face lands at the topology index equal to
+    // Extrude each selected face and reconcile, capturing each new top face's
+    // `material_idx` so the chained selection (below) can resolve its post-
+    // flatten index. `extrude_face_region` reuses the input face as the new top
+    // cap (so `result.top_face == fk`), and its side quads inherit that
+    // `material_idx`; the top face therefore lands at the topology index
     // `count(faces with material_idx < M)` after flatten.
-    let mut top_material_idxs: Vec<u32> = Vec::with_capacity(mesh_faces.len());
-    for fk in mesh_faces {
-        if let Ok(result) = extrude_face_region(&mut halfedge.mesh, fk, DEFAULT_EXTRUDE_DEPTH) {
-            let mtx = halfedge.mesh.faces[result.top_face].material_idx;
-            top_material_idxs.push(mtx);
-        }
+    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    let source = brush.faces.last().cloned().unwrap_or_default();
+    let original_face_count = brush.faces.len();
+    let top_material_idxs: Vec<u32> = apply_topology_edit(
+        &mut brush.faces,
+        &mut brush.topology,
+        &mut halfedge.0,
+        |mesh| {
+            let mut idxs = Vec::with_capacity(mesh_faces.len());
+            for fk in &mesh_faces {
+                if let Ok(result) = extrude_face_region(mesh, *fk, DEFAULT_EXTRUDE_DEPTH) {
+                    idxs.push(mesh.faces[result.top_face].material_idx);
+                }
+            }
+            idxs
+        },
+    );
+
+    // New side faces inherit the previous last face's appearance.
+    for new_face in original_face_count..brush.faces.len() {
+        brush.faces[new_face].copy_appearance_from(&source);
+        brush.faces[new_face].ensure_uv_axes();
     }
 
-    // Re-cache all face normals.
-    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
-    for fk in face_keys_all {
-        let face = &halfedge.mesh.faces[fk];
-        let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
-        let mut cur = face.loop_first;
-        for _ in 0..face.loop_count {
-            let lp = &halfedge.mesh.loops[cur];
-            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
-            cur = lp.next;
-        }
-        let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        halfedge.mesh.faces[fk].normal_cache = new_normal;
-    }
-
-    // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
-    let new_topology = halfedge.mesh.flatten_to_topology();
-    let mut brush = brushes.get_mut(brush_entity)?;
-
-    // Extrude adds new faces. Extend brush.faces with copies of the last
-    // existing face data as a default; material_idx from the parent face is
-    // inherited during flatten.
-    let new_face_count = new_topology.polygons.len();
-    while brush.faces.len() < new_face_count {
-        let template = brush.faces.last().cloned().unwrap_or_default();
-        brush.faces.push(template);
-    }
-
-    // Update plane data per face from new topology.
-    let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
-    for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
-        if face_idx < new_topology.polygons.len() {
-            let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
-                .vert as usize;
-            let distance = positions[v0_idx].dot(normal);
-            face_data.plane.normal = normal;
-            face_data.plane.distance = distance;
-        }
-    }
-    brush.topology = new_topology;
-
-    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
-    let new_mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
-    let new_vert_keys: Vec<_> = new_mesh.verts.keys().collect();
-    let mut new_face_keys = vec![Default::default(); new_mesh.faces.len()];
-    for (k, f) in new_mesh.faces.iter() {
-        let slot = f.material_idx as usize;
-        if slot < new_face_keys.len() {
-            new_face_keys[slot] = k;
-        }
-    }
-    halfedge.mesh = new_mesh;
-    halfedge.vert_keys = new_vert_keys;
-    halfedge.face_keys = new_face_keys;
-
-    // Push undo entry.
     // Chain selection: write the new top face(s) into `BrushSelection.faces`
     // so a follow-up gesture (drag-along-normal, inset, extrude again) can
     // operate on the freshly created top ring immediately.
@@ -235,7 +190,7 @@ pub(crate) fn brush_extrude(
     mut modal_state: ResMut<ExtrudeModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    modal_inputs: crate::input_contexts::ModalInputs,
+    modal_inputs: crate::modal_inputs::ModalInputs,
     cursor: crate::viewport::UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
@@ -273,15 +228,13 @@ pub(crate) fn brush_extrude(
             return OperatorResult::Cancelled;
         }
 
-        let mesh_snapshot = halfedge.mesh.clone();
         let brush_xform = brush_transforms.get(brush_entity).ok();
 
         // Derive the screen-space direction corresponding to "+1 world-unit
         // along the representative face normal". Fall back to (0, -1) (cursor
-        // up = positive amount) when the camera projection isn't available,
-        // matching the heuristic mentioned in the spec.
+        // up = positive amount) when the camera projection isn't available.
         let screen_normal_dir = compute_screen_normal_dir(
-            &mesh_snapshot,
+            &halfedge.mesh,
             &face_keys,
             brush_xform,
             &camera_query,
@@ -295,8 +248,7 @@ pub(crate) fn brush_extrude(
         modal_state.start_cursor = cursor_pos;
         modal_state.screen_normal_dir = screen_normal_dir;
         modal_state.current_amount = 0.0;
-        modal_state.start_brush = Some(brush_before);
-        modal_state.start_mesh = Some(mesh_snapshot);
+        modal_state.edit = Some(ModalTopologyEdit::begin(&brush_before, halfedge));
 
         return OperatorResult::Running;
     }
@@ -386,7 +338,7 @@ fn cancel_extrude(
     *modal_state = ExtrudeModalState::default();
 }
 
-/// Reset the live brush + `HalfedgeMesh` to the snapshot captured at modal start.
+/// Reset the live brush and binding to the snapshot captured at modal start.
 fn restore_brush_from_snapshot(
     modal_state: &ExtrudeModalState,
     brushes: &mut Query<&mut Brush>,
@@ -395,35 +347,22 @@ fn restore_brush_from_snapshot(
     let Some(brush_entity) = modal_state.brush_entity else {
         return;
     };
-    let Some(ref start_brush) = modal_state.start_brush else {
+    let Some(edit) = modal_state.edit.as_ref() else {
         return;
     };
     let Ok(mut brush) = brushes.get_mut(brush_entity) else {
         return;
     };
-    *brush = start_brush.clone();
-    if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
-        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = mesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
-            vec![Default::default(); mesh.faces.len()];
-        for (k, f) in mesh.faces.iter() {
-            let slot = f.material_idx as usize;
-            if slot < face_keys.len() {
-                face_keys[slot] = k;
-            }
-        }
-        halfedge.mesh = mesh;
-        halfedge.vert_keys = vert_keys;
-        halfedge.face_keys = face_keys;
-    }
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
+        return;
+    };
+    edit.restore(&mut brush, &mut halfedge);
 }
 
 /// Re-run `extrude_face_region` against the snapshot at the current amount and
-/// write the resulting topology back into the live `Brush` + `BrushHalfedge`.
-/// Returns the post-flatten face indices of the new top faces (one per
-/// successful extrusion), in the same order as `modal_state.face_keys`. The
-/// commit path uses these for chained selection.
+/// write the result into the live `Brush` + `BrushHalfedge`. Returns the
+/// post-flatten face indices of the new top faces (one per successful
+/// extrusion), in `modal_state.face_keys` order, for chained selection.
 fn apply_live_extrude(
     modal_state: &mut ExtrudeModalState,
     brushes: &mut Query<&mut Brush>,
@@ -432,146 +371,64 @@ fn apply_live_extrude(
     let Some(brush_entity) = modal_state.brush_entity else {
         return Vec::new();
     };
-    let Some(ref start_mesh) = modal_state.start_mesh else {
+    let Some(edit) = modal_state.edit.as_ref() else {
         return Vec::new();
     };
-    let Some(ref start_brush) = modal_state.start_brush else {
+    let Ok(brush_mut) = brushes.get_mut(brush_entity) else {
         return Vec::new();
     };
     let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
         return Vec::new();
     };
+    let brush = brush_mut.into_inner();
 
-    // Sub-threshold amounts: snap the live mesh back to the start state.
+    // Sub-threshold amounts: snap the live brush back to the snapshot.
     if modal_state.current_amount.abs() < 1e-4 {
-        let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-            return Vec::new();
-        };
-        *brush = start_brush.clone();
-        let mesh = HalfedgeMesh::lift_from_topology(&start_brush.topology);
-        let vert_keys: Vec<_> = mesh.verts.keys().collect();
-        let mut face_keys: Vec<jackdaw_geometry::halfedge::FaceKey> =
-            vec![Default::default(); mesh.faces.len()];
-        for (k, f) in mesh.faces.iter() {
-            let slot = f.material_idx as usize;
-            if slot < face_keys.len() {
-                face_keys[slot] = k;
-            }
-        }
-        halfedge.mesh = mesh;
-        halfedge.vert_keys = vert_keys;
-        halfedge.face_keys = face_keys;
+        edit.restore(brush, &mut halfedge);
         return Vec::new();
     }
 
-    // Always start the per-frame op from the clean snapshot.
-    halfedge.mesh = start_mesh.clone();
-
-    // Run extrude on each selected face; capture each successful op's
-    // top-face `material_idx` for the chained-selection index math.
-    // `extrude_face_region` reuses the input face as the new top cap (i.e.
-    // `result.top_face == fk`), preserving its `material_idx`. The N side
-    // quads it adds inherit the same `material_idx`. Among ties on a given M
-    // the original (now top) face sits first in slotmap iteration order, so
-    // the top face lands at the topology index equal to
-    // `count(faces with material_idx < M)` after flatten.
-    let mut top_material_idxs: Vec<u32> = Vec::with_capacity(modal_state.face_keys.len());
-    for &fk in &modal_state.face_keys {
-        if let Ok(result) = extrude_face_region(&mut halfedge.mesh, fk, modal_state.current_amount)
-        {
-            let mtx = halfedge.mesh.faces[result.top_face].material_idx;
-            top_material_idxs.push(mtx);
-        }
-    }
-
-    // Resolve post-flatten top-face indices BEFORE flatten/re-lift, while
-    // the mesh still holds the original material_idx values.
-    let top_face_indices: Vec<usize> = top_material_idxs
-        .iter()
-        .map(|&mtx| {
-            halfedge
-                .mesh
-                .faces
-                .values()
-                .filter(|f| f.material_idx < mtx)
-                .count()
-        })
-        .collect();
-
-    // Re-cache all face normals; extrude reshapes the top + side faces.
-    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
-    for fk in face_keys_all {
-        let face = &halfedge.mesh.faces[fk];
-        let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
-        let mut cur = face.loop_first;
-        for _ in 0..face.loop_count {
-            let lp = &halfedge.mesh.loops[cur];
-            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
-            cur = lp.next;
-        }
-        let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        halfedge.mesh.faces[fk].normal_cache = new_normal;
-    }
-
-    // Flatten HalfedgeMesh -> topology, sync Brush.
-    let new_topology = halfedge.mesh.flatten_to_topology();
-    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
-        return top_face_indices;
-    };
-
-    // Grow brush.faces to cover the new side faces. Seed each new slot from
-    // the face being extruded (so material + uv_scale + uv_rotation +
-    // uv_offset inherit from the parent face), then zero out
-    // `uv_u_axis` / `uv_v_axis` so `ensure_uv_axes` derives proper tangents
-    // from each wall face's own plane normal. Picking the parent face as
-    // template (rather than `start_brush.faces.last()`) keeps the extrude's
-    // checker tiling continuous with the original face on the wall sides.
-    let new_face_count = new_topology.polygons.len();
-    let original_face_count = start_brush.faces.len();
-    let extrude_template = modal_state
+    // Seed new wall faces from the face being extruded so material + UV scale /
+    // rotation / offset inherit from the parent, then re-derive each wall's UV
+    // axes from its own plane. Preferring the parent over the brush's last face
+    // keeps the extrude's checker tiling continuous with the original face.
+    let parent = modal_state
         .face_indices
         .first()
-        .and_then(|&idx| start_brush.faces.get(idx).cloned())
-        .or_else(|| start_brush.faces.last().cloned());
-    while brush.faces.len() < new_face_count {
-        let mut template = extrude_template
-            .clone()
-            .or_else(|| brush.faces.last().cloned())
-            .unwrap_or_default();
-        template.uv_u_axis = Vec3::ZERO;
-        template.uv_v_axis = Vec3::ZERO;
-        brush.faces.push(template);
-    }
+        .and_then(|&idx| edit.snapshot_brush().faces.get(idx).cloned())
+        .or_else(|| edit.snapshot_brush().faces.last().cloned())
+        .unwrap_or_default();
+    let original_face_count = edit.snapshot_brush().faces.len();
 
-    let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
-    for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
-        if face_idx < new_topology.polygons.len() {
-            let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
-                .vert as usize;
-            let distance = positions[v0_idx].dot(normal);
-            face_data.plane.normal = normal;
-            face_data.plane.distance = distance;
-            if face_idx >= original_face_count {
-                face_data.ensure_uv_axes();
+    // Restore to the snapshot, re-run the extrude at the current amount, and
+    // reconcile. The closure resolves each new top face's post-flatten index
+    // while the mesh still holds the original material_idx values.
+    // `extrude_face_region` reuses the input face as the new top cap (so
+    // `result.top_face == fk`); its side quads share that `material_idx`, so the
+    // top lands at the topology index `count(faces with material_idx < M)`.
+    let amount = modal_state.current_amount;
+    let face_keys = modal_state.face_keys.clone();
+    let top_face_indices = edit.apply(brush, &mut halfedge, |mesh| {
+        let mut top_material_idxs = Vec::with_capacity(face_keys.len());
+        for &fk in &face_keys {
+            if let Ok(result) = extrude_face_region(mesh, fk, amount) {
+                top_material_idxs.push(mesh.faces[result.top_face].material_idx);
             }
         }
-    }
-    brush.topology = new_topology;
+        top_material_idxs
+            .iter()
+            .map(|&mtx| mesh.faces.values().filter(|f| f.material_idx < mtx).count())
+            .collect::<Vec<usize>>()
+    });
 
-    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
-    let new_mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
-    let new_vert_keys: Vec<_> = new_mesh.verts.keys().collect();
-    let mut new_face_keys = vec![Default::default(); new_mesh.faces.len()];
-    for (k, f) in new_mesh.faces.iter() {
-        let slot = f.material_idx as usize;
-        if slot < new_face_keys.len() {
-            new_face_keys[slot] = k;
-        }
+    // Each new wall face inherits the parent's appearance with freshly derived
+    // UV axes.
+    for new_face in original_face_count..brush.faces.len() {
+        brush.faces[new_face].copy_appearance_from(&parent);
+        brush.faces[new_face].uv_u_axis = Vec3::ZERO;
+        brush.faces[new_face].uv_v_axis = Vec3::ZERO;
+        brush.faces[new_face].ensure_uv_axes();
     }
-    halfedge.mesh = new_mesh;
-    halfedge.vert_keys = new_vert_keys;
-    halfedge.face_keys = new_face_keys;
 
     top_face_indices
 }

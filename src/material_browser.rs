@@ -745,7 +745,7 @@ fn handle_apply_material(
     // material card is currently mounted.
     if let Some(primary) = selection.primary() {
         commands.trigger(
-            crate::inspector::component_display::RefreshInspectorCardBody {
+            crate::inspector::material_card_routing::RefreshInspectorCardBody {
                 source: primary,
                 type_path: "material_card::".to_string(),
             },

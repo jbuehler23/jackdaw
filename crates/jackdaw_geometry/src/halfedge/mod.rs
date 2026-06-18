@@ -7,6 +7,7 @@
 //! (loop cut, knife, bevel, slide) mutate this structure directly.
 
 pub mod cycles;
+mod edit;
 pub mod flatten;
 pub mod lift;
 pub mod ops;
@@ -14,4 +15,5 @@ pub mod select;
 pub mod types;
 pub mod validate;
 
+pub use edit::{HalfedgeBinding, apply_topology_edit};
 pub use types::*;

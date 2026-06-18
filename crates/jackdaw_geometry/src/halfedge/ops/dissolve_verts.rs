@@ -362,18 +362,17 @@ fn dissolve_valence_n_fallback(
         .unwrap_or(0);
 
     // Compute expected outward normal: average of incident face normals.
-    let mut expected_normal = bevy::math::Vec3::ZERO;
+    let mut expected_normal = glam::Vec3::ZERO;
     for &face in &incident_faces {
         expected_normal += mesh.faces[face].normal_cache;
     }
     let expected_normal = expected_normal.normalize_or_zero();
 
     // Compute the proposed ring's Newell normal and centroid.
-    let ring_positions: Vec<bevy::math::Vec3> =
-        outer_ring.iter().map(|&k| mesh.verts[k].co).collect();
+    let ring_positions: Vec<glam::Vec3> = outer_ring.iter().map(|&k| mesh.verts[k].co).collect();
     let ring_normal = crate::newell_normal(&ring_positions);
-    let ring_centroid: bevy::math::Vec3 =
-        ring_positions.iter().copied().sum::<bevy::math::Vec3>() / ring_positions.len() as f32;
+    let ring_centroid: glam::Vec3 =
+        ring_positions.iter().copied().sum::<glam::Vec3>() / ring_positions.len() as f32;
 
     // Determine whether to reverse the ring's winding.
     let should_reverse = if expected_normal.length_squared() > 0.5 {
@@ -383,7 +382,7 @@ fn dissolve_valence_n_fallback(
         // Symmetric-normal case (e.g. dissolving across a cube edge between
         // opposing faces): fall back to the brush interior centroid as reference.
         // The merged face's normal should point AWAY from the interior centroid.
-        let mut brush_centroid_sum = bevy::math::Vec3::ZERO;
+        let mut brush_centroid_sum = glam::Vec3::ZERO;
         let mut count = 0u32;
         for (k, vert) in mesh.verts.iter() {
             if k == v {

@@ -35,8 +35,7 @@ pub fn remove_doubles(mesh: &mut HalfedgeMesh, distance: f32) -> Result<MergeRes
     }
 
     // First, collect vertices in a stable sorted order (by slotmap key FFI value).
-    let mut keyed: Vec<(VertKey, bevy::math::Vec3)> =
-        mesh.verts.iter().map(|(k, v)| (k, v.co)).collect();
+    let mut keyed: Vec<(VertKey, glam::Vec3)> = mesh.verts.iter().map(|(k, v)| (k, v.co)).collect();
     keyed.sort_by_key(|(k, _)| {
         use slotmap::Key;
         k.data().as_ffi()

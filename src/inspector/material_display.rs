@@ -667,7 +667,6 @@ pub(crate) fn inject_material_cards(
     source: Entity,
     inspector_entity: Entity,
     icon_font: &Handle<Font>,
-    editor_font: &Handle<Font>,
     collapse_state: &super::InspectorCollapseState,
 ) {
     for kind in MaterialCardKind::ALL {
@@ -676,14 +675,13 @@ pub(crate) fn inject_material_cards(
             .get(kind.title())
             .copied()
             .unwrap_or(kind.default_collapsed());
-        let body = super::component_display::spawn_material_card_shell(
+        let body = super::material_card_routing::spawn_material_card_shell(
             commands,
             inspector_entity,
             kind.title(),
             kind.icon(),
             kind.type_path(),
             icon_font,
-            editor_font,
             collapsed,
         );
         commands.queue(move |world: &mut World| {
@@ -733,7 +731,7 @@ pub(crate) fn resolve_material_handle(
     source: Entity,
 ) -> Option<Handle<StandardMaterial>> {
     if world.get::<crate::brush::Brush>(source).is_some() {
-        return super::component_display::resolve_brush_material_handle(world, source);
+        return super::material_card_routing::resolve_brush_material_handle(world, source);
     }
     world
         .get::<MeshMaterial3d<StandardMaterial>>(source)
@@ -1038,37 +1036,27 @@ pub(super) fn on_preview_shape_button_click(
 /// Only writes when a change is detected to avoid thrashing the render data.
 pub(super) fn refresh_preview_shape_buttons(
     state: Res<crate::material_preview::MaterialPreviewState>,
-    buttons: Query<(
-        Entity,
+    mut buttons: Query<(
         &PreviewShapeButton,
-        &ButtonVariant,
-        &BackgroundColor,
-        &BorderColor,
+        &mut ButtonVariant,
+        &mut BackgroundColor,
+        &mut BorderColor,
     )>,
-    mut bg_query: Query<&mut BackgroundColor>,
-    mut border_query: Query<&mut BorderColor>,
-    mut variant_query: Query<&mut ButtonVariant>,
 ) {
     if !state.is_changed() {
         return;
     }
-    for (entity, btn, current_variant, _bg, _border) in &buttons {
+    for (btn, mut variant, mut bg, mut border) in &mut buttons {
         let wanted = if btn.0 == state.preview_shape {
             ButtonVariant::Active
         } else {
             ButtonVariant::Default
         };
-        if *current_variant == wanted {
+        if *variant == wanted {
             continue;
         }
-        if let Ok(mut v) = variant_query.get_mut(entity) {
-            *v = wanted;
-        }
-        if let (Ok(mut bg), Ok(mut border)) =
-            (bg_query.get_mut(entity), border_query.get_mut(entity))
-        {
-            set_button_variant(wanted, &mut bg, &mut border);
-        }
+        *variant = wanted;
+        set_button_variant(wanted, &mut bg, &mut border);
     }
 }
 
@@ -1145,7 +1133,9 @@ fn spawn_material_numeric_field(
 
 #[cfg(test)]
 mod preview_card_tests {
-    use super::{MaterialPreviewView, PreviewShapeButton, fill_preview_card};
+    use super::{
+        MaterialPreviewView, PreviewShapeButton, fill_preview_card, refresh_preview_shape_buttons,
+    };
     use crate::material_preview::MaterialPreviewState;
     use bevy::prelude::*;
 
@@ -1201,6 +1191,17 @@ mod preview_card_tests {
             "active_material must be set to the provided handle"
         );
     }
+
+    // Running the system in a schedule catches intra-system query conflicts
+    // (Bevy B0001), which crash the editor at startup. Calling the card builder
+    // directly does not exercise this, so a builder-only test missed it once.
+    #[test]
+    fn refresh_preview_shape_buttons_initializes_without_query_conflict() {
+        let mut app = make_app();
+        app.add_systems(Update, refresh_preview_shape_buttons);
+        // Would panic with B0001 at system init if the queries aliased.
+        app.update();
+    }
 }
 
 #[cfg(test)]
@@ -1255,14 +1256,12 @@ mod inject_material_cards_tests {
             .run_system_once(
                 move |mut commands: Commands,
                       collapse_state: Res<InspectorCollapseState>,
-                      icon_font: Res<IconFont>,
-                      editor_font: Res<EditorFont>| {
+                      icon_font: Res<IconFont>| {
                     inject_material_cards(
                         &mut commands,
                         source,
                         inspector,
                         &icon_font.0,
-                        &editor_font.0,
                         &collapse_state,
                     );
                 },

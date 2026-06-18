@@ -1540,17 +1540,7 @@ fn commit_path(world: &mut World, brush_entity: Entity) {
         new_faces.push(src);
     }
 
-    let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
-    for (idx, face_data) in new_faces.iter_mut().enumerate() {
-        if idx < new_topology.polygons.len() {
-            let normal = new_topology.face_normal_with(&positions, idx);
-            let v0_idx =
-                new_topology.loops[new_topology.polygons[idx].loop_start as usize].vert as usize;
-            let distance = positions[v0_idx].dot(normal);
-            face_data.plane.normal = normal;
-            face_data.plane.distance = distance;
-        }
-    }
+    new_topology.recompute_face_planes(&mut new_faces);
 
     let new_brush = {
         let Some(mut brush_mut) = world.get_mut::<Brush>(brush_entity) else {

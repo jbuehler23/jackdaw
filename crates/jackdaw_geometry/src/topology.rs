@@ -5,16 +5,17 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use bevy::math::{Vec2, Vec3};
-use bevy::prelude::*;
+#[cfg(feature = "render")]
 use bevy::reflect::Reflect;
 use bitflags::bitflags;
+use glam::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
-use crate::BrushPlane;
 use crate::newell::newell_normal;
+use crate::{BrushFaceData, BrushPlane};
 
-#[derive(Reflect, Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "render", derive(Reflect))]
 pub struct BrushTopology {
     pub vertices: Vec<MeshVert>,
     pub edges: Vec<MeshEdge>,
@@ -23,15 +24,17 @@ pub struct BrushTopology {
     pub attributes: AttributeStack,
 }
 
-#[derive(Reflect, Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "render", derive(Reflect))]
 pub struct MeshVert {
     pub position: Vec3,
 }
 
-#[derive(Reflect, Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "render", derive(Reflect))]
 pub struct MeshEdge {
     pub v: [u32; 2],
-    #[reflect(ignore)]
+    #[cfg_attr(feature = "render", reflect(ignore))]
     pub flags: EdgeFlag,
 }
 
@@ -44,13 +47,15 @@ impl Default for MeshEdge {
     }
 }
 
-#[derive(Reflect, Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "render", derive(Reflect))]
 pub struct MeshPoly {
     pub loop_start: u32,
     pub loop_total: u32,
 }
 
-#[derive(Reflect, Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "render", derive(Reflect))]
 pub struct MeshLoop {
     pub vert: u32,
     pub edge: u32,
@@ -78,7 +83,8 @@ impl<'de> Deserialize<'de> for EdgeFlag {
     }
 }
 
-#[derive(Reflect, Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "render", derive(Reflect))]
 pub struct AttributeStack {
     pub vert: HashMap<Cow<'static, str>, AttributeData>,
     pub edge: HashMap<Cow<'static, str>, AttributeData>,
@@ -87,7 +93,8 @@ pub struct AttributeStack {
     pub face: HashMap<Cow<'static, str>, AttributeData>,
 }
 
-#[derive(Reflect, Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "render", derive(Reflect))]
 pub enum AttributeData {
     F32(Vec<f32>),
     Vec2(Vec<Vec2>),
@@ -146,11 +153,29 @@ impl BrushTopology {
         self.face_centroid_with(&positions, face_idx)
     }
 
+    /// Plane for `face_idx` using already-computed vertex positions.
+    fn face_plane_with(&self, positions: &[Vec3], face_idx: usize) -> BrushPlane {
+        let normal = self.face_normal_with(positions, face_idx);
+        let v0_idx = self.loops[self.polygons[face_idx].loop_start as usize].vert as usize;
+        BrushPlane {
+            normal,
+            distance: positions[v0_idx].dot(normal),
+        }
+    }
+
     pub fn face_plane(&self, face_idx: usize) -> BrushPlane {
         let positions: Vec<Vec3> = self.vertices.iter().map(|v| v.position).collect();
-        let normal = self.face_normal_with(&positions, face_idx);
-        let v0_idx = self.loops[self.polygons[face_idx].loop_start as usize].vert as usize;
-        let distance = positions[v0_idx].dot(normal);
-        BrushPlane { normal, distance }
+        self.face_plane_with(&positions, face_idx)
+    }
+
+    /// Overwrite each face's plane from this topology, computing vertex positions
+    /// once. Faces beyond this topology's polygon count are left unchanged.
+    pub fn recompute_face_planes(&self, faces: &mut [BrushFaceData]) {
+        let positions: Vec<Vec3> = self.vertices.iter().map(|v| v.position).collect();
+        for (face_idx, face) in faces.iter_mut().enumerate() {
+            if face_idx < self.polygons.len() {
+                face.plane = self.face_plane_with(&positions, face_idx);
+            }
+        }
     }
 }

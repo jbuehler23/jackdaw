@@ -7,7 +7,8 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-bevy = { version = "0.18", default-features = false, features = [
+glam = { version = "0.30", features = ["serde"] }
+bevy = { version = "0.18", default-features = false, optional = true, features = [
     "reflect_auto_register",
     "std",
     "serialize",
@@ -20,12 +21,17 @@ bitflags = "2"
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+glam = { version = "0.30", features = ["serde"] }
 jackdaw_jsn = { path = "../jackdaw_jsn", default-features = false }
 serde_json = { workspace = true }
 
 [features]
 default = ["render"]
-render = ["bevy/bevy_pbr", "bevy/bevy_render"]
+# `render` is the full Bevy-facing build used by the editor: reflection, ECS
+# component derives, and StandardMaterial handles on faces. The engine-agnostic
+# core consumed by the Godot binding is the `--no-default-features` build:
+# glam + serde only, String materials, no derives.
+render = ["dep:bevy", "bevy/bevy_pbr", "bevy/bevy_render"]
 
 [lints]
 workspace = true

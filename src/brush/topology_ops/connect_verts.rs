@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::connect_verts::connect_verts;
-use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey};
+use jackdaw_geometry::halfedge::{VertKey, apply_topology_edit};
 use jackdaw_jsn::Brush;
 
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
@@ -47,98 +47,53 @@ pub(crate) fn brush_connect_verts(
         return OperatorResult::Cancelled;
     }
 
-    // Run connect_verts on the selected vertices.
-    let connect_result = connect_verts(&mut halfedge.mesh, &vert_keys);
-
-    // Capture the topology vertex index pair for each new edge so we can write
-    // them into `BrushSelection.edges` after the flatten/re-lift roundtrip.
-    // Topology vertex order matches HalfedgeMesh slotmap iteration order (see
-    // `flatten_to_topology`); connect_verts never removes verts.
-    let new_edge_pairs: Vec<(usize, usize)> = match connect_result {
-        Ok(ref r) => {
-            let mut vk_to_topo: std::collections::HashMap<VertKey, usize> =
-                std::collections::HashMap::with_capacity(halfedge.mesh.verts.len());
-            for (i, (k, _)) in halfedge.mesh.verts.iter().enumerate() {
-                vk_to_topo.insert(k, i);
-            }
-            let mut out: Vec<(usize, usize)> = Vec::with_capacity(r.new_edges.len());
-            for ek in &r.new_edges {
-                let Some(edge) = halfedge.mesh.edges.get(*ek) else {
-                    continue;
-                };
-                let Some(&a) = vk_to_topo.get(&edge.v[0]) else {
-                    continue;
-                };
-                let Some(&b) = vk_to_topo.get(&edge.v[1]) else {
-                    continue;
-                };
-                let pair = if a < b { (a, b) } else { (b, a) };
-                if !out.contains(&pair) {
-                    out.push(pair);
+    // Connect the verts and reconcile, capturing the topology vertex index pair
+    // for each new edge so the post-commit selection can target them. The pairs
+    // are read from the mesh before reconcile; topology vertex order matches the
+    // mesh slotmap order (see `flatten_to_topology`) and connect_verts never
+    // removes verts. `into_inner` reborrows the change-detected `Mut<Brush>` as
+    // `&mut Brush` so the two fields can be borrowed disjointly.
+    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    let source = brush.faces.last().cloned().unwrap_or_default();
+    let original_face_count = brush.faces.len();
+    let new_edge_pairs: Vec<(usize, usize)> = apply_topology_edit(
+        &mut brush.faces,
+        &mut brush.topology,
+        &mut halfedge.0,
+        |mesh| match connect_verts(mesh, &vert_keys) {
+            Ok(r) => {
+                let mut vk_to_topo: std::collections::HashMap<VertKey, usize> =
+                    std::collections::HashMap::with_capacity(mesh.verts.len());
+                for (i, (k, _)) in mesh.verts.iter().enumerate() {
+                    vk_to_topo.insert(k, i);
                 }
+                let mut out: Vec<(usize, usize)> = Vec::with_capacity(r.new_edges.len());
+                for ek in &r.new_edges {
+                    let Some(edge) = mesh.edges.get(*ek) else {
+                        continue;
+                    };
+                    let Some(&a) = vk_to_topo.get(&edge.v[0]) else {
+                        continue;
+                    };
+                    let Some(&b) = vk_to_topo.get(&edge.v[1]) else {
+                        continue;
+                    };
+                    let pair = if a < b { (a, b) } else { (b, a) };
+                    if !out.contains(&pair) {
+                        out.push(pair);
+                    }
+                }
+                out
             }
-            out
-        }
-        Err(_) => Vec::new(),
-    };
+            Err(_) => Vec::new(),
+        },
+    );
 
-    // Re-cache all face normals.
-    let face_keys_all: Vec<_> = halfedge.mesh.faces.keys().collect();
-    for fk in face_keys_all {
-        let face = &halfedge.mesh.faces[fk];
-        let mut ring_positions = Vec::with_capacity(face.loop_count as usize);
-        let mut cur = face.loop_first;
-        for _ in 0..face.loop_count {
-            let lp = &halfedge.mesh.loops[cur];
-            ring_positions.push(halfedge.mesh.verts[lp.vert].co);
-            cur = lp.next;
-        }
-        let new_normal = jackdaw_geometry::newell_normal(&ring_positions);
-        halfedge.mesh.faces[fk].normal_cache = new_normal;
+    // Any face the split created inherits the previous last face's appearance.
+    for new_face in original_face_count..brush.faces.len() {
+        brush.faces[new_face].copy_appearance_from(&source);
+        brush.faces[new_face].ensure_uv_axes();
     }
-
-    // Flatten HalfedgeMesh -> topology, sync Brush.faces[i].plane + Brush.topology.
-    let new_topology = halfedge.mesh.flatten_to_topology();
-    let mut brush = brushes.get_mut(brush_entity)?;
-
-    // Connect_verts may add new faces. Extend brush.faces with copies of the last
-    // existing face data as a default; material_idx from the parent face is
-    // inherited during flatten.
-    let new_face_count = new_topology.polygons.len();
-    while brush.faces.len() < new_face_count {
-        let template = brush.faces.last().cloned().unwrap_or_default();
-        brush.faces.push(template);
-    }
-
-    // Update plane data per face from new topology.
-    let positions: Vec<Vec3> = new_topology.vertices.iter().map(|v| v.position).collect();
-    for (face_idx, face_data) in brush.faces.iter_mut().enumerate() {
-        if face_idx < new_topology.polygons.len() {
-            let normal = new_topology.face_normal_with(&positions, face_idx);
-            let v0_idx = new_topology.loops[new_topology.polygons[face_idx].loop_start as usize]
-                .vert as usize;
-            let distance = positions[v0_idx].dot(normal);
-            face_data.plane.normal = normal;
-            face_data.plane.distance = distance;
-        }
-    }
-    brush.topology = new_topology;
-
-    // Re-lift HalfedgeMesh from new topology so vert_keys / face_keys are consistent.
-    let new_mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
-    let new_vert_keys: Vec<_> = new_mesh.verts.keys().collect();
-    let mut new_face_keys = vec![Default::default(); new_mesh.faces.len()];
-    for (k, f) in new_mesh.faces.iter() {
-        let slot = f.material_idx as usize;
-        if slot < new_face_keys.len() {
-            new_face_keys[slot] = k;
-        }
-    }
-    halfedge.mesh = new_mesh;
-    halfedge.vert_keys = new_vert_keys;
-    halfedge.face_keys = new_face_keys;
-
-    // Push undo entry.
     // Chain selection: write the newly created connecting edges into
     // `BrushSelection.edges` so the user can immediately act on them
     // (e.g. switch to Edge mode and loop-cut / slide).
