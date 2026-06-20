@@ -36,10 +36,10 @@ bevy = { version = "0.18", features = ["file_watcher"] }
 # Static-linked editor. `default-features = false` keeps us off
 # the experimental dylib path; vanilla cargo build, no
 # rustc-wrapper, no SDK proxy.
-jackdaw = { version = "0.4", default-features = false, optional = true }
+jackdaw = { version = "0.5", default-features = false, optional = true }
 # Runtime-only `.jsn` loader for the standalone binary. No editor
 # deps pulled in.
-jackdaw_runtime = "0.4"
+jackdaw_runtime = "0.5"
 # Claim SIGINT/SIGTERM before wgpu/gilrs swallow it.
 ctrlc = "3"
 

@@ -4,15 +4,17 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushSelection, EditMode};
+use crate::brush::BrushSelection;
+use crate::brush::EditMode;
+use crate::brush::topology_ops::uv_common::{can_run, for_each_selected_face};
 
 /// Snap U and V axes to the closest world-axis pair for the face's normal.
-/// Useful for Hammer / Quake-style brushwork where adjacent brushes with the
-/// same texture tile continuously across edges.
+/// Useful for grid-aligned brushwork where adjacent brushes with the same
+/// texture tile continuously across edges.
 #[operator(
     id = "brush.face.uv.world_aligned",
     label = "World-Align UVs",
-    is_available = can_run_uv_world_aligned,
+    is_available = can_run,
     allows_undo = true
 )]
 pub(crate) fn brush_uv_world_aligned(
@@ -21,61 +23,17 @@ pub(crate) fn brush_uv_world_aligned(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
 ) -> OperatorResult {
-    if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-        return OperatorResult::Cancelled;
-    }
-    let brush_entity = selection.active_brush?;
-    let sel_faces: Vec<usize> = selection
-        .sub(brush_entity)
-        .map(|s| s.faces.clone())
-        .unwrap_or_default();
-    if sel_faces.is_empty() {
-        return OperatorResult::Cancelled;
-    }
-    let mut brush = brushes.get_mut(brush_entity)?;
-
-    for &face_idx in &sel_faces {
-        if face_idx >= brush.faces.len() {
-            continue;
-        }
-        let n = brush.topology.face_normal(face_idx);
-        let abs = n.abs();
-        let (u, v) = if abs.x >= abs.y && abs.x >= abs.z {
-            // Normal mostly along X: U = +/-Y, V = Z
-            if n.x >= 0.0 {
-                (Vec3::Y, Vec3::Z)
-            } else {
-                (Vec3::NEG_Y, Vec3::Z)
-            }
-        } else if abs.y >= abs.x && abs.y >= abs.z {
-            // Normal mostly along Y: U = +/-X (negated for consistent winding), V = Z
-            if n.y >= 0.0 {
-                (Vec3::NEG_X, Vec3::Z)
-            } else {
-                (Vec3::X, Vec3::Z)
-            }
-        } else {
-            // Normal mostly along Z: U = X, V = +/-Y
-            if n.z >= 0.0 {
-                (Vec3::X, Vec3::Y)
-            } else {
-                (Vec3::X, Vec3::NEG_Y)
-            }
-        };
-        let face = &mut brush.faces[face_idx];
-        face.uv_u_axis = u;
-        face.uv_v_axis = v;
-    }
-
-    OperatorResult::Finished
-}
-
-pub(crate) fn can_run_uv_world_aligned(
-    edit_mode: Res<EditMode>,
-    selection: Res<BrushSelection>,
-) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
-        && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
+    for_each_selected_face(
+        &edit_mode,
+        &selection,
+        &mut brushes,
+        |face_idx, topology, face| {
+            let normal = topology.face_normal(face_idx);
+            let axes = jackdaw_uv::world_aligned(normal);
+            face.uv_u_axis = axes.u;
+            face.uv_v_axis = axes.v;
+        },
+    )
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

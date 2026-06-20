@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Binding, BindingOf, InputModKeys, ModKeys, Press, Release, Tap};
+use bevy_enhanced_input::prelude::{
+    Binding, BindingOf, InputModKeys, ModKeys, Press, Release, Tap,
+};
 
 use crate::keymap_conditions::{DoubleClick, ScrollTick};
 

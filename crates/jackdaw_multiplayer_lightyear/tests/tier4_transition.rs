@@ -2,7 +2,7 @@
 //! the empty-tag spawn, which is *inside* a `ZoneTransition` trigger volume that
 //! targets (zone 2, tag "gate"). On the next server `FixedUpdate` the server-side
 //! `detect_zone_transitions` system fires: it re-routes the player's room
-//! membership (zone 1 → zone 2) and repositions the player at the zone-2 "gate"
+//! membership (zone 1 -> zone 2) and repositions the player at the zone-2 "gate"
 //! spawn. We assert the server-side player ends in zone 2 at the gate position.
 //!
 //! This exercises the whole Phase 6 surface: AABB overlap detection (no physics),
@@ -18,7 +18,7 @@ use jackdaw_multiplayer_lightyear::{
 };
 
 /// The zone-1 starter spawn (where the player auto-spawns) AND the location of the
-/// trigger volume — so the freshly spawned player is immediately inside it.
+/// trigger volume - so the freshly spawned player is immediately inside it.
 const P1: Vec3 = Vec3::new(10.0, 0.0, -5.0);
 /// The zone-2 "gate" destination spawn the player is repositioned to.
 const P2: Vec3 = Vec3::new(-40.0, 3.0, 100.0);
@@ -34,7 +34,7 @@ fn free_addr() -> std::net::SocketAddr {
 fn authored_trigger_moves_player_to_destination_zone_and_spawn() {
     let addr = free_addr();
 
-    // ---- server: hosts zones 1 + 2, plus a trigger volume at P1 → zone 2/"gate" ----
+    // ---- server: hosts zones 1 + 2, plus a trigger volume at P1 -> zone 2/"gate" ----
     let mut server = App::new();
     // `MinimalPlugins` does NOT include `TransformPlugin`, so without it `Transform`
     // would never propagate into `GlobalTransform` (it would stay identity/zero) and

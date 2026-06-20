@@ -85,7 +85,7 @@ pub(super) struct MaterialFieldBinding {
 // ---------------------------------------------------------------------------
 
 /// Labeled inline color picker bound to a `StandardMaterial` color field.
-/// `rgba` is the current color as [f32;4]; `write` applies a committed color.
+/// `rgba` is the current color as `[f32; 4]`; `write` applies a committed color.
 pub(super) fn spawn_material_color_field(
     world: &mut World,
     parent: Entity,

@@ -1,0 +1,17 @@
+[package]
+name = "jackdaw_hull"
+version = "0.5.0"
+edition = "2024"
+description = "Engine-agnostic convex-hull math (triangle merging, brush rebuild, planar hull) for the jackdaw editor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+glam = { version = "0.30", features = ["serde"] }
+parry3d = "0.26"
+# Path dep with no default features so the bevy-gated `render` feature of
+# jackdaw_geometry is never pulled in; this keeps jackdaw_hull bevy-free.
+jackdaw_geometry = { version = "0.5.0", path = "../jackdaw_geometry", default-features = false }
+
+[lints]
+workspace = true

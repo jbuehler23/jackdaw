@@ -27,6 +27,7 @@ pub mod select_more;
 pub mod select_ring;
 pub mod subdivide;
 pub mod uv_align_to_edge;
+pub mod uv_common;
 pub mod uv_fit_to_face;
 pub mod uv_reset_axes;
 pub mod uv_rotate_90;

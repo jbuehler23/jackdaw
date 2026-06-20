@@ -30,7 +30,7 @@
 //! [`PointerInputContext`] is always active (priority 0) and carries the
 //! single `PointerPrimary` action, bound code-level to `MouseButton::Left`
 //! with `Down::default()` so BEI tracks the full press/hold/release cycle.
-//! The `pointer_primary_just_pressed()` edge is exposed via [`PointerInputs`]
+//! The `pointer_primary_just_pressed()` edge is exposed via `PointerInputs`
 //! via `ActionEvents::START`. LMB release checks and drag/threshold logic in
 //! the invoke-trigger systems continue to read raw `ButtonInput<MouseButton>`
 //! directly; only the initial press edge is routed through this action.
@@ -40,7 +40,7 @@
 //! # `BuiltinActions` registry
 //!
 //! [`BuiltinActions`] maps action names (e.g. `"modal.confirm"`) to the action
-//! entities that the applier in `keymap.rs` needs in order to attach BEI
+//! entities that the applier in `keymap.rs` needs to attach BEI
 //! bindings. The Modal and Navigation arms of `apply_keymap_preset` look up
 //! names here; unknown names land in `skipped_unknown_operator` (same slot
 //! used for unknown operator ids, shared because the semantics are identical:

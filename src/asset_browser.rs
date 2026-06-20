@@ -20,7 +20,7 @@ use rfd::AsyncFileDialog;
 use crate::{
     EditorEntity,
     brush::{Brush, BrushEditMode, BrushSelection, EditMode, LastUsedMaterial},
-    material_browser::{MaterialRegistry, pbr_filename_regex},
+    material_browser::MaterialRegistry,
     prelude::*,
     selection::Selection,
 };
@@ -946,7 +946,7 @@ fn try_find_registry_material(
     path: &str,
     registry: &MaterialRegistry,
 ) -> Option<Handle<StandardMaterial>> {
-    let re = pbr_filename_regex()?;
+    let re = jackdaw_material::pbr_filename_regex()?;
     let filename = Path::new(path).file_name()?.to_str()?;
     let caps = re.captures(filename)?;
     let base_name = caps.get(1)?.as_str().to_lowercase();

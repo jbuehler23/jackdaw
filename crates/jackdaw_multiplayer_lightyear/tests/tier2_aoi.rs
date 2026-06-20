@@ -42,7 +42,7 @@ fn make_client(addr: std::net::SocketAddr, client_id: u64) -> App {
     app
 }
 
-/// Count player entities a client can see that it does NOT control — i.e. the
+/// Count player entities a client can see that it does NOT control - i.e. the
 /// OTHER players. The controlled entity gets a `Controlled` marker on receipt;
 /// everyone else's replicated player does not.
 fn other_players(app: &mut App) -> usize {
@@ -153,7 +153,7 @@ fn two_clients_see_each_other_then_cross_zone_culls() {
     // So the TOTAL count of "other players" across both client worlds must reach
     // 0 (each client auto-despawns the player it can no longer see). Asserting
     // the sum proves the cull fired in both directions without depending on a
-    // fragile server-entity → netcode-id mapping.
+    // fragile server-entity -> netcode-id mapping.
     let mut culled = false;
     let mut last = (usize::MAX, usize::MAX);
     for _ in 0..1000 {

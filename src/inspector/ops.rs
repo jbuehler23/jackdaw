@@ -7,8 +7,8 @@ use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 
-use super::prefab_field_dots::revert_component_to_baseline;
 use super::physics_display::{DisablePhysics, enable_physics};
+use super::prefab_field_dots::revert_component_to_baseline;
 use crate::commands::{AddComponent, CommandHistory, EditorCommand};
 use crate::selection::Selection;
 

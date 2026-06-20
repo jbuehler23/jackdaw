@@ -46,7 +46,7 @@ const SNAP_HIGHLIGHT_COLOR: Color = Color::srgb(0.2, 1.0, 1.0);
 const OCCLUDED_HANDLE_ALPHA: f32 = 0.5;
 
 /// Which mirror-plane grab handle the cursor is over, if any. Written each
-/// frame by [`mirror_plane_hover`]; the plane-drag operator reads it to know
+/// frame by `mirror_plane_hover`; the plane-drag operator reads it to know
 /// what to grab on press.
 #[derive(Resource, Default)]
 pub struct MirrorPlaneHover {

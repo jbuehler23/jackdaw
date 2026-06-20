@@ -5,7 +5,7 @@
 //! removal deleting more than expected") was traced to Manifold's
 //! bounds-relative coincidence epsilon being tighter than the f32-to-f64
 //! plane noise present in editor-saved brushes. The fix lives in
-//! `crates/jackdaw_csg/src/lib.rs::brush_to_manifold` where we now call
+//! `crates/jackdaw_csg/src/lib.rs::brush_to_manifold`, which calls
 //! `set_tolerance(MANIFOLD_TOLERANCE)` on every input manifold.
 //!
 //! This test mimics the geometry in `assets/pre_cut.jsn`: brush-shaped
@@ -22,12 +22,8 @@ use jackdaw_jsn::Brush;
 /// op: face planes and topology in world space.
 fn world_cuboid(half_x: f32, half_y: f32, half_z: f32, center: Vec3) -> Brush {
     let brush = Brush::cuboid(half_x, half_y, half_z);
-    let (world_faces, world_topo) = brush_to_world(
-        &brush.faces,
-        &brush.topology,
-        Quat::IDENTITY,
-        center,
-    );
+    let (world_faces, world_topo) =
+        brush_to_world(&brush.faces, &brush.topology, Quat::IDENTITY, center);
     Brush {
         faces: world_faces,
         topology: world_topo,

@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_runtime"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 description = "Runtime scene loader for the Jackdaw editor"
 license = "MIT OR Apache-2.0"
@@ -16,10 +16,10 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_scene",
     "bevy_log",
 ] }
-jackdaw_jsn = { version = "0.4.1", path = "../jackdaw_jsn", default-features = false }
-jackdaw_geometry = { version = "0.4.1", path = "../jackdaw_geometry", default-features = false }
+jackdaw_jsn = { version = "0.5.0", path = "../jackdaw_jsn", default-features = false }
+jackdaw_geometry = { version = "0.5.0", path = "../jackdaw_geometry", default-features = false }
 jackdaw_pie_protocol = { path = "../jackdaw_pie_protocol", optional = true }
-jackdaw_camera_rig = { version = "0.4.1", path = "../jackdaw_camera_rig", optional = true }
+jackdaw_camera_rig = { version = "0.5.0", path = "../jackdaw_camera_rig", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "2"

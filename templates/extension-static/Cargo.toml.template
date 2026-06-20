@@ -30,7 +30,7 @@ bevy = "0.18"
 # vanilla cargo, no rustc-wrapper, no SDK proxy, and no
 # platform-specific link issues. `default-features = false` keeps
 # us off the experimental dylib path.
-jackdaw = { version = "0.4", default-features = false }
+jackdaw = { version = "0.5", default-features = false }
 
 [profile.dev]
 opt-level = 1

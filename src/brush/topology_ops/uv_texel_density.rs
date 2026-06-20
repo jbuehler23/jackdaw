@@ -4,7 +4,9 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushSelection, EditMode};
+use crate::brush::BrushSelection;
+use crate::brush::EditMode;
+use crate::brush::topology_ops::uv_common::{can_run, for_each_selected_face};
 
 const DEFAULT_TEXEL_DENSITY: f32 = 64.0; // texels per world unit
 const ASSUMED_TEXTURE_PIXELS: f32 = 1024.0;
@@ -15,7 +17,7 @@ const ASSUMED_TEXTURE_PIXELS: f32 = 1024.0;
 #[operator(
     id = "brush.face.uv.texel_density",
     label = "Set Texel Density",
-    is_available = can_run_uv_texel_density,
+    is_available = can_run,
     allows_undo = true
 )]
 pub(crate) fn brush_uv_texel_density(
@@ -24,36 +26,16 @@ pub(crate) fn brush_uv_texel_density(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
 ) -> OperatorResult {
-    if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-        return OperatorResult::Cancelled;
-    }
-    let brush_entity = selection.active_brush?;
-    let sel_faces: Vec<usize> = selection
-        .sub(brush_entity)
-        .map(|s| s.faces.clone())
-        .unwrap_or_default();
-    if sel_faces.is_empty() {
-        return OperatorResult::Cancelled;
-    }
-    let mut brush = brushes.get_mut(brush_entity)?;
+    let scale = jackdaw_uv::texel_density_scale(DEFAULT_TEXEL_DENSITY, ASSUMED_TEXTURE_PIXELS);
 
-    let scale = DEFAULT_TEXEL_DENSITY / ASSUMED_TEXTURE_PIXELS;
-
-    for &face_idx in &sel_faces {
-        if let Some(face) = brush.faces.get_mut(face_idx) {
-            face.uv_scale = Vec2::new(scale, scale);
-        }
-    }
-
-    OperatorResult::Finished
-}
-
-pub(crate) fn can_run_uv_texel_density(
-    edit_mode: Res<EditMode>,
-    selection: Res<BrushSelection>,
-) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
-        && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
+    for_each_selected_face(
+        &edit_mode,
+        &selection,
+        &mut brushes,
+        |_face_idx, _topology, face| {
+            face.uv_scale = scale;
+        },
+    )
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

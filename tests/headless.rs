@@ -38,7 +38,7 @@ fn can_call_operator() {
         .query_filtered::<(), With<Panel>>()
         .iter(app.world())
         .count();
-    // TODO: why is this panel not spawned? What do I need to do in order to make it spawn?
+    // TODO: why is this panel not spawned? What is needed to make it spawn?
     assert_eq!(amount_of_panels, 0);
     assert!(!app.world_mut().contains_resource::<Marker>());
 

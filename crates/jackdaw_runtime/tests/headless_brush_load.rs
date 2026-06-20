@@ -17,7 +17,7 @@
 //! `Handle<StandardMaterial>`. The runtime's deserializer processor can
 //! turn a `#Name`/`@Name`/path string into the correct typed handle
 //! ONLY when that name resolves through the scene's inline-asset map or
-//! the project catalog — and populating that map requires the
+//! the project catalog - and populating that map requires the
 //! `StandardMaterial` asset type to be registered for reflection. That
 //! registration is installed by `MaterialPlugin::<StandardMaterial>` /
 //! `PbrPlugin`, which drag in the full render stack (`RenderPlugin`,
@@ -25,7 +25,7 @@
 //! that, so render-ON the inline `StandardMaterial` entry is skipped,
 //! the bare `#StoneWall` falls through to an untyped `load_untyped`
 //! handle, and reflect-applying that untyped handle into the strong
-//! `Handle<StandardMaterial>` field fails — the whole `Brush` is
+//! `Handle<StandardMaterial>` field fails - the whole `Brush` is
 //! rejected. Resolving a material path into a typed handle is therefore
 //! inseparable from render-side registration; this test deliberately
 //! exercises the render-free `material: String` path instead, and is

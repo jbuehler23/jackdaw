@@ -1,4 +1,4 @@
-//! Tier 6: turnkey additions — Commands-based sends, connection-lifecycle events,
+//! Tier 6: turnkey additions - Commands-based sends, connection-lifecycle events,
 //! and per-connection inbound rate-limiting.
 //!
 //! Run: `cargo test -p jackdaw_multiplayer_lightyear --test tier6_turnkey_additions`
@@ -191,7 +191,7 @@ fn connect_event_server(addr: std::net::SocketAddr) -> App {
     app
 }
 
-// Minimal client with no registered messages — protocol agrees with connect_event_server.
+// Minimal client with no registered messages - protocol agrees with connect_event_server.
 fn make_plain_client(addr: std::net::SocketAddr, id: u64) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
@@ -323,7 +323,7 @@ fn rate_limit_drops_over_cap() {
     }
 
     // The client floods 10 Pings in one burst. Reach the cap, then confirm the
-    // remainder are dropped — all within the first 1-second window.
+    // remainder are dropped - all within the first 1-second window.
     let mut hit_cap = false;
     for _ in 0..400 {
         server.update();

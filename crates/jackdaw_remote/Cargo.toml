@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_remote"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 description = "Remote game integration for the Jackdaw 3D level editor"
 license = "MIT OR Apache-2.0"

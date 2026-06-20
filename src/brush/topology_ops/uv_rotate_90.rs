@@ -4,13 +4,15 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushSelection, EditMode};
+use crate::brush::BrushSelection;
+use crate::brush::EditMode;
+use crate::brush::topology_ops::uv_common::{can_run, for_each_selected_face};
 
 /// Rotate the U and V axes 90 degrees counter-clockwise on each selected face.
 #[operator(
     id = "brush.face.uv.rotate_90",
     label = "Rotate UV 90 deg",
-    is_available = can_run_uv_rotate_90,
+    is_available = can_run,
     allows_undo = true
 )]
 pub(crate) fn brush_uv_rotate_90(
@@ -19,37 +21,17 @@ pub(crate) fn brush_uv_rotate_90(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
 ) -> OperatorResult {
-    if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-        return OperatorResult::Cancelled;
-    }
-    let brush_entity = selection.active_brush?;
-    let sel_faces: Vec<usize> = selection
-        .sub(brush_entity)
-        .map(|s| s.faces.clone())
-        .unwrap_or_default();
-    if sel_faces.is_empty() {
-        return OperatorResult::Cancelled;
-    }
-    let mut brush = brushes.get_mut(brush_entity)?;
-
-    for &face_idx in &sel_faces {
-        if let Some(face) = brush.faces.get_mut(face_idx) {
-            let old_u = face.uv_u_axis;
-            let old_v = face.uv_v_axis;
-            face.uv_u_axis = -old_v;
-            face.uv_v_axis = old_u;
-        }
-    }
-
-    OperatorResult::Finished
-}
-
-pub(crate) fn can_run_uv_rotate_90(
-    edit_mode: Res<EditMode>,
-    selection: Res<BrushSelection>,
-) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
-        && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
+    for_each_selected_face(
+        &edit_mode,
+        &selection,
+        &mut brushes,
+        |_face_idx, _topology, face| {
+            let rotated =
+                jackdaw_uv::rotate_90(jackdaw_uv::UvAxes::new(face.uv_u_axis, face.uv_v_axis));
+            face.uv_u_axis = rotated.u;
+            face.uv_v_axis = rotated.v;
+        },
+    )
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

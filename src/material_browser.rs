@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use bevy::{
@@ -259,12 +258,6 @@ struct TextureSlotPickTask {
     material_handle: Handle<StandardMaterial>,
 }
 
-/// PBR filename regex pattern.
-pub(crate) fn pbr_filename_regex() -> Option<regex::Regex> {
-    let pattern = r"(?i)^(.+?)[_\-\.\s](diffuse|diff|albedo|base|col|color|basecolor|metallic|metalness|metal|mtl|roughness|rough|rgh|normal|normaldx|normalgl|nor|nrm|nrml|norm|orm|emission|emissive|emit|ao|ambient|occlusion|ambientocclusion|displacement|displace|disp|dsp|height|heightmap|alpha|opacity|specularity|specular|spec|spc|gloss|glossy|glossiness|bump|bmp|b|n)\.(png|jpg|jpeg|ktx2|bmp|tga|webp)$";
-    regex::Regex::new(pattern).ok()
-}
-
 /// Returns `true` if the PNG file uses 16-bit (or higher) bit depth.
 ///
 /// Bevy decodes such PNGs as `R16Uint` which is incompatible with
@@ -289,108 +282,73 @@ fn is_16bit_png(path: &Path) -> bool {
     header[24] >= 16
 }
 
+/// Load a texture path into an `Image` handle for the given role, choosing the
+/// color space from `role.is_srgb()`.
+fn load_role_image(
+    role: jackdaw_material::TextureRole,
+    fs_path: &str,
+    asset_server: &AssetServer,
+) -> Handle<Image> {
+    // `group_texture_sets` returns the absolute filesystem path it was given;
+    // derive the asset-relative path for AssetServer loads so we stay inside
+    // Bevy's approved-path set.
+    let asset_path = crate::entity_ops::to_asset_path(fs_path);
+    if role.is_srgb() {
+        asset_server.load::<Image>(asset_path)
+    } else {
+        asset_server.load_with_settings::<Image, ImageLoaderSettings>(
+            asset_path,
+            |s: &mut ImageLoaderSettings| s.is_srgb = false,
+        )
+    }
+}
+
 /// Scan a directory for PBR texture sets and create `StandardMaterial` assets.
 fn detect_and_create_materials(
     dir: &Path,
     asset_server: &AssetServer,
     materials: &mut Assets<StandardMaterial>,
 ) -> Vec<(String, Handle<StandardMaterial>)> {
-    let Some(re) = pbr_filename_regex() else {
-        return Vec::new();
-    };
+    let mut paths = Vec::new();
+    collect_texture_paths(dir, &mut paths);
 
-    let mut groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    scan_dir_recursive(dir, &re, &mut groups);
+    let sets = jackdaw_material::group_texture_sets(&paths);
 
     let mut results = Vec::new();
-    for (base_name, slots) in &groups {
-        let mut base_color_texture = None;
-        let mut normal_map_texture = None;
-        let mut metallic_roughness_texture = None;
-        let mut emissive_texture = None;
-        let mut occlusion_texture = None;
-        let mut depth_map = None;
+    for set in sets {
+        use jackdaw_material::TextureRole;
 
-        for (tag, fs_path) in slots {
-            // `scan_dir_recursive` produces absolute filesystem
-            // paths. Keep `fs_path` for direct disk reads (e.g.
-            // `is_16bit_png`) and derive `asset_path` (relative
-            // to the project's `assets/` root) for AssetServer
-            // loads, staying inside Bevy's approved-path set.
-            let asset_path = crate::entity_ops::to_asset_path(fs_path);
-            let tag_lower = tag.to_lowercase();
-            match tag_lower.as_str() {
-                "diffuse" | "diff" | "albedo" | "base" | "col" | "color" | "basecolor" | "b" => {
-                    base_color_texture = Some(asset_server.load::<Image>(asset_path.clone()));
-                }
-                "normalgl" | "nor" | "nrm" | "nrml" | "norm" | "bump" | "bmp" | "n" | "normal" => {
-                    normal_map_texture = Some(
-                        asset_server.load_with_settings::<Image, ImageLoaderSettings>(
-                            asset_path.clone(),
-                            |s: &mut ImageLoaderSettings| s.is_srgb = false,
-                        ),
-                    );
-                }
-                "orm" => {
-                    let img = asset_server.load_with_settings::<Image, ImageLoaderSettings>(
-                        asset_path.clone(),
-                        |s: &mut ImageLoaderSettings| s.is_srgb = false,
-                    );
-                    if metallic_roughness_texture.is_none() {
-                        metallic_roughness_texture = Some(img.clone());
-                    }
-                    if occlusion_texture.is_none() {
-                        occlusion_texture = Some(img);
-                    }
-                }
-                "metallic" | "metalness" | "metal" | "mtl" | "roughness" | "rough" | "rgh"
-                    if metallic_roughness_texture.is_none() => {
-                        metallic_roughness_texture = Some(
-                            asset_server.load_with_settings::<Image, ImageLoaderSettings>(
-                                asset_path.clone(),
-                                |s: &mut ImageLoaderSettings| s.is_srgb = false,
-                            ),
-                        );
-                    }
-                "emission" | "emissive" | "emit" => {
-                    emissive_texture = Some(asset_server.load::<Image>(asset_path.clone()));
-                }
-                "ao" | "ambient" | "occlusion" | "ambientocclusion" => {
-                    occlusion_texture = Some(
-                        asset_server.load_with_settings::<Image, ImageLoaderSettings>(
-                            asset_path.clone(),
-                            |s: &mut ImageLoaderSettings| s.is_srgb = false,
-                        ),
-                    );
-                }
-                "displacement" | "displace" | "disp" | "dsp" | "height" | "heightmap"
-                    // Skip 16-bit integer PNGs. Bevy decodes them as R16Uint which
-                    // is incompatible with StandardMaterial's float-filterable depth_map slot.
-                    if !is_16bit_png(Path::new(fs_path)) => {
-                        depth_map = Some(
-                            asset_server.load_with_settings::<Image, ImageLoaderSettings>(
-                                asset_path.clone(),
-                                |s: &mut ImageLoaderSettings| s.is_srgb = false,
-                            ),
-                        );
-                    }
-                _ => {}
-            }
-        }
+        let base_color_texture = set
+            .base_color
+            .as_deref()
+            .map(|p| load_role_image(TextureRole::BaseColor, p, asset_server));
+        let normal_map_texture = set
+            .normal
+            .as_deref()
+            .map(|p| load_role_image(TextureRole::Normal, p, asset_server));
+        let metallic_roughness_texture = set
+            .metallic_roughness
+            .as_deref()
+            .map(|p| load_role_image(TextureRole::MetallicRoughness, p, asset_server));
+        let emissive_texture = set
+            .emissive
+            .as_deref()
+            .map(|p| load_role_image(TextureRole::Emissive, p, asset_server));
+        let occlusion_texture = set
+            .occlusion
+            .as_deref()
+            .map(|p| load_role_image(TextureRole::Occlusion, p, asset_server));
+        // Skip 16-bit integer PNGs for the depth slot. Bevy decodes them as
+        // R16Uint, which is incompatible with StandardMaterial's
+        // float-filterable depth_map slot. The crate still assigns the depth
+        // candidate; we drop it here, post-hoc, after reading the file header.
+        let depth_map = set
+            .depth
+            .as_deref()
+            .filter(|p| !is_16bit_png(Path::new(p)))
+            .map(|p| load_role_image(TextureRole::Depth, p, asset_server));
 
-        // Only create if at least one texture slot is populated
-        if base_color_texture.is_none()
-            && normal_map_texture.is_none()
-            && metallic_roughness_texture.is_none()
-            && emissive_texture.is_none()
-            && occlusion_texture.is_none()
-            && depth_map.is_none()
-        {
-            continue;
-        }
-
-        let has_depth = depth_map.is_some();
-        let has_mr = metallic_roughness_texture.is_some();
+        let scalars = set.recommended_scalars();
         let handle = materials.add(StandardMaterial {
             base_color_texture,
             normal_map_texture,
@@ -398,41 +356,35 @@ fn detect_and_create_materials(
             emissive_texture,
             occlusion_texture,
             depth_map,
-            metallic: if has_mr { 1.0 } else { 0.0 },
-            perceptual_roughness: if has_mr { 1.0 } else { 0.5 },
-            parallax_depth_scale: if has_depth { 0.05 } else { 0.0 },
+            metallic: scalars.metallic,
+            perceptual_roughness: scalars.perceptual_roughness,
+            parallax_depth_scale: scalars.parallax_depth_scale,
             parallax_mapping_method: bevy::pbr::ParallaxMappingMethod::Occlusion,
-            max_parallax_layer_count: if has_depth { 32.0 } else { 0.0 },
+            max_parallax_layer_count: scalars.max_parallax_layer_count,
             ..default()
         });
 
-        results.push((base_name.clone(), handle));
+        results.push((set.base_name, handle));
     }
 
-    results.sort_by(|a, b| a.0.cmp(&b.0));
+    // `group_texture_sets` already returns sets sorted by base name.
     results
 }
 
-fn scan_dir_recursive(
-    dir: &Path,
-    re: &regex::Regex,
-    groups: &mut HashMap<String, Vec<(String, String)>>,
-) {
+/// Recursively walk a directory, collecting candidate texture file paths as
+/// forward-slash strings. The crate's regex is the authority on which of these
+/// actually parse into material sets; this walk only filters out non-2D KTX2
+/// files (cubemaps, texture arrays) that can't bind to a `StandardMaterial`
+/// texture slot.
+fn collect_texture_paths(dir: &Path, paths: &mut Vec<String>) {
     let Ok(read_dir) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in read_dir.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            scan_dir_recursive(&path, re, groups);
+            collect_texture_paths(&path, paths);
         } else {
-            let file_name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            // Skip non-2D KTX2 files (cubemaps, texture arrays). They can't
-            // be used as regular 2D textures in StandardMaterial.
             if path
                 .extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("ktx2"))
@@ -441,17 +393,7 @@ fn scan_dir_recursive(
                 continue;
             }
 
-            if let Some(caps) = re.captures(&file_name) {
-                let base_name = caps[1].to_string();
-                let tag = caps[2].to_string();
-
-                let asset_path = path.to_string_lossy().replace('\\', "/");
-
-                groups
-                    .entry(base_name.to_lowercase())
-                    .or_default()
-                    .push((tag, asset_path));
-            }
+            paths.push(path.to_string_lossy().replace('\\', "/"));
         }
     }
 }

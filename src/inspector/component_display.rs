@@ -37,9 +37,9 @@ use jackdaw_runtime::EditorCategory;
 use super::{
     ComponentDisplay, ComponentDisplayBody, ComponentDisplayTypePath, ComponentName,
     ComponentPicker, Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch,
-    InspectorTarget, ReflectDisplayable, brush_display,
-    category_strip::ActiveInspectorCategory, component_tooltip::ReflectedTypeTooltip,
-    custom_props_display, extract_module_group, material_display, modifier_display, reflect_fields,
+    InspectorTarget, ReflectDisplayable, brush_display, category_strip::ActiveInspectorCategory,
+    component_tooltip::ReflectedTypeTooltip, custom_props_display, extract_module_group,
+    material_display, modifier_display, reflect_fields,
 };
 use crate::inspector::prefab_field_dots::{PrefabInstanceCtx, inspector_type_paths_for};
 use crate::prefab::PrefabAstCache;

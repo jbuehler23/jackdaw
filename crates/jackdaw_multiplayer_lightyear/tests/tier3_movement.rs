@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 /// The game's player input. Native input requires the full
 /// `Serialize + DeserializeOwned + Clone + PartialEq + Debug + Default + Reflect`
-/// set plus a `MapEntities` impl (empty here — the input carries no entities).
+/// set plus a `MapEntities` impl (empty here - the input carries no entities).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default, Reflect)]
 struct TestInput {
     dir: Vec3,

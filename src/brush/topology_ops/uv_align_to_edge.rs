@@ -4,7 +4,9 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_jsn::Brush;
 
-use crate::brush::{BrushEditMode, BrushSelection, EditMode};
+use crate::brush::BrushSelection;
+use crate::brush::EditMode;
+use crate::brush::topology_ops::uv_common::{can_run, for_each_selected_face};
 
 /// Rotate UV axes so the U direction aligns with a selected edge of the face.
 /// Useful for getting a texture's grain to follow a particular feature edge.
@@ -13,7 +15,7 @@ use crate::brush::{BrushEditMode, BrushSelection, EditMode};
 #[operator(
     id = "brush.face.uv.align_to_edge",
     label = "Align UV to Edge",
-    is_available = can_run_uv_align_to_edge,
+    is_available = can_run,
     allows_undo = true
 )]
 pub(crate) fn brush_uv_align_to_edge(
@@ -22,65 +24,42 @@ pub(crate) fn brush_uv_align_to_edge(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
 ) -> OperatorResult {
-    if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-        return OperatorResult::Cancelled;
-    }
-    let brush_entity = selection.active_brush?;
-    let sel_faces: Vec<usize> = selection
-        .sub(brush_entity)
-        .map(|s| s.faces.clone())
-        .unwrap_or_default();
-    if sel_faces.is_empty() {
-        return OperatorResult::Cancelled;
-    }
     let selected_edges: Vec<(usize, usize)> = selection
-        .sub(brush_entity)
+        .active_sub()
         .map(|s| s.edges.clone())
         .unwrap_or_default();
-    let mut brush = brushes.get_mut(brush_entity)?;
 
-    for &face_idx in &sel_faces {
-        if face_idx >= brush.faces.len() {
-            continue;
-        }
-        let normal = brush.topology.face_normal(face_idx);
-        let ring: Vec<u32> = brush.topology.face_ring(face_idx).collect();
-        if ring.len() < 2 {
-            continue;
-        }
-
-        // Find a selected edge whose both endpoints are in this face's ring.
-        let mut target_edge: Option<(usize, usize)> = None;
-        for &(a, b) in &selected_edges {
-            if ring.contains(&(a as u32)) && ring.contains(&(b as u32)) {
-                target_edge = Some((a, b));
-                break;
+    for_each_selected_face(
+        &edit_mode,
+        &selection,
+        &mut brushes,
+        |face_idx, topology, face| {
+            let normal = topology.face_normal(face_idx);
+            let ring: Vec<u32> = topology.face_ring(face_idx).collect();
+            if ring.len() < 2 {
+                return;
             }
-        }
-        let (a_idx, b_idx) = target_edge.unwrap_or_else(|| (ring[0] as usize, ring[1] as usize));
 
-        let a_pos = brush.topology.vertices[a_idx].position;
-        let b_pos = brush.topology.vertices[b_idx].position;
-        let edge_dir = b_pos - a_pos;
+            // Find a selected edge whose both endpoints are in this face's ring.
+            let mut target_edge: Option<(usize, usize)> = None;
+            for &(a, b) in &selected_edges {
+                if ring.contains(&(a as u32)) && ring.contains(&(b as u32)) {
+                    target_edge = Some((a, b));
+                    break;
+                }
+            }
+            let (a_idx, b_idx) =
+                target_edge.unwrap_or_else(|| (ring[0] as usize, ring[1] as usize));
 
-        // Project onto face plane, then normalize.
-        let edge_dir_planar = (edge_dir - normal * edge_dir.dot(normal)).normalize_or_zero();
-        if edge_dir_planar.length_squared() > 0.5 {
-            let face = &mut brush.faces[face_idx];
-            face.uv_u_axis = edge_dir_planar;
-            face.uv_v_axis = normal.cross(edge_dir_planar).normalize_or_zero();
-        }
-    }
+            let a_pos = topology.vertices[a_idx].position;
+            let b_pos = topology.vertices[b_idx].position;
 
-    OperatorResult::Finished
-}
-
-pub(crate) fn can_run_uv_align_to_edge(
-    edit_mode: Res<EditMode>,
-    selection: Res<BrushSelection>,
-) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
-        && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
+            if let Some(axes) = jackdaw_uv::align_to_edge(normal, a_pos, b_pos) {
+                face.uv_u_axis = axes.u;
+                face.uv_v_axis = axes.v;
+            }
+        },
+    )
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

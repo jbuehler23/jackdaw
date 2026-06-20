@@ -1,5 +1,5 @@
 //! A `Replication` proxy round-trips through Bevy's structural reflection
-//! (de)serialization — the path Jackdaw's `.jsn` save/load uses. Run:
+//! (de)serialization - the path Jackdaw's `.jsn` save/load uses. Run:
 //! `cargo test -p jackdaw_multiplayer --test jsn_roundtrip`
 
 use bevy::prelude::*;

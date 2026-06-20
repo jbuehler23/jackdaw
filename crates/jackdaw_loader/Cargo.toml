@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_loader"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 description = "Dynamic-library extension loader for Jackdaw"
 license = "MIT OR Apache-2.0"

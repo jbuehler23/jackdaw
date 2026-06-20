@@ -1,6 +1,6 @@
 use glam::Vec3;
+use jackdaw_csg::{BooleanOp, CsgInput, brush_boolean};
 use jackdaw_geometry::{compute_brush_topology, cuboid_faces};
-use jackdaw_csg::{brush_boolean, BooleanOp, CsgInput};
 
 #[test]
 fn box_minus_tunnel_through_manifold() {
@@ -15,5 +15,8 @@ fn box_minus_tunnel_through_manifold() {
     let result = brush_boolean(&a, &b, BooleanOp::Difference)
         .expect("manifold difference of two valid boxes should succeed");
     assert!(!result.faces.is_empty(), "difference should produce faces");
-    assert!(!result.topology.polygons.is_empty(), "result should carry topology");
+    assert!(
+        !result.topology.polygons.is_empty(),
+        "result should carry topology"
+    );
 }

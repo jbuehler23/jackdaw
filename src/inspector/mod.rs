@@ -11,8 +11,8 @@ pub(crate) mod material_card_routing;
 mod material_display;
 mod modifier_display;
 pub(crate) mod ops;
-mod prefab_field_dots;
 pub(crate) mod physics_display;
+mod prefab_field_dots;
 pub(crate) mod prefab_menu;
 pub(crate) mod reflect_fields;
 

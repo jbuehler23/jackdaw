@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 description = "A 3D level editor built with Bevy"
 license = "MIT OR Apache-2.0"
@@ -87,6 +87,12 @@ jackdaw_widgets.workspace = true
 jackdaw_commands.workspace = true
 jackdaw_terrain.workspace = true
 jackdaw_remote.workspace = true
+jackdaw_snap.workspace = true
+jackdaw_select.workspace = true
+jackdaw_uv.workspace = true
+jackdaw_pick.workspace = true
+jackdaw_hull.workspace = true
+jackdaw_material.workspace = true
 jackdaw_node_graph.workspace = true
 jackdaw_animation.workspace = true
 jackdaw_avian_integration.workspace = true
@@ -157,7 +163,7 @@ bevy_simple_subsecond_system = { version = "0.2", optional = true }
 winit.workspace = true
 image.workspace = true
 time.workspace = true
-jackdaw_localization = { version = "0.4.1", path = "crates/jackdaw_localization" }
+jackdaw_localization = { version = "0.5.0", path = "crates/jackdaw_localization" }
 
 # Powers the Linux `PR_SET_PDEATHSIG` hook that takes PIE game processes down
 # with the editor when it is killed (`src/pie.rs`).
@@ -173,22 +179,28 @@ bevy = { version = "0.18", features = [
     "file_watcher",
     "reflect_documentation",
 ] }
-jackdaw_jsn = { version = "0.4.1", path = "crates/jackdaw_jsn" }
-jackdaw_geometry = { version = "0.4.1", path = "crates/jackdaw_geometry" }
-jackdaw_csg = { version = "0.4.1", path = "crates/jackdaw_csg" }
+jackdaw_jsn = { version = "0.5.0", path = "crates/jackdaw_jsn" }
+jackdaw_geometry = { version = "0.5.0", path = "crates/jackdaw_geometry" }
+jackdaw_csg = { version = "0.5.0", path = "crates/jackdaw_csg" }
 bevy_monitors = "0.2"
 bevy_infinite_grid = "0.18"
-jackdaw_camera = { version = "0.4.1", path = "crates/jackdaw_camera" }
-jackdaw_camera_rig = { version = "0.4.1", path = "crates/jackdaw_camera_rig" }
-jackdaw_feathers = { version = "0.4.1", path = "crates/jackdaw_feathers" }
-jackdaw_widgets = { version = "0.4.1", path = "crates/jackdaw_widgets" }
-jackdaw_commands = { version = "0.4.1", path = "crates/jackdaw_commands" }
-jackdaw_terrain = { version = "0.4.1", path = "crates/jackdaw_terrain" }
-jackdaw_remote = { version = "0.4.1", path = "crates/jackdaw_remote" }
-jackdaw_node_graph = { version = "0.4.1", path = "crates/jackdaw_node_graph" }
-jackdaw_animation = { version = "0.4.1", path = "crates/jackdaw_animation" }
-jackdaw_fuzzy = { version = "0.4.1", path = "crates/jackdaw_fuzzy" }
-jackdaw_localization = { version = "0.4.1", path = "crates/jackdaw_localization" }
+jackdaw_camera = { version = "0.5.0", path = "crates/jackdaw_camera" }
+jackdaw_camera_rig = { version = "0.5.0", path = "crates/jackdaw_camera_rig" }
+jackdaw_feathers = { version = "0.5.0", path = "crates/jackdaw_feathers" }
+jackdaw_widgets = { version = "0.5.0", path = "crates/jackdaw_widgets" }
+jackdaw_commands = { version = "0.5.0", path = "crates/jackdaw_commands" }
+jackdaw_terrain = { version = "0.5.0", path = "crates/jackdaw_terrain" }
+jackdaw_remote = { version = "0.5.0", path = "crates/jackdaw_remote" }
+jackdaw_snap = { version = "0.5.0", path = "crates/jackdaw_snap" }
+jackdaw_select = { version = "0.5.0", path = "crates/jackdaw_select" }
+jackdaw_uv = { version = "0.5.0", path = "crates/jackdaw_uv" }
+jackdaw_pick = { version = "0.5.0", path = "crates/jackdaw_pick" }
+jackdaw_hull = { version = "0.5.0", path = "crates/jackdaw_hull" }
+jackdaw_material = { version = "0.5.0", path = "crates/jackdaw_material" }
+jackdaw_node_graph = { version = "0.5.0", path = "crates/jackdaw_node_graph" }
+jackdaw_animation = { version = "0.5.0", path = "crates/jackdaw_animation" }
+jackdaw_fuzzy = { version = "0.5.0", path = "crates/jackdaw_fuzzy" }
+jackdaw_localization = { version = "0.5.0", path = "crates/jackdaw_localization" }
 noise = "0.9"
 rand = "0.9"
 serde = "1"
@@ -201,19 +213,19 @@ avian3d = { version = "0.6", default-features = false, features = [
     "parry-f32",
     "collider-from-mesh",
 ] }
-jackdaw_avian_integration = { version = "0.4.1", path = "crates/jackdaw_avian_integration" }
-jackdaw_multiplayer = { version = "0.4.1", path = "crates/jackdaw_multiplayer" }
-jackdaw_multiplayer_editor = { version = "0.4.1", path = "crates/jackdaw_multiplayer_editor" }
-jackdaw_multiplayer_lightyear = { version = "0.4.1", path = "crates/jackdaw_multiplayer_lightyear" }
-jackdaw_runtime = { version = "0.4.1", path = "crates/jackdaw_runtime" }
-jackdaw_panels = { version = "0.4.1", path = "crates/jackdaw_panels" }
-jackdaw_api = { version = "0.4.1", path = "crates/jackdaw_api" }
-jackdaw_api_internal = { version = "0.4.1", path = "crates/jackdaw_api_internal" }
-jackdaw_api_macros = { version = "0.4.1", path = "crates/jackdaw_api_macros" }
-jackdaw_dylib = { version = "0.4.1", path = "crates/jackdaw_dylib" }
-jackdaw_loader = { version = "0.4.1", path = "crates/jackdaw_loader" }
-jackdaw_sdk = { version = "0.4.1", path = "crates/jackdaw_sdk" }
-jackdaw_rustc_wrapper = { version = "0.4.1", path = "crates/jackdaw_rustc_wrapper" }
+jackdaw_avian_integration = { version = "0.5.0", path = "crates/jackdaw_avian_integration" }
+jackdaw_multiplayer = { version = "0.5.0", path = "crates/jackdaw_multiplayer" }
+jackdaw_multiplayer_editor = { version = "0.5.0", path = "crates/jackdaw_multiplayer_editor" }
+jackdaw_multiplayer_lightyear = { version = "0.5.0", path = "crates/jackdaw_multiplayer_lightyear" }
+jackdaw_runtime = { version = "0.5.0", path = "crates/jackdaw_runtime" }
+jackdaw_panels = { version = "0.5.0", path = "crates/jackdaw_panels" }
+jackdaw_api = { version = "0.5.0", path = "crates/jackdaw_api" }
+jackdaw_api_internal = { version = "0.5.0", path = "crates/jackdaw_api_internal" }
+jackdaw_api_macros = { version = "0.5.0", path = "crates/jackdaw_api_macros" }
+jackdaw_dylib = { version = "0.5.0", path = "crates/jackdaw_dylib" }
+jackdaw_loader = { version = "0.5.0", path = "crates/jackdaw_loader" }
+jackdaw_sdk = { version = "0.5.0", path = "crates/jackdaw_sdk" }
+jackdaw_rustc_wrapper = { version = "0.5.0", path = "crates/jackdaw_rustc_wrapper" }
 bevy_enhanced_input = "0.24"
 rfd = "0.15"
 bevy_rerecast = { version = "0.4", default-features = true }
@@ -236,8 +248,8 @@ time = { version = "0.3.47", default-features = false, features = [
     "local-offset",
     "formatting",
 ] }
+fluent = "0.16"
 fluent_content = "0.0.5"
-bevy_fluent = { git = "https://github.com/ThierryBerger/bevy_fluent.git", branch = "asset_path_resolve" }
 unic-langid = { version = "0.9", features = ["macros"] }
 sys-locale = "0.2"
 

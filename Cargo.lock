@@ -1310,27 +1310,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bevy_fluent"
-version = "0.14.0"
-source = "git+https://github.com/ThierryBerger/bevy_fluent.git?branch=asset_path_resolve#84fbf955b4028bfedc9b4778f957c24dad550ae6"
-dependencies = [
- "bevy",
- "fluent",
- "fluent-langneg",
- "fluent_content",
- "futures-lite",
- "indexmap",
- "intl-memoizer",
- "ron",
- "serde",
- "serde_yaml",
- "thiserror 1.0.69",
- "tracing",
- "unic-langid",
- "uuid",
-]
-
-[[package]]
 name = "bevy_gilrs"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5244,7 +5223,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jackdaw"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -5271,19 +5250,25 @@ dependencies = [
  "jackdaw_csg",
  "jackdaw_feathers",
  "jackdaw_geometry",
+ "jackdaw_hull",
  "jackdaw_jsn",
  "jackdaw_loader",
  "jackdaw_localization",
+ "jackdaw_material",
  "jackdaw_multiplayer",
  "jackdaw_multiplayer_editor",
  "jackdaw_node_graph",
  "jackdaw_panels",
+ "jackdaw_pick",
  "jackdaw_pie_protocol",
  "jackdaw_remote",
  "jackdaw_runtime",
  "jackdaw_rustc_wrapper",
  "jackdaw_sdk",
+ "jackdaw_select",
+ "jackdaw_snap",
  "jackdaw_terrain",
+ "jackdaw_uv",
  "jackdaw_widgets",
  "libc",
  "notify",
@@ -5301,7 +5286,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_animation"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "jackdaw_commands",
@@ -5315,7 +5300,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_api"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "bevy_enhanced_input 0.24.3",
@@ -5331,7 +5316,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_api_internal"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "bevy_enhanced_input 0.24.3",
@@ -5347,7 +5332,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_api_macros"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5356,7 +5341,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_avian_integration"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "avian3d 0.6.1",
  "bevy",
@@ -5364,14 +5349,14 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_camera"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
 ]
 
 [[package]]
 name = "jackdaw_camera_rig"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "jackdaw_jsn",
@@ -5379,7 +5364,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_commands"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "serde",
@@ -5387,7 +5372,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_csg"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "glam 0.30.10",
  "jackdaw_geometry",
@@ -5398,7 +5383,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_dylib"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "jackdaw_api_internal",
  "jackdaw_commands",
@@ -5407,7 +5392,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_feathers"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "bevy_easings",
@@ -5424,14 +5409,14 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_fuzzy"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "nucleo-matcher",
 ]
 
 [[package]]
 name = "jackdaw_geometry"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "bitflags 2.11.1",
@@ -5445,8 +5430,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "jackdaw_hull"
+version = "0.5.0"
+dependencies = [
+ "glam 0.30.10",
+ "jackdaw_geometry",
+ "parry3d",
+]
+
+[[package]]
 name = "jackdaw_jsn"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "glam 0.30.10",
@@ -5459,7 +5453,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_loader"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "dirs",
@@ -5469,18 +5463,25 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_localization"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
- "bevy_fluent",
+ "fluent",
  "fluent_content",
  "sys-locale 0.2.4",
  "unic-langid",
 ]
 
 [[package]]
+name = "jackdaw_material"
+version = "0.5.0"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "jackdaw_multiplayer"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "jackdaw_jsn",
@@ -5490,7 +5491,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_multiplayer_editor"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "jackdaw_api",
@@ -5499,7 +5500,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_multiplayer_lightyear"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "jackdaw_camera_rig",
@@ -5510,7 +5511,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_node_graph"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "bevy_enhanced_input 0.24.3",
@@ -5525,7 +5526,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_panels"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "jackdaw_feathers",
@@ -5536,8 +5537,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "jackdaw_pick"
+version = "0.5.0"
+dependencies = [
+ "glam 0.30.10",
+ "jackdaw_geometry",
+]
+
+[[package]]
 name = "jackdaw_pie_protocol"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "ipc-channel",
@@ -5548,7 +5557,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_remote"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "jackdaw_pie_protocol",
@@ -5558,7 +5567,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_runtime"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "jackdaw_camera_rig",
@@ -5572,7 +5581,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_rustc_wrapper"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -5580,15 +5589,31 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_sdk"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "jackdaw_api",
 ]
 
 [[package]]
+name = "jackdaw_select"
+version = "0.5.0"
+dependencies = [
+ "glam 0.30.10",
+ "jackdaw_geometry",
+]
+
+[[package]]
+name = "jackdaw_snap"
+version = "0.5.0"
+dependencies = [
+ "glam 0.30.10",
+ "serde",
+]
+
+[[package]]
 name = "jackdaw_terrain"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy_math 0.18.1",
  "noise",
@@ -5596,8 +5621,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "jackdaw_uv"
+version = "0.5.0"
+dependencies = [
+ "glam 0.30.10",
+ "jackdaw_geometry",
+]
+
+[[package]]
 name = "jackdaw_widgets"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "bevy_enhanced_input 0.24.3",
@@ -7903,7 +7936,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -7940,7 +7973,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -8526,12 +8559,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ryu"
-version = "1.0.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
-
-[[package]]
 name = "safe_arch"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8728,19 +8755,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_yaml"
-version = "0.9.34+deprecated"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
-dependencies = [
- "indexmap",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
-]
-
-[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8750,12 +8764,6 @@ dependencies = [
  "cpufeatures 0.2.17",
  "digest",
 ]
-
-[[package]]
-name = "sha1_smol"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sha2"
@@ -9887,12 +9895,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "unsafe-libyaml"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
-
-[[package]]
 name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9960,7 +9962,6 @@ dependencies = [
  "getrandom 0.4.2",
  "js-sys",
  "serde_core",
- "sha1_smol",
  "wasm-bindgen",
 ]
 

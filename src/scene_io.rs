@@ -466,7 +466,7 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
 ///
 /// Known limitation: a previously-exported `.nav` is never deleted here. If
 /// a scene once had a navmesh (so `.nav` exists) and the navmesh is later
-/// removed, the stale `.nav` remains on disk. This is intentional for now —
+/// removed, the stale `.nav` remains on disk. This is intentional for now -
 /// deletion risks clobbering a file another tool or the user owns, and a
 /// stale `.nav` is better caught by a freshness check on the load side.
 fn export_navmesh_sibling(world: &World, scene_path: &str) {

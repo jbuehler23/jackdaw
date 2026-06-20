@@ -208,7 +208,7 @@ fn knife_face_interior_poke_then_chord_to_edge_midpoint() {
 
     // The fan triangle that originally connected (center, v4, v5) was
     // also re-keyed by `split_edge` (which splits each loop in the
-    // radial cycle). We now have two adjacent triangles sharing the
+    // radial cycle), leaving two adjacent triangles that share the
     // new edge_mid vert. Bisect the half-fan that still contains v4.
     let chord_face =
         face_containing_verts(&mesh, center_vert, edge_mid).expect("fan half with edge_mid");

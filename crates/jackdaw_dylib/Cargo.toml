@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_dylib"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 description = "Shared dynamic library bundling jackdaw's extension-facing types. Mirrors `bevy_dylib`."
 license = "MIT OR Apache-2.0"

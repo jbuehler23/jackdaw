@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_multiplayer_editor"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 description = "Editor extension that surfaces Jackdaw's networking proxy components in the inspector. No networking runtime."
 license = "MIT OR Apache-2.0"

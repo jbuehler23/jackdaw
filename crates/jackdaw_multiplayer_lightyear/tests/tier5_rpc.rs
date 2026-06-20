@@ -5,7 +5,7 @@
 //! Run: `cargo test -p jackdaw_multiplayer_lightyear --test tier5_rpc`
 //!
 //! Game-facing code here (the `on_ping` / `on_pong` observers and the
-//! `ClientSender`/`ServerSender` calls) imports NO lightyear types — that is the
+//! `ClientSender`/`ServerSender` calls) imports NO lightyear types - that is the
 //! point of the layer. The only lightyear import is `EventSender`, used purely as
 //! a test-harness readiness probe (a real game gates sends on its own UI/connection
 //! state instead).
@@ -208,7 +208,7 @@ fn directed_is_isolated() {
     let addr = free_addr();
     let mut server = build_reply_server(addr); // replies only to whoever pings
     let mut a = build_client(addr, 1, true); // sends Ping(42)
-    let mut b = build_client(addr, 2, false); // never sends — must receive nothing
+    let mut b = build_client(addr, 2, false); // never sends - must receive nothing
 
     // See directed_round_trip for why finish + cleanup are required here.
     for app in [&mut server, &mut a, &mut b] {

@@ -1737,7 +1737,7 @@ fn find_live_face_containing_point(mesh: &HalfedgeMesh, click: Vec3) -> Option<F
         if plane_dist > 1e-2 {
             continue;
         }
-        if point_in_polygon_3d(click, &ring_positions, n) {
+        if jackdaw_pick::point_in_polygon(click, &ring_positions, n) {
             return Some(k);
         }
     }
@@ -1772,49 +1772,6 @@ fn face_ring_positions(mesh: &HalfedgeMesh, face: FaceKey) -> Vec<Vec3> {
         cur = mesh.loops[cur].next;
     }
     out
-}
-
-/// 3D point-in-polygon: project the polygon and the test point onto
-/// the plane spanned by the polygon (using `normal` as the plane
-/// normal), then run a 2D ray-cast. Returns true when `point` is
-/// inside the projected polygon.
-fn point_in_polygon_3d(point: Vec3, ring: &[Vec3], normal: Vec3) -> bool {
-    if ring.len() < 3 {
-        return false;
-    }
-    let n = normal.normalize_or_zero();
-    if n == Vec3::ZERO {
-        return false;
-    }
-    // Build a 2D basis perpendicular to `n`.
-    let u_seed = if n.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
-    let u = (u_seed - n * u_seed.dot(n)).normalize_or_zero();
-    if u == Vec3::ZERO {
-        return false;
-    }
-    let v = n.cross(u);
-    let origin = ring[0];
-    let to_2d = |p: Vec3| -> Vec2 {
-        let d = p - origin;
-        Vec2::new(d.dot(u), d.dot(v))
-    };
-    let ring_2d: Vec<Vec2> = ring.iter().map(|&p| to_2d(p)).collect();
-    let point_2d = to_2d(point);
-    // Standard ray-cast.
-    let n2d = ring_2d.len();
-    let mut inside = false;
-    let mut j = n2d - 1;
-    for i in 0..n2d {
-        let pi = ring_2d[i];
-        let pj = ring_2d[j];
-        if ((pi.y > point_2d.y) != (pj.y > point_2d.y))
-            && (point_2d.x < (pj.x - pi.x) * (point_2d.y - pi.y) / (pj.y - pi.y) + pi.x)
-        {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
 }
 
 /// Insert a chord from `va` to `vb`. If the two verts share a live
