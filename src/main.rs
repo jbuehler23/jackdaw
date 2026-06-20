@@ -5,10 +5,8 @@ use bevy::{
     prelude::*,
     window::{ExitCondition, WindowPlugin},
 };
+use bevy_window_chrome::primary_window_attributes;
 use jackdaw::prelude::*;
-
-#[cfg(not(target_arch = "wasm32"))]
-mod window_icon;
 
 fn main() -> AppExit {
     // Install a SIGINT/SIGTERM handler before anything else gets a
@@ -94,6 +92,7 @@ fn main() -> AppExit {
                 .set(WindowPlugin {
                     exit_condition: ExitCondition::DontExit,
                     close_when_requested: false,
+                    primary_window: Some(primary_window_attributes()),
                     ..default()
                 }),
         )
@@ -111,9 +110,6 @@ fn main() -> AppExit {
     if let Some(pending) = auto_open {
         app.insert_resource(pending);
     }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    window_icon::install(&mut app);
 
     app.run()
 }

@@ -733,8 +733,7 @@ mod tests {
     fn build_hull_too_few_vertices_is_none() {
         let c = cuboid();
         let verts = vec![Vec3::ZERO, Vec3::X, Vec3::Y];
-        let out =
-            build_hull_faces_matching(&verts, 0, &c.faces, &c.rings, FaceMaterial::default());
+        let out = build_hull_faces_matching(&verts, 0, &c.faces, &c.rings, FaceMaterial::default());
         assert!(out.is_none(), "fewer than four input vertices returns None");
     }
 

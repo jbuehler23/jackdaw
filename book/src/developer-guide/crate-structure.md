@@ -50,6 +50,7 @@ in the workspace. The interesting layers:
 - `jackdaw_remote`: the Bevy Remote Protocol (BRP) client
   used by the remote inspector when talking to a running
   game.
+- `bevy_window_chrome`: custom title bar window chrome for Bevy.
 
 ## Extension and dylib plumbing
 

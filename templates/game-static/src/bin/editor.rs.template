@@ -52,7 +52,8 @@ fn main() -> AppExit {
                         address_mode_w: ImageAddressMode::Repeat,
                         ..ImageSamplerDescriptor::linear()
                     },
-                }),
+                })
+                .set(editor_window_plugin()),
         )
         // Ambient plugins. `jackdaw::prelude` re-exports both so
         // we don't need direct deps on avian3d /

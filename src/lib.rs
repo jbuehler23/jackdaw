@@ -104,6 +104,7 @@ pub mod viewport;
 pub mod viewport_overlays;
 pub mod viewport_select;
 pub mod viewport_util;
+pub mod windowing;
 pub mod workspace_dropdown;
 
 use bevy::{
@@ -129,6 +130,7 @@ use selection::Selection;
 
 /// Everything needed to start using Jackdaw.
 pub mod prelude {
+    pub use crate::windowing::{editor_window_plugin, primary_window_attributes};
     pub use crate::{
         DylibLoaderPlugin, EditorCategory, EditorDescription, EditorHidden, EditorPlugins,
         ExtensionPlugin, SkipSerialization,
@@ -165,7 +167,7 @@ pub enum AppState {
     Editor,
 }
 
-#[derive(Component, Default)]
+#[derive(Component, Copy, Clone, Default)]
 pub struct EditorEntity;
 
 /// Marker component for UI overlays that should block viewport camera input
@@ -350,6 +352,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(operator_tooltip::OperatorTooltipPlugin)
         .add_plugins(jackdaw_node_graph::NodeGraphPlugin)
         .add_plugins(jackdaw_animation::AnimationPlugin)
+        .add_plugins(windowing::WindowingPlugin)
         .add_plugins(jackdaw_panels::DockPlugin)
         .add_plugins(input_contexts::InputContextsPlugin)
         .add_plugins(jackdaw_api_internal::ExtensionLoaderPlugin)
@@ -411,7 +414,13 @@ impl Plugin for EditorCorePlugin {
         .add_observer(flag_menu_dirty_on_menu_entry_remove)
         .add_systems(
             OnEnter(AppState::Editor),
-            (spawn_layout, init_layout, populate_menu).chain(),
+            (
+                layout::spawn_editor_layout,
+                ApplyDeferred,
+                init_layout,
+                populate_menu,
+            )
+                .chain(),
         )
         .add_systems(OnEnter(AppState::Editor), run_config::read_run_configs)
         .add_systems(
@@ -619,15 +628,6 @@ fn auto_hide_internal_entities(
             }
         }
     }
-}
-
-fn spawn_layout(
-    mut commands: Commands,
-    icon_font: Res<jackdaw_feathers::icons::IconFont>,
-    editor_font: Res<jackdaw_feathers::icons::EditorFont>,
-) {
-    commands.spawn((Camera2d, EditorEntity));
-    commands.spawn(layout::editor_layout(&icon_font, &editor_font));
 }
 
 /// Spawn a new keyframe clip on the same target as the currently-

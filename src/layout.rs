@@ -2,7 +2,7 @@ use bevy::{picking::hover::Hovered, prelude::*, ui_widgets::observe};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{self, ButtonOperatorCall, ButtonSize, ButtonVariant},
-    icons::IconFont,
+    icons::{EditorFont, IconFont},
     menu_bar, separator, split_panel, status_bar,
     text_edit::{self, TextEditProps},
     tokens,
@@ -33,7 +33,11 @@ use crate::{
     snapping::SnapSettings,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
+    windowing::{JackdawIcon, title_bar_repo_link},
 };
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+use bevy_window_chrome::CaptionFont;
+use bevy_window_chrome::{WindowChromeTheme, spawn_window_shell};
 
 /// Discriminator for the header tab kinds the editor knows how to host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -116,208 +120,167 @@ pub struct HierarchyFilter;
 #[derive(Component)]
 pub struct Toolbar;
 
-pub fn editor_layout(
-    icon_font: &IconFont,
-    editor_font: &jackdaw_feathers::icons::EditorFont,
-) -> impl Bundle {
-    (
+fn spawn_editor_main_area(parent: &mut ChildSpawnerCommands) {
+    // Scene document (visible by default).
+    //
+    // The dock tree is materialised by `jackdaw_panels`' reconciler
+    // under this single host. The default tree (left | (center over
+    // bottom) | right) is built in `init_layout` from registered
+    // windows; the user can drag panels anywhere within it.
+    parent.spawn((
+        DocumentRoot(TabKind::Scene),
         EditorEntity,
-        // Outer shell: dark background with padding (Figma: 10px padding, bg #171717)
-        BackgroundColor(tokens::WINDOW_BG),
         Node {
             width: percent(100),
-            height: percent(100),
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Center,
-            padding: UiRect::all(px(tokens::PANEL_GAP)),
+            flex_grow: 1.0,
+            min_height: px(0.0),
+            display: Display::Flex,
+            flex_direction: FlexDirection::Row,
             ..Default::default()
         },
         children![(
-            // Inner container: the editor workspace with rounded corners and border.
+            jackdaw_panels::reconcile::DockTreeHost::default(),
             EditorEntity,
             Node {
                 width: percent(100),
-                flex_grow: 1.0,
-                min_height: px(0.0),
-                flex_direction: FlexDirection::Column,
-                border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::all(px(8.0)),
+                height: percent(100),
+                flex_direction: FlexDirection::Row,
                 overflow: Overflow::clip(),
                 ..Default::default()
             },
-            BackgroundColor(tokens::WINDOW_BG),
-            BorderColor::all(tokens::BORDER_SUBTLE),
-            children![
-                // Integrated window header: menu bar + scene tabs +
-                // workspace dropdown + transport. Scene tabs live in
-                // the header alongside the menu (where workspace tabs
-                // used to sit); workspaces are exposed as a dropdown
-                // next to the Play pill.
-                window_header(icon_font.0.clone(), editor_font.0.clone()),
-                // Content container (flex grow). Holds both workspaces.
-                // Figma: Editor (Rows) has padding: 0px 4px
-                (
-                    EditorEntity,
-                    Node {
-                        width: percent(100),
-                        flex_grow: 1.0,
-                        min_height: px(0.0),
-                        flex_direction: FlexDirection::Column,
-                        padding: UiRect::horizontal(px(tokens::PANEL_GAP)),
-                        row_gap: px(tokens::PANEL_GAP),
-                        ..Default::default()
-                    },
-                    children![
-                    // Scene document (visible by default).
-                    //
-                    // The dock tree is materialised by `jackdaw_panels`'
-                    // reconciler under this single host. The default
-                    // tree (left | (center over bottom) | right) is
-                    // built in `init_layout` from registered windows;
-                    // the user can drag panels anywhere within it.
-                    (
-                        DocumentRoot(TabKind::Scene),
-                        EditorEntity,
-                        Node {
-                            width: percent(100),
-                            flex_grow: 1.0,
-                            min_height: px(0.0),
-                            display: Display::Flex,
-                            flex_direction: FlexDirection::Row,
-                            ..Default::default()
-                        },
-                        children![(
-                            jackdaw_panels::reconcile::DockTreeHost::default(),
-                            EditorEntity,
-                            Node {
-                                width: percent(100),
-                                height: percent(100),
-                                flex_direction: FlexDirection::Row,
-                                overflow: Overflow::clip(),
-                                ..Default::default()
-                            },
-                        )],
-                    ),
-                    // Schedule Explorer document (hidden by default).
-                    // Formerly the Remote Debug workspace; same content
-                    // repackaged as a document tab.
-                    (
-                        DocumentRoot(TabKind::ScheduleExplorer),
-                        EditorEntity,
-                        Node {
-                            width: percent(100),
-                            flex_grow: 1.0,
-                            min_height: px(0.0),
-                            flex_direction: FlexDirection::Column,
-                            display: Display::None,
-                            ..Default::default()
-                        },
-                        split_panel::panel_group(
-                            0.2,
-                            (
-                                Spawn((
-                                    split_panel::panel(1),
-                                    crate::remote::entity_browser::remote_debug_workspace_content(),
-                                )),
-                                Spawn(split_panel::panel_handle()),
-                                Spawn((
-                                    split_panel::panel(1),
-                                    crate::remote::remote_inspector::remote_inspector(),
-                                )),
-                            ),
-                        ),
-                    )
-                ],
-                ),
-                // Status bar (fixed height) with connection indicator
-                editor_status_bar()
-            ],
         )],
-    )
+    ));
+    // Schedule Explorer document (hidden by default).
+    parent.spawn((
+        DocumentRoot(TabKind::ScheduleExplorer),
+        EditorEntity,
+        Node {
+            width: percent(100),
+            flex_grow: 1.0,
+            min_height: px(0.0),
+            flex_direction: FlexDirection::Column,
+            display: Display::None,
+            ..Default::default()
+        },
+        split_panel::panel_group(
+            0.2,
+            (
+                Spawn((
+                    split_panel::panel(1),
+                    crate::remote::entity_browser::remote_debug_workspace_content(),
+                )),
+                Spawn(split_panel::panel_handle()),
+                Spawn((
+                    split_panel::panel(1),
+                    crate::remote::remote_inspector::remote_inspector(),
+                )),
+            ),
+        ),
+    ));
+    parent.spawn(editor_status_bar());
 }
 
-/// Integrated window header. Two groups separated by a flexible spacer:
-/// the **left group** owns the menu bar and the document tab strip (so
-/// tabs sit right after the `Add` menu, matching the Figma mock), and
-/// the **right group** owns the Scene View combobox and the Play/Pause
-/// pill. A flex-grow spacer between them absorbs the slack, so resizing
-/// the dropdown label (e.g. `Scene View v` -> `Animation View v`) can't
-/// shift the tabs.
-fn window_header(icon_font: Handle<Font>, editor_font: Handle<Font>) -> impl Bundle {
+/// Fills a [`spawn_window_shell`] title bar/body pair with editor UI.
+pub fn spawn_editor(
+    commands: &mut Commands,
+    title_bar: Entity,
+    body: Entity,
+    icon_font: Handle<Font>,
+    editor_font: Handle<Font>,
+    jackdaw_icon: Handle<Image>,
+) {
+    commands
+        .entity(title_bar)
+        .with_children(|title_bar_parent| {
+            title_bar_parent.spawn(window_title_bar_content(
+                icon_font.clone(),
+                editor_font.clone(),
+                jackdaw_icon,
+            ));
+        });
+    commands.entity(body).insert((
+        EditorEntity,
+        Node {
+            width: percent(100),
+            height: percent(100),
+            flex_grow: 1.0,
+            min_height: px(0.0),
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::horizontal(px(tokens::PANEL_GAP)),
+            row_gap: px(tokens::PANEL_GAP),
+            overflow: Overflow::clip(),
+            ..Default::default()
+        },
+    ));
+    commands.entity(body).with_children(spawn_editor_main_area);
+}
+
+/// Editor entry: UI camera, window shell, then editor chrome/content.
+pub fn spawn_editor_layout(
+    mut commands: Commands,
+    theme: Res<WindowChromeTheme>,
+    icon_font: Res<IconFont>,
+    editor_font: Res<EditorFont>,
+    jackdaw_icon: Res<JackdawIcon>,
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+    caption_font: Res<CaptionFont>,
+) {
+    let slots = spawn_window_shell(
+        &mut commands,
+        &theme,
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+        caption_font,
+        EditorEntity,
+    );
+    spawn_editor(
+        &mut commands,
+        slots.title_bar,
+        slots.body,
+        icon_font.0.clone(),
+        editor_font.0.clone(),
+        jackdaw_icon.0.clone(),
+    );
+}
+
+fn window_title_bar_content(
+    icon_font: Handle<Font>,
+    editor_font: Handle<Font>,
+    jackdaw_icon: Handle<Image>,
+) -> impl Bundle {
     (
         EditorEntity,
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             width: percent(100),
-            height: px(36.0),
-            flex_shrink: 0.0,
-            border_radius: BorderRadius::top(Val::Px(7.0)),
+            height: percent(100),
+            padding: UiRect::horizontal(px(tokens::SPACING_MD)),
+            column_gap: px(tokens::SPACING_MD),
             ..Default::default()
         },
-        BackgroundColor(tokens::WINDOW_BG),
+        Pickable::IGNORE,
         children![
-            // Left: menu bar + scene tab strip. The strip carries the
-            // scene tabs that drive what's being edited (formerly the
-            // workspace tab strip, which is now a dropdown on the right).
-            // `flex_shrink: 1` + `min_width: 0` let the whole left group
-            // (and therefore the scene tab strip inside it) compress
-            // when many tabs are open, instead of pushing into the
-            // right-side workspace dropdown.
+            title_bar_repo_link(jackdaw_icon),
+            menu_bar::menu_bar_shell(),
             (
+                crate::scenes::ui::SceneTabStrip,
                 EditorEntity,
+                Pickable::IGNORE,
                 Node {
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
                     height: percent(100),
-                    column_gap: px(tokens::SPACING_LG),
+                    column_gap: px(4.0),
                     flex_shrink: 1.0,
-                    min_width: px(0.0),
                     flex_grow: 1.0,
+                    min_width: px(0.0),
+                    overflow: Overflow::scroll_x(),
                     ..Default::default()
                 },
-                children![
-                    menu_bar::menu_bar_shell(),
-                    (
-                        crate::scenes::ui::SceneTabStrip,
-                        EditorEntity,
-                        Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            height: percent(100),
-                            column_gap: px(4.0),
-                            flex_shrink: 1.0,
-                            flex_grow: 1.0,
-                            min_width: px(0.0),
-                            overflow: Overflow::scroll_x(),
-                            ..Default::default()
-                        },
-                        ScrollPosition::default(),
-                    ),
-                ],
+                ScrollPosition::default(),
             ),
-            // Right: Workspace switcher dropdown + Play/Pause transport.
-            // `flex_shrink: 0` pins the right-side controls so the
-            // scene tab strip on the left is what gives ground when
-            // space gets tight.
-            (
-                EditorEntity,
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    padding: UiRect::horizontal(px(tokens::SPACING_MD)),
-                    column_gap: px(8.0),
-                    flex_shrink: 0.0,
-                    ..Default::default()
-                },
-                children![
-                    crate::workspace_dropdown::workspace_dropdown_trigger(
-                        editor_font,
-                        icon_font.clone(),
-                    ),
-                    play_pause_controls(icon_font),
-                ],
-            ),
+            crate::workspace_dropdown::workspace_dropdown_trigger(editor_font, icon_font.clone()),
+            play_pause_controls(icon_font),
         ],
     )
 }
@@ -333,7 +296,7 @@ fn play_pause_controls(icon_font: Handle<Font>) -> impl Bundle {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
-            height: px(22.0),
+            height: px(tokens::HEADER_CONTROL_HEIGHT),
             padding: UiRect::horizontal(px(6.5)),
             column_gap: px(9.0),
             border: UiRect::all(px(1.0)),
@@ -459,7 +422,7 @@ pub fn project_files_panel_content() -> impl Bundle {
 /// Bundle the editor toolbar and the `SceneViewport` node together so
 /// `setup_viewport` can mount the whole thing inside the dock tree's
 /// "center" leaf in one go. Public to the crate because it's spawned
-/// by the viewport plugin, not by `editor_layout` directly.
+/// by the viewport plugin, not by the editor body layout directly.
 pub(crate) fn viewport_with_toolbar() -> impl Bundle {
     (
         EditorEntity,

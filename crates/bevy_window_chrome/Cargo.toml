@@ -1,0 +1,49 @@
+[package]
+name = "bevy_window_chrome"
+version = "0.1.0"
+edition = "2024"
+description = "Native-looking custom window chrome (borderless title bars, caption buttons, resize handles) for Bevy apps"
+repository = "https://github.com/jbuehler23/jackdaw"
+license = "MIT OR Apache-2.0"
+keywords = ["bevy", "window", "titlebar", "chrome", "decorations"]
+categories = ["game-development", "gui"]
+include = [
+    "Cargo.toml",
+    "LICENSE*",
+    "README.md",
+    "examples/**/*",
+    "src/**/*",
+    "caption-lucide.ttf",
+    "assets/**/*",
+]
+
+[dependencies]
+bevy.workspace = true
+winit.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_SystemInformation",
+    "Win32_UI_WindowsAndMessaging",
+    "Wdk_System_SystemServices",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.5.2", features = ["relax-sign-encoding"] }
+objc2-foundation = { version = "0.2.2", default-features = false, features = [
+    "NSGeometry",
+    "NSNotification",
+    "NSObject",
+    "NSString",
+] }
+objc2-app-kit = { version = "0.2.2", default-features = false, features = [
+    "NSView",
+    "NSWindow",
+    "NSScreen",
+] }
+raw-window-handle = { version = "0.6", features = ["std"] }
+
+[lints]
+workspace = true

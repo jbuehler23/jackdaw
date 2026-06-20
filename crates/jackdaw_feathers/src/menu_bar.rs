@@ -192,6 +192,7 @@ pub fn menu_bar_shell() -> impl Bundle {
     (
         MenuBarRoot,
         MenuBar,
+        Pickable::IGNORE,
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -199,9 +200,8 @@ pub fn menu_bar_shell() -> impl Bundle {
             // their share of the row; `flex_shrink: 0` keeps our menu
             // items from being squeezed if the window is narrow.
             width: Val::Auto,
-            height: Val::Px(tokens::MENU_BAR_HEIGHT),
+            height: Val::Px(tokens::HEADER_CONTROL_HEIGHT),
             flex_shrink: 0.0,
-            padding: UiRect::horizontal(Val::Px(tokens::SPACING_SM)),
             ..Default::default()
         },
         BackgroundColor(tokens::WINDOW_BG),

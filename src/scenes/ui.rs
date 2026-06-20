@@ -33,7 +33,6 @@ const TAB_LABEL_FONT_PX: f32 = 12.0;
 const TAB_ICON_FONT_PX: f32 = 11.0;
 const TAB_CLOSE_ICON_PX: f32 = 10.0;
 const TAB_PAD_X: f32 = 6.0;
-const TAB_PAD_Y: f32 = 5.0;
 const TAB_RADIUS: f32 = 4.0;
 const TAB_GAP: f32 = 4.0;
 
@@ -190,9 +189,10 @@ fn spawn_scene_tab(
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(TAB_GAP),
-                padding: UiRect::axes(Val::Px(TAB_PAD_X), Val::Px(TAB_PAD_Y)),
+                padding: UiRect::horizontal(Val::Px(TAB_PAD_X)),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(TAB_RADIUS)),
+                height: Val::Px(tokens::HEADER_CONTROL_HEIGHT),
                 // Tabs shrink uniformly when the strip runs out of
                 // room. `min_width` keeps a tab readable down to icon
                 // + a couple of chars + close; `max_width` stops a
@@ -393,8 +393,8 @@ fn spawn_add_tab_button(commands: &mut Commands, strip: Entity, icon_font: Optio
             SceneTabAddButton,
             Interaction::default(),
             Node {
-                width: Val::Px(22.0),
-                height: Val::Px(22.0),
+                width: Val::Px(tokens::HEADER_CONTROL_HEIGHT),
+                height: Val::Px(tokens::HEADER_CONTROL_HEIGHT),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 border_radius: BorderRadius::all(Val::Px(4.0)),

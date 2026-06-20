@@ -2583,6 +2583,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_window_chrome"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "objc2 0.5.2",
+ "objc2-app-kit 0.2.2",
+ "objc2-foundation 0.2.2",
+ "raw-window-handle",
+ "windows-sys 0.61.2",
+ "winit",
+]
+
+[[package]]
 name = "bevy_winit"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5235,6 +5248,7 @@ dependencies = [
  "bevy_monitors",
  "bevy_rerecast",
  "bevy_simple_subsecond_system",
+ "bevy_window_chrome",
  "bincode",
  "ctrlc",
  "dirs",
@@ -5281,6 +5295,7 @@ dependencies = [
  "test_fixture_extension",
  "time",
  "toml",
+ "webbrowser",
  "winit",
 ]
 
@@ -10321,6 +10336,22 @@ dependencies = [
  "pastey",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "webbrowser"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fc95580916af1e68ff6a7be07446fc5db73ebf71cf092de939bbf5f7e189f72"
+dependencies = [
+ "core-foundation 0.10.1",
+ "jni 0.22.4",
+ "log",
+ "ndk-context",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "url",
  "web-sys",
 ]
 

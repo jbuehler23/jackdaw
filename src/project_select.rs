@@ -24,7 +24,11 @@ use crate::{
     project::{self, ProjectRoot},
     scene_io,
     scrolling_log::{self, ScrollingLog},
+    windowing::{JackdawIcon, title_bar_repo_link},
 };
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+use bevy_window_chrome::CaptionFont;
+use bevy_window_chrome::{WindowChromeTheme, spawn_window_shell};
 
 #[derive(Default)]
 enum ScaffoldState {
@@ -117,7 +121,7 @@ impl Plugin for ProjectSelectPlugin {
 }
 
 /// Marker for the project selector root UI node.
-#[derive(Component)]
+#[derive(Component, Copy, Clone)]
 struct ProjectSelectorRoot;
 
 /// When set, the project selector will skip UI and auto-open the given project.
@@ -347,19 +351,17 @@ fn default_projects_dir() -> PathBuf {
 
 fn spawn_project_selector(
     mut commands: Commands,
+    theme: Res<WindowChromeTheme>,
     editor_font: Res<EditorFont>,
     icon_font: Res<jackdaw_feathers::icons::IconFont>,
+    jackdaw_icon: Res<JackdawIcon>,
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+    caption_font: Res<CaptionFont>,
     pending: Option<Res<PendingAutoOpen>>,
 ) {
-    // UI camera for the project selector screen. Spawned BEFORE the
-    // auto-open early-return so the build-progress modal renders
-    // against a valid camera even when the user lands directly in
-    // an opening project. Without this, the launcher window stays
-    // fully blank for several minutes during a static-editor build
-    // because the modal had no camera to draw on.
-    commands.spawn((ProjectSelectorRoot, Camera2d));
-
     if let Some(pending) = pending {
+        // Camera only — no shell while auto-opening; the build modal still needs to draw.
+        commands.spawn((Camera2d, ProjectSelectorRoot));
         let path = pending.path.clone();
         let skip_build = pending.skip_build;
         commands.remove_resource::<PendingAutoOpen>();
@@ -379,58 +381,70 @@ fn spawn_project_selector(
         || cwd.join("project.jsn").is_file()
         || cwd.join("assets").is_dir();
 
+    let slots = spawn_window_shell(
+        &mut commands,
+        &theme,
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+        caption_font,
+        ProjectSelectorRoot,
+    );
+    fill_project_selector(
+        &mut commands,
+        slots.title_bar,
+        slots.body,
+        font,
+        icon_font_handle,
+        jackdaw_icon.0.clone(),
+        recent,
+        cwd,
+        cwd_has_project,
+    );
+}
+
+fn fill_project_selector(
+    commands: &mut Commands,
+    title_bar: Entity,
+    body: Entity,
+    font: Handle<Font>,
+    icon_font_handle: Handle<Font>,
+    jackdaw_icon: Handle<Image>,
+    recent: project::RecentProjects,
+    cwd: PathBuf,
+    cwd_has_project: bool,
+) {
     commands
-        .spawn((
-            ProjectSelectorRoot,
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                ..Default::default()
-            },
-            BackgroundColor(tokens::WINDOW_BG),
-        ))
-        .with_children(|root| {
-            // Launcher header mirrors the editor chrome: compact title on the
-            // left, version metadata on the right, and no centered splash card.
-            root.spawn((
+        .entity(title_bar)
+        .with_children(|title_bar_parent| {
+            title_bar_parent.spawn((
                 Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Px(44.0),
+                    flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::SpaceBetween,
-                    padding: UiRect::axes(Val::Px(14.0), Val::Px(0.0)),
-                    border: UiRect::bottom(Val::Px(1.0)),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    padding: UiRect::horizontal(Val::Px(tokens::SPACING_MD)),
                     ..Default::default()
                 },
-                BackgroundColor(tokens::PANEL_HEADER_BG),
-                BorderColor::all(tokens::BORDER_SUBTLE),
+                Pickable::IGNORE,
                 children![
                     (
                         Node {
                             flex_direction: FlexDirection::Row,
                             align_items: AlignItems::Center,
-                            column_gap: Val::Px(8.0),
+                            column_gap: Val::Px(tokens::SPACING_MD),
                             ..Default::default()
                         },
                         children![
-                            (
-                                Text::new(String::from(Icon::Boxes.unicode())),
-                                TextFont {
-                                    font: icon_font_handle.clone(),
-                                    font_size: tokens::ICON_MD,
-                                    ..Default::default()
-                                },
-                                TextColor(tokens::DOC_TAB_TOOL_ACCENT),
-                            ),
+                            title_bar_repo_link(jackdaw_icon),
                             (
                                 Text::new("jackdaw"),
                                 TextFont {
                                     font: font.clone(),
-                                    font_size: tokens::FONT_LG,
+                                    font_size: tokens::FONT_MD,
                                     ..Default::default()
                                 },
                                 TextColor(tokens::TEXT_PRIMARY),
+                                Pickable::IGNORE,
                             ),
                         ],
                     ),
@@ -442,16 +456,19 @@ fn spawn_project_selector(
                             ..Default::default()
                         },
                         TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
-                    ),
+                        Pickable::IGNORE,
+                    )
                 ],
             ));
-
-            root.spawn(Node {
+        });
+    commands.entity(body).with_children(|body_parent| {
+        body_parent
+            .spawn(Node {
                 width: Val::Percent(100.0),
                 flex_grow: 1.0,
                 flex_direction: FlexDirection::Row,
                 column_gap: Val::Px(8.0),
-                padding: UiRect::all(Val::Px(8.0)),
+                padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(0.0), Val::Px(8.0)),
                 ..Default::default()
             })
             .with_children(|content| {
@@ -576,6 +593,7 @@ fn spawn_project_selector(
                                 align_items: AlignItems::Center,
                                 padding: UiRect::axes(Val::Px(12.0), Val::Px(0.0)),
                                 border: UiRect::bottom(Val::Px(1.0)),
+                                border_radius: BorderRadius::top(Val::Px(tokens::BORDER_RADIUS_LG)),
                                 ..Default::default()
                             },
                             BackgroundColor(tokens::PANEL_HEADER_BG),
@@ -650,7 +668,7 @@ fn spawn_project_selector(
                             });
                     });
             });
-        });
+    });
 }
 
 fn spawn_project_row(
