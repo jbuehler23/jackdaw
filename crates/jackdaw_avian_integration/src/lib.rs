@@ -4,11 +4,15 @@
 //! registration for avian3d physics components, and an interactive
 //! simulation workflow (see [`simulation`]).
 
+#[cfg(feature = "overlays")]
 use std::marker::PhantomData;
 
+#[cfg(feature = "overlays")]
 use avian3d::debug_render::{PhysicsGizmoExt, PhysicsGizmos};
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use jackdaw_geometry::{ModifierStack, is_convex_topology};
+use jackdaw_jsn::{Brush, evaluate_brush_geometry};
 
 pub mod simulation;
 
@@ -28,6 +32,93 @@ pub mod simulation;
 #[reflect(Component, Default)]
 pub struct AvianCollider(pub ColliderConstructor);
 
+/// Runtime bridge that builds an avian [`Collider`] from the editor-authored
+/// [`AvianCollider`] wrapper, so brushes and meshes saved with a collider
+/// actually collide at runtime, not only in the editor preview. Wired into
+/// `jackdaw_runtime`'s `JackdawPlugin` behind its `physics` feature.
+///
+/// The editor uses its own bridge that reads the live edit caches; this one
+/// rebuilds the collider from the serialized `Brush` geometry, so it also works
+/// in a headless server with no rendering. Registering the avian types here also
+/// lets the scene loader deserialize `AvianCollider` in the first place.
+pub struct AvianColliderBridgePlugin;
+
+impl Plugin for AvianColliderBridgePlugin {
+    fn build(&self, app: &mut App) {
+        register_avian_types(app);
+        app.add_systems(PreUpdate, build_brush_colliders)
+            .add_observer(remove_collider_with_avian_collider);
+    }
+}
+
+/// Build a `Collider` for every brush whose `AvianCollider`, geometry, or
+/// modifier stack changed. Spawning a scene sets these components via
+/// reflection, which marks them changed, so colliders appear on load and track
+/// any later geometry change.
+fn build_brush_colliders(
+    mut commands: Commands,
+    changed: Query<
+        (Entity, &AvianCollider, &Brush, Option<&ModifierStack>),
+        Or<(
+            Changed<AvianCollider>,
+            Changed<Brush>,
+            Changed<ModifierStack>,
+        )>,
+    >,
+) {
+    for (entity, collider_cfg, brush, stack) in &changed {
+        if let Some(collider) = brush_collider(brush, stack, collider_cfg) {
+            commands.entity(entity).insert(collider);
+        }
+    }
+}
+
+/// Remove the built `Collider` when its source `AvianCollider` is removed, so a
+/// physics-off toggle or undo does not leave a stale collider behind.
+fn remove_collider_with_avian_collider(trigger: On<Remove, AvianCollider>, mut commands: Commands) {
+    let entity = trigger.event_target();
+    if let Ok(mut ec) = commands.get_entity(entity) {
+        ec.try_remove::<Collider>();
+    }
+}
+
+/// Build a collider from a brush's evaluated geometry. Non-convex brushes are
+/// forced to a trimesh (a convex hull or primitive would mis-simulate); convex
+/// brushes honor a requested primitive or convex hull and otherwise fall back to
+/// a trimesh.
+pub fn brush_collider(
+    brush: &Brush,
+    stack: Option<&ModifierStack>,
+    cfg: &AvianCollider,
+) -> Option<Collider> {
+    let force_trimesh = !is_convex_topology(&brush.topology);
+
+    // A primitive shape (cuboid, sphere, ...) needs no geometry.
+    if !force_trimesh && !cfg.0.requires_mesh() {
+        return Collider::try_from_constructor(cfg.0.clone(), None);
+    }
+
+    let (vertices, face_polygons, _) = evaluate_brush_geometry(brush, stack);
+    if vertices.is_empty() {
+        return None;
+    }
+
+    if !force_trimesh && matches!(cfg.0, ColliderConstructor::ConvexHullFromMesh) {
+        return Collider::convex_hull(vertices);
+    }
+
+    let mut indices: Vec<[u32; 3]> = Vec::new();
+    for polygon in &face_polygons {
+        for i in 1..polygon.len().saturating_sub(1) {
+            indices.push([polygon[0] as u32, polygon[i] as u32, polygon[i + 1] as u32]);
+        }
+    }
+    if indices.is_empty() {
+        return None;
+    }
+    Some(Collider::trimesh(vertices, indices))
+}
+
 pub mod physics_colors {
     use bevy::prelude::Color;
 
@@ -38,12 +129,14 @@ pub mod physics_colors {
     pub const COLLIDER_HIERARCHY_ARROW: Color = Color::srgba(0.4, 0.7, 1.0, 0.6);
 }
 
+#[cfg(feature = "overlays")]
 #[derive(Resource, Clone, PartialEq)]
 pub struct PhysicsOverlayConfig {
     pub show_colliders: bool,
     pub show_hierarchy_arrows: bool,
 }
 
+#[cfg(feature = "overlays")]
 impl Default for PhysicsOverlayConfig {
     fn default() -> Self {
         Self {
@@ -58,10 +151,12 @@ impl Default for PhysicsOverlayConfig {
 /// Generic over a `SelectionMarker` component type so callers can wire in
 /// their own selection system. Systems run unconditionally; wrap the plugin
 /// in your own run condition if you need editor-only behavior.
+#[cfg(feature = "overlays")]
 pub struct PhysicsOverlaysPlugin<S: Component> {
     _marker: PhantomData<S>,
 }
 
+#[cfg(feature = "overlays")]
 impl<S: Component> Default for PhysicsOverlaysPlugin<S> {
     fn default() -> Self {
         Self {
@@ -70,12 +165,14 @@ impl<S: Component> Default for PhysicsOverlaysPlugin<S> {
     }
 }
 
+#[cfg(feature = "overlays")]
 impl<S: Component> PhysicsOverlaysPlugin<S> {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
+#[cfg(feature = "overlays")]
 impl<S: Component> Plugin for PhysicsOverlaysPlugin<S> {
     fn build(&self, app: &mut App) {
         register_avian_types(app);
@@ -97,11 +194,13 @@ impl<S: Component> Plugin for PhysicsOverlaysPlugin<S> {
 }
 
 /// Register avian3d types that have both `reflect(Component)` and `reflect(Default)`,
-/// so they appear in the editor's component picker and can be edited via the JSN AST.
+/// so they appear in the editor's component picker, edit through the JSN AST, and
+/// deserialize at runtime.
 ///
-/// TODO: Remove once jackdaw moves to Bevy 0.19+, which has `reflect_auto_register`
-/// that automatically registers all types with `#[derive(Reflect)]` via the `inventory`
-/// crate at app startup.
+/// These are external (avian) types, so Bevy's `reflect_auto_register` cannot
+/// register them: the `inventory` shims it relies on are dropped by the linker
+/// for a dependency crate that nothing references. Registering them explicitly is
+/// the reliable path and stays correct regardless of Bevy version.
 pub fn register_avian_types(app: &mut App) {
     app
         // Core
@@ -142,6 +241,7 @@ pub fn register_avian_types(app: &mut App) {
     // exported from avian3d::prelude. Register more as needed.
 }
 
+#[cfg(feature = "overlays")]
 fn draw_collider_gizmos<S: Component>(
     mut gizmos: Gizmos<PhysicsGizmos>,
     config: Res<PhysicsOverlayConfig>,
@@ -192,6 +292,7 @@ fn draw_collider_gizmos<S: Component>(
     }
 }
 
+#[cfg(feature = "overlays")]
 fn draw_hierarchy_arrows<S: Component>(
     mut gizmos: Gizmos<PhysicsGizmos>,
     config: Res<PhysicsOverlayConfig>,
@@ -229,6 +330,7 @@ fn draw_hierarchy_arrows<S: Component>(
     }
 }
 
+#[cfg(feature = "overlays")]
 fn collect_descendant_colliders(
     entity: Entity,
     children_query: &Query<&Children>,
@@ -242,5 +344,55 @@ fn collect_descendant_colliders(
             }
             collect_descendant_colliders(child, children_query, collider_check, out);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::reflect::AppTypeRegistry;
+    use jackdaw_jsn::Brush;
+
+    #[test]
+    fn cuboid_brush_builds_a_trimesh_collider() {
+        let brush = Brush::cuboid(1.0, 1.0, 1.0);
+        let cfg = AvianCollider(ColliderConstructor::TrimeshFromMesh);
+        assert!(
+            brush_collider(&brush, None, &cfg).is_some(),
+            "a convex cuboid with a mesh constructor yields a trimesh collider"
+        );
+    }
+
+    #[test]
+    fn convex_brush_honors_convex_hull_request() {
+        let brush = Brush::cuboid(0.5, 0.5, 0.5);
+        let cfg = AvianCollider(ColliderConstructor::ConvexHullFromMesh);
+        assert!(
+            brush_collider(&brush, None, &cfg).is_some(),
+            "a convex-hull request on a cuboid yields a collider"
+        );
+    }
+
+    #[test]
+    fn bridge_inserts_collider_on_spawn() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<AppTypeRegistry>();
+        app.add_plugins(AvianColliderBridgePlugin);
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Brush::cuboid(1.0, 1.0, 1.0),
+                AvianCollider(ColliderConstructor::TrimeshFromMesh),
+            ))
+            .id();
+
+        app.update();
+
+        assert!(
+            app.world().get::<Collider>(entity).is_some(),
+            "spawning a brush with an AvianCollider builds a Collider"
+        );
     }
 }

@@ -26,7 +26,15 @@ required-features = ["editor"]
 [features]
 default = []
 # `cargo editor` (alias) compiles the editor binary alongside.
-editor = ["dep:jackdaw"]
+# Enabling `jackdaw_runtime/pie` here matches the feature set the Play
+# (PIE) build uses, so the editor build and the game build share one
+# cargo cache instead of recompiling each other on every switch.
+editor = ["dep:jackdaw", "jackdaw_runtime/pie"]
+# Play-in-editor build of the game binary. The editor's Play button
+# enables this automatically; it gates the `maybe_windowless` wrap in
+# `main.rs` so the game runs inside the editor's Game panel instead of
+# its own OS window.
+pie = ["jackdaw_runtime/pie"]
 
 [dependencies]
 # `file_watcher` enables hot reload of `assets/scene.jsn` in the
@@ -38,8 +46,14 @@ bevy = { version = "0.18", features = ["file_watcher"] }
 # rustc-wrapper, no SDK proxy.
 jackdaw = { version = "0.5", default-features = false, optional = true }
 # Runtime-only `.jsn` loader for the standalone binary. No editor
-# deps pulled in.
-jackdaw_runtime = "0.5"
+# deps pulled in. The `physics` feature builds avian colliders from
+# brushes authored with an `AvianCollider`, so the level collides in
+# the standalone game and in PIE, not only in the editor preview.
+jackdaw_runtime = { version = "0.5", features = ["physics"] }
+# Avian physics. `PhysicsPlugins` (added in `main.rs` and the editor
+# binary) runs the simulation; add `RigidBody`, `Collider`, etc. to
+# your own entities as needed.
+avian3d = "0.6"
 # Claim SIGINT/SIGTERM before wgpu/gilrs swallow it.
 ctrlc = "3"
 
@@ -50,3 +64,9 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# The `jackdaw` editor crate is huge; optimizing it at `opt-level = 3` like the
+# rest of the deps needs ~8GB to compile and can OOM. It's editor-only (never
+# linked into your shipped game via `cargo run`), so build it unoptimized.
+[profile.dev.package.jackdaw]
+opt-level = 1

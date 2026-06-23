@@ -18,7 +18,7 @@ use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeFocused, TreeIndex, TreeNode, TreeNodeExpanded,
     TreeRowChildren, TreeRowClicked, TreeRowContent, TreeRowDot, TreeRowDropped,
     TreeRowDroppedOnRoot, TreeRowInlineRename, TreeRowLabel, TreeRowRenamed, TreeRowSelected,
-    TreeRowStartRename, TreeRowVisibilityToggled,
+    TreeRowStartRename, TreeRowVisibilityToggle, TreeRowVisibilityToggled,
 };
 
 use crate::{
@@ -678,6 +678,16 @@ fn on_name_changed(
     child_of_check: Query<(), With<ChildOf>>,
 ) {
     let entity = trigger.event_target();
+
+    // The row icon is registered against the entity's type component (Brush,
+    // Terrain, light, ...), which can stream in before the row exists, leaving
+    // the fallback dot. `Name` usually lands last, so refresh the glyph here for
+    // any registered type (a no-op when no row exists yet; the later spawn then
+    // reads the resolved icon). Generalizes `on_brush_icon_ready`.
+    commands.queue(move |world: &mut World| {
+        refresh_row_icon(world, entity);
+    });
+
     let Ok(name) = name_query.get(entity) else {
         return;
     };
@@ -1705,7 +1715,10 @@ fn add_child_entity(
     });
 }
 
-/// Toggle entity visibility when the eye icon is clicked.
+/// Toggle entity visibility when the eye icon is clicked. This is an
+/// editor-local view state: it sets ECS `Visibility` only and is never written
+/// to the `.jsn` scene, so it does not re-apply on rebuild. The eye glyph is
+/// synced to match so hidden state is always visible.
 fn on_visibility_toggled(
     event: On<TreeRowVisibilityToggled>,
     mut commands: Commands,
@@ -1722,25 +1735,45 @@ fn on_visibility_toggled(
         Visibility::Hidden => Visibility::Inherited,
         _ => Visibility::Hidden,
     };
-
-    let old_json = serde_json::Value::String(format!("{current:?}"));
-    let new_json = serde_json::Value::String(format!("{new_visibility:?}"));
-
-    let cmd = SetJsnField {
-        entity: source,
-        type_path: "bevy_camera::visibility::Visibility".to_string(),
-        field_path: String::new(),
-        old_value: old_json,
-        new_value: new_json,
-        was_derived: false,
-    };
+    let hidden = matches!(new_visibility, Visibility::Hidden);
 
     commands.queue(move |world: &mut World| {
-        let mut cmd = Box::new(cmd);
-        cmd.execute(world);
-        let mut history = world.resource_mut::<CommandHistory>();
-        history.push_executed(cmd);
+        if let Ok(mut ec) = world.get_entity_mut(source) {
+            ec.insert(new_visibility);
+        }
+        refresh_row_visibility_glyph(world, source, hidden);
     });
+}
+
+/// Sync the eye toggle glyph for every Outliner row of `entity` to its
+/// visibility state, dimming when hidden so the state always reads correctly.
+fn refresh_row_visibility_glyph(world: &mut World, entity: Entity, hidden: bool) {
+    use jackdaw_feathers::icons::Icon;
+    let glyph = String::from(if hidden { Icon::EyeOff } else { Icon::Eye }.unicode());
+    let alpha = if hidden { 0.7 } else { 0.4 };
+    let rows: Vec<Entity> = world
+        .resource::<TreeIndex>()
+        .rows_for_source(entity)
+        .map(|(_container, row)| row)
+        .collect();
+    for row in rows {
+        // TreeNode -> TreeRowContent -> TreeRowVisibilityToggle -> glyph Text.
+        let Some(content) = first_child_with::<TreeRowContent>(world, row) else {
+            continue;
+        };
+        let Some(toggle) = first_child_with::<TreeRowVisibilityToggle>(world, content) else {
+            continue;
+        };
+        let Some(glyph_text) = world.get::<Children>(toggle).and_then(|c| c.iter().next()) else {
+            continue;
+        };
+        if let Some(mut text) = world.get_mut::<Text>(glyph_text) {
+            text.0 = glyph.clone();
+        }
+        if let Some(mut color) = world.get_mut::<TextColor>(glyph_text) {
+            color.0 = color.0.with_alpha(alpha);
+        }
+    }
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

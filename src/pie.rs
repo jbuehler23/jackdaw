@@ -174,13 +174,22 @@ impl Plugin for PiePlugin {
             .init_resource::<crate::live_edits::LiveEditLog>()
             .init_resource::<crate::live_highlight::LastHighlight>()
             .init_resource::<PieWindowMode>()
+            .init_resource::<PiePrebuildState>()
+            // PIE is an editor-only subsystem; gate it to the editor state so it
+            // never ticks in the launcher (`ProjectSelect`). Without this,
+            // `reconcile_build_status` resets the shared `BuildStatus` from
+            // `Building` to `Idle` every frame during the launcher's editor
+            // build, so the build's completion handler drops the result and the
+            // handoff never fires.
             .add_systems(
                 Update,
                 (
                     advance_pie_session,
+                    prebuild_play_target,
                     drain_game_events,
                     crate::live_highlight::sync_selection_highlight,
-                ),
+                )
+                    .run_if(in_state(crate::AppState::Editor)),
             )
             .add_systems(
                 OnEnter(PlayState::Stopped),
@@ -316,7 +325,7 @@ pub(crate) fn focused_with_fresh_stream(
 /// Where a launched game's window lives. Applies to the next launch.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PieWindowMode {
-    /// No OS window: the game renders into the Live viewport stream.
+    /// No OS window: the game streams its frames into the editor's Game panel.
     #[default]
     Embedded,
     /// The game opens its own OS window (debug fallback; no input capture).
@@ -335,12 +344,12 @@ fn toggle_window_mode(mode: &mut PieWindowMode) {
     };
 }
 
-/// Switch the next launch between an embedded (viewport) game and a separate
-/// game window.
+/// Switch the next launch between an embedded game (streamed into the Game
+/// panel) and a separate game window.
 #[operator(
     id = "pie.window_mode_toggle",
     label = "Toggle Game Window Mode",
-    description = "Switch the next launch between embedded (viewport) and a separate game window."
+    description = "Switch the next launch between embedded (Game panel) and a separate game window."
 )]
 pub(crate) fn pie_window_mode_toggle(
     _: In<OperatorParameters>,
@@ -903,6 +912,63 @@ fn advance_pie_session(world: &mut World) {
     poll_children(world);
     reconcile_play_state(world);
     reconcile_build_status(world);
+}
+
+/// One-shot flag so the background pre-build is attempted only once per editor
+/// session, without re-running `cargo metadata` every frame.
+#[derive(Resource, Default)]
+pub struct PiePrebuildState {
+    attempted: bool,
+}
+
+/// Pre-build the default Play target in the background once the editor opens, so
+/// the first Play reuses a warm cache instead of compiling the game's Bevy
+/// variant on demand. Mirrors `launch_instance`'s build but with no pending
+/// spawn: it only drives `PieSession.builds` to `Done`, which a later Play
+/// reuses immediately.
+fn prebuild_play_target(world: &mut World) {
+    if world.resource::<PiePrebuildState>().attempted {
+        return;
+    }
+    // Wait until the project's run configs have loaded.
+    let run = match world.get_resource::<RunConfigs>() {
+        None => return,
+        Some(rc) => rc.manifest.runs.first().cloned(),
+    };
+    // Run configs are loaded; this is the one-shot attempt regardless of outcome.
+    world.resource_mut::<PiePrebuildState>().attempted = true;
+    let Some(run) = run else {
+        return; // no run config to pre-build
+    };
+    let Some(root) = project_root(world) else {
+        return;
+    };
+    let Some(meta) = CargoMeta::load(&root) else {
+        return;
+    };
+    let Some(spec) = resolve_build_spec(&meta, &run) else {
+        return;
+    };
+    let mut session = world.non_send_resource_mut::<PieSession>();
+    if session.builds.contains_key(&spec) {
+        return; // already built or building (the user may have hit Play already)
+    }
+    let progress = Arc::new(Mutex::new(BuildProgress::default()));
+    let sink = Arc::clone(&progress);
+    let build_spec = spec.clone();
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        crate::ext_build::build_game_bin_with_progress(&root, &build_spec, Some(sink), None)
+            .map_err(|err| io::Error::other(err.to_string()))
+    });
+    info!("PIE: pre-building the Play target in the background for a fast first Play");
+    session.builds.insert(
+        spec,
+        BuildState::Running {
+            task,
+            pending: Vec::new(),
+            progress,
+        },
+    );
 }
 
 /// Mirror the active game build into the editor's `BuildStatus` so the

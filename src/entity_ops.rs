@@ -506,15 +506,18 @@ pub fn duplicate_selected(world: &mut World) {
             continue;
         }
 
-        // Snapshot the entity (and descendants) via DynamicSceneBuilder. The raw builder
-        // copies `Children`, which preserves real child entities (e.g. a tree's trunk
-        // brush). It also copies the brush's runtime mesh-face child refs, which
-        // DynamicScene remaps to dead placeholder entities; those dangling refs are harmless
-        // because every scene walk (`collect_entity_ids`, the serialize walk) skips
-        // despawned entities, and `Children` is never serialized. Denying `Children` here
-        // instead drops the real children, so the raw builder is correct.
+        // Snapshot the entity (and descendants) via DynamicSceneBuilder.
+        // `collect_entity_ids` keeps real children (e.g. a tree's trunk brush)
+        // but excludes runtime face-mesh children. The brush's `Children`
+        // component still references those excluded meshes, and `write_to_world`
+        // allocates a live placeholder entity for each unmapped reference, which
+        // would otherwise surface as empty orphan children on the clone. We
+        // despawn those placeholders below; the clone's brush regenerates its
+        // own face meshes on the next remesh.
         let mut snapshot_entities = Vec::new();
         crate::commands::collect_entity_ids(world, entity, &mut snapshot_entities);
+        let snapshot_set: std::collections::HashSet<Entity> =
+            snapshot_entities.iter().copied().collect();
         let scene = DynamicSceneBuilder::from_world(world)
             .extract_entities(snapshot_entities.into_iter())
             .build();
@@ -523,6 +526,20 @@ pub fn duplicate_selected(world: &mut World) {
         let mut entity_map = Default::default();
         if scene.write_to_world(world, &mut entity_map).is_err() {
             continue;
+        }
+
+        // Despawn placeholder clones created for child references that were not
+        // part of the snapshot (the brush's runtime face meshes), so the clone
+        // does not gain empty orphan children.
+        let placeholders: Vec<Entity> = entity_map
+            .iter()
+            .filter(|(src, _)| !snapshot_set.contains(src))
+            .map(|(_, dst)| *dst)
+            .collect();
+        for placeholder in placeholders {
+            if let Ok(ec) = world.get_entity_mut(placeholder) {
+                ec.despawn();
+            }
         }
 
         // Find the cloned root entity

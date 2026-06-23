@@ -2,6 +2,7 @@
 //! launches without the editor; `cargo editor` runs the editor
 //! and game in one binary.
 
+use avian3d::prelude::*;
 use bevy::{
     image::{ImageAddressMode, ImagePlugin, ImageSamplerDescriptor},
     prelude::*,
@@ -13,29 +14,39 @@ fn main() -> AppExit {
     // handlers that swallow the signal.
     let _ = ctrlc::set_handler(|| std::process::exit(130));
 
+    // `ImagePlugin` swapped to a `Repeat` sampler so the tileable PBR
+    // materials authored in the editor render the same way at runtime.
+    // Bevy's default is `ClampToEdge`, which sends UV coordinates outside
+    // [0,1] to white edges (wrong for brick / wood / etc. brush materials).
+    // `file_watcher` (Cargo.toml) drives hot reload of `assets/scene.jsn`.
+    let default_plugins = DefaultPlugins.set(ImagePlugin {
+        default_sampler: ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            address_mode_w: ImageAddressMode::Repeat,
+            ..ImageSamplerDescriptor::linear()
+        },
+    });
+    // The editor's Play build sets the `pie` feature. `maybe_windowless`
+    // then drops the OS window and retargets cameras to the streamed image
+    // so the game runs inside the editor's Game panel. A standalone
+    // `cargo run` (no `pie`) opens a normal window.
+    #[cfg(feature = "pie")]
+    let default_plugins = jackdaw_runtime::maybe_windowless(default_plugins);
+
     App::new()
         .set_error_handler(bevy::ecs::error::error)
-        // Bevy's `file_watcher` cargo feature (Cargo.toml) drives
-        // hot reload: on save, `JackdawPlugin` despawns the scene
-        // entities and respawns from the new asset.
-        //
-        // `ImagePlugin` swapped to a `Repeat` sampler so the
-        // tileable PBR materials authored in the editor render the
-        // same way at runtime. Bevy's default is `ClampToEdge`,
-        // which sends UV coordinates outside [0,1] to white edges
-        // (wrong for brick / wood / etc. brush materials).
-        .add_plugins(DefaultPlugins.set(ImagePlugin {
-            default_sampler: ImageSamplerDescriptor {
-                address_mode_u: ImageAddressMode::Repeat,
-                address_mode_v: ImageAddressMode::Repeat,
-                address_mode_w: ImageAddressMode::Repeat,
-                ..ImageSamplerDescriptor::linear()
-            },
-        }))
-        // Add ambient plugins (physics, input, audio) here next to
+        .add_plugins(default_plugins)
+        // Add ambient plugins (input, audio) here next to
         // `DefaultPlugins`. Keeping them out of `MyGamePlugin`
         // avoids duplicate-plugin panics when the editor binary
         // adds its own copy.
+        //
+        // `PhysicsPlugins` runs the avian simulation. `JackdawPlugin`
+        // (with the `physics` feature, on in Cargo.toml) builds a
+        // `Collider` from each brush authored with an `AvianCollider`,
+        // so the level has collision out of the box.
+        .add_plugins(PhysicsPlugins::default())
         .add_plugins(JackdawPlugin)
         .add_plugins({{crate_name}}::MyGamePlugin)
         .add_systems(Startup, (spawn_initial_scene, spawn_default_camera))

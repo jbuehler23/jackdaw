@@ -9,6 +9,18 @@ use bevy_window_chrome::primary_window_attributes;
 use jackdaw::prelude::*;
 
 fn main() -> AppExit {
+    // CLI subcommands run headless and exit before the GUI launcher.
+    // `jackdaw new <name>` scaffolds a new project; `jackdaw init` wires the
+    // editor into an existing Bevy project.
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("new") => return jackdaw::scaffold::run_new_cli(&args[2..]),
+        Some("init") => return jackdaw::scaffold::run_init_cli(&args[2..]),
+        Some("migrate") => return jackdaw::migrate::run_migrate_cli(&args[2..]),
+        Some("doctor") => return jackdaw::preflight::run_doctor_cli(),
+        _ => {}
+    }
+
     // Install a SIGINT/SIGTERM handler before anything else gets a
     // chance to. Something in the dep tree (wgpu, gilrs, or one of
     // their transitive deps) installs its own `ctrlc` handler that

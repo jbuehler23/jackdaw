@@ -60,6 +60,12 @@ impl Plugin for JackdawPlugin {
             (clear_modified_scene_roots, spawn_loaded_scenes).chain(),
         );
 
+        // Build avian colliders from authored `AvianCollider` components so
+        // brushes collide at runtime. Add `PhysicsPlugins` in your app to run
+        // the simulation.
+        #[cfg(feature = "physics")]
+        app.add_plugins(jackdaw_avian_integration::AvianColliderBridgePlugin);
+
         // When `JACKDAW_PIE` is set, open the ipc-channel link to the editor
         // and attach the PIE stream / control systems. A connect failure logs
         // and leaves the runtime untouched.

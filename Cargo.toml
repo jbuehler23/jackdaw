@@ -160,6 +160,19 @@ pathdiff.workspace = true
 notify = "8"
 ctrlc = "3"
 toml = "0.8"
+# Format-preserving TOML edits for `jackdaw init` (existing-project scaffold).
+toml_edit = "0.22"
+# Embed the project templates into the binary so `jackdaw new` scaffolds
+# offline with no cargo-generate dependency.
+include_dir = "0.7"
+# Parse + rewrite a project's `main.rs` when migrating a bin-only project into a
+# `GamePlugin` library (`src/migrate.rs`). `span-locations` gives byte spans so
+# moved item definitions are sliced verbatim (comments preserved); prettyplease
+# formats only the synthetic `GamePlugin` impl we generate.
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+prettyplease = "0.2"
 bevy_simple_subsecond_system = { version = "0.2", optional = true }
 winit.workspace = true
 image.workspace = true

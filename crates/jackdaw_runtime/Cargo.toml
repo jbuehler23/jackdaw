@@ -20,6 +20,12 @@ jackdaw_jsn = { version = "0.5.0", path = "../jackdaw_jsn", default-features = f
 jackdaw_geometry = { version = "0.5.0", path = "../jackdaw_geometry", default-features = false }
 jackdaw_pie_protocol = { path = "../jackdaw_pie_protocol", optional = true }
 jackdaw_camera_rig = { version = "0.5.0", path = "../jackdaw_camera_rig", optional = true }
+# Runtime collider bridge: the `AvianCollider` -> `Collider` conversion. Default
+# features are kept so this resolves to the same build as the editor's dependency
+# (no cargo recompile churn when alternating editor and game builds). The unused
+# overlay gizmos are dead code in the game; a lean release build can override with
+# `default-features = false`.
+jackdaw_avian_integration = { version = "0.5.0", path = "../jackdaw_avian_integration", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "2"
@@ -47,6 +53,10 @@ pie = [
     "bevy/bevy_image",
     "bevy/mesh_picking",
 ]
+# Avian physics: build `Collider`s from authored `AvianCollider` components at
+# runtime so brushes collide in the standalone game and in PIE, not only in the
+# editor preview. Add `PhysicsPlugins` in your app to actually simulate.
+physics = ["dep:jackdaw_avian_integration"]
 
 [lints]
 workspace = true
