@@ -13,8 +13,8 @@ use jackdaw_pie_protocol::RemoteEntity;
 
 /// Which data source the outliner and inspector panels display.
 ///
-/// `Scene` shows the authored scene as normal. `Live` shows data from the
-/// running game via [`PieMirror`]. Resets to `Scene` when play stops.
+/// `Scene` shows the authored scene as normal. `Live` shows data streamed from
+/// the running game. Resets to `Scene` when play stops.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PieViewMode {
     #[default]
@@ -70,7 +70,7 @@ pub struct InstanceBuffer {
 impl InstanceBuffer {
     /// Accumulate one event into this instance's snapshot.
     ///
-    /// Mirrors the spawn/change/despawn handling of [`PieMirror::apply`]
+    /// Mirrors the spawn/change/despawn handling of the live instance set
     /// without the `structure_generation` counter (nothing renders from the
     /// buffer directly). `Status` and `Log` events are ignored.
     pub fn apply(&mut self, event: &jackdaw_pie_protocol::StateEvent) {

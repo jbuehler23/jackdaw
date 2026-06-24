@@ -60,15 +60,19 @@ impl std::fmt::Display for MigrationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MigrationError::NoMainRs => write!(f, "no src/main.rs to migrate"),
-            MigrationError::Io(e) => write!(f, "{e}"),
             MigrationError::Parse(e) => write!(f, "could not parse src/main.rs: {e}"),
-            MigrationError::Unsupported(e) => write!(f, "{e}"),
+            MigrationError::Io(e) | MigrationError::Unsupported(e) => write!(f, "{e}"),
         }
     }
 }
 
 /// CLI entry point for `jackdaw migrate`. Run from a project directory; previews
 /// the migration by default, writes only with `--apply`.
+#[expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "CLI subcommand writes its results and errors to the terminal"
+)]
 pub fn run_migrate_cli(args: &[String]) -> AppExit {
     let apply = args.iter().any(|a| a == "--apply");
     let root = match std::env::current_dir() {
@@ -123,7 +127,7 @@ pub fn run_migrate_cli(args: &[String]) -> AppExit {
     }
 }
 
-/// Read the library crate name (snake_case) from the project's Cargo.toml.
+/// Read the library crate name (`snake_case`) from the project's Cargo.toml.
 pub fn crate_name_of(root: &Path) -> Result<String, MigrationError> {
     let text = std::fs::read_to_string(root.join("Cargo.toml"))
         .map_err(|_| MigrationError::Io("no Cargo.toml in the current directory".into()))?;
@@ -139,7 +143,7 @@ pub fn crate_name_of(root: &Path) -> Result<String, MigrationError> {
 }
 
 /// Build a migration plan for the project at `root` without touching any files.
-/// `crate_name` is the library crate name (snake_case) the editor links.
+/// `crate_name` is the library crate name (`snake_case`) the editor links.
 pub fn plan_migration(root: &Path, crate_name: &str) -> Result<MigrationPlan, MigrationError> {
     let main_path = root.join("src/main.rs");
     if !main_path.is_file() {
@@ -264,7 +268,7 @@ struct Classified {
     inject_at: usize,
     /// Whether the builder is the `let mut app` statement form.
     let_form: bool,
-    /// `add_plugins(..)` left in main (DefaultPlugins / ambient), for the notes.
+    /// `add_plugins(..)` left in main (`DefaultPlugins` / ambient), for the notes.
     kept_plugins: Vec<String>,
     /// Line-start byte of the builder statement (`App::new()` / `let mut app`),
     /// where the `let default_plugins = ...` pie-wrap is inserted.
@@ -272,13 +276,13 @@ struct Classified {
     /// The kept `add_plugins(DefaultPlugins...)` argument: its `[start, end)`
     /// byte range and verbatim text, used to wrap it with `maybe_windowless` so
     /// embedded Play works without hand-editing. `None` if no `DefaultPlugins`
-    /// add_plugins call was found.
+    /// `add_plugins` call was found.
     default_plugins: Option<(usize, usize, String)>,
 }
 
 /// The builder expression we found in `fn main`, plus enough context to rewrite.
 enum Builder {
-    /// A `App::new().a().b().run()` method-call chain. Holds the run() call.
+    /// A `App::new().a().b().run()` method-call chain. Holds the `run()` call.
     Chain(syn::ExprMethodCall),
     /// `let mut app = App::new(); app.a(); ...; app.run();`. Holds each
     /// `app.method(..)` statement call and the `app.run()` call.
@@ -295,20 +299,19 @@ fn find_builder(block: &syn::Block) -> Result<(Builder, proc_macro2::Span), Migr
     // Chained form: a trailing expr or expr-statement that is a method-call
     // chain bottoming out at `App::new()`.
     for stmt in &block.stmts {
-        let expr = match stmt {
-            syn::Stmt::Expr(e, _) => e,
-            _ => continue,
+        let syn::Stmt::Expr(expr, _) = stmt else {
+            continue;
         };
-        if let syn::Expr::MethodCall(mc) = expr {
-            if chain_roots_at_app_new(expr) {
-                if mc.method != "run" {
-                    return Err(MigrationError::Unsupported(
-                        "the App builder chain doesn't end in `.run()`; migrate by hand".into(),
-                    ));
-                }
-                let anchor = find_app_new_span(expr).unwrap_or_else(|| expr.span());
-                return Ok((Builder::Chain(mc.clone()), anchor));
+        if let syn::Expr::MethodCall(mc) = expr
+            && chain_roots_at_app_new(expr)
+        {
+            if mc.method != "run" {
+                return Err(MigrationError::Unsupported(
+                    "the App builder chain doesn't end in `.run()`; migrate by hand".into(),
+                ));
             }
+            let anchor = find_app_new_span(expr).unwrap_or_else(|| expr.span());
+            return Ok((Builder::Chain(mc.clone()), anchor));
         }
     }
 
@@ -319,10 +322,10 @@ fn find_builder(block: &syn::Block) -> Result<(Builder, proc_macro2::Span), Migr
             return None;
         };
         let init = local.init.as_ref()?;
-        if expr_is_app_new(&init.expr) {
-            if let syn::Pat::Ident(p) = &local.pat {
-                return Some((p.ident.clone(), local.span()));
-            }
+        if expr_is_app_new(&init.expr)
+            && let syn::Pat::Ident(p) = &local.pat
+        {
+            return Some((p.ident.clone(), local.span()));
         }
         None
     });
@@ -330,17 +333,16 @@ fn find_builder(block: &syn::Block) -> Result<(Builder, proc_macro2::Span), Migr
         let mut calls = Vec::new();
         let mut run = None;
         for stmt in &block.stmts {
-            let expr = match stmt {
-                syn::Stmt::Expr(e, _) => e,
-                _ => continue,
+            let syn::Stmt::Expr(expr, _) = stmt else {
+                continue;
             };
-            if let syn::Expr::MethodCall(mc) = expr {
-                if expr_is_ident(&mc.receiver, &app_ident) {
-                    if mc.method == "run" {
-                        run = Some(mc.clone());
-                    } else {
-                        calls.push(mc.clone());
-                    }
+            if let syn::Expr::MethodCall(mc) = expr
+                && expr_is_ident(&mc.receiver, &app_ident)
+            {
+                if mc.method == "run" {
+                    run = Some(mc.clone());
+                } else {
+                    calls.push(mc.clone());
                 }
             }
         }
@@ -414,12 +416,13 @@ fn classify_builder(
                 let arg = first_arg_text(mc, offsets);
                 // Capture the DefaultPlugins argument so it can be wrapped with
                 // `maybe_windowless` for embedded Play. First one wins.
-                if default_plugins.is_none() && arg.trim_start().starts_with("DefaultPlugins") {
-                    if let Some(first) = mc.args.first() {
-                        let start = offsets.to_byte(first.span().start());
-                        let end = offsets.to_byte(first.span().end());
-                        default_plugins = Some((start, end, arg.clone()));
-                    }
+                if default_plugins.is_none()
+                    && arg.trim_start().starts_with("DefaultPlugins")
+                    && let Some(first) = mc.args.first()
+                {
+                    let start = offsets.to_byte(first.span().start());
+                    let end = offsets.to_byte(first.span().end());
+                    default_plugins = Some((start, end, arg.clone()));
                 }
                 kept_plugins.push(arg);
             }
@@ -702,7 +705,7 @@ fn render_main(
     }
 
     // Apply edits right-to-left so earlier offsets stay valid.
-    edits.sort_by(|a, b| b.0.cmp(&a.0));
+    edits.sort_by_key(|e| std::cmp::Reverse(e.0));
     let mut out = source.to_string();
     for (start, end, text) in edits {
         if start > out.len() || end > out.len() || start > end {
@@ -800,13 +803,14 @@ fn slice_item(
     let mut text = source[start..end].to_string();
 
     let (name, keyword_span, is_private) = item_vis_info(item);
-    if make_pub && is_private {
-        if let Some(kw) = keyword_span {
-            let kw_byte = offsets.to_byte(kw);
-            if kw_byte >= start && kw_byte <= end {
-                let rel = kw_byte - start;
-                text.insert_str(rel, "pub ");
-            }
+    if make_pub
+        && is_private
+        && let Some(kw) = keyword_span
+    {
+        let kw_byte = offsets.to_byte(kw);
+        if kw_byte >= start && kw_byte <= end {
+            let rel = kw_byte - start;
+            text.insert_str(rel, "pub ");
         }
     }
     Ok((text, name))

@@ -61,6 +61,11 @@ impl std::fmt::Display for ScaffoldError {
 }
 
 /// CLI entry point for `jackdaw init`. Run from a project directory.
+#[expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "CLI subcommand writes its results and errors to the terminal"
+)]
 pub fn run_init_cli(args: &[String]) -> AppExit {
     let plugin = parse_plugin_arg(args);
     let root = match std::env::current_dir() {
@@ -243,14 +248,13 @@ pub fn scaffold_existing_project(
 
     // `default-run` so plain `cargo run` stays unambiguous once the editor bin
     // exists. Only when there is a default game binary (`src/main.rs`).
-    if root.join("src/main.rs").is_file() {
-        if let Some(pkg) = doc.get_mut("package").and_then(|p| p.as_table_mut()) {
-            if !pkg.contains_key("default-run") {
-                pkg["default-run"] = value(&package_name);
-                actions.push("set `package.default-run`".into());
-                manifest_changed = true;
-            }
-        }
+    if root.join("src/main.rs").is_file()
+        && let Some(pkg) = doc.get_mut("package").and_then(|p| p.as_table_mut())
+        && !pkg.contains_key("default-run")
+    {
+        pkg["default-run"] = value(&package_name);
+        actions.push("set `package.default-run`".into());
+        manifest_changed = true;
     }
 
     if manifest_changed {
@@ -462,6 +466,11 @@ fn ensure_cargo_aliases(root: &Path) -> Result<bool, ScaffoldError> {
 
 /// CLI entry point for `jackdaw new <name>`. Scaffolds a new static-game project
 /// into `<cwd>/<name>` from the embedded template.
+#[expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "CLI subcommand writes its results and errors to the terminal"
+)]
 pub fn run_new_cli(args: &[String]) -> AppExit {
     let Some(raw_name) = args.iter().find(|a| !a.starts_with("--")) else {
         eprintln!("jackdaw new: usage: jackdaw new <name>");

@@ -42,11 +42,15 @@ impl CheckResult {
 
 /// Every check that applies on this platform. Call off the main thread.
 pub fn run_all_checks() -> Vec<CheckResult> {
-    // `mut` is only used on Windows (the linker check); allow it elsewhere.
-    #[allow(unused_mut)]
-    let mut out = vec![check_rust_toolchain(), check_cmake()];
+    let out = vec![check_rust_toolchain(), check_cmake()];
+    // The Windows linker check is the only platform-specific entry; shadow with
+    // a mutable binding there so non-Windows builds keep an immutable `out`.
     #[cfg(windows)]
-    out.push(check_windows_linker());
+    let out = {
+        let mut out = out;
+        out.push(check_windows_linker());
+        out
+    };
     out
 }
 
@@ -103,8 +107,9 @@ fn classify_rustc(version: &str) -> (CheckStatus, Option<&'static str>) {
     }
 }
 
-/// Pure logic for the Windows linker check, split out for testing.
-#[cfg_attr(not(windows), allow(dead_code))]
+/// Pure logic for the Windows linker check, split out for testing. Compiled on
+/// Windows (where the check runs) and under `test` (where it is unit-tested).
+#[cfg(any(windows, test))]
 fn windows_linker_status(
     gcc_found: bool,
     cmake_generator: Option<&str>,
@@ -151,6 +156,10 @@ fn first_line(cmd: &str, args: &[&str]) -> Option<String> {
 }
 
 /// CLI entry point for `jackdaw doctor`.
+#[expect(
+    clippy::print_stdout,
+    reason = "CLI subcommand writes its report to the terminal"
+)]
 pub fn run_doctor_cli() -> AppExit {
     let results = run_all_checks();
     println!("jackdaw doctor:");
