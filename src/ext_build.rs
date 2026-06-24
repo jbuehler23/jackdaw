@@ -388,8 +388,7 @@ pub fn build_static_editor_with_progress(
     // machine, so the first project pays the full build and every project after
     // it opens in seconds. Falls back to the project's own `target/` only when
     // no cache dir is resolvable.
-    let editor_target_dir =
-        shared_build_target_dir().unwrap_or_else(|| project_dir.join("target"));
+    let editor_target_dir = shared_build_target_dir().unwrap_or_else(|| project_dir.join("target"));
     let editor_target_str = editor_target_dir
         .to_str()
         .expect("CARGO_TARGET_DIR path must be valid UTF-8");
@@ -475,8 +474,7 @@ pub fn build_game_bin_with_progress(
     // build's already-compiled bevy + jackdaw rather than recompiling the tree
     // per project. Falls back to the project's own `target/` when no cache dir
     // is resolvable.
-    let game_target_dir =
-        shared_build_target_dir().unwrap_or_else(|| project_dir.join("target"));
+    let game_target_dir = shared_build_target_dir().unwrap_or_else(|| project_dir.join("target"));
     let game_target_str = game_target_dir
         .to_str()
         .expect("CARGO_TARGET_DIR path must be valid UTF-8");

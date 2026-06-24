@@ -383,7 +383,8 @@ fn start_preflight(mut state: ResMut<PreflightState>, pending: Option<Res<Pendin
     }
     state.results.clear();
     state.reported = false;
-    state.task = Some(AsyncComputeTaskPool::get().spawn(async move { crate::preflight::run_all_checks() }));
+    state.task =
+        Some(AsyncComputeTaskPool::get().spawn(async move { crate::preflight::run_all_checks() }));
 }
 
 /// Drain the preflight task when it completes, store the results for the UI, and
@@ -549,14 +550,16 @@ fn update_preflight_banner(
             ],
         ))
         .id();
-    commands.entity(recheck).observe(
-        |_: On<Pointer<Click>>, mut state: ResMut<PreflightState>| {
+    commands
+        .entity(recheck)
+        .observe(|_: On<Pointer<Click>>, mut state: ResMut<PreflightState>| {
             state.results.clear();
             state.reported = false;
-            state.task =
-                Some(AsyncComputeTaskPool::get().spawn(async move { crate::preflight::run_all_checks() }));
-        },
-    );
+            state.task = Some(
+                AsyncComputeTaskPool::get()
+                    .spawn(async move { crate::preflight::run_all_checks() }),
+            );
+        });
 }
 
 /// A banner row: an icon glyph followed by a label.
@@ -753,12 +756,7 @@ fn fill_project_selector(
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(4.0),
-                padding: UiRect::new(
-                    Val::Px(8.0),
-                    Val::Px(8.0),
-                    Val::Px(8.0),
-                    Val::Px(0.0),
-                ),
+                padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(8.0), Val::Px(0.0)),
                 ..Default::default()
             },
         ));
@@ -1858,15 +1856,15 @@ fn show_setup_jackdaw_card(world: &mut World, root: PathBuf, error: Option<Strin
     let setup = spawn_card_button(world, row, "Set up jackdaw", &font, true);
 
     let root_open = root.clone();
-    world.entity_mut(open_anyway).observe(
-        move |_: On<Pointer<Click>>, mut commands: Commands| {
+    world
+        .entity_mut(open_anyway)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
             let root = root_open.clone();
             commands.queue(move |world: &mut World| {
                 close_new_project_modal(world);
                 transition_to_editor(world, root);
             });
-        },
-    );
+        });
     world
         .entity_mut(setup)
         .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
@@ -2044,7 +2042,8 @@ fn show_lib_stub_warning_card_with_note(world: &mut World, root: PathBuf, note: 
         ))
         .id();
 
-    let open_editor = spawn_card_button(world, row, "Open editor (move code yourself)", &font, false);
+    let open_editor =
+        spawn_card_button(world, row, "Open editor (move code yourself)", &font, false);
     let migrate = spawn_card_button(world, row, "Migrate my code", &font, true);
 
     let root_open = root.clone();

@@ -145,7 +145,8 @@ pub fn plan_migration(root: &Path, crate_name: &str) -> Result<MigrationPlan, Mi
     if !main_path.is_file() {
         return Err(MigrationError::NoMainRs);
     }
-    let source = std::fs::read_to_string(&main_path).map_err(|e| MigrationError::Io(format!("{e}")))?;
+    let source =
+        std::fs::read_to_string(&main_path).map_err(|e| MigrationError::Io(format!("{e}")))?;
     let file = syn::parse_file(&source).map_err(|e| MigrationError::Parse(format!("{e}")))?;
 
     let offsets = LineOffsets::new(&source);
@@ -195,12 +196,7 @@ pub fn plan_migration(root: &Path, crate_name: &str) -> Result<MigrationPlan, Mi
         }
     }
 
-    let lib_rs = render_lib(
-        crate_name,
-        &use_text,
-        &classified.moved,
-        &moved_item_text,
-    );
+    let lib_rs = render_lib(crate_name, &use_text, &classified.moved, &moved_item_text);
     let main_rs = render_main(&source, &offsets, crate_name, &classified, &item_deletes)?;
 
     // Never hand back source we can't even parse.
@@ -220,8 +216,7 @@ pub fn plan_migration(root: &Path, crate_name: &str) -> Result<MigrationPlan, Mi
         notes.push("no game systems/resources found to move; only definitions relocated".into());
     }
     if classified.default_plugins.is_some() {
-        notes
-            .push("wrapped DefaultPlugins with maybe_windowless so embedded Play works".into());
+        notes.push("wrapped DefaultPlugins with maybe_windowless so embedded Play works".into());
     } else {
         notes.push(
             "no DefaultPlugins call found; add `maybe_windowless` by hand for embedded Play".into(),
@@ -242,7 +237,8 @@ pub fn plan_migration(root: &Path, crate_name: &str) -> Result<MigrationPlan, Mi
 pub fn apply_migration(root: &Path, plan: &MigrationPlan) -> Result<(), MigrationError> {
     let main_path = root.join("src/main.rs");
     let bak_path = root.join("src/main.rs.bak");
-    let original = std::fs::read_to_string(&main_path).map_err(|e| MigrationError::Io(format!("{e}")))?;
+    let original =
+        std::fs::read_to_string(&main_path).map_err(|e| MigrationError::Io(format!("{e}")))?;
     std::fs::write(&bak_path, original).map_err(|e| MigrationError::Io(format!("{e}")))?;
     std::fs::write(&main_path, &plan.main_rs).map_err(|e| MigrationError::Io(format!("{e}")))?;
     std::fs::write(root.join("src/lib.rs"), &plan.lib_rs)
@@ -349,7 +345,9 @@ fn find_builder(block: &syn::Block) -> Result<(Builder, proc_macro2::Span), Migr
             }
         }
         let run = run.ok_or_else(|| {
-            MigrationError::Unsupported("found `App::new()` but no `app.run()`; migrate by hand".into())
+            MigrationError::Unsupported(
+                "found `App::new()` but no `app.run()`; migrate by hand".into(),
+            )
         })?;
         return Ok((Builder::Let { calls, run }, anchor));
     }
@@ -384,7 +382,12 @@ fn expr_is_app_new(expr: &syn::Expr) -> bool {
     let syn::Expr::Path(p) = &*call.func else {
         return false;
     };
-    let segs: Vec<String> = p.path.segments.iter().map(|s| s.ident.to_string()).collect();
+    let segs: Vec<String> = p
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
     matches!(segs.as_slice(), [.., a, b] if a == "App" && b == "new")
 }
 
@@ -720,7 +723,10 @@ fn alone_on_line(s: &str, start: usize, end: usize) -> bool {
     let eol = end_of_line(s, end);
     let after = &s[end..eol];
     before.chars().all(char::is_whitespace)
-        && after.trim_end_matches('\n').chars().all(char::is_whitespace)
+        && after
+            .trim_end_matches('\n')
+            .chars()
+            .all(char::is_whitespace)
 }
 
 /// Byte offset just past the newline ending the line that contains `byte`.
@@ -990,9 +996,10 @@ fn main() {
         assert!(plan.lib_rs.contains("app.add_systems(Startup, setup)"));
         assert!(plan.lib_rs.contains("app.insert_resource(ClearColor"));
         // Update systems gated behind play_gate.
-        assert!(plan
-            .lib_rs
-            .contains("app.add_systems(Update, (move_player).run_if(play_gate::is_playing));"));
+        assert!(
+            plan.lib_rs
+                .contains("app.add_systems(Update, (move_player).run_if(play_gate::is_playing));")
+        );
         // Startup systems are NOT gated.
         assert!(!plan.lib_rs.contains("Startup, (setup).run_if"));
 
@@ -1003,17 +1010,30 @@ fn main() {
         assert!(!plan.main_rs.contains("add_systems"));
         assert!(!plan.main_rs.contains("insert_resource"));
         // The moved definitions are gone from main (now only in the library).
-        assert!(!plan.main_rs.contains("struct Player"), "Player moved out of main");
-        assert!(!plan.main_rs.contains("fn move_player"), "move_player moved out of main");
-        assert!(!plan.main_rs.contains("fn setup"), "setup moved out of main");
+        assert!(
+            !plan.main_rs.contains("struct Player"),
+            "Player moved out of main"
+        );
+        assert!(
+            !plan.main_rs.contains("fn move_player"),
+            "move_player moved out of main"
+        );
+        assert!(
+            !plan.main_rs.contains("fn setup"),
+            "setup moved out of main"
+        );
 
         // Embedded Play is wired without hand-editing: DefaultPlugins is bound,
         // wrapped with maybe_windowless under the pie feature, and added.
-        assert!(plan.main_rs.contains("let default_plugins = DefaultPlugins;"));
+        assert!(
+            plan.main_rs
+                .contains("let default_plugins = DefaultPlugins;")
+        );
         assert!(plan.main_rs.contains("#[cfg(feature = \"pie\")]"));
-        assert!(plan
-            .main_rs
-            .contains("jackdaw_runtime::maybe_windowless(default_plugins)"));
+        assert!(
+            plan.main_rs
+                .contains("jackdaw_runtime::maybe_windowless(default_plugins)")
+        );
         assert!(plan.main_rs.contains("add_plugins(default_plugins)"));
         assert!(syn::parse_file(&plan.main_rs).is_ok());
 
@@ -1049,26 +1069,37 @@ fn main() {
 
         assert!(plan.lib_rs.contains("pub struct Score"));
         assert!(plan.lib_rs.contains("pub fn tick"));
-        assert!(plan
-            .lib_rs
-            .contains("app.add_systems(Update, (tick).run_if(play_gate::is_playing));"));
+        assert!(
+            plan.lib_rs
+                .contains("app.add_systems(Update, (tick).run_if(play_gate::is_playing));")
+        );
         assert!(plan.lib_rs.contains("app.insert_resource(Score(0))"));
 
         // main keeps the let binding + DefaultPlugins + run, injects GamePlugin,
         // and drops the moved statements.
         assert!(plan.main_rs.contains("let mut app = App::new();"));
         assert!(plan.main_rs.contains("app.add_plugins(default_plugins);"));
-        assert!(plan.main_rs.contains("app.add_plugins(scorer::GamePlugin);"));
+        assert!(
+            plan.main_rs
+                .contains("app.add_plugins(scorer::GamePlugin);")
+        );
         assert!(plan.main_rs.contains("app.run();"));
         assert!(!plan.main_rs.contains("add_systems"));
         assert!(!plan.main_rs.contains("insert_resource"));
-        assert!(!plan.main_rs.contains("struct Score"), "Score moved out of main");
+        assert!(
+            !plan.main_rs.contains("struct Score"),
+            "Score moved out of main"
+        );
         assert!(!plan.main_rs.contains("fn tick"), "tick moved out of main");
         // Embedded Play wiring for the let-form too.
-        assert!(plan.main_rs.contains("let default_plugins = DefaultPlugins;"));
-        assert!(plan
-            .main_rs
-            .contains("jackdaw_runtime::maybe_windowless(default_plugins)"));
+        assert!(
+            plan.main_rs
+                .contains("let default_plugins = DefaultPlugins;")
+        );
+        assert!(
+            plan.main_rs
+                .contains("jackdaw_runtime::maybe_windowless(default_plugins)")
+        );
 
         assert!(syn::parse_file(&plan.main_rs).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1102,7 +1133,8 @@ fn main() {
 
     #[test]
     fn declines_when_no_main() {
-        let dir = std::env::temp_dir().join(format!("jackdaw_migrate_nomain_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("jackdaw_migrate_nomain_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         assert!(matches!(

@@ -152,7 +152,10 @@ pub fn resolve_build_spec(
     // An `editor` feature on a run config compiles the whole editor into the
     // game binary and forces a full editor recompile on every Play. It is never
     // correct here: the editor binary is built separately.
-    if features.iter().any(|f| f == "editor" || f.ends_with("/editor")) {
+    if features
+        .iter()
+        .any(|f| f == "editor" || f.ends_with("/editor"))
+    {
         bevy::log::warn!(
             "jackdaw.toml run config `{}` enables an `editor` feature; remove it from \
              this run config's `features`. It links the editor into the game and \

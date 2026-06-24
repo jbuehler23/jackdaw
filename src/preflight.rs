@@ -190,10 +190,7 @@ mod tests {
     #[test]
     fn windows_linker_warns_only_on_unguarded_mingw() {
         // No gcc -> fine.
-        assert_eq!(
-            windows_linker_status(false, None).0,
-            CheckStatus::Ok
-        );
+        assert_eq!(windows_linker_status(false, None).0, CheckStatus::Ok);
         // gcc present, no generator forcing MSVC -> warn with a fix.
         let (status, _, fix) = windows_linker_status(true, None);
         assert_eq!(status, CheckStatus::Warn);

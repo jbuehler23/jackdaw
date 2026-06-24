@@ -554,7 +554,8 @@ pub(crate) fn rewrite_jackdaw_dep_for_dev_checkout(
     };
 
     // Point the optional `jackdaw` editor dep at the checkout root.
-    let mut contents = rewrite_jackdaw_dep_line(&original, &checkout).unwrap_or_else(|| original.clone());
+    let mut contents =
+        rewrite_jackdaw_dep_line(&original, &checkout).unwrap_or_else(|| original.clone());
 
     // Patch the other jackdaw crates the project depends on directly (e.g.
     // `jackdaw_runtime`) at the local checkout via `[patch.crates-io]`. This

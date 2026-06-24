@@ -47,7 +47,11 @@ impl std::fmt::Display for ScaffoldError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ScaffoldError::NoManifest(p) => {
-                write!(f, "no Cargo.toml at {} (run this in your project root)", p.display())
+                write!(
+                    f,
+                    "no Cargo.toml at {} (run this in your project root)",
+                    p.display()
+                )
             }
             ScaffoldError::ManifestParse(e) => write!(f, "could not parse Cargo.toml: {e}"),
             ScaffoldError::NoPackageName => write!(f, "Cargo.toml has no [package] name"),
@@ -224,7 +228,9 @@ pub fn scaffold_existing_project(
             .entry("bin")
             .or_insert(Item::ArrayOfTables(toml_edit::ArrayOfTables::new()))
             .as_array_of_tables_mut()
-            .ok_or_else(|| ScaffoldError::ManifestParse("[[bin]] is not an array of tables".into()))?;
+            .ok_or_else(|| {
+                ScaffoldError::ManifestParse("[[bin]] is not an array of tables".into())
+            })?;
         let mut t = Table::new();
         t["name"] = value("editor");
         let mut rf = Array::new();
@@ -248,7 +254,8 @@ pub fn scaffold_existing_project(
     }
 
     if manifest_changed {
-        std::fs::write(&manifest_path, doc.to_string()).map_err(|e| ScaffoldError::Io(format!("{e}")))?;
+        std::fs::write(&manifest_path, doc.to_string())
+            .map_err(|e| ScaffoldError::Io(format!("{e}")))?;
     }
 
     // `src/bin/editor.rs`.
@@ -349,7 +356,9 @@ fn set_jackdaw_profile_opt_level(doc: &mut DocumentMut) -> Result<bool, Scaffold
         .entry("package")
         .or_insert(Item::Table(Table::new()))
         .as_table_mut()
-        .ok_or_else(|| ScaffoldError::ManifestParse("[profile.dev.package] is not a table".into()))?;
+        .ok_or_else(|| {
+            ScaffoldError::ManifestParse("[profile.dev.package] is not a table".into())
+        })?;
     if !had_package {
         package.set_implicit(true);
     }
@@ -634,7 +643,8 @@ mod tests {
     use super::*;
 
     fn temp_project(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("jackdaw_scaffold_{}_{}", tag, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("jackdaw_scaffold_{}_{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
@@ -655,7 +665,10 @@ mod tests {
 
         let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
         assert!(manifest.contains("jackdaw"), "adds jackdaw dep");
-        assert!(manifest.contains("jackdaw_runtime/pie"), "editor feature pulls pie");
+        assert!(
+            manifest.contains("jackdaw_runtime/pie"),
+            "editor feature pulls pie"
+        );
         assert!(manifest.contains("name = \"editor\""), "adds editor bin");
         assert!(
             manifest.contains("[profile.dev.package.jackdaw]"),
@@ -690,14 +703,18 @@ mod tests {
         let report = scaffold_existing_project(&dir, None).expect("second run");
         assert!(report.actions.is_empty(), "nothing to change on re-run");
         let manifest_after_second = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
-        assert_eq!(manifest_after_first, manifest_after_second, "manifest unchanged");
+        assert_eq!(
+            manifest_after_first, manifest_after_second,
+            "manifest unchanged"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn creates_lib_stub_when_missing() {
-        let dir = std::env::temp_dir().join(format!("jackdaw_scaffold_nolib_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("jackdaw_scaffold_nolib_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
@@ -730,7 +747,10 @@ mod tests {
         // `.template` files substituted and renamed to their real names.
         let cargo = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
         assert!(cargo.contains("name = \"my-cool-game\""));
-        assert!(!cargo.contains("{{"), "no unsubstituted placeholders remain");
+        assert!(
+            !cargo.contains("{{"),
+            "no unsubstituted placeholders remain"
+        );
         let main_rs = std::fs::read_to_string(dir.join("src/main.rs")).unwrap();
         assert!(
             main_rs.contains("my_cool_game::"),
