@@ -73,6 +73,12 @@ members = [
     "examples/extension/viewable_camera_extension",
     "tests/fixtures/test_fixture_extension",
 ]
+# The lightyear runtime backend depends on lightyear, which targets Bevy 0.18
+# and has no Bevy 0.19 release yet. Excluded from the workspace build until
+# lightyear ships 0.19 support; re-add it then. Nothing else links it (the
+# editor's multiplayer authoring uses jackdaw_multiplayer{,_editor}, not this
+# backend), so excluding it doesn't affect the editor, runtime, or templates.
+exclude = ["crates/jackdaw_multiplayer_lightyear"]
 
 [dependencies]
 bevy.workspace = true
@@ -217,7 +223,6 @@ avian3d = { version = "0.7", default-features = false, features = [
 jackdaw_avian_integration = { version = "0.5.0", path = "crates/jackdaw_avian_integration" }
 jackdaw_multiplayer = { version = "0.5.0", path = "crates/jackdaw_multiplayer" }
 jackdaw_multiplayer_editor = { version = "0.5.0", path = "crates/jackdaw_multiplayer_editor" }
-jackdaw_multiplayer_lightyear = { version = "0.5.0", path = "crates/jackdaw_multiplayer_lightyear" }
 jackdaw_runtime = { version = "0.5.0", path = "crates/jackdaw_runtime" }
 jackdaw_panels = { version = "0.5.0", path = "crates/jackdaw_panels" }
 jackdaw_api = { version = "0.5.0", path = "crates/jackdaw_api" }

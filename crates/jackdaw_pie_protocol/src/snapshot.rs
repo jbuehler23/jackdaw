@@ -2,12 +2,11 @@ use std::any::TypeId;
 use std::collections::HashMap;
 
 use bevy::{
-    asset::ReflectHandle,
+    asset::{ReflectHandle, UntypedHandle},
     prelude::*,
     reflect::{
         TypeRegistration, TypeRegistry,
         serde::{ReflectDeserializerProcessor, ReflectSerializerProcessor, TypedReflectSerializer},
-        std_traits::ReflectDefault,
     },
 };
 use serde::de::IgnoredAny;
@@ -146,13 +145,14 @@ impl ReflectDeserializerProcessor for RemoteDeserializerProcessor {
     where
         D: Deserializer<'de>,
     {
-        // Only intercept asset handles that can supply a default; everything else
-        // deserializes normally.
-        if registration.data::<ReflectHandle>().is_some()
-            && let Some(reflect_default) = registration.data::<ReflectDefault>()
-        {
+        // Intercept asset handles: the serializer emits `null` for each one, so
+        // consume that and rebuild the handle type's default. Bevy 0.19 dropped
+        // `Handle`'s `Default` impl (so `ReflectDefault` is no longer
+        // registered), so build the default through `ReflectHandle` instead.
+        if let Some(reflect_handle) = registration.data::<ReflectHandle>() {
             deserializer.deserialize_option(IgnoredAny)?;
-            return Ok(Ok(reflect_default.default().into_partial_reflect()));
+            let untyped = UntypedHandle::default_for_type(reflect_handle.asset_type_id());
+            return Ok(Ok(reflect_handle.typed(untyped).into_partial_reflect()));
         }
         Ok(Err(deserializer))
     }

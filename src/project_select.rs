@@ -1408,7 +1408,7 @@ fn set_template_input_text(world: &mut World, new_text: String) {
 }
 
 /// Walk from the outer Template-field entity to its inner
-/// [`EditableText`] entity. Mirror of
+/// `EditableText` entity. Mirror of
 /// `inspector::find_text_edit_entities_local`.
 fn find_text_edit_entities_for_template(world: &World, outer: Entity) -> Option<(Entity, Entity)> {
     use jackdaw_feathers::text_edit::TextEditWrapper;
@@ -2306,7 +2306,7 @@ fn on_reset_new_location(_: On<Pointer<Click>>, mut commands: Commands) {
 
 /// Observer for the Browse button on the local template path field.
 /// Opens a folder picker; on completion, writes the picked path into
-/// the `NewProjectLocalTemplateInput` text field via [`EditableText`].
+/// the `NewProjectLocalTemplateInput` text field via `EditableText`.
 fn on_browse_template_folder(
     _: On<Pointer<Click>>,
     mut commands: Commands,
