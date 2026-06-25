@@ -1967,6 +1967,25 @@ fn collect_scene_entities_from_set(
         .filter(|e| !editor_set.contains(e))
         .collect();
 
+    // Bevy 0.19's gizmo plugin spawns named line-renderer entities in the main
+    // world (`LineGizmoRenderer` etc.); they carry only a `Name` and no scene
+    // marker, so the "every named non-editor entity" filter above would
+    // otherwise serialize them into every `.jsn` and undo snapshot. They're
+    // engine internals, not authored content, so drop them.
+    const BEVY_GIZMO_RENDERER_NAMES: &[&str] = &[
+        "LineGizmoRenderer",
+        "LineStripGizmoRenderer",
+        "LineJointGizmoRenderer",
+    ];
+    let roots: Vec<Entity> = roots
+        .into_iter()
+        .filter(|&e| {
+            world
+                .get::<Name>(e)
+                .is_none_or(|n| !BEVY_GIZMO_RENDERER_NAMES.contains(&n.as_str()))
+        })
+        .collect();
+
     // Expand to include all descendants
     let mut scene_set = HashSet::new();
     let mut stack = roots;
