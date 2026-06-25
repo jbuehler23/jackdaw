@@ -1996,7 +1996,13 @@ fn collect_scene_entities_from_set(
         }
     }
 
-    scene_set.into_iter().collect()
+    // Return in a deterministic order. `scene_set` is a `HashSet`, whose
+    // iteration order varies between captures even for an identical entity set;
+    // sorting makes the snapshot AST canonical so undo equality and `.jsn`
+    // output don't shift when an unrelated entity moves archetypes.
+    let mut ordered: Vec<Entity> = scene_set.into_iter().collect();
+    ordered.sort_unstable();
+    ordered
 }
 
 /// Collect every editor entity: each `EditorEntity` root and its
