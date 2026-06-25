@@ -34,7 +34,7 @@ Future live-reload will do this automatically on source change.
 
 Bevy's derive macros (`#[derive(Component)]`, `#[derive(Resource)]`)
 read `CARGO_MANIFEST_DIR/Cargo.toml` at expansion time to figure
-out how to name bevy's crate. `bevy = "0.18"` in `[dependencies]`
+out how to name bevy's crate. `bevy = "0.19"` in `[dependencies]`
 is just there so the macros emit correct paths. Cargo compiles
 the real bevy into this project's `target/` on the first build,
 but that `libbevy-<hash>.rlib` is never actually linked: jackdaw's

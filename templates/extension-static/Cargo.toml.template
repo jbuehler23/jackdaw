@@ -24,7 +24,7 @@ name = "{{project-name}}"
 path = "src/main.rs"
 
 [dependencies]
-bevy = "0.18"
+bevy = "0.19"
 # Static-embed build: jackdaw links into this binary as a plain
 # library, not a dylib. This is the recommended path. Builds with
 # vanilla cargo, no rustc-wrapper, no SDK proxy, and no

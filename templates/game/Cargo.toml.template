@@ -22,7 +22,7 @@ crate-type = ["cdylib"]
 # `jackdaw_api` is never declared here; the wrapper injects its
 # `--extern` flag unconditionally.
 [dependencies]
-bevy = "0.18"
+bevy = "0.19"
 
 # The build.rs scans src/ for `#[derive(..., Reflect, ...)]` types
 # and emits an explicit registration function that jackdaw's

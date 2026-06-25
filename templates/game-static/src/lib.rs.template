@@ -48,7 +48,7 @@ impl Plugin for MyGamePlugin {
 /// No `register_type` call is needed because the editor binary adds
 /// `MyGamePlugin` (see `src/bin/editor.rs`), and this type is used by
 /// a system in this crate. That reference keeps the crate linked, so
-/// Bevy 0.18's `reflect_auto_register` picks the type up. A type in a
+/// Bevy 0.19's `reflect_auto_register` picks the type up. A type in a
 /// crate the editor never references would be stripped by the linker
 /// and would need an explicit `app.register_type::<T>()`.
 #[derive(Component, Reflect)]
