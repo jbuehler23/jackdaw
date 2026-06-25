@@ -56,7 +56,7 @@ pub struct GraphTerminalView {
 ///         let Ok(graph_node) = nodes.get(body.node) else { continue };
 ///         if graph_node.node_type != "demo.constant" { continue }
 ///         commands
-///             .spawn((Text::new("value: 0.0"), TextFont { font_size: 11.0, ..default() }))
+///             .spawn((Text::new("value: 0.0"), TextFont { font_size: FontSize::Px(11.0), ..default() }))
 ///             .insert(ChildOf(body_entity));
 ///     }
 /// }
