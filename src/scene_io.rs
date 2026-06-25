@@ -2912,27 +2912,33 @@ mod navmesh_export_tests {
         // its own threads, so no app tick is needed; we still tick the
         // global pools each iteration as a belt-and-suspenders nudge in
         // case the runner constrained the pool to the calling thread.
-        let mut appeared = false;
+        // Poll for the sibling `.nav` to both exist AND fully decode (bounded
+        // ~3s). The IO pool runs on its own threads and creates the file before
+        // the bytes are flushed, so `exists()` alone races the write and can
+        // read a truncated file; a successful decode is the real readiness
+        // signal. The bytes must decode back into a Navmesh via the same bincode
+        // contract the loader uses (`navmesh.load`). We still tick the global
+        // pools each iteration as a belt-and-suspenders nudge in case the runner
+        // constrained the pool to the calling thread.
+        let config = bincode::config::standard();
+        let mut decoded: Option<Navmesh> = None;
         for _ in 0..300 {
-            if nav_path.exists() {
-                appeared = true;
+            if nav_path.exists()
+                && let Ok(mut file) = std::fs::File::open(&nav_path)
+                && let Ok(nav) = bincode::serde::decode_from_std_read(&mut file, config)
+            {
+                decoded = Some(nav);
                 break;
             }
             bevy::tasks::tick_global_task_pools_on_main_thread();
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(
-            appeared,
-            "sibling .nav was not written within the timeout: {}",
-            nav_path.display()
-        );
-
-        // The bytes must decode back into a Navmesh via the same bincode
-        // contract the loader uses (`navmesh.load`).
-        let mut file = std::fs::File::open(&nav_path).expect("open written .nav");
-        let config = bincode::config::standard();
-        let decoded: Navmesh = bincode::serde::decode_from_std_read(&mut file, config)
-            .expect("written .nav decodes back into a Navmesh");
+        let decoded = decoded.unwrap_or_else(|| {
+            panic!(
+                "sibling .nav was not written and decodable within the timeout: {}",
+                nav_path.display()
+            )
+        });
         assert_eq!(
             decoded,
             empty_navmesh(),
