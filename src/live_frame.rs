@@ -1,5 +1,5 @@
 //! Receives live frame-view pixels from the focused game instance and keeps
-//! them in an editor-side image asset for the viewport background.
+//! them in an editor-side image asset displayed by the Game panel.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;

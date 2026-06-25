@@ -18,8 +18,38 @@ You'll want the same packages bevy needs:
 sudo apt install libasound2-dev libudev-dev libwayland-dev
 ```
 
-Adjust for your package manager on other distros. macOS and
-Windows don't need anything extra.
+Adjust for your package manager on other distros. macOS needs
+nothing extra.
+
+## Windows
+
+Two gotchas, both from dependencies rather than jackdaw itself.
+
+**cmake picks the wrong compiler.** Jackdaw's CSG kernel
+(`manifold-csg-sys`) builds a C++ library with cmake. If MinGW GCC
+is on your `PATH` (it ships with Git for Windows and Strawberry
+Perl), cmake selects it instead of MSVC and the resulting object
+files fail to link with `LNK1143: invalid or corrupt file`. Force
+the Visual Studio generator before building:
+
+```powershell
+$env:CMAKE_GENERATOR = "Visual Studio 17 2022"
+cargo install --git https://github.com/jbuehler23/jackdaw --force
+```
+
+Do not set `CC=cl` / `CXX=cl` to fix this; that breaks other
+crates (e.g. `ring`) that rely on cmake's own compiler detection.
+
+**Prefer the Vulkan backend.** Some DX12 driver/wgpu combinations
+hit validation panics in the renderer. If you see a crash inside
+`wgpu-core` (an `assertion left == right failed` in `render.rs`),
+force Vulkan:
+
+```powershell
+$env:WGPU_BACKEND = "vulkan"
+```
+
+Vulkan is the more stable backend on Windows.
 
 ## Install jackdaw
 

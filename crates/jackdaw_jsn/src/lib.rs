@@ -23,6 +23,8 @@ pub use ast::{JsnNodeId, SceneJsnAst, needs_id_migration};
 pub use brush_chunks::{MeshChunk, build_brush_chunks};
 pub use format::{JsnProject, JsnProjectConfig, JsnScene};
 pub use loader::JsnAssetLoader;
+#[cfg(feature = "render")]
+pub use mesh_rebuild::evaluate_brush_geometry;
 
 pub struct JsnPlugin {
     /// Whether to run the built-in runtime mesh rebuild for brushes.

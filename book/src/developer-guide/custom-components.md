@@ -20,9 +20,13 @@ shows up.
 
 A few things make this work without ceremony:
 
-- Bevy 0.18's `reflect_auto_register` finds and registers the
-  type at app build, so you don't need
-  `app.register_type::<PlayerSpawn>()`.
+- Bevy 0.18's `reflect_auto_register` registers the type at app
+  build, so you don't need `app.register_type::<PlayerSpawn>()`,
+  as long as your crate is linked into the editor binary and
+  something references it (the editor adds your `MyGamePlugin`,
+  which does). A type in a crate the editor never references is
+  stripped by the linker before registration runs; register it
+  explicitly if it never shows up.
 - The `reflect_documentation` cargo feature is on
   workspace-wide, so doc comments on the type become picker
   tooltips.

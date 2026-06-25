@@ -27,10 +27,32 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::{hint, thread};
+use std::thread;
 
 use crate::new_project::TemplateLinkage;
 use crate::sdk_paths::SdkPaths;
+
+/// Shared cargo target directory for building user-project editor and game
+/// binaries. A jackdaw source checkout routes into a dir under the checkout; an
+/// installed jackdaw uses a per-version dir under the user cache. Either way
+/// bevy + jackdaw + their dependencies compile once per machine, so every
+/// project after the first opens in seconds instead of recompiling the whole
+/// tree. Returns `None` when no cache dir is resolvable; callers then fall back
+/// to the project's own `target/`.
+///
+/// Keyed by jackdaw's version so an upgrade (different ABI) starts a fresh cache
+/// rather than mixing incompatible artifacts.
+fn shared_build_target_dir() -> Option<PathBuf> {
+    if let Some(checkout) = crate::new_project::jackdaw_dev_checkout() {
+        return Some(checkout.join("target").join("user-projects"));
+    }
+    dirs::cache_dir().map(|cache| {
+        cache
+            .join("jackdaw")
+            .join(env!("CARGO_PKG_VERSION"))
+            .join("target")
+    })
+}
 
 /// Everything that can go wrong while building an extension/game
 /// project.
@@ -350,24 +372,23 @@ pub fn build_static_editor_with_progress(
         "editor",
         "--features",
         "editor",
+        // The `jackdaw` editor crate is enormous; the Bevy dev profile's
+        // `package."*" opt-level = 3` optimizes it like any other dep, needing
+        // ~8GB to compile (it OOMs alongside the running editor). Build it at
+        // opt-level 1 (how the workspace itself builds it). It's editor-only,
+        // never linked into the shipped game, so there's no runtime cost. Other
+        // deps (bevy) keep opt-level 3.
+        "--config",
+        "profile.dev.package.jackdaw.opt-level=1",
         "--message-format=json-render-diagnostics",
     ]);
 
-    // When the launcher is running from a jackdaw source checkout,
-    // route the user-project build into a shared target dir under
-    // the checkout. Cargo's content-addressable artifact reuse then
-    // means jackdaw + bevy + transitive deps compile once globally
-    // and incremental rebuilds finish in seconds, instead of taking
-    // 2+ minutes per project per session as the user re-iterates.
-    //
-    // Falls through to the user-project's own `target/` for
-    // released binaries (no dev checkout detected). The released
-    // build path is the user's normal cargo target; nothing
-    // surprising.
-    let editor_target_dir = match crate::new_project::jackdaw_dev_checkout() {
-        Some(checkout) => checkout.join("target").join("user-projects"),
-        None => project_dir.join("target"),
-    };
+    // Build into the shared, cross-project cache (see
+    // `shared_build_target_dir`): jackdaw + bevy + their deps compile once per
+    // machine, so the first project pays the full build and every project after
+    // it opens in seconds. Falls back to the project's own `target/` only when
+    // no cache dir is resolvable.
+    let editor_target_dir = shared_build_target_dir().unwrap_or_else(|| project_dir.join("target"));
     let editor_target_str = editor_target_dir
         .to_str()
         .expect("CARGO_TARGET_DIR path must be valid UTF-8");
@@ -448,11 +469,12 @@ pub fn build_game_bin_with_progress(
         cmd.arg("--features").arg(spec.features.join(","));
     }
 
-    // Build into the project's own `target/`, the same directory the
-    // developer's `cargo build` uses. Play then reuses the project's
-    // already-compiled dependencies, and the binary lands where they
-    // expect it rather than in a separate editor-owned directory.
-    let game_target_dir = project_dir.join("target");
+    // Build into the same shared cache as the editor build (see
+    // `shared_build_target_dir`), so the game (PIE) build reuses the editor
+    // build's already-compiled bevy + jackdaw rather than recompiling the tree
+    // per project. Falls back to the project's own `target/` when no cache dir
+    // is resolvable.
+    let game_target_dir = shared_build_target_dir().unwrap_or_else(|| project_dir.join("target"));
     let game_target_str = game_target_dir
         .to_str()
         .expect("CARGO_TARGET_DIR path must be valid UTF-8");
@@ -566,13 +588,35 @@ fn run_cargo_with_progress(
                         .unwrap_or_default();
                     return Err(BuildError::Cancelled { stderr_tail: tail });
                 }
-                hint::spin_loop();
+                // Sleep rather than busy-spin: a tight `spin_loop` pins a core
+                // for the whole multi-minute build and can starve the pipe
+                // reader threads on a contended system.
+                thread::sleep(std::time::Duration::from_millis(10));
             }
             Err(e) => return Err(BuildError::BuildSpawn(e)),
         }
     };
-    let _ = stdout_handle.join();
-    let _ = stderr_handle.join();
+    // Join the reader threads, but never block forever. If a cargo grandchild
+    // (a build script or a process it spawned) kept a stdout/stderr pipe
+    // write-end open after cargo exited, that pipe never reaches EOF and the
+    // readers would never return, leaving the launcher stuck at the finished
+    // build with no handoff. cargo has emitted all its output by the time it
+    // exits, so after a short grace period proceed regardless and leave any
+    // still-blocked reader detached.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    for handle in [stdout_handle, stderr_handle] {
+        while !handle.is_finished() && std::time::Instant::now() < deadline {
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if handle.is_finished() {
+            let _ = handle.join();
+        } else {
+            bevy::log::warn!(
+                "build: a cargo output reader did not finish after cargo exited; \
+                 proceeding (a child process likely held a pipe open)"
+            );
+        }
+    }
 
     if let Some(s) = sink
         && let Ok(mut g) = s.lock()

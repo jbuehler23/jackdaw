@@ -58,6 +58,8 @@ struct MetaPackage {
     name: String,
     targets: Vec<MetaTarget>,
     dependencies: Vec<MetaDep>,
+    #[serde(default)]
+    features: std::collections::HashMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -117,6 +119,14 @@ impl CargoMeta {
             .is_some_and(|p| p.dependencies.iter().any(|d| d.name == dep))
     }
 
+    /// Whether the named package declares a cargo `feature`.
+    pub fn package_has_feature(&self, package: &str, feature: &str) -> bool {
+        self.packages
+            .iter()
+            .find(|p| p.name == package)
+            .is_some_and(|p| p.features.contains_key(feature))
+    }
+
     pub fn package_of_bin(&self, bin: &str) -> Option<&str> {
         self.packages
             .iter()
@@ -139,7 +149,27 @@ pub fn resolve_build_spec(
 ) -> Option<crate::ext_build::BuildSpec> {
     let package = meta.package_of_bin(&run.bin)?.to_string();
     let mut features = run.features.clone();
-    if meta.package_depends_directly(&package, "jackdaw_runtime") {
+    // An `editor` feature on a run config compiles the whole editor into the
+    // game binary and forces a full editor recompile on every Play. It is never
+    // correct here: the editor binary is built separately.
+    if features
+        .iter()
+        .any(|f| f == "editor" || f.ends_with("/editor"))
+    {
+        bevy::log::warn!(
+            "jackdaw.toml run config `{}` enables an `editor` feature; remove it from \
+             this run config's `features`. It links the editor into the game and \
+             recompiles the editor on every Play.",
+            run.bin
+        );
+    }
+    // Prefer the project's own `pie` feature so its `#[cfg(feature = "pie")]`
+    // (which wraps the game in `maybe_windowless` to run inside the Game panel)
+    // activates. Fall back to the dependency feature for projects that don't
+    // declare one.
+    if meta.package_has_feature(&package, "pie") {
+        features.push("pie".to_string());
+    } else if meta.package_depends_directly(&package, "jackdaw_runtime") {
         features.push("jackdaw_runtime/pie".to_string());
     }
     Some(crate::ext_build::BuildSpec {

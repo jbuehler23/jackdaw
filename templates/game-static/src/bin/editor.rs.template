@@ -1,75 +1,19 @@
 //! Editor + game binary for {{project-name}}, built only when
 //! the `editor` feature is on (typically via `cargo editor`).
-//! Statically links the jackdaw editor with [`MyGamePlugin`];
-//! PIE Play runs the game in-process inside the editor window.
+//! Statically links the jackdaw editor with [`MyGamePlugin`] so the
+//! inspector knows this project's component types. PIE Play builds and
+//! launches the game as a separate process and streams it back into the
+//! Game panel.
 //!
 //! See `src/main.rs` for the standalone runner.
 
-use std::path::PathBuf;
-
-use bevy::{
-    asset::AssetPlugin,
-    image::{ImageAddressMode, ImagePlugin, ImageSamplerDescriptor},
-    prelude::*,
-};
-use jackdaw::prelude::*;
-use jackdaw::project_select::PendingAutoOpen;
+use bevy::prelude::*;
 
 fn main() -> AppExit {
-    // Claim SIGINT/SIGTERM before wgpu/gilrs install their own
-    // handlers that swallow the signal.
-    let _ = ctrlc::set_handler(|| std::process::exit(130));
-
-    // The launcher hands off via `JACKDAW_PROJECT`; for
-    // `cargo editor` from a project shell, fall back to cwd.
-    // Without one of these the editor would land on the
-    // launcher's picker instead of opening this project.
-    let project_root = std::env::var_os("JACKDAW_PROJECT")
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok());
-
-    // Mirror jackdaw's standalone `src/main.rs` AssetPlugin /
-    // ImagePlugin config: point the asset root at this project's
-    // `assets/`, and use the `Repeat` sampler so brush materials
-    // tile correctly by default.
-    let asset_root = project_root
-        .as_ref()
-        .map(|p| p.join("assets").to_string_lossy().to_string())
-        .unwrap_or_else(|| "assets".to_string());
-
-    let mut app = App::new();
-    app.set_error_handler(bevy::ecs::error::error)
-        .add_plugins(
-            DefaultPlugins
-                .set(AssetPlugin {
-                    file_path: asset_root,
-                    ..default()
-                })
-                .set(ImagePlugin {
-                    default_sampler: ImageSamplerDescriptor {
-                        address_mode_u: ImageAddressMode::Repeat,
-                        address_mode_v: ImageAddressMode::Repeat,
-                        address_mode_w: ImageAddressMode::Repeat,
-                        ..ImageSamplerDescriptor::linear()
-                    },
-                })
-                .set(editor_window_plugin()),
-        )
-        // Ambient plugins. `jackdaw::prelude` re-exports both so
-        // we don't need direct deps on avian3d /
-        // bevy_enhanced_input.
-        .add_plugins((PhysicsPlugins::default(), EnhancedInputPlugin))
-        .add_plugins(EditorPlugins::default())
-        .add_plugins({{crate_name}}::MyGamePlugin);
-
-    if let Some(root) = project_root.filter(|p| p.is_dir()) {
-        // `skip_build = true`: this binary IS the editor; no
-        // build step to wait for.
-        app.insert_resource(PendingAutoOpen {
-            path: root,
-            skip_build: true,
-        });
-    }
-
-    app.run()
+    // `editor_main` wires `DefaultPlugins` (with this project's asset root and
+    // the tiling image sampler), the ambient physics + input plugins, the
+    // editor itself, and auto-opens this project. Passing `MyGamePlugin` links
+    // this crate's reflected components into the inspector's Add Component
+    // picker.
+    jackdaw::editor_main({{crate_name}}::MyGamePlugin)
 }

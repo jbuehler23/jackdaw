@@ -312,6 +312,8 @@ pub enum ScaffoldError {
     LocationNotFound(PathBuf),
     ProjectAlreadyExists(PathBuf),
     Command(CommandError),
+    /// Failure from the embedded-template scaffolder (the static-game path).
+    Io(String),
 }
 
 impl From<CommandError> for ScaffoldError {
@@ -345,6 +347,7 @@ impl std::fmt::Display for ScaffoldError {
                 p.display()
             ),
             Self::Command(e) => write!(f, "{e}"),
+            Self::Io(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -397,6 +400,18 @@ pub fn scaffold_project(
     let project_path = location.join(name);
     if project_path.exists() {
         return Err(ScaffoldError::ProjectAlreadyExists(project_path));
+    }
+
+    // The recommended static-game template is embedded in the binary, so
+    // scaffold it directly (offline, no cargo-generate / bevy CLI) using the
+    // same code path as `jackdaw new`. dylib and extension templates still go
+    // through cargo-generate below.
+    if matches!(linkage, TemplateLinkage::Static) && template_url.contains("game-static") {
+        // `scaffold_new_project` writes the files and applies the dev-checkout
+        // dep rewrite itself, so this path also works from `jackdaw new`.
+        crate::scaffold::scaffold_new_project(&project_path, name)
+            .map_err(|e| ScaffoldError::Io(e.to_string()))?;
+        return Ok(project_path);
     }
 
     // Split `URL [SUBDIR]`. The URL alone goes to bevy CLI's
@@ -523,29 +538,57 @@ fn scaffold_from_local_path(
 /// that. Dylib templates don't declare `jackdaw` at all (the
 /// rustc-wrapper injects `jackdaw_api`), so this function is a
 /// no-op for them.
-fn rewrite_jackdaw_dep_for_dev_checkout(project_path: &Path, linkage: TemplateLinkage) {
+/// Returns `true` if the manifest was actually changed (false when not a dev
+/// checkout, the manifest is unreadable, or it was already rewritten).
+pub(crate) fn rewrite_jackdaw_dep_for_dev_checkout(
+    project_path: &Path,
+    linkage: TemplateLinkage,
+) -> bool {
     let _ = linkage; // currently unused; kept so future linkage-specific tweaks are obvious.
     let Some(checkout) = jackdaw_dev_checkout() else {
-        return;
+        return false;
     };
     let manifest_path = project_path.join("Cargo.toml");
-    let Ok(contents) = std::fs::read_to_string(&manifest_path) else {
-        return;
+    let Ok(original) = std::fs::read_to_string(&manifest_path) else {
+        return false;
     };
-    let Some(new_contents) = rewrite_jackdaw_dep_line(&contents, &checkout) else {
-        return; // dylib template has no jackdaw dep; nothing to rewrite.
-    };
-    if let Err(e) = std::fs::write(&manifest_path, new_contents) {
-        warn!(
-            "Failed to rewrite jackdaw dep in {} for dev checkout: {e}",
-            manifest_path.display()
-        );
-    } else {
-        info!(
-            "Rewrote jackdaw dep in {} to path = '{}' (dev checkout detected)",
-            manifest_path.display(),
-            checkout.display()
-        );
+
+    // Point the optional `jackdaw` editor dep at the checkout root.
+    let mut contents =
+        rewrite_jackdaw_dep_line(&original, &checkout).unwrap_or_else(|| original.clone());
+
+    // Patch the other jackdaw crates the project depends on directly (e.g.
+    // `jackdaw_runtime`) at the local checkout via `[patch.crates-io]`. This
+    // resolves the in-development version (the workspace is on 0.5 while
+    // crates.io still has 0.4.x) and preserves the dep line's features.
+    if contents.contains("jackdaw_runtime") && !contents.contains("[patch.crates-io]") {
+        let runtime = checkout.join("crates").join("jackdaw_runtime");
+        contents.push_str(&format!(
+            "\n[patch.crates-io]\njackdaw_runtime = {{ path = '{}' }}\n",
+            runtime.display()
+        ));
+    }
+
+    if contents == original {
+        return false;
+    }
+
+    match std::fs::write(&manifest_path, contents) {
+        Ok(()) => {
+            info!(
+                "Rewrote jackdaw deps in {} for the dev checkout at {}",
+                manifest_path.display(),
+                checkout.display()
+            );
+            true
+        }
+        Err(e) => {
+            warn!(
+                "Failed to rewrite jackdaw deps in {} for dev checkout: {e}",
+                manifest_path.display()
+            );
+            false
+        }
     }
 }
 
@@ -793,5 +836,39 @@ mod tests {
         assert!(out.contains("name = \"my_game\""));
         assert!(out.contains("bevy = \"0.18\""));
         assert!(out.contains("editor = [\"jackdaw\"]"));
+    }
+
+    #[test]
+    fn dev_checkout_patches_jackdaw_runtime_and_jackdaw() {
+        // Only meaningful inside a jackdaw source checkout; a no-op otherwise.
+        if jackdaw_dev_checkout().is_none() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("jackdaw_devpatch_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+             [dependencies]\n\
+             jackdaw = { version = \"0.5\", default-features = false, optional = true }\n\
+             jackdaw_runtime = { version = \"0.5\", features = [\"physics\"] }\n",
+        )
+        .unwrap();
+
+        rewrite_jackdaw_dep_for_dev_checkout(&dir, TemplateLinkage::Static);
+
+        let out = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        assert!(
+            out.contains("jackdaw = { path ="),
+            "editor dep rewritten to a path"
+        );
+        assert!(out.contains("[patch.crates-io]"), "patch section added");
+        assert!(
+            out.contains("jackdaw_runtime = { path ="),
+            "jackdaw_runtime patched to the local checkout"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

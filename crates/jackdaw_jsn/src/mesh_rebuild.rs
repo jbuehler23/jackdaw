@@ -101,15 +101,18 @@ pub fn mark_brushes_changed_on_modifier_removal(
     }
 }
 
-fn build_brush_meshes(
-    entity: Entity,
+/// Evaluate a brush's geometry: authored topology rings (or plane intersection
+/// for legacy plane-only brushes) with the in-game modifier stack folded in.
+///
+/// Returns the vertex positions, the per-face vertex-index rings, and the
+/// evaluated-to-authored face map. The face map is empty when no modifiers ran;
+/// otherwise it maps each evaluated face index back to its authored face index
+/// so callers can recover face data. Used by both the brush mesh build and the
+/// runtime collider bridge so the collision shape matches the rendered geometry.
+pub fn evaluate_brush_geometry(
     brush: &Brush,
     stack: Option<&jackdaw_geometry::ModifierStack>,
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    assets: &AssetServer,
-) {
+) -> (Vec<Vec3>, Vec<Vec<usize>>, Vec<u32>) {
     // Plane-intersection fallback for brushes without authored topology
     // (plane-only legacy data).
     let (vertices, face_polygons) = if !brush.topology.polygons.is_empty() {
@@ -135,7 +138,7 @@ fn build_brush_meshes(
                 .collect()
         })
         .unwrap_or_default();
-    let (vertices, face_polygons, face_source) = if game_mods.is_empty() {
+    if game_mods.is_empty() {
         (vertices, face_polygons, Vec::new())
     } else {
         let eval = jackdaw_geometry::evaluate_modifier_stack(
@@ -145,7 +148,19 @@ fn build_brush_meshes(
             &game_mods,
         );
         (eval.vertices, eval.face_polygons, eval.face_source)
-    };
+    }
+}
+
+fn build_brush_meshes(
+    entity: Entity,
+    brush: &Brush,
+    stack: Option<&jackdaw_geometry::ModifierStack>,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    assets: &AssetServer,
+) {
+    let (vertices, face_polygons, face_source) = evaluate_brush_geometry(brush, stack);
 
     // Resolve the evaluated face data (mirrored polygons get their plane
     // recomputed from the reflected ring) and mesh it into per-material chunks.

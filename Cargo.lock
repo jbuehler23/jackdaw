@@ -4572,6 +4572,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4728,6 +4747,7 @@ dependencies = [
  "dirs",
  "ehttp",
  "image",
+ "include_dir",
  "jackdaw_animation",
  "jackdaw_api",
  "jackdaw_api_internal",
@@ -4761,14 +4781,19 @@ dependencies = [
  "libc",
  "notify",
  "pathdiff",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
  "regex",
  "rfd",
  "serde",
  "serde_json",
+ "syn",
  "tempfile",
  "test_fixture_extension",
  "time",
  "toml",
+ "toml_edit 0.22.27",
  "webbrowser",
  "winit",
 ]
@@ -4834,6 +4859,8 @@ version = "0.5.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "jackdaw_geometry",
+ "jackdaw_jsn",
 ]
 
 [[package]]
@@ -5045,6 +5072,7 @@ name = "jackdaw_runtime"
 version = "0.5.0"
 dependencies = [
  "bevy",
+ "jackdaw_avian_integration",
  "jackdaw_camera_rig",
  "jackdaw_geometry",
  "jackdaw_jsn",

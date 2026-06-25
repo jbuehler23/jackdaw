@@ -42,9 +42,15 @@ impl Plugin for MyGamePlugin {
 /// Minimum to reach the picker: `#[derive(Component, Reflect)]`
 /// plus `#[reflect(Component)]`. The doc comment above becomes
 /// the picker tooltip (Bevy's `reflect_documentation` is enabled
-/// workspace-wide). No `register_type` call (Bevy 0.18's
-/// `reflect_auto_register` handles it). No `Default` derive
-/// either; jackdaw constructs one from primitive field defaults.
+/// workspace-wide). No `Default` derive either; jackdaw constructs
+/// one from primitive field defaults.
+///
+/// No `register_type` call is needed because the editor binary adds
+/// `MyGamePlugin` (see `src/bin/editor.rs`), and this type is used by
+/// a system in this crate. That reference keeps the crate linked, so
+/// Bevy 0.18's `reflect_auto_register` picks the type up. A type in a
+/// crate the editor never references would be stripped by the linker
+/// and would need an explicit `app.register_type::<T>()`.
 #[derive(Component, Reflect)]
 #[reflect(Component, @EditorCategory::new("Actor"))]
 pub struct SpinningCube {

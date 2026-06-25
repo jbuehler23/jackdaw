@@ -30,6 +30,7 @@
 | R | Rotate mode |
 | T | Scale mode |
 | X | Toggle local / world space |
+| M | Toggle snapping (same as the toolbar magnet) |
 | MMB | Toggle snap |
 | Ctrl (during drag) | Toggle snap |
 | Arrows | Nudge (grid-unit move) |
@@ -80,6 +81,12 @@
 
 | Key | Action |
 |-----|--------|
+| Numpad 1 | Front view (orthographic, looking down +Y) |
+| Numpad 3 | Right view (orthographic, looking down +X) |
+| Ctrl+Numpad 3 | Left view |
+| Numpad 7 | Top view (orthographic, looking down +Z) |
+| Numpad 5 | Toggle perspective / orthographic |
+| Home | Frame all entities |
 | Ctrl+Shift+W | Toggle wireframe |
 | [ | Decrease grid size |
 | ] | Increase grid size |

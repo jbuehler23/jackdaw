@@ -1,9 +1,11 @@
 //! Grid-size operators: increase / decrease the editor grid by one
-//! power. Flips a resource, no history entry.
+//! power, plus the master snap toggle. Flips a resource, no history
+//! entry.
 //!
-//! Default keybinds: `]` (increase), `[` (decrease). The scroll-wheel
-//! path for grid resize lives alongside the modifier-gated scroll
-//! handler in [`crate::snapping`].
+//! Default keybinds: `]` (increase), `[` (decrease), `M` (toggle
+//! snapping, same as the toolbar magnet). The scroll-wheel path for
+//! grid resize lives alongside the modifier-gated scroll handler in
+//! [`crate::snapping`].
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -23,6 +25,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.bind_operator::<CoreExtensionInputContext, GridDecreaseOp>([PresetInput::key(
         "BracketLeft",
     )]);
+    // `M` for the magnet (snap) toggle, mirroring the toolbar magnet button.
+    ctx.bind_operator::<CoreExtensionInputContext, GridToggleSnapOp>([PresetInput::key("KeyM")]);
 }
 
 #[operator(id = "grid.increase", label = "Increase Grid")]

@@ -57,7 +57,7 @@ and your game code lives in `MyGamePlugin` (a regular Bevy
 `Plugin`). There's no dylib loading, no rustc-wrapper, no SDK
 proxy. Builds like any other Bevy crate on every platform.
 
-Split, Unity/Unreal/Godot-style:
+Split, engine-style (scene data separate from code):
 
 - **Scene content** (entities + components) lives in `.jsn` files
   in `assets/`, authored through the editor UI.
@@ -66,11 +66,16 @@ Split, Unity/Unreal/Godot-style:
 
 ## Components
 
-Any `#[derive(Component, Reflect, Default)]` struct that's
-registered through `App::register_type::<T>()` shows up
-automatically in the editor's **Add Component** picker.
-`#[reflect(Component, Default)]` is required so the picker can
-see the type.
+Any struct deriving `#[derive(Component, Reflect)]` with
+`#[reflect(Component)]` shows up automatically in the editor's
+**Add Component** picker. No `register_type` call is needed: the
+editor binary adds `MyGamePlugin`, and that reference keeps your
+crate linked so Bevy's `reflect_auto_register` finds the type.
+
+If a component does not appear, it is almost always because
+nothing the editor binary links references it, so the linker
+stripped its registration. Make sure the type is used from (or
+registered by) a plugin the editor adds.
 
 The scaffold ships with one such component: `SpinningCube`. See
 `src/lib.rs` for the shape.

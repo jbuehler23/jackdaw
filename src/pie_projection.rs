@@ -1,5 +1,8 @@
 //! Projects the focused PIE instance's streamed state into the editor preview
-//! ECS, so the Scene outliner, inspector, and viewport render the live game.
+//! ECS, so the Scene outliner and inspector show the live game's entities, and
+//! the Game panel's Select mode can resolve a picked game entity. (Those
+//! entities also appear in the viewport because they are real preview ECS
+//! entities; there is no separate viewport renderer for the running game.)
 
 use std::collections::HashMap;
 

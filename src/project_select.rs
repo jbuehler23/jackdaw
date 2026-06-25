@@ -71,15 +71,30 @@ impl Plugin for ProjectSelectPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NewProjectState>()
             .init_resource::<crate::build_status::BuildStatus>()
-            .add_systems(OnEnter(AppState::ProjectSelect), spawn_project_selector)
+            .init_resource::<PreflightState>()
+            .add_systems(
+                OnEnter(AppState::ProjectSelect),
+                (spawn_project_selector, start_preflight),
+            )
             .add_systems(
                 Update,
                 (
                     poll_folder_dialog,
                     poll_template_folder_dialog,
                     refresh_build_progress_ui,
+                    poll_preflight,
                 )
                     .run_if(in_state(AppState::ProjectSelect)),
+            )
+            .add_systems(
+                Update,
+                apply_pending_auto_open.run_if(in_state(AppState::ProjectSelect)),
+            )
+            .add_systems(
+                Update,
+                update_preflight_banner
+                    .run_if(in_state(AppState::ProjectSelect))
+                    .run_if(resource_changed::<PreflightState>),
             )
             // Build-progress polling and task draining run in BOTH
             // states. The static-template scaffold flow transitions
@@ -349,6 +364,278 @@ fn default_projects_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Environment preflight results for the launcher. Populated asynchronously on
+/// entering the project selector so a missing toolchain / cmake / a Windows
+/// linker misconfiguration is reported before the user starts a long build.
+#[derive(Resource, Default)]
+pub struct PreflightState {
+    task: Option<Task<Vec<crate::preflight::CheckResult>>>,
+    /// Latest results, available for the launcher UI to render.
+    pub results: Vec<crate::preflight::CheckResult>,
+    reported: bool,
+}
+
+/// Kick off the environment checks off the main thread when the launcher opens.
+fn start_preflight(mut state: ResMut<PreflightState>, pending: Option<Res<PendingAutoOpen>>) {
+    // No launcher shell during an auto-open handoff; skip the checks.
+    if pending.is_some() {
+        return;
+    }
+    state.results.clear();
+    state.reported = false;
+    state.task =
+        Some(AsyncComputeTaskPool::get().spawn(async move { crate::preflight::run_all_checks() }));
+}
+
+/// Drain the preflight task when it completes, store the results for the UI, and
+/// log them so a failure is visible even before the panel renders.
+fn poll_preflight(mut state: ResMut<PreflightState>) {
+    let Some(task) = state.task.as_mut() else {
+        return;
+    };
+    let Some(results) = future::block_on(future::poll_once(task)) else {
+        return;
+    };
+    state.task = None;
+    if !state.reported {
+        use crate::preflight::CheckStatus;
+        for r in &results {
+            let fix = r.fix.as_deref().unwrap_or("");
+            match r.status {
+                CheckStatus::Ok => info!("Preflight {}: {}", r.label, r.detail),
+                CheckStatus::Warn => warn!("Preflight {}: {} -- {fix}", r.label, r.detail),
+                CheckStatus::Fail => error!("Preflight {}: {} -- {fix}", r.label, r.detail),
+            }
+        }
+        state.reported = true;
+    }
+    state.results = results;
+}
+
+/// Marker on the launcher's preflight banner container (top of the body).
+#[derive(Component)]
+pub struct PreflightBanner;
+
+/// Rebuild the preflight banner from the latest results. Quiet while checking
+/// (one line) or healthy (a single green line); expands with per-issue detail
+/// and a fix when a check warns or fails. Runs only when `PreflightState`
+/// changes, so it does not rebuild every frame.
+fn update_preflight_banner(
+    mut commands: Commands,
+    state: Res<PreflightState>,
+    banner_q: Query<(Entity, Option<&Children>), With<PreflightBanner>>,
+    editor_font: Res<EditorFont>,
+    icon_font: Res<jackdaw_feathers::icons::IconFont>,
+) {
+    use crate::preflight::CheckStatus;
+
+    let Ok((banner, children)) = banner_q.single() else {
+        return;
+    };
+    if let Some(children) = children {
+        for child in children.iter() {
+            commands.entity(child).despawn();
+        }
+    }
+
+    const GREEN: Color = Color::srgb(0.45, 0.80, 0.55);
+    const AMBER: Color = Color::srgb(0.92, 0.74, 0.36);
+    const RED: Color = Color::srgb(0.92, 0.45, 0.45);
+
+    let font = editor_font.0.clone();
+    let ifont = icon_font.0.clone();
+
+    if state.task.is_some() {
+        preflight_line(
+            &mut commands,
+            banner,
+            &ifont,
+            &font,
+            Icon::Loader,
+            tokens::TEXT_SECONDARY,
+            "Checking environment...".to_string(),
+            tokens::TEXT_SECONDARY,
+        );
+        return;
+    }
+    if state.results.is_empty() {
+        return;
+    }
+    let issues: Vec<&crate::preflight::CheckResult> = state
+        .results
+        .iter()
+        .filter(|r| r.status != CheckStatus::Ok)
+        .collect();
+    if issues.is_empty() {
+        preflight_line(
+            &mut commands,
+            banner,
+            &ifont,
+            &font,
+            Icon::CircleCheck,
+            GREEN,
+            "Environment ready".to_string(),
+            GREEN,
+        );
+        return;
+    }
+    let n = issues.len();
+    let header = format!("Environment - {n} issue{}", if n == 1 { "" } else { "s" });
+    preflight_line(
+        &mut commands,
+        banner,
+        &ifont,
+        &font,
+        Icon::TriangleAlert,
+        AMBER,
+        header,
+        AMBER,
+    );
+    for r in issues {
+        let (glyph, color) = match r.status {
+            CheckStatus::Fail => (Icon::CircleAlert, RED),
+            _ => (Icon::TriangleAlert, AMBER),
+        };
+        preflight_line(
+            &mut commands,
+            banner,
+            &ifont,
+            &font,
+            glyph,
+            color,
+            format!("{}: {}", r.label, r.detail),
+            tokens::TEXT_PRIMARY,
+        );
+        if let Some(fix) = &r.fix {
+            preflight_fix_line(&mut commands, banner, &font, format!("fix: {fix}"));
+        }
+    }
+
+    // Recheck button: re-runs the environment checks after the user fixes
+    // something, without reopening the launcher.
+    let recheck = commands
+        .spawn((
+            Node {
+                align_self: AlignSelf::FlexStart,
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(6.0),
+                padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
+                ..Default::default()
+            },
+            BackgroundColor(tokens::TOOLBAR_BG),
+            BorderColor::all(tokens::BORDER_SUBTLE),
+            ChildOf(banner),
+            children![
+                (
+                    Text::new(String::from(Icon::RefreshCw.unicode())),
+                    TextFont {
+                        font: ifont.clone().into(),
+                        font_size: tokens::TEXT_SIZE_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                ),
+                (
+                    Text::new("Recheck"),
+                    TextFont {
+                        font: font.clone().into(),
+                        font_size: tokens::TEXT_SIZE_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                ),
+            ],
+        ))
+        .id();
+    commands
+        .entity(recheck)
+        .observe(|_: On<Pointer<Click>>, mut state: ResMut<PreflightState>| {
+            state.results.clear();
+            state.reported = false;
+            state.task = Some(
+                AsyncComputeTaskPool::get()
+                    .spawn(async move { crate::preflight::run_all_checks() }),
+            );
+        });
+}
+
+/// A banner row: an icon glyph followed by a label.
+fn preflight_line(
+    commands: &mut Commands,
+    banner: Entity,
+    icon_font: &Handle<Font>,
+    font: &Handle<Font>,
+    icon: Icon,
+    icon_color: Color,
+    text: String,
+    text_color: Color,
+) {
+    commands.spawn((
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(tokens::SPACING_SM),
+            ..Default::default()
+        },
+        ChildOf(banner),
+        children![
+            (
+                Text::new(String::from(icon.unicode())),
+                TextFont {
+                    font: icon_font.clone().into(),
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..Default::default()
+                },
+                TextColor(icon_color),
+            ),
+            (
+                Text::new(text),
+                TextFont {
+                    font: font.clone().into(),
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..Default::default()
+                },
+                TextColor(text_color),
+            ),
+        ],
+    ));
+}
+
+/// An indented secondary "fix:" line under an issue.
+fn preflight_fix_line(commands: &mut Commands, banner: Entity, font: &Handle<Font>, text: String) {
+    commands.spawn((
+        Node {
+            margin: UiRect::left(Val::Px(22.0)),
+            ..Default::default()
+        },
+        ChildOf(banner),
+        children![(
+            Text::new(text),
+            TextFont {
+                font: font.clone().into(),
+                font_size: tokens::TEXT_SIZE_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+        )],
+    ));
+}
+
+/// Perform a queued auto-open, one frame after entering the project selector.
+/// Deferring the open to `Update` (rather than running it from the `OnEnter`
+/// spawn) lets `Startup` finish loading the editor extensions first, so the
+/// open path finds the resources they register, such as `UntitledCounter`.
+/// Removing the resource makes this run exactly once.
+fn apply_pending_auto_open(world: &mut World) {
+    let Some(pending) = world.remove_resource::<PendingAutoOpen>() else {
+        return;
+    };
+    enter_project_with(world, pending.path, pending.skip_build);
+}
+
 fn spawn_project_selector(
     mut commands: Commands,
     theme: Res<WindowChromeTheme>,
@@ -359,15 +646,14 @@ fn spawn_project_selector(
     caption_font: Res<CaptionFont>,
     pending: Option<Res<PendingAutoOpen>>,
 ) {
-    if let Some(pending) = pending {
-        // Camera only — no shell while auto-opening; the build modal still needs to draw.
+    if pending.is_some() {
+        // Camera only, no shell: the open itself runs in `apply_pending_auto_open`
+        // (an `Update` system) rather than here, so `Startup` has loaded the
+        // editor extensions first. Those extensions register resources the open
+        // path needs (e.g. `UntitledCounter`, populated when a project with no
+        // scene falls back to creating an untitled one). The build modal still
+        // draws over this camera.
         commands.spawn((Camera2d, ProjectSelectorRoot));
-        let path = pending.path.clone();
-        let skip_build = pending.skip_build;
-        commands.remove_resource::<PendingAutoOpen>();
-        commands.queue(move |world: &mut World| {
-            enter_project_with(world, path, skip_build);
-        });
         return;
     }
 
@@ -462,6 +748,18 @@ fn fill_project_selector(
             ));
         });
     commands.entity(body).with_children(|body_parent| {
+        // Preflight banner at the top of the body, filled live by
+        // `update_preflight_banner` as the environment checks complete.
+        body_parent.spawn((
+            PreflightBanner,
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(8.0), Val::Px(0.0)),
+                ..Default::default()
+            },
+        ));
         body_parent
             .spawn(Node {
                 width: Val::Percent(100.0),
@@ -938,12 +1236,15 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
     // the build rather than compile the whole dep graph just to fail
     // the artifact check at the end.
     if !crate::ext_build::manifest_declares_cdylib(&root) {
+        // A Cargo.toml project that is neither a static-game nor a cdylib is not
+        // wired for the jackdaw editor. Offer to set it up (scaffold the editor
+        // binary + deps) rather than silently opening the launcher's editor
+        // without the project's components.
         info!(
-            "Project at {} has a Cargo.toml but no cdylib target; \
-             opening without building.",
+            "Project at {} has a Cargo.toml but isn't jackdaw-wired; offering setup.",
             root.display()
         );
-        transition_to_editor(world, root);
+        show_setup_jackdaw_card(world, root, None);
         return;
     }
 
@@ -1457,6 +1758,490 @@ pub fn close_new_project_modal(world: &mut World) {
 /// / progress-bar / log-tail markers as the scaffold modal, so
 /// the existing `refresh_build_progress_ui` system drives it
 /// without extra wiring. Despawned via `close_new_project_modal`.
+/// Card shown when opening a Cargo project that isn't wired for the jackdaw
+/// editor. Offers to set it up (scaffold the editor binary, feature, jackdaw.toml,
+/// and deps via the same code as `jackdaw init`) or open it without setup.
+/// `error` re-renders the card with a failure message (e.g. no library target).
+fn show_setup_jackdaw_card(world: &mut World, root: PathBuf, error: Option<String>) {
+    close_new_project_modal(world);
+    let font = world.resource::<EditorFont>().0.clone();
+
+    let scrim = world
+        .spawn((
+            NewProjectModalRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                top: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..Default::default()
+            },
+            BackgroundColor(tokens::DIALOG_BACKDROP),
+            GlobalZIndex(100),
+        ))
+        .id();
+    let card = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(12.0),
+                padding: UiRect::all(Val::Px(24.0)),
+                min_width: Val::Px(480.0),
+                max_width: Val::Px(640.0),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+                ..Default::default()
+            },
+            BackgroundColor(tokens::PANEL_BG),
+            BorderColor::all(tokens::BORDER_SUBTLE),
+            ChildOf(scrim),
+        ))
+        .id();
+
+    world.spawn((
+        Text::new("Set up jackdaw for this project"),
+        TextFont {
+            font: font.clone().into(),
+            font_size: tokens::TEXT_SIZE_LG,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_PRIMARY),
+        ChildOf(card),
+    ));
+    world.spawn((
+        Text::new(
+            "This project has a Cargo.toml but isn't wired for the jackdaw editor. \
+             Setting it up adds an `editor` binary, a `jackdaw.toml`, the `cargo editor` \
+             alias, and the jackdaw dependencies. Your game code stays in `src/lib.rs` \
+             and existing files aren't overwritten. If the project has no library target, \
+             a `GamePlugin` stub is created for you.",
+        ),
+        TextFont {
+            font: font.clone().into(),
+            font_size: tokens::TEXT_SIZE_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        ChildOf(card),
+    ));
+
+    if let Some(error) = error {
+        world.spawn((
+            Text::new(format!("Could not set up: {error}")),
+            TextFont {
+                font: font.clone().into(),
+                font_size: tokens::TEXT_SIZE_SM,
+                ..Default::default()
+            },
+            TextColor(Color::srgb(0.92, 0.45, 0.45)),
+            ChildOf(card),
+        ));
+    }
+
+    let row = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                justify_content: JustifyContent::FlexEnd,
+                ..Default::default()
+            },
+            ChildOf(card),
+        ))
+        .id();
+
+    let open_anyway = spawn_card_button(world, row, "Open without setup", &font, false);
+    let setup = spawn_card_button(world, row, "Set up jackdaw", &font, true);
+
+    let root_open = root.clone();
+    world
+        .entity_mut(open_anyway)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = root_open.clone();
+            commands.queue(move |world: &mut World| {
+                close_new_project_modal(world);
+                transition_to_editor(world, root);
+            });
+        });
+    world
+        .entity_mut(setup)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = root.clone();
+            commands.queue(move |world: &mut World| on_setup_jackdaw_clicked(world, root));
+        });
+}
+
+/// A modal-card button. Primary uses the accent fill; secondary the toolbar fill.
+fn spawn_card_button(
+    world: &mut World,
+    parent: Entity,
+    label: &str,
+    font: &Handle<Font>,
+    primary: bool,
+) -> Entity {
+    let (bg, border) = if primary {
+        (tokens::SELECTED_BG, tokens::SELECTED_BORDER)
+    } else {
+        (tokens::TOOLBAR_BG, tokens::BORDER_SUBTLE)
+    };
+    world
+        .spawn((
+            Node {
+                height: Val::Px(32.0),
+                padding: UiRect::axes(Val::Px(14.0), Val::Px(0.0)),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
+                ..Default::default()
+            },
+            BackgroundColor(bg),
+            BorderColor::all(border),
+            ChildOf(parent),
+            children![(
+                Text::new(label.to_string()),
+                TextFont {
+                    font: font.clone().into(),
+                    font_size: tokens::TEXT_SIZE,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_PRIMARY),
+            )],
+        ))
+        .id()
+}
+
+/// Run the existing-project scaffold for the "Set up jackdaw" card. On success,
+/// re-enter the project (now wired, so it builds the editor and hands off); on
+/// failure, re-show the card with the error. If setup had to create a
+/// `src/lib.rs` stub (bin-only project), warn the dev to move their game code
+/// into the new `GamePlugin` before continuing.
+fn on_setup_jackdaw_clicked(world: &mut World, root: PathBuf) {
+    match crate::scaffold::scaffold_existing_project(&root, None) {
+        Ok(report) => {
+            info!(
+                "Set up jackdaw at {}: {}",
+                root.display(),
+                report.actions.join(", ")
+            );
+            if report.created_lib_stub {
+                show_lib_stub_warning_card(world, root);
+            } else {
+                close_new_project_modal(world);
+                enter_project_with(world, root, false);
+            }
+        }
+        Err(e) => {
+            warn!("Set up jackdaw failed for {}: {e}", root.display());
+            show_setup_jackdaw_card(world, root, Some(e.to_string()));
+        }
+    }
+}
+
+/// Shown after setup creates a `src/lib.rs` stub for a bin-only project. The
+/// editor only sees components that live in the project's library, so the dev
+/// has to move their game code out of `main.rs` into the new `GamePlugin`
+/// before their components appear. Offers an automatic migration, or opening
+/// the editor as-is (it just won't show their components yet).
+fn show_lib_stub_warning_card(world: &mut World, root: PathBuf) {
+    show_lib_stub_warning_card_with_note(world, root, None);
+}
+
+/// As [`show_lib_stub_warning_card`], with an extra red note (e.g. why an
+/// automatic migration couldn't run).
+fn show_lib_stub_warning_card_with_note(world: &mut World, root: PathBuf, note: Option<String>) {
+    close_new_project_modal(world);
+    let font = world.resource::<EditorFont>().0.clone();
+
+    let scrim = world
+        .spawn((
+            NewProjectModalRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                top: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..Default::default()
+            },
+            BackgroundColor(tokens::DIALOG_BACKDROP),
+            GlobalZIndex(100),
+        ))
+        .id();
+    let card = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(12.0),
+                padding: UiRect::all(Val::Px(24.0)),
+                min_width: Val::Px(480.0),
+                max_width: Val::Px(640.0),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+                ..Default::default()
+            },
+            BackgroundColor(tokens::PANEL_BG),
+            BorderColor::all(tokens::BORDER_SUBTLE),
+            ChildOf(scrim),
+        ))
+        .id();
+
+    world.spawn((
+        Text::new("Created a library for your game code"),
+        TextFont {
+            font: font.clone().into(),
+            font_size: tokens::TEXT_SIZE_LG,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_PRIMARY),
+        ChildOf(card),
+    ));
+    world.spawn((
+        Text::new(
+            "This project had no library target, so jackdaw created `src/lib.rs` with \
+             an empty `GamePlugin`. The editor only discovers components that live in \
+             your library, so move your gameplay (components, systems, resources) out \
+             of `main.rs` into `GamePlugin`, then have `main.rs` add it. Until you do, \
+             the editor opens but the inspector won't list your components.",
+        ),
+        TextFont {
+            font: font.clone().into(),
+            font_size: tokens::TEXT_SIZE_SM,
+            ..Default::default()
+        },
+        TextColor(Color::srgb(0.95, 0.78, 0.45)),
+        ChildOf(card),
+    ));
+
+    if let Some(note) = note {
+        world.spawn((
+            Text::new(note),
+            TextFont {
+                font: font.clone().into(),
+                font_size: tokens::TEXT_SIZE_SM,
+                ..Default::default()
+            },
+            TextColor(Color::srgb(0.92, 0.45, 0.45)),
+            ChildOf(card),
+        ));
+    }
+
+    let row = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                justify_content: JustifyContent::FlexEnd,
+                ..Default::default()
+            },
+            ChildOf(card),
+        ))
+        .id();
+
+    let open_editor =
+        spawn_card_button(world, row, "Open editor (move code yourself)", &font, false);
+    let migrate = spawn_card_button(world, row, "Migrate my code", &font, true);
+
+    let root_open = root.clone();
+    world
+        .entity_mut(open_editor)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = root_open.clone();
+            commands.queue(move |world: &mut World| {
+                close_new_project_modal(world);
+                enter_project_with(world, root, false);
+            });
+        });
+    world
+        .entity_mut(migrate)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = root.clone();
+            commands.queue(move |world: &mut World| on_migrate_clicked(world, root));
+        });
+}
+
+/// Plan an automatic migration of the project's `main.rs` into the new
+/// `GamePlugin`. On success show a preview to confirm; on failure fall back to
+/// the manual warning card with the reason appended.
+fn on_migrate_clicked(world: &mut World, root: PathBuf) {
+    let crate_name = match crate::migrate::crate_name_of(&root) {
+        Ok(n) => n,
+        Err(e) => {
+            warn!("Migrate: {e}");
+            show_lib_stub_warning_card_with_note(
+                world,
+                root,
+                Some(format!("Couldn't read the crate name: {e}")),
+            );
+            return;
+        }
+    };
+    match crate::migrate::plan_migration(&root, &crate_name) {
+        Ok(plan) => show_migration_preview_card(world, root, plan),
+        Err(e) => {
+            warn!("Migrate: {e}");
+            show_lib_stub_warning_card_with_note(
+                world,
+                root,
+                Some(format!(
+                    "Couldn't migrate automatically ({e}). Move your code into `GamePlugin` by hand."
+                )),
+            );
+        }
+    }
+}
+
+/// Preview of a planned migration: what moves into the library, what gets wired
+/// into `GamePlugin`, and the safety note. "Apply migration" writes the files
+/// (original `main.rs` saved as `main.rs.bak`) then builds + opens; "Back"
+/// returns to the warning card.
+fn show_migration_preview_card(
+    world: &mut World,
+    root: PathBuf,
+    plan: crate::migrate::MigrationPlan,
+) {
+    close_new_project_modal(world);
+    let font = world.resource::<EditorFont>().0.clone();
+
+    let scrim = world
+        .spawn((
+            NewProjectModalRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                top: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..Default::default()
+            },
+            BackgroundColor(tokens::DIALOG_BACKDROP),
+            GlobalZIndex(100),
+        ))
+        .id();
+    let card = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(10.0),
+                padding: UiRect::all(Val::Px(24.0)),
+                min_width: Val::Px(520.0),
+                max_width: Val::Px(680.0),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+                ..Default::default()
+            },
+            BackgroundColor(tokens::PANEL_BG),
+            BorderColor::all(tokens::BORDER_SUBTLE),
+            ChildOf(scrim),
+        ))
+        .id();
+
+    world.spawn((
+        Text::new("Migrate your game code"),
+        TextFont {
+            font: font.clone().into(),
+            font_size: tokens::TEXT_SIZE_LG,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_PRIMARY),
+        ChildOf(card),
+    ));
+    world.spawn((
+        Text::new("Nothing is written until you click Apply. Your original main.rs is saved as main.rs.bak."),
+        TextFont {
+            font: font.clone().into(),
+            font_size: tokens::TEXT_SIZE_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        ChildOf(card),
+    ));
+
+    let mut summary = String::new();
+    if !plan.moved_items.is_empty() {
+        summary.push_str(&format!(
+            "Move into src/lib.rs:\n  {}\n\n",
+            plan.moved_items.join(", ")
+        ));
+    }
+    if !plan.moved_calls.is_empty() {
+        summary.push_str(&format!(
+            "Wire into GamePlugin::build:\n  {}\n\n",
+            plan.moved_calls.join("\n  ")
+        ));
+    }
+    summary.push_str("Slim src/main.rs to DefaultPlugins + add_plugins(GamePlugin).");
+    for note in &plan.notes {
+        summary.push_str(&format!("\n\nNote: {note}"));
+    }
+    world.spawn((
+        Text::new(summary),
+        TextFont {
+            font: font.clone().into(),
+            font_size: tokens::TEXT_SIZE_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_PRIMARY),
+        ChildOf(card),
+    ));
+
+    let row = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                justify_content: JustifyContent::FlexEnd,
+                ..Default::default()
+            },
+            ChildOf(card),
+        ))
+        .id();
+
+    let back = spawn_card_button(world, row, "Back", &font, false);
+    let apply = spawn_card_button(world, row, "Apply migration", &font, true);
+
+    let root_back = root.clone();
+    world
+        .entity_mut(back)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = root_back.clone();
+            commands.queue(move |world: &mut World| show_lib_stub_warning_card(world, root));
+        });
+
+    // The plan is moved into the apply observer; it owns the generated contents.
+    let plan = std::sync::Arc::new(plan);
+    world
+        .entity_mut(apply)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = root.clone();
+            let plan = std::sync::Arc::clone(&plan);
+            commands.queue(move |world: &mut World| {
+                match crate::migrate::apply_migration(&root, &plan) {
+                    Ok(()) => {
+                        info!("Migrated {} into GamePlugin", root.display());
+                        close_new_project_modal(world);
+                        enter_project_with(world, root, false);
+                    }
+                    Err(e) => {
+                        warn!("Migrate apply failed for {}: {e}", root.display());
+                        show_lib_stub_warning_card_with_note(
+                            world,
+                            root,
+                            Some(format!("Couldn't write the migration: {e}")),
+                        );
+                    }
+                }
+            });
+        });
+}
+
 pub fn open_project_progress_modal(world: &mut World, project_name: &str) {
     close_new_project_modal(world);
 
@@ -2832,6 +3617,9 @@ fn refresh_build_progress_ui(
     // "Compiling <crate>" or "Preparing..." if we don't know yet.
     let crate_line = match (&progress.current_crate, progress.artifacts_total) {
         (Some(name), Some(total)) => {
+            // The estimate (package count) undershoots the real artifact count
+            // (proc-macros, build scripts), so clamp to never display past 100%.
+            let total = total.max(progress.artifacts_done);
             format!("Compiling {name} ({}/{})", progress.artifacts_done, total)
         }
         (Some(name), None) => format!("Compiling {name} ({} so far)", progress.artifacts_done),
@@ -3046,6 +3834,16 @@ fn drive_static_editor_build(world: &mut World) {
             // design would queue, but it'd just stack same-project
             // requests; one in-flight is enough.
         } else {
+            // In a jackdaw source checkout, point the project's jackdaw deps at
+            // the local workspace before cargo runs. A project whose Cargo.toml
+            // carries `jackdaw = "0.5"` can't resolve that against crates.io
+            // (which only publishes older versions); this repoints it at the
+            // local path idempotently.
+            crate::new_project::rewrite_jackdaw_dep_for_dev_checkout(
+                &root,
+                crate::new_project::TemplateLinkage::Static,
+            );
+
             // Re-use the `Arc<Mutex<BuildProgress>>` already
             // installed on `state.build_progress` (set by the
             // post-scaffold path or the recents-click path) so the
@@ -3118,7 +3916,10 @@ fn drive_static_editor_build(world: &mut World) {
 
         let project = match &world.resource::<crate::build_status::BuildStatus>().state {
             BuildState::Building { project, .. } => project.clone(),
-            _ => return,
+            _ => {
+                warn!("static editor build finished but BuildStatus was not Building; dropping");
+                return;
+            }
         };
 
         match result {
