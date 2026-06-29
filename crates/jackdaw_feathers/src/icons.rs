@@ -1,5 +1,6 @@
-use bevy::text::FontSize;
-use bevy::{asset::AssetId, prelude::*};
+use bevy::prelude::*;
+use bevy::scene::bsn;
+use bevy::text::{FontSize, FontSourceTemplate, TextFontTemplate};
 pub use lucide_icons::Icon;
 
 /// Resource holding the loaded Lucide icon font handle.
@@ -23,8 +24,6 @@ const FIRA_SANS_ITALIC_BYTES: &[u8] = include_bytes!("../fonts/FiraSans-Italic.t
 
 impl Plugin for IconFontPlugin {
     fn build(&self, app: &mut App) {
-        // Insert font resources immediately so they're available before any schedule runs.
-        // Both fonts are embedded bytes, so no async loading is needed.
         let mut fonts = app.world_mut().resource_mut::<Assets<Font>>();
 
         let icon_font = Font::from_bytes(lucide_icons::LUCIDE_FONT_BYTES.to_vec());
@@ -47,27 +46,16 @@ impl Plugin for IconFontPlugin {
     }
 }
 
-/// Create a text bundle that renders a single Lucide icon glyph.
-pub fn icon(icon: Icon, size: f32, font: Handle<Font>) -> impl Bundle {
-    (
-        Text::new(String::from(icon.unicode())),
-        TextFont {
-            font: font.into(),
-            font_size: FontSize::Px(size),
-            ..Default::default()
-        },
-    )
-}
-
-/// Create a text bundle for an icon with a specific color.
-pub fn icon_colored(icon: Icon, size: f32, font: Handle<Font>, color: Color) -> impl Bundle {
-    (
-        Text::new(String::from(icon.unicode())),
-        TextFont {
-            font: font.into(),
-            font_size: FontSize::Px(size),
-            ..Default::default()
-        },
-        TextColor(color),
-    )
+pub fn icon_scene(icon: Icon, size: f32, font: Handle<Font>, color: Color) -> impl Scene {
+    let glyph = String::from(icon.unicode());
+    let text_font = TextFontTemplate {
+        font: FontSourceTemplate::Handle(font.into()),
+        font_size: FontSize::Px(size),
+        ..default()
+    };
+    bsn! {
+        Text::new(glyph)
+        TextColor(color)
+        template_value(text_font)
+    }
 }
