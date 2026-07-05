@@ -5,7 +5,7 @@
 //! transitions. The game writes only its `Input` type, a movement system, and
 //! `replicate::<C>()` per networked component type.
 //!
-//! Built on lightyear 0.26 with prediction OFF (server-authoritative + interpolation).
+//! Built on lightyear 0.28 with prediction OFF (server-authoritative + interpolation).
 
 mod camera_gate;
 mod client;

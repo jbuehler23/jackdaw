@@ -9,7 +9,7 @@ use jackdaw_multiplayer::{SpawnPoint, ZoneId};
 use jackdaw_multiplayer_lightyear::{
     JackdawMultiplayerClientPlugin, JackdawMultiplayerServerPlugin,
 };
-use lightyear::prelude::{ControlledBy, NetworkVisibility, Replicate};
+use lightyear::prelude::{ControlledBy, Replicate, Rooms};
 
 fn free_addr() -> std::net::SocketAddr {
     let s = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -43,6 +43,15 @@ fn client_connects_and_player_is_spawned() {
         tick: std::time::Duration::from_millis(50),
     });
 
+    // Manually-driven apps must finish + cleanup so plugins whose wiring lives in
+    // `Plugin::finish()` are installed: lightyear's replicon channel bridge inserts
+    // `RepliconChannelMap` there, and its server packet systems read that resource
+    // every update. `App::update()` does not drive the finish/cleanup lifecycle.
+    for app in [&mut server, &mut client] {
+        app.finish();
+        app.cleanup();
+    }
+
     let mut spawned = false;
     for _ in 0..600 {
         server.update();
@@ -50,7 +59,7 @@ fn client_connects_and_player_is_spawned() {
         let mut q = server.world_mut().query_filtered::<Entity, (
             With<Replicate>,
             With<ControlledBy>,
-            With<NetworkVisibility>,
+            With<Rooms>,
         )>();
         if q.iter(server.world()).count() >= 1 {
             spawned = true;

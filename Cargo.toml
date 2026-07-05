@@ -73,14 +73,8 @@ members = [
     "examples/extension/viewable_camera_extension",
     "tests/fixtures/test_fixture_extension",
 ]
-# The lightyear runtime backend pins lightyear 0.28, which targets Bevy
-# 0.19, but needs a small API migration first: NetworkVisibility,
-# SendUpdatesMode, and the Room types moved out of the prelude, and
-# ReplicationSender construction changed. Excluded until that lands.
-# Nothing else links it (the editor's multiplayer authoring uses
-# jackdaw_multiplayer{,_editor}), so the editor, runtime, and templates
-# are unaffected.
-exclude = ["crates/jackdaw_multiplayer_lightyear"]
+
+[dependencies]
 bevy.workspace = true
 jackdaw_jsn.workspace = true
 jackdaw_geometry.workspace = true

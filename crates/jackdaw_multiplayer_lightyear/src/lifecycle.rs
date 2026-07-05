@@ -5,9 +5,8 @@ use jackdaw_multiplayer::{ReplTarget, Replication, SpawnPoint, ZoneId};
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{
     Connected, ControlledBy, Disconnected, InterpolationTarget, Lifetime, LinkOf, NetworkTarget,
-    NetworkVisibility, Replicate, ReplicationSender, SendUpdatesMode,
+    Replicate, ReplicationSender, RoomAllocator,
 };
-use std::time::Duration;
 
 /// Fired (server side) when a client connection completes the handshake. `client`
 /// is the connection (`ClientOf`) entity, the natural key for per-connection game
@@ -66,6 +65,7 @@ fn pick_default_spawn<'a>(
 fn spawn_player_bundle(
     commands: &mut Commands,
     rooms: &mut ZoneRooms,
+    allocator: &mut RoomAllocator,
     connection: Entity,
     zone: &ZoneId,
     pos: Vec3,
@@ -74,7 +74,6 @@ fn spawn_player_bundle(
         .spawn((
             Transform::from_translation(pos),
             Replicate::to_clients(NetworkTarget::All),
-            NetworkVisibility,
             ControlledBy {
                 owner: connection,
                 lifetime: Lifetime::SessionBased,
@@ -84,7 +83,7 @@ fn spawn_player_bundle(
             CurrentZone(zone.clone()),
         ))
         .id();
-    join_zone(commands, rooms, zone, player, connection);
+    join_zone(commands, rooms, allocator, zone, player, connection);
     player
 }
 
@@ -94,6 +93,7 @@ fn spawn_player_bundle(
 pub struct PlayerSpawner<'w, 's> {
     spawns: Query<'w, 's, (&'static SpawnPoint, &'static GlobalTransform)>,
     rooms: ResMut<'w, ZoneRooms>,
+    allocator: ResMut<'w, RoomAllocator>,
     commands: Commands<'w, 's>,
 }
 
@@ -111,6 +111,7 @@ impl PlayerSpawner<'_, '_> {
         Some(spawn_player_bundle(
             &mut self.commands,
             &mut self.rooms,
+            &mut self.allocator,
             connection,
             zone,
             pos,
@@ -124,8 +125,14 @@ impl PlayerSpawner<'_, '_> {
     pub fn spawn_at_default(&mut self, connection: Entity) -> Option<(Entity, Vec3)> {
         let (zone, pos) =
             pick_default_spawn(self.spawns.iter().map(|(s, gtf)| (s, gtf.translation())))?;
-        let player =
-            spawn_player_bundle(&mut self.commands, &mut self.rooms, connection, &zone, pos);
+        let player = spawn_player_bundle(
+            &mut self.commands,
+            &mut self.rooms,
+            &mut self.allocator,
+            connection,
+            &zone,
+            pos,
+        );
         Some((player, pos))
     }
 }
@@ -145,14 +152,13 @@ impl Plugin for ServerLifecyclePlugin {
 }
 
 /// When the server spawns a per-connection link entity, attach a `ReplicationSender`
-/// so it can replicate state to that client. Mirrors lightyear's documented
-/// `handle_new_client` pattern (facade `src/lib.rs:116-126`).
+/// marker so it can replicate state to that client. Mirrors lightyear's documented
+/// `handle_new_client` pattern. The sender carries no per-link config; send timing
+/// is governed globally by lightyear's replication tick.
 fn on_link_add(add: On<Add, LinkOf>, mut commands: Commands) {
-    commands.entity(add.entity).insert(ReplicationSender::new(
-        Duration::from_millis(100),
-        SendUpdatesMode::SinceLastAck,
-        false,
-    ));
+    commands
+        .entity(add.entity)
+        .insert(ReplicationSender::default());
 }
 
 /// When a connection finishes the netcode handshake, fire `ClientConnected` (always)
@@ -164,6 +170,7 @@ fn on_client_connected(
     policy: Res<SpawnPolicy>,
     spawns: Query<(&SpawnPoint, &GlobalTransform)>,
     mut rooms: ResMut<ZoneRooms>,
+    mut allocator: ResMut<RoomAllocator>,
     mut commands: Commands,
 ) {
     // Only react to server-side connection entities (a `ClientOf` link), not the
@@ -184,7 +191,7 @@ fn on_client_connected(
         warn!("client connected but the world has no SpawnPoint; no player spawned");
         return;
     };
-    spawn_player_bundle(&mut commands, &mut rooms, add.entity, &zone, pos);
+    spawn_player_bundle(&mut commands, &mut rooms, &mut allocator, add.entity, &zone, pos);
 }
 
 /// Emit `ClientDisconnected` when a server-side connection is torn down. Lightyear
@@ -203,9 +210,8 @@ fn on_client_disconnected(
     commands.trigger(ClientDisconnected { client: add.entity });
 }
 
-/// Translate authored `Replication` proxy components into real lightyear
-/// `Replicate` + `NetworkVisibility` (so authored networked props are room-gatable),
-/// plus `InterpolationTarget` when requested.
+/// Translate authored `Replication` proxy components into a real lightyear
+/// `Replicate`, plus `InterpolationTarget` when requested.
 fn apply_replication_proxies(
     mut commands: Commands,
     added: Query<(Entity, &Replication), Added<Replication>>,
@@ -215,9 +221,7 @@ fn apply_replication_proxies(
             ReplTarget::All => NetworkTarget::All,
             ReplTarget::None => NetworkTarget::None,
         };
-        commands
-            .entity(e)
-            .insert((Replicate::to_clients(target), NetworkVisibility));
+        commands.entity(e).insert(Replicate::to_clients(target));
         if proxy.interpolated {
             commands
                 .entity(e)
@@ -287,6 +291,13 @@ mod tests {
             tick_duration: core::time::Duration::from_millis(100),
         });
         app.add_plugins(ServerLifecyclePlugin);
+        // A manually-driven app must run the finish/cleanup lifecycle so plugins
+        // whose wiring lives in `Plugin::finish()` are installed. lightyear's
+        // replicon channel bridge inserts `RepliconChannelMap` there; its server
+        // packet systems read that resource every update, so without this they
+        // panic on a missing resource. `App::update()` does not drive finish/cleanup.
+        app.finish();
+        app.cleanup();
 
         let e = app
             .world_mut()

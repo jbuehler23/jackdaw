@@ -9,7 +9,7 @@ use jackdaw_multiplayer::{SpawnPoint, ZoneId};
 use jackdaw_multiplayer_lightyear::{
     JackdawMultiplayerClientPlugin, JackdawMultiplayerServerPlugin, PlayerSpawner, SpawnPolicy,
 };
-use lightyear::prelude::{ControlledBy, NetworkVisibility, Replicate};
+use lightyear::prelude::{ControlledBy, Replicate, Rooms};
 
 fn free_addr() -> std::net::SocketAddr {
     let s = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -50,7 +50,7 @@ fn client(addr: std::net::SocketAddr) -> App {
 fn player_count(app: &mut App) -> usize {
     let mut q = app
         .world_mut()
-        .query_filtered::<(), (With<Replicate>, With<ControlledBy>, With<NetworkVisibility>)>();
+        .query_filtered::<(), (With<Replicate>, With<ControlledBy>, With<Rooms>)>();
     q.iter(app.world()).count()
 }
 

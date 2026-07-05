@@ -89,7 +89,7 @@ pub trait MultiplayerAppExt {
     /// `Controlled` marker the receiver adds to the entity it controls).
     ///
     /// Bound copied verbatim from `impl<A: ...> Plugin for InputPlugin<A>` in
-    /// `lightyear_inputs_native-0.26.4/src/plugin.rs:19-32`.
+    /// `lightyear_inputs_native-0.28.0/src/plugin.rs`.
     fn register_input<A>(&mut self) -> &mut Self
     where
         A: Serialize
@@ -141,7 +141,7 @@ impl MultiplayerAppExt for App {
             + DeserializeOwned
             + 'static,
     {
-        self.register_component::<C>().add_linear_interpolation();
+        self.component::<C>().replicate().add_linear_interpolation();
         self
     }
 
@@ -154,7 +154,7 @@ impl MultiplayerAppExt for App {
             + DeserializeOwned
             + 'static,
     {
-        self.register_component::<C>();
+        self.component::<C>().replicate();
         self
     }
 

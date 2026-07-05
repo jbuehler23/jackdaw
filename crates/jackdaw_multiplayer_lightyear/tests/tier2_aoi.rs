@@ -1,8 +1,9 @@
 //! Tier 2: the critical area-of-interest proof. Two clients connect into the
-//! SAME zone and each must SEE the other player (room-scoped replication: the
-//! visibility trifecta `Replicate(All) + NetworkVisibility + shared Room`). Then
-//! one player is moved to a different zone and both clients must lose sight of
-//! the cross-zone player (the room cull / auto-despawn).
+//! SAME zone and each must SEE the other player (room-scoped replication:
+//! `Replicate(All)` on the entity plus a shared `Rooms` membership on both the
+//! entity and each connection). Then one player is moved to a different zone and
+//! both clients must lose sight of the cross-zone player (the room cull /
+//! auto-despawn).
 //!
 //! Run: `cargo test -p jackdaw_multiplayer_lightyear --test tier2_aoi`
 use bevy::MinimalPlugins;
@@ -38,7 +39,7 @@ fn make_client(addr: std::net::SocketAddr, client_id: u64) -> App {
         client_id,
         tick: std::time::Duration::from_millis(50),
     });
-    app.register_component::<PlayerMarker>();
+    app.component::<PlayerMarker>().replicate();
     app
 }
 
@@ -70,7 +71,7 @@ fn two_clients_see_each_other_then_cross_zone_culls() {
         bind: addr,
         ..Default::default()
     });
-    server.register_component::<PlayerMarker>();
+    server.component::<PlayerMarker>().replicate();
     // The auto-spawn picks the empty-tag spawn point; zone 1 is the starter.
     server.world_mut().spawn((
         Transform::default(),
@@ -136,9 +137,9 @@ fn two_clients_see_each_other_then_cross_zone_culls() {
 
     // ---- (b) move ONE player to zone 2; the cross-zone view must cull ----
     // Pick any one server-side player and relocate it. `move_player_to_zone`
-    // reads its CurrentZone (1) + owning connection and fires the four
-    // RoomEvents: the moved player's sender leaves room 1 / joins room 2, and
-    // the moved player's entity leaves room 1 / joins room 2.
+    // reads its CurrentZone (1) + owning connection and replaces the `Rooms`
+    // membership on both the moved player entity and its connection with zone 2's
+    // room, so both leave room 1 and join room 2.
     let moved = {
         let mut q = server
             .world_mut()

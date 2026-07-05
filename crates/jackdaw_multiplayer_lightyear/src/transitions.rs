@@ -11,6 +11,7 @@ use crate::lifecycle::PlayerConnection;
 use crate::rooms::{CurrentZone, ZoneRooms, set_zone};
 use bevy::prelude::*;
 use jackdaw_multiplayer::{SpawnPoint, ZoneTransition};
+use lightyear::prelude::RoomAllocator;
 
 /// Installs the server-side zone-transition detection system in `FixedUpdate`.
 pub(crate) struct ZoneTransitionPlugin;
@@ -41,6 +42,7 @@ fn detect_zone_transitions(
     spawns: Query<(&SpawnPoint, &GlobalTransform)>,
     mut players: Query<(Entity, &mut Transform, &mut CurrentZone, &PlayerConnection)>,
     mut rooms: ResMut<ZoneRooms>,
+    mut allocator: ResMut<RoomAllocator>,
     mut commands: Commands,
 ) {
     for (entity, mut tf, mut zone, conn) in &mut players {
@@ -64,6 +66,7 @@ fn detect_zone_transitions(
                 set_zone(
                     &mut commands,
                     &mut rooms,
+                    &mut allocator,
                     &zone.0,
                     &trigger.dest_zone,
                     entity,
