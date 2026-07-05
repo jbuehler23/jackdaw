@@ -3,16 +3,140 @@ use crate::brush::{Brush, BrushEditMode, BrushFaceData, BrushSelection, EditMode
 use crate::commands::CommandHistory;
 use crate::selection::Selection;
 
-use bevy::picking::hover::Hovered;
+use bevy::ecs::lifecycle::Insert;
+use bevy::feathers::containers::{group, group_body, group_header, pane_body};
+use bevy::feathers::controls::{FeathersTextInput, FeathersTextInputContainer};
+use bevy::feathers::theme::ThemedText;
+use bevy::input::keyboard::{KeyCode, KeyboardInput};
+use bevy::input_focus::{FocusLost, FocusedInput};
 use bevy::prelude::*;
+use bevy::text::{EditableText, TextEdit};
+use bevy::ui_widgets::ValueChange;
 use jackdaw_api::prelude::*;
-use jackdaw_feathers::{
-    button::ButtonOperatorCall,
-    text_edit::{self, TextEditCommitEvent, TextEditProps},
-    tokens,
-};
+use jackdaw_feathers::{button::ButtonOperatorCall, tokens};
 
 use super::{BrushFaceField, BrushFaceFieldBinding, BrushFacePropsContainer};
+
+/// Initial text staged on a brush face text input container. The
+/// `Insert`-triggered `seed_brush_face_text` observer writes it into the
+/// editable buffer once the child text entry spawns, then removes it.
+#[derive(Component)]
+struct PendingBrushFaceText(String);
+
+/// Container framing a `FeathersTextInput` bound to a brush face UV field.
+/// The inner text entry drives the commit observers; the container holds the
+/// `BrushFaceFieldBinding` and staged value, and seeds the text buffer once the
+/// staged value lands.
+fn brush_face_text_scene() -> impl Scene {
+    bsn! {
+        @FeathersTextInputContainer
+        on(seed_brush_face_text)
+        Children [
+            @FeathersTextInput
+            on(brush_face_text_on_enter_key)
+            on(brush_face_text_on_focus_lost)
+        ]
+    }
+}
+
+/// Spawn a `FeathersTextInput` bound to a brush face UV field. The binding and
+/// the staged text ride on the container; the inner text entry emits
+/// `ValueChange<String>` on Enter or blur, which `on_brush_face_text_commit`
+/// writes back through `apply_brush_face_field`.
+fn spawn_brush_face_text(
+    commands: &mut Commands,
+    parent: Entity,
+    current_value: &str,
+    field: BrushFaceField,
+) {
+    commands.spawn_scene(brush_face_text_scene()).insert((
+        BrushFaceFieldBinding { field },
+        PendingBrushFaceText(current_value.to_string()),
+        ChildOf(parent),
+    ));
+}
+
+/// Write the staged text into the editable buffer once it is inserted on the
+/// container, then clear it so a later refresh does not re-seed it.
+fn seed_brush_face_text(
+    inserted: On<Insert, PendingBrushFaceText>,
+    q_children: Query<&Children>,
+    q_pending: Query<&PendingBrushFaceText>,
+    mut q_text: Query<&mut EditableText>,
+    mut commands: Commands,
+) {
+    let container = inserted.event_target();
+    let Ok(pending) = q_pending.get(container) else {
+        return;
+    };
+    let text_id = q_children
+        .iter_descendants(container)
+        .find(|e| q_text.contains(*e));
+    if let Some(text_id) = text_id
+        && let Ok(mut editable) = q_text.get_mut(text_id)
+    {
+        editable.queue_edit(TextEdit::SelectAll);
+        editable.queue_edit(TextEdit::Insert(pending.0.clone().into()));
+    }
+    commands.entity(container).remove::<PendingBrushFaceText>();
+}
+
+/// Emit a final `ValueChange<String>` when Enter is pressed in a brush face text input.
+fn brush_face_text_on_enter_key(
+    key_input: On<FocusedInput<KeyboardInput>>,
+    q_text: Query<&EditableText>,
+    mut commands: Commands,
+) {
+    if key_input.input.key_code != KeyCode::Enter {
+        return;
+    }
+    let text_id = key_input.event_target();
+    if let Ok(editable) = q_text.get(text_id) {
+        commands.trigger(ValueChange {
+            source: text_id,
+            value: editable.value().to_string(),
+            is_final: true,
+        });
+    }
+}
+
+/// Emit a final `ValueChange<String>` when a brush face text input loses focus.
+fn brush_face_text_on_focus_lost(
+    focus_lost: On<FocusLost>,
+    q_text: Query<&EditableText>,
+    mut commands: Commands,
+) {
+    let text_id = focus_lost.event_target();
+    if let Ok(editable) = q_text.get(text_id) {
+        commands.trigger(ValueChange {
+            source: text_id,
+            value: editable.value().to_string(),
+            is_final: true,
+        });
+    }
+}
+
+/// Spawn a titled feathers group with `caption` as its header, returning the
+/// group body entity that rows are parented to.
+fn spawn_group(commands: &mut Commands, parent: Entity, caption: &str) -> Entity {
+    let group_entity = commands
+        .spawn_scene(group())
+        .insert(ChildOf(parent))
+        .id();
+    let header = commands
+        .spawn_scene(group_header())
+        .insert(ChildOf(group_entity))
+        .id();
+    commands.spawn((
+        Text::new(caption.to_string()),
+        ThemedText,
+        ChildOf(header),
+    ));
+    commands
+        .spawn_scene(group_body())
+        .insert(ChildOf(group_entity))
+        .id()
+}
 
 fn resolve_material_label(
     mat_handle: &Handle<StandardMaterial>,
@@ -63,6 +187,9 @@ pub(super) fn spawn_brush_display(
 
     let info = format!("{face_count} faces, {vertex_count} vertices, {edge_count} edges");
 
+    // Seat the card content in a feathers content pane.
+    let body = commands.spawn_scene(pane_body()).insert(ChildOf(parent)).id();
+
     commands.spawn((
         Text::new(info),
         TextFont {
@@ -70,23 +197,11 @@ pub(super) fn spawn_brush_display(
             ..Default::default()
         },
         TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(parent),
+        ChildOf(body),
     ));
 
     // Topology section
-    commands.spawn((
-        Text::new("Topology"),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        Node {
-            margin: UiRect::top(Val::Px(tokens::SPACING_SM)),
-            ..Default::default()
-        },
-        ChildOf(parent),
-    ));
+    let topo_body = spawn_group(commands, body, "Topology");
 
     // Fallback status row for the degenerate empty-brush case while
     // `topology_migration` still ships as a safety net.
@@ -98,7 +213,7 @@ pub(super) fn spawn_brush_display(
                 ..Default::default()
             },
             TextColor(tokens::TEXT_DISABLED),
-            ChildOf(parent),
+            ChildOf(topo_body),
         ));
     } else {
         let topo_rows: &[(&str, usize)] = &[
@@ -117,7 +232,7 @@ pub(super) fn spawn_brush_display(
                         width: Val::Percent(100.0),
                         ..Default::default()
                     },
-                    ChildOf(parent),
+                    ChildOf(topo_body),
                 ))
                 .id();
             commands.spawn((
@@ -147,7 +262,7 @@ pub(super) fn spawn_brush_display(
     }
 
     // Material summary: shows unique materials used by this brush.
-    spawn_material_summary(commands, parent, brush, materials);
+    spawn_material_summary(commands, body, brush, materials);
 
     // Face properties container -- populated dynamically by update_brush_face_properties
     commands.spawn((
@@ -159,7 +274,7 @@ pub(super) fn spawn_brush_display(
             row_gap: px(tokens::SPACING_XS),
             ..Default::default()
         },
-        ChildOf(parent),
+        ChildOf(body),
     ));
 }
 
@@ -185,20 +300,8 @@ fn spawn_material_summary(
     let total_faces = brush.faces.len();
     let any_has_material = material_counts.iter().any(|(h, _)| *h != Handle::default());
 
-    // Section header
-    commands.spawn((
-        Text::new("Materials & Textures"),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        Node {
-            margin: UiRect::top(Val::Px(tokens::SPACING_SM)),
-            ..Default::default()
-        },
-        ChildOf(parent),
-    ));
+    // Materials section
+    let mat_body = spawn_group(commands, parent, "Materials & Textures");
 
     for (mat_handle, count) in &material_counts {
         let is_default = *mat_handle == Handle::default();
@@ -212,7 +315,7 @@ fn spawn_material_summary(
                     width: Val::Percent(100.0),
                     ..Default::default()
                 },
-                ChildOf(parent),
+                ChildOf(mat_body),
             ))
             .id();
 
@@ -274,54 +377,16 @@ fn spawn_material_summary(
         ));
     }
 
-    // Clear All button, only if at least one face has a material.
-    // `Hovered + ButtonOperatorCall` are tooltip data sources only ;
-    // dispatch flows through the click observer below because this
-    // is a raw Node (not a feathers `button()`), so it doesn't fire
-    // `ButtonClickEvent`.
+    // Clear All button, only if at least one face has a material. The
+    // `ButtonOperatorCall` drives both dispatch (via `Activate` ->
+    // `dispatch_activate_operator`) and the hover tooltip.
     if any_has_material {
-        let clear_all_btn = commands
-            .spawn((
-                Node {
-                    padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
-                    margin: UiRect::top(Val::Px(tokens::SPACING_XS)),
-                    ..Default::default()
-                },
-                BackgroundColor(tokens::INPUT_BG),
-                Hovered::default(),
-                ButtonOperatorCall::new(BrushClearAllMaterialsOp::ID),
-                ChildOf(parent),
-            ))
-            .id();
-        commands.spawn((
-            Text::new("Clear All"),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-            ChildOf(clear_all_btn),
-        ));
         commands
-            .entity(clear_all_btn)
-            .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-                commands.operator(BrushClearAllMaterialsOp::ID).call();
-            });
-        commands.entity(clear_all_btn).observe(
-            |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
-                if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                    bg.0 = tokens::HOVER_BG;
-                }
-            },
-        );
-        commands.entity(clear_all_btn).observe(
-            |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-                if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                    bg.0 = tokens::INPUT_BG;
-                }
-            },
-        );
+            .spawn_scene(jackdaw_feathers::button::operator_button(
+                BrushClearAllMaterialsOp::ID,
+                "Clear All",
+            ))
+            .insert(ChildOf(mat_body));
     }
 }
 
@@ -415,30 +480,18 @@ pub(crate) fn update_brush_face_properties(
     local_state.faces = sub.faces.clone();
     local_state.data_hash = combined_hash;
 
-    // Use first selected face for display values
+    // Seat the rebuilt face-property rows in a feathers group whose header
+    // names the current face selection.
     let first_face_idx = sub.faces[0];
     let face = &brush.faces[first_face_idx];
     let multi = sub.faces.len() > 1;
 
-    // Header
     let header_text = if multi {
         format!("{} faces selected", sub.faces.len())
     } else {
         format!("Face {}", first_face_idx)
     };
-    commands.spawn((
-        Text::new(header_text),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_PRIMARY),
-        Node {
-            margin: UiRect::vertical(Val::Px(tokens::SPACING_XS)),
-            ..Default::default()
-        },
-        ChildOf(container_entity),
-    ));
+    let body = spawn_group(&mut commands, container_entity, &header_text);
 
     // Material info
     let has_material = face.material != Handle::default();
@@ -454,7 +507,7 @@ pub(crate) fn update_brush_face_properties(
                     width: Val::Percent(100.0),
                     ..Default::default()
                 },
-                ChildOf(container_entity),
+                ChildOf(body),
             ))
             .id();
 
@@ -488,94 +541,22 @@ pub(crate) fn update_brush_face_properties(
             ChildOf(mat_row),
         ));
 
-        // Clear material button. Tooltip via `ButtonOperatorCall`,
-        // dispatch via the click observer (raw Node, not a feathers
-        // button; see `Clear All` above for the same pattern).
-        let clear_mat_btn = commands
-            .spawn((
-                Node {
-                    padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
-                    ..Default::default()
-                },
-                BackgroundColor(tokens::INPUT_BG),
-                Hovered::default(),
-                ButtonOperatorCall::new(BrushFaceClearMaterialOp::ID),
-                ChildOf(mat_row),
-            ))
-            .id();
-        commands.spawn((
-            Text::new("Clear"),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-            ChildOf(clear_mat_btn),
-        ));
+        // Clear material button. The `ButtonOperatorCall` drives both
+        // dispatch (via `Activate`) and the hover tooltip.
         commands
-            .entity(clear_mat_btn)
-            .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-                commands.operator(BrushFaceClearMaterialOp::ID).call();
-            });
-        commands.entity(clear_mat_btn).observe(
-            |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
-                if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                    bg.0 = tokens::HOVER_BG;
-                }
-            },
-        );
-        commands.entity(clear_mat_btn).observe(
-            |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-                if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                    bg.0 = tokens::INPUT_BG;
-                }
-            },
-        );
+            .spawn_scene(jackdaw_feathers::button::operator_button(
+                BrushFaceClearMaterialOp::ID,
+                "Clear",
+            ))
+            .insert(ChildOf(mat_row));
 
-        // "Apply to All Faces" button. Tooltip + dispatch via the same
-        // pattern as `Clear All` above.
-        let apply_all_btn = commands
-            .spawn((
-                Node {
-                    padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
-                    ..Default::default()
-                },
-                BackgroundColor(tokens::INPUT_BG),
-                Hovered::default(),
-                ButtonOperatorCall::new(BrushFaceApplyTextureToAllOp::ID),
-                ChildOf(container_entity),
-            ))
-            .id();
-        commands.spawn((
-            Text::new("Apply to All Faces"),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-            ChildOf(apply_all_btn),
-        ));
+        // "Apply to All Faces" button.
         commands
-            .entity(apply_all_btn)
-            .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-                commands.operator(BrushFaceApplyTextureToAllOp::ID).call();
-            });
-        commands.entity(apply_all_btn).observe(
-            |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
-                if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                    bg.0 = tokens::HOVER_BG;
-                }
-            },
-        );
-        commands.entity(apply_all_btn).observe(
-            |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-                if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                    bg.0 = tokens::INPUT_BG;
-                }
-            },
-        );
+            .spawn_scene(jackdaw_feathers::button::operator_button(
+                BrushFaceApplyTextureToAllOp::ID,
+                "Apply to All Faces",
+            ))
+            .insert(ChildOf(body));
     } else {
         commands.spawn((
             Text::new("No Material"),
@@ -584,35 +565,34 @@ pub(crate) fn update_brush_face_properties(
                 ..Default::default()
             },
             TextColor(tokens::TEXT_SECONDARY),
-            ChildOf(container_entity),
+            ChildOf(body),
         ));
     }
 
     // UV Offset
     spawn_brush_face_field_row(
         &mut commands,
-        container_entity,
+        body,
         "UV Offset",
         face.uv_offset.x as f64,
         face.uv_offset.y as f64,
         BrushFaceField::UvOffsetX,
         BrushFaceField::UvOffsetY,
-        brush_entity,
     );
 
     // UV Scale
     spawn_brush_face_field_row(
         &mut commands,
-        container_entity,
+        body,
         "UV Scale",
         face.uv_scale.x as f64,
         face.uv_scale.y as f64,
         BrushFaceField::UvScaleX,
         BrushFaceField::UvScaleY,
-        brush_entity,
     );
 
-    // UV Scale preset buttons
+    // UV Scale preset buttons. Each carries a `scale` param; the
+    // `ButtonOperatorCall` drives dispatch (via `Activate`) and tooltip.
     let preset_row = commands
         .spawn((
             Node {
@@ -621,7 +601,7 @@ pub(crate) fn update_brush_face_properties(
                 width: Val::Percent(100.0),
                 ..Default::default()
             },
-            ChildOf(container_entity),
+            ChildOf(body),
         ))
         .id();
     for preset in [0.25_f32, 0.5, 1.0, 2.0] {
@@ -630,53 +610,28 @@ pub(crate) fn update_brush_face_properties(
         } else {
             format!("{preset}x")
         };
-        let btn = commands
+        // Wrap in a growing cell so the presets spread evenly; the button
+        // keeps its native feathers Node. Override `ButtonOperatorCall` with
+        // the per-preset `scale` param.
+        let cell = commands
             .spawn((
                 Node {
-                    padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
                     flex_grow: 1.0,
-                    justify_content: JustifyContent::Center,
                     ..Default::default()
                 },
-                BackgroundColor(tokens::INPUT_BG),
-                Hovered::default(),
-                ButtonOperatorCall::new(BrushFaceSetUvScalePresetOp::ID)
-                    .with_param("scale", preset as f64),
                 ChildOf(preset_row),
             ))
             .id();
-        commands.spawn((
-            Text::new(label),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-            ChildOf(btn),
-        ));
         commands
-            .entity(btn)
-            .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-                commands
-                    .operator(BrushFaceSetUvScalePresetOp::ID)
-                    .param("scale", preset as f64)
-                    .call();
-            });
-        commands.entity(btn).observe(
-            |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
-                if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                    bg.0 = tokens::HOVER_BG;
-                }
-            },
-        );
-        commands.entity(btn).observe(
-            |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-                if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                    bg.0 = tokens::INPUT_BG;
-                }
-            },
-        );
+            .spawn_scene(jackdaw_feathers::button::operator_button(
+                BrushFaceSetUvScalePresetOp::ID,
+                label,
+            ))
+            .insert((
+                ButtonOperatorCall::new(BrushFaceSetUvScalePresetOp::ID)
+                    .with_param("scale", preset as f64),
+                ChildOf(cell),
+            ));
     }
 
     // UV Rotation
@@ -689,7 +644,7 @@ pub(crate) fn update_brush_face_properties(
                 width: Val::Percent(100.0),
                 ..Default::default()
             },
-            ChildOf(container_entity),
+            ChildOf(body),
         ))
         .id();
 
@@ -709,18 +664,12 @@ pub(crate) fn update_brush_face_properties(
     ));
 
     let rotation_degrees = face.uv_rotation.to_degrees() as f64;
-    commands.spawn((
-        text_edit::text_edit(
-            TextEditProps::default()
-                .numeric_f32()
-                .grow()
-                .with_default_value(rotation_degrees.to_string()),
-        ),
-        BrushFaceFieldBinding {
-            field: BrushFaceField::UvRotation,
-        },
-        ChildOf(rot_row),
-    ));
+    spawn_brush_face_text(
+        &mut commands,
+        rot_row,
+        &rotation_degrees.to_string(),
+        BrushFaceField::UvRotation,
+    );
 }
 
 fn spawn_brush_face_field_row(
@@ -731,7 +680,6 @@ fn spawn_brush_face_field_row(
     y_value: f64,
     x_field: BrushFaceField,
     y_field: BrushFaceField,
-    _brush_entity: Entity,
 ) {
     let row = commands
         .spawn((
@@ -761,48 +709,33 @@ fn spawn_brush_face_field_row(
         ChildOf(row),
     ));
 
-    // X input
-    commands.spawn((
-        text_edit::text_edit(
-            TextEditProps::default()
-                .numeric_f32()
-                .grow()
-                .with_default_value(x_value.to_string()),
-        ),
-        BrushFaceFieldBinding { field: x_field },
-        ChildOf(row),
-    ));
-
-    // Y input
-    commands.spawn((
-        text_edit::text_edit(
-            TextEditProps::default()
-                .numeric_f32()
-                .grow()
-                .with_default_value(y_value.to_string()),
-        ),
-        BrushFaceFieldBinding { field: y_field },
-        ChildOf(row),
-    ));
+    spawn_brush_face_text(commands, row, &x_value.to_string(), x_field);
+    spawn_brush_face_text(commands, row, &y_value.to_string(), y_field);
 }
 
-/// Handle `TextEditCommitEvent` for brush face field bindings.
+/// Handle `ValueChange<String>` for brush face field bindings. The event fires
+/// on the inner text entry, so the binding is found by walking up to its
+/// container.
 pub(crate) fn on_brush_face_text_commit(
-    event: On<TextEditCommitEvent>,
+    event: On<ValueChange<String>>,
     bindings: Query<&BrushFaceFieldBinding>,
     child_of_query: Query<&ChildOf>,
     brush_selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut history: ResMut<CommandHistory>,
 ) {
+    if !event.is_final {
+        return;
+    }
+
     // Walk up from the committed entity to find a BrushFaceFieldBinding
-    let mut current = event.entity;
+    let mut current = event.source;
     for _ in 0..4 {
         let Ok(child_of) = child_of_query.get(current) else {
             break;
         };
         if let Ok(binding) = bindings.get(child_of.parent()) {
-            let value: f64 = event.text.parse().unwrap_or(0.0);
+            let value: f64 = event.value.parse().unwrap_or(0.0);
             apply_brush_face_field(
                 binding.field,
                 value,

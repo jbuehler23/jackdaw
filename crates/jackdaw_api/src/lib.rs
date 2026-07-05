@@ -77,7 +77,7 @@ pub mod op {
     pub use jackdaw_api_internal::operator::{
         CallOperatorError, CallOperatorSettings, ExecutionContext, Operator, OperatorCallBuilder,
         OperatorCommandsExt, OperatorParameters, OperatorResult, OperatorSignature,
-        OperatorSystemId, OperatorWorldExt, ParamSpec,
+        OperatorSystemId, OperatorWorldExt, ParamSpec, RefreshOperatorButtons,
     };
 }
 
@@ -122,7 +122,9 @@ pub use jackdaw_jsn as jsn;
 /// schema first or `jackdaw_feathers` should grow a builder method
 /// that hides the choice.
 pub mod ui {
-    pub use jackdaw_feathers::button::{ButtonProps, button};
+    pub use jackdaw_feathers::button::{
+        ButtonProps, button, operator_button, operator_button_variant,
+    };
     pub use jackdaw_feathers::icons::Icon;
 
     /// Radial (pie) quick-menu widget. Open a ring of [`RadialMenuItem`]s at
@@ -177,7 +179,7 @@ pub mod prelude {
     pub use crate::op::{
         CallOperatorError, CallOperatorSettings, ExecutionContext, Operator,
         OperatorCommandsExt as _, OperatorParameters, OperatorResult, OperatorSignature,
-        OperatorSystemId, OperatorWorldExt as _, ParamSpec,
+        OperatorSystemId, OperatorWorldExt as _, ParamSpec, RefreshOperatorButtons,
     };
     pub use crate::pie::PlayState;
     pub use crate::runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems};

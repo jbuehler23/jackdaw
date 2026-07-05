@@ -17,13 +17,13 @@
 //! call sites compile-fail when the operator is renamed instead of
 //! silently going stale.
 
+use bevy::feathers::controls::ButtonVariant;
 use bevy::prelude::*;
 use jackdaw::draw_brush::ActivateDrawBrushModalOp;
-use jackdaw::layout::update_toolbar_button_variants;
 use jackdaw::tool_ops::{ToolRotateOp, ToolSelectOp};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::{ActiveModalOperator, OperatorEntity};
-use jackdaw_feathers::button::{ButtonOperatorCall, ButtonVariant};
+use jackdaw_feathers::button::ButtonOperatorCall;
 
 mod util;
 
@@ -115,40 +115,37 @@ fn every_modal_operator_round_trips() {
     }
 }
 
-/// Regression: when a modal operator is running, its toolbar button
-/// is the only one carrying `ButtonVariant::Active`. Mode/gizmo
-/// buttons must drop their highlight so the user sees a single
-/// active tool. Reproduces the bug where Object Mode stayed
-/// highlighted while Draw Brush was armed because the system
-/// short-circuited on `Res::is_changed()` and never observed
-/// `ActiveModalOperator` being inserted.
+/// Regression: while a modal operator runs, its toolbar button is the
+/// only one carrying `ButtonVariant::Primary`. Mode and gizmo buttons
+/// drop to `Plain` so the user sees a single active tool. Covers the
+/// case where Object Mode stayed highlighted while Draw Brush was
+/// armed.
 #[test]
 fn modal_dispatch_steals_toolbar_highlight() {
     let mut app = util::editor_test_app();
 
-    // Spawn synthetic toolbar entities. The real toolbar isn't
-    // mounted in the test app (it lives behind `OnEnter(Editor)`),
-    // so we model just enough surface for the highlight system to
-    // run against: a `ButtonOperatorCall` and a `ButtonVariant`.
+    // Synthetic toolbar buttons. The real toolbar mounts behind
+    // `OnEnter(Editor)`, so model just the surface the highlight
+    // observer reads: a `ButtonOperatorCall` and a `ButtonVariant`.
     let object_button = app
         .world_mut()
         .spawn((
             ButtonOperatorCall::new(ToolSelectOp::ID),
-            ButtonVariant::Active,
+            ButtonVariant::Plain,
         ))
         .id();
     let rotate_button = app
         .world_mut()
         .spawn((
             ButtonOperatorCall::new(ToolRotateOp::ID),
-            ButtonVariant::Active,
+            ButtonVariant::Plain,
         ))
         .id();
     let draw_button = app
         .world_mut()
         .spawn((
             ButtonOperatorCall::new(ActivateDrawBrushModalOp::ID),
-            ButtonVariant::Ghost,
+            ButtonVariant::Plain,
         ))
         .id();
 
@@ -159,32 +156,31 @@ fn modal_dispatch_steals_toolbar_highlight() {
         .call()
         .unwrap_or_else(|err| panic!("draw brush dispatch errored: {err}"));
 
-    // Run the highlight system once. It's gated to AppState::Editor
-    // in the editor's plugin schedule, so we drive it directly here.
-    app.world_mut()
-        .run_system_cached(update_toolbar_button_variants)
-        .expect("update_toolbar_button_variants ran");
+    // The highlight is an `On<RefreshOperatorButtons>` observer. Fire
+    // the event so it flips the variants against the running modal.
+    app.world_mut().trigger(RefreshOperatorButtons);
 
     let variant_of = |app: &mut App, e: Entity| {
-        *app.world()
+        app.world()
             .entity(e)
             .get::<ButtonVariant>()
             .expect("button has ButtonVariant")
+            .clone()
     };
 
     assert_eq!(
         variant_of(&mut app, draw_button),
-        ButtonVariant::Active,
+        ButtonVariant::Primary,
         "draw-brush button should highlight while its modal is running"
     );
     assert_eq!(
         variant_of(&mut app, object_button),
-        ButtonVariant::Ghost,
+        ButtonVariant::Plain,
         "object-mode button should drop its highlight while a modal is running"
     );
     assert_eq!(
         variant_of(&mut app, rotate_button),
-        ButtonVariant::Ghost,
+        ButtonVariant::Plain,
         "gizmo-rotate button should drop its highlight while a modal is running"
     );
 }

@@ -1,16 +1,22 @@
 use bevy::{
+    ecs::lifecycle::Insert,
+    feathers::controls::{
+        ButtonVariant, FeathersButton, FeathersCheckbox, FeathersMenu, FeathersMenuButton,
+        FeathersMenuItem, FeathersMenuPopup, FeathersTextInput, FeathersTextInputContainer,
+    },
+    feathers::theme::ThemedText,
+    input::keyboard::{KeyCode, KeyboardInput},
     input::mouse::{MouseScrollUnit, MouseWheel},
+    input_focus::{FocusLost, FocusedInput},
     picking::hover::Hovered,
     prelude::*,
     render::render_resource::Face,
+    text::{EditableText, TextEdit},
+    ui::Checked,
+    ui_widgets::{Activate, ValueChange},
 };
 use jackdaw_feathers::{
-    button::{ButtonProps, ButtonSize, ButtonVariant, button, set_button_variant},
-    checkbox::{CheckboxCommitEvent, CheckboxProps, checkbox},
-    color_picker::{ColorPickerCommitEvent, ColorPickerProps, color_picker},
-    combobox::{ComboBoxChangeEvent, ComboBoxOptionData, combobox_with_selected},
-    icons::{EditorFont, Icon, IconFont, icon_colored},
-    text_edit::{self, TextEditCommitEvent, TextEditProps},
+    icons::{Icon, IconFont, icon_colored},
     tokens,
 };
 /// The material cards shown in the Material inspector tab, in display order.
@@ -69,23 +75,32 @@ impl MaterialCardKind {
     }
 }
 
-/// Marker for material field UI entities
+/// Marker for material field UI entities. Placed on each color picker and
+/// combobox menu so tests count the expected number of widgets.
 #[derive(Component)]
 struct MaterialFieldMarker;
 
-/// Binding that links a material `text_edit` to a material asset handle and field mutator.
+/// Binding that links a material numeric text input to a material asset handle
+/// and field mutator.
 #[derive(Component)]
 pub(super) struct MaterialFieldBinding {
     pub(super) material_handle: Handle<StandardMaterial>,
     pub(super) apply_fn: fn(&mut StandardMaterial, f64),
 }
 
+/// Initial text staged on a material text input container. The `Insert`-triggered
+/// `seed_material_text` observer writes it into the editable buffer once the inner
+/// text entry spawns, then removes it.
+#[derive(Component)]
+struct PendingMaterialText(String);
+
 // ---------------------------------------------------------------------------
 // Shared row-builder helpers
 // ---------------------------------------------------------------------------
 
 /// Labeled inline color picker bound to a `StandardMaterial` color field.
-/// `rgba` is the current color as `[f32; 4]`; `write` applies a committed color.
+/// `rgba` is the current color as `[f32; 4]`; `write` applies a committed color
+/// directly to the asset without undo, matching the rest of the material editor.
 pub(super) fn spawn_material_color_field(
     world: &mut World,
     parent: Entity,
@@ -94,45 +109,23 @@ pub(super) fn spawn_material_color_field(
     handle: Handle<StandardMaterial>,
     write: fn(&mut StandardMaterial, [f32; 4]),
 ) {
-    let col = world
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(tokens::SPACING_XS),
-                width: Val::Percent(100.0),
-                ..Default::default()
-            },
-            ChildOf(parent),
-        ))
-        .id();
-
-    world.spawn((
-        Text::new(format!("{label}:")),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(col),
-    ));
-
-    let picker = world
-        .spawn((
-            color_picker(ColorPickerProps::new().with_color(rgba).inline()),
-            MaterialFieldMarker,
-            ChildOf(col),
-        ))
-        .id();
-
-    let picker_handle = handle.clone();
-    world.entity_mut(picker).observe(
-        move |event: On<ColorPickerCommitEvent>,
-              mut materials: ResMut<Assets<StandardMaterial>>| {
-            if let Some(mut material) = materials.get_mut(&picker_handle) {
-                write(&mut material, event.color);
+    let root = super::reflect_fields::spawn_color_picker(
+        &mut world.commands(),
+        parent,
+        rgba,
+        label,
+        0.0,
+        move |world, rgba, _is_final| {
+            if let Some(mut material) = world
+                .resource_mut::<Assets<StandardMaterial>>()
+                .get_mut(&handle)
+            {
+                write(&mut material, rgba);
             }
         },
     );
+    world.commands().entity(root).insert(MaterialFieldMarker);
+    world.flush();
 }
 
 /// Binding component that links a material checkbox to its asset handle and field mutator.
@@ -142,21 +135,35 @@ pub(super) struct MaterialCheckboxBinding {
     pub(super) apply_fn: fn(&mut StandardMaterial, bool),
 }
 
-/// Handle `CheckboxCommitEvent` for material checkbox bindings.
+/// Handle `ValueChange<bool>` for material checkbox bindings. This global
+/// observer sees every checkbox change; the `MaterialCheckboxBinding` lookup on
+/// `event.source` self-filters to material fields.
 pub(super) fn on_material_checkbox_commit(
-    event: On<CheckboxCommitEvent>,
+    event: On<ValueChange<bool>>,
     bindings: Query<&MaterialCheckboxBinding>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut commands: Commands,
 ) {
-    let Ok(binding) = bindings.get(event.entity) else {
+    let target = event.source;
+    let Ok(binding) = bindings.get(target) else {
         return;
     };
+    let checked = event.value;
+    // The checkbox does not self-update `Checked`; reflect the new value so the
+    // box renders the change.
+    if checked {
+        commands.entity(target).insert(Checked);
+    } else {
+        commands.entity(target).remove::<Checked>();
+    }
     if let Some(mut material) = materials.get_mut(&binding.material_handle) {
-        (binding.apply_fn)(&mut material, event.checked);
+        (binding.apply_fn)(&mut material, checked);
     }
 }
 
-/// Labeled checkbox bound to a `StandardMaterial` bool field.
+/// Labeled checkbox bound to a `StandardMaterial` bool field. The
+/// `MaterialCheckboxBinding` rides on the checkbox entity, so
+/// `on_material_checkbox_commit` reads it off the `ValueChange` source.
 pub(super) fn spawn_material_checkbox_field(
     world: &mut World,
     parent: Entity,
@@ -165,9 +172,6 @@ pub(super) fn spawn_material_checkbox_field(
     handle: Handle<StandardMaterial>,
     write: fn(&mut StandardMaterial, bool),
 ) {
-    let editor_font = world.resource::<EditorFont>().0.clone();
-    let icon_font = world.resource::<IconFont>().0.clone();
-
     let row = world
         .spawn((
             Node {
@@ -190,22 +194,32 @@ pub(super) fn spawn_material_checkbox_field(
         ChildOf(row),
     ));
 
-    world.spawn((
-        checkbox(
-            CheckboxProps::new("").checked(value),
-            &editor_font,
-            &icon_font,
-        ),
+    let mut commands = world.commands();
+    let mut cb = commands.spawn_scene(bsn! { @FeathersCheckbox });
+    cb.insert((
         MaterialCheckboxBinding {
             material_handle: handle,
             apply_fn: write,
         },
         ChildOf(row),
     ));
+    // The checkbox does not self-manage `Checked`; seed the initial state.
+    if value {
+        cb.insert(Checked);
+    }
+    drop(commands);
+    world.flush();
 }
 
-/// Labeled combobox; `options` are labels, `selected` the current index,
-/// `on_select(world, handle, index)` applies the choice to the asset.
+/// Records the selected option index on a material combobox menu, read back by
+/// item observers so a repeated pick does not re-fire the asset write.
+#[derive(Component)]
+struct MaterialComboBoxSelection(usize);
+
+/// Labeled menu; `options` are captions, `selected` the current index,
+/// `on_select(world, handle, index)` applies the choice directly to the asset.
+/// The button caption tracks the current option; each item's `Activate` records
+/// the index on the menu and calls `on_select`.
 pub(super) fn spawn_material_combobox_field(
     world: &mut World,
     parent: Entity,
@@ -237,29 +251,77 @@ pub(super) fn spawn_material_combobox_field(
         ChildOf(row),
     ));
 
-    let option_data: Vec<ComboBoxOptionData> = options
-        .iter()
-        .map(|&s| ComboBoxOptionData::new(s))
-        .collect();
+    let current_caption = options.get(selected).copied().unwrap_or("").to_string();
 
-    let combo = world
-        .spawn((
-            combobox_with_selected(option_data, selected),
+    let commands = &mut world.commands();
+    let menu = commands
+        .spawn_scene(bsn! { @FeathersMenu })
+        .insert((
             MaterialFieldMarker,
+            MaterialComboBoxSelection(selected),
             ChildOf(row),
         ))
         .id();
 
-    let combo_handle = handle.clone();
-    world.entity_mut(combo).observe(
-        move |event: On<ComboBoxChangeEvent>, mut commands: Commands| {
-            let idx = event.selected;
-            let h = combo_handle.clone();
-            commands.queue(move |world: &mut World| {
-                on_select(world, &h, idx);
+    let button = commands
+        .spawn_scene(bsn! {
+            @FeathersMenuButton {
+                @caption: bsn! { Text({current_caption}) ThemedText },
+            }
+        })
+        .insert(ChildOf(menu))
+        .id();
+
+    let popup = commands
+        .spawn_scene(bsn! { @FeathersMenuPopup })
+        .insert(ChildOf(menu))
+        .id();
+
+    for (idx, option) in options.into_iter().enumerate() {
+        let handle = handle.clone();
+        commands
+            .spawn_scene(bsn! {
+                @FeathersMenuItem {
+                    @caption: bsn! { Text({option.to_string()}) ThemedText },
+                }
+            })
+            .insert(ChildOf(popup))
+            .observe(move |_activate: On<Activate>, mut commands: Commands| {
+                let handle = handle.clone();
+                commands.queue(move |world: &mut World| {
+                    // Skip a no-op re-pick, then record the new index and repaint
+                    // the caption before applying the choice to the asset.
+                    if let Some(sel) = world.get::<MaterialComboBoxSelection>(menu)
+                        && sel.0 == idx
+                    {
+                        return;
+                    }
+                    if let Some(mut sel) = world.get_mut::<MaterialComboBoxSelection>(menu) {
+                        sel.0 = idx;
+                    }
+                    set_menu_button_caption(world, button, option);
+                    on_select(world, &handle, idx);
+                });
             });
-        },
-    );
+    }
+    world.flush();
+}
+
+/// Rewrite the caption text of a material menu button to `text`.
+fn set_menu_button_caption(world: &mut World, button: Entity, text: &str) {
+    let mut descendants: Vec<Entity> = Vec::new();
+    if let Ok(children) = world.query::<&Children>().get(world, button) {
+        descendants.extend(children.iter());
+    }
+    while let Some(entity) = descendants.pop() {
+        if world.get::<Text>(entity).is_some() {
+            world.entity_mut(entity).insert(Text::new(text.to_string()));
+            return;
+        }
+        if let Ok(children) = world.query::<&Children>().get(world, entity) {
+            descendants.extend(children.iter());
+        }
+    }
 }
 
 /// Marker placed on the row container of each texture slot. Tests count
@@ -472,20 +534,25 @@ pub(super) fn fill_textures_card(
     );
 }
 
-/// Handle `TextEditCommitEvent` for material field bindings.
+/// Handle `ValueChange<String>` for material numeric field bindings. The event
+/// fires on the inner text entry, so the binding is found by walking up to its
+/// container. The parsed value is written directly to the asset without undo.
 pub(super) fn on_material_text_commit(
-    event: On<TextEditCommitEvent>,
+    event: On<ValueChange<String>>,
     bindings: Query<&MaterialFieldBinding>,
     child_of_query: Query<&ChildOf>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let mut current = event.entity;
+    if !event.is_final {
+        return;
+    }
+    let mut current = event.source;
     for _ in 0..4 {
         let Ok(child_of) = child_of_query.get(current) else {
             break;
         };
         if let Ok(binding) = bindings.get(child_of.parent()) {
-            let value: f64 = event.text.parse().unwrap_or(0.0);
+            let value: f64 = event.value.parse().unwrap_or(0.0);
             if let Some(mut material) = materials.get_mut(&binding.material_handle) {
                 (binding.apply_fn)(&mut material, value);
             }
@@ -773,7 +840,9 @@ mod surface_card_tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.add_plugins(bevy::scene::ScenePlugin);
         app.init_asset::<StandardMaterial>();
+        app.init_asset::<Font>();
 
         let handle = app
             .world_mut()
@@ -818,29 +887,20 @@ mod surface_card_tests {
 #[cfg(test)]
 mod settings_card_tests {
     use super::{
-        MaterialCheckboxBinding, MaterialFieldBinding, MaterialFieldMarker, fill_settings_card,
+        MaterialCheckboxBinding, MaterialComboBoxSelection, MaterialFieldBinding,
+        MaterialFieldMarker, fill_settings_card,
     };
     use bevy::prelude::*;
-    use jackdaw_feathers::{
-        combobox::EditorComboBox,
-        icons::{EditorFont, IconFont},
-    };
 
     #[test]
     fn settings_card_spawns_rows() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.add_plugins(bevy::scene::ScenePlugin);
         app.init_asset::<StandardMaterial>();
         app.init_asset::<Font>();
-
-        // The checkbox helper reads EditorFont and IconFont at spawn time.
-        // Insert weak handles so the world satisfies the resource requirements
-        // without needing a full UI plugin stack.
-        let editor_font: Handle<Font> = Handle::default();
-        let icon_font: Handle<Font> = Handle::default();
-        app.world_mut().insert_resource(EditorFont(editor_font));
-        app.world_mut().insert_resource(IconFont(icon_font));
+        app.init_asset::<Image>();
 
         let handle = app
             .world_mut()
@@ -852,15 +912,15 @@ mod settings_card_tests {
         fill_settings_card(app.world_mut(), body, handle);
         app.world_mut().flush();
 
-        // 2 combobox rows (Culling, Alpha Mode) carry EditorComboBox + MaterialFieldMarker.
+        // 2 menu rows (Culling, Alpha Mode) each carry MaterialComboBoxSelection.
         let combo_count = app
             .world_mut()
-            .query::<&EditorComboBox>()
+            .query::<&MaterialComboBoxSelection>()
             .iter(app.world())
             .count();
-        assert_eq!(combo_count, 2, "expected 2 EditorComboBox components");
+        assert_eq!(combo_count, 2, "expected 2 material menu selections");
 
-        // MaterialFieldMarker is also placed on each combobox entity.
+        // MaterialFieldMarker is also placed on each menu entity.
         let marker_count = app
             .world_mut()
             .query::<&MaterialFieldMarker>()
@@ -896,22 +956,20 @@ mod settings_card_tests {
 mod textures_card_tests {
     use super::{MaterialCheckboxBinding, MaterialTextureSlot, fill_textures_card};
     use bevy::prelude::*;
-    use jackdaw_feathers::icons::{EditorFont, IconFont};
+    use jackdaw_feathers::icons::IconFont;
 
     #[test]
     fn textures_card_spawns_slots_and_checkbox() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.add_plugins(bevy::scene::ScenePlugin);
         app.init_asset::<StandardMaterial>();
         app.init_asset::<Font>();
 
-        // The checkbox helper reads EditorFont and IconFont at spawn time.
-        // Insert weak handles so the world satisfies the resource requirements
-        // without needing a full UI plugin stack.
-        let editor_font: Handle<Font> = Handle::default();
+        // The texture-slot icons read IconFont at spawn time. Insert a weak
+        // handle so the world satisfies the resource without a full UI stack.
         let icon_font: Handle<Font> = Handle::default();
-        app.world_mut().insert_resource(EditorFont(editor_font));
         app.world_mut().insert_resource(IconFont(icon_font));
 
         let handle = app
@@ -1010,18 +1068,22 @@ pub(super) fn fill_preview_card(world: &mut World, body: Entity, handle: Handle<
             crate::material_preview::PreviewShape::Cube => "Cube",
             crate::material_preview::PreviewShape::Plane => "Plane",
         };
-        world.spawn((
-            button(ButtonProps::new(label).with_size(ButtonSize::MD)),
-            PreviewShapeButton(shape),
-            ChildOf(row),
-        ));
+        world
+            .commands()
+            .spawn_scene(bsn! {
+                @FeathersButton {
+                    @caption: bsn! { Text({label.to_string()}) ThemedText },
+                }
+            })
+            .insert((PreviewShapeButton(shape), ChildOf(row)));
     }
+    world.flush();
 }
 
-/// Observer registered in `InspectorPlugin`: clicking a `PreviewShapeButton`
+/// Observer registered in `InspectorPlugin`: activating a `PreviewShapeButton`
 /// sets `MaterialPreviewState.preview_shape` to the button's shape.
 pub(super) fn on_preview_shape_button_click(
-    event: On<jackdaw_feathers::button::ButtonClickEvent>,
+    event: On<Activate>,
     buttons: Query<&PreviewShapeButton>,
     mut state: ResMut<crate::material_preview::MaterialPreviewState>,
 ) {
@@ -1031,32 +1093,26 @@ pub(super) fn on_preview_shape_button_click(
     state.preview_shape = btn.0;
 }
 
-/// Each frame: set each shape button's visual variant to `Active` when its
-/// shape matches `MaterialPreviewState.preview_shape`, else `Default`.
-/// Only writes when a change is detected to avoid thrashing the render data.
+/// Each frame: set each shape button's variant to `Primary` when its shape
+/// matches `MaterialPreviewState.preview_shape`, else `Normal`. Only writes when
+/// a change is detected so native theming does not thrash.
 pub(super) fn refresh_preview_shape_buttons(
     state: Res<crate::material_preview::MaterialPreviewState>,
-    mut buttons: Query<(
-        &PreviewShapeButton,
-        &mut ButtonVariant,
-        &mut BackgroundColor,
-        &mut BorderColor,
-    )>,
+    mut buttons: Query<(&PreviewShapeButton, &mut ButtonVariant)>,
 ) {
     if !state.is_changed() {
         return;
     }
-    for (btn, mut variant, mut bg, mut border) in &mut buttons {
+    for (btn, mut variant) in &mut buttons {
         let wanted = if btn.0 == state.preview_shape {
-            ButtonVariant::Active
+            ButtonVariant::Primary
         } else {
-            ButtonVariant::Default
+            ButtonVariant::Normal
         };
         if *variant == wanted {
             continue;
         }
         *variant = wanted;
-        set_button_variant(wanted, &mut bg, &mut border);
     }
 }
 
@@ -1116,19 +1172,96 @@ fn spawn_material_numeric_field(
         ChildOf(row),
     ));
 
-    world.spawn((
-        text_edit::text_edit(
-            TextEditProps::default()
-                .numeric_f32()
-                .grow()
-                .with_default_value(value.to_string()),
-        ),
-        MaterialFieldBinding {
-            material_handle,
-            apply_fn,
-        },
-        ChildOf(row),
-    ));
+    // The `MaterialFieldBinding` and staged text ride on the container; the
+    // inner text entry emits `ValueChange<String>` on Enter or blur, which
+    // `on_material_text_commit` writes back to the asset.
+    world
+        .commands()
+        .spawn_scene(material_text_scene())
+        .insert((
+            MaterialFieldBinding {
+                material_handle,
+                apply_fn,
+            },
+            PendingMaterialText(value.to_string()),
+            ChildOf(row),
+        ));
+    world.flush();
+}
+
+/// Container framing a `FeathersTextInput`. The inner text entry drives the
+/// commit observers; the container holds the binding and staged value, and
+/// seeds the text buffer once the staged value lands.
+fn material_text_scene() -> impl Scene {
+    bsn! {
+        @FeathersTextInputContainer
+        on(seed_material_text)
+        Children [
+            @FeathersTextInput
+            on(material_text_on_enter_key)
+            on(material_text_on_focus_lost)
+        ]
+    }
+}
+
+/// Write the staged text into the editable buffer once it is inserted on the
+/// container, then clear it so a later refresh does not re-seed it.
+fn seed_material_text(
+    inserted: On<Insert, PendingMaterialText>,
+    q_children: Query<&Children>,
+    q_pending: Query<&PendingMaterialText>,
+    mut q_text: Query<&mut EditableText>,
+    mut commands: Commands,
+) {
+    let container = inserted.event_target();
+    let Ok(pending) = q_pending.get(container) else {
+        return;
+    };
+    let text_id = q_children
+        .iter_descendants(container)
+        .find(|e| q_text.contains(*e));
+    if let Some(text_id) = text_id
+        && let Ok(mut editable) = q_text.get_mut(text_id)
+    {
+        editable.queue_edit(TextEdit::SelectAll);
+        editable.queue_edit(TextEdit::Insert(pending.0.clone().into()));
+    }
+    commands.entity(container).remove::<PendingMaterialText>();
+}
+
+/// Emit a final `ValueChange<String>` when Enter is pressed in a material text input.
+fn material_text_on_enter_key(
+    key_input: On<FocusedInput<KeyboardInput>>,
+    q_text: Query<&EditableText>,
+    mut commands: Commands,
+) {
+    if key_input.input.key_code != KeyCode::Enter {
+        return;
+    }
+    let text_id = key_input.event_target();
+    if let Ok(editable) = q_text.get(text_id) {
+        commands.trigger(ValueChange {
+            source: text_id,
+            value: editable.value().to_string(),
+            is_final: true,
+        });
+    }
+}
+
+/// Emit a final `ValueChange<String>` when a material text input loses focus.
+fn material_text_on_focus_lost(
+    focus_lost: On<FocusLost>,
+    q_text: Query<&EditableText>,
+    mut commands: Commands,
+) {
+    let text_id = focus_lost.event_target();
+    if let Ok(editable) = q_text.get(text_id) {
+        commands.trigger(ValueChange {
+            source: text_id,
+            value: editable.value().to_string(),
+            is_final: true,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -1143,8 +1276,10 @@ mod preview_card_tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.add_plugins(bevy::scene::ScenePlugin);
         app.init_asset::<StandardMaterial>();
         app.init_asset::<Image>();
+        app.init_asset::<Font>();
         app.init_resource::<MaterialPreviewState>();
         app
     }
@@ -1217,6 +1352,7 @@ mod inject_material_cards_tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.add_plugins(bevy::scene::ScenePlugin);
         app.init_asset::<StandardMaterial>();
         app.init_asset::<Image>();
         app.init_asset::<Font>();
@@ -1231,7 +1367,7 @@ mod inject_material_cards_tests {
         app.init_resource::<crate::material_preview::MaterialPreviewState>();
         app.init_resource::<InspectorCollapseState>();
 
-        // EditorFont and IconFont are also read by card body helpers.
+        // IconFont is read by the texture-slot and card-shell helpers.
         app
     }
 

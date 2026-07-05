@@ -21,6 +21,7 @@ pub(super) fn drop_brush_edit_on_deselect(
     mut edit_mode: ResMut<EditMode>,
     mut brush_selection: ResMut<BrushSelection>,
     modal: Res<crate::modal_transform::ModalTransformState>,
+    mut commands: Commands,
 ) {
     if input_focus.get().is_some() || modal.active.is_some() {
         return;
@@ -40,6 +41,9 @@ pub(super) fn drop_brush_edit_on_deselect(
         }
         *edit_mode = EditMode::Object;
         brush_selection.clear();
+        // This edit-mode reset is outside the operator path, so announce it
+        // for the toolbar's edit-mode highlight observer.
+        commands.trigger(jackdaw_api::op::RefreshOperatorButtons);
     }
 }
 

@@ -1,4 +1,6 @@
+use bevy::feathers::controls::{ButtonVariant as FeathersButtonVariant, FeathersButton};
 use bevy::feathers::cursor::EntityCursor;
+use bevy::feathers::theme::ThemedText;
 use bevy::input_focus::InputFocus;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -26,7 +28,13 @@ pub struct ButtonClickEvent {
 ///
 /// Feathers carries this as a plain component to keep the widget
 /// crate independent of the operator API.
-#[derive(Component, Clone, Debug)]
+///
+/// `Default` is derived so the component can be authored directly in a
+/// `bsn!` scene, whose blanket `FromTemplate` impl needs `Clone +
+/// Default`; see [`operator_button`]. A defaulted value has an empty
+/// id and dispatches nothing, so it is only meaningful when constructed
+/// with a real id via [`ButtonOperatorCall::new`].
+#[derive(Component, Clone, Debug, Default)]
 pub struct ButtonOperatorCall {
     pub id: Cow<'static, str>,
     pub params: Vec<(Cow<'static, str>, PropertyValue)>,
@@ -50,6 +58,41 @@ impl ButtonOperatorCall {
     ) -> Self {
         self.params.push((key.into(), value.into()));
         self
+    }
+}
+
+/// A [`FeathersButton`] wired to dispatch operator `op_id` when
+/// clicked, as a `Scene` for composing inside a `bsn!` `Children [ ... ]`
+/// list.
+///
+/// The button carries a [`ButtonOperatorCall`], which the editor's
+/// operator-button glue reads to dispatch the operator on the `Activate`
+/// event, toggle
+/// [`InteractionDisabled`](bevy::ui::InteractionDisabled) whenever the
+/// operator reports itself unavailable, and attach a hover tooltip via
+/// the `Add, ButtonOperatorCall` observer.
+pub fn operator_button(
+    op_id: impl Into<Cow<'static, str>>,
+    caption: impl Into<String>,
+) -> impl Scene {
+    operator_button_variant(op_id, caption, FeathersButtonVariant::Normal)
+}
+
+/// [`operator_button`] with an explicit button variant, e.g.
+/// `ButtonVariant::Primary` for a call-to-action button.
+pub fn operator_button_variant(
+    op_id: impl Into<Cow<'static, str>>,
+    caption: impl Into<String>,
+    variant: FeathersButtonVariant,
+) -> impl Scene {
+    let op_id = op_id.into();
+    let caption = caption.into();
+    bsn! {
+        @FeathersButton {
+            @caption: bsn! { Text(caption) ThemedText },
+            @variant: {variant}
+        }
+        ButtonOperatorCall::new(op_id)
     }
 }
 

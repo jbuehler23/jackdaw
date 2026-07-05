@@ -12,8 +12,12 @@ use bevy::{
         component::{ComponentId, Components},
         reflect::{AppTypeRegistry, ReflectComponent},
     },
+    feathers::containers::{pane, pane_body, pane_header},
+    feathers::controls::FeathersDisclosureToggle,
     prelude::*,
     reflect::serde::TypedReflectSerializer,
+    ui::Checked,
+    ui_widgets::{ToggleChecked, ValueChange},
 };
 use jackdaw_feathers::{
     button::ButtonOperatorCall,
@@ -21,9 +25,7 @@ use jackdaw_feathers::{
     tokens,
 };
 use jackdaw_localization::LocalizedText;
-use jackdaw_widgets::collapsible::{
-    CollapsibleBody, CollapsibleHeader, CollapsibleSection, ToggleCollapsible,
-};
+use jackdaw_widgets::collapsible::{CollapsibleBody, CollapsibleHeader, CollapsibleSection};
 
 use jackdaw_feathers::text_edit::TextEditValue;
 use std::collections::HashSet;
@@ -695,6 +697,51 @@ pub(crate) fn on_inspector_dirty(
     }
 }
 
+/// Links a disclosure toggle to the collapsible section it controls. Shared by
+/// component cards and material cards; both route through `on_disclosure_change`.
+#[derive(Component)]
+pub(crate) struct DisclosureSection(pub(crate) Entity);
+
+/// Drive the section's collapsed flag and body visibility from the disclosure
+/// toggle's checked state. `value` is the expanded state, so
+/// `collapsed = !value`. The toggle does not self-manage `Checked`; set it
+/// here so the chevron rotates. Writing `CollapsibleSection.collapsed` lets
+/// `persist_inspector_collapse` record the state for the next rebuild.
+pub(crate) fn on_disclosure_change(
+    change: On<ValueChange<bool>>,
+    toggles: Query<&DisclosureSection>,
+    mut sections: Query<(&mut CollapsibleSection, &Children)>,
+    mut bodies: Query<&mut Node, With<CollapsibleBody>>,
+    mut commands: Commands,
+) {
+    let toggle = change.source;
+    let Ok(link) = toggles.get(toggle) else {
+        return;
+    };
+    let expanded = change.value;
+
+    if expanded {
+        commands.entity(toggle).insert(Checked);
+    } else {
+        commands.entity(toggle).remove::<Checked>();
+    }
+
+    let Ok((mut section, children)) = sections.get_mut(link.0) else {
+        return;
+    };
+    section.collapsed = !expanded;
+
+    for child in children.iter() {
+        if let Ok(mut node) = bodies.get_mut(child) {
+            node.display = if expanded {
+                Display::Flex
+            } else {
+                Display::None
+            };
+        }
+    }
+}
+
 /// Inputs to [`spawn_component_display`]. Bundled into a single
 /// struct so the call site is readable as a struct literal instead of
 /// a long positional argument list.
@@ -746,27 +793,10 @@ pub(crate) fn spawn_component_display(
         Display::Flex
     };
 
-    let body_entity = commands
-        .spawn((
-            ComponentDisplayBody,
-            CollapsibleBody,
-            Node {
-                padding: UiRect::new(
-                    Val::Px(tokens::SPACING_MD),
-                    Val::Px(tokens::SPACING_SM),
-                    Val::Px(tokens::SPACING_XS),
-                    Val::Px(tokens::SPACING_XS),
-                ),
-                flex_direction: FlexDirection::Column,
-                width: Val::Percent(100.0),
-                display: body_display,
-                ..Default::default()
-            },
-        ))
-        .id();
-
+    // Card frame: a feathers pane holding a header and a body.
     let section_entity = commands
-        .spawn((
+        .spawn_scene(pane())
+        .insert((
             ComponentDisplay,
             ComponentName(name.to_string()),
             ComponentDisplayTypePath(type_path.to_string()),
@@ -774,37 +804,29 @@ pub(crate) fn spawn_component_display(
             Node {
                 flex_direction: FlexDirection::Column,
                 width: Val::Percent(100.0),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::COMPONENT_CARD_RADIUS)),
                 ..Default::default()
             },
-            BackgroundColor(tokens::COMPONENT_CARD_BG),
-            BorderColor::all(tokens::COMPONENT_CARD_BORDER),
-            BoxShadow(vec![ShadowStyle {
-                x_offset: Val::ZERO,
-                y_offset: Val::ZERO,
-                blur_radius: Val::Px(1.0),
-                spread_radius: Val::ZERO,
-                color: tokens::SHADOW_COLOR,
-            }]),
         ))
         .id();
 
-    // Header (Figma: space-between with [chevron] [icon+name] [ellipsis])
+    // Header keeps `pane_header`'s space-between layout so the toggle area sits
+    // left and the revert / remove buttons sit right.
     let header = commands
-        .spawn((
-            CollapsibleHeader,
+        .spawn_scene(pane_header())
+        .insert((CollapsibleHeader, ChildOf(section_entity)))
+        .id();
+
+    let body_entity = commands
+        .spawn_scene(pane_body())
+        .insert((
+            ComponentDisplayBody,
+            CollapsibleBody,
             Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceBetween,
+                flex_direction: FlexDirection::Column,
                 width: Val::Percent(100.0),
-                padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_SM)),
-                column_gap: Val::Px(tokens::SPACING_SM),
-                border_radius: BorderRadius::top(Val::Px(tokens::COMPONENT_CARD_RADIUS)),
+                display: body_display,
                 ..Default::default()
             },
-            BackgroundColor(tokens::COMPONENT_CARD_HEADER_BG),
             ChildOf(section_entity),
         ))
         .id();
@@ -830,17 +852,16 @@ pub(crate) fn spawn_component_display(
         ))
         .id();
 
-    // Chevron icon
-    commands.spawn((
-        Text::new(String::from(Icon::ChevronDown.unicode())),
-        TextFont {
-            font: font.clone().into(),
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(toggle_area),
-    ));
+    // Disclosure toggle. Its checked state maps to expanded (`!collapsed`),
+    // and it renders the rotating chevron. Clicking it emits
+    // `ValueChange<bool>`, handled by `on_disclosure_change`, which drives the
+    // section's collapsed flag and the body visibility.
+    let mut disclosure = commands.spawn_scene(bsn! { @FeathersDisclosureToggle });
+    disclosure.insert((ChildOf(toggle_area), DisclosureSection(section_entity)));
+    if !collapsed {
+        disclosure.insert(Checked);
+    }
+    let disclosure_entity = disclosure.id();
 
     // Component icon (matching Figma: lucide/move-3d style icon)
     commands.spawn((
@@ -872,12 +893,14 @@ pub(crate) fn spawn_component_display(
         ChildOf(toggle_area),
     ));
 
-    // Toggle on click (on toggle area, not on the X button)
-    let section = section_entity;
+    // Clicking anywhere on the header row toggles the disclosure, which then
+    // emits `ValueChange<bool>` and flows through `on_disclosure_change`.
     commands
         .entity(toggle_area)
         .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.trigger(ToggleCollapsible { entity: section });
+            commands.trigger(ToggleChecked {
+                entity: disclosure_entity,
+            });
         });
 
     if component.is_some() {
@@ -1036,25 +1059,6 @@ pub(crate) fn spawn_component_display(
             },
         );
     }
-
-    // Hover effect on header
-    commands.entity(header).observe(
-        |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor, With<CollapsibleHeader>>| {
-            if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                bg.0 = tokens::HOVER_BG;
-            }
-        },
-    );
-    commands.entity(header).observe(
-        |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor, With<CollapsibleHeader>>| {
-            if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                bg.0 = tokens::COMPONENT_CARD_HEADER_BG;
-            }
-        },
-    );
-
-    // Attach body to section
-    commands.entity(body_entity).insert(ChildOf(section_entity));
 
     (section_entity, body_entity)
 }

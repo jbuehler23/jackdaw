@@ -73,14 +73,14 @@ members = [
     "examples/extension/viewable_camera_extension",
     "tests/fixtures/test_fixture_extension",
 ]
-# The lightyear runtime backend depends on lightyear, which targets Bevy 0.18
-# and has no Bevy 0.19 release yet. Excluded from the workspace build until
-# lightyear ships 0.19 support; re-add it then. Nothing else links it (the
-# editor's multiplayer authoring uses jackdaw_multiplayer{,_editor}, not this
-# backend), so excluding it doesn't affect the editor, runtime, or templates.
+# The lightyear runtime backend pins lightyear 0.28, which targets Bevy
+# 0.19, but needs a small API migration first: NetworkVisibility,
+# SendUpdatesMode, and the Room types moved out of the prelude, and
+# ReplicationSender construction changed. Excluded until that lands.
+# Nothing else links it (the editor's multiplayer authoring uses
+# jackdaw_multiplayer{,_editor}), so the editor, runtime, and templates
+# are unaffected.
 exclude = ["crates/jackdaw_multiplayer_lightyear"]
-
-[dependencies]
 bevy.workspace = true
 jackdaw_jsn.workspace = true
 jackdaw_geometry.workspace = true
@@ -193,6 +193,7 @@ libc = "0.2"
 [workspace.dependencies]
 bevy = { version = "0.19", features = [
     "bevy_feathers",
+    "bevy_scene",
     "bevy_dev_tools",
     "serialize",
     "debug",

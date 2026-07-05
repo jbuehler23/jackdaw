@@ -4,7 +4,7 @@ use std::path::PathBuf;
 /// Marker on the root entity of a prefab file. Loaders treat
 /// `Prefab`-marked roots as reusable instance sources, not as scene roots.
 #[derive(Component, Reflect, Default, Clone, Debug)]
-#[reflect(Component)]
+#[reflect(Component, Default)]
 pub struct Prefab;
 
 /// Stable per-prefab id assigned to every entity inside a prefab

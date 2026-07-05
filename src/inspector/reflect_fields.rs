@@ -3,27 +3,61 @@ use crate::selection::Selection;
 
 use bevy::reflect::{NamedField, UnnamedField};
 use bevy::{
+    ecs::lifecycle::Insert,
     ecs::reflect::{AppTypeRegistry, ReflectComponent},
-    feathers::theme::ThemedText,
-    input_focus::InputFocus,
+    feathers::{
+        controls::{
+            ColorChannel, ColorPlaneValue, ColorSwatchValue, FeathersCheckbox, FeathersColorPlane,
+            FeathersColorSlider, FeathersColorSwatch, FeathersListRow, FeathersListView,
+            FeathersListViewProps, FeathersMenu, FeathersMenuButton, FeathersMenuItem,
+            FeathersMenuPopup, FeathersTextInput, FeathersTextInputContainer, SliderBaseColor,
+        },
+        theme::ThemedText,
+    },
+    input::keyboard::{KeyCode, KeyboardInput},
+    input_focus::{FocusLost, FocusedInput, InputFocus},
     math::Vec3A,
     prelude::*,
     reflect::ReflectRef,
-    ui_widgets::observe,
+    text::{EditableText, TextEdit},
+    ui::Checked,
+    ui_widgets::{Activate, Checkbox, SliderValue, ValueChange, observe},
 };
 use jackdaw_feathers::{
-    checkbox::{CheckboxCommitEvent, CheckboxProps, CheckboxState, checkbox},
-    color_picker::{ColorPickerCommitEvent, ColorPickerProps, color_picker},
-    combobox::{ComboBoxChangeEvent, combobox_with_selected},
-    list_view,
-    text_edit::{
-        self, TextEditCommitEvent, TextEditConfig, TextEditDragging, TextEditProps, TextEditValue,
-        TextEditVariant, TextEditWrapper, set_text_input_value,
+    number_input::{
+        NumberInputPrecision, NumberInputStep, ScrubNumberInput, ScrubNumberInputValue,
+        is_scrubbing_or_focused,
     },
     tokens,
 };
 
-use crate::default_style;
+// Axis sigil colors for vector component inputs. The colored left stripe and
+// the X/Y/Z label are drawn by the number input widget itself.
+use bevy::feathers::tokens as feathers_tokens;
+
+/// Decimal places shown for drag-scrub float fields. Also seeds
+/// `NumberInputPrecision`, which the scrubber uses to round during a drag
+/// and to derive drag speed.
+const NUMERIC_DISPLAY_PRECISION: i32 = 2;
+
+/// Round an `f64` to [`NUMERIC_DISPLAY_PRECISION`] for display, scrubbing the
+/// `f32 -> f64` widening noise out of values read back via reflection so the
+/// field shows e.g. `0.1` rather than `0.10000000149011612`.
+fn round_numeric_display(value: f64) -> f64 {
+    let factor = 10f64.powi(NUMERIC_DISPLAY_PRECISION);
+    (value * factor).round() / factor
+}
+
+/// Read a [`ScrubNumberInputValue`] as an `f64` regardless of variant. The
+/// widget's own `as_f64` is private, so the inspector reads the public variants.
+fn scrub_value_as_f64(value: &ScrubNumberInputValue) -> f64 {
+    match value {
+        ScrubNumberInputValue::F32(v) => *v as f64,
+        ScrubNumberInputValue::F64(v) => *v,
+        ScrubNumberInputValue::I32(v) => *v as f64,
+        ScrubNumberInputValue::I64(v) => *v as f64,
+    }
+}
 
 use super::{FieldBinding, InspectorFieldRow, MAX_REFLECT_DEPTH};
 
@@ -146,10 +180,14 @@ pub(crate) fn spawn_reflected_fields(
             );
             if !map.is_empty() {
                 let lv = commands
-                    .spawn((list_view::list_view(), ChildOf(parent)))
+                    .spawn_scene(FeathersListView::scene(FeathersListViewProps::default()))
+                    .insert(ChildOf(parent))
                     .id();
-                for (i, (key, val)) in map.iter().enumerate() {
-                    let item_entity = commands.spawn((list_view::list_item(i), ChildOf(lv))).id();
+                for (key, val) in map.iter() {
+                    let item_entity = commands
+                        .spawn_scene(FeathersListRow::scene())
+                        .insert(ChildOf(lv))
+                        .id();
                     let key_label = format_partial_reflect_value(key);
                     let child_path = if base_path.is_empty() {
                         format!("[{key_label}]")
@@ -182,10 +220,14 @@ pub(crate) fn spawn_reflected_fields(
             );
             if !set.is_empty() {
                 let lv = commands
-                    .spawn((list_view::list_view(), ChildOf(parent)))
+                    .spawn_scene(FeathersListView::scene(FeathersListViewProps::default()))
+                    .insert(ChildOf(parent))
                     .id();
-                for (i, item) in set.iter().enumerate() {
-                    let item_entity = commands.spawn((list_view::list_item(i), ChildOf(lv))).id();
+                for item in set.iter() {
+                    let item_entity = commands
+                        .spawn_scene(FeathersListRow::scene())
+                        .insert(ChildOf(lv))
+                        .id();
                     spawn_text_row(
                         commands,
                         item_entity,
@@ -311,11 +353,15 @@ fn spawn_field_row(
         );
         if !list.is_empty() {
             let lv = commands
-                .spawn((list_view::list_view(), ChildOf(parent)))
+                .spawn_scene(FeathersListView::scene(FeathersListViewProps::default()))
+                .insert(ChildOf(parent))
                 .id();
             for i in 0..list.len() {
                 if let Some(item) = list.get(i) {
-                    let item_entity = commands.spawn((list_view::list_item(i), ChildOf(lv))).id();
+                    let item_entity = commands
+                        .spawn_scene(FeathersListRow::scene())
+                        .insert(ChildOf(lv))
+                        .id();
                     let child_path = if field_path.is_empty() {
                         format!("[{i}]")
                     } else {
@@ -345,11 +391,15 @@ fn spawn_field_row(
         );
         if !array.is_empty() {
             let lv = commands
-                .spawn((list_view::list_view(), ChildOf(parent)))
+                .spawn_scene(FeathersListView::scene(FeathersListViewProps::default()))
+                .insert(ChildOf(parent))
                 .id();
             for i in 0..array.len() {
                 if let Some(item) = array.get(i) {
-                    let item_entity = commands.spawn((list_view::list_item(i), ChildOf(lv))).id();
+                    let item_entity = commands
+                        .spawn_scene(FeathersListRow::scene())
+                        .insert(ChildOf(lv))
+                        .id();
                     let child_path = if field_path.is_empty() {
                         format!("[{i}]")
                     } else {
@@ -379,10 +429,14 @@ fn spawn_field_row(
         );
         if !map.is_empty() {
             let lv = commands
-                .spawn((list_view::list_view(), ChildOf(parent)))
+                .spawn_scene(FeathersListView::scene(FeathersListViewProps::default()))
+                .insert(ChildOf(parent))
                 .id();
-            for (i, (key, val)) in map.iter().enumerate() {
-                let item_entity = commands.spawn((list_view::list_item(i), ChildOf(lv))).id();
+            for (key, val) in map.iter() {
+                let item_entity = commands
+                    .spawn_scene(FeathersListRow::scene())
+                    .insert(ChildOf(lv))
+                    .id();
                 let key_label = format_partial_reflect_value(key);
                 let child_path = if field_path.is_empty() {
                     format!("[{key_label}]")
@@ -416,10 +470,14 @@ fn spawn_field_row(
         );
         if !set.is_empty() {
             let lv = commands
-                .spawn((list_view::list_view(), ChildOf(parent)))
+                .spawn_scene(FeathersListView::scene(FeathersListViewProps::default()))
+                .insert(ChildOf(parent))
                 .id();
-            for (i, item) in set.iter().enumerate() {
-                let item_entity = commands.spawn((list_view::list_item(i), ChildOf(lv))).id();
+            for item in set.iter() {
+                let item_entity = commands
+                    .spawn_scene(FeathersListRow::scene())
+                    .insert(ChildOf(lv))
+                    .id();
                 spawn_text_row(
                     commands,
                     item_entity,
@@ -545,7 +603,6 @@ fn spawn_field_row(
             type_path,
             depth,
             editor_font,
-            icon_font,
         );
         return;
     }
@@ -711,7 +768,7 @@ fn spawn_field_row(
         return;
     }
 
-    // Enum fields -> ComboBox
+    // Enum fields -> select menu
     if let ReflectRef::Enum(e) = value.reflect_ref() {
         if value.try_as_reflect().is_some() {
             spawn_enum_field(
@@ -933,7 +990,7 @@ fn spawn_vec3_row(
         axes_row,
         "X",
         vec3.x as f64,
-        default_style::INSPECTOR_AXIS_X,
+        feathers_tokens::TEXT_INPUT_X_AXIS,
         format!("{field_path}.x"),
         source_entity,
         type_path,
@@ -944,7 +1001,7 @@ fn spawn_vec3_row(
         axes_row,
         "Y",
         vec3.y as f64,
-        default_style::INSPECTOR_AXIS_Y,
+        feathers_tokens::TEXT_INPUT_Y_AXIS,
         format!("{field_path}.y"),
         source_entity,
         type_path,
@@ -955,7 +1012,7 @@ fn spawn_vec3_row(
         axes_row,
         "Z",
         vec3.z as f64,
-        default_style::INSPECTOR_AXIS_Z,
+        feathers_tokens::TEXT_INPUT_Z_AXIS,
         format!("{field_path}.z"),
         source_entity,
         type_path,
@@ -1017,7 +1074,7 @@ fn spawn_vec2_row(
         axes_row,
         "X",
         vec2.x as f64,
-        default_style::INSPECTOR_AXIS_X,
+        feathers_tokens::TEXT_INPUT_X_AXIS,
         format!("{field_path}.x"),
         source_entity,
         type_path,
@@ -1028,7 +1085,7 @@ fn spawn_vec2_row(
         axes_row,
         "Y",
         vec2.y as f64,
-        default_style::INSPECTOR_AXIS_Y,
+        feathers_tokens::TEXT_INPUT_Y_AXIS,
         format!("{field_path}.y"),
         source_entity,
         type_path,
@@ -1099,7 +1156,7 @@ fn spawn_vec4_row(
         axes_row,
         "X",
         x,
-        default_style::INSPECTOR_AXIS_X,
+        feathers_tokens::TEXT_INPUT_X_AXIS,
         format!("{field_path}.x"),
         source_entity,
         type_path,
@@ -1110,7 +1167,7 @@ fn spawn_vec4_row(
         axes_row,
         "Y",
         y,
-        default_style::INSPECTOR_AXIS_Y,
+        feathers_tokens::TEXT_INPUT_Y_AXIS,
         format!("{field_path}.y"),
         source_entity,
         type_path,
@@ -1121,18 +1178,19 @@ fn spawn_vec4_row(
         axes_row,
         "Z",
         z,
-        default_style::INSPECTOR_AXIS_Z,
+        feathers_tokens::TEXT_INPUT_Z_AXIS,
         format!("{field_path}.z"),
         source_entity,
         type_path,
         disabled,
     );
+    // No dedicated axis token for a 4th component; use the default sigil.
     spawn_axis_input(
         commands,
         axes_row,
         "W",
         w,
-        tokens::AXIS_W_COLOR,
+        feathers_tokens::TEXT_INPUT_BG,
         format!("{field_path}.w"),
         source_entity,
         type_path,
@@ -1143,34 +1201,34 @@ fn spawn_vec4_row(
 fn spawn_axis_input(
     commands: &mut Commands,
     parent: Entity,
-    label: &str,
+    label: &'static str,
     value: f64,
-    label_color: Color,
+    sigil_color: bevy::feathers::theme::ThemeToken,
     field_path: String,
     source_entity: Entity,
     type_path: &str,
     disabled: bool,
 ) {
-    // Numeric input with colored axis prefix (X/Y/Z/W label inside the input)
-    commands.spawn((
-        text_edit::text_edit(
-            TextEditProps::default()
-                .numeric_f32()
-                .with_default_value(value.to_string())
-                .with_disabled(disabled)
-                .with_prefix(text_edit::TextEditPrefix::Label {
-                    label: label.to_string(),
-                    size: tokens::TEXT_SIZE_PX,
-                    color: Some(label_color),
-                }),
-        ),
+    // One float input per vector component. The widget draws the colored sigil
+    // stripe and the X/Y/Z/W label; `ScrubNumberInputValue::F64` holds the
+    // component value. The `FieldBinding` carries the `.x`/`.y`/`.z`/`.w`
+    // subfield path, so `on_numeric_value_change_f64` writes back the component.
+    let mut field = commands.spawn_scene(bsn! {
+        @ScrubNumberInput { @sigil_color: {sigil_color}, @label_text: {label} }
+    });
+    field.insert((
         FieldBinding {
             source_entity,
             type_path: type_path.to_string(),
             field_path,
         },
         ChildOf(parent),
+        ScrubNumberInputValue::F64(round_numeric_display(value)),
+        NumberInputPrecision(NUMERIC_DISPLAY_PRECISION),
     ));
+    if disabled {
+        field.insert(bevy::ui::InteractionDisabled);
+    }
 }
 
 fn spawn_bool_toggle(
@@ -1183,7 +1241,6 @@ fn spawn_bool_toggle(
     type_path: &str,
     depth: usize,
     editor_font: &Handle<Font>,
-    icon_font: &Handle<Font>,
 ) {
     let left_padding = depth as f32 * tokens::SPACING_MD;
     // Bool fields stay as a row (label + checkbox side by side)
@@ -1211,12 +1268,10 @@ fn spawn_bool_toggle(
         ChildOf(row),
     ));
 
-    commands.spawn((
-        checkbox(
-            CheckboxProps::new("").checked(value),
-            editor_font,
-            icon_font,
-        ),
+    // The `FieldBinding` sits on the checkbox entity, so
+    // `on_checkbox_commit` reads it from the `ValueChange` source directly.
+    let mut cb = commands.spawn_scene(bsn! { @FeathersCheckbox });
+    cb.insert((
         FieldBinding {
             source_entity,
             type_path: type_path.to_string(),
@@ -1224,6 +1279,202 @@ fn spawn_bool_toggle(
         },
         ChildOf(row),
     ));
+    // The checkbox does not self-manage `Checked`; seed the initial state.
+    // `on_checkbox_commit` and the refresh path keep it in sync thereafter.
+    if value {
+        cb.insert(Checked);
+    }
+}
+
+/// Which channel a color sub-widget edits. `Plane` covers the red/blue plane
+/// picker; the rest are the per-channel sliders.
+#[derive(Clone, Copy, PartialEq)]
+enum ColorPart {
+    Plane,
+    Red,
+    Green,
+    Blue,
+    Alpha,
+}
+
+/// Links a color sub-widget back to its field root so the global
+/// `ValueChange` observers can find the shared `ColorFieldState`.
+#[derive(Component)]
+pub(crate) struct ColorSubWidget {
+    root: Entity,
+    part: ColorPart,
+}
+
+/// The current sRGBA color for one inspector color field, held on the field
+/// root. The native color widgets do not self-update their values, so this is
+/// the app-owned source of truth that the observers read, mutate, and mirror
+/// back onto every sub-widget.
+#[derive(Component)]
+struct ColorFieldState {
+    rgba: [f32; 4],
+}
+
+/// Where a color field writes its committed sRGBA. Held on the field root and
+/// invoked by `commit_color_field` with `(world, rgba, is_final)`. This is the
+/// only binding-specific part of the color composite; different callers supply
+/// their own commit closure while sharing every widget and observer.
+#[derive(Component)]
+struct ColorCommit(Box<dyn Fn(&mut World, [f32; 4], bool) + Send + Sync>);
+
+/// Optional gate on a color field root. When present and it returns `true`, the
+/// shared plane/slider observers drop the edit before touching `ColorFieldState`
+/// or the sub-widgets, so a read-only field never moves. Absent means always
+/// editable. Callers that need the read-only case (reflect fields skip remote
+/// proxy targets) attach this; the observers stay binding-agnostic.
+#[derive(Component)]
+struct ColorCommitSkip(Box<dyn Fn(&World) -> bool + Send + Sync>);
+
+/// True when a color field root carries a `ColorCommitSkip` that vetoes the
+/// edit. Runs against the read-only world before an observer mutates state.
+fn color_edit_skipped(world: &World, root: Entity) -> bool {
+    world
+        .get::<ColorCommitSkip>(root)
+        .is_some_and(|skip| skip.0(world))
+}
+
+/// Marks the inner text entry of a color field's hex input and links it to the
+/// field root. The hex commit observers self-filter on this marker so the
+/// generic string-field commit path never runs for the hex box.
+#[derive(Component)]
+pub(crate) struct HexColorInput {
+    root: Entity,
+}
+
+/// Spawn a color-picker composite (label + swatch preview + hex entry + red/blue
+/// plane + RGBA sliders) under `parent`, seeded to `initial` sRGBA. The composite
+/// is binding-agnostic: every widget, the shared `ColorFieldState`, and the sync
+/// observers are the same regardless of where the value goes. `commit` receives
+/// `(world, rgba, is_final)` each time the color settles, so callers route the
+/// result wherever they need without touching the shared observer path. Returns
+/// the field root, which carries `ColorFieldState` and `ColorCommit`.
+pub(crate) fn spawn_color_picker(
+    commands: &mut Commands,
+    parent: Entity,
+    initial: [f32; 4],
+    name: &str,
+    left_padding: f32,
+    commit: impl Fn(&mut World, [f32; 4], bool) + Send + Sync + 'static,
+) -> Entity {
+    let rgba = initial;
+    let srgba = Srgba::new(rgba[0], rgba[1], rgba[2], rgba[3]);
+
+    // Field root: holds the shared color state and the commit callback that the
+    // sub-widget observers reach through `ColorSubWidget.root`.
+    let root = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(tokens::SPACING_XS),
+                padding: UiRect::left(px(left_padding)),
+                width: Val::Percent(100.0),
+                ..Default::default()
+            },
+            ColorFieldState { rgba },
+            ColorCommit(Box::new(commit)),
+            ChildOf(parent),
+        ))
+        .id();
+
+    // Label + swatch preview on one row.
+    let header = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
+                column_gap: px(tokens::SPACING_SM),
+                width: Val::Percent(100.0),
+                ..Default::default()
+            },
+            ChildOf(root),
+        ))
+        .id();
+
+    commands.spawn((
+        Text::new(format!("{name}:")),
+        TextFont {
+            font_size: tokens::TEXT_SIZE_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_TERTIARY),
+        ChildOf(header),
+    ));
+
+    // Hex entry mirrors the current color as a 6- or 8-digit hex string and
+    // parses one back on commit. `HexColorInput` lands on the inner text entry
+    // via a deferred insert once the scene tree spawns.
+    let hex_container = commands
+        .spawn_scene(hex_input_scene())
+        .insert((PendingFieldText(srgba.to_hex()), ChildOf(header)))
+        .id();
+    commands.queue(move |world: &mut World| {
+        let mut descendants: Vec<Entity> = Vec::new();
+        if let Ok(children) = world.query::<&Children>().get(world, hex_container) {
+            descendants.extend(children.iter());
+        }
+        while let Some(entity) = descendants.pop() {
+            if world.get::<EditableText>(entity).is_some() {
+                world.entity_mut(entity).insert(HexColorInput { root });
+                break;
+            }
+            if let Ok(children) = world.query::<&Children>().get(world, entity) {
+                descendants.extend(children.iter());
+            }
+        }
+    });
+
+    commands
+        .spawn_scene(bsn! { @FeathersColorSwatch })
+        .insert((
+            ColorSwatchValue(Color::Srgba(srgba)),
+            ColorSubWidget {
+                root,
+                part: ColorPart::Plane,
+            },
+            ChildOf(header),
+        ));
+
+    // Red/blue plane picker. The plane's fixed channel is green (`z`); its `x`
+    // is red, `y` is blue.
+    commands
+        .spawn_scene(bsn! { @FeathersColorPlane::RedBlue })
+        .insert((
+            ColorPlaneValue(Vec3::new(rgba[0], rgba[2], rgba[1])),
+            ColorSubWidget {
+                root,
+                part: ColorPart::Plane,
+            },
+            ChildOf(root),
+        ));
+
+    // One slider per channel. `SliderBaseColor` drives the gradient; the
+    // observers keep it and `SliderValue` in sync with `ColorFieldState`.
+    for (part, channel, value) in [
+        (ColorPart::Red, ColorChannel::Red, rgba[0]),
+        (ColorPart::Green, ColorChannel::Green, rgba[1]),
+        (ColorPart::Blue, ColorChannel::Blue, rgba[2]),
+        (ColorPart::Alpha, ColorChannel::Alpha, rgba[3]),
+    ] {
+        commands
+            .spawn_scene(bsn! {
+                @FeathersColorSlider {
+                    @value: {value},
+                    @channel: {channel},
+                }
+            })
+            .insert((
+                SliderBaseColor(Color::Srgba(srgba)),
+                ColorSubWidget { root, part },
+                ChildOf(root),
+            ));
+    }
+
+    root
 }
 
 fn spawn_color_field(
@@ -1237,55 +1488,266 @@ fn spawn_color_field(
     depth: usize,
 ) {
     let left_padding = depth as f32 * tokens::SPACING_MD;
-    let col = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: px(tokens::SPACING_XS),
-                padding: UiRect::left(px(left_padding)),
-                width: Val::Percent(100.0),
-                ..Default::default()
-            },
-            ChildOf(parent),
-        ))
-        .id();
-
-    // Label above
-    commands.spawn((
-        Text::new(format!("{name}:")),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_TERTIARY),
-        ChildOf(col),
-    ));
 
     let srgba = color.to_srgba();
     let rgba = [srgba.red, srgba.green, srgba.blue, srgba.alpha];
 
-    let path = field_path.clone();
     let tp = type_path.to_string();
-    commands
-        .spawn((
-            color_picker(ColorPickerProps::new().with_color(rgba)),
-            FieldBinding {
-                source_entity,
-                type_path: type_path.to_string(),
-                field_path,
-            },
-            ChildOf(col),
-        ))
-        .observe(
-            move |event: On<ColorPickerCommitEvent>, mut commands: Commands| {
-                let color = event.color;
-                let path = path.clone();
-                let tp = tp.clone();
-                commands.queue(move |world: &mut World| {
-                    apply_color_with_undo(world, source_entity, &tp, &path, color);
-                });
-            },
-        );
+    let path = field_path;
+
+    let commit = move |world: &mut World, rgba: [f32; 4], is_final: bool| {
+        if is_final {
+            apply_color_with_undo(world, source_entity, &tp, &path, rgba);
+        } else {
+            let value_str = serde_json::to_string(&rgba).unwrap_or_default();
+            apply_field_value_live(world, source_entity, &tp, &path, &value_str);
+        }
+    };
+
+    let root = spawn_color_picker(commands, parent, rgba, name, left_padding, commit);
+
+    // The plane/slider drag observers skip read-only remote proxy targets. Held
+    // as a `ColorCommitSkip` on the root so the shared observers never touch
+    // `FieldBinding`; the hex commit path is unaffected, matching the prior
+    // behavior where only the drag observers guarded on the proxy.
+    commands.entity(root).insert(ColorCommitSkip(Box::new(move |world: &World| {
+        world
+            .get::<crate::remote::entity_browser::RemoteEntityProxy>(source_entity)
+            .is_some()
+    })));
+}
+
+/// Container framing the color field's hex `FeathersTextInput`. The inner text
+/// entry carries `HexColorInput` and its own commit observers, so the generic
+/// string-field path never handles it. `PendingFieldText` on the container
+/// seeds the initial hex string once the inner entry spawns.
+fn hex_input_scene() -> impl Scene {
+    bsn! {
+        @FeathersTextInputContainer
+        Node { flex_grow: 0.0 }
+        on(seed_string_field)
+        Children [
+            (
+                @FeathersTextInput {
+                    @visible_width: 10f32,
+                    @max_characters: 9usize,
+                }
+                on(hex_input_on_enter_key)
+                on(hex_input_on_focus_lost)
+            )
+        ]
+    }
+}
+
+/// Parse the hex string in a color field's hex entry, and on success adopt it
+/// into `ColorFieldState`, repaint the composite, and commit one undo-backed
+/// change. An unparseable string is ignored; the next `sync_color_widgets`
+/// restores the valid text.
+fn commit_hex_input(world: &mut World, hex_entity: Entity, text: String) {
+    let Some(hex) = world.get::<HexColorInput>(hex_entity) else {
+        return;
+    };
+    let root = hex.root;
+
+    let Ok(parsed) = Srgba::hex(text) else {
+        return;
+    };
+    let rgba = [parsed.red, parsed.green, parsed.blue, parsed.alpha];
+
+    if let Some(mut state) = world.get_mut::<ColorFieldState>(root) {
+        state.rgba = rgba;
+    }
+    sync_color_widgets(world, root);
+    commit_color_field(world, root, true);
+}
+
+/// Commit the hex entry when Enter is pressed.
+fn hex_input_on_enter_key(
+    key_input: On<FocusedInput<KeyboardInput>>,
+    q_text: Query<&EditableText>,
+    q_hex: Query<(), With<HexColorInput>>,
+    mut commands: Commands,
+) {
+    if key_input.input.key_code != KeyCode::Enter {
+        return;
+    }
+    let hex_entity = key_input.event_target();
+    if !q_hex.contains(hex_entity) {
+        return;
+    }
+    if let Ok(editable) = q_text.get(hex_entity) {
+        let text = editable.value().to_string();
+        commands.queue(move |world: &mut World| {
+            commit_hex_input(world, hex_entity, text);
+        });
+    }
+}
+
+/// Commit the hex entry when it loses focus.
+fn hex_input_on_focus_lost(
+    focus_lost: On<FocusLost>,
+    q_text: Query<&EditableText>,
+    q_hex: Query<(), With<HexColorInput>>,
+    mut commands: Commands,
+) {
+    let hex_entity = focus_lost.event_target();
+    if !q_hex.contains(hex_entity) {
+        return;
+    }
+    if let Ok(editable) = q_text.get(hex_entity) {
+        let text = editable.value().to_string();
+        commands.queue(move |world: &mut World| {
+            commit_hex_input(world, hex_entity, text);
+        });
+    }
+}
+
+/// Repaint every color sub-widget under `root` from the field's
+/// `ColorFieldState`. Called after an observer mutates a channel so the swatch,
+/// plane, and the other sliders stay consistent within one gesture.
+fn sync_color_widgets(world: &mut World, root: Entity) {
+    let Some(state) = world.get::<ColorFieldState>(root) else {
+        return;
+    };
+    let rgba = state.rgba;
+    let srgba = Srgba::new(rgba[0], rgba[1], rgba[2], rgba[3]);
+    let color = Color::Srgba(srgba);
+
+    let mut widgets: Vec<(Entity, ColorPart)> = Vec::new();
+    let mut query = world.query::<(Entity, &ColorSubWidget)>();
+    for (entity, sub) in query.iter(world) {
+        if sub.root == root {
+            widgets.push((entity, sub.part));
+        }
+    }
+
+    for (entity, part) in widgets {
+        let Ok(mut ent) = world.get_entity_mut(entity) else {
+            continue;
+        };
+        match part {
+            ColorPart::Plane => {
+                // The swatch and the plane both carry `ColorPart::Plane`; only
+                // the plane has a `ColorPlaneValue`, only the swatch a
+                // `ColorSwatchValue`, so the branch that matches updates.
+                if ent.contains::<ColorPlaneValue>() {
+                    ent.insert(ColorPlaneValue(Vec3::new(rgba[0], rgba[2], rgba[1])));
+                }
+                if ent.contains::<ColorSwatchValue>() {
+                    ent.insert(ColorSwatchValue(color));
+                }
+            }
+            ColorPart::Red => {
+                ent.insert((SliderValue(rgba[0]), SliderBaseColor(color)));
+            }
+            ColorPart::Green => {
+                ent.insert((SliderValue(rgba[1]), SliderBaseColor(color)));
+            }
+            ColorPart::Blue => {
+                ent.insert((SliderValue(rgba[2]), SliderBaseColor(color)));
+            }
+            ColorPart::Alpha => {
+                ent.insert((SliderValue(rgba[3]), SliderBaseColor(color)));
+            }
+        }
+    }
+
+    // Mirror the color into the hex entry, unless the user is typing in it.
+    let focused = world.resource::<InputFocus>().get();
+    let mut hex_entity = None;
+    let mut hex_query = world.query::<(Entity, &HexColorInput)>();
+    for (entity, hex) in hex_query.iter(world) {
+        if hex.root == root {
+            hex_entity = Some(entity);
+            break;
+        }
+    }
+    if let Some(hex_entity) = hex_entity
+        && focused != Some(hex_entity)
+        && let Ok(mut editable) = world.query::<&mut EditableText>().get_mut(world, hex_entity)
+    {
+        editable.queue_edit(TextEdit::SelectAll);
+        editable.queue_edit(TextEdit::Insert(srgba.to_hex().into()));
+    }
+}
+
+/// Commit the current `ColorFieldState` under `root` through the field's
+/// `ColorCommit` callback. A live drag passes `is_final == false`; the final
+/// event passes `true`. The callback decides where the color goes, so this is
+/// binding-agnostic.
+fn commit_color_field(world: &mut World, root: Entity, is_final: bool) {
+    let Some(state) = world.get::<ColorFieldState>(root) else {
+        return;
+    };
+    let rgba = state.rgba;
+
+    let Some(commit) = world.entity_mut(root).take::<ColorCommit>() else {
+        return;
+    };
+    commit.0(world, rgba, is_final);
+    world.entity_mut(root).insert(commit);
+}
+
+/// Write path for the red/blue color plane. Updates the red and blue channels
+/// of the field's `ColorFieldState`, mirrors the color across the composite,
+/// then commits (live while dragging, undo-backed on release).
+pub(crate) fn on_color_plane_change(
+    event: On<ValueChange<Vec2>>,
+    sub_widgets: Query<&ColorSubWidget>,
+    mut commands: Commands,
+) {
+    let Ok(sub) = sub_widgets.get(event.source) else {
+        return;
+    };
+    let root = sub.root;
+    let value = event.value;
+    let is_final = event.is_final;
+    commands.queue(move |world: &mut World| {
+        if color_edit_skipped(world, root) {
+            return;
+        }
+        if let Some(mut state) = world.get_mut::<ColorFieldState>(root) {
+            state.rgba[0] = value.x;
+            state.rgba[2] = value.y;
+        }
+        sync_color_widgets(world, root);
+        commit_color_field(world, root, is_final);
+    });
+}
+
+/// Write path for the per-channel color sliders. Reads which channel the
+/// slider edits off `ColorSubWidget.part`, updates it, mirrors the composite,
+/// and commits.
+pub(crate) fn on_color_slider_change(
+    event: On<ValueChange<f32>>,
+    sub_widgets: Query<&ColorSubWidget>,
+    mut commands: Commands,
+) {
+    let Ok(sub) = sub_widgets.get(event.source) else {
+        return;
+    };
+    let root = sub.root;
+    let part = sub.part;
+    let channel = match part {
+        ColorPart::Red => 0,
+        ColorPart::Green => 1,
+        ColorPart::Blue => 2,
+        ColorPart::Alpha => 3,
+        // The plane carries `ColorPart::Plane` and never emits `ValueChange<f32>`.
+        ColorPart::Plane => return,
+    };
+    let value = event.value;
+    let is_final = event.is_final;
+    commands.queue(move |world: &mut World| {
+        if color_edit_skipped(world, root) {
+            return;
+        }
+        if let Some(mut state) = world.get_mut::<ColorFieldState>(root) {
+            state.rgba[channel] = value;
+        }
+        sync_color_widgets(world, root);
+        commit_color_field(world, root, is_final);
+    });
 }
 
 /// Apply a color change with undo support (propagates to all selected entities).
@@ -1396,23 +1858,16 @@ fn spawn_numeric_field(
         ChildOf(col),
     ));
 
-    // Integer source types (u32, i64, ...) format as integer and
-    // accept integer-only input; floats keep the f32 path. Without
-    // this split, a `u32` bitmask like `CollisionLayers::filters`
-    // would render as `4294967295` in a float-mode input that
-    // accepts decimals and rounds through `f32` on commit.
-    let (default_value, props) = if is_integer {
-        (
-            (value as i64).to_string(),
-            TextEditProps::default().numeric_int(),
-        )
-    } else {
-        (value.to_string(), TextEditProps::default().numeric_f32())
-    };
-
-    // Input below
-    commands.spawn((
-        text_edit::text_edit(props.with_default_value(default_value)),
+    // The `FieldBinding` sits on the widget root, so the `ValueChange`
+    // observers read it from `event.source`. The widget emits
+    // `ValueChange<T>` but never self-updates `ScrubNumberInputValue`, so
+    // the observers re-insert it and the refresh path syncs it from ECS.
+    //
+    // Integer source types (u32, i64, ...) funnel into the `I64` variant and
+    // float types into `F64`. Without this split a `u32` bitmask like
+    // `CollisionLayers::filters` would round through `f32` on commit.
+    let mut field = commands.spawn_scene(bsn! { @ScrubNumberInput });
+    field.insert((
         FieldBinding {
             source_entity,
             type_path: type_path.to_string(),
@@ -1420,6 +1875,20 @@ fn spawn_numeric_field(
         },
         ChildOf(col),
     ));
+    // The emitted `ValueChange<T>` type follows the value variant: `I64`
+    // emits `ValueChange<i64>` and `F64` emits `ValueChange<f64>`. The
+    // variant is the only format selector needed here.
+    if is_integer {
+        field.insert((
+            ScrubNumberInputValue::I64(value as i64),
+            NumberInputStep(1.0),
+        ));
+    } else {
+        field.insert((
+            ScrubNumberInputValue::F64(round_numeric_display(value)),
+            NumberInputPrecision(NUMERIC_DISPLAY_PRECISION),
+        ));
+    }
 }
 
 fn spawn_editable_field(
@@ -1459,19 +1928,14 @@ fn spawn_editable_field(
     ));
 
     // Input below
-    commands.spawn((
-        text_edit::text_edit(
-            TextEditProps::default()
-                .with_default_value(current_value)
-                .allow_empty(),
-        ),
-        FieldBinding {
-            source_entity,
-            type_path: type_path.to_string(),
-            field_path,
-        },
-        ChildOf(col),
-    ));
+    spawn_string_input(
+        commands,
+        col,
+        current_value,
+        field_path,
+        source_entity,
+        type_path,
+    );
 }
 
 /// When the inspector is in PIE Live mode, apply a field edit to the selected
@@ -1692,11 +2156,15 @@ fn spawn_list_expansion<'a>(
         return;
     }
     let lv = commands
-        .spawn((list_view::list_view(), ChildOf(parent)))
+        .spawn_scene(FeathersListView::scene(FeathersListViewProps::default()))
+        .insert(ChildOf(parent))
         .id();
     for i in 0..len {
         if let Some(item) = get_item(i) {
-            let item_entity = commands.spawn((list_view::list_item(i), ChildOf(lv))).id();
+            let item_entity = commands
+                .spawn_scene(FeathersListRow::scene())
+                .insert(ChildOf(lv))
+                .id();
             let child_path = if base_path.is_empty() {
                 format!("[{i}]")
             } else {
@@ -1771,20 +2239,120 @@ fn spawn_inline_editable(
     source_entity: Entity,
     type_path: &str,
 ) {
-    commands.spawn((
-        text_edit::text_edit(
-            TextEditProps::default()
-                .grow()
-                .with_default_value(current_value)
-                .allow_empty(),
-        ),
+    spawn_string_input(
+        commands,
+        parent,
+        current_value,
+        field_path,
+        source_entity,
+        type_path,
+    );
+}
+
+/// Initial text staged on a string field's container. The [`Insert`]-triggered
+/// [`seed_string_field`] observer reads it once the child text entry spawns
+/// and writes it into the editable buffer, then removes it.
+#[derive(Component)]
+struct PendingFieldText(String);
+
+/// Spawn a `FeathersTextInput` bound to a reflected string field. The
+/// `FieldBinding` and initial text ride on the container entity; the inner
+/// text entry emits `ValueChange<String>` on Enter or blur, which
+/// `on_text_edit_commit` writes back through `apply_field_value_with_undo`.
+fn spawn_string_input(
+    commands: &mut Commands,
+    parent: Entity,
+    current_value: &str,
+    field_path: String,
+    source_entity: Entity,
+    type_path: &str,
+) {
+    commands.spawn_scene(string_field_scene()).insert((
         FieldBinding {
             source_entity,
             type_path: type_path.to_string(),
             field_path,
         },
+        PendingFieldText(current_value.to_string()),
         ChildOf(parent),
     ));
+}
+
+/// Container framing a `FeathersTextInput`. The inner text entry drives the
+/// commit observers; the container holds the field binding and staged value,
+/// and seeds the text buffer once the staged value lands.
+fn string_field_scene() -> impl Scene {
+    bsn! {
+        @FeathersTextInputContainer
+        on(seed_string_field)
+        Children [
+            @FeathersTextInput
+            on(string_field_on_enter_key)
+            on(string_field_on_focus_lost)
+        ]
+    }
+}
+
+/// Write the staged text into the editable buffer once the field binding's
+/// value is inserted on the container, then clear the staged value so a later
+/// inspector refresh does not re-seed it. Fires on the container after the
+/// scene tree (including the child text entry) has spawned.
+fn seed_string_field(
+    inserted: On<Insert, PendingFieldText>,
+    q_children: Query<&Children>,
+    q_pending: Query<&PendingFieldText>,
+    mut q_text: Query<&mut EditableText>,
+    mut commands: Commands,
+) {
+    let container = inserted.event_target();
+    let Ok(pending) = q_pending.get(container) else {
+        return;
+    };
+    let text_id = q_children
+        .iter_descendants(container)
+        .find(|e| q_text.contains(*e));
+    if let Some(text_id) = text_id
+        && let Ok(mut editable) = q_text.get_mut(text_id)
+    {
+        editable.queue_edit(TextEdit::SelectAll);
+        editable.queue_edit(TextEdit::Insert(pending.0.clone().into()));
+    }
+    commands.entity(container).remove::<PendingFieldText>();
+}
+
+/// Emit a final `ValueChange<String>` when Enter is pressed in a string field.
+fn string_field_on_enter_key(
+    key_input: On<FocusedInput<KeyboardInput>>,
+    q_text: Query<&EditableText>,
+    mut commands: Commands,
+) {
+    if key_input.input.key_code != KeyCode::Enter {
+        return;
+    }
+    let text_id = key_input.event_target();
+    if let Ok(editable) = q_text.get(text_id) {
+        commands.trigger(ValueChange {
+            source: text_id,
+            value: editable.value().to_string(),
+            is_final: true,
+        });
+    }
+}
+
+/// Emit a final `ValueChange<String>` when a string field loses focus.
+fn string_field_on_focus_lost(
+    focus_lost: On<FocusLost>,
+    q_text: Query<&EditableText>,
+    mut commands: Commands,
+) {
+    let text_id = focus_lost.event_target();
+    if let Ok(editable) = q_text.get(text_id) {
+        commands.trigger(ValueChange {
+            source: text_id,
+            value: editable.value().to_string(),
+            is_final: true,
+        });
+    }
 }
 
 fn spawn_text_row(commands: &mut Commands, parent: Entity, text: &str, depth: usize) {
@@ -1861,26 +2429,34 @@ fn format_partial_reflect_value(value: &dyn PartialReflect) -> String {
     format!("{value:?}")
 }
 
-/// Handle `TextEditCommitEvent` for inspector field bindings (numeric and string fields).
+/// Handle `ValueChange<String>` for inspector string fields. The committed
+/// text is applied verbatim. The event fires on the text entry, so the field
+/// binding is found by walking up to its container. Numeric and
+/// vector-component fields go through `ScrubNumberInput` and its
+/// `on_numeric_value_change_*` observers instead.
 pub(crate) fn on_text_edit_commit(
-    event: On<TextEditCommitEvent>,
-    bindings: Query<(&FieldBinding, Option<&TextEditVariant>)>,
+    event: On<ValueChange<String>>,
+    bindings: Query<&FieldBinding>,
     child_of_query: Query<&ChildOf>,
     mut commands: Commands,
     remote_proxies: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
 ) {
-    // Walk up from the committed entity to find a FieldBinding.
+    // Only the drag/typing-finished commit writes back.
+    if !event.is_final {
+        return;
+    }
+
+    // Walk up from the source entity to find a FieldBinding.
     // Check the entity itself first, then walk up through parents.
-    let mut current = event.entity;
+    let mut current = event.source;
     let mut found = None;
 
-    // Check the committed entity itself
-    if let Ok((binding, variant)) = bindings.get(current) {
+    // Check the source entity itself
+    if let Ok(binding) = bindings.get(current) {
         found = Some((
             binding.source_entity,
             binding.type_path.clone(),
             binding.field_path.clone(),
-            variant.copied(),
         ));
     }
 
@@ -1890,12 +2466,11 @@ pub(crate) fn on_text_edit_commit(
             let Ok(child_of) = child_of_query.get(current) else {
                 break;
             };
-            if let Ok((binding, variant)) = bindings.get(child_of.parent()) {
+            if let Ok(binding) = bindings.get(child_of.parent()) {
                 found = Some((
                     binding.source_entity,
                     binding.type_path.clone(),
                     binding.field_path.clone(),
-                    variant.copied(),
                 ));
                 break;
             }
@@ -1903,7 +2478,9 @@ pub(crate) fn on_text_edit_commit(
         }
     }
 
-    let Some((source_entity, tp, path, variant)) = found else {
+    // No binding on this widget: another `ValueChange<String>` producer, not an
+    // inspector string field.
+    let Some((source_entity, tp, path)) = found else {
         return;
     };
 
@@ -1912,28 +2489,130 @@ pub(crate) fn on_text_edit_commit(
         return;
     }
 
-    // For numeric fields, use the text as-is (already formatted)
-    // For string fields, use text directly
-    let value_str = if variant.is_some_and(|v| v.is_numeric()) {
-        // Parse and re-format to ensure consistent value
-        let val: f64 = event.text.parse().unwrap_or(0.0);
-        format!("{val}")
-    } else {
-        event.text.clone()
-    };
-
+    let value_str = event.value.clone();
     commands.queue(move |world: &mut World| {
         apply_field_value_with_undo(world, source_entity, &tp, &path, &value_str);
     });
 }
 
-pub(crate) fn on_checkbox_commit(
-    event: On<CheckboxCommitEvent>,
+/// Apply a drag-tick (non-final) numeric edit. Writes only the live ECS
+/// components for the current selection so the viewport tracks the drag,
+/// without touching the `SceneJsnAst` or minting an undo entry. The pre-drag
+/// value survives in the AST for the single `SetJsnField` pushed on
+/// `is_final`. In PIE Live mode it routes through the live-edit stream instead.
+fn apply_field_value_live(
+    world: &mut World,
+    source_entity: Entity,
+    type_path: &str,
+    field_path: &str,
+    new_value_str: &str,
+) {
+    let new_json = parse_to_json_value(new_value_str);
+    if try_route_pie_live_field_edit(
+        world,
+        source_entity,
+        type_path,
+        field_path,
+        new_json.clone(),
+    ) {
+        return;
+    }
+    let targets: Vec<Entity> = world.resource::<Selection>().entities.clone();
+    for target in targets {
+        crate::commands::apply_jsn_field_to_ecs(world, target, type_path, field_path, &new_json);
+    }
+}
+
+/// Write path for float drag-scrub fields. The widget emits
+/// `ValueChange<f64>` on every drag tick with `is_final == false`, and once
+/// on drag-end, Enter, or blur with `is_final == true`, but never
+/// self-updates its value. This re-inserts `ScrubNumberInputValue` to move
+/// the display, applies live to the ECS each tick, and pushes the
+/// undo-backed `SetJsnField` only on the final event, giving one undo entry
+/// per drag.
+pub(crate) fn on_numeric_value_change_f64(
+    event: On<ValueChange<f64>>,
     bindings: Query<&FieldBinding>,
     mut commands: Commands,
     remote_proxies: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
 ) {
-    let Ok(binding) = bindings.get(event.entity) else {
+    let source = event.source;
+    let Ok(binding) = bindings.get(source) else {
+        return;
+    };
+    let target = binding.source_entity;
+    if remote_proxies.contains(target) {
+        return;
+    }
+    let tp = binding.type_path.clone();
+    let path = binding.field_path.clone();
+    let value = event.value;
+    let is_final = event.is_final;
+
+    // The widget does not self-update its value; re-insert it so the field
+    // tracks the drag.
+    commands
+        .entity(source)
+        .insert(ScrubNumberInputValue::F64(value));
+
+    let value_str = format!("{value}");
+    commands.queue(move |world: &mut World| {
+        if is_final {
+            apply_field_value_with_undo(world, target, &tp, &path, &value_str);
+        } else {
+            apply_field_value_live(world, target, &tp, &path, &value_str);
+        }
+    });
+}
+
+/// Write path for integer drag-scrub fields, handling the `ValueChange<i64>`
+/// the `I64` format emits. See [`on_numeric_value_change_f64`] for the same
+/// logic on floats.
+pub(crate) fn on_numeric_value_change_i64(
+    event: On<ValueChange<i64>>,
+    bindings: Query<&FieldBinding>,
+    mut commands: Commands,
+    remote_proxies: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+) {
+    let source = event.source;
+    let Ok(binding) = bindings.get(source) else {
+        return;
+    };
+    let target = binding.source_entity;
+    if remote_proxies.contains(target) {
+        return;
+    }
+    let tp = binding.type_path.clone();
+    let path = binding.field_path.clone();
+    let value = event.value;
+    let is_final = event.is_final;
+
+    // The widget does not self-update its value; re-insert it so the field
+    // tracks the drag.
+    commands
+        .entity(source)
+        .insert(ScrubNumberInputValue::I64(value));
+
+    let value_str = format!("{value}");
+    commands.queue(move |world: &mut World| {
+        if is_final {
+            apply_field_value_with_undo(world, target, &tp, &path, &value_str);
+        } else {
+            apply_field_value_live(world, target, &tp, &path, &value_str);
+        }
+    });
+}
+
+pub(crate) fn on_checkbox_commit(
+    event: On<ValueChange<bool>>,
+    bindings: Query<&FieldBinding>,
+    mut commands: Commands,
+    remote_proxies: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+) {
+    // This global observer sees `ValueChange<bool>` for every checkbox, so
+    // the `FieldBinding` lookup self-filters to inspector fields.
+    let target = event.source;
+    let Ok(binding) = bindings.get(target) else {
         return;
     };
     let source = binding.source_entity;
@@ -1944,7 +2623,15 @@ pub(crate) fn on_checkbox_commit(
     }
     let tp = binding.type_path.clone();
     let path = binding.field_path.clone();
-    let val = format!("{}", event.checked);
+    let checked = event.value;
+    // The checkbox does not self-update `Checked`; reflect the new value so
+    // the box renders the change. Feathers styles the box off `Checked`.
+    if checked {
+        commands.entity(target).insert(Checked);
+    } else {
+        commands.entity(target).remove::<Checked>();
+    }
+    let val = format!("{checked}");
     commands.queue(move |world: &mut World| {
         apply_field_value_with_undo(world, source, &tp, &path, &val);
     });
@@ -1996,47 +2683,55 @@ pub(crate) fn refresh_inspector_fields(
     let type_registry = world.resource::<AppTypeRegistry>().clone();
     let registry = type_registry.read();
 
-    // Collect numeric binding info: outer entity + current TextEditValue
-    let mut numeric_lookups: Vec<(Entity, String, String, String)> = Vec::new();
-    let mut query = world.query::<(Entity, &FieldBinding, &TextEditValue, &TextEditConfig)>();
-    for (entity, binding, value, config) in query.iter(world) {
-        if binding.source_entity == primary && config.variant.is_numeric() {
-            numeric_lookups.push((
+    // Collect drag-scrub binding info: the `ScrubNumberInput` root entity and
+    // its current value. This covers scalar numeric fields and the per-axis
+    // vector component inputs (both carry `ScrubNumberInput` + `FieldBinding`).
+    // Refresh re-inserts the value when the reflected ECS value diverges, as
+    // after an undo/redo, gizmo edit, or external edit.
+    let mut scrub_lookups: Vec<(Entity, String, String, ScrubNumberInputValue)> = Vec::new();
+    let mut scrub_query = world
+        .query_filtered::<(Entity, &FieldBinding, &ScrubNumberInputValue), With<ScrubNumberInput>>(
+        );
+    for (entity, binding, value) in scrub_query.iter(world) {
+        if binding.source_entity == primary {
+            scrub_lookups.push((
                 entity,
                 binding.type_path.clone(),
                 binding.field_path.clone(),
-                value.0.clone(),
+                *value,
             ));
         }
     }
 
-    // Collect checkbox binding info and current state
+    // Collect checkbox binding info and current state. Checkboxes carry
+    // `Checkbox` and the field's `FieldBinding`, and current state is
+    // `Has<Checked>`. The `With<Checkbox>` filter keeps numeric `FieldBinding`
+    // rows out.
     let mut bool_lookups: Vec<(Entity, String, String, bool)> = Vec::new();
-    let mut checkbox_query = world.query::<(Entity, &FieldBinding, &CheckboxState)>();
-    for (entity, binding, state) in checkbox_query.iter(world) {
+    let mut checkbox_query =
+        world.query_filtered::<(Entity, &FieldBinding, Has<Checked>), With<Checkbox>>();
+    for (entity, binding, checked) in checkbox_query.iter(world) {
         if binding.source_entity == primary {
             bool_lookups.push((
                 entity,
                 binding.type_path.clone(),
                 binding.field_path.clone(),
-                state.checked,
+                checked,
             ));
         }
     }
 
-    if numeric_lookups.is_empty() && bool_lookups.is_empty() {
+    if scrub_lookups.is_empty() && bool_lookups.is_empty() {
         return;
     }
 
-    // Read reflected values and compute updates
-    // For numeric fields: we need to find inner EditorTextEdit entity and set its value
-    let mut numeric_updates: Vec<(Entity, f64)> = Vec::new();
+    let mut scrub_updates: Vec<(Entity, ScrubNumberInputValue)> = Vec::new();
     let mut bool_updates: Vec<(Entity, bool)> = Vec::new();
     let Ok(entity_ref) = world.get_entity(primary) else {
         return;
     };
 
-    for (ui_entity, comp_type_path, field_path, current_text) in &numeric_lookups {
+    for (ui_entity, comp_type_path, field_path, current) in &scrub_lookups {
         let Some(registration) = registry.get_with_type_path(comp_type_path) else {
             continue;
         };
@@ -2049,14 +2744,26 @@ pub(crate) fn refresh_inspector_fields(
         let Ok(field) = reflected.reflect_path(field_path.as_str()) else {
             continue;
         };
-        let value = reflect_field_to_f64(field);
-        let Some(value) = value else {
+        let Some(value) = reflect_field_to_f64(field) else {
             continue;
         };
 
-        let current_val: f64 = current_text.parse().unwrap_or(0.0);
-        if (current_val - value).abs() > 0.005 {
-            numeric_updates.push((*ui_entity, value));
+        // Preserve the field's variant. Integer fields stay `I64` and compare
+        // exactly; everything else is treated as `F64` and compared with the
+        // display epsilon.
+        let update = match current {
+            ScrubNumberInputValue::I64(cur) => {
+                let new_i = value.round() as i64;
+                (new_i != *cur).then_some(ScrubNumberInputValue::I64(new_i))
+            }
+            _ => {
+                let new_f = round_numeric_display(value);
+                ((new_f - scrub_value_as_f64(current)).abs() > 0.005)
+                    .then_some(ScrubNumberInputValue::F64(new_f))
+            }
+        };
+        if let Some(update) = update {
+            scrub_updates.push((*ui_entity, update));
         }
     }
 
@@ -2082,42 +2789,34 @@ pub(crate) fn refresh_inspector_fields(
 
     drop(registry);
 
-    // Apply numeric updates: find inner EditorTextEdit entity and use set_text_input_value
     let input_focus = world.resource::<InputFocus>().get();
-    for (outer_entity, value) in numeric_updates {
-        // Walk: outer (TextEditConfig) -> children -> wrapper (TextEditWrapper) -> inner entity
-        let Some((wrapper_entity, inner_entity)) = find_text_edit_entities(world, outer_entity)
-        else {
-            continue;
-        };
 
-        // Skip if the field is being drag-adjusted or the user is typing in it
-        if world.get::<TextEditDragging>(wrapper_entity).is_some() {
+    // Apply drag-scrub updates by re-inserting `ScrubNumberInputValue`; the
+    // widget's own insert observer repaints the text. Skip while the user is
+    // mid-scrub or typing in the field so the refresh never clobbers an
+    // in-progress edit.
+    for (entity, value) in scrub_updates {
+        if is_scrubbing_or_focused(world, entity, input_focus) {
             continue;
         }
-        if input_focus == Some(inner_entity) {
-            continue;
-        }
-
-        if let Some(variant) = world.get::<TextEditVariant>(inner_entity).copied() {
-            let formatted = text_edit::format_numeric_value(value, variant);
-            if let Some(mut editable) = world.get_mut::<bevy::text::EditableText>(inner_entity) {
-                set_text_input_value(&mut editable, formatted);
-            }
-        }
+        world.entity_mut(entity).insert(value);
     }
 
-    // Apply bool updates (sync_checkbox_icon handles the visual update)
+    // Apply bool updates by inserting or removing `Checked`; the checkbox
+    // renders off `Checked`. Undo/redo and external edits land here.
     for (entity, value) in bool_updates {
-        if let Some(mut state) = world.get_mut::<CheckboxState>(entity) {
-            state.checked = value;
+        let mut ent = world.entity_mut(entity);
+        if value {
+            ent.insert(Checked);
+        } else {
+            ent.remove::<Checked>();
         }
     }
 }
 
 /// HACK: polling-based enum-variant refresh. Compares each `EnumVariantHost`'s
 /// stored variant name against the ECS value via reflection every frame, and
-/// rebuilds the subtree (combobox + field rows) in place when they differ.
+/// rebuilds the subtree (select menu + field rows) in place when they differ.
 ///
 /// This covers all update sources uniformly (user click, undo/redo, external
 /// edits) via a single ECS-mismatch trigger, but the per-frame poll is wasteful
@@ -2195,7 +2894,7 @@ pub(crate) fn refresh_enum_variants(
             continue;
         }
 
-        // Despawn the old children (combobox + field rows) and repopulate
+        // Despawn the old children (select menu + field rows) and repopulate
         for child in children.iter() {
             commands.entity(child).despawn();
         }
@@ -2214,25 +2913,6 @@ pub(crate) fn refresh_enum_variants(
 
         host.current_variant = new_variant;
     }
-}
-
-/// Walk from an outer `text_edit` entity to find the wrapper and inner `EditorTextEdit` entities.
-/// Returns (`wrapper_entity`, `inner_entity`).
-fn find_text_edit_entities(world: &World, outer_entity: Entity) -> Option<(Entity, Entity)> {
-    let children = world.get::<Children>(outer_entity)?;
-    for child in children.iter() {
-        if let Some(wrapper) = world.get::<TextEditWrapper>(child) {
-            return Some((child, wrapper.0));
-        }
-        if let Some(grandchildren) = world.get::<Children>(child) {
-            for gc in grandchildren.iter() {
-                if let Some(wrapper) = world.get::<TextEditWrapper>(gc) {
-                    return Some((gc, wrapper.0));
-                }
-            }
-        }
-    }
-    None
 }
 
 fn reflect_field_to_f64(field: &dyn PartialReflect) -> Option<f64> {
@@ -2274,7 +2954,7 @@ fn is_opaque_type(value: &dyn PartialReflect) -> bool {
         || type_path.contains("Cow<")
 }
 
-/// Spawn a `ComboBox` for enum fields, supporting unit-only enums with undo.
+/// Spawn a select menu for enum fields, supporting unit-only enums with undo.
 fn spawn_enum_field(
     commands: &mut Commands,
     parent: Entity,
@@ -2326,11 +3006,6 @@ fn spawn_enum_field(
         return;
     }
 
-    let selected_index = variant_names
-        .iter()
-        .position(|n| n == &current_variant)
-        .unwrap_or(0);
-
     // Check if all variants are unit variants
     let all_unit = (0..enum_info.variant_len()).all(|i| {
         enum_info
@@ -2342,7 +3017,7 @@ fn spawn_enum_field(
     let left_padding = depth as f32 * tokens::SPACING_MD;
 
     if all_unit {
-        // Simple ComboBox for unit-only enums
+        // Menu-button + popup in a row for unit-only enums.
         let row = commands
             .spawn((
                 Node {
@@ -2357,38 +3032,19 @@ fn spawn_enum_field(
             ))
             .id();
 
-        let path = field_path.clone();
-        let tp = type_path.to_string();
-        commands
-            .spawn((
-                combobox_with_selected(variant_names, selected_index),
-                FieldBinding {
-                    source_entity,
-                    type_path: type_path.to_string(),
-                    field_path,
-                },
-                ChildOf(row),
-            ))
-            .observe(
-                move |event: On<ComboBoxChangeEvent>, mut commands: Commands| {
-                    let variant_name = event.label.clone();
-                    let path = path.clone();
-                    let tp = tp.clone();
-                    commands.queue(move |world: &mut World| {
-                        apply_enum_variant_with_undo(
-                            world,
-                            source_entity,
-                            &tp,
-                            &path,
-                            &variant_name,
-                        );
-                    });
-                },
-            );
+        spawn_enum_menu(
+            commands,
+            row,
+            &variant_names,
+            &current_variant,
+            &field_path,
+            source_entity,
+            type_path,
+        );
     } else {
-        // Container + combobox + field rows. Tagged with `EnumVariantHost` so
-        // `refresh_enum_variants` can swap in new field rows when the ECS variant
-        // changes (user click, undo, redo, external edit).
+        // Container + select menu + field rows. Tagged with `EnumVariantHost`
+        // so `refresh_enum_variants` can swap in new field rows when the ECS
+        // variant changes (user click, undo, redo, external edit).
         let container = commands
             .spawn((
                 Node {
@@ -2423,10 +3079,70 @@ fn spawn_enum_field(
     }
 }
 
-/// Spawn the combobox + current-variant field rows as children of `container`.
-/// Called both on initial UI build and from `refresh_enum_variants` after
-/// despawning the old children. `host` bundles `source_entity`, `type_path`,
-/// `field_path`, `depth` so those four don't appear as separate arguments.
+/// Spawn a select menu for an enum field: a `FeathersMenu` holding a
+/// `FeathersMenuButton` (caption = `current_variant`) and a `FeathersMenuPopup`
+/// with one `FeathersMenuItem` per name in `variant_names`. Picking an item
+/// fires `Activate`, whose observer captures that item's variant name and calls
+/// `apply_enum_variant_with_undo`. The menu is parented to `parent`.
+fn spawn_enum_menu(
+    commands: &mut Commands,
+    parent: Entity,
+    variant_names: &[String],
+    current_variant: &str,
+    field_path: &str,
+    source_entity: Entity,
+    type_path: &str,
+) {
+    let menu = commands
+        .spawn_scene(bsn! { @FeathersMenu })
+        .insert(ChildOf(parent))
+        .id();
+
+    // Button caption shows the current variant. The struct/tuple refresh path
+    // rebuilds the whole menu, so the caption tracks the live variant without a
+    // separate text rewrite.
+    commands
+        .spawn_scene(bsn! {
+            @FeathersMenuButton {
+                @caption: bsn! { Text({current_variant.to_string()}) ThemedText },
+            }
+        })
+        .insert(ChildOf(menu));
+
+    let popup = commands
+        .spawn_scene(bsn! { @FeathersMenuPopup })
+        .insert(ChildOf(menu))
+        .id();
+
+    // One item per variant. Each closure owns its variant name so `Activate`
+    // writes back the picked variant.
+    for name in variant_names {
+        let variant_name = name.clone();
+        let path = field_path.to_string();
+        let tp = type_path.to_string();
+        commands
+            .spawn_scene(bsn! {
+                @FeathersMenuItem {
+                    @caption: bsn! { Text({name.clone()}) ThemedText },
+                }
+            })
+            .insert(ChildOf(popup))
+            .observe(move |_activate: On<Activate>, mut commands: Commands| {
+                let variant_name = variant_name.clone();
+                let path = path.clone();
+                let tp = tp.clone();
+                commands.queue(move |world: &mut World| {
+                    apply_enum_variant_with_undo(world, source_entity, &tp, &path, &variant_name);
+                });
+            });
+    }
+}
+
+/// Spawn the select menu + current-variant field rows as children of
+/// `container`. Called both on initial UI build and from `refresh_enum_variants`
+/// after despawning the old children. `host` bundles `source_entity`,
+/// `type_path`, `field_path`, `depth` so those four don't appear as separate
+/// arguments.
 pub(super) fn spawn_variant_contents(
     commands: &mut Commands,
     container: Entity,
@@ -2437,7 +3153,7 @@ pub(super) fn spawn_variant_contents(
     editor_font: &Handle<Font>,
     icon_font: &Handle<Font>,
 ) {
-    // Variant names + current selected index come straight from reflect.
+    // Variant names come straight from reflect.
     let Some(type_info) = enum_ref.get_represented_type_info() else {
         return;
     };
@@ -2454,35 +3170,16 @@ pub(super) fn spawn_variant_contents(
         return;
     }
     let current_variant = enum_ref.variant_name();
-    let selected_index = variant_names
-        .iter()
-        .position(|n| n == current_variant)
-        .unwrap_or(0);
 
-    // Combobox with change observer
-    let field_path_for_observer = host.field_path.clone();
-    let type_path_for_observer = host.type_path.clone();
-    let source_entity = host.source_entity;
-    commands
-        .spawn((
-            combobox_with_selected(variant_names, selected_index),
-            FieldBinding {
-                source_entity,
-                type_path: host.type_path.clone(),
-                field_path: host.field_path.clone(),
-            },
-            ChildOf(container),
-        ))
-        .observe(
-            move |event: On<ComboBoxChangeEvent>, mut commands: Commands| {
-                let variant_name = event.label.clone();
-                let path = field_path_for_observer.clone();
-                let tp = type_path_for_observer.clone();
-                commands.queue(move |world: &mut World| {
-                    apply_enum_variant_with_undo(world, source_entity, &tp, &path, &variant_name);
-                });
-            },
-        );
+    spawn_enum_menu(
+        commands,
+        container,
+        &variant_names,
+        current_variant,
+        &host.field_path,
+        host.source_entity,
+        &host.type_path,
+    );
 
     // Spawn a row for each field of the current variant
     let variant_field_count = enum_ref.field_len();

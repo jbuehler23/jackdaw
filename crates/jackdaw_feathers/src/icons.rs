@@ -1,6 +1,30 @@
-use bevy::text::FontSize;
+use bevy::asset::embedded_asset;
+use bevy::text::{FontSize, FontSourceTemplate};
 use bevy::{asset::AssetId, prelude::*};
 pub use lucide_icons::Icon;
+
+/// Embedded-asset paths for the editor fonts, referenceable from `bsn!`
+/// scenes and anywhere an `AssetServer` load path is expected.
+///
+/// A font is registered with [`embedded_asset!`] and then named by its
+/// `embedded://` path, which the `bsn!` template machinery resolves to a
+/// `Handle<Font>` via `AssetServer::load`.
+///
+/// The `..` segment is expected. The font files live in `fonts/` beside
+/// `src/`, so `embedded_asset!`, called from `src/icons.rs`, computes the
+/// path relative to the source file. The registration key and the load
+/// key are byte-identical, so the `..` round-trips correctly. The
+/// `embedded_font_paths_match_registration` test pins these to the value
+/// `embedded_asset!` registers.
+pub mod font_paths {
+    /// Lucide icon font (glyphs via [`super::Icon`]`::*.unicode()`).
+    pub const LUCIDE: &str = "embedded://jackdaw_feathers/../fonts/lucide.ttf";
+    /// Editor body font, regular weight.
+    pub const FIRA_REGULAR: &str =
+        "embedded://jackdaw_feathers/../fonts/FiraSans-Regular.ttf";
+    /// Editor body font, italic.
+    pub const FIRA_ITALIC: &str = "embedded://jackdaw_feathers/../fonts/FiraSans-Italic.ttf";
+}
 
 /// Resource holding the loaded Lucide icon font handle.
 #[derive(Resource, Deref, DerefMut)]
@@ -44,6 +68,14 @@ impl Plugin for IconFontPlugin {
         app.insert_resource(IconFont(icon_handle));
         app.insert_resource(EditorFont(editor_font_handle));
         app.insert_resource(EditorFontItalic(editor_font_italic_handle));
+
+        // Register the fonts as embedded assets so they can be referenced by
+        // path from `bsn!` scenes; see `font_paths`. The synchronous
+        // from-bytes load above still backs the handle resources. This
+        // registration only adds the `embedded://` path source.
+        embedded_asset!(app, "../fonts/lucide.ttf");
+        embedded_asset!(app, "../fonts/FiraSans-Regular.ttf");
+        embedded_asset!(app, "../fonts/FiraSans-Italic.ttf");
     }
 }
 
@@ -70,4 +102,56 @@ pub fn icon_colored(icon: Icon, size: f32, font: Handle<Font>, color: Color) -> 
         },
         TextColor(color),
     )
+}
+
+/// A `bsn!` scene rendering a single Lucide icon glyph, for composing icon
+/// content inside other scenes without threading a `Handle<Font>`.
+///
+/// Pass a glyph string, e.g. `Icon::Plus.unicode()`. The font is referenced
+/// by its embedded path [`font_paths::LUCIDE`]; `bsn!` resolves it to a
+/// `Handle<Font>` at scene-build time.
+pub fn icon_scene(glyph: impl Into<String>, size: f32) -> impl Scene {
+    let glyph = glyph.into();
+    bsn! {
+        Text(glyph)
+        TextFont {
+            font: FontSourceTemplate::Handle(font_paths::LUCIDE),
+            font_size: FontSize::Px(size),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::asset::embedded_path;
+
+    /// The `font_paths` constants must be the keys that `embedded_asset!`
+    /// registers, otherwise `AssetServer::load` and the `bsn!` coercion would
+    /// miss. `embedded_path!` runs the same path computation the registration
+    /// uses, from the same source file, so this verifies and documents the
+    /// embedded prefix.
+    #[test]
+    fn embedded_font_paths_match_registration() {
+        let as_uri = |p: std::path::PathBuf| format!("embedded://{}", p.display());
+        assert_eq!(
+            as_uri(embedded_path!("../fonts/lucide.ttf")),
+            font_paths::LUCIDE,
+        );
+        assert_eq!(
+            as_uri(embedded_path!("../fonts/FiraSans-Regular.ttf")),
+            font_paths::FIRA_REGULAR,
+        );
+        assert_eq!(
+            as_uri(embedded_path!("../fonts/FiraSans-Italic.ttf")),
+            font_paths::FIRA_ITALIC,
+        );
+    }
+
+    /// `icon_scene` must construct a valid `bsn!` scene. This is a
+    /// compile-level check of the `TextFont` and font-path coercion.
+    #[test]
+    fn icon_scene_constructs() {
+        let _scene = icon_scene(Icon::Plus.unicode(), 16.0);
+    }
 }

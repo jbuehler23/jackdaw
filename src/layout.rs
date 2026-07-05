@@ -1,9 +1,10 @@
+use bevy::feathers::controls::{ButtonVariant, FeathersToolButton};
 use bevy::{picking::hover::Hovered, prelude::*, ui_widgets::observe};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
-    button::{self, ButtonOperatorCall, ButtonSize, ButtonVariant},
-    icons::{EditorFont, IconFont},
-    menu_bar, separator, split_panel, status_bar,
+    button::ButtonOperatorCall,
+    icons::{EditorFont, IconFont, icon_scene},
+    menu_bar, split_panel, status_bar,
     text_edit::{self, TextEditProps},
     tokens,
     tree_view::tree_container_drop_observers,
@@ -435,28 +436,30 @@ pub(crate) fn viewport_with_toolbar() -> impl Bundle {
             ..Default::default()
         },
         BackgroundColor(tokens::PANEL_BG),
-        children![
-            toolbar(),
-            crate::navmesh::toolbar::navmesh_toolbar(),
-            crate::terrain::toolbar::terrain_toolbar(),
-            scene_view(),
-        ],
+        // The main editor toolbar, the navmesh toolbar, and the terrain
+        // toolbar are bsn! Scenes, which can't nest inside this Bundle
+        // `children!` tree. They're spawned separately and slotted in above
+        // the viewport by `build_viewport_panel`.
+        children![scene_view()],
     )
 }
 
-fn toolbar() -> impl Bundle {
-    // Every toolbar entry below goes through `feathers::button(...)`,
-    // the same constructor extensions use. Active-state highlighting
-    // is driven by [`update_toolbar_button_variants`] flipping
-    // `ButtonVariant::Active` on the owning entity, so we never
-    // mutate `BackgroundColor` directly and `handle_hover` stays the
-    // sole bg writer.
-    //
-    // Sizing matches the Figma viewport-toolbar spec: 30px tall, 1px
-    // border, top corners rounded against the panel below.
-    (
-        Toolbar,
-        EditorEntity,
+/// The viewport's main editor toolbar as a `bsn!` Scene. Holds the
+/// Select/Translate/Rotate/Scale buttons, gizmo-space toggle, draw-brush,
+/// measure, brush edit modes, physics, and the grid stepper and snap.
+///
+/// Spawned standalone via `spawn_scene`; see
+/// [`crate::viewport::build_viewport_panel`]. A Scene can't nest inside the
+/// `viewport_with_toolbar` Bundle `children!` tree, and the spawn site
+/// attaches the [`Toolbar`] and [`EditorEntity`] markers. Active-tool
+/// highlighting is driven by [`update_toolbar_button_variants`] flipping
+/// each button's [`ButtonVariant`] by operator id, so this never mutates
+/// `BackgroundColor` directly.
+///
+/// Sizing: 30px tall, 1px border, top corners rounded against the panel
+/// below.
+pub(crate) fn toolbar() -> impl Scene {
+    bsn! {
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -477,66 +480,86 @@ fn toolbar() -> impl Bundle {
                 bottom_right: px(0.0),
             },
             flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::PANEL_HEADER_BG),
-        BorderColor::all(tokens::TOOLBAR_BORDER),
-        children![
-            toolbar_op_button::<ToolSelectOp>(Icon::MousePointer),
-            toolbar_op_button::<ToolTranslateOp>(Icon::Move3d),
-            toolbar_op_button::<ToolRotateOp>(Icon::Rotate3d),
-            toolbar_op_button::<ToolScaleOp>(Icon::Scale3d),
-            separator::separator(separator::SeparatorProps::vertical()),
+        }
+        BackgroundColor(tokens::PANEL_HEADER_BG)
+        BorderColor::all(tokens::TOOLBAR_BORDER)
+        Children [
+            toolbar_op_button(ToolSelectOp::ID, Icon::MousePointer),
+            toolbar_op_button(ToolTranslateOp::ID, Icon::Move3d),
+            toolbar_op_button(ToolRotateOp::ID, Icon::Rotate3d),
+            toolbar_op_button(ToolScaleOp::ID, Icon::Scale3d),
+            toolbar_separator(),
             // Gizmo space toggle. Active highlight = `Local`; default
             // = `World`. Tooltip is the discoverability path.
-            toolbar_op_button::<GizmoSpaceToggleOp>(Icon::Globe),
-            separator::separator(separator::SeparatorProps::vertical()),
-            toolbar_op_button::<ActivateDrawBrushModalOp>(Icon::Box),
-            toolbar_op_button::<MeasureDistanceOp>(Icon::RulerDimensionLine),
-            toolbar_op_button::<EditModeVertexOp>(Icon::CircleDot),
-            toolbar_op_button::<EditModeEdgeOp>(Icon::GitCommitHorizontal),
-            toolbar_op_button::<EditModeFaceOp>(Icon::Hexagon),
-            toolbar_op_button::<EditModeClipOp>(Icon::ScissorsLineDashed),
-            separator::separator(separator::SeparatorProps::vertical()),
-            toolbar_op_button::<PhysicsActivateOp>(Icon::Zap),
+            toolbar_op_button(GizmoSpaceToggleOp::ID, Icon::Globe),
+            toolbar_separator(),
+            toolbar_op_button(ActivateDrawBrushModalOp::ID, Icon::Box),
+            toolbar_op_button(MeasureDistanceOp::ID, Icon::RulerDimensionLine),
+            toolbar_op_button(EditModeVertexOp::ID, Icon::CircleDot),
+            toolbar_op_button(EditModeEdgeOp::ID, Icon::GitCommitHorizontal),
+            toolbar_op_button(EditModeFaceOp::ID, Icon::Hexagon),
+            toolbar_op_button(EditModeClipOp::ID, Icon::ScissorsLineDashed),
+            toolbar_separator(),
+            toolbar_op_button(PhysicsActivateOp::ID, Icon::Zap),
             // Spacer pushes the grid / snap widget to the right edge.
-            (Node {
-                flex_grow: 1.0,
-                ..Default::default()
-            },),
+            toolbar_spacer(),
             // Grid-size stepper: current size between decrease / increase.
-            toolbar_op_button::<GridDecreaseOp>(Icon::Minus),
+            toolbar_op_button(GridDecreaseOp::ID, Icon::Minus),
             grid_size_label(),
-            toolbar_op_button::<GridIncreaseOp>(Icon::Plus),
-            separator::separator(separator::SeparatorProps::vertical()),
+            toolbar_op_button(GridIncreaseOp::ID, Icon::Plus),
+            toolbar_separator(),
             // Grid-snap toggle; highlights while snapping is on.
-            toolbar_op_button::<GridToggleSnapOp>(Icon::Magnet),
-        ],
-    )
+            toolbar_op_button(GridToggleSnapOp::ID, Icon::Magnet),
+        ]
+    }
+}
+
+/// Font size for the toolbar's icon glyphs.
+const TOOLBAR_ICON_PX: f32 = 16.0;
+
+/// Thin vertical rule separating groups of toolbar buttons.
+fn toolbar_separator() -> impl Scene {
+    bsn! {
+        Node {
+            width: px(1),
+            height: px(16),
+            align_self: AlignSelf::Center,
+            margin: UiRect::horizontal(px(2)),
+        }
+        BackgroundColor(tokens::TOOLBAR_BORDER)
+    }
+}
+
+/// Flexible gap that pushes the grid / snap controls to the toolbar's
+/// right edge.
+fn toolbar_spacer() -> impl Scene {
+    bsn! {
+        Node {
+            flex_grow: 1.0,
+        }
+    }
 }
 
 /// Marker for the live grid-size readout in the viewport toolbar.
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct GridSizeLabel;
 
 /// A text readout of the current grid size, updated by
 /// [`update_grid_size_label`]. The font is filled in by that system from
-/// the editor font resource (the toolbar bundle has none to hand).
-fn grid_size_label() -> impl Bundle {
-    (
-        GridSizeLabel,
-        Text::new("1"),
+/// the editor font resource (the toolbar scene has none to hand).
+fn grid_size_label() -> impl Scene {
+    bsn! {
+        GridSizeLabel
+        Text("1")
         TextFont {
             font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
+        }
+        TextColor(tokens::TEXT_SECONDARY)
         Node {
             align_self: AlignSelf::Center,
             min_width: px(34.0),
-            ..Default::default()
-        },
-    )
+        }
+    }
 }
 
 /// Format a grid size for the toolbar readout, trimming a trailing
@@ -569,27 +592,26 @@ pub fn update_grid_size_label(
     }
 }
 
-/// Spawn a square icon-only toolbar button bound to operator `Op`.
-/// Identical to what an extension would write. The icon is the only
-/// visible glyph; `ButtonSize::Icon` suppresses the content text
-/// label, and the operator's label and description show in the rich
-/// operator tooltip on hover via [`OperatorTooltipPlugin`].
+/// An icon-only toolbar button bound to operator `op_id`. It is a
+/// [`FeathersToolButton`] whose caption is a single Lucide glyph rendered
+/// with the icon font via [`icon_scene`]. The [`ButtonOperatorCall`] hooks
+/// it into the operator-button glue in `core_extension`, which dispatches
+/// on `Activate`, auto-disables via `InteractionDisabled` when the
+/// operator is unavailable, and attaches the operator tooltip on hover
+/// through the `On<Add, ButtonOperatorCall>` observer.
 ///
-/// Initial variant is `Ghost` so idle buttons render transparent
-/// against the toolbar's `#1F1F24` panel; the
-/// [`update_toolbar_button_variants`] system flips them to `Active`
-/// when the matching mode/modal is current. Without this, every
-/// button would sit on the muted `Default` grey and the toolbar
-/// would lose the "one currently-active tool" reading.
-///
-/// [`OperatorTooltipPlugin`]: crate::operator_tooltip::OperatorTooltipPlugin
-fn toolbar_op_button<Op: Operator>(icon: Icon) -> impl Bundle {
-    button::button(
-        ButtonProps::from_operator::<Op>()
-            .with_variant(ButtonVariant::Ghost)
-            .icon(icon)
-            .with_size(ButtonSize::Icon),
-    )
+/// Starts in the `Plain` variant so idle buttons read flat against the
+/// toolbar panel; [`update_toolbar_button_variants`] flips the active
+/// tool/mode/modal button to `Primary`.
+fn toolbar_op_button(op_id: &'static str, icon: Icon) -> impl Scene {
+    let glyph = String::from(icon.unicode());
+    bsn! {
+        @FeathersToolButton {
+            @caption: bsn! { icon_scene(glyph, TOOLBAR_ICON_PX) },
+            @variant: {ButtonVariant::Plain}
+        }
+        ButtonOperatorCall::new(op_id)
+    }
 }
 
 pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
@@ -773,19 +795,49 @@ fn scene_view() -> impl Bundle {
     )
 }
 
-/// Flip every toolbar button's [`ButtonVariant`] between `Default`
-/// and `Active` based on the matching editor state. The feathers
-/// `handle_hover` system reads the variant to compute the
-/// background, so this is the only place toolbar active-state lives;
-/// `BackgroundColor` is never mutated directly. New toolbar buttons
-/// just need to register their operator id below to opt in.
+/// Operator ids the main viewport toolbar owns. The navmesh and terrain
+/// contextual toolbars spawn the same `ButtonOperatorCall` and
+/// `ButtonVariant` component pair and drive their own highlighters, so
+/// [`update_toolbar_button_variants`] only flips the variant on these ids
+/// and leaves everything else alone. The grid stepper actions
+/// `GridDecreaseOp` and `GridIncreaseOp` are absent by design. They never
+/// highlight, so they stay at their spawn variant.
+fn is_main_toolbar_op(id: &str) -> bool {
+    id == ToolSelectOp::ID
+        || id == ToolTranslateOp::ID
+        || id == ToolRotateOp::ID
+        || id == ToolScaleOp::ID
+        || id == GizmoSpaceToggleOp::ID
+        || id == ActivateDrawBrushModalOp::ID
+        || id == MeasureDistanceOp::ID
+        || id == EditModeVertexOp::ID
+        || id == EditModeEdgeOp::ID
+        || id == EditModeFaceOp::ID
+        || id == EditModeClipOp::ID
+        || id == EditModeKnifeOp::ID
+        || id == PhysicsActivateOp::ID
+        || id == GridToggleSnapOp::ID
+}
+
+/// Flip each main-toolbar button's [`ButtonVariant`] between `Plain`
+/// (idle, transparent) and `Primary` (active) based on the matching editor
+/// state, identified by operator id. The feathers `update_button_styles`
+/// system reads the variant to compute the background, so this is the only
+/// place toolbar active-state lives; `BackgroundColor` is never mutated
+/// directly.
 ///
-/// Runs every frame: `ActiveModalOperator` is added/removed via
-/// observers that don't trigger `Res::is_changed()` on any of the
-/// scalar resources, so a change-detection short-circuit would miss
-/// the start of a Draw Brush / Measure Distance / etc. session. The
-/// loop is O(toolbar buttons), trivially cheap.
+/// Buttons whose id isn't a main-toolbar op are skipped, so the navmesh
+/// contextual row and this one never fight over the same `ButtonVariant`
+/// even though they share the component pair.
+///
+/// This is an [`On<RefreshOperatorButtons>`] observer. Every editor-state
+/// change it reads from -- active tool, edit mode, gizmo space, snap, and
+/// the active modal -- is mutated by an operator, which announces through
+/// dispatch. Seeding on a freshly-spawned toolbar comes from the same event
+/// fired when each `ButtonOperatorCall` is added. The loop is O(toolbar
+/// buttons) and only writes on an actual change.
 pub fn update_toolbar_button_variants(
+    _: On<RefreshOperatorButtons>,
     edit_mode: Res<EditMode>,
     active_tool: Res<ActiveTool>,
     gizmo_space: Res<GizmoSpace>,
@@ -795,49 +847,47 @@ pub fn update_toolbar_button_variants(
 ) {
     let modal_running = active_modal.is_modal_running();
     for (call, mut variant) in &mut buttons {
+        let id = call.id.as_ref();
+        if !is_main_toolbar_op(id) {
+            continue;
+        }
         // While any modal is running only the modal's own button
-        // highlights. Gizmo / mode buttons go quiet so the user sees
-        // a single active tool at a time, matching how mature 3D editors
-        // surfaces the current mode. New extension modal operators
-        // pick this up automatically through the fall-through arm.
+        // highlights. Gizmo and mode buttons go quiet so the user sees a
+        // single active tool at a time. Draw Brush and Measure highlight
+        // here via their modal id; they have no non-modal arm below.
         let active = if modal_running {
-            active_modal.is_operator(&call.id)
-        } else if call.id == ToolTranslateOp::ID {
+            active_modal.is_operator(id)
+        } else if id == ToolTranslateOp::ID {
             *active_tool == ActiveTool::Translate
-        } else if call.id == ToolRotateOp::ID {
+        } else if id == ToolRotateOp::ID {
             *active_tool == ActiveTool::Rotate
-        } else if call.id == ToolScaleOp::ID {
+        } else if id == ToolScaleOp::ID {
             *active_tool == ActiveTool::Scale
-        } else if call.id == GizmoSpaceToggleOp::ID {
+        } else if id == GizmoSpaceToggleOp::ID {
             *gizmo_space == GizmoSpace::Local
-        } else if call.id == ToolSelectOp::ID {
+        } else if id == ToolSelectOp::ID {
             *active_tool == ActiveTool::Select
-        } else if call.id == EditModeVertexOp::ID {
+        } else if id == EditModeVertexOp::ID {
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
-        } else if call.id == EditModeEdgeOp::ID {
+        } else if id == EditModeEdgeOp::ID {
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge)
-        } else if call.id == EditModeFaceOp::ID {
+        } else if id == EditModeFaceOp::ID {
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
-        } else if call.id == EditModeClipOp::ID {
+        } else if id == EditModeClipOp::ID {
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Clip)
-        } else if call.id == EditModeKnifeOp::ID {
+        } else if id == EditModeKnifeOp::ID {
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Knife)
-        } else if call.id == PhysicsActivateOp::ID {
+        } else if id == PhysicsActivateOp::ID {
             *edit_mode == EditMode::Physics
-        } else if call.id == GridToggleSnapOp::ID {
+        } else if id == GridToggleSnapOp::ID {
             snap.translate_snap
         } else {
             false
         };
-        // Inactive toolbar buttons fall back to `Ghost` (transparent)
-        // so only the active one stands out as solid grey. Using
-        // `Default` here would tint every idle button with the muted
-        // ZINC_700 fill at ~50% alpha and they'd all read as
-        // "highlighted" against the toolbar's dark panel.
         let target = if active {
-            ButtonVariant::Active
+            ButtonVariant::Primary
         } else {
-            ButtonVariant::Ghost
+            ButtonVariant::Plain
         };
         if *variant != target {
             *variant = target;

@@ -133,9 +133,14 @@ impl Plugin for InspectorPlugin {
             .add_observer(component_display::add_component_displays)
             .add_observer(component_display::on_inspector_dirty)
             .add_observer(material_card_routing::on_refresh_inspector_card_body)
+            .add_observer(component_display::on_disclosure_change)
             .add_observer(component_picker::on_add_component_button_click)
             .add_observer(reflect_fields::on_checkbox_commit)
             .add_observer(reflect_fields::on_text_edit_commit)
+            .add_observer(reflect_fields::on_numeric_value_change_f64)
+            .add_observer(reflect_fields::on_numeric_value_change_i64)
+            .add_observer(reflect_fields::on_color_plane_change)
+            .add_observer(reflect_fields::on_color_slider_change)
             .add_observer(custom_props_display::on_custom_property_checkbox_commit)
             .add_observer(custom_props_display::on_custom_property_text_commit)
             .add_observer(brush_display::on_brush_face_text_commit)
@@ -376,9 +381,9 @@ pub(super) struct InspectorFieldRow {
     pub(super) field_path: String,
 }
 
-/// Marker on the container that holds an enum combobox + its current variant's
-/// field rows. `refresh_enum_variants` polls these and rebuilds the subtree
-/// (combobox + field rows) in place whenever the ECS variant changes.
+/// Marker on the container that holds an enum select menu + its current
+/// variant's field rows. `refresh_enum_variants` polls these and rebuilds the
+/// subtree (menu + field rows) in place whenever the ECS variant changes.
 #[derive(Component)]
 pub(super) struct EnumVariantHost {
     pub(super) source_entity: Entity,

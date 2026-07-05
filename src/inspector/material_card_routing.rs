@@ -1,8 +1,14 @@
+use bevy::feathers::containers::{pane, pane_body, pane_header};
+use bevy::feathers::controls::FeathersDisclosureToggle;
 use bevy::prelude::*;
+use bevy::ui::Checked;
+use bevy::ui_widgets::ToggleChecked;
+use jackdaw_feathers::tokens;
+use jackdaw_widgets::collapsible::{CollapsibleBody, CollapsibleHeader, CollapsibleSection};
 
 use super::{
     ComponentDisplay, ComponentDisplayBody, ComponentDisplayTypePath, ComponentName, Inspector,
-    InspectorDirty, InspectorTarget,
+    InspectorDirty, InspectorTarget, component_display::DisclosureSection,
 };
 
 /// Resolve which `Handle<StandardMaterial>` to display for a brush entity.
@@ -46,9 +52,12 @@ pub(crate) fn resolve_brush_material_handle(
 }
 
 /// Spawn a material card shell (section + header + body) under
-/// `inspector_entity` via the shared inspector-card builder, tagged with the
+/// `inspector_entity` from feathers panel containers, tagged with the
 /// `ComponentDisplay*` markers so the category filter routes it to the Material
-/// tab. Returns the body entity for deferred filling.
+/// tab. The header carries a `FeathersDisclosureToggle` that drives collapse
+/// through `on_disclosure_change`; the section/header/body keep the
+/// `Collapsible*` markers so `persist_inspector_collapse` records the state.
+/// Returns the body entity for deferred filling.
 pub(crate) fn spawn_material_card_shell(
     commands: &mut Commands,
     inspector_entity: Entity,
@@ -58,25 +67,102 @@ pub(crate) fn spawn_material_card_shell(
     icon_font: &Handle<Font>,
     collapsed: bool,
 ) -> Entity {
-    let card = jackdaw_feathers::inspector_card::spawn_inspector_card(
-        commands,
-        inspector_entity,
-        title,
-        icon_font,
-        jackdaw_feathers::inspector_card::InspectorCardOpts {
-            icon: Some(icon),
-            removable: false,
-            collapsible: true,
-            collapsed,
+    let body_display = if collapsed {
+        Display::None
+    } else {
+        Display::Flex
+    };
+
+    // Card frame: a feathers pane holding a header and a body.
+    let section = commands
+        .spawn_scene(pane())
+        .insert((
+            ComponentDisplay,
+            ComponentName(title.to_string()),
+            ComponentDisplayTypePath(type_path.to_string()),
+            CollapsibleSection { collapsed },
+            Node {
+                flex_direction: FlexDirection::Column,
+                width: Val::Percent(100.0),
+                ..Default::default()
+            },
+            ChildOf(inspector_entity),
+        ))
+        .id();
+
+    let header = commands
+        .spawn_scene(pane_header())
+        .insert((
+            CollapsibleHeader,
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Start,
+                column_gap: Val::Px(tokens::SPACING_SM),
+                width: Val::Percent(100.0),
+                ..Default::default()
+            },
+            ChildOf(section),
+        ))
+        .id();
+
+    // Disclosure toggle: its `Checked` state is the expanded state and it draws
+    // the rotating chevron. `ValueChange<bool>` routes through
+    // `on_disclosure_change`.
+    let mut disclosure = commands.spawn_scene(bsn! { @FeathersDisclosureToggle });
+    disclosure.insert((ChildOf(header), DisclosureSection(section)));
+    if !collapsed {
+        disclosure.insert(Checked);
+    }
+    let disclosure_entity = disclosure.id();
+
+    // Card icon then title.
+    commands.spawn((
+        Text::new(String::from(icon.unicode())),
+        TextFont {
+            font: icon_font.clone().into(),
+            font_size: tokens::TEXT_SIZE,
+            ..Default::default()
         },
-    );
-    commands.entity(card.section).insert((
-        ComponentDisplay,
-        ComponentName(title.to_string()),
-        ComponentDisplayTypePath(type_path.to_string()),
+        TextColor(tokens::TEXT_SECONDARY),
+        ChildOf(header),
     ));
-    commands.entity(card.body).insert(ComponentDisplayBody);
-    card.body
+    commands.spawn((
+        Text::new(title.to_string()),
+        TextFont {
+            font_size: tokens::TEXT_SIZE_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_DISPLAY_COLOR.into()),
+        ChildOf(header),
+    ));
+
+    // Clicking anywhere on the header toggles the disclosure, which then emits
+    // `ValueChange<bool>` through `on_disclosure_change`.
+    commands
+        .entity(header)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.trigger(ToggleChecked {
+                entity: disclosure_entity,
+            });
+        });
+
+    let body = commands
+        .spawn_scene(pane_body())
+        .insert((
+            ComponentDisplayBody,
+            CollapsibleBody,
+            Node {
+                flex_direction: FlexDirection::Column,
+                width: Val::Percent(100.0),
+                display: body_display,
+                ..Default::default()
+            },
+            ChildOf(section),
+        ))
+        .id();
+
+    body
 }
 
 /// True if a card with `card_type_path` should be refreshed by a trigger for

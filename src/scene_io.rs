@@ -9,7 +9,7 @@ use std::result::Result;
 use bevy::asset::{ReflectAsset, ReflectHandle, UntypedAssetId};
 use bevy::image::ImageLoaderSettings;
 use bevy::reflect::serde::{ReflectDeserializerProcessor, ReflectSerializerProcessor};
-use bevy::reflect::{TypeRegistration, TypeRegistry};
+use bevy::reflect::{TypeInfo, TypeRegistration, TypeRegistry};
 use bevy::{
     asset::AssetPath,
     ecs::reflect::AppTypeRegistry,
@@ -1591,6 +1591,61 @@ fn collect_linear_image_names(assets: &JsnAssets) -> HashSet<String> {
     linear_names
 }
 
+/// Serialize a type's reflect `Default` to a JSON value. Returns
+/// `None` when the type has no `ReflectDefault` or the value cannot
+/// be serialized.
+fn serialize_reflect_default(
+    registration: &TypeRegistration,
+    registry: &TypeRegistry,
+) -> Option<serde_json::Value> {
+    let default = registration.data::<ReflectDefault>()?.default();
+    let serializer = TypedReflectSerializer::new(default.as_partial_reflect(), registry);
+    serde_json::to_value(&serializer).ok()
+}
+
+/// Produce a complete JSON object for `registration` by filling
+/// on-disk values into the type's serialized default. Fields present in
+/// `on_disk` are kept; missing fields take the default; keys not in the
+/// struct are dropped.
+///
+/// Only top-level struct fields are filled. Enums, tuple structs,
+/// tuples, collections, and opaque leaves are taken wholly from
+/// `on_disk` so variant tags and element shapes stay intact. Handle
+/// refs (`@Name`/`#Name` strings, `null`) ride through unchanged and
+/// resolve in the deserializer processor; default handle fields
+/// serialize to `null`, which the processor turns into a default handle.
+fn fill_missing_with_defaults(
+    on_disk: &serde_json::Value,
+    registration: &TypeRegistration,
+    registry: &TypeRegistry,
+) -> serde_json::Value {
+    let TypeInfo::Struct(struct_info) = registration.type_info() else {
+        return on_disk.clone();
+    };
+    let serde_json::Value::Object(disk_map) = on_disk else {
+        return on_disk.clone();
+    };
+
+    let mut out = match serialize_reflect_default(registration, registry) {
+        Some(serde_json::Value::Object(default_map)) => default_map,
+        // No default to fill from: pass the on-disk fields through.
+        _ => disk_map.clone(),
+    };
+
+    for field in struct_info.iter() {
+        let Some(disk_value) = disk_map.get(field.name()) else {
+            continue;
+        };
+        let filled = match registry.get(field.type_id()) {
+            Some(field_reg) => fill_missing_with_defaults(disk_value, field_reg, registry),
+            None => disk_value.clone(),
+        };
+        out.insert(field.name().to_string(), filled);
+    }
+
+    serde_json::Value::Object(out)
+}
+
 pub fn load_inline_assets(
     world: &mut World,
     assets: &JsnAssets,
@@ -1687,12 +1742,15 @@ pub fn load_inline_assets(
                 entity_map: &[],
             };
 
+            // Fill fields the on-disk value omits using the type's
+            // default so a strict deserializer sees a complete object.
+            let filled = fill_missing_with_defaults(json_value, registration, &registry_guard);
             let deserializer = TypedReflectDeserializer::with_processor(
                 registration,
                 &registry_guard,
                 &mut deser_processor,
             );
-            let Ok(reflected) = deserializer.deserialize(json_value) else {
+            let Ok(reflected) = deserializer.deserialize(&filled) else {
                 warn!("Failed to deserialize inline asset '{name}' of type '{type_path}'");
                 continue;
             };
@@ -1747,6 +1805,18 @@ pub fn load_scene_from_jsn(
                 continue;
             }
 
+            // A marker or otherwise-empty component serializes to
+            // `null`. Insert the type's default so the marker survives
+            // the round-trip; a strict deserializer rejects `null`.
+            if value.is_null()
+                && let Some(reflect_default) = registration.data::<ReflectDefault>()
+            {
+                world
+                    .entity_mut(spawned[i])
+                    .insert_reflect(reflect_default.default().into_partial_reflect());
+                continue;
+            }
+
             let mut deser_processor = JsnDeserializerProcessor {
                 asset_server: &asset_server,
                 parent_path,
@@ -1754,12 +1824,15 @@ pub fn load_scene_from_jsn(
                 catalog_assets: &catalog_handles,
                 entity_map: &spawned,
             };
+            // Fill fields the on-disk value omits using the type's
+            // default so a strict deserializer sees a complete object.
+            let filled = fill_missing_with_defaults(value, registration, &registry_guard);
             let deserializer = TypedReflectDeserializer::with_processor(
                 registration,
                 &registry_guard,
                 &mut deser_processor,
             );
-            let Ok(reflected) = deserializer.deserialize(value) else {
+            let Ok(reflected) = deserializer.deserialize(&filled) else {
                 warn!("Failed to deserialize '{type_path}'  -- skipping");
                 continue;
             };
@@ -2566,6 +2639,62 @@ pub fn register_entities_in_ast(world: &mut World, entities: &[Entity]) {
 mod tests {
     use super::*;
     use crate::SkipSerialization;
+
+    /// A struct whose on-disk form lacks `added`, standing in for data
+    /// that predates a field being added to the type.
+    #[derive(Reflect, Default)]
+    #[reflect(Default)]
+    struct OldNew {
+        kept: f32,
+        added: u32,
+    }
+
+    /// Fills missing struct fields from the type default, keeps present
+    /// fields, drops unknown keys, and leaves a strict deserializer able
+    /// to build the value.
+    #[test]
+    fn fill_missing_with_defaults_completes_partial_struct() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<OldNew>();
+        registry.register::<f32>();
+        registry.register::<u32>();
+        let registration = registry.get(TypeId::of::<OldNew>()).unwrap();
+
+        // Old data: `kept` only, plus a field that no longer exists.
+        let on_disk = serde_json::json!({ "kept": 2.5, "gone": 9 });
+        let filled = fill_missing_with_defaults(&on_disk, registration, &registry);
+
+        let obj = filled.as_object().expect("filled value is an object");
+        assert_eq!(obj.get("kept").and_then(serde_json::Value::as_f64), Some(2.5));
+        assert_eq!(obj.get("added").and_then(serde_json::Value::as_u64), Some(0));
+        assert!(!obj.contains_key("gone"), "unknown key must be dropped");
+
+        let deserializer = TypedReflectDeserializer::new(registration, &registry);
+        let reflected = deserializer
+            .deserialize(&filled)
+            .expect("strict deserialize succeeds on filled object");
+        let value = OldNew::from_reflect(reflected.as_ref()).expect("materialize OldNew");
+        assert_eq!(value.kept, 2.5);
+        assert_eq!(value.added, 0);
+    }
+
+    /// A complete object round-trips unchanged: every present value is
+    /// preserved, so behavior is a no-op for current data.
+    #[test]
+    fn fill_missing_with_defaults_is_noop_for_complete_object() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<OldNew>();
+        registry.register::<f32>();
+        registry.register::<u32>();
+        let registration = registry.get(TypeId::of::<OldNew>()).unwrap();
+
+        let on_disk = serde_json::json!({ "kept": 1.0, "added": 7 });
+        let filled = fill_missing_with_defaults(&on_disk, registration, &registry);
+
+        let obj = filled.as_object().expect("filled value is an object");
+        assert_eq!(obj.get("kept").and_then(serde_json::Value::as_f64), Some(1.0));
+        assert_eq!(obj.get("added").and_then(serde_json::Value::as_u64), Some(7));
+    }
 
     /// `SkipSerialization` children must be excluded from the saved
     /// scene graph alongside `EditorHidden` and `NonSerializable`.

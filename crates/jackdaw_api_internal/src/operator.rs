@@ -593,6 +593,21 @@ fn is_op_running(
     active.get(world).ok().is_some_and(|a| a.is_operator(id))
 }
 
+/// Fired once whenever an operator runs through [`dispatch_operator`],
+/// meaning it passed its availability and modal-conflict checks and its
+/// system executed. Every operator invocation routes through that one
+/// function, whether from a toolbar click, keybind, palette, or a
+/// programmatic `world.operator(id).call()`. Any editor-state change an
+/// operator makes to the active tool, edit mode, gizmo space, snap, or
+/// active modal is announced here.
+///
+/// UI that derives its appearance from operator-owned state observes
+/// this instead of polling every frame. The toolbar variant highlighters
+/// and the operator-button availability driver recompute only on a state
+/// change.
+#[derive(Event)]
+pub struct RefreshOperatorButtons;
+
 fn dispatch_operator(
     In((id, params, settings)): In<(Cow<'static, str>, OperatorParameters, CallOperatorSettings)>,
     world: &mut World,
@@ -680,6 +695,11 @@ fn dispatch_operator(
             }
         }
     }
+
+    // Announce after the modal slot is settled; the `Running` arm above
+    // inserts `ActiveModalOperator`. Observers that key off the active
+    // modal must see its final state for this invocation.
+    world.trigger(RefreshOperatorButtons);
 
     Ok(result)
 }
@@ -834,6 +854,11 @@ fn finalize_modal(
     let Some(snapshot) = world.entity_mut(entity).take::<ActiveModalOperator>() else {
         return;
     };
+    // A modal can end without a fresh dispatch when its own invoke returns
+    // Finished while ticking. This is where its `ActiveModalOperator` is
+    // torn down, so announce here too, otherwise the toolbar would keep the
+    // modal's button highlighted until the next operator ran.
+    world.trigger(RefreshOperatorButtons);
     if !commit || !op.allows_undo {
         return;
     }

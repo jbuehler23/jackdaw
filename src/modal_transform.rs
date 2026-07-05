@@ -102,17 +102,33 @@ fn snap_toggle(
     mode: Res<ActiveTool>,
     modal: Res<ModalTransformState>,
     mut snap_settings: ResMut<SnapSettings>,
+    mut commands: Commands,
 ) {
     if modal.active.is_some() {
         return;
     }
 
     if mouse.just_pressed(MouseButton::Middle) {
-        match *mode {
-            ActiveTool::Select => {}
-            ActiveTool::Translate => snap_settings.translate_snap = !snap_settings.translate_snap,
-            ActiveTool::Rotate => snap_settings.rotate_snap = !snap_settings.rotate_snap,
-            ActiveTool::Scale => snap_settings.scale_snap = !snap_settings.scale_snap,
+        let toggled = match *mode {
+            ActiveTool::Select => false,
+            ActiveTool::Translate => {
+                snap_settings.translate_snap = !snap_settings.translate_snap;
+                true
+            }
+            ActiveTool::Rotate => {
+                snap_settings.rotate_snap = !snap_settings.rotate_snap;
+                true
+            }
+            ActiveTool::Scale => {
+                snap_settings.scale_snap = !snap_settings.scale_snap;
+                true
+            }
+        };
+        // Middle-mouse toggles snap outside the operator path, so the
+        // toolbar's GridToggleSnap highlight observer won't see the change
+        // unless we announce it.
+        if toggled {
+            commands.trigger(jackdaw_api::op::RefreshOperatorButtons);
         }
     }
 }

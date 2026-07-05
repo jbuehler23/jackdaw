@@ -4,8 +4,16 @@
 use std::path::PathBuf;
 
 use bevy::{
+    feathers::{
+        controls::{FeathersButton, FeathersCheckbox},
+        display::label_dim,
+        theme::{ThemeBorderColor, ThemedText},
+        tokens,
+    },
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
+    ui::Checked,
+    ui_widgets::{Activate, ValueChange},
 };
 use jackdaw_api::prelude::ExtensionKind;
 use jackdaw_api_internal::{
@@ -14,11 +22,8 @@ use jackdaw_api_internal::{
     paths::config_dir,
 };
 use jackdaw_feathers::{
-    button::{ButtonClickEvent, ButtonProps, ButtonSize, ButtonVariant, button},
-    checkbox::{CheckboxCommitEvent, CheckboxProps, checkbox},
     dialog::{CloseDialogEvent, DialogChildrenSlot, OpenDialogEvent},
-    icons::{EditorFont, Icon, IconFont},
-    tokens,
+    tooltip::Tooltip,
 };
 use rfd::{AsyncFileDialog, FileHandle};
 
@@ -33,8 +38,6 @@ impl Plugin for ExtensionsDialogPlugin {
             .init_resource::<InstallStatus>()
             .add_systems(Update, populate_extensions_dialog)
             .add_systems(Update, poll_install_task)
-            .add_observer(on_extension_checkbox_commit)
-            .add_observer(on_install_button_click)
             .add_observer(on_dialog_closed);
     }
 }
@@ -45,19 +48,6 @@ fn on_dialog_closed(_: On<CloseDialogEvent>, mut open: ResMut<ExtensionsDialogOp
 
 #[derive(Resource, Default)]
 struct ExtensionsDialogOpen(bool);
-
-/// Records the extension name on each checkbox so the commit observer
-/// can look up which one to toggle.
-#[derive(Component)]
-struct ExtensionCheckbox {
-    extension_id: String,
-}
-
-/// Marks the "Install from file..." button. A single click observer
-/// resolves the button entity by querying for this component, so
-/// adding more buttons won't cross-fire.
-#[derive(Component)]
-struct InstallFromFileButton;
 
 /// Marks the status text row that sits under the install button.
 /// Whenever an install finishes (or fails), the task poller replaces
@@ -96,17 +86,15 @@ pub fn open_extensions_dialog(world: &mut World) {
 ///
 /// The slot is found by marker presence rather than `&Children` because
 /// a freshly-spawned `DialogChildrenSlot` has no `Children` component
-/// yet. Checking for existing `ExtensionCheckbox` entities prevents
-/// double-populating a re-opened dialog.
+/// yet. The `ExtensionsDialogContent` marker on the list root guards
+/// against double-populating a re-opened dialog.
 fn populate_extensions_dialog(
     mut commands: Commands,
     catalog: Res<ExtensionCatalog>,
     open: Res<ExtensionsDialogOpen>,
     slots: Query<Entity, With<DialogChildrenSlot>>,
     loaded: Query<&Extension>,
-    editor_font: Res<EditorFont>,
-    icon_font: Res<IconFont>,
-    existing: Query<(), With<ExtensionCheckbox>>,
+    existing: Query<(), With<ExtensionsDialogContent>>,
 ) {
     if !open.0 {
         return;
@@ -117,9 +105,6 @@ fn populate_extensions_dialog(
     let Some(slot_entity) = slots.iter().next() else {
         return;
     };
-
-    let font = editor_font.0.clone();
-    let ifont = icon_font.0.clone();
 
     // Split catalog entries into Built-in vs. Custom. Membership comes
     // from each extension's declared `ExtensionKind`.
@@ -150,201 +135,197 @@ fn populate_extensions_dialog(
     custom_rows.sort_by(|a, b| a.0.cmp(&b.0));
 
     let list = commands
-        .spawn((
-            ChildOf(slot_entity),
-            ExtensionsDialogContent,
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(tokens::SPACING_XS),
-                min_width: Val::Px(280.0),
-                ..default()
-            },
-        ))
+        .spawn_scene(extensions_list_container())
+        .insert((ChildOf(slot_entity), ExtensionsDialogContent))
         .id();
 
-    spawn_section_header(&mut commands, list, "Built-in");
+    commands
+        .spawn_scene(section_header("Built-in"))
+        .insert(ChildOf(list));
     for (id, label, checked) in builtin_rows {
-        commands.spawn((
-            ChildOf(list),
-            ExtensionCheckbox {
-                extension_id: id.clone(),
-            },
-            checkbox(CheckboxProps::new(label).checked(checked), &font, &ifont),
-        ));
+        spawn_extension_row(&mut commands, list, id, label, checked);
     }
 
-    spawn_section_header(&mut commands, list, "Regular");
+    commands
+        .spawn_scene(section_header("Regular"))
+        .insert(ChildOf(list));
     if custom_rows.is_empty() {
-        commands.spawn((
-            ChildOf(list),
-            Node {
-                padding: UiRect::axes(Val::Px(tokens::SPACING_LG), Val::Px(tokens::SPACING_SM)),
-                ..default()
-            },
-            children![(
-                Text::new("No regular extensions installed"),
-                TextFont {
-                    font_size: tokens::TEXT_SIZE_SM,
-                    ..default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-            )],
-        ));
+        commands
+            .spawn_scene(empty_regular_notice())
+            .insert(ChildOf(list));
     } else {
         for (id, label, checked) in custom_rows {
-            commands.spawn((
-                ChildOf(list),
-                ExtensionCheckbox {
-                    extension_id: id.clone(),
-                },
-                checkbox(CheckboxProps::new(label).checked(checked), &font, &ifont),
-            ));
+            spawn_extension_row(&mut commands, list, id, label, checked);
         }
     }
 
     spawn_install_row(&mut commands, list);
 }
 
-/// Compose the install/build buttons plus the shared status line
-/// under them. Lives inside `populate_extensions_dialog` so it's
-/// rebuilt every time the dialog opens.
+/// Spawn one extension checkbox under `list`, seeding its initial
+/// `Checked` state. The checkbox carries its own `ValueChange<bool>`
+/// observer (see [`extension_checkbox`]) which toggles the extension
+/// and persists the enabled set.
+fn spawn_extension_row(
+    commands: &mut Commands,
+    list: Entity,
+    id: String,
+    label: String,
+    checked: bool,
+) {
+    let mut row = commands.spawn_scene(extension_checkbox(id, label));
+    if checked {
+        // Checkboxes don't seed their own `Checked` state, so an enabled
+        // extension is marked here at spawn.
+        row.insert(Checked);
+    }
+    row.insert(ChildOf(list));
+}
+
+/// The list root spawned into the dialog slot. The
+/// `ExtensionsDialogContent` marker is inserted at the spawn site so an
+/// install can cascade-despawn this subtree and trigger a rebuild.
+fn extensions_list_container() -> impl Scene {
+    bsn! {
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(2),
+            min_width: px(280),
+        }
+    }
+}
+
+/// A checkbox bound to one extension. The observer keeps the visual
+/// `Checked` state in sync, since the checkbox doesn't self-update, and
+/// runs the enable/disable and persist pipeline.
+fn extension_checkbox(id: String, label: String) -> impl Scene {
+    bsn! {
+        @FeathersCheckbox {
+            @caption: bsn! { Text(label) ThemedText }
+        }
+        on(move |change: On<ValueChange<bool>>, mut commands: Commands| {
+            let checked = change.value;
+            let source = change.source;
+
+            // Belt-and-suspenders: required extensions shouldn't have a
+            // checkbox in the first place (see `populate_extensions_dialog`),
+            // but if one slipped through we refuse to disable it and keep
+            // it visually enabled rather than letting the editor end up in
+            // a broken state.
+            if !checked && extension_resolution::is_required(&id) {
+                warn!("Refusing to disable required extension `{id}`");
+                commands.entity(source).insert(Checked);
+                return;
+            }
+
+            if checked {
+                commands.entity(source).insert(Checked);
+            } else {
+                commands.entity(source).remove::<Checked>();
+            }
+
+            let name = id.clone();
+            commands.queue(move |world: &mut World| {
+                if checked {
+                    enable_extension(world, &name);
+                    // Re-apply the keymap so newly registered operator
+                    // actions get bindings without requiring a restart.
+                    crate::extension_lifecycle::apply_active_keymap(world);
+                } else {
+                    disable_extension(world, &name);
+                }
+                persist_current_enabled(world);
+            });
+        })
+    }
+}
+
+/// Underlined section heading.
+fn section_header(label: impl Into<String>) -> impl Scene {
+    bsn! {
+        Node {
+            width: percent(100),
+            padding: UiRect::new(px(12), px(12), px(8), px(2)),
+            border: UiRect::bottom(px(1)),
+        }
+        ThemeBorderColor(tokens::PANE_HEADER_DIVIDER)
+        Children [ label_dim(label) ]
+    }
+}
+
+/// Placeholder shown when no regular (non-built-in) extensions exist.
+fn empty_regular_notice() -> impl Scene {
+    bsn! {
+        Node {
+            padding: UiRect::axes(px(12), px(4)),
+        }
+        Children [ label_dim("No regular extensions installed") ]
+    }
+}
+
+/// Compose the install button plus the shared status line under it.
+///
+/// Only "install a prebuilt .so" lives in the editor. Source-tree builds
+/// happen at the launcher (File > Home) so every build carries its
+/// potential process-restart with it. This keeps a sudden restart when
+/// clicking Build out of the mid-session editor experience.
 fn spawn_install_row(commands: &mut Commands, list: Entity) {
     let row = commands
-        .spawn((
-            ChildOf(list),
-            Node {
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::axes(Val::Px(tokens::SPACING_LG), Val::Px(tokens::SPACING_SM)),
-                row_gap: Val::Px(tokens::SPACING_XS),
-                ..default()
-            },
-        ))
+        .spawn_scene(install_row_container())
+        .insert(ChildOf(list))
         .id();
 
-    // Only "install a prebuilt .so" lives in the editor: source-tree
-    // builds happen at the launcher (File > Home) so every build
-    // carries its potential process-restart with it. This keeps
-    // mid-session surprises (sudden restart when clicking Build)
-    // out of the editor experience.
-    commands.spawn((
+    commands.spawn_scene(install_button()).insert((
         ChildOf(row),
-        InstallFromFileButton,
-        button(
-            ButtonProps::new("Install prebuilt dylib...")
-                .with_variant(ButtonVariant::Default)
-                .with_size(ButtonSize::MD)
-                .with_left_icon(Icon::FilePlus),
-        ),
-        jackdaw_feathers::tooltip::Tooltip::title("Install Extension").with_description(
+        Tooltip::title("Install Extension").with_description(
             "Pick a prebuilt extension dylib (.so / .dll / .dylib) and copy \
                  it into the user extensions directory. The extension loads on \
                  the next editor restart.",
         ),
     ));
 
-    commands.spawn((
-        ChildOf(row),
-        InstallStatusText,
-        Text::new(String::new()),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-    ));
+    commands
+        .spawn_scene(label_dim(String::new()))
+        .insert((ChildOf(row), InstallStatusText));
 }
 
-/// Underlined heading matching the Add Component dialog's style.
-fn spawn_section_header(commands: &mut Commands, list: Entity, label: &str) {
-    let header = commands
-        .spawn((
-            ChildOf(list),
-            Node {
-                padding: UiRect::new(
-                    Val::Px(tokens::SPACING_LG),
-                    Val::Px(tokens::SPACING_LG),
-                    Val::Px(tokens::SPACING_MD),
-                    Val::Px(tokens::SPACING_XS),
-                ),
-                width: Val::Percent(100.0),
-                border: UiRect::bottom(Val::Px(1.0)),
-                ..default()
-            },
-            BorderColor::all(tokens::BORDER_SUBTLE),
-        ))
-        .id();
-
-    commands.spawn((
-        ChildOf(header),
-        Text::new(label.to_string()),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-    ));
-}
-
-/// Enable or disable the matching extension when a checkbox commits,
-/// then persist the new enabled list.
-fn on_extension_checkbox_commit(
-    event: On<CheckboxCommitEvent>,
-    checkboxes: Query<&ExtensionCheckbox>,
-    mut commands: Commands,
-) {
-    let Ok(cb) = checkboxes.get(event.entity) else {
-        return;
-    };
-    let name = cb.extension_id.clone();
-    let checked = event.checked;
-
-    // Belt-and-suspenders: required extensions shouldn't have a
-    // checkbox in the first place (see `populate_extensions_dialog`),
-    // but if one slipped through we refuse to disable it rather than
-    // letting the editor end up in a broken state.
-    if !checked && extension_resolution::is_required(&name) {
-        warn!("Refusing to disable required extension `{name}`");
-        return;
-    }
-
-    commands.queue(move |world: &mut World| {
-        if checked {
-            enable_extension(world, &name);
-            // Re-apply the keymap so newly registered operator actions get
-            // bindings without requiring a restart.
-            crate::extension_lifecycle::apply_active_keymap(world);
-        } else {
-            disable_extension(world, &name);
+fn install_row_container() -> impl Scene {
+    bsn! {
+        Node {
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::axes(px(12), px(4)),
+            row_gap: px(2),
         }
-        persist_current_enabled(world);
-    });
+    }
 }
 
-/// Spawn an rfd file picker when the install button is clicked.
-/// Skips if a picker is already in flight (rfd can't run two at
-/// once on some platforms, and it'd be confusing UX).
-fn on_install_button_click(
-    event: On<ButtonClickEvent>,
-    buttons: Query<(), With<InstallFromFileButton>>,
-    mut commands: Commands,
-) {
-    if buttons.get(event.entity).is_err() {
-        return;
-    }
-    commands.queue(|world: &mut World| {
-        if world.resource::<InstallStatus>().task.is_some() {
-            return;
+/// Button that opens an rfd file picker for a prebuilt dylib. Skips if a
+/// picker is already in flight; rfd can't run two at once on some
+/// platforms, and it would be confusing UX.
+fn install_button() -> impl Scene {
+    bsn! {
+        @FeathersButton {
+            @caption: bsn! { Text("Install prebuilt dylib...") ThemedText }
         }
-        let dialog = AsyncFileDialog::new().add_filter(
-            "Extension dylib",
-            // Platform-specific extensions mirror what the loader
-            // recognises (`jackdaw_loader::is_dylib`).
-            &["so", "dylib", "dll"],
-        );
-        let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_file().await });
-        world.resource_mut::<InstallStatus>().task = Some(task);
-        world.resource_mut::<InstallStatus>().message = Some("Select a dylib file...".into());
-    });
+        on(|_: On<Activate>, mut commands: Commands| {
+            commands.queue(|world: &mut World| {
+                if world.resource::<InstallStatus>().task.is_some() {
+                    return;
+                }
+                let dialog = AsyncFileDialog::new().add_filter(
+                    "Extension dylib",
+                    // Platform-specific extensions mirror what the loader
+                    // recognises (`jackdaw_loader::is_dylib`).
+                    &["so", "dylib", "dll"],
+                );
+                let task =
+                    AsyncComputeTaskPool::get().spawn(async move { dialog.pick_file().await });
+                world.resource_mut::<InstallStatus>().task = Some(task);
+                world.resource_mut::<InstallStatus>().message =
+                    Some("Select a dylib file...".into());
+            });
+        })
+    }
 }
 
 /// Drive the file picker task to completion. On selection, queue a

@@ -1,4 +1,9 @@
+use std::borrow::Cow;
+
+use bevy::feathers::controls::FeathersButton;
 use bevy::prelude::*;
+use bevy::ui::InteractionDisabled;
+use bevy::ui_widgets::Activate;
 use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
@@ -9,6 +14,8 @@ use jackdaw_feathers::{
 };
 use jackdaw_jsn::PropertyValue;
 
+use crate::selection::Selection;
+
 /// Catalog name of the Core extension. Exported so
 /// [`crate::extension_resolution::REQUIRED_EXTENSIONS`] and the
 /// Extensions dialog can refer to it without duplicating the
@@ -17,28 +24,23 @@ pub const CORE_EXTENSION_ID: &str = "jackdaw.core";
 
 pub(super) fn plugin(app: &mut App) {
     app.register_extension::<JackdawCoreExtension>()
-        .add_observer(dispatch_button_operator_call);
+        .add_observer(dispatch_button_operator_call)
+        .add_observer(dispatch_activate_operator)
+        .add_observer(update_operator_button_availability)
+        .add_observer(seed_operator_button_on_add)
+        .add_systems(Update, refresh_buttons_on_selection_change);
 }
 
-/// When a button carrying a [`ButtonOperatorCall`] is clicked,
-/// dispatch the referenced operator with the button's statically-declared
-/// parameters. This is the single editor-wide glue that makes
-/// `ButtonProps::call_operator(id)` and menu / context-menu `op:`-prefixed
-/// entries (which also attach `ButtonOperatorCall` via feathers) actually
-/// run the operator.
+/// Queues the work that makes a [`ButtonOperatorCall`] run its operator.
+/// Cancels any active modal first so a toolbar button is a peer of
+/// whatever tool currently owns the modal slot, then dispatches the
+/// referenced operator with the button's statically-declared parameters.
 ///
-/// The feathers-level click handlers for menu/context items skip
-/// firing their own `MenuAction`/`ContextMenuAction` events when they
-/// see `ButtonOperatorCall`, so this observer is the sole dispatch path
-/// for those items and won't double-fire.
-fn dispatch_button_operator_call(
-    event: On<ButtonClickEvent>,
-    button_op: Query<&ButtonOperatorCall>,
-    mut commands: Commands,
-) {
-    let Ok(call) = button_op.get(event.entity) else {
-        return;
-    };
+/// Both dispatch entry points call this: [`dispatch_button_operator_call`]
+/// for the `ButtonClickEvent` from `feathers::button`, and
+/// [`dispatch_activate_operator`] for the `Activate` from a
+/// `FeathersButton`.
+fn queue_operator_dispatch(commands: &mut Commands, call: &ButtonOperatorCall) {
     let id = call.id.clone().into_owned();
     let params: Vec<(String, PropertyValue)> = call
         .params
@@ -64,6 +66,107 @@ fn dispatch_button_operator_call(
             error!("operator dispatch failed for `{id}`: {err}");
         }
     });
+}
+
+/// Dispatches when a `feathers::button` carrying a [`ButtonOperatorCall`]
+/// is clicked and fires `ButtonClickEvent`. This also covers menu and
+/// context-menu `op:`-prefixed entries, which attach `ButtonOperatorCall`
+/// via feathers. The feathers-level click handlers skip firing their own
+/// `MenuAction`/`ContextMenuAction` events when they see
+/// `ButtonOperatorCall`, so this observer is the sole dispatch path for
+/// those items and won't double-fire.
+fn dispatch_button_operator_call(
+    event: On<ButtonClickEvent>,
+    button_op: Query<&ButtonOperatorCall>,
+    mut commands: Commands,
+) {
+    if let Ok(call) = button_op.get(event.entity) {
+        queue_operator_dispatch(&mut commands, call);
+    }
+}
+
+/// Dispatches when a `bevy_feathers` button authored via
+/// `jackdaw_feathers::button::operator_button` emits `Activate` on click
+/// or keyboard activation. Entities without a `ButtonOperatorCall` are
+/// ignored, so other `Activate` sources such as a button with its own
+/// `on(Activate)` observer don't double-fire.
+fn dispatch_activate_operator(
+    activate: On<Activate>,
+    button_op: Query<&ButtonOperatorCall>,
+    mut commands: Commands,
+) {
+    if let Ok(call) = button_op.get(activate.entity) {
+        queue_operator_dispatch(&mut commands, call);
+    }
+}
+
+/// Drive `InteractionDisabled` on every `FeathersButton` operator button
+/// from its operator's live availability. `bevy_feathers` reads
+/// `InteractionDisabled` to grey the button out and suppress its
+/// `Activate`, so this is the only place such a button's enabled state
+/// lives.
+///
+/// This is an [`On<RefreshOperatorButtons>`] observer. Availability turns
+/// on the editor state every operator mutates, announced through dispatch,
+/// and on the current selection. [`refresh_buttons_on_selection_change`]
+/// re-fires the event when `Selection` changes, and freshly-spawned
+/// buttons seed off the same event via [`seed_operator_button_on_add`].
+/// Reading `is_available` needs `&mut World`, so the recompute is queued.
+///
+/// Scoped to `FeathersButton` so the `feathers::button` path, which gates
+/// clicks via its own `ButtonVariant::Disabled`, is left untouched.
+/// `is_available` returning `Err` keeps the button enabled. That covers an
+/// unknown id or a modal op while a modal runs; dispatch cancels the
+/// active modal first, so modal-op buttons must stay clickable.
+fn update_operator_button_availability(
+    _: On<RefreshOperatorButtons>,
+    buttons: Query<(Entity, &ButtonOperatorCall), With<FeathersButton>>,
+    mut commands: Commands,
+) {
+    let calls: Vec<(Entity, Cow<'static, str>)> =
+        buttons.iter().map(|(e, c)| (e, c.id.clone())).collect();
+    if calls.is_empty() {
+        return;
+    }
+    commands.queue(move |world: &mut World| {
+        for (entity, id) in calls {
+            let available = world.operator(id).is_available().unwrap_or(true);
+            let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+                continue;
+            };
+            let disabled = entity_mut.contains::<InteractionDisabled>();
+            if available && disabled {
+                entity_mut.remove::<InteractionDisabled>();
+            } else if !available && !disabled {
+                entity_mut.insert(InteractionDisabled);
+            }
+        }
+    });
+}
+
+/// Seed a button's variant and disabled state the moment its
+/// [`ButtonOperatorCall`] is added. The variant highlighters and the
+/// availability driver are [`On<RefreshOperatorButtons>`] observers, so
+/// they only run on a state change. Without this, a freshly-opened editor
+/// or a just-spawned contextual toolbar would show stale defaults until
+/// the first operator ran. Re-firing the event recomputes every button, so
+/// the new one settles alongside the rest. The trigger is queued, so it
+/// runs after the spawn flushes and the button's `ButtonVariant` is in
+/// place.
+fn seed_operator_button_on_add(_: On<Add, ButtonOperatorCall>, mut commands: Commands) {
+    commands.trigger(RefreshOperatorButtons);
+}
+
+/// Operator availability often depends on the selection (e.g. delete,
+/// duplicate, group). Selection lives in the [`Selection`] resource and
+/// is mutated from many sites (some bypass the `Selected` component), so
+/// resource change-detection is the one reliable signal. This bridges it
+/// to the refresh event; it recomputes nothing itself and short-circuits
+/// on frames where the selection is unchanged.
+fn refresh_buttons_on_selection_change(selection: Res<Selection>, mut commands: Commands) {
+    if selection.is_changed() {
+        commands.trigger(RefreshOperatorButtons);
+    }
 }
 
 #[derive(Default)]

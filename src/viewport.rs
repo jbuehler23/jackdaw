@@ -463,7 +463,48 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
     // `SceneViewport` UI node filling the rest; we attach
     // `ViewportNode` to that SceneViewport so its camera renders into
     // the UI node's bounds.
-    world.spawn((ChildOf(parent), crate::layout::viewport_with_toolbar()));
+    let column = world
+        .spawn((ChildOf(parent), crate::layout::viewport_with_toolbar()))
+        .id();
+
+    // The main editor toolbar is a bsn! Scene, so it can't live inside the
+    // Bundle `children!` of `viewport_with_toolbar`. Spawn it standalone,
+    // stamp the editor markers, and slot it in as the first child (index 0)
+    // above the viewport. This runs before the navmesh insert so the navmesh
+    // row lands at index 1, directly beneath it.
+    match world.spawn_scene(crate::layout::toolbar()) {
+        Ok(mut toolbar) => {
+            toolbar.insert((crate::layout::Toolbar, crate::EditorEntity));
+            let toolbar = toolbar.id();
+            world.entity_mut(column).insert_children(0, &[toolbar]);
+        }
+        Err(err) => error!("failed to spawn editor toolbar scene: {err}"),
+    }
+
+    // The navmesh toolbar is a bsn! Scene, so it can't live inside the Bundle
+    // `children!` above. Spawn it standalone, stamp the editor markers, and
+    // slot it in right under the main toolbar (index 1) so the contextual row
+    // sits above the viewport rather than below it.
+    match world.spawn_scene(crate::navmesh::toolbar::navmesh_toolbar()) {
+        Ok(mut navmesh) => {
+            navmesh.insert((crate::navmesh::toolbar::NavmeshToolbar, crate::EditorEntity));
+            let navmesh = navmesh.id();
+            world.entity_mut(column).insert_children(1, &[navmesh]);
+        }
+        Err(err) => error!("failed to spawn navmesh toolbar scene: {err}"),
+    }
+
+    // The terrain toolbar is likewise a bsn! Scene. Spawn it standalone,
+    // stamp the editor markers, and slot it in at index 2 so the contextual
+    // row sits directly beneath the navmesh toolbar and above the viewport.
+    match world.spawn_scene(crate::terrain::toolbar::terrain_toolbar()) {
+        Ok(mut terrain) => {
+            terrain.insert((crate::terrain::toolbar::TerrainToolbar, crate::EditorEntity));
+            let terrain = terrain.id();
+            world.entity_mut(column).insert_children(2, &[terrain]);
+        }
+        Err(err) => error!("failed to spawn terrain toolbar scene: {err}"),
+    }
 
     // Find the freshly-spawned SceneViewport that's a descendant of
     // `parent` and attach the camera link plus the drop observer.

@@ -499,7 +499,6 @@ impl Plugin for EditorCorePlugin {
             Update,
             (
                 send_scroll_events,
-                layout::update_toolbar_button_variants,
                 layout::update_grid_size_label,
                 layout::update_active_document_display,
                 layout::update_tab_strip_highlights,
@@ -520,6 +519,7 @@ impl Plugin for EditorCorePlugin {
                 .run_if(in_state(AppState::Editor)),
         )
         .add_systems(Update, keybind_focus::disable_keyboard_input_when_typing)
+        .add_observer(layout::update_toolbar_button_variants)
         .add_observer(on_workspace_changed)
         .add_observer(on_scroll)
         .add_observer(handle_menu_action)

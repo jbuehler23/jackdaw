@@ -12,6 +12,7 @@ pub mod inspector_card;
 pub mod inspector_field;
 pub mod list_view;
 pub mod menu_bar;
+pub mod number_input;
 pub mod panel_header;
 pub mod panel_section;
 pub mod picker;
@@ -51,6 +52,7 @@ impl Plugin for EditorFeathersPlugin {
             variant_edit::plugin,
             scroll::plugin,
             toast::plugin,
+            number_input::ScrubNumberInputPlugin,
         ));
         app.add_plugins((
             tooltip::TooltipPlugin,

@@ -712,7 +712,13 @@ impl EditorCommand for SetJsnField {
 
 /// Apply a JSON value to an ECS component  -- either full component replacement
 /// (empty `field_path`) or field-level update.
-fn apply_jsn_field_to_ecs(
+///
+/// Writes only the live ECS component, leaving the `SceneJsnAst` untouched.
+/// The `SceneJsnAst` is the undo source of truth. The inspector's drag-scrub
+/// fields call this on each non-final tick so the viewport tracks the drag
+/// without minting an undo entry or dirtying the AST; the pre-drag value stays
+/// in the AST for the single `SetJsnField` undo pushed when the drag ends.
+pub(crate) fn apply_jsn_field_to_ecs(
     world: &mut World,
     entity: Entity,
     type_path: &str,
