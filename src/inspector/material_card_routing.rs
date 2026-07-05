@@ -147,7 +147,7 @@ pub(crate) fn spawn_material_card_shell(
             });
         });
 
-    let body = commands
+    commands
         .spawn_scene(pane_body())
         .insert((
             ComponentDisplayBody,
@@ -160,9 +160,7 @@ pub(crate) fn spawn_material_card_shell(
             },
             ChildOf(section),
         ))
-        .id();
-
-    body
+        .id()
 }
 
 /// True if a card with `card_type_path` should be refreshed by a trigger for

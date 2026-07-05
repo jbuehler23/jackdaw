@@ -102,7 +102,7 @@ fn connect_client(mut commands: Commands, config: Res<ClientConfig>) {
             // The client entity must hold a `ReplicationReceiver` to receive
             // replicated state (mirrors the server attaching a `ReplicationSender`
             // per `LinkOf`). `ClientPlugins` does NOT add this automatically.
-            ReplicationReceiver::default(),
+            ReplicationReceiver,
             // Override the default `InputTimelineConfig` (which carries
             // `InputDelayConfig::no_input_delay()`) with a fixed minimum input delay
             // so client inputs reach the server in time to be applied (see

@@ -17,8 +17,8 @@ use bevy::text::{EditableText, TextEdit};
 use bevy::ui::Checked;
 use bevy::ui_widgets::{Activate, ValueChange, observe};
 use jackdaw_feathers::icons::Icon;
-use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_feathers::tokens;
+use jackdaw_feathers::tooltip::Tooltip;
 
 use crate::default_style;
 
@@ -351,9 +351,11 @@ fn spawn_custom_text_with(
     current_value: &str,
     binding: impl Bundle,
 ) {
-    commands
-        .spawn_scene(custom_text_scene())
-        .insert((binding, PendingCustomText(current_value.to_string()), ChildOf(parent)));
+    commands.spawn_scene(custom_text_scene()).insert((
+        binding,
+        PendingCustomText(current_value.to_string()),
+        ChildOf(parent),
+    ));
 }
 
 /// Container framing a `FeathersTextInput`. The inner text entry drives the
@@ -462,13 +464,11 @@ fn spawn_add_property_row(
         .id();
 
     // Name input
-    commands
-        .spawn_scene(custom_text_scene())
-        .insert((
-            CustomPropertyNameInput,
-            PendingCustomText(String::new()),
-            ChildOf(row),
-        ));
+    commands.spawn_scene(custom_text_scene()).insert((
+        CustomPropertyNameInput,
+        PendingCustomText(String::new()),
+        ChildOf(row),
+    ));
 
     // Type selector menu. The button caption is the selected type; each item
     // writes its type name onto the row's `CustomPropertyTypeChoice`.
@@ -501,12 +501,7 @@ fn spawn_add_property_row(
 /// the selected type and whose popup lists one item per property type. Picking an
 /// item writes its type name onto the add-row's `CustomPropertyTypeChoice`, which
 /// `add_custom_property_from_ui` reads back.
-fn spawn_type_menu(
-    commands: &mut Commands,
-    add_row: Entity,
-    type_names: &[String],
-    current: &str,
-) {
+fn spawn_type_menu(commands: &mut Commands, add_row: Entity, type_names: &[String], current: &str) {
     let menu = commands
         .spawn_scene(bsn! { @FeathersMenu })
         .insert((CustomPropertyTypeSelector, ChildOf(add_row)))

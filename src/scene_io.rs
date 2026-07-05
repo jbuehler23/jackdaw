@@ -2665,8 +2665,14 @@ mod tests {
         let filled = fill_missing_with_defaults(&on_disk, registration, &registry);
 
         let obj = filled.as_object().expect("filled value is an object");
-        assert_eq!(obj.get("kept").and_then(serde_json::Value::as_f64), Some(2.5));
-        assert_eq!(obj.get("added").and_then(serde_json::Value::as_u64), Some(0));
+        assert_eq!(
+            obj.get("kept").and_then(serde_json::Value::as_f64),
+            Some(2.5)
+        );
+        assert_eq!(
+            obj.get("added").and_then(serde_json::Value::as_u64),
+            Some(0)
+        );
         assert!(!obj.contains_key("gone"), "unknown key must be dropped");
 
         let deserializer = TypedReflectDeserializer::new(registration, &registry);
@@ -2692,8 +2698,14 @@ mod tests {
         let filled = fill_missing_with_defaults(&on_disk, registration, &registry);
 
         let obj = filled.as_object().expect("filled value is an object");
-        assert_eq!(obj.get("kept").and_then(serde_json::Value::as_f64), Some(1.0));
-        assert_eq!(obj.get("added").and_then(serde_json::Value::as_u64), Some(7));
+        assert_eq!(
+            obj.get("kept").and_then(serde_json::Value::as_f64),
+            Some(1.0)
+        );
+        assert_eq!(
+            obj.get("added").and_then(serde_json::Value::as_u64),
+            Some(7)
+        );
     }
 
     /// `SkipSerialization` children must be excluded from the saved

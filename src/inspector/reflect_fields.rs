@@ -1428,16 +1428,14 @@ pub(crate) fn spawn_color_picker(
         }
     });
 
-    commands
-        .spawn_scene(bsn! { @FeathersColorSwatch })
-        .insert((
-            ColorSwatchValue(Color::Srgba(srgba)),
-            ColorSubWidget {
-                root,
-                part: ColorPart::Plane,
-            },
-            ChildOf(header),
-        ));
+    commands.spawn_scene(bsn! { @FeathersColorSwatch }).insert((
+        ColorSwatchValue(Color::Srgba(srgba)),
+        ColorSubWidget {
+            root,
+            part: ColorPart::Plane,
+        },
+        ChildOf(header),
+    ));
 
     // Red/blue plane picker. The plane's fixed channel is green (`z`); its `x`
     // is red, `y` is blue.
@@ -1510,11 +1508,13 @@ fn spawn_color_field(
     // as a `ColorCommitSkip` on the root so the shared observers never touch
     // `FieldBinding`; the hex commit path is unaffected, matching the prior
     // behavior where only the drag observers guarded on the proxy.
-    commands.entity(root).insert(ColorCommitSkip(Box::new(move |world: &World| {
-        world
-            .get::<crate::remote::entity_browser::RemoteEntityProxy>(source_entity)
-            .is_some()
-    })));
+    commands
+        .entity(root)
+        .insert(ColorCommitSkip(Box::new(move |world: &World| {
+            world
+                .get::<crate::remote::entity_browser::RemoteEntityProxy>(source_entity)
+                .is_some()
+        })));
 }
 
 /// Container framing the color field's hex `FeathersTextInput`. The inner text
@@ -1664,7 +1664,9 @@ fn sync_color_widgets(world: &mut World, root: Entity) {
     }
     if let Some(hex_entity) = hex_entity
         && focused != Some(hex_entity)
-        && let Ok(mut editable) = world.query::<&mut EditableText>().get_mut(world, hex_entity)
+        && let Ok(mut editable) = world
+            .query::<&mut EditableText>()
+            .get_mut(world, hex_entity)
     {
         editable.queue_edit(TextEdit::SelectAll);
         editable.queue_edit(TextEdit::Insert(srgba.to_hex().into()));

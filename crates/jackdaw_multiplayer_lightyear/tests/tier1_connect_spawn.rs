@@ -56,11 +56,9 @@ fn client_connects_and_player_is_spawned() {
     for _ in 0..600 {
         server.update();
         client.update();
-        let mut q = server.world_mut().query_filtered::<Entity, (
-            With<Replicate>,
-            With<ControlledBy>,
-            With<Rooms>,
-        )>();
+        let mut q = server
+            .world_mut()
+            .query_filtered::<Entity, (With<Replicate>, With<ControlledBy>, With<Rooms>)>();
         if q.iter(server.world()).count() >= 1 {
             spawned = true;
             break;

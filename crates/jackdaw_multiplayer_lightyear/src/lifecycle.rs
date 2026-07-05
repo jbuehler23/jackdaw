@@ -156,9 +156,7 @@ impl Plugin for ServerLifecyclePlugin {
 /// `handle_new_client` pattern. The sender carries no per-link config; send timing
 /// is governed globally by lightyear's replication tick.
 fn on_link_add(add: On<Add, LinkOf>, mut commands: Commands) {
-    commands
-        .entity(add.entity)
-        .insert(ReplicationSender::default());
+    commands.entity(add.entity).insert(ReplicationSender);
 }
 
 /// When a connection finishes the netcode handshake, fire `ClientConnected` (always)
@@ -191,7 +189,14 @@ fn on_client_connected(
         warn!("client connected but the world has no SpawnPoint; no player spawned");
         return;
     };
-    spawn_player_bundle(&mut commands, &mut rooms, &mut allocator, add.entity, &zone, pos);
+    spawn_player_bundle(
+        &mut commands,
+        &mut rooms,
+        &mut allocator,
+        add.entity,
+        &zone,
+        pos,
+    );
 }
 
 /// Emit `ClientDisconnected` when a server-side connection is torn down. Lightyear

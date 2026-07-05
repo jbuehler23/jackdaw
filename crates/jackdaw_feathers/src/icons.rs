@@ -20,8 +20,7 @@ pub mod font_paths {
     /// Lucide icon font (glyphs via [`super::Icon`]`::*.unicode()`).
     pub const LUCIDE: &str = "embedded://jackdaw_feathers/../fonts/lucide.ttf";
     /// Editor body font, regular weight.
-    pub const FIRA_REGULAR: &str =
-        "embedded://jackdaw_feathers/../fonts/FiraSans-Regular.ttf";
+    pub const FIRA_REGULAR: &str = "embedded://jackdaw_feathers/../fonts/FiraSans-Regular.ttf";
     /// Editor body font, italic.
     pub const FIRA_ITALIC: &str = "embedded://jackdaw_feathers/../fonts/FiraSans-Italic.ttf";
 }

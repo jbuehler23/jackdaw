@@ -194,20 +194,21 @@ pub(super) fn spawn_material_checkbox_field(
         ChildOf(row),
     ));
 
-    let mut commands = world.commands();
-    let mut cb = commands.spawn_scene(bsn! { @FeathersCheckbox });
-    cb.insert((
-        MaterialCheckboxBinding {
-            material_handle: handle,
-            apply_fn: write,
-        },
-        ChildOf(row),
-    ));
-    // The checkbox does not self-manage `Checked`; seed the initial state.
-    if value {
-        cb.insert(Checked);
+    {
+        let mut commands = world.commands();
+        let mut cb = commands.spawn_scene(bsn! { @FeathersCheckbox });
+        cb.insert((
+            MaterialCheckboxBinding {
+                material_handle: handle,
+                apply_fn: write,
+            },
+            ChildOf(row),
+        ));
+        // The checkbox does not self-manage `Checked`; seed the initial state.
+        if value {
+            cb.insert(Checked);
+        }
     }
-    drop(commands);
     world.flush();
 }
 
@@ -1175,17 +1176,14 @@ fn spawn_material_numeric_field(
     // The `MaterialFieldBinding` and staged text ride on the container; the
     // inner text entry emits `ValueChange<String>` on Enter or blur, which
     // `on_material_text_commit` writes back to the asset.
-    world
-        .commands()
-        .spawn_scene(material_text_scene())
-        .insert((
-            MaterialFieldBinding {
-                material_handle,
-                apply_fn,
-            },
-            PendingMaterialText(value.to_string()),
-            ChildOf(row),
-        ));
+    world.commands().spawn_scene(material_text_scene()).insert((
+        MaterialFieldBinding {
+            material_handle,
+            apply_fn,
+        },
+        PendingMaterialText(value.to_string()),
+        ChildOf(row),
+    ));
     world.flush();
 }
 

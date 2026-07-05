@@ -119,19 +119,12 @@ fn brush_face_text_on_focus_lost(
 /// Spawn a titled feathers group with `caption` as its header, returning the
 /// group body entity that rows are parented to.
 fn spawn_group(commands: &mut Commands, parent: Entity, caption: &str) -> Entity {
-    let group_entity = commands
-        .spawn_scene(group())
-        .insert(ChildOf(parent))
-        .id();
+    let group_entity = commands.spawn_scene(group()).insert(ChildOf(parent)).id();
     let header = commands
         .spawn_scene(group_header())
         .insert(ChildOf(group_entity))
         .id();
-    commands.spawn((
-        Text::new(caption.to_string()),
-        ThemedText,
-        ChildOf(header),
-    ));
+    commands.spawn((Text::new(caption.to_string()), ThemedText, ChildOf(header)));
     commands
         .spawn_scene(group_body())
         .insert(ChildOf(group_entity))
@@ -188,7 +181,10 @@ pub(super) fn spawn_brush_display(
     let info = format!("{face_count} faces, {vertex_count} vertices, {edge_count} edges");
 
     // Seat the card content in a feathers content pane.
-    let body = commands.spawn_scene(pane_body()).insert(ChildOf(parent)).id();
+    let body = commands
+        .spawn_scene(pane_body())
+        .insert(ChildOf(parent))
+        .id();
 
     commands.spawn((
         Text::new(info),

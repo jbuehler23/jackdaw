@@ -29,8 +29,8 @@ use bevy::ecs::{
     world::World,
 };
 use bevy::input::{
-    keyboard::{Key, KeyCode, KeyboardInput},
     ButtonInput,
+    keyboard::{Key, KeyCode, KeyboardInput},
 };
 use bevy::input_focus::{
     AcquireFocus, FocusCause, FocusGained, FocusLost, FocusedInput, InputFocus,
@@ -38,24 +38,23 @@ use bevy::input_focus::{
 use bevy::log::{warn, warn_once};
 use bevy::math::ops;
 use bevy::picking::{
+    PickingSystems,
     events::{Cancel, Drag, DragEnd, DragStart, Pointer, Press, Release},
     hover::Hovered,
     pointer::PointerButton,
-    PickingSystems,
 };
-use bevy::reflect::std_traits::ReflectDefault;
 use bevy::reflect::Reflect;
+use bevy::reflect::std_traits::ReflectDefault;
 use bevy::scene::prelude::*;
 use bevy::text::{
     EditableText, EditableTextFilter, FontSourceTemplate, Justify, LineHeight, TextEdit, TextFont,
     TextLayout,
 };
 use bevy::ui::{
-    percent, px,
-    widget::{Text, TextScroll},
     AlignItems, AlignSelf, BackgroundGradient, ColorStop, ComputedNode, ComputedUiRenderTargetInfo,
-    Display, Gradient, InteractionDisabled, InterpolationColorSpace, JustifyContent, LinearGradient,
-    Node, PositionType, UiGlobalTransform, UiRect, UiScale,
+    Display, Gradient, InteractionDisabled, InterpolationColorSpace, JustifyContent,
+    LinearGradient, Node, PositionType, UiGlobalTransform, UiRect, UiScale, percent, px,
+    widget::{Text, TextScroll},
 };
 use bevy::ui_widgets::ValueChange;
 
@@ -561,7 +560,11 @@ fn number_input_on_insert_value(
     update: On<Insert, ScrubNumberInputValue>,
     q_children: Query<&Children>,
     q_number_input: Query<
-        (&ScrubNumberInputValue, Option<&SoftLimit>, Option<&HardLimit>),
+        (
+            &ScrubNumberInputValue,
+            Option<&SoftLimit>,
+            Option<&HardLimit>,
+        ),
         With<ScrubNumberInput>,
     >,
     mut q_text_input: Query<(&mut EditableText, &mut BackgroundGradient)>,
@@ -923,7 +926,10 @@ fn scrubber_on_drag_start(
             }
         } else if let Some(NumberInputStep(step)) = step {
             *step * BASE_DRAG_SPEED
-        } else if matches!(input_value.format(), ScrubNumberFormat::I32 | ScrubNumberFormat::I64) {
+        } else if matches!(
+            input_value.format(),
+            ScrubNumberFormat::I32 | ScrubNumberFormat::I64
+        ) {
             // Treat integers as having a step size of 1
             BASE_DRAG_SPEED
         } else if let Some(prec) = precision {
@@ -1270,7 +1276,7 @@ fn update_slidebar_styles_theme(
 /// updates back into the widget, such as an inspector refresh, use this to
 /// avoid clobbering an in-progress edit. The drag flag lives on a private
 /// child entity, so this accessor exists rather than exposing
-/// [`ScrubberDragState`].
+/// `ScrubberDragState`.
 pub fn is_scrubbing_or_focused(world: &World, root: Entity, focus: Option<Entity>) -> bool {
     fn walk(world: &World, entity: Entity, focus: Option<Entity>) -> bool {
         if world

@@ -593,7 +593,7 @@ fn is_op_running(
     active.get(world).ok().is_some_and(|a| a.is_operator(id))
 }
 
-/// Fired once whenever an operator runs through [`dispatch_operator`],
+/// Fired once whenever an operator runs through `dispatch_operator`,
 /// meaning it passed its availability and modal-conflict checks and its
 /// system executed. Every operator invocation routes through that one
 /// function, whether from a toolbar click, keybind, palette, or a
