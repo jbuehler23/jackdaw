@@ -98,7 +98,7 @@ pub fn spawn_navmesh_entity(commands: &mut Commands) -> Entity {
         .spawn((
             Name::new("Navmesh"),
             Transform::from_scale(Vec3::splat(10.0)),
-            jackdaw_jsn::NavmeshRegion::default(),
+            jackdaw_scene_types::NavmeshRegion::default(),
         ))
         .id()
 }

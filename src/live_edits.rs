@@ -6,7 +6,8 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_jsn::{JsnNodeId, SceneJsnAst};
+use jackdaw_jsn::SceneJsnAst;
+use jackdaw_scene_types::SceneNodeId;
 
 use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
 
@@ -204,7 +205,7 @@ pub fn resolve_entry_entity(
     entry: &LiveEditEntry,
 ) -> Option<Entity> {
     if let Some(node_id) = entry.node_id
-        && let Some(entity) = ast.entity_for_node_id(JsnNodeId(node_id))
+        && let Some(entity) = ast.entity_for_node_id(SceneNodeId(node_id))
     {
         return Some(entity);
     }
@@ -628,7 +629,7 @@ mod tests {
         })
     }
 
-    fn build_world() -> (World, Entity, JsnNodeId) {
+    fn build_world() -> (World, Entity, SceneNodeId) {
         let mut world = World::new();
         world.init_resource::<AppTypeRegistry>();
         world.init_resource::<PieProjection>();
@@ -645,7 +646,7 @@ mod tests {
         let preview_entity = world
             .spawn((Name::new("player"), Transform::from_xyz(1.0, 2.0, 3.0)))
             .id();
-        let node_id = JsnNodeId::next();
+        let node_id = SceneNodeId::next();
         let mut components = HashMap::new();
         components.insert(TRANSFORM_PATH.to_string(), transform_json());
         let mut ast = SceneJsnAst::default();

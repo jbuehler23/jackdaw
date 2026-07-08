@@ -2,7 +2,7 @@ use crate::default_style;
 use crate::draw_brush::{DrawBrushGizmoGroup, DrawPlane};
 use crate::snapping::SnapSettings;
 use bevy::prelude::*;
-use jackdaw_jsn::BrushTopology;
+use jackdaw_scene_types::BrushTopology;
 
 /// AABB overlap test on topology vertices. Replaces the convex-only plane
 /// `brushes_intersect` for paths where either brush may be concave; the

@@ -1,5 +1,5 @@
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::dissolve_faces::dissolve_faces};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn dissolve_one_face_of_cube_leaves_5_faces_with_hole() {

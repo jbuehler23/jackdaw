@@ -32,7 +32,7 @@ pub use self::mesh::{
 };
 pub use edit_mode_systems::BrushHalfedge;
 pub use jackdaw_geometry::MeshMirror;
-pub use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
+pub use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
 pub use knife_mode::{KnifeMode, KnifePathPoint, KnifeSnapKind, KnifeSnapTarget};
 pub use preview::{ActivePreview, PreviewMesh, PreviewState};
 pub use topology_ops::edge_bevel::EdgeBevelModalState;
@@ -376,13 +376,13 @@ fn apply_brush(world: &mut World, entity: Entity, target: &Brush) {
 
 /// Serialize a Brush component to JSON and store it in the AST.
 pub fn sync_brush_to_ast(world: &mut World, entity: Entity, brush: &Brush) {
-    // `jackdaw_jsn::types::Brush`; the canonical reflected type
+    // `jackdaw_scene_types::types::Brush`; the canonical reflected type
     // path (Brush is defined directly in `jackdaw_jsn::types`, not a
     // `types::brush` submodule; historically this string was wrong
     // and the AST ended up with a `types::brush::Brush` key that
     // `load_scene_from_jsn` then skipped with an `Unknown type`
     // warning and silently lost the Brush on every scene reload).
-    crate::commands::sync_component_to_ast(world, entity, "jackdaw_jsn::types::Brush", brush);
+    crate::commands::sync_component_to_ast(world, entity, "jackdaw_scene_types::types::Brush", brush);
 }
 
 /// Watch for any `Changed<Brush>` and mirror the new state into the

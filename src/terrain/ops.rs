@@ -32,7 +32,7 @@ fn toggle_to(mode: &mut TerrainEditMode, target: TerrainEditMode) {
 /// toolbar that hosts these buttons is hidden anyway.
 fn has_selected_terrain(
     selection: Res<Selection>,
-    terrains: Query<(), With<jackdaw_jsn::Terrain>>,
+    terrains: Query<(), With<jackdaw_scene_types::Terrain>>,
 ) -> bool {
     selection.primary().is_some_and(|e| terrains.contains(e))
 }
@@ -159,7 +159,7 @@ pub(crate) fn terrain_tool_generate(
 pub(crate) fn terrain_generate(
     _: In<OperatorParameters>,
     selection: Res<Selection>,
-    mut terrains: Query<(&mut jackdaw_jsn::Terrain, &mut TerrainDirtyChunks)>,
+    mut terrains: Query<(&mut jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
     gen_state: Res<TerrainGenerateState>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
@@ -196,7 +196,7 @@ pub(crate) fn terrain_generate(
 pub(crate) fn terrain_erode(
     _: In<OperatorParameters>,
     selection: Res<Selection>,
-    mut terrains: Query<(&mut jackdaw_jsn::Terrain, &mut TerrainDirtyChunks)>,
+    mut terrains: Query<(&mut jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
     gen_state: Res<TerrainGenerateState>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {

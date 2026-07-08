@@ -838,7 +838,7 @@ fn camera_bookmark_keys(
     keyboard: Res<ButtonInput<KeyCode>>,
     edit_mode: Res<crate::brush::EditMode>,
     selection: Res<Selection>,
-    brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    brushes: Query<(), With<jackdaw_scene_types::Brush>>,
     modal: Res<crate::modal_transform::ModalTransformState>,
     mut commands: Commands,
 ) {

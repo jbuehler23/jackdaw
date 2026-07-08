@@ -1304,7 +1304,7 @@ pub(crate) fn build_scene_snapshot(
     };
 
     // Component types to skip  -- only computed/internal components.
-    // `JsnNodeId` is skipped here because it is emitted as the structural
+    // `SceneNodeId` is skipped here because it is emitted as the structural
     // `JsnEntity::id` field below, not as a reflected component entry.
     let skip_ids: HashSet<TypeId> = HashSet::from([
         TypeId::of::<GlobalTransform>(),
@@ -1312,7 +1312,7 @@ pub(crate) fn build_scene_snapshot(
         TypeId::of::<ViewVisibility>(),
         TypeId::of::<ChildOf>(),
         TypeId::of::<Children>(),
-        TypeId::of::<jackdaw_jsn::JsnNodeId>(),
+        TypeId::of::<jackdaw_scene_types::SceneNodeId>(),
     ]);
 
     let ast = world.get_resource::<jackdaw_jsn::SceneJsnAst>();
@@ -1330,7 +1330,7 @@ pub(crate) fn build_scene_snapshot(
             // structural field; fall back to the AST node when the live
             // entity lacks the component (e.g. not yet backfilled).
             let id = entity_ref
-                .get::<jackdaw_jsn::JsnNodeId>()
+                .get::<jackdaw_scene_types::SceneNodeId>()
                 .map(|nid| nid.0)
                 .or_else(|| {
                     ast.and_then(|a| a.node_for_entity(entity))
@@ -1872,8 +1872,8 @@ pub fn load_scene_from_jsn(
     for (i, jsn) in entities.iter().enumerate() {
         let node_id = jsn
             .id
-            .map(jackdaw_jsn::JsnNodeId)
-            .unwrap_or_else(jackdaw_jsn::JsnNodeId::next);
+            .map(jackdaw_scene_types::SceneNodeId)
+            .unwrap_or_else(jackdaw_scene_types::SceneNodeId::next);
         world.entity_mut(spawned[i]).insert(node_id);
     }
 
@@ -1892,7 +1892,7 @@ pub fn load_scene_from_jsn(
         .iter()
         .filter_map(|&e| {
             world
-                .get::<jackdaw_jsn::GltfSource>(e)
+                .get::<jackdaw_scene_types::GltfSource>(e)
                 .map(|gs| (e, gs.path.clone(), gs.scene_index))
         })
         .collect();
@@ -2765,18 +2765,18 @@ mod tests {
         );
     }
 
-    /// Every entity spawned from a scene carries a `JsnNodeId`, and the id
+    /// Every entity spawned from a scene carries a `SceneNodeId`, and the id
     /// survives a save (`build_scene_snapshot`) then load round-trip so the
     /// running game can map a live entity back to its authored node.
     #[test]
     fn spawned_entities_carry_node_id_and_round_trip() {
-        use jackdaw_jsn::JsnNodeId;
+        use jackdaw_scene_types::SceneNodeId;
         use jackdaw_jsn::format::JsnEntity;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default());
-        app.register_type::<JsnNodeId>();
+        app.register_type::<SceneNodeId>();
         app.register_type::<Name>();
 
         // Two entities with explicit on-disk ids (parent + child).
@@ -2799,14 +2799,14 @@ mod tests {
 
         let id0 = app
             .world()
-            .get::<JsnNodeId>(spawned[0])
-            .expect("spawned entity should carry JsnNodeId");
+            .get::<SceneNodeId>(spawned[0])
+            .expect("spawned entity should carry SceneNodeId");
         let id1 = app
             .world()
-            .get::<JsnNodeId>(spawned[1])
-            .expect("spawned child should carry JsnNodeId");
-        assert_eq!(*id0, JsnNodeId(42));
-        assert_eq!(*id1, JsnNodeId(99));
+            .get::<SceneNodeId>(spawned[1])
+            .expect("spawned child should carry SceneNodeId");
+        assert_eq!(*id0, SceneNodeId(42));
+        assert_eq!(*id1, SceneNodeId(99));
 
         // Save the live world back out and confirm the ids land in the
         // structural `id` field, not duplicated as a component entry.
@@ -2842,7 +2842,7 @@ mod tests {
     /// Authored Transform is `[1, 2, 3]`; the live ECS Transform is `[9, 9, 9]`.
     /// The save must write the authored values.
     fn build_live_save_world() -> World {
-        use jackdaw_jsn::JsnNodeId;
+        use jackdaw_scene_types::SceneNodeId;
         use jackdaw_jsn::ast::{JsnEntityNode, SceneJsnAst};
 
         let mut world = World::new();
@@ -2852,7 +2852,7 @@ mod tests {
             let mut w = registry.write();
             w.register::<Name>();
             w.register::<Transform>();
-            w.register::<JsnNodeId>();
+            w.register::<SceneNodeId>();
         }
         world.init_resource::<jackdaw_commands::CommandHistory>();
         world.init_resource::<SceneFilePath>();
@@ -2860,7 +2860,7 @@ mod tests {
 
         // Authored node: Transform translation [1, 2, 3], bound to a preview
         // entity whose live ECS Transform is the [9, 9, 9] overlay.
-        let node_id = JsnNodeId::next();
+        let node_id = SceneNodeId::next();
         let preview = world
             .spawn((
                 Name::new("Authored"),

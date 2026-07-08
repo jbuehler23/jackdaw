@@ -6,7 +6,7 @@
 //!
 //! ```ignore
 //! use bevy::prelude::*;
-//! use jackdaw_jsn::EditorCategory;
+//! use jackdaw_scene_types::EditorCategory;
 //!
 //! /// Spawns the player entity.
 //! #[derive(Component, Reflect, Default)]

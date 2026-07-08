@@ -37,7 +37,7 @@ pub struct SetTerrainHeights {
 
 impl EditorCommand for SetTerrainHeights {
     fn execute(&mut self, world: &mut World) {
-        if let Some(mut terrain) = world.get_mut::<jackdaw_jsn::Terrain>(self.entity) {
+        if let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(self.entity) {
             terrain.heights = self.new_heights.clone();
         }
         if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(self.entity) {
@@ -47,7 +47,7 @@ impl EditorCommand for SetTerrainHeights {
     }
 
     fn undo(&mut self, world: &mut World) {
-        if let Some(mut terrain) = world.get_mut::<jackdaw_jsn::Terrain>(self.entity) {
+        if let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(self.entity) {
             terrain.heights = self.old_heights.clone();
         }
         if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(self.entity) {
@@ -62,12 +62,12 @@ impl EditorCommand for SetTerrainHeights {
 }
 
 fn sync_terrain_heights_to_ast(world: &mut World, entity: Entity) {
-    if let Some(terrain) = world.get::<jackdaw_jsn::Terrain>(entity) {
+    if let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(entity) {
         let terrain = terrain.clone();
         crate::commands::sync_component_to_ast(
             world,
             entity,
-            "jackdaw_jsn::types::terrain::Terrain",
+            "jackdaw_scene_types::types::terrain::Terrain",
             &terrain,
         );
     }
@@ -77,7 +77,7 @@ fn sync_terrain_heights_to_ast(world: &mut World, entity: Entity) {
 /// return the (entity, grid coordinate) that the brush should target.
 fn terrain_brush_hit(
     vp: &crate::viewport::ViewportCursor,
-    terrain_query: &Query<(Entity, &jackdaw_jsn::Terrain, &GlobalTransform)>,
+    terrain_query: &Query<(Entity, &jackdaw_scene_types::Terrain, &GlobalTransform)>,
     selection: &Selection,
 ) -> Option<(Entity, Vec2)> {
     let selected = selection.primary()?;
@@ -124,7 +124,7 @@ fn terrain_brush_hit(
 fn update_terrain_brush_position(
     edit_mode: Res<TerrainEditMode>,
     vp: crate::viewport::ViewportCursor,
-    terrain_query: Query<(Entity, &jackdaw_jsn::Terrain, &GlobalTransform)>,
+    terrain_query: Query<(Entity, &jackdaw_scene_types::Terrain, &GlobalTransform)>,
     selection: Res<Selection>,
     mut sculpt_state: ResMut<TerrainSculptState>,
 ) {
@@ -188,7 +188,7 @@ pub fn terrain_sculpt(
     edit_mode: Res<TerrainEditMode>,
     brush_settings: Res<TerrainBrushSettings>,
     mut sculpt_state: ResMut<TerrainSculptState>,
-    mut terrain_query: Query<(&mut jackdaw_jsn::Terrain, &mut TerrainDirtyChunks)>,
+    mut terrain_query: Query<(&mut jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
     mut history: ResMut<CommandHistory>,
     time: Res<Time>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
@@ -242,7 +242,7 @@ pub fn terrain_sculpt(
 
 fn cancel_terrain_sculpt(
     mut sculpt_state: ResMut<TerrainSculptState>,
-    mut terrain_query: Query<(&mut jackdaw_jsn::Terrain, &mut TerrainDirtyChunks)>,
+    mut terrain_query: Query<(&mut jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
 ) {
     if !sculpt_state.active {
         return;
@@ -286,7 +286,7 @@ fn draw_terrain_brush_gizmo(
     sculpt_state: Res<TerrainSculptState>,
     brush_settings: Res<TerrainBrushSettings>,
     edit_mode: Res<TerrainEditMode>,
-    terrains: Query<(&jackdaw_jsn::Terrain, &GlobalTransform)>,
+    terrains: Query<(&jackdaw_scene_types::Terrain, &GlobalTransform)>,
     mut gizmos: Gizmos,
 ) {
     if !matches!(*edit_mode, TerrainEditMode::Sculpt(_)) {

@@ -16,7 +16,7 @@
 
 use glam::{Quat, Vec3};
 use jackdaw_csg::{CsgInput, brush_difference_split, brush_to_world};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 /// Translated, rotated cuboid as the editor would produce after a draw
 /// op: face planes and topology in world space.

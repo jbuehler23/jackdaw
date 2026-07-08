@@ -11,7 +11,7 @@
 
 use bevy::math::Vec3;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::edge_bevel::edge_bevel};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn beveled_cube_topology_chamfer_ring_is_a_parallelogram() {
@@ -124,7 +124,7 @@ fn beveling_every_cube_edge_produces_consistent_post_flatten_chamfer() {
 
 #[test]
 fn jsn_runtime_mesh_rebuild_uses_topology_for_chamfer() {
-    // `jackdaw_jsn::mesh_rebuild` is the runtime path: it runs once on
+    // `jackdaw_scene_types::mesh_rebuild` is the runtime path: it runs once on
     // `Insert<Brush>` and builds the rendered geometry from
     // `brush.topology` when present (falling back to plane intersection
     // only for legacy brushes). Verify the chamfer face's rendered ring

@@ -9,7 +9,7 @@
 use bevy::{prelude::*, ui::ui_transform::UiGlobalTransform};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
-use jackdaw_jsn::{Brush, BrushFaceData, BrushGroup, BrushPlane};
+use jackdaw_scene_types::{Brush, BrushFaceData, BrushGroup, BrushPlane};
 
 use crate::brush::{
     BrushEditMode, BrushMeshCache, BrushSelection, ClipMode, ClipState, EditMode, SetBrush,

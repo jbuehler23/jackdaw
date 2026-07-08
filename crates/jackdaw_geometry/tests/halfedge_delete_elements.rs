@@ -1,6 +1,6 @@
 use jackdaw_geometry::halfedge::HalfedgeMesh;
 use jackdaw_geometry::halfedge::ops::delete_elements::{delete_edges, delete_faces, delete_verts};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 /// A cube corner is used by 3 faces; deleting it must drop those 3 faces and
 /// the vert, leaving an open mesh that is not re-closed.

@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use jackdaw_geometry::{
     compute_brush_geometry_from_planes, compute_brush_topology, compute_face_tangent_axes,
 };
-use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
+use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
 
 pub(crate) fn spawn_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
     let plane = &active.plane;

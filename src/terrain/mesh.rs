@@ -20,8 +20,8 @@ struct TerrainMaterialHandle(Handle<StandardMaterial>);
 fn initialize_terrain_chunks(
     mut commands: Commands,
     mut terrains: Query<
-        (Entity, &jackdaw_jsn::Terrain, &mut TerrainDirtyChunks),
-        Or<(Added<jackdaw_jsn::Terrain>, Changed<TerrainDirtyChunks>)>,
+        (Entity, &jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks),
+        Or<(Added<jackdaw_scene_types::Terrain>, Changed<TerrainDirtyChunks>)>,
     >,
     existing_chunks: Query<(Entity, &TerrainChunk)>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -88,7 +88,7 @@ fn initialize_terrain_chunks(
 
 /// Rebuild meshes for chunks in the dirty set.
 fn rebuild_dirty_chunks(
-    mut terrains: Query<(&jackdaw_jsn::Terrain, &mut TerrainDirtyChunks)>,
+    mut terrains: Query<(&jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
     mut chunks: Query<(&TerrainChunk, &mut Mesh3d)>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
@@ -116,7 +116,7 @@ fn rebuild_dirty_chunks(
     }
 }
 
-fn heightmap_from_terrain(terrain: &jackdaw_jsn::Terrain) -> jackdaw_terrain::Heightmap {
+fn heightmap_from_terrain(terrain: &jackdaw_scene_types::Terrain) -> jackdaw_terrain::Heightmap {
     jackdaw_terrain::Heightmap {
         resolution: terrain.resolution,
         size: terrain.size,

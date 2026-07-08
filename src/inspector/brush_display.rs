@@ -932,7 +932,7 @@ pub(crate) fn brush_clear_all_materials(
     selection: Res<Selection>,
     mut brushes: Query<&mut Brush>,
     mut history: ResMut<CommandHistory>,
-    brush_groups: Query<(), With<jackdaw_jsn::types::BrushGroup>>,
+    brush_groups: Query<(), With<jackdaw_scene_types::types::BrushGroup>>,
     children_query: Query<&Children>,
     mut commands: Commands,
 ) -> OperatorResult {

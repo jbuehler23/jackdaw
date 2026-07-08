@@ -215,7 +215,7 @@ fn active_viewport_ready(active: Res<ActiveViewport>) -> bool {
 
 fn read_int_param(params: &OperatorParameters, name: &str) -> Option<i64> {
     params.get(name).and_then(|v| match v {
-        jackdaw_jsn::PropertyValue::Int(i) => Some(*i),
+        jackdaw_scene_types::PropertyValue::Int(i) => Some(*i),
         _ => None,
     })
 }

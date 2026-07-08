@@ -41,7 +41,7 @@ impl SystemClipboard {
 }
 
 // Re-export from jackdaw_jsn
-pub use jackdaw_jsn::GltfSource;
+pub use jackdaw_scene_types::GltfSource;
 
 pub struct EntityOpsPlugin;
 

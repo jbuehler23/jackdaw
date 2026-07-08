@@ -600,7 +600,7 @@ fn handle_apply_material(
     selection: Res<Selection>,
     mut brushes: Query<&mut Brush>,
     mut history: ResMut<CommandHistory>,
-    brush_groups: Query<(), With<jackdaw_jsn::types::BrushGroup>>,
+    brush_groups: Query<(), With<jackdaw_scene_types::types::BrushGroup>>,
     children_query: Query<&Children>,
     mut last_material: ResMut<LastUsedMaterial>,
     mut commands: Commands,

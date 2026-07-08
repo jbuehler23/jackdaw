@@ -2068,12 +2068,12 @@ fn register_animation_entities_in_ast(
 /// semantics.
 ///
 /// Lives in the main crate rather than `jackdaw_animation` because it
-/// needs to read `jackdaw_jsn::GltfSource`, and we'd rather not wire a
+/// needs to read `jackdaw_scene_types::GltfSource`, and we'd rather not wire a
 /// `jackdaw_jsn` dep into the animation crate.
 ///
-/// [`GltfSource`]: jackdaw_jsn::GltfSource
+/// [`GltfSource`]: jackdaw_scene_types::GltfSource
 fn discover_gltf_clips(
-    sources: Query<(Entity, &jackdaw_jsn::GltfSource, Option<&Children>)>,
+    sources: Query<(Entity, &jackdaw_scene_types::GltfSource, Option<&Children>)>,
     existing_refs: Query<(), With<jackdaw_animation::GltfClipRef>>,
     asset_server: Res<AssetServer>,
     gltfs: Res<Assets<bevy::gltf::Gltf>>,

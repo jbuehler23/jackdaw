@@ -5316,6 +5316,7 @@ dependencies = [
  "jackdaw_remote",
  "jackdaw_runtime",
  "jackdaw_rustc_wrapper",
+ "jackdaw_scene_types",
  "jackdaw_sdk",
  "jackdaw_select",
  "jackdaw_snap",
@@ -5352,6 +5353,7 @@ dependencies = [
  "jackdaw_jsn",
  "jackdaw_localization",
  "jackdaw_node_graph",
+ "jackdaw_scene_types",
  "lucide-icons",
  "serde",
 ]
@@ -5369,6 +5371,7 @@ dependencies = [
  "jackdaw_feathers",
  "jackdaw_jsn",
  "jackdaw_panels",
+ "jackdaw_scene_types",
  "jackdaw_widgets",
 ]
 
@@ -5383,6 +5386,7 @@ dependencies = [
  "jackdaw_commands",
  "jackdaw_jsn",
  "jackdaw_panels",
+ "jackdaw_scene_types",
  "lucide-icons",
  "serde",
  "serde_json",
@@ -5405,6 +5409,7 @@ dependencies = [
  "bevy",
  "jackdaw_geometry",
  "jackdaw_jsn",
+ "jackdaw_scene_types",
 ]
 
 [[package]]
@@ -5420,6 +5425,7 @@ version = "0.5.0"
 dependencies = [
  "bevy",
  "jackdaw_jsn",
+ "jackdaw_scene_types",
 ]
 
 [[package]]
@@ -5437,6 +5443,7 @@ dependencies = [
  "glam 0.32.1",
  "jackdaw_geometry",
  "jackdaw_jsn",
+ "jackdaw_scene_types",
  "manifold-csg",
  "manifold-csg-sys",
 ]
@@ -5460,6 +5467,7 @@ dependencies = [
  "jackdaw_fuzzy",
  "jackdaw_jsn",
  "jackdaw_localization",
+ "jackdaw_scene_types",
  "jackdaw_widgets",
  "lucide-icons",
 ]
@@ -5481,6 +5489,7 @@ dependencies = [
  "earcutr",
  "glam 0.32.1",
  "jackdaw_jsn",
+ "jackdaw_scene_types",
  "serde",
  "serde_json",
  "slotmap",
@@ -5543,6 +5552,7 @@ version = "0.5.0"
 dependencies = [
  "bevy",
  "jackdaw_jsn",
+ "jackdaw_scene_types",
  "serde",
  "serde_json",
 ]
@@ -5578,6 +5588,7 @@ dependencies = [
  "jackdaw_feathers",
  "jackdaw_jsn",
  "jackdaw_localization",
+ "jackdaw_scene_types",
  "jackdaw_widgets",
  "serde",
 ]
@@ -5633,6 +5644,7 @@ dependencies = [
  "jackdaw_geometry",
  "jackdaw_jsn",
  "jackdaw_pie_protocol",
+ "jackdaw_scene_types",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

@@ -226,7 +226,7 @@ fn poll_read_tasks(
     mut read_tasks: ResMut<ReadTasks>,
     mut commands: Commands,
     mut navmeshes: ResMut<Assets<Navmesh>>,
-    mut regions: Query<&mut jackdaw_jsn::NavmeshRegion>,
+    mut regions: Query<&mut jackdaw_scene_types::NavmeshRegion>,
     mut state: ResMut<NavmeshState>,
 ) {
     read_tasks.retain_mut(|task| {

@@ -6,7 +6,7 @@
 //! without an ECS world.
 
 use jackdaw_geometry::halfedge::{HalfedgeMesh, apply_topology_edit};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use crate::brush::BrushHalfedge;
 
@@ -64,7 +64,7 @@ impl ModalTopologyEdit {
 mod tests {
     use super::ModalTopologyEdit;
     use crate::brush::BrushHalfedge;
-    use jackdaw_jsn::Brush;
+    use jackdaw_scene_types::Brush;
 
     #[test]
     fn restore_returns_the_brush_to_its_snapshot() {

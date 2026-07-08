@@ -11,7 +11,7 @@ use bevy::light::{FogVolume, VolumetricFog};
 use bevy::prelude::*;
 use bevy::ui::widget::ViewportNode;
 use jackdaw_feathers::tokens;
-use jackdaw_jsn::BrushGroup;
+use jackdaw_scene_types::BrushGroup;
 
 #[derive(Component)]
 struct AxisLabel;
@@ -849,7 +849,7 @@ fn draw_coordinate_indicator(
 /// Draw wireframe cuboid for `NavmeshRegion` entities showing their AABB bounds.
 fn draw_navmesh_region_bounds(
     mut gizmos: Gizmos,
-    regions: Query<&GlobalTransform, With<jackdaw_jsn::NavmeshRegion>>,
+    regions: Query<&GlobalTransform, With<jackdaw_scene_types::NavmeshRegion>>,
 ) {
     let color = default_style::NAVMESH_REGION_BOUNDS;
     for global_tf in &regions {

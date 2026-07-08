@@ -1,5 +1,5 @@
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::inset_face::inset_face};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn inset_one_quad_face_of_cube_adds_4_verts_8_edges_4_faces() {

@@ -7,7 +7,7 @@
 //! directly).
 
 use bevy::prelude::*;
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use crate::brush::{BrushEditMode, BrushSelection, EditMode};
 
@@ -19,7 +19,7 @@ pub struct BrushHalfedge(pub jackdaw_geometry::halfedge::HalfedgeBinding);
 
 impl BrushHalfedge {
     /// Lift a brush topology into an edit-time binding.
-    pub fn from_topology(topology: &jackdaw_jsn::BrushTopology) -> Self {
+    pub fn from_topology(topology: &jackdaw_scene_types::BrushTopology) -> Self {
         Self(jackdaw_geometry::halfedge::HalfedgeBinding::lift_from_topology(topology))
     }
 }

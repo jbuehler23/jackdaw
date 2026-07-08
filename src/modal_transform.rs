@@ -155,7 +155,7 @@ fn viewport_drag_detect(
     (mut ray_cast, parents, brushes, editor_entities): (
         MeshRayCast,
         Query<&ChildOf>,
-        Query<(), With<jackdaw_jsn::Brush>>,
+        Query<(), With<jackdaw_scene_types::Brush>>,
         Query<(), With<crate::EditorEntity>>,
     ),
 ) {

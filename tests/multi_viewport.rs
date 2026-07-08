@@ -18,7 +18,7 @@
 use bevy::{dev_tools::infinite_grid::InfiniteGrid, prelude::*};
 use jackdaw::viewport::{ActiveViewport, MainViewportCamera, ViewportConfig, ViewportGrid};
 use jackdaw_api::prelude::*;
-use jackdaw_jsn::PropertyValue;
+use jackdaw_scene_types::PropertyValue;
 
 mod util;
 

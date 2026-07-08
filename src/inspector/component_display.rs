@@ -169,7 +169,7 @@ pub(crate) fn build_inspector_displays(
     let registry = type_registry.read();
 
     // Check for prefab baseline (override tracking)
-    let baseline = entity_ref.get::<jackdaw_jsn::JsnPrefabBaseline>().cloned();
+    let baseline = entity_ref.get::<jackdaw_scene_types::JsnPrefabBaseline>().cloned();
 
     // Prefab-instance context: if this entity sits inside an IsA
     // subtree, override info comes from the prefab AST + cache and the
@@ -485,7 +485,7 @@ pub(crate) fn build_inspector_displays(
             }
 
             // Priority 3c: Terrain, custom inspector sections
-            if type_id == TypeId::of::<jackdaw_jsn::Terrain>() {
+            if type_id == TypeId::of::<jackdaw_scene_types::Terrain>() {
                 crate::terrain::inspector::spawn_terrain_inspector_container(commands, body_entity);
                 continue;
             }

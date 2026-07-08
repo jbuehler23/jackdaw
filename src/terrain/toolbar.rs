@@ -75,7 +75,7 @@ fn vertical_separator() -> impl Scene {
 
 fn toggle_toolbar_visibility(
     selection: Res<Selection>,
-    terrains: Query<(), With<jackdaw_jsn::Terrain>>,
+    terrains: Query<(), With<jackdaw_scene_types::Terrain>>,
     mut toolbar: Query<&mut Node, With<TerrainToolbar>>,
     mut edit_mode: ResMut<TerrainEditMode>,
 ) {

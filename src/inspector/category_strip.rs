@@ -261,7 +261,7 @@ mod tests {
         seed_default_categories(&mut r);
         // A brush entity: Brush + Transform + a custom component.
         let present = [
-            "jackdaw_jsn::types::Brush",
+            "jackdaw_scene_types::types::Brush",
             "bevy_transform::components::transform::Transform",
             "my_game::Health",
         ];

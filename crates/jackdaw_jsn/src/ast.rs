@@ -5,18 +5,15 @@ use bevy::{prelude::*, reflect::NamedField};
 
 use crate::format::{JsnAssets, JsnEntity, JsnMetadata, JsnScene};
 
-/// Stable per-node identity, moved to `jackdaw_scene_types` as `SceneNodeId`
-/// since it is format-independent (identity, not JSON). Kept as an alias so
-/// existing code (`JsnNodeId(x)`, `JsnNodeId::next()`) keeps working.
-pub use jackdaw_scene_types::SceneNodeId as JsnNodeId;
-/// Lower bound of the sparse id range, re-exported from `jackdaw_scene_types`
-/// so this is the one source of truth.
-pub use jackdaw_scene_types::SPARSE_MIN;
+/// Stable per-node identity, format-independent (identity, not JSON), so it
+/// lives in `jackdaw_scene_types`. `JsnEntityNode` (jackdaw_jsn's own API)
+/// stores it directly rather than re-exporting the type under a local alias.
+use jackdaw_scene_types::SceneNodeId;
+/// Lower bound of the sparse id range.
+use jackdaw_scene_types::SPARSE_MIN;
 
-/// Reflect type path for [`JsnNodeId`] (now `SceneNodeId`), used when
-/// projecting the structural node id to and from the reflected-component
-/// representation. Re-points to the new type path; the old value was
-/// `jackdaw_jsn::ast::JsnNodeId`.
+/// Reflect type path for [`SceneNodeId`], used when projecting the
+/// structural node id to and from the reflected-component representation.
 pub const JSN_NODE_ID_TYPE_PATH: &str = jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH;
 
 /// Report whether a loaded scene carries node ids that break the global-key
@@ -67,7 +64,7 @@ pub struct JsnEntityNode {
     /// Stable id for this node, persisted in the `.jsn` and attached to the
     /// spawned ECS entity. `None` only transiently before a fresh id is
     /// minted (`from_jsn_scene`, `create_node`, `add_root`, `add_child`).
-    pub id: Option<JsnNodeId>,
+    pub id: Option<SceneNodeId>,
     /// Parent index into `SceneJsnAst::nodes`.
     pub parent: Option<usize>,
     /// All component data keyed by type path (e.g. `"bevy_transform::components::transform::Transform"`).
@@ -103,21 +100,21 @@ impl SceneJsnAst {
                     ecs_to_jsn.insert(e, i);
                 }
                 // The structural `id` is canonical. Fall back to a stray
-                // `JsnNodeId` reflected into `components` (defensive against
+                // `SceneNodeId` reflected into `components` (defensive against
                 // older save paths), and finally mint a fresh id so every
                 // loaded node is identifiable.
                 let mut components = jsn.components.clone();
                 let id = jsn
                     .id
-                    .map(JsnNodeId)
+                    .map(SceneNodeId)
                     .or_else(|| {
                         components
                             .remove(JSN_NODE_ID_TYPE_PATH)
                             .as_ref()
                             .and_then(serde_json::Value::as_u64)
-                            .map(JsnNodeId)
+                            .map(SceneNodeId)
                     })
-                    .unwrap_or_else(JsnNodeId::next);
+                    .unwrap_or_else(SceneNodeId::next);
                 JsnEntityNode {
                     id: Some(id),
                     parent: jsn.parent,
@@ -135,7 +132,7 @@ impl SceneJsnAst {
         // stored by index, so they are unaffected.
         if needs_id_migration(scene) {
             for node in &mut nodes {
-                node.id = Some(JsnNodeId::next());
+                node.id = Some(SceneNodeId::next());
             }
         }
 
@@ -183,19 +180,19 @@ impl SceneJsnAst {
             .and_then(|idx| self.nodes.get_mut(idx))
     }
 
-    /// Find the index of the node carrying the given stable [`JsnNodeId`].
+    /// Find the index of the node carrying the given stable [`SceneNodeId`].
     ///
     /// Linear scan over `nodes`; ids are unique, so the first match is the
     /// only one. Used to map a running game's live entity back to its
     /// authored node (the PIE "save runtime values" path).
-    pub fn node_index_by_id(&self, id: JsnNodeId) -> Option<usize> {
+    pub fn node_index_by_id(&self, id: SceneNodeId) -> Option<usize> {
         self.nodes.iter().position(|n| n.id == Some(id))
     }
 
     /// Look up the editor preview ECS entity for the node carrying the given
-    /// stable [`JsnNodeId`]. `None` when no node has that id, or the matching
+    /// stable [`SceneNodeId`]. `None` when no node has that id, or the matching
     /// node has no preview entity (e.g. an inherited node spawned ECS-only).
-    pub fn entity_for_node_id(&self, id: JsnNodeId) -> Option<Entity> {
+    pub fn entity_for_node_id(&self, id: SceneNodeId) -> Option<Entity> {
         let idx = self.node_index_by_id(id)?;
         self.nodes.get(idx).and_then(|n| n.ecs_entity)
     }
@@ -223,7 +220,7 @@ impl SceneJsnAst {
         let parent_idx = parent.and_then(|p| self.ecs_to_jsn.get(&p).copied());
         let idx = self.nodes.len();
         self.nodes.push(JsnEntityNode {
-            id: Some(JsnNodeId::next()),
+            id: Some(SceneNodeId::next()),
             parent: parent_idx,
             components: HashMap::new(),
             derived_components: HashSet::new(),
@@ -330,7 +327,7 @@ impl SceneJsnAst {
     pub fn add_root(&mut self) -> usize {
         let idx = self.nodes.len();
         self.nodes.push(JsnEntityNode {
-            id: Some(JsnNodeId::next()),
+            id: Some(SceneNodeId::next()),
             parent: None,
             components: HashMap::new(),
             derived_components: HashSet::new(),
@@ -343,7 +340,7 @@ impl SceneJsnAst {
     pub fn add_child(&mut self, parent: usize) -> usize {
         let idx = self.nodes.len();
         self.nodes.push(JsnEntityNode {
-            id: Some(JsnNodeId::next()),
+            id: Some(SceneNodeId::next()),
             parent: Some(parent),
             components: HashMap::new(),
             derived_components: HashSet::new(),
@@ -439,7 +436,7 @@ impl SceneJsnAst {
             self.nodes.push(JsnEntityNode {
                 // A clone is a new node, so it gets a fresh id rather than
                 // sharing the source's (mirrors paste minting fresh ids).
-                id: Some(JsnNodeId::next()),
+                id: Some(SceneNodeId::next()),
                 parent: dst_parent,
                 components: src_node.components.clone(),
                 derived_components: src_node.derived_components.clone(),
@@ -1144,7 +1141,7 @@ mod tests {
         assert_eq!(result, Some(&serde_json::json!(20.0_f32)));
     }
 
-    /// A freshly authored node gets a `JsnNodeId`, and a round-trip through
+    /// A freshly authored node gets a `SceneNodeId`, and a round-trip through
     /// `to_jsn_scene` / `from_jsn_scene` preserves each node's id.
     #[test]
     fn node_ids_survive_save_load_round_trip() {
@@ -1205,7 +1202,7 @@ mod tests {
     fn node_lookup_missing_id_is_none() {
         let mut ast = SceneJsnAst::default();
         ast.add_root();
-        let absent = JsnNodeId::next();
+        let absent = SceneNodeId::next();
         assert_eq!(ast.node_index_by_id(absent), None);
         assert_eq!(ast.entity_for_node_id(absent), None);
     }
@@ -1326,8 +1323,8 @@ mod tests {
     /// Minted ids land in the sparse range and never repeat back-to-back.
     #[test]
     fn minted_ids_are_sparse_and_unique() {
-        let a = JsnNodeId::next();
-        let b = JsnNodeId::next();
+        let a = SceneNodeId::next();
+        let b = SceneNodeId::next();
         assert_ne!(a, b, "successive mints must differ");
         assert!(a.0 >= SPARSE_MIN, "minted id must be in the sparse range");
         assert!(b.0 >= SPARSE_MIN, "minted id must be in the sparse range");
@@ -1368,8 +1365,8 @@ mod tests {
     fn from_jsn_scene_preserves_sparse_unique_ids() {
         let scene = scene_from_nodes(&[(Some(SPARSE_MIN + 5), None), (Some(SPARSE_MIN + 6), None)]);
         let ast = SceneJsnAst::from_jsn_scene(&scene, &[]);
-        assert_eq!(ast.nodes[0].id, Some(JsnNodeId(SPARSE_MIN + 5)));
-        assert_eq!(ast.nodes[1].id, Some(JsnNodeId(SPARSE_MIN + 6)));
+        assert_eq!(ast.nodes[0].id, Some(SceneNodeId(SPARSE_MIN + 5)));
+        assert_eq!(ast.nodes[1].id, Some(SceneNodeId(SPARSE_MIN + 6)));
     }
 
     /// Re-minting changes ids but leaves the index-based parent links intact.

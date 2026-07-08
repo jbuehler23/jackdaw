@@ -11,6 +11,7 @@ bevy.workspace = true
 avian3d = { workspace = true }
 jackdaw_jsn = { version = "0.5.0", path = "../jackdaw_jsn" }
 jackdaw_geometry = { version = "0.5.0", path = "../jackdaw_geometry" }
+jackdaw_scene_types = { version = "0.5.0", path = "../jackdaw_scene_types" }
 
 [features]
 default = ["overlays"]

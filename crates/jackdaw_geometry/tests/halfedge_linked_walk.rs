@@ -1,5 +1,5 @@
 use jackdaw_geometry::halfedge::{EdgeFlag, HalfedgeMesh, select::linked_walk::linked_walk};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn linked_walk_on_connected_cube_returns_all_6_faces() {

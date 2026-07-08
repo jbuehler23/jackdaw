@@ -15,7 +15,7 @@ use bevy::prelude::*;
 use jackdaw_geometry::{
     clean_degenerate_faces, compute_brush_geometry_from_planes, compute_brush_topology,
 };
-use jackdaw_jsn::{Brush, BrushFaceData, BrushGroup, BrushPlane};
+use jackdaw_scene_types::{Brush, BrushFaceData, BrushGroup, BrushPlane};
 
 /// If `entity` is a child of a `BrushGroup`, return (`parent_entity`, `parent_translation`).
 pub(crate) fn brush_parent_group(world: &World, entity: Entity) -> Option<(Entity, Vec3)> {
@@ -636,7 +636,7 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
     // multiple disconnected fragments via `brush_difference_split`.
 
     // Transform every cutter into world space once (faces + topology).
-    let cutter_world: Vec<(Vec<BrushFaceData>, jackdaw_jsn::BrushTopology)> = cutters
+    let cutter_world: Vec<(Vec<BrushFaceData>, jackdaw_scene_types::BrushTopology)> = cutters
         .iter()
         .map(|(_, brush, gt)| {
             let (_, rotation, translation) = gt.to_scale_rotation_translation();
@@ -672,7 +672,7 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
         // Iteratively subtract each cutter from the fragment list.
         struct WorldBrush {
             faces: Vec<BrushFaceData>,
-            topo: jackdaw_jsn::BrushTopology,
+            topo: jackdaw_scene_types::BrushTopology,
         }
         let mut current: Vec<WorldBrush> = vec![WorldBrush {
             faces: target_world_faces,
@@ -931,7 +931,7 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
     // each subsequent brush into the running result. Works for both
     // convex and concave inputs.
 
-    let world_inputs: Vec<(Vec<BrushFaceData>, jackdaw_jsn::BrushTopology)> = selected_brushes
+    let world_inputs: Vec<(Vec<BrushFaceData>, jackdaw_scene_types::BrushTopology)> = selected_brushes
         .iter()
         .map(|(_, brush, gt)| {
             let (_, rotation, translation) = gt.to_scale_rotation_translation();

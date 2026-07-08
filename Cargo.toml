@@ -78,6 +78,7 @@ members = [
 bevy.workspace = true
 jackdaw_jsn.workspace = true
 jackdaw_geometry.workspace = true
+jackdaw_scene_types.workspace = true
 jackdaw_csg.workspace = true
 bevy_monitors.workspace = true
 bevy_window_chrome.workspace = true

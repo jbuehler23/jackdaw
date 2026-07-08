@@ -20,6 +20,7 @@ manifold-csg-sys = { version = "=3.4.107", default-features = false }
 
 [dev-dependencies]
 jackdaw_jsn.workspace = true
+jackdaw_scene_types.workspace = true
 
 [features]
 default = ["render", "parallel"]

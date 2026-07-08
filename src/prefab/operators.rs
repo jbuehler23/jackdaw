@@ -757,7 +757,7 @@ pub fn save_scene_as_prefab(world: &mut World, target_path: &Path) {
             .unwrap_or("prefab")
             .to_string();
         let synthetic_node = JsnEntityNode {
-            id: Some(jackdaw_jsn::JsnNodeId::next()),
+            id: Some(jackdaw_scene_types::SceneNodeId::next()),
             parent: None,
             components: synthetic_root_components(synthetic_name),
             derived_components: Default::default(),

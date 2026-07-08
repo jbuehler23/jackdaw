@@ -982,12 +982,12 @@ pub fn apply_texture(
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     registry: Res<MaterialRegistry>,
-    brush_groups: Query<(), With<jackdaw_jsn::types::BrushGroup>>,
+    brush_groups: Query<(), With<jackdaw_scene_types::types::BrushGroup>>,
     children_query: Query<&Children>,
     mut commands: Commands,
 ) -> OperatorResult {
     let path: String = match params.0.get("path") {
-        Some(jackdaw_jsn::PropertyValue::String(s)) => s.to_string(),
+        Some(jackdaw_scene_types::PropertyValue::String(s)) => s.to_string(),
         _ => {
             warn!("material.apply_texture called without a String `path` parameter");
             return OperatorResult::Cancelled;

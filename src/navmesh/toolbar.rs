@@ -80,7 +80,7 @@ fn vertical_separator() -> impl Scene {
 
 fn toggle_toolbar_visibility(
     selection: Res<Selection>,
-    regions: Query<(), With<jackdaw_jsn::NavmeshRegion>>,
+    regions: Query<(), With<jackdaw_scene_types::NavmeshRegion>>,
     mut toolbar: Query<&mut Node, With<NavmeshToolbar>>,
 ) {
     if !selection.is_changed() {

@@ -5,7 +5,7 @@ use crate::{selection::Selection, viewport::ViewportCursor};
 use bevy::{input_focus::InputFocus, prelude::*};
 use bevy_enhanced_input::prelude::Press;
 use jackdaw_api_internal::keymap::PresetInput;
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 mod build;
 mod csg_ops;

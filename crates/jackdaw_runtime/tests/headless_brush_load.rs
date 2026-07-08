@@ -81,11 +81,11 @@ fn headless_brush_load() {
     app.register_type::<ZoneMarker>();
 
     // The `Brush` component lives in `jackdaw_jsn` (type path
-    // `jackdaw_jsn::types::Brush`), re-exported as `jackdaw_jsn::Brush`.
+    // `jackdaw_scene_types::types::Brush`), re-exported as `jackdaw_scene_types::Brush`.
     // Its `faces` carry the geometry; `BrushFaceData`/`BrushPlane` come
     // from `jackdaw_geometry`. Reference the path via `TypePath` rather
     // than hardcoding the fragile module string.
-    let brush_type_path = <jackdaw_jsn::Brush as TypePath>::type_path().to_string();
+    let brush_type_path = <jackdaw_scene_types::Brush as TypePath>::type_path().to_string();
 
     // Entity 0: a transform carrying the user marker.
     // Entity 1: a brush whose every face references `#StoneWall` by path
@@ -163,7 +163,7 @@ fn headless_brush_load() {
     // deserialized into the render-free `String` field.
     let brush_count = app
         .world_mut()
-        .query::<&jackdaw_jsn::Brush>()
+        .query::<&jackdaw_scene_types::Brush>()
         .iter(app.world())
         .count();
     assert_eq!(brush_count, 1, "Brush geometry must survive headless load");
@@ -179,7 +179,7 @@ fn headless_brush_load() {
     // without the render asset machinery; that the `#StoneWall` path string
     // deserializes into the `String` field is covered implicitly by the
     // brush deserializing at all.
-    let mut brush_query = app.world_mut().query::<&jackdaw_jsn::Brush>();
+    let mut brush_query = app.world_mut().query::<&jackdaw_scene_types::Brush>();
     let brush = brush_query.iter(app.world()).next().expect("one brush");
     assert_eq!(brush.faces.len(), 6, "all six faces must load");
 }

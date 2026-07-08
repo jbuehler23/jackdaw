@@ -23,6 +23,7 @@ serde = { workspace = true, features = ["derive"] }
 [dev-dependencies]
 glam.workspace = true
 jackdaw_jsn = { path = "../jackdaw_jsn", default-features = false }
+jackdaw_scene_types = { path = "../jackdaw_scene_types", default-features = false }
 serde_json = { workspace = true }
 
 [features]

@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use bevy::ecs::component::ComponentId;
 use bevy::prelude::*;
 use bevy::reflect::serde::TypedReflectDeserializer;
-use jackdaw_jsn::ast::{JsnNodeId, SceneJsnAst};
+use jackdaw_jsn::ast::SceneJsnAst;
+use jackdaw_scene_types::SceneNodeId;
 use jackdaw_pie_protocol::StateEvent;
 use serde::de::{DeserializeSeed, IntoDeserializer};
 
@@ -20,7 +21,7 @@ use serde::de::{DeserializeSeed, IntoDeserializer};
 pub struct PieEphemeral;
 
 /// Maps a streamed entity (game-side bits) to the preview entity representing
-/// it: an authored entity resolved via `JsnNodeId`, or an ephemeral preview
+/// it: an authored entity resolved via `SceneNodeId`, or an ephemeral preview
 /// entity this projector spawned. Cleared when play stops, focus changes, or
 /// the active tab switches (tab activation respawns authored entities with
 /// fresh ids, so the old map is stale).
@@ -266,7 +267,7 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                 .and_then(|id| {
                     world
                         .resource::<SceneJsnAst>()
-                        .entity_for_node_id(JsnNodeId(id))
+                        .entity_for_node_id(SceneNodeId(id))
                 })
                 .unwrap_or_else(|| {
                     // Seed Transform/Visibility so children inherit before
@@ -513,7 +514,7 @@ mod tests {
     /// wireframe (the symptom observed in the PIE Live view).
     #[test]
     fn brush_geometry_survives_pie_round_trip() {
-        use jackdaw_jsn::Brush;
+        use jackdaw_scene_types::Brush;
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
@@ -652,18 +653,19 @@ mod tests {
 
     // ---- project_event integration tests ----
 
-    use jackdaw_jsn::ast::{JsnEntityNode, JsnNodeId, SceneJsnAst};
+    use jackdaw_jsn::ast::{JsnEntityNode, SceneJsnAst};
+    use jackdaw_scene_types::SceneNodeId;
     use jackdaw_pie_protocol::StateEvent;
     use jackdaw_pie_protocol::snapshot::RemoteEntity;
     use std::collections::HashSet;
 
-    fn build_projection_world() -> (World, Entity, JsnNodeId) {
+    fn build_projection_world() -> (World, Entity, SceneNodeId) {
         let mut world = build_world();
         world.init_resource::<PieProjection>();
 
         // Build a SceneJsnAst with one authored node bound to a preview entity.
         let preview_entity = world.spawn(Mutable(0)).id();
-        let node_id = JsnNodeId::next();
+        let node_id = SceneNodeId::next();
         let mut ast = SceneJsnAst::default();
         ast.nodes.push(JsnEntityNode {
             id: Some(node_id),
@@ -1033,7 +1035,7 @@ mod tests {
     // and by_bits-clear halves of `revert_preview`; the re-spawn half is
     // covered by integration tests for `swap_active_tab`.
 
-    fn build_revert_world() -> (World, Entity, JsnNodeId) {
+    fn build_revert_world() -> (World, Entity, SceneNodeId) {
         // Same as build_projection_world but also inserts the Scenes resource
         // (empty, so respawn_scene_from_ast's tab-empty guard returns early)
         // and CommandHistory (required by capture_active_tab). With an empty

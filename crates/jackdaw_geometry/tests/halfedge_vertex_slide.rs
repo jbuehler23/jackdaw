@@ -1,6 +1,6 @@
 use glam::Vec3;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::vertex_slide::vertex_slide};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn vertex_slide_at_t_0_5_moves_vert_halfway_to_neighbor() {

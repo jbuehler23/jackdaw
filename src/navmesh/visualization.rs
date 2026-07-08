@@ -293,7 +293,7 @@ fn rebuild_navmesh_visuals(
 }
 
 fn on_navmesh_region_removed(
-    _trigger: On<Remove, jackdaw_jsn::NavmeshRegion>,
+    _trigger: On<Remove, jackdaw_scene_types::NavmeshRegion>,
     mut commands: Commands,
     fills: Query<Entity, With<NavmeshFillMesh>>,
     poly_fills: Query<Entity, With<NavmeshPolyFillMesh>>,

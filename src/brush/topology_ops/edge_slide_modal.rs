@@ -18,7 +18,7 @@ use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::cycles::radial_walk;
 use jackdaw_geometry::halfedge::ops::edge_slide::edge_slide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use super::modal_edit::ModalTopologyEdit;
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};

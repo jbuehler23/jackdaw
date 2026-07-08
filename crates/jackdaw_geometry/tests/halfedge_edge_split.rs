@@ -1,5 +1,5 @@
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::edge_split::split_edge};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn split_edge_of_cube_adds_one_vert_one_edge_one_loop_per_adjacent_face() {

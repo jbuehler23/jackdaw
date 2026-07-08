@@ -322,7 +322,7 @@ pub fn regenerate_brush_meshes(
                 &brush.faces,
             )
         };
-        let chunks = jackdaw_jsn::build_brush_chunks(&vertices, &face_polygons, &evaluated_faces);
+        let chunks = jackdaw_scene_types::build_brush_chunks(&vertices, &face_polygons, &evaluated_faces);
         let mut chunk_entities = Vec::with_capacity(chunks.len());
 
         for chunk in chunks {

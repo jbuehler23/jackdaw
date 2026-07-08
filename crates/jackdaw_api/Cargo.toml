@@ -38,6 +38,7 @@ jackdaw_commands.workspace = true
 jackdaw_dylib = { workspace = true, optional = true }
 jackdaw_feathers.workspace = true
 jackdaw_jsn.workspace = true
+jackdaw_scene_types.workspace = true
 jackdaw_panels.workspace = true
 jackdaw_widgets.workspace = true
 

@@ -15,7 +15,7 @@ use bevy::{
     prelude::*,
 };
 use jackdaw_geometry::{compute_brush_geometry_from_planes, compute_face_tangent_axes};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 pub(crate) fn draw_brush_update(
     mut draw_state: ResMut<DrawBrushState>,

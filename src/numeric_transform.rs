@@ -405,7 +405,7 @@ fn topmost_selected(selection: &Selection, parents: &Query<&ChildOf>) -> Vec<Ent
 struct NumericBrushParams<'w, 's> {
     caches: Query<'w, 's, &'static crate::brush::BrushMeshCache>,
     globals: Query<'w, 's, &'static GlobalTransform>,
-    brushes: Query<'w, 's, &'static mut jackdaw_jsn::Brush>,
+    brushes: Query<'w, 's, &'static mut jackdaw_scene_types::Brush>,
     halfedges: Query<'w, 's, &'static mut crate::brush::BrushHalfedge>,
     mirrors: Query<'w, 's, &'static jackdaw_geometry::ModifierStack>,
 }

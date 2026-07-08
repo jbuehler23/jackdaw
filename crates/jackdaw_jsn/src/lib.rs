@@ -1,46 +1,16 @@
 pub mod ast;
-pub mod editor_meta;
 pub mod format;
 mod loader;
 
-/// Brush render-chunk building, moved to `jackdaw_scene_types` so it is
-/// reachable without depending on the rest of the JSN scene format.
-pub mod brush_chunks {
-    pub use jackdaw_scene_types::brush_chunks::*;
-}
-
-/// Runtime brush mesh rebuild, moved to `jackdaw_scene_types` (render-gated,
-/// matching its own `render` feature).
-#[cfg(feature = "render")]
-pub mod mesh_rebuild {
-    pub use jackdaw_scene_types::mesh_rebuild::*;
-}
-
-/// Format-independent component types (`Brush`, `Terrain`, etc.), moved to
-/// `jackdaw_scene_types` so consumer crates can depend on them without the
-/// JSN scene format.
-pub mod types {
-    pub use jackdaw_scene_types::types::*;
-}
-
 use bevy::prelude::*;
-
-// Re-export core types for consumer convenience
-pub use editor_meta::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
-pub use types::{
-    Brush, BrushFaceData, BrushGroup, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
-    GltfSource, JsnPrefab, JsnPrefabBaseline, NavmeshRegion, PropertyValue, SceneRootTag, Terrain,
+use jackdaw_scene_types::{
+    Brush, BrushFaceData, BrushGroup, BrushPlane, BrushTopology, CustomProperties, GltfSource,
+    JsnPrefab, NavmeshRegion, PropertyValue, SceneRootTag, Terrain,
 };
 
-// Re-export geometry crate
-pub use jackdaw_geometry;
-
-pub use ast::{JsnNodeId, SceneJsnAst, needs_id_migration};
-pub use brush_chunks::{MeshChunk, build_brush_chunks};
+pub use ast::{JsnEntityNode, SceneJsnAst, needs_id_migration};
 pub use format::{JsnProject, JsnProjectConfig, JsnScene};
 pub use loader::JsnAssetLoader;
-#[cfg(feature = "render")]
-pub use mesh_rebuild::evaluate_brush_geometry;
 
 pub struct JsnPlugin {
     /// Whether to run the built-in runtime mesh rebuild for brushes.
@@ -77,7 +47,7 @@ impl Plugin for JsnPlugin {
             .register_type::<AttributeData>()
             .register_type::<CustomProperties>()
             .register_type::<PropertyValue>()
-            .register_type::<ast::JsnNodeId>()
+            .register_type::<jackdaw_scene_types::SceneNodeId>()
             .register_type::<GltfSource>()
             .register_type::<JsnPrefab>()
             .register_type::<NavmeshRegion>()
@@ -109,7 +79,7 @@ impl Plugin for JsnPlugin {
             }
 
             if self.runtime_mesh_rebuild {
-                app.add_plugins(mesh_rebuild::MeshRebuildPlugin);
+                app.add_plugins(jackdaw_scene_types::mesh_rebuild::MeshRebuildPlugin);
             }
         }
     }

@@ -58,7 +58,7 @@ pub struct ObstacleGizmo;
 pub(crate) fn navmesh_fetch(
     _: In<OperatorParameters>,
     mut commands: Commands,
-    regions: Query<&jackdaw_jsn::NavmeshRegion>,
+    regions: Query<&jackdaw_scene_types::NavmeshRegion>,
     maybe_task: Option<Res<GetNavmeshInputRequestTask>>,
     mut state: ResMut<NavmeshState>,
 ) -> OperatorResult {
@@ -172,7 +172,7 @@ fn poll_navmesh_input(
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
     existing_visuals: Query<Entity, With<SceneVisualMesh>>,
     existing_obstacles: Query<Entity, With<ObstacleGizmo>>,
-    regions: Query<Entity, With<jackdaw_jsn::NavmeshRegion>>,
+    regions: Query<Entity, With<jackdaw_scene_types::NavmeshRegion>>,
     mut navmesh_handle: ResMut<NavmeshHandleRes>,
     mut state: ResMut<NavmeshState>,
 ) -> Result {

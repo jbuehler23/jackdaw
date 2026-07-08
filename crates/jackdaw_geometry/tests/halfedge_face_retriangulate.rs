@@ -12,7 +12,7 @@ use jackdaw_geometry::halfedge::{
     FaceKey, HalfedgeMesh, VertKey,
     ops::face_retriangulate::{RetriangulateError, face_retriangulate},
 };
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 /// Locate the `FaceKey` whose `material_idx == idx`.
 fn face_by_idx(mesh: &HalfedgeMesh, idx: u32) -> FaceKey {

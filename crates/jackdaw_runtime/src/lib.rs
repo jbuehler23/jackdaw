@@ -20,7 +20,7 @@ use jackdaw_jsn::format::{JsnAssets, JsnCatalog, JsnScene, JsnSceneV2};
 use serde::Deserializer;
 use serde::de::{DeserializeSeed, Visitor};
 
-pub use jackdaw_jsn::{
+pub use jackdaw_scene_types::{
     Brush, BrushFaceData, CustomProperties, EditorCategory, EditorDescription, EditorHidden,
     GltfSource, PropertyValue, SkipSerialization,
 };
@@ -305,12 +305,12 @@ fn spawn_loaded_scenes(
         // Tag the container so the editor's outliner classifies it as a scene
         // root and shows the scene icon. The tag streams in the snapshot.
         if world
-            .get::<jackdaw_jsn::SceneRootTag>(root_entity)
+            .get::<jackdaw_scene_types::SceneRootTag>(root_entity)
             .is_none()
         {
             world
                 .entity_mut(root_entity)
-                .insert(jackdaw_jsn::SceneRootTag);
+                .insert(jackdaw_scene_types::SceneRootTag);
         }
 
         world.entity_mut(root_entity).insert(SceneSpawned);
@@ -438,11 +438,11 @@ fn spawn_scene_entities(
         // Attach the stable authored-node id so the PIE mirror can map
         // this runtime entity back to its scene node. Present only when
         // the scene was saved with node id support; legacy entries are
-        // left without a JsnNodeId rather than minting a new one here.
+        // left without a SceneNodeId rather than minting a new one here.
         if let Some(raw_id) = jsn.id {
             world
                 .entity_mut(entity)
-                .insert(jackdaw_jsn::JsnNodeId(raw_id));
+                .insert(jackdaw_scene_types::SceneNodeId(raw_id));
         }
 
         // User components on top. `On<Insert, T>` fires here with
@@ -459,7 +459,7 @@ fn spawn_scene_entities(
             .iter()
             .filter_map(|&e| {
                 world
-                    .get::<jackdaw_jsn::GltfSource>(e)
+                    .get::<jackdaw_scene_types::GltfSource>(e)
                     .map(|gs| (e, gs.path.clone(), gs.scene_index))
             })
             .collect();

@@ -15,7 +15,7 @@ use jackdaw_geometry::halfedge::ops::delete_elements::{
     DeleteResult, delete_edges, delete_faces, delete_verts,
 };
 use jackdaw_geometry::halfedge::{EdgeKey, FaceKey, HalfedgeMesh, VertKey, apply_topology_edit};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use crate::brush::{
     BrushDragState, BrushEditMode, BrushHalfedge, BrushMeshCache, BrushSelection, EdgeDragState,
@@ -212,7 +212,7 @@ fn apply_delete_to_brush(
     let old_faces = brush.faces.clone();
     let result = apply_topology_edit(&mut brush.faces, &mut brush.topology, &mut halfedge.0, edit);
 
-    let mut new_faces: Vec<jackdaw_jsn::BrushFaceData> =
+    let mut new_faces: Vec<jackdaw_scene_types::BrushFaceData> =
         Vec::with_capacity(result.surviving_faces.len());
     for &old_idx in &result.surviving_faces {
         let old = old_faces

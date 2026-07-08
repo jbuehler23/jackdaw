@@ -12,7 +12,7 @@ use jackdaw_feathers::{
     button::{ButtonClickEvent, ButtonOperatorCall},
     picker::{DismissPickerEvent, Picker},
 };
-use jackdaw_jsn::PropertyValue;
+use jackdaw_scene_types::PropertyValue;
 
 use crate::selection::Selection;
 

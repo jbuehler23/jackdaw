@@ -10,7 +10,7 @@
 use glam::Vec3;
 use jackdaw_csg::{CsgInput, brush_difference_split};
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::edge_bevel::edge_bevel};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 /// Bevel one edge of a cube to produce a concave-topology brush, then
 /// sync `Brush.faces` to the new polygon count, mirroring what

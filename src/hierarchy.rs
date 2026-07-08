@@ -33,7 +33,7 @@ use crate::{
     selection::{Selected, Selection},
 };
 use jackdaw_feathers::dialog::{DialogActionEvent, DialogChildrenSlot};
-use jackdaw_jsn::{Brush, BrushGroup};
+use jackdaw_scene_types::{Brush, BrushGroup};
 
 /// Stores the default name for the prefab save dialog.
 #[derive(Resource, Default)]
@@ -172,7 +172,7 @@ fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
     if world.get::<Mesh3d>(entity).is_some() {
         return EntityCategory::Mesh;
     }
-    if world.get::<jackdaw_jsn::SceneRootTag>(entity).is_some() {
+    if world.get::<jackdaw_scene_types::SceneRootTag>(entity).is_some() {
         return EntityCategory::Scene;
     }
     if world.get::<WorldAssetRoot>(entity).is_some() {
@@ -256,7 +256,7 @@ fn is_outliner_child(world: &World, child: Entity) -> bool {
     world.get_entity(child).is_ok()
         && world.get::<EditorEntity>(child).is_none()
         && world.get::<EditorHidden>(child).is_none()
-        && world.get::<jackdaw_jsn::DerivedFaceMesh>(child).is_none()
+        && world.get::<jackdaw_scene_types::DerivedFaceMesh>(child).is_none()
 }
 
 /// Returns true if `entity` has `PrefabEntityId` but NOT `IsA` -- meaning
@@ -2424,7 +2424,7 @@ fn apply_hierarchy_filter(
 mod tests {
     use super::*;
     use jackdaw_api_internal::operator::OperatorParameters;
-    use jackdaw_jsn::PropertyValue;
+    use jackdaw_scene_types::PropertyValue;
     use std::collections::BTreeMap;
 
     fn empty_params() -> OperatorParameters {
@@ -2440,7 +2440,7 @@ mod tests {
     #[test]
     fn scene_root_tag_classifies_as_scene() {
         let mut world = World::new();
-        let root = world.spawn(jackdaw_jsn::SceneRootTag).id();
+        let root = world.spawn(jackdaw_scene_types::SceneRootTag).id();
         let plain = world.spawn_empty().id();
         assert_eq!(classify_entity(&world, root), EntityCategory::Scene);
         assert_ne!(classify_entity(&world, plain), EntityCategory::Scene);

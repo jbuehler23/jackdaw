@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 use jackdaw_geometry::compute_brush_topology;
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 /// System: when a legacy brush appears (faces present, topology empty),
 /// derive topology from planes and write it back. Runs whenever `Brush`
@@ -34,7 +34,7 @@ mod tests {
     use super::*;
     use bevy::app::App;
     use jackdaw_geometry::topology::BrushTopology;
-    use jackdaw_jsn::Brush;
+    use jackdaw_scene_types::Brush;
 
     #[test]
     fn legacy_brush_with_empty_topology_gets_populated_by_system() {

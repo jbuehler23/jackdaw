@@ -1,7 +1,7 @@
 use glam::Vec3;
 use jackdaw_geometry::halfedge::ops::loop_cut::loop_cut;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::edge_slide::edge_slide};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn slide_loop_cut_edge_at_t_pos_1_moves_endpoint_toward_top() {

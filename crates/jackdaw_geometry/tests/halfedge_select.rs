@@ -2,7 +2,7 @@ use jackdaw_geometry::halfedge::{
     HalfedgeMesh, VertFlag,
     select::{SelectionDelta, apply_vert_delta},
 };
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn apply_vert_delta_sets_select_bits_and_returns_inverse() {

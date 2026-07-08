@@ -12,7 +12,7 @@ use bevy::{
 use jackdaw_geometry::{
     compute_brush_geometry_from_planes, compute_brush_topology, triangulate_face,
 };
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[derive(Component)]
 pub(crate) struct DrawPreviewMesh;

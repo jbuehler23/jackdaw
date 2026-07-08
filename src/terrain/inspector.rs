@@ -92,7 +92,7 @@ fn update_terrain_inspector(
     mut commands: Commands,
     selection: Res<Selection>,
     edit_mode: Res<TerrainEditMode>,
-    terrains: Query<(), With<jackdaw_jsn::Terrain>>,
+    terrains: Query<(), With<jackdaw_scene_types::Terrain>>,
     container_query: Query<(Entity, Option<&Children>), With<TerrainInspectorContainer>>,
     mut local_state: Local<InspectorState>,
     brush_settings: Res<TerrainBrushSettings>,

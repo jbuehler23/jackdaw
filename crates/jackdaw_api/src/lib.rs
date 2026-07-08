@@ -103,8 +103,15 @@ pub mod runtime {
     };
 }
 
-/// JSN primitives re-exported for operator parameter marshalling.
-pub use jackdaw_jsn as jsn;
+/// JSN primitives re-exported for operator parameter marshalling. Includes
+/// the format-independent scene types (`PropertyValue`, `Brush`, etc.),
+/// which live in `jackdaw_scene_types` and are re-exported here alongside
+/// `jackdaw_jsn`'s own file-format types so extension authors have one
+/// import path.
+pub mod jsn {
+    pub use jackdaw_jsn::*;
+    pub use jackdaw_scene_types::*;
+}
 
 /// Minimal UI primitives an extension needs to spawn editor-style
 /// widgets. Today this is just `button(ButtonProps)`; `label()` and

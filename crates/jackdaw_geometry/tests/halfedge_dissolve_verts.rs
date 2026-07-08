@@ -3,7 +3,7 @@ use jackdaw_geometry::halfedge::ops::edge_split::split_edge;
 use jackdaw_geometry::halfedge::ops::face_create::create_face_from_verts;
 use jackdaw_geometry::halfedge::ops::subdivide::subdivide;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::dissolve_verts::dissolve_verts};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn dissolve_midpoint_vert_from_edge_split_restores_original_edge() {

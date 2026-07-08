@@ -15,7 +15,7 @@ use bevy::{
 };
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
-use jackdaw_jsn::{Brush, BrushGroup};
+use jackdaw_scene_types::{Brush, BrushGroup};
 
 /// Marker for the box-select visual overlay node.
 #[derive(Component)]

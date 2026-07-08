@@ -17,7 +17,7 @@ use jackdaw_geometry::halfedge::{
     EdgeKey, FaceKey, HalfedgeMesh, VertKey,
     ops::{edge_split::split_edge, face_poke::face_poke, face_split::split_face},
 };
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 /// Locate the `FaceKey` whose `material_idx == idx`. `lift_from_topology` sets
 /// `material_idx` to the topology face index, so this is a stable lookup that
@@ -44,7 +44,7 @@ fn edge_with_endpoints(
 
 #[test]
 fn knife_bisects_cube_top_face_along_chord() {
-    // Cube faces in jackdaw_jsn::Brush::cuboid: face 4 is +Z (the top).
+    // Cube faces in jackdaw_scene_types::Brush::cuboid: face 4 is +Z (the top).
     // Top ring: verts 4,5,6,7. Front-top edge = (4,5). Back-top edge = (6,7).
     // The knife operator's commit pipeline at "click 1 = midpoint of (4,5),
     // click 2 = midpoint of (6,7)" performs:

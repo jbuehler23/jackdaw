@@ -12,7 +12,7 @@ use avian3d::debug_render::{PhysicsGizmoExt, PhysicsGizmos};
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use jackdaw_geometry::{ModifierStack, is_convex_topology};
-use jackdaw_jsn::{Brush, evaluate_brush_geometry};
+use jackdaw_scene_types::{Brush, evaluate_brush_geometry};
 
 pub mod simulation;
 
@@ -351,7 +351,7 @@ fn collect_descendant_colliders(
 mod tests {
     use super::*;
     use bevy::ecs::reflect::AppTypeRegistry;
-    use jackdaw_jsn::Brush;
+    use jackdaw_scene_types::Brush;
 
     #[test]
     fn cuboid_brush_builds_a_trimesh_collider() {

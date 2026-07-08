@@ -126,10 +126,10 @@ pub fn seed_default_categories(r: &mut InspectorRegistry) {
         ("bevy_ecs::name::Name", "object"),
         ("bevy_render::view::visibility::Visibility", "object"),
         // Brush geometry lives in the Mesh tab. The real reflect path is
-        // jackdaw_jsn::types::Brush; the short alias is seeded as well so
+        // jackdaw_scene_types::types::Brush; the short alias is seeded as well so
         // any lookup using the unqualified form also resolves correctly.
-        ("jackdaw_jsn::types::Brush", "mesh"),
-        ("jackdaw_jsn::Brush", "mesh"),
+        ("jackdaw_scene_types::types::Brush", "mesh"),
+        ("jackdaw_scene_types::Brush", "mesh"),
         // Modifier stack lives in the Modifiers tab.
         ("jackdaw_geometry::modifiers::ModifierStack", "modifiers"),
         // Standard material component lives in the Material tab.
@@ -170,7 +170,7 @@ mod tests {
             r.category_for("bevy_transform::components::transform::Transform"),
             "object"
         );
-        assert_eq!(r.category_for("jackdaw_jsn::Brush"), "mesh");
+        assert_eq!(r.category_for("jackdaw_scene_types::Brush"), "mesh");
         assert_eq!(r.category_for("some::unknown::Custom"), "components");
     }
 

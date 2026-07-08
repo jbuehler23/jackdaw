@@ -46,7 +46,7 @@ fn null_material_brush_loads_headless_under_render_feature() {
     app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
     app.add_plugins(JackdawPlugin);
 
-    let brush_type_path = <jackdaw_jsn::Brush as TypePath>::type_path().to_string();
+    let brush_type_path = <jackdaw_scene_types::Brush as TypePath>::type_path().to_string();
 
     let scene = JsnScene {
         jsn: JsnHeader::default(),
@@ -85,7 +85,7 @@ fn null_material_brush_loads_headless_under_render_feature() {
     app.update();
     app.update();
 
-    let mut brush_query = app.world_mut().query::<&jackdaw_jsn::Brush>();
+    let mut brush_query = app.world_mut().query::<&jackdaw_scene_types::Brush>();
     let brushes: Vec<_> = brush_query.iter(app.world()).collect();
     assert_eq!(
         brushes.len(),

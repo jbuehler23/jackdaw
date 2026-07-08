@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use bevy::window::SystemCursorIcon;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use crate::brush::box_select::BrushBoxSelectState;
 use crate::brush::interaction::{

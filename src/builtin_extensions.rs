@@ -16,9 +16,9 @@ use jackdaw_feathers::tokens;
 /// defining module (what `TypePath` reports), not a re-export path. Tested
 /// against the real `TypePath` so a typo fails loudly.
 pub(crate) const WORLD_ENTITY_ICONS: &[(&str, Icon)] = &[
-    ("jackdaw_jsn::types::Brush", Icon::Cuboid),
-    ("jackdaw_jsn::types::Terrain", Icon::Mountain),
-    ("jackdaw_jsn::types::NavmeshRegion", Icon::Waypoints),
+    ("jackdaw_scene_types::types::Brush", Icon::Cuboid),
+    ("jackdaw_scene_types::types::Terrain", Icon::Mountain),
+    ("jackdaw_scene_types::types::NavmeshRegion", Icon::Waypoints),
     ("jackdaw::entity_ops::SceneFogVolume", Icon::CloudFog),
     ("jackdaw::entity_ops::SceneReflectionProbe", Icon::Sparkles),
     ("jackdaw::entity_ops::SceneAnimationPlayer", Icon::Play),
@@ -414,9 +414,9 @@ mod tests {
         {
             let registry = world.resource::<AppTypeRegistry>();
             let mut registry = registry.write();
-            registry.register::<jackdaw_jsn::Brush>();
-            registry.register::<jackdaw_jsn::Terrain>();
-            registry.register::<jackdaw_jsn::NavmeshRegion>();
+            registry.register::<jackdaw_scene_types::Brush>();
+            registry.register::<jackdaw_scene_types::Terrain>();
+            registry.register::<jackdaw_scene_types::NavmeshRegion>();
             registry.register::<crate::entity_ops::SceneFogVolume>();
             registry.register::<crate::entity_ops::SceneReflectionProbe>();
             registry.register::<crate::entity_ops::SceneAnimationPlayer>();
@@ -436,15 +436,15 @@ mod tests {
 
         let cases: &[(Entity, Icon)] = &[
             (
-                world.spawn(jackdaw_jsn::Brush::default()).id(),
+                world.spawn(jackdaw_scene_types::Brush::default()).id(),
                 Icon::Cuboid,
             ),
             (
-                world.spawn(jackdaw_jsn::Terrain::default()).id(),
+                world.spawn(jackdaw_scene_types::Terrain::default()).id(),
                 Icon::Mountain,
             ),
             (
-                world.spawn(jackdaw_jsn::NavmeshRegion::default()).id(),
+                world.spawn(jackdaw_scene_types::NavmeshRegion::default()).id(),
                 Icon::Waypoints,
             ),
             (

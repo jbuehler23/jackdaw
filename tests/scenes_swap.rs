@@ -59,7 +59,7 @@ fn serialize_world_to_jsn_scene_captures_brushes() {
     use bevy::render::RenderPlugin;
     use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::winit::WinitPlugin;
-    use jackdaw_jsn::Brush;
+    use jackdaw_scene_types::Brush;
 
     let mut app = App::new();
     app.add_plugins(
@@ -90,7 +90,7 @@ fn swap_round_trips_a_single_brush() {
     use bevy::render::RenderPlugin;
     use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::winit::WinitPlugin;
-    use jackdaw_jsn::Brush;
+    use jackdaw_scene_types::Brush;
 
     let mut app = App::new();
     app.add_plugins(
@@ -1084,11 +1084,11 @@ fn finish_load_scene_entities_and_ast_share_ids_after_heal() {
         };
         let node_id = node.id.expect("healed node must have an id");
         let live = world
-            .get::<jackdaw_jsn::JsnNodeId>(entity)
-            .expect("spawned entity must have JsnNodeId");
+            .get::<jackdaw_scene_types::SceneNodeId>(entity)
+            .expect("spawned entity must have SceneNodeId");
         assert_eq!(
             live.0, node_id.0,
-            "entity {entity:?}: live JsnNodeId {} != AST node id {} after heal",
+            "entity {entity:?}: live SceneNodeId {} != AST node id {} after heal",
             live.0, node_id.0,
         );
         bound_count += 1;

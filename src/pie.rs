@@ -768,7 +768,7 @@ fn serialize_preview_entity_components(
 /// at runtime with no authored counterpart). A new [`JsnEntityNode`](jackdaw_jsn::ast::JsnEntityNode) is
 /// appended to the AST, its `components` filled from the preview entity's
 /// reflected components, its `ecs_entity` bound to this entity. The entity
-/// receives a [`JsnNodeId`](jackdaw_jsn::JsnNodeId) component and loses [`PieEphemeral`](crate::pie_projection::PieEphemeral) so it is
+/// receives a [`SceneNodeId`](jackdaw_scene_types::SceneNodeId) component and loses [`PieEphemeral`](crate::pie_projection::PieEphemeral) so it is
 /// now treated as an authored entity. Path B is not undoable in v1 (no
 /// remove-node command exists that mirrors the insert).
 ///
@@ -874,7 +874,7 @@ pub(crate) fn promote_ephemeral_to_authored(world: &mut World, preview: Entity, 
 
     let entries = serialize_preview_entity_components(world, preview);
 
-    let node_id = jackdaw_jsn::ast::JsnNodeId::next();
+    let node_id = jackdaw_scene_types::SceneNodeId::next();
     let idx = {
         let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
         let idx = ast.nodes.len();
@@ -1462,7 +1462,7 @@ mod save_to_scene_tests {
     use bevy::reflect::serde::TypedReflectSerializer;
     use jackdaw_commands::CommandHistory;
     use jackdaw_jsn::SceneJsnAst;
-    use jackdaw_jsn::ast::JsnNodeId;
+    use jackdaw_scene_types::SceneNodeId;
 
     use super::*;
     use crate::pie_projection::{PieEphemeral, PieProjection};
@@ -1626,18 +1626,18 @@ mod save_to_scene_tests {
             "node carries the serialized Transform"
         );
 
-        // The entity now has a JsnNodeId and no longer PieEphemeral.
+        // The entity now has a SceneNodeId and no longer PieEphemeral.
         assert!(
-            world.get::<JsnNodeId>(ephemeral).is_some(),
-            "promoted entity carries a JsnNodeId"
+            world.get::<SceneNodeId>(ephemeral).is_some(),
+            "promoted entity carries a SceneNodeId"
         );
         assert!(
             world.get::<PieEphemeral>(ephemeral).is_none(),
             "PieEphemeral is removed after promotion"
         );
 
-        // The AST node's id matches the entity's JsnNodeId.
-        let node_id = world.get::<JsnNodeId>(ephemeral).copied().unwrap();
+        // The AST node's id matches the entity's SceneNodeId.
+        let node_id = world.get::<SceneNodeId>(ephemeral).copied().unwrap();
         assert_eq!(ast.nodes[0].id, Some(node_id));
     }
 
@@ -1685,7 +1685,8 @@ mod stop_cleanup_tests {
     use bevy::reflect::TypePath;
     use jackdaw_commands::CommandHistory;
     use jackdaw_jsn::SceneJsnAst;
-    use jackdaw_jsn::ast::{JsnEntityNode, JsnNodeId};
+    use jackdaw_jsn::ast::JsnEntityNode;
+    use jackdaw_scene_types::SceneNodeId;
 
     use super::*;
     use crate::pie_mirror::{InstanceBuffer, PieMirrorEntry};
@@ -1719,7 +1720,7 @@ mod stop_cleanup_tests {
         world.init_resource::<PieProjection>();
 
         let preview_entity = world.spawn(Mutable(0)).id();
-        let node_id = JsnNodeId::next();
+        let node_id = SceneNodeId::next();
         let mut ast = SceneJsnAst::default();
         ast.nodes.push(JsnEntityNode {
             id: Some(node_id),

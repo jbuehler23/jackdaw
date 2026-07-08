@@ -6,7 +6,7 @@
 use glam::{Vec2, Vec3};
 use jackdaw_csg::{BooleanOp, CsgInput, brush_boolean, brush_difference_split};
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::edge_bevel::edge_bevel};
-use jackdaw_jsn::{Brush, BrushFaceData};
+use jackdaw_scene_types::{Brush, BrushFaceData};
 
 /// Helper: bevel one edge of a cube to produce a chamfered brush, then
 /// grow `Brush.faces` so every polygon ring has a matching face slot

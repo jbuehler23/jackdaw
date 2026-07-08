@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 
-use jackdaw_jsn::BrushGroup;
+use jackdaw_scene_types::BrushGroup;
 
 use crate::brush::{Brush, BrushEditMode, BrushMeshCache, EditMode};
 use crate::draw_brush::{CutPreviewFace, CutPreviewHidden, CutResultPreviewMesh};

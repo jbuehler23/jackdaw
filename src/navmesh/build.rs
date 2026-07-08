@@ -13,7 +13,7 @@ use super::{NavmeshHandleRes, NavmeshState, NavmeshStatus};
 pub(crate) fn navmesh_build(
     _: In<OperatorParameters>,
     mut commands: Commands,
-    regions: Query<&jackdaw_jsn::NavmeshRegion>,
+    regions: Query<&jackdaw_scene_types::NavmeshRegion>,
     mut navmesh_generator: NavmeshGenerator,
     mut state: ResMut<NavmeshState>,
 ) -> OperatorResult {
@@ -30,7 +30,7 @@ pub(crate) fn navmesh_build(
 
 /// Convert region settings without AABB (for BRP fetch, the remote app determines bounds).
 pub(super) fn region_to_settings_without_transform(
-    region: &jackdaw_jsn::NavmeshRegion,
+    region: &jackdaw_scene_types::NavmeshRegion,
 ) -> NavmeshSettings {
     NavmeshSettings {
         agent_radius: region.agent_radius,

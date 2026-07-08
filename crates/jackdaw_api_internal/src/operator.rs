@@ -9,7 +9,7 @@ use bevy::ecs::system::{SystemId, SystemState};
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::InputAction;
 use jackdaw_commands::{CommandHistory, EditorCommand};
-use jackdaw_jsn::PropertyValue;
+use jackdaw_scene_types::PropertyValue;
 
 use crate::lifecycle::ActiveModalQuery;
 use crate::{

@@ -1,6 +1,6 @@
 use glam::Vec3;
 use jackdaw_geometry::is_convex_topology;
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn cube_is_convex() {

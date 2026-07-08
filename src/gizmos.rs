@@ -665,7 +665,7 @@ fn clear_gizmo_drag_state(
 struct EditGizmoBrushParams<'w, 's> {
     caches: Query<'w, 's, &'static crate::brush::BrushMeshCache>,
     globals: Query<'w, 's, &'static GlobalTransform>,
-    brushes: Query<'w, 's, &'static mut jackdaw_jsn::Brush>,
+    brushes: Query<'w, 's, &'static mut jackdaw_scene_types::Brush>,
     halfedges: Query<'w, 's, &'static mut crate::brush::BrushHalfedge>,
     mirrors: Query<'w, 's, &'static jackdaw_geometry::ModifierStack>,
 }
@@ -893,7 +893,7 @@ pub fn gizmo_drag_edit(
 /// Shares [`restore_captures`] with the direct vertex / edge drag cancels.
 fn cancel_gizmo_edit_drag(
     mut drag_state: ResMut<EditGizmoDragState>,
-    mut brushes: Query<&mut jackdaw_jsn::Brush>,
+    mut brushes: Query<&mut jackdaw_scene_types::Brush>,
     mut halfedges: Query<&mut crate::brush::BrushHalfedge>,
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
     mut override_cursor: ResMut<OverrideCursor>,

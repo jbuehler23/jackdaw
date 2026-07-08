@@ -1,6 +1,6 @@
 use jackdaw_geometry::halfedge::ops::loop_cut::loop_cut;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::dissolve_edges::dissolve_edges};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn dissolve_a_loop_cut_edge_merges_two_quads_back_into_one() {
