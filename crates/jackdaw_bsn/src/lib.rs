@@ -11,11 +11,14 @@
 //! the crate root; the parser versions stay under [`crate::parse`].
 
 pub mod apply;
+pub mod catalog;
 pub mod document;
 pub mod emitter;
 pub mod loader;
 pub mod parse;
 pub mod sync;
+
+pub use catalog::{CatalogAssetRef, CatalogEntry, load_bsn_assets, serialize_assets_to_bsn};
 
 pub use parse::{
     BsnAst, BsnExpr, BsnNameStore, BsnNamedTuple, BsnRelation, BsnRoot, BsnStruct, BsnSymbol,

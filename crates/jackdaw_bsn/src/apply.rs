@@ -428,6 +428,33 @@ pub fn bsn_value_to_reflect(
         return None;
     }
 
+    // If the expected type is `Option<Handle<T>>`, resolve a path string into
+    // `Some(handle)` (or `None` for an empty string / missing value).
+    if let Some(registration) = registry.get(expected)
+        && let bevy::reflect::TypeInfo::Enum(enum_info) = registration.type_info()
+        && enum_info.type_path().starts_with("core::option::Option<")
+        && let Some(bevy::reflect::enums::VariantInfo::Tuple(some_var)) = enum_info.variant("Some")
+        && let Some(inner_field) = some_var.field_at(0)
+        && registry
+            .get_type_data::<ReflectHandle>(inner_field.type_id())
+            .is_some()
+    {
+        let inner_ty = inner_field.type_id();
+        if let BsnValue::String(path) = value
+            && !path.is_empty()
+            && let Some(inner) = bsn_value_to_reflect(value, inner_ty, registry, asset_server)
+        {
+            let mut dynamic_tuple = bevy::reflect::tuple::DynamicTuple::default();
+            dynamic_tuple.insert_boxed(inner);
+            let mut dynamic_enum = DynamicEnum::new("Some", DynamicVariant::Tuple(dynamic_tuple));
+            dynamic_enum.set_represented_type(Some(registration.type_info()));
+            return Some(Box::new(dynamic_enum));
+        }
+        let mut dynamic_enum = DynamicEnum::new("None", DynamicVariant::Unit);
+        dynamic_enum.set_represented_type(Some(registration.type_info()));
+        return Some(Box::new(dynamic_enum));
+    }
+
     match value {
         BsnValue::Float(f) => float_to_reflect(*f, expected),
         BsnValue::Int(i) => int_to_reflect(*i, expected),

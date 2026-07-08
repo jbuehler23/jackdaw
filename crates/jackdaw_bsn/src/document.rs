@@ -512,6 +512,65 @@ impl BsnValue {
             }
         }
 
+        // Option<Handle<T>> fields: emit the inner asset path (Some) or an
+        // empty string (None) so the value round-trips through one path string.
+        if let Some(ctx) = ctx
+            && let ReflectRef::Enum(e) = value.reflect_ref()
+        {
+            let inner_is_handle = value
+                .get_represented_type_info()
+                .and_then(|info| match info {
+                    bevy::reflect::TypeInfo::Enum(enum_info)
+                        if enum_info.type_path().starts_with("core::option::Option<") =>
+                    {
+                        enum_info.variant("Some")
+                    }
+                    _ => None,
+                })
+                .and_then(|variant| match variant {
+                    bevy::reflect::enums::VariantInfo::Tuple(tuple) => tuple.field_at(0),
+                    _ => None,
+                })
+                .map(|field| {
+                    type_registry
+                        .get_type_data::<ReflectHandle>(field.type_id())
+                        .is_some()
+                })
+                .unwrap_or(false);
+
+            if inner_is_handle {
+                match e.variant_name() {
+                    "None" => return BsnValue::String(String::new()),
+                    "Some" => {
+                        if let Some(inner) = e.field_at(0)
+                            && let Some(concrete) = inner.try_as_reflect()
+                        {
+                            let type_id = concrete.reflect_type_info().type_id();
+                            if let Some(reflect_handle) =
+                                type_registry.get_type_data::<ReflectHandle>(type_id)
+                                && let Some(untyped_handle) =
+                                    reflect_handle.downcast_handle_untyped(concrete.as_any())
+                            {
+                                if let Some(path) = ctx.asset_server.get_path(untyped_handle.id()) {
+                                    let path_str = path.to_string();
+                                    if let Some(relative) =
+                                        pathdiff::diff_paths(&path_str, ctx.parent_path)
+                                    {
+                                        return BsnValue::String(
+                                            relative.to_string_lossy().into_owned(),
+                                        );
+                                    }
+                                    return BsnValue::String(path_str);
+                                }
+                                return BsnValue::String(String::new());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         // Structs.
         if let ReflectRef::Struct(s) = value.reflect_ref() {
             let type_path = value
