@@ -76,6 +76,9 @@ pub enum BsnExpr {
     BoolLit(bool),
     IntLit(i128),
     List(Vec<Entity>),
+    /// `map[(key, value), ...]`: a jackdaw-invented map literal whose entries
+    /// are key/value expression pairs.
+    Map(Vec<(Entity, Entity)>),
 }
 
 impl BsnSymbol {

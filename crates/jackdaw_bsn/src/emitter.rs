@@ -231,7 +231,35 @@ fn emit_value(value: &BsnValue, out: &mut String) {
             }
             write!(out, "]").unwrap();
         }
+        BsnValue::Map(entries) => {
+            write!(out, "map[").unwrap();
+            for (i, (key, value)) in sorted_map_entries(entries).iter().enumerate() {
+                if i > 0 {
+                    write!(out, ", ").unwrap();
+                }
+                write!(out, "({key}, ").unwrap();
+                emit_value(value, out);
+                write!(out, ")").unwrap();
+            }
+            write!(out, "]").unwrap();
+        }
     }
+}
+
+/// Render each map entry's key to text and return the entries sorted by that
+/// key text. Sorting on the emitted key makes map emission deterministic
+/// regardless of the source insertion order.
+fn sorted_map_entries(entries: &[(BsnValue, BsnValue)]) -> Vec<(String, &BsnValue)> {
+    let mut rendered: Vec<(String, &BsnValue)> = entries
+        .iter()
+        .map(|(key, value)| {
+            let mut key_text = String::new();
+            emit_value(key, &mut key_text);
+            (key_text, value)
+        })
+        .collect();
+    rendered.sort_by(|a, b| a.0.cmp(&b.0));
+    rendered
 }
 
 /// Emit a value, using multiline format for nested structs and lists.
@@ -249,6 +277,23 @@ fn emit_value_maybe_multiline(value: &BsnValue, indent: usize, out: &mut String)
                 write_indent(indent + 1, out);
                 emit_value_maybe_multiline(item, indent + 1, out);
                 if i + 1 < items.len() {
+                    writeln!(out, ",").unwrap();
+                } else {
+                    writeln!(out).unwrap();
+                }
+            }
+            write_indent(indent, out);
+            write!(out, "]").unwrap();
+        }
+        BsnValue::Map(entries) if !entries.is_empty() => {
+            writeln!(out, "map[").unwrap();
+            let sorted = sorted_map_entries(entries);
+            for (i, (key, value)) in sorted.iter().enumerate() {
+                write_indent(indent + 1, out);
+                write!(out, "({key}, ").unwrap();
+                emit_value_maybe_multiline(value, indent + 1, out);
+                write!(out, ")").unwrap();
+                if i + 1 < sorted.len() {
                     writeln!(out, ",").unwrap();
                 } else {
                     writeln!(out).unwrap();

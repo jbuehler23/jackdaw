@@ -95,6 +95,8 @@ pub enum BsnValue {
     TupleStruct(BsnTupleStructData),
     /// `[value, value, ...]` list/vec.
     List(Vec<BsnValue>),
+    /// `map[(key, value), ...]` map/HashMap.
+    Map(Vec<(BsnValue, BsnValue)>),
 }
 
 /// Resource holding the BSN AST for the currently loaded scene.
@@ -656,6 +658,18 @@ impl BsnValue {
                 }
             }
             return BsnValue::List(items);
+        }
+
+        // Maps / HashMaps.
+        if let ReflectRef::Map(m) = value.reflect_ref() {
+            let mut entries = Vec::new();
+            for (key, val) in m.iter() {
+                entries.push((
+                    BsnValue::from_reflect_inner(key, type_registry, ctx),
+                    BsnValue::from_reflect_inner(val, type_registry, ctx),
+                ));
+            }
+            return BsnValue::Map(entries);
         }
 
         // Fallback: emit as string via Debug.

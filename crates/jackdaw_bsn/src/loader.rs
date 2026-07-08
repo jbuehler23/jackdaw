@@ -189,6 +189,13 @@ fn adapt_expr(bevy_ast: &BsnAst, expr_id: Entity) -> BsnValue {
             let values = adapt_tuple_values(bevy_ast, expr_ids);
             BsnValue::List(values)
         }
+        BsnExpr::Map(pairs) => {
+            let entries = pairs
+                .iter()
+                .map(|&(k, v)| (adapt_expr(bevy_ast, k), adapt_expr(bevy_ast, v)))
+                .collect();
+            BsnValue::Map(entries)
+        }
     }
 }
 

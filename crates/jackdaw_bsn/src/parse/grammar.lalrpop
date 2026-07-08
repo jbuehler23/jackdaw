@@ -84,6 +84,21 @@ Expr: Entity = {
     "[" "]" => {
         ast.borrow_mut().create_expr(BsnExpr::List(Vec::new()))
     },
+    "map" "[" <p:MapPairsInner> ","? "]" => {
+        ast.borrow_mut().create_expr(BsnExpr::Map(p))
+    },
+    "map" "[" "]" => {
+        ast.borrow_mut().create_expr(BsnExpr::Map(Vec::new()))
+    },
+};
+
+MapPairsInner: Vec<(Entity, Entity)> = {
+    <t:MapPair> => { let mut v = Vec::new(); v.push(t); v },
+    <h:MapPairsInner> "," <t:MapPair> => { let mut h = h; h.push(t); h },
+};
+
+MapPair: (Entity, Entity) = {
+    "(" <k:Expr> "," <v:Expr> ")" => (k, v),
 };
 
 Relation: BsnRelation = {
@@ -121,5 +136,6 @@ extern {
         "#" => lexer::Token::Hash,
         "@" => lexer::Token::At,
         "::" => lexer::Token::DoubleColon,
+        "map" => lexer::Token::Map,
     }
 }

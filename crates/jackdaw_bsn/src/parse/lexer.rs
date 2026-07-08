@@ -22,6 +22,8 @@ pub enum Token {
     Colon,
     Hash,
     At,
+    /// The `map` keyword, emitted only for the `map[...]` literal position.
+    Map,
 }
 
 #[derive(Debug)]
@@ -125,6 +127,39 @@ fn lex_false(input: &str) -> IResult<&str, Token> {
 }
 fn lex_true(input: &str) -> IResult<&str, Token> {
     nom::combinator::value(Token::BoolLit(true), nom::bytes::complete::tag("true")).parse(input)
+}
+
+/// Lex the `map` keyword that tags a `map[(k, v), ...]` literal.
+///
+/// The word `map` is only reserved in this one position: it must be a
+/// standalone identifier immediately followed (ignoring whitespace) by `[`.
+/// Anywhere else - a field named `map`, a component named `map`, a `map::`
+/// path segment - it stays a normal identifier via [`lex_ident`].
+fn lex_map_keyword(input: &str) -> IResult<&str, Token> {
+    let (rest, _) = nom::bytes::complete::tag("map")(input)?;
+
+    // Reject when `map` is only a prefix of a longer identifier (`maps`,
+    // `map_data`); those must lex as a single `Ident`.
+    if rest
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+
+    // Only treat `map` as the keyword when a `[` follows it.
+    if !rest.trim_start().starts_with('[') {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+
+    Ok((rest, Token::Map))
 }
 
 fn lex_ident(ident: &str) -> IResult<&str, Token> {
@@ -270,8 +305,9 @@ fn lex_float(input: &str) -> IResult<&str, Token> {
 
 fn lex_token(input: &str) -> IResult<&str, Token> {
     nom::branch::alt((
-        lex_true,  // Must come before `lex_ident`.
-        lex_false, // Must come before `lex_ident`.
+        lex_true,        // Must come before `lex_ident`.
+        lex_false,       // Must come before `lex_ident`.
+        lex_map_keyword, // Must come before `lex_ident`.
         lex_ident,
         lex_string,
         lex_float, // Must come before `lex_int`.

@@ -84,3 +84,130 @@ bevy_ecs::hierarchy::Children [
     // covers the non-handle component round-trip only.
     let _ = SceneBsnAst::default();
 }
+
+/// A component with a `HashMap<String, i32>` field, applied from a `map[...]`
+/// literal. Proves the `DynamicMap` built by `map_value_to_reflect` converts
+/// into a concrete `HashMap` when applied onto the component (the concrete
+/// map's `FromReflect`-backed `insert_boxed` does the key/value conversion).
+#[test]
+fn bsn_map_literal_materializes_into_concrete_hashmap() {
+    use bevy::reflect::Reflect;
+    use bevy::reflect::prelude::ReflectDefault;
+    use bevy::ecs::reflect::ReflectComponent;
+    use std::collections::HashMap;
+
+    #[derive(bevy::ecs::component::Component, Reflect, Default)]
+    #[reflect(Default, Component)]
+    struct HasMap {
+        data: HashMap<String, i32>,
+    }
+
+    let mut world = World::new();
+    let registry = AppTypeRegistry::default();
+    registry.write().register::<HasMap>();
+
+    let type_path = registry
+        .read()
+        .get(std::any::TypeId::of::<HasMap>())
+        .expect("HasMap registered")
+        .type_info()
+        .type_path()
+        .to_string();
+    world.insert_resource(registry);
+
+    let text = format!("{type_path} {{\n    data: map[(\"a\", 1), (\"b\", 2)],\n}}\n");
+
+    let ast = parse_bsn_text(&text).expect("bsn should parse");
+    world.insert_resource(ast);
+
+    let spawned = spawn_from_ast(&mut world);
+    apply_dirty_ast_patches(&mut world);
+    assert_eq!(spawned.len(), 1);
+
+    let comp = world
+        .get::<HasMap>(spawned[0])
+        .expect("HasMap component applied");
+    assert_eq!(comp.data.len(), 2, "both map entries applied");
+    assert_eq!(comp.data.get("a"), Some(&1));
+    assert_eq!(comp.data.get("b"), Some(&2));
+}
+
+/// A multiline `map[...]` whose values are nested struct instances. Proves the
+/// map apply path recurses through `bsn_value_to_reflect` for non-scalar
+/// values, not just primitives, and materializes a concrete `HashMap` of
+/// structs.
+#[test]
+fn bsn_map_with_struct_values_materializes() {
+    use bevy::reflect::Reflect;
+    use bevy::reflect::prelude::ReflectDefault;
+    use bevy::ecs::reflect::ReflectComponent;
+    use std::collections::HashMap;
+
+    #[derive(Reflect, Default, PartialEq, Debug)]
+    #[reflect(Default)]
+    struct Slot {
+        amount: i32,
+        enabled: bool,
+    }
+
+    #[derive(bevy::ecs::component::Component, Reflect, Default)]
+    #[reflect(Default, Component)]
+    struct Props {
+        data: HashMap<String, Slot>,
+    }
+
+    let mut world = World::new();
+    let registry = AppTypeRegistry::default();
+    {
+        let mut w = registry.write();
+        w.register::<Props>();
+        w.register::<Slot>();
+    }
+
+    let (props_path, slot_path) = {
+        let r = registry.read();
+        let props = r
+            .get(std::any::TypeId::of::<Props>())
+            .expect("Props registered")
+            .type_info()
+            .type_path()
+            .to_string();
+        let slot = r
+            .get(std::any::TypeId::of::<Slot>())
+            .expect("Slot registered")
+            .type_info()
+            .type_path()
+            .to_string();
+        (props, slot)
+    };
+    world.insert_resource(registry);
+
+    let text = format!(
+        "{props_path} {{\n    data: map[\n        (\"one\", {slot_path} {{ amount: 5, enabled: true }}),\n        (\"two\", {slot_path} {{ amount: 9, enabled: false }}),\n    ],\n}}\n"
+    );
+
+    let ast = parse_bsn_text(&text).expect("bsn should parse");
+    world.insert_resource(ast);
+
+    let spawned = spawn_from_ast(&mut world);
+    apply_dirty_ast_patches(&mut world);
+
+    let comp = world
+        .get::<Props>(spawned[0])
+        .expect("Props component applied");
+    assert_eq!(comp.data.len(), 2);
+    assert_eq!(
+        comp.data.get("one"),
+        Some(&Slot {
+            amount: 5,
+            enabled: true
+        })
+    );
+    assert_eq!(
+        comp.data.get("two"),
+        Some(&Slot {
+            amount: 9,
+            enabled: false
+        })
+    );
+}

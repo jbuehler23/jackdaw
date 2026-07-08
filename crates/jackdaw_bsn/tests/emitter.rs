@@ -113,6 +113,13 @@ fn assert_value_eq(a: &BsnValue, b: &BsnValue) {
             assert_values_eq(&x.values, &y.values);
         }
         (BsnValue::List(x), BsnValue::List(y)) => assert_values_eq(x, y),
+        (BsnValue::Map(x), BsnValue::Map(y)) => {
+            assert_eq!(x.len(), y.len(), "map entry count");
+            for ((ka, va), (kb, vb)) in x.iter().zip(y.iter()) {
+                assert_value_eq(ka, kb);
+                assert_value_eq(va, vb);
+            }
+        }
         _ => panic!(
             "value variant mismatch: {} vs {}",
             describe_value(a),
@@ -132,6 +139,7 @@ fn describe_value(value: &BsnValue) -> String {
         BsnValue::Struct(d) => format!("Struct({})", d.type_path),
         BsnValue::TupleStruct(d) => format!("TupleStruct({})", d.type_path),
         BsnValue::List(v) => format!("List(len={})", v.len()),
+        BsnValue::Map(v) => format!("Map(len={})", v.len()),
     }
 }
 
@@ -201,6 +209,85 @@ fn emit_preserves_document_field_order() {
     let text = emit_scene(&ast);
     let expected = "test::Ordered {\n    z_field: 1,\n    a_field: 2,\n    m_field: 3,\n}\n";
     assert_eq!(text, expected, "field emission must follow document Vec order");
+}
+
+#[test]
+fn emit_map_sorts_by_key_and_roundtrips() {
+    // Build a document holding a map value with keys out of sorted order.
+    let mut ast = SceneBsnAst::default();
+
+    let patch = ast
+        .world
+        .spawn(BsnPatch::Struct(BsnStructData {
+            type_path: "test::Props".into(),
+            fields: BsnStructFields(vec![BsnField {
+                name: "data".into(),
+                value: BsnValue::Map(vec![
+                    (BsnValue::String("charlie".into()), BsnValue::Int(3)),
+                    (BsnValue::String("alpha".into()), BsnValue::Int(1)),
+                    (BsnValue::String("bravo".into()), BsnValue::Int(2)),
+                ]),
+            }]),
+        }))
+        .id();
+    let entity = ast.world.spawn(BsnPatches(vec![patch])).id();
+    ast.roots.push(entity);
+
+    let first = emit_scene(&ast);
+    let second = emit_scene(&ast);
+    // Deterministic: byte-stable across repeated emits.
+    assert_eq!(first, second, "map emission must be byte-stable");
+
+    // Keys appear in sorted order regardless of insertion order.
+    let alpha = first.find("alpha").expect("alpha present");
+    let bravo = first.find("bravo").expect("bravo present");
+    let charlie = first.find("charlie").expect("charlie present");
+    assert!(alpha < bravo && bravo < charlie, "map keys must emit sorted:\n{first}");
+
+    // Re-parses to a structurally equal document (entries preserved).
+    let reparsed = parse_bsn_text(&first).expect("emitted map should re-parse");
+    let reemitted = emit_scene(&reparsed);
+    assert_eq!(first, reemitted, "map round trip must be a text fixpoint");
+
+    // The re-parsed map carries all three entries.
+    let root = reparsed.roots[0];
+    let patches = reparsed.get_patches(root).expect("root patches");
+    let struct_patch = patches
+        .0
+        .iter()
+        .find_map(|&pe| match reparsed.get_patch(pe) {
+            Some(BsnPatch::Struct(d)) => Some(d),
+            _ => None,
+        })
+        .expect("struct patch");
+    let map_field = &struct_patch.fields.0[0].value;
+    let BsnValue::Map(entries) = map_field else {
+        panic!("expected a Map value, got {}", describe_value(map_field));
+    };
+    assert_eq!(entries.len(), 3, "all map entries preserved");
+}
+
+#[test]
+fn emit_empty_map_roundtrips() {
+    let mut ast = SceneBsnAst::default();
+    let patch = ast
+        .world
+        .spawn(BsnPatch::Struct(BsnStructData {
+            type_path: "test::Props".into(),
+            fields: BsnStructFields(vec![BsnField {
+                name: "data".into(),
+                value: BsnValue::Map(Vec::new()),
+            }]),
+        }))
+        .id();
+    let entity = ast.world.spawn(BsnPatches(vec![patch])).id();
+    ast.roots.push(entity);
+
+    let text = emit_scene(&ast);
+    assert!(text.contains("data: map[]"), "empty map emits as map[]:\n{text}");
+
+    let reparsed = parse_bsn_text(&text).expect("empty map should re-parse");
+    assert_eq!(text, emit_scene(&reparsed), "empty map round trip is a fixpoint");
 }
 
 #[test]

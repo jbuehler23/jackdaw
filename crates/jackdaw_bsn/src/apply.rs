@@ -13,6 +13,7 @@ use bevy::reflect::{
     PartialReflect, ReflectMut, TypeRegistry,
     enums::{DynamicEnum, DynamicVariant},
     list::DynamicList,
+    map::{DynamicMap, Map},
     prelude::ReflectDefault,
 };
 
@@ -464,6 +465,7 @@ pub fn bsn_value_to_reflect(
         BsnValue::Struct(data) => struct_value_to_reflect(data, registry, asset_server),
         BsnValue::TupleStruct(data) => tuple_struct_value_to_reflect(data, registry, asset_server),
         BsnValue::List(items) => list_value_to_reflect(items, expected, registry, asset_server),
+        BsnValue::Map(entries) => map_value_to_reflect(entries, expected, registry, asset_server),
     }
 }
 
@@ -601,6 +603,35 @@ fn list_value_to_reflect(
     }
     dynamic_list.set_represented_type(Some(registration.type_info()));
     Some(Box::new(dynamic_list))
+}
+
+/// Build a [`DynamicMap`] for a `map[(k, v), ...]` value against the expected
+/// concrete map type. The dynamic map carries the target type info, so applying
+/// it onto a concrete `HashMap<K, V>` field converts each key/value through that
+/// map's `FromReflect`-backed `insert_boxed`.
+fn map_value_to_reflect(
+    entries: &[(BsnValue, BsnValue)],
+    expected: TypeId,
+    registry: &TypeRegistry,
+    asset_server: Option<&AssetServer>,
+) -> Option<Box<dyn PartialReflect>> {
+    let registration = registry.get(expected)?;
+    let map_info = registration.type_info().as_map().ok()?;
+    let key_type_id = map_info.key_ty().id();
+    let value_type_id = map_info.value_ty().id();
+
+    let mut dynamic_map = DynamicMap::default();
+    for (key, value) in entries {
+        if let Some(reflected_key) =
+            bsn_value_to_reflect(key, key_type_id, registry, asset_server)
+            && let Some(reflected_value) =
+                bsn_value_to_reflect(value, value_type_id, registry, asset_server)
+        {
+            dynamic_map.insert_boxed(reflected_key, reflected_value);
+        }
+    }
+    dynamic_map.set_represented_type(Some(registration.type_info()));
+    Some(Box::new(dynamic_map))
 }
 
 /// Set a field value at a dotted path within an entity's AST patches.

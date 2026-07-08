@@ -170,6 +170,59 @@ fn parses_list_literal() {
 }
 
 #[test]
+fn parses_map_literal() {
+    let ast = parse_bsn(r#"Comp { data: map[("a", 1), ("b", 2)] }"#).unwrap();
+    let patches = root_patches(&ast);
+    let BsnPatch::Struct(BsnStruct(_, fields, _)) = patch(&ast, patches[0]) else {
+        panic!("expected Struct");
+    };
+    let BsnExpr::Map(entries) = expr(&ast, fields[0].1) else {
+        panic!("expected Map expr");
+    };
+    assert_eq!(entries.len(), 2);
+    // First entry: ("a", 1).
+    let (k0, v0) = entries[0];
+    assert!(matches!(expr(&ast, k0), BsnExpr::StringLit(s) if s == "a"));
+    assert!(matches!(expr(&ast, v0), BsnExpr::IntLit(1)));
+    // Second entry: ("b", 2).
+    let (k1, v1) = entries[1];
+    assert!(matches!(expr(&ast, k1), BsnExpr::StringLit(s) if s == "b"));
+    assert!(matches!(expr(&ast, v1), BsnExpr::IntLit(2)));
+}
+
+#[test]
+fn parses_empty_map_literal() {
+    let ast = parse_bsn("Comp { data: map[] }").unwrap();
+    let patches = root_patches(&ast);
+    let BsnPatch::Struct(BsnStruct(_, fields, _)) = patch(&ast, patches[0]) else {
+        panic!("expected Struct");
+    };
+    let BsnExpr::Map(entries) = expr(&ast, fields[0].1) else {
+        panic!("expected Map expr");
+    };
+    assert!(entries.is_empty());
+}
+
+#[test]
+fn map_is_a_contextual_keyword() {
+    // `map` is only special immediately before `[`. As a field name, component
+    // name, or path segment it remains an ordinary identifier.
+    let ast = parse_bsn("Comp { map: 1 }").unwrap();
+    let patches = root_patches(&ast);
+    let BsnPatch::Struct(BsnStruct(_, fields, _)) = patch(&ast, patches[0]) else {
+        panic!("expected Struct");
+    };
+    assert_eq!(fields[0].0, "map");
+
+    let ast = parse_bsn("map { x: 1 }").unwrap();
+    let patches = root_patches(&ast);
+    let BsnPatch::Struct(BsnStruct(symbol, _, _)) = patch(&ast, patches[0]) else {
+        panic!("expected Struct named map");
+    };
+    assert_eq!(symbol.1, "map");
+}
+
+#[test]
 fn parses_empty_list_literal() {
     let ast = parse_bsn("Holder { items: [] }").unwrap();
     let patches = root_patches(&ast);
