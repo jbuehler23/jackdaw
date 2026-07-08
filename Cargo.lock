@@ -5305,6 +5305,7 @@ dependencies = [
  "jackdaw_api",
  "jackdaw_api_internal",
  "jackdaw_avian_integration",
+ "jackdaw_bsn",
  "jackdaw_camera",
  "jackdaw_camera_rig",
  "jackdaw_commands",

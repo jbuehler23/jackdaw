@@ -357,6 +357,7 @@ impl Plugin for EditorCorePlugin {
             jackdaw_jsn::JsnPlugin {
                 runtime_mesh_rebuild: false,
             },
+            jackdaw_bsn::JackdawBsnPlugin,
             (
                 project_select::ProjectSelectPlugin,
                 scrolling_log::ScrollingLogPlugin,

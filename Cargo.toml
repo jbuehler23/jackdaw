@@ -77,6 +77,7 @@ members = [
 [dependencies]
 bevy.workspace = true
 jackdaw_jsn.workspace = true
+jackdaw_bsn.workspace = true
 jackdaw_geometry.workspace = true
 jackdaw_scene_types.workspace = true
 jackdaw_csg.workspace = true
