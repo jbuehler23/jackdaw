@@ -456,6 +456,20 @@ pub fn bsn_value_to_reflect(
         return Some(Box::new(dynamic_enum));
     }
 
+    // If the expected type is an enum and the value names one of its variants
+    // (a data variant as Struct/TupleStruct, or a unit variant as a bare Type),
+    // build the variant value directly. `component_to_bsn_patch` emits a
+    // variant's value with a `Enum::Variant` type path, which is not itself a
+    // registered type, so the plain struct/tuple-struct paths below would fail
+    // to resolve it.
+    if let Some(registration) = registry.get(expected)
+        && let bevy::reflect::TypeInfo::Enum(enum_info) = registration.type_info()
+        && let Some(result) =
+            enum_variant_value_to_reflect(value, enum_info, registration, registry, asset_server)
+    {
+        return Some(result);
+    }
+
     match value {
         BsnValue::Float(f) => float_to_reflect(*f, expected),
         BsnValue::Int(i) => int_to_reflect(*i, expected),
@@ -467,6 +481,71 @@ pub fn bsn_value_to_reflect(
         BsnValue::List(items) => list_value_to_reflect(items, expected, registry, asset_server),
         BsnValue::Map(entries) => map_value_to_reflect(entries, expected, registry, asset_server),
     }
+}
+
+/// The trailing `Variant` segment of an `Enum::Variant` type path (or the whole
+/// string if it has no `::`).
+fn variant_name_of(type_path: &str) -> &str {
+    match type_path.rfind("::") {
+        Some(sep) => &type_path[sep + 2..],
+        None => type_path,
+    }
+}
+
+/// Build a value of the expected enum type from a `BsnValue` that names one of
+/// its variants. Returns `None` when the value does not name a variant of this
+/// enum (so the caller can fall through to other conversions).
+fn enum_variant_value_to_reflect(
+    value: &BsnValue,
+    enum_info: &bevy::reflect::enums::EnumInfo,
+    enum_registration: &bevy::reflect::TypeRegistration,
+    registry: &TypeRegistry,
+    asset_server: Option<&AssetServer>,
+) -> Option<Box<dyn PartialReflect>> {
+    use bevy::reflect::enums::VariantInfo;
+
+    let (variant_name, dynamic_variant) = match value {
+        BsnValue::Type(type_path) => {
+            let name = variant_name_of(type_path);
+            match enum_info.variant(name)? {
+                VariantInfo::Unit(_) => (name.to_string(), DynamicVariant::Unit),
+                _ => return None,
+            }
+        }
+        BsnValue::TupleStruct(data) => {
+            let name = variant_name_of(&data.type_path);
+            let VariantInfo::Tuple(tuple_var) = enum_info.variant(name)? else {
+                return None;
+            };
+            let mut dynamic_tuple = bevy::reflect::tuple::DynamicTuple::default();
+            for (i, item) in data.values.iter().enumerate() {
+                let field = tuple_var.field_at(i)?;
+                let reflected =
+                    bsn_value_to_reflect(item, field.type_id(), registry, asset_server)?;
+                dynamic_tuple.insert_boxed(reflected);
+            }
+            (name.to_string(), DynamicVariant::Tuple(dynamic_tuple))
+        }
+        BsnValue::Struct(data) => {
+            let name = variant_name_of(&data.type_path);
+            let VariantInfo::Struct(struct_var) = enum_info.variant(name)? else {
+                return None;
+            };
+            let mut dynamic_struct = bevy::reflect::structs::DynamicStruct::default();
+            for field in &data.fields.0 {
+                let field_info = struct_var.field(&field.name)?;
+                let reflected =
+                    bsn_value_to_reflect(&field.value, field_info.type_id(), registry, asset_server)?;
+                dynamic_struct.insert_boxed(&field.name, reflected);
+            }
+            (name.to_string(), DynamicVariant::Struct(dynamic_struct))
+        }
+        _ => return None,
+    };
+
+    let mut dynamic_enum = DynamicEnum::new(variant_name, dynamic_variant);
+    dynamic_enum.set_represented_type(Some(enum_registration.type_info()));
+    Some(Box::new(dynamic_enum))
 }
 
 fn float_to_reflect(f: f64, expected: TypeId) -> Option<Box<dyn PartialReflect>> {
@@ -636,7 +715,14 @@ fn map_value_to_reflect(
 
 /// Set a field value at a dotted path within an entity's AST patches.
 ///
-/// Creates the struct patch and intermediate fields if they don't exist.
+/// Mirrors the JSON-path layer's `set_field_in_component_json`:
+/// - an unregistered `type_path` is a no-op (no patch is created),
+/// - an empty `field_path` replaces the whole component value,
+/// - dotted segments navigate named struct fields, numeric tuple-struct
+///   indices, `field[i]` list elements, and `field[key]` map entries.
+///
+/// Struct patches and intermediate struct fields are created on demand so a
+/// value can be written into an as-yet-empty patch.
 pub fn set_bsn_field(
     ast: &mut SceneBsnAst,
     patches_entity: Entity,
@@ -645,6 +731,12 @@ pub fn set_bsn_field(
     value: BsnValue,
     registry: &TypeRegistry,
 ) {
+    // Refuse to write a field for a type the registry does not know about,
+    // matching the JSON-path layer (which resolves the type before writing).
+    if registry.get_with_type_path(type_path).is_none() {
+        return;
+    }
+
     // Ensure a Struct patch exists for this type.
     let patch_entity = match ast.find_patch_by_type_path(patches_entity, type_path) {
         Some(pe) => pe,
@@ -663,31 +755,75 @@ pub fn set_bsn_field(
         }
     };
 
-    // If the patch is a bare Type (all defaults), promote to Struct,
-    // preserving the original type path (which may be variant-qualified).
-    if let Some(patch) = ast.world.get_mut::<BsnPatch>(patch_entity) {
-        let patch = patch.into_inner();
-        if let BsnPatch::Type(existing_tp) = patch {
-            let preserved_tp = existing_tp.clone();
-            *patch = BsnPatch::Struct(BsnStructData {
-                type_path: preserved_tp,
-                fields: BsnStructFields::default(),
-            });
-        }
-    }
-
-    // Navigate to the field and set the value.
     let Some(patch) = ast.world.get_mut::<BsnPatch>(patch_entity) else {
         return;
     };
     let patch = patch.into_inner();
-    let BsnPatch::Struct(data) = patch else { return };
 
-    let segments: Vec<&str> = field_path.split('.').collect();
-    set_nested_field(&mut data.fields, &segments, value, type_path, registry);
+    // Empty path: replace the whole component value.
+    if field_path.is_empty() {
+        if let Some(replacement) = value_to_patch(value) {
+            *patch = replacement;
+        }
+        return;
+    }
+
+    // If the patch is a bare Type (all defaults), promote to Struct,
+    // preserving the original type path (which may be variant-qualified).
+    if let BsnPatch::Type(existing_tp) = patch {
+        let preserved_tp = existing_tp.clone();
+        *patch = BsnPatch::Struct(BsnStructData {
+            type_path: preserved_tp,
+            fields: BsnStructFields::default(),
+        });
+    }
+
+    // View the patch as a navigable value, descend the path, and store it back.
+    let (mut root, is_tuple) = match std::mem::replace(patch, BsnPatch::Type(String::new())) {
+        BsnPatch::Struct(data) => (BsnValue::Struct(data), false),
+        BsnPatch::TupleStruct(data) => (BsnValue::TupleStruct(data), true),
+        other => {
+            *patch = other;
+            return;
+        }
+    };
+    let root_type_path = match &root {
+        BsnValue::Struct(d) => d.type_path.clone(),
+        BsnValue::TupleStruct(d) => d.type_path.clone(),
+        _ => String::new(),
+    };
+
+    let segments: Vec<&str> = field_path.split('.').filter(|s| !s.is_empty()).collect();
+    set_nested_value(&mut root, &segments, value, &root_type_path, registry);
+
+    *patch = match root {
+        BsnValue::Struct(data) => BsnPatch::Struct(data),
+        BsnValue::TupleStruct(data) => BsnPatch::TupleStruct(data),
+        // The value view was created from a Struct or TupleStruct and the
+        // navigator never changes the root's kind, so this is unreachable in
+        // practice; fall back to preserve the original tuple/struct shape.
+        other => {
+            if is_tuple {
+                BsnPatch::TupleStruct(BsnTupleStructData {
+                    type_path: root_type_path,
+                    values: vec![other],
+                })
+            } else {
+                BsnPatch::Struct(BsnStructData {
+                    type_path: root_type_path,
+                    fields: BsnStructFields::default(),
+                })
+            }
+        }
+    };
 }
 
 /// Get a field value at a dotted path within an entity's AST patches.
+///
+/// Mirrors `get_field_in_component_json`: an empty `field_path` returns the
+/// whole component value; dotted segments navigate named struct fields,
+/// numeric tuple-struct indices, `field[i]` list elements, and `field[key]`
+/// map entries.
 pub fn get_bsn_field(
     ast: &SceneBsnAst,
     patches_entity: Entity,
@@ -696,92 +832,243 @@ pub fn get_bsn_field(
 ) -> Option<BsnValue> {
     let patch_entity = ast.find_patch_by_type_path(patches_entity, type_path)?;
     let patch = ast.get_patch(patch_entity)?;
-    let BsnPatch::Struct(data) = patch else {
-        return None;
-    };
+    let root = patch_to_value(patch)?;
 
-    let segments: Vec<&str> = field_path.split('.').collect();
-    get_nested_field(&data.fields, &segments)
+    let segments: Vec<&str> = field_path.split('.').filter(|s| !s.is_empty()).collect();
+    get_nested_value(&root, &segments).cloned()
 }
 
-fn set_nested_field(
-    fields: &mut BsnStructFields,
+/// The whole-component [`BsnValue`] view of a patch, or `None` for patches that
+/// carry no addressable value (Name, Base, Template, Children).
+fn patch_to_value(patch: &BsnPatch) -> Option<BsnValue> {
+    match patch {
+        BsnPatch::Struct(data) => Some(BsnValue::Struct(data.clone())),
+        BsnPatch::TupleStruct(data) => Some(BsnValue::TupleStruct(data.clone())),
+        BsnPatch::Type(tp) => Some(BsnValue::Type(tp.clone())),
+        _ => None,
+    }
+}
+
+/// Convert a whole-component [`BsnValue`] back into the patch that stores it.
+/// Used by the empty-path set case.
+fn value_to_patch(value: BsnValue) -> Option<BsnPatch> {
+    match value {
+        BsnValue::Struct(data) => Some(BsnPatch::Struct(data)),
+        BsnValue::TupleStruct(data) => Some(BsnPatch::TupleStruct(data)),
+        BsnValue::Type(tp) => Some(BsnPatch::Type(tp)),
+        _ => None,
+    }
+}
+
+/// Whether a map key `BsnValue` equals the textual key `segment` from a path.
+fn key_matches(key: &BsnValue, segment: &str) -> bool {
+    match key {
+        BsnValue::String(s) => s == segment,
+        BsnValue::Type(t) => t == segment,
+        BsnValue::Int(i) => segment.parse::<i128>().ok() == Some(*i),
+        BsnValue::Bool(b) => segment.parse::<bool>().ok() == Some(*b),
+        _ => false,
+    }
+}
+
+/// Read a nested value by path segments, navigating structs (named fields),
+/// tuple structs / lists (numeric or `[i]` indices), and maps (`[key]`).
+fn get_nested_value<'a>(root: &'a BsnValue, segments: &[&str]) -> Option<&'a BsnValue> {
+    let mut current = root;
+    for segment in segments {
+        current = navigate_value(current, segment)?;
+    }
+    Some(current)
+}
+
+/// Navigate one path segment into a value. A segment may carry a trailing
+/// bracket index (`name[i]`, `name[key]`, or `[i]`/`[key]` with an empty name).
+fn navigate_value<'a>(value: &'a BsnValue, segment: &str) -> Option<&'a BsnValue> {
+    if let Some(bracket_pos) = segment.find('[') {
+        if !segment.ends_with(']') {
+            return None;
+        }
+        let key = &segment[..bracket_pos];
+        let inner = &segment[bracket_pos + 1..segment.len() - 1];
+        let base = if key.is_empty() {
+            value
+        } else {
+            navigate_named(value, key)?
+        };
+        return index_into_value(base, inner);
+    }
+    navigate_named(value, segment)
+}
+
+/// Navigate a named struct field or a numeric tuple-struct/list index.
+fn navigate_named<'a>(value: &'a BsnValue, name: &str) -> Option<&'a BsnValue> {
+    match value {
+        BsnValue::Struct(data) => data
+            .fields
+            .0
+            .iter()
+            .find(|f| f.name == name)
+            .map(|f| &f.value),
+        BsnValue::TupleStruct(data) => name.parse::<usize>().ok().and_then(|i| data.values.get(i)),
+        BsnValue::List(items) => name.parse::<usize>().ok().and_then(|i| items.get(i)),
+        BsnValue::Map(entries) => entries
+            .iter()
+            .find(|(k, _)| key_matches(k, name))
+            .map(|(_, v)| v),
+        _ => None,
+    }
+}
+
+/// Index into a list (by number), tuple struct (by number), or map (by key).
+fn index_into_value<'a>(value: &'a BsnValue, inner: &str) -> Option<&'a BsnValue> {
+    match value {
+        BsnValue::List(items) => inner.parse::<usize>().ok().and_then(|i| items.get(i)),
+        BsnValue::TupleStruct(data) => {
+            inner.parse::<usize>().ok().and_then(|i| data.values.get(i))
+        }
+        BsnValue::Map(entries) => entries
+            .iter()
+            .find(|(k, _)| key_matches(k, inner))
+            .map(|(_, v)| v),
+        _ => None,
+    }
+}
+
+/// Write `value` at `segments` within `current`, mirroring the read navigation.
+/// Named struct fields (and intermediate structs) are created on demand; tuple
+/// struct / list / map elements are only navigated when they already exist.
+fn set_nested_value(
+    current: &mut BsnValue,
     segments: &[&str],
     value: BsnValue,
-    parent_type_path: &str,
+    current_type_path: &str,
     registry: &TypeRegistry,
 ) {
-    if segments.is_empty() {
+    let Some((segment, rest)) = segments.split_first() else {
+        *current = value;
         return;
-    }
-    let field_name = segments[0];
+    };
 
-    if segments.len() == 1 {
-        // Leaf: set or create the field.
-        if let Some(field) = fields.0.iter_mut().find(|f| f.name == field_name) {
-            field.value = value;
+    // Bracket navigation: `name[inner]` or `[inner]`.
+    if let Some(bracket_pos) = segment.find('[') {
+        if !segment.ends_with(']') {
+            return;
+        }
+        let key = &segment[..bracket_pos];
+        let inner = &segment[bracket_pos + 1..segment.len() - 1];
+        let base: Option<&mut BsnValue> = if key.is_empty() {
+            Some(current)
         } else {
-            fields.0.push(BsnField {
-                name: field_name.to_string(),
-                value,
-            });
+            navigate_named_mut(current, key)
+        };
+        let Some(base) = base else { return };
+        if let Some(target) = index_into_value_mut(base, inner) {
+            set_nested_value(target, rest, value, "", registry);
         }
         return;
     }
 
-    // Non-leaf: navigate into a nested struct value.
-    let remaining = &segments[1..];
-    let nested_type_path =
-        get_field_type_path(parent_type_path, field_name, registry).unwrap_or_default();
-
-    // Find or create the intermediate field.
-    let existing = fields.0.iter_mut().find(|f| f.name == field_name);
-    let nested_fields = if let Some(field) = existing {
-        match &mut field.value {
-            BsnValue::Struct(nested_data) => &mut nested_data.fields,
-            other => {
-                *other = BsnValue::Struct(BsnStructData {
+    match current {
+        BsnValue::Struct(data) => {
+            if rest.is_empty() {
+                if let Some(field) = data.fields.0.iter_mut().find(|f| f.name == *segment) {
+                    field.value = value;
+                } else {
+                    data.fields.0.push(BsnField {
+                        name: segment.to_string(),
+                        value,
+                    });
+                }
+                return;
+            }
+            let nested_type_path =
+                get_field_type_path(current_type_path, segment, registry).unwrap_or_default();
+            let pos = match data.fields.0.iter().position(|f| f.name == *segment) {
+                Some(p) => p,
+                None => {
+                    data.fields.0.push(BsnField {
+                        name: segment.to_string(),
+                        value: BsnValue::Struct(BsnStructData {
+                            type_path: nested_type_path.clone(),
+                            fields: BsnStructFields::default(),
+                        }),
+                    });
+                    data.fields.0.len() - 1
+                }
+            };
+            let field = &mut data.fields.0[pos];
+            if !matches!(
+                field.value,
+                BsnValue::Struct(_)
+                    | BsnValue::TupleStruct(_)
+                    | BsnValue::List(_)
+                    | BsnValue::Map(_)
+            ) {
+                field.value = BsnValue::Struct(BsnStructData {
                     type_path: nested_type_path.clone(),
                     fields: BsnStructFields::default(),
                 });
-                if let BsnValue::Struct(d) = other {
-                    &mut d.fields
-                } else {
-                    unreachable!()
-                }
+            }
+            set_nested_value(&mut field.value, rest, value, &nested_type_path, registry);
+        }
+        BsnValue::TupleStruct(data) => {
+            if let Some(target) = segment.parse::<usize>().ok().and_then(|i| data.values.get_mut(i))
+            {
+                set_nested_value(target, rest, value, "", registry);
             }
         }
-    } else {
-        fields.0.push(BsnField {
-            name: field_name.to_string(),
-            value: BsnValue::Struct(BsnStructData {
-                type_path: nested_type_path.clone(),
-                fields: BsnStructFields::default(),
-            }),
-        });
-        if let BsnValue::Struct(ref mut d) = fields.0.last_mut().unwrap().value {
-            &mut d.fields
-        } else {
-            unreachable!()
+        BsnValue::List(items) => {
+            if let Some(target) = segment.parse::<usize>().ok().and_then(|i| items.get_mut(i)) {
+                set_nested_value(target, rest, value, "", registry);
+            }
         }
-    };
-
-    set_nested_field(nested_fields, remaining, value, &nested_type_path, registry);
+        BsnValue::Map(entries) => {
+            if let Some((_, v)) = entries.iter_mut().find(|(k, _)| key_matches(k, segment)) {
+                set_nested_value(v, rest, value, "", registry);
+            }
+        }
+        _ => {}
+    }
 }
 
-fn get_nested_field(fields: &BsnStructFields, segments: &[&str]) -> Option<BsnValue> {
-    if segments.is_empty() {
-        return None;
+/// Mutable analog of [`navigate_named`].
+fn navigate_named_mut<'a>(value: &'a mut BsnValue, name: &str) -> Option<&'a mut BsnValue> {
+    match value {
+        BsnValue::Struct(data) => data
+            .fields
+            .0
+            .iter_mut()
+            .find(|f| f.name == name)
+            .map(|f| &mut f.value),
+        BsnValue::TupleStruct(data) => name
+            .parse::<usize>()
+            .ok()
+            .and_then(move |i| data.values.get_mut(i)),
+        BsnValue::List(items) => name.parse::<usize>().ok().and_then(move |i| items.get_mut(i)),
+        BsnValue::Map(entries) => entries
+            .iter_mut()
+            .find(|(k, _)| key_matches(k, name))
+            .map(|(_, v)| v),
+        _ => None,
     }
-    let field = fields.0.iter().find(|f| f.name == segments[0])?;
+}
 
-    if segments.len() == 1 {
-        return Some(field.value.clone());
-    }
-    if let BsnValue::Struct(ref data) = field.value {
-        get_nested_field(&data.fields, &segments[1..])
-    } else {
-        None
+/// Mutable analog of [`index_into_value`].
+fn index_into_value_mut<'a>(value: &'a mut BsnValue, inner: &str) -> Option<&'a mut BsnValue> {
+    match value {
+        BsnValue::List(items) => inner
+            .parse::<usize>()
+            .ok()
+            .and_then(move |i| items.get_mut(i)),
+        BsnValue::TupleStruct(data) => inner
+            .parse::<usize>()
+            .ok()
+            .and_then(move |i| data.values.get_mut(i)),
+        BsnValue::Map(entries) => entries
+            .iter_mut()
+            .find(|(k, _)| key_matches(k, inner))
+            .map(|(_, v)| v),
+        _ => None,
     }
 }
 
@@ -827,54 +1114,76 @@ pub fn parse_string_to_bsn_value(value_str: &str, expected: TypeId) -> Option<Bs
 mod tests {
     use super::*;
     use crate::{BsnPatches, BsnStructFields};
+    use bevy::reflect::Reflect;
+
+    // A registered struct so `set_bsn_field`'s registry check passes.
+    #[derive(Component, Reflect, Default, Clone)]
+    #[reflect(Default)]
+    struct Marker {
+        x: f32,
+        value: bool,
+    }
+
+    fn marker_registry() -> (TypeRegistry, String) {
+        let mut registry = TypeRegistry::new();
+        registry.register::<Marker>();
+        registry.register::<f32>();
+        registry.register::<bool>();
+        let type_path = registry
+            .get(std::any::TypeId::of::<Marker>())
+            .unwrap()
+            .type_info()
+            .type_path()
+            .to_string();
+        (registry, type_path)
+    }
 
     #[test]
     fn set_and_get_nested_field() {
         let mut ast = SceneBsnAst::default();
+        let (registry, type_path) = marker_registry();
 
-        // Create an entity with an empty Transform struct patch.
+        // Create an entity with an empty Marker struct patch.
         let patch = ast
             .world
             .spawn(BsnPatch::Struct(BsnStructData {
-                type_path: "Transform".into(),
+                type_path: type_path.clone(),
                 fields: BsnStructFields::default(),
             }))
             .id();
         let patches_entity = ast.world.spawn(BsnPatches(vec![patch])).id();
 
-        // Set a nested field (no registry needed for leaf-only path).
-        let registry = TypeRegistry::default();
         set_bsn_field(
             &mut ast,
             patches_entity,
-            "Transform",
+            &type_path,
             "x",
             BsnValue::Float(5.0),
             &registry,
         );
 
-        let val = get_bsn_field(&ast, patches_entity, "Transform", "x");
+        let val = get_bsn_field(&ast, patches_entity, &type_path, "x");
         assert!(matches!(val, Some(BsnValue::Float(f)) if (f - 5.0).abs() < f64::EPSILON));
     }
 
     #[test]
     fn promotes_type_patch_to_struct() {
         let mut ast = SceneBsnAst::default();
+        let (registry, type_path) = marker_registry();
 
-        let patch = ast.world.spawn(BsnPatch::Type("MyType".into())).id();
+        let patch = ast.world.spawn(BsnPatch::Type(type_path.clone())).id();
         let patches_entity = ast.world.spawn(BsnPatches(vec![patch])).id();
 
-        let registry = TypeRegistry::default();
         set_bsn_field(
             &mut ast,
             patches_entity,
-            "MyType",
+            &type_path,
             "value",
             BsnValue::Bool(true),
             &registry,
         );
 
-        let val = get_bsn_field(&ast, patches_entity, "MyType", "value");
+        let val = get_bsn_field(&ast, patches_entity, &type_path, "value");
         assert!(matches!(val, Some(BsnValue::Bool(true))));
     }
 }
@@ -943,12 +1252,9 @@ mod field_navigation_matrix {
         assert!(matches!(translation, Some(BsnValue::Struct(_))));
     }
 
-    /// GAP: `get_field_empty_path_returns_whole_component` in the JSON layer
-    /// treats `""` as "no further navigation, return the whole value". BSN's
-    /// `get_bsn_field` always splits on `.` and treats `""` as a literal field
-    /// name to look up, so it returns `None` instead of the component value.
+    /// An empty path returns the whole component value, matching the JSON
+    /// layer's `get_field_empty_path_returns_whole_component`.
     #[test]
-    #[ignore = "parity gap: get_bsn_field has no empty-path special case (splits '' into a field named \"\", unlike the JSON layer which returns the whole component)"]
     fn get_field_empty_path_returns_whole_component() {
         let (ast, patches_entity) = one_patch_ast(BsnPatch::Struct(BsnStructData {
             type_path: "Transform".into(),
@@ -1001,8 +1307,12 @@ mod field_navigation_matrix {
     /// Mirrors `get_field_round_trips_with_set_field`.
     #[test]
     fn get_field_round_trips_with_set_field() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<Transform>();
+        let tp = type_path_of::<Transform>(&registry);
+
         let (mut ast, patches_entity) = one_patch_ast(BsnPatch::Struct(BsnStructData {
-            type_path: "Transform".into(),
+            type_path: tp.clone(),
             fields: BsnStructFields(vec![BsnField {
                 name: "translation".into(),
                 value: BsnValue::Struct(BsnStructData {
@@ -1012,58 +1322,52 @@ mod field_navigation_matrix {
             }]),
         }));
 
-        let registry = TypeRegistry::default();
         set_bsn_field(
             &mut ast,
             patches_entity,
-            "Transform",
+            &tp,
             "translation.y",
             BsnValue::Float(7.0),
             &registry,
         );
 
-        let result = get_bsn_field(&ast, patches_entity, "Transform", "translation.y");
+        let result = get_bsn_field(&ast, patches_entity, &tp, "translation.y");
         assert!(matches!(result, Some(BsnValue::Float(f)) if (f - 7.0).abs() < f64::EPSILON));
     }
 
-    /// GAP: `set_field_in_component_json_empty_path_replaces_value` replaces
-    /// the whole component value in one call. `set_bsn_field` has no
-    /// empty-path special case either: it creates/overwrites a field
-    /// literally named `""` instead of replacing the struct's fields wholesale.
+    /// An empty path replaces the whole component value in one call, matching
+    /// the JSON layer's `set_field_in_component_json_empty_path_replaces_value`.
     #[test]
-    #[ignore = "parity gap: set_bsn_field has no empty-path special case (sets a field named \"\" instead of replacing the whole component value, unlike the JSON layer)"]
     fn set_field_empty_path_replaces_whole_value() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<Transform>();
+        let tp = type_path_of::<Transform>(&registry);
+
         let (mut ast, patches_entity) = one_patch_ast(BsnPatch::Struct(BsnStructData {
-            type_path: "Transform".into(),
+            type_path: tp.clone(),
             fields: BsnStructFields(vec![BsnField {
                 name: "x".into(),
                 value: BsnValue::Float(0.0),
             }]),
         }));
 
-        let registry = TypeRegistry::default();
         let replacement = BsnValue::Struct(BsnStructData {
-            type_path: "Transform".into(),
+            type_path: tp.clone(),
             fields: BsnStructFields(vec![BsnField {
                 name: "x".into(),
                 value: BsnValue::Float(9.0),
             }]),
         });
-        set_bsn_field(&mut ast, patches_entity, "Transform", "", replacement, &registry);
+        set_bsn_field(&mut ast, patches_entity, &tp, "", replacement, &registry);
 
-        let whole = get_bsn_field(&ast, patches_entity, "Transform", "x");
+        let whole = get_bsn_field(&ast, patches_entity, &tp, "x");
         assert!(matches!(whole, Some(BsnValue::Float(f)) if (f - 9.0).abs() < f64::EPSILON));
     }
 
-    /// GAP: `set_field_in_component_json_unregistered_type_is_noop` asserts
-    /// the JSON layer refuses to write a field for a type the reflect
-    /// `TypeRegistry` doesn't know about (it looks up the type before
-    /// writing, and no-ops when that lookup fails). `set_bsn_field` performs
-    /// no such check: it addresses patches purely by type-path string, so it
-    /// happily creates a brand-new struct patch for any type path, registered
-    /// or not. This test documents that `set_bsn_field` is NOT a no-op here.
+    /// `set_bsn_field` refuses to write a field for a type the reflect
+    /// `TypeRegistry` does not know about, matching the JSON layer's
+    /// `set_field_in_component_json_unregistered_type_is_noop`.
     #[test]
-    #[ignore = "parity gap: set_bsn_field has no registry-backed type check and creates a new patch for any type path instead of no-oping like the JSON layer"]
     fn set_field_on_unregistered_type_is_noop() {
         let mut ast = SceneBsnAst::default();
         let patches_entity = ast.world.spawn(BsnPatches(Vec::new())).id();
@@ -1142,16 +1446,12 @@ mod field_navigation_matrix {
         }
     }
 
-    /// GAP: `newtype_variant_field_round_trips_through_index_zero` reads and
-    /// writes a newtype-wrapped variant's inner field through index `0`
-    /// (`"0.flag"`). Bevy reflects a tuple-variant enum as a
-    /// `BsnPatch::TupleStruct` (see `component_to_bsn_patch_inner`'s
-    /// `VariantType::Tuple` arm), but `get_bsn_field`/`set_bsn_field` only
-    /// destructure `BsnPatch::Struct`, so they return `None`/no-op on any
-    /// tuple-struct or newtype-variant patch. There is currently no bracket-
-    /// or index-based navigation into `BsnValue::TupleStruct` at all.
+    /// Reads and writes a newtype-wrapped variant's inner field through index
+    /// `0` (`"0.flag"`). Bevy reflects a tuple-variant enum as a
+    /// `BsnPatch::TupleStruct`, and the navigator descends its values by index,
+    /// matching the JSON layer's
+    /// `newtype_variant_field_round_trips_through_index_zero`.
     #[test]
-    #[ignore = "parity gap: get_bsn_field/set_bsn_field only navigate BsnPatch::Struct; tuple-variant/newtype patches (BsnPatch::TupleStruct) have no index-0 field access"]
     fn newtype_variant_field_round_trips_through_index_zero() {
         let mut registry = TypeRegistry::new();
         registry.register::<TestModifier>();
@@ -1190,13 +1490,9 @@ mod field_navigation_matrix {
         items: Vec<f32>,
     }
 
-    /// GAP: `get_field_bracket_index_reads_list_element` reads a list element
-    /// via `items[1]` bracket syntax. `get_bsn_field`/`get_nested_field` only
-    /// split the field path on `.` and only recurse into `BsnValue::Struct`;
-    /// there is no bracket-index parsing and no `BsnValue::List` indexing at
-    /// all, so this returns `None` instead of the element.
+    /// Reads a list element via `items[1]` bracket syntax, matching the JSON
+    /// layer's `get_field_bracket_index_reads_list_element`.
     #[test]
-    #[ignore = "parity gap: get_bsn_field has no bracket-index syntax and does not navigate into BsnValue::List at all"]
     fn get_field_bracket_index_reads_list_element() {
         let mut registry = TypeRegistry::new();
         registry.register::<TestList>();
@@ -1212,5 +1508,140 @@ mod field_navigation_matrix {
 
         let result = get_bsn_field(&ast, patches_entity, &base_type_path, "items[1]");
         assert!(matches!(result, Some(BsnValue::Float(f)) if (f - 20.0).abs() < f64::EPSILON));
+    }
+
+    /// A struct with a map field, whose entries are read and written via
+    /// `field[key]` bracket-key syntax (the shape the inspector emits for
+    /// map-valued components like custom properties).
+    #[derive(Component, Reflect, Default, Clone)]
+    #[reflect(Default)]
+    struct TestMap {
+        props: std::collections::HashMap<String, f32>,
+    }
+
+    #[test]
+    fn bracket_key_reads_and_writes_map_entry() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<TestMap>();
+        registry.register::<std::collections::HashMap<String, f32>>();
+        registry.register::<String>();
+        registry.register::<f32>();
+        let base_type_path = type_path_of::<TestMap>(&registry);
+
+        let mut props = std::collections::HashMap::new();
+        props.insert("hp".to_string(), 10.0_f32);
+        let map = TestMap { props };
+        let patch = component_to_bsn_patch(&map, &registry);
+        let (mut ast, patches_entity) = one_patch_ast(patch);
+
+        let read = get_bsn_field(&ast, patches_entity, &base_type_path, "props[hp]");
+        assert!(matches!(read, Some(BsnValue::Float(f)) if (f - 10.0).abs() < f64::EPSILON));
+
+        set_bsn_field(
+            &mut ast,
+            patches_entity,
+            &base_type_path,
+            "props[hp]",
+            BsnValue::Float(25.0),
+            &registry,
+        );
+        let read_back = get_bsn_field(&ast, patches_entity, &base_type_path, "props[hp]");
+        assert!(matches!(read_back, Some(BsnValue::Float(f)) if (f - 25.0).abs() < f64::EPSILON));
+    }
+}
+
+/// Value-level reflection tests: applying BSN patches that carry enum-variant
+/// values (including maps of enums) back onto concrete components.
+#[cfg(test)]
+mod apply_value_tests {
+    use super::*;
+    use crate::component_to_bsn_patch;
+    use bevy::reflect::Reflect;
+    use std::collections::HashMap;
+
+    #[derive(Reflect, Clone, PartialEq, Debug, Default)]
+    #[reflect(Default)]
+    enum Prop {
+        Number(f32),
+        Flag(bool),
+        #[default]
+        Empty,
+    }
+
+    #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
+    #[reflect(Component, Default)]
+    struct EnumFieldHolder {
+        prop: Prop,
+    }
+
+    #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
+    #[reflect(Component, Default)]
+    struct PropMapHolder {
+        props: HashMap<String, Prop>,
+    }
+
+    fn base_world() -> World {
+        let mut world = World::new();
+        let registry = AppTypeRegistry::default();
+        {
+            let mut w = registry.write();
+            w.register::<f32>();
+            w.register::<bool>();
+            w.register::<String>();
+            w.register::<Prop>();
+            w.register::<EnumFieldHolder>();
+            w.register::<PropMapHolder>();
+            w.register::<HashMap<String, Prop>>();
+        }
+        world.insert_resource(registry);
+        world.insert_resource(SceneBsnAst::default());
+        world
+    }
+
+    /// Emit a component to a BSN patch, apply it onto a fresh entity, and
+    /// return that entity so the caller can read the reconstructed component.
+    fn round_trip_patch(world: &mut World, patch: BsnPatch) -> Entity {
+        let patches_entity = world
+            .resource_mut::<SceneBsnAst>()
+            .create_entity_node(vec![patch]);
+        let entity = world.spawn(AstNodeRef { patches_entity }).id();
+        world
+            .resource_mut::<SceneBsnAst>()
+            .link(entity, patches_entity);
+        apply_ast_to_ecs(world, entity);
+        entity
+    }
+
+    #[test]
+    fn enum_typed_field_data_variant_round_trips_through_apply() {
+        let mut world = base_world();
+
+        let patch = {
+            let registry = world.resource::<AppTypeRegistry>().read();
+            component_to_bsn_patch(&EnumFieldHolder { prop: Prop::Number(7.0) }, &registry)
+        };
+        let entity = round_trip_patch(&mut world, patch);
+
+        let holder = world.get::<EnumFieldHolder>(entity).expect("holder applied");
+        assert_eq!(holder.prop, Prop::Number(7.0));
+    }
+
+    #[test]
+    fn map_of_enum_round_trips_through_apply() {
+        let mut world = base_world();
+
+        let mut props = HashMap::new();
+        props.insert("hp".to_string(), Prop::Number(7.0));
+        props.insert("alive".to_string(), Prop::Flag(true));
+
+        let patch = {
+            let registry = world.resource::<AppTypeRegistry>().read();
+            component_to_bsn_patch(&PropMapHolder { props }, &registry)
+        };
+        let entity = round_trip_patch(&mut world, patch);
+
+        let holder = world.get::<PropMapHolder>(entity).expect("holder applied");
+        assert_eq!(holder.props.get("hp"), Some(&Prop::Number(7.0)));
+        assert_eq!(holder.props.get("alive"), Some(&Prop::Flag(true)));
     }
 }

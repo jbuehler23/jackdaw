@@ -153,6 +153,15 @@ impl SceneBsnAst {
         }
     }
 
+    /// Remove the mapping for an AST node, clearing both directions. The
+    /// counterpart to [`unlink`](Self::unlink) keyed by the AST node so a
+    /// subtree teardown can drop every descendant's link, not just the top.
+    fn unlink_ast(&mut self, ast_entity: Entity) {
+        if let Some(ecs_entity) = self.ast_to_ecs.remove(&ast_entity) {
+            self.ecs_to_ast.remove(&ecs_entity);
+        }
+    }
+
     /// Get the AST entity for an ECS entity.
     pub fn ast_for(&self, ecs_entity: Entity) -> Option<Entity> {
         self.ecs_to_ast.get(&ecs_entity).copied()
@@ -315,11 +324,12 @@ impl SceneBsnAst {
     }
 
     /// Remove an entity's AST node entirely: detach from parent (or roots),
-    /// recursively despawn all AST sub-entities, and unlink the ECS mapping.
+    /// recursively despawn all AST sub-entities, and unlink the ECS mapping for
+    /// the node and every linked descendant.
     ///
     /// No-ops gracefully if the entity is not in `ecs_to_ast`.
     pub fn remove_entity_node(&mut self, ecs_entity: Entity) {
-        let Some(node_ast) = self.ecs_to_ast.remove(&ecs_entity) else {
+        let Some(node_ast) = self.ecs_to_ast.get(&ecs_entity).copied() else {
             return;
         };
 
@@ -363,8 +373,14 @@ impl SceneBsnAst {
         None
     }
 
-    /// Recursively despawn an AST node and all its children/patches.
+    /// Recursively despawn an AST node and all its children/patches, dropping
+    /// the ECS link for every node torn down (not just the top) so no stale
+    /// `ecs_to_ast`/`ast_to_ecs` entries survive for a linked descendant.
     fn despawn_recursive(&mut self, node: Entity) {
+        // Drop this node's link before its entity id is despawned and possibly
+        // recycled for an unrelated AST node.
+        self.unlink_ast(node);
+
         let children: Vec<Entity> = if let Some(patches) = self.get_patches(node) {
             patches
                 .0

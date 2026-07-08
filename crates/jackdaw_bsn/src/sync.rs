@@ -134,62 +134,14 @@ pub fn create_entity_in_ast(world: &mut World, entity: Entity, parent: Option<En
 
 /// Remove an ECS entity's AST node and unlink it.
 ///
-/// Removes the node from its parent's `Children` patch (or roots) and despawns
-/// the AST entities recursively.
+/// Delegates to [`SceneBsnAst::remove_entity_node`], the single implementation
+/// that detaches the node from its parent's `Children` patch (or roots),
+/// despawns the AST subtree, and unlinks the ECS mapping for the node and every
+/// linked descendant.
 pub fn delete_entity_from_ast(world: &mut World, entity: Entity) {
-    let Some(ast_ref) = world.get::<crate::AstNodeRef>(entity) else {
-        return;
-    };
-    let node_ast = ast_ref.patches_entity;
-
-    let mut ast = world.resource_mut::<SceneBsnAst>();
-
-    // Find parent and remove from it.
-    let parent_ast = find_ast_parent(&ast, node_ast);
-    if let Some(parent_ast) = parent_ast {
-        ast.remove_child_from_ast(parent_ast, node_ast);
-    } else {
-        ast.remove_from_roots(node_ast);
-    }
-
-    // Recursively despawn AST nodes.
-    despawn_ast_recursive(&mut ast, node_ast);
-
-    // Unlink ECS -> AST.
-    ast.unlink(entity);
-}
-
-/// Recursively despawn an AST node and all its child AST nodes.
-fn despawn_ast_recursive(ast: &mut SceneBsnAst, node: Entity) {
-    // Collect children first.
-    let children: Vec<Entity> = if let Some(patches) = ast.get_patches(node) {
-        let mut children = Vec::new();
-        for &pe in &patches.0 {
-            if let Some(crate::BsnPatch::Children(child_list)) = ast.get_patch(pe) {
-                children.extend(child_list.iter().copied());
-            }
-        }
-        children
-    } else {
-        Vec::new()
-    };
-
-    for child in children {
-        despawn_ast_recursive(ast, child);
-    }
-
-    // Despawn patch entities, then the node itself.
-    if let Some(patches) = ast.get_patches(node) {
-        let patch_ids: Vec<Entity> = patches.0.clone();
-        for pe in patch_ids {
-            if let Ok(em) = ast.world.get_entity_mut(pe) {
-                em.despawn();
-            }
-        }
-    }
-    if let Ok(em) = ast.world.get_entity_mut(node) {
-        em.despawn();
-    }
+    world
+        .resource_mut::<SceneBsnAst>()
+        .remove_entity_node(entity);
 }
 
 /// After reparenting an ECS entity, move its AST node to the new parent's
@@ -380,6 +332,47 @@ mod tests {
         assert!(
             ast.ast_for(child).is_none(),
             "ECS -> AST link should be removed for the deleted entity"
+        );
+    }
+
+    #[test]
+    fn delete_subtree_leaves_no_stale_links_for_descendants() {
+        let mut world = world_with_registry();
+
+        // parent -> child -> grandchild, every level linked to an ECS entity.
+        let parent = world.spawn_empty().id();
+        create_entity_in_ast(&mut world, parent, None);
+
+        let child = world.spawn_empty().id();
+        create_entity_in_ast(&mut world, child, Some(parent));
+        let child_ast = world.get::<AstNodeRef>(child).unwrap().patches_entity;
+
+        let grandchild = world.spawn_empty().id();
+        create_entity_in_ast(&mut world, grandchild, Some(child));
+        let grandchild_ast = world.get::<AstNodeRef>(grandchild).unwrap().patches_entity;
+
+        delete_entity_from_ast(&mut world, parent);
+
+        let ast = world.resource::<SceneBsnAst>();
+        // Every level's link must be gone in both directions, not just the top.
+        assert!(
+            ast.ecs_to_ast.is_empty(),
+            "no ecs_to_ast entries should survive a subtree delete, found: {:?}",
+            ast.ecs_to_ast.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            ast.ast_to_ecs.is_empty(),
+            "no ast_to_ecs entries should survive a subtree delete, found: {:?}",
+            ast.ast_to_ecs.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            ast.ast_for(child).is_none() && ast.ast_for(grandchild).is_none(),
+            "descendant ECS entities must be unlinked"
+        );
+        assert!(
+            ast.world.get_entity(child_ast).is_err()
+                && ast.world.get_entity(grandchild_ast).is_err(),
+            "descendant AST node entities must be despawned"
         );
     }
 

@@ -390,4 +390,64 @@ mod tests {
             .expect("normal texture path");
         assert_eq!(normal_path.to_string(), "textures/normal.png");
     }
+
+    // An asset whose `Option<Handle>` field defaults to `Some`, so a `None`
+    // value differs from default and is actually emitted (rather than diffed
+    // away). This asserts the None direction of the round trip end to end.
+    #[derive(Asset, Reflect, Clone)]
+    #[reflect(Default)]
+    struct OptionalTextureMaterial {
+        normal_map: Option<bevy::asset::Handle<Texture>>,
+    }
+
+    impl Default for OptionalTextureMaterial {
+        fn default() -> Self {
+            // Default is Some so a None value is a non-default override.
+            Self {
+                normal_map: Some(bevy::asset::Handle::default()),
+            }
+        }
+    }
+
+    #[test]
+    fn option_handle_none_field_round_trips_as_none() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            AssetPlugin::default(),
+        ));
+        app.init_asset::<Texture>();
+        app.init_asset::<OptionalTextureMaterial>();
+        app.register_asset_reflect::<Texture>();
+        app.register_asset_reflect::<OptionalTextureMaterial>();
+
+        let id = app
+            .world_mut()
+            .resource_mut::<Assets<OptionalTextureMaterial>>()
+            .add(OptionalTextureMaterial { normal_map: None });
+
+        let refs = vec![CatalogAssetRef {
+            name: "NoNormal".into(),
+            type_id: TypeId::of::<OptionalTextureMaterial>(),
+            asset_id: id.id().untyped(),
+        }];
+
+        let text = serialize_assets_to_bsn(app.world(), &refs);
+
+        let entries = load_bsn_assets(app.world_mut(), &text).expect("load should succeed");
+        assert_eq!(entries.len(), 1);
+
+        let handle = entries[0].handle.clone().typed::<OptionalTextureMaterial>();
+        let loaded = app
+            .world()
+            .resource::<Assets<OptionalTextureMaterial>>()
+            .get(&handle)
+            .expect("loaded material")
+            .clone();
+
+        assert!(
+            loaded.normal_map.is_none(),
+            "a None Option<Handle> must reload as None, got Some"
+        );
+    }
 }
