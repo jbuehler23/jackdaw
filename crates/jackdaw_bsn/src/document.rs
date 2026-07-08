@@ -8,6 +8,9 @@
 //!
 //! Nodes live as entities in a private [`World`] held by [`SceneBsnAst`].
 
+use std::path::Path;
+
+use bevy::asset::{AssetServer, ReflectHandle};
 use bevy::ecs::entity::Entity;
 use bevy::ecs::prelude::{Component, Resource};
 use bevy::ecs::world::World;
@@ -417,16 +420,35 @@ impl SceneBsnAst {
     }
 }
 
+/// Context for resolving `Handle<T>` fields to asset-path strings during BSN
+/// emission. `parent_path` is the directory the emitted `.bsn` file lives in,
+/// used to make emitted asset paths relative.
+pub struct BsnAssetContext<'a> {
+    pub asset_server: &'a AssetServer,
+    pub parent_path: &'a Path,
+}
+
 impl BsnValue {
     /// Create a [`BsnValue`] from a reflected value and its type info.
-    ///
-    /// `type_registry` is threaded through so nested values can consult type
-    /// data (asset-handle resolution during emission lands with the emitter).
-    #[expect(
-        clippy::only_used_in_recursion,
-        reason = "registry is reserved for type-data lookups added with the emitter"
-    )]
     pub fn from_reflect(value: &dyn PartialReflect, type_registry: &TypeRegistry) -> Self {
+        Self::from_reflect_inner(value, type_registry, None)
+    }
+
+    /// Create a [`BsnValue`] from a reflected value, resolving `Handle<T>`
+    /// fields (at any nesting depth) to asset-path strings via `ctx`.
+    pub fn from_reflect_with_assets(
+        value: &dyn PartialReflect,
+        type_registry: &TypeRegistry,
+        ctx: &BsnAssetContext,
+    ) -> Self {
+        Self::from_reflect_inner(value, type_registry, Some(ctx))
+    }
+
+    fn from_reflect_inner(
+        value: &dyn PartialReflect,
+        type_registry: &TypeRegistry,
+        ctx: Option<&BsnAssetContext>,
+    ) -> Self {
         // Try primitives first.
         if let Some(v) = value.try_downcast_ref::<f32>() {
             return BsnValue::Float(*v as f64);
@@ -469,6 +491,27 @@ impl BsnValue {
             return BsnValue::Int(*v as i128);
         }
 
+        // Handle<T> fields: resolve to an asset-path string when an asset
+        // context is available.
+        if let Some(ctx) = ctx
+            && let Some(concrete) = value.try_as_reflect()
+        {
+            let type_id = concrete.reflect_type_info().type_id();
+            if let Some(reflect_handle) = type_registry.get_type_data::<ReflectHandle>(type_id) {
+                if let Some(untyped_handle) = reflect_handle.downcast_handle_untyped(concrete.as_any())
+                    && let Some(path) = ctx.asset_server.get_path(untyped_handle.id())
+                {
+                    let path_str = path.to_string();
+                    if let Some(relative) = pathdiff::diff_paths(&path_str, ctx.parent_path) {
+                        return BsnValue::String(relative.to_string_lossy().into_owned());
+                    }
+                    return BsnValue::String(path_str);
+                }
+                // Handle with no resolvable path: emit an empty string.
+                return BsnValue::String(String::new());
+            }
+        }
+
         // Structs.
         if let ReflectRef::Struct(s) = value.reflect_ref() {
             let type_path = value
@@ -481,7 +524,7 @@ impl BsnValue {
                 let field_value = s.field_at(i).unwrap();
                 fields.push(BsnField {
                     name,
-                    value: BsnValue::from_reflect(field_value, type_registry),
+                    value: BsnValue::from_reflect_inner(field_value, type_registry, ctx),
                 });
             }
             return BsnValue::Struct(BsnStructData {
@@ -499,7 +542,7 @@ impl BsnValue {
             let mut values = Vec::new();
             for i in 0..ts.field_len() {
                 let field_value = ts.field(i).unwrap();
-                values.push(BsnValue::from_reflect(field_value, type_registry));
+                values.push(BsnValue::from_reflect_inner(field_value, type_registry, ctx));
             }
             return BsnValue::TupleStruct(BsnTupleStructData { type_path, values });
         }
@@ -520,7 +563,7 @@ impl BsnValue {
                         let field_value = e.field_at(i).unwrap();
                         fields.push(BsnField {
                             name,
-                            value: BsnValue::from_reflect(field_value, type_registry),
+                            value: BsnValue::from_reflect_inner(field_value, type_registry, ctx),
                         });
                     }
                     return BsnValue::Struct(BsnStructData {
@@ -532,7 +575,7 @@ impl BsnValue {
                     let mut values = Vec::new();
                     for i in 0..e.field_len() {
                         let field_value = e.field_at(i).unwrap();
-                        values.push(BsnValue::from_reflect(field_value, type_registry));
+                        values.push(BsnValue::from_reflect_inner(field_value, type_registry, ctx));
                     }
                     return BsnValue::TupleStruct(BsnTupleStructData {
                         type_path: full_path,
@@ -550,7 +593,7 @@ impl BsnValue {
             let mut items = Vec::new();
             for i in 0..l.len() {
                 if let Some(item) = l.get(i) {
-                    items.push(BsnValue::from_reflect(item, type_registry));
+                    items.push(BsnValue::from_reflect_inner(item, type_registry, ctx));
                 }
             }
             return BsnValue::List(items);
@@ -565,6 +608,24 @@ impl BsnValue {
 pub fn component_to_bsn_patch(
     reflected: &dyn PartialReflect,
     type_registry: &TypeRegistry,
+) -> BsnPatch {
+    component_to_bsn_patch_inner(reflected, type_registry, None)
+}
+
+/// Convert a component's reflected data into a BSN AST patch, resolving
+/// `Handle<T>` fields (at any nesting depth) to asset-path strings via `ctx`.
+pub fn component_to_bsn_patch_with_assets(
+    reflected: &dyn PartialReflect,
+    type_registry: &TypeRegistry,
+    ctx: &BsnAssetContext,
+) -> BsnPatch {
+    component_to_bsn_patch_inner(reflected, type_registry, Some(ctx))
+}
+
+fn component_to_bsn_patch_inner(
+    reflected: &dyn PartialReflect,
+    type_registry: &TypeRegistry,
+    ctx: Option<&BsnAssetContext>,
 ) -> BsnPatch {
     use bevy::reflect::prelude::ReflectDefault;
 
@@ -605,7 +666,7 @@ pub fn component_to_bsn_patch(
                 if should_emit {
                     fields.push(BsnField {
                         name,
-                        value: BsnValue::from_reflect(field_value, type_registry),
+                        value: BsnValue::from_reflect_inner(field_value, type_registry, ctx),
                     });
                 }
             }
@@ -624,7 +685,7 @@ pub fn component_to_bsn_patch(
             let mut values = Vec::new();
             for i in 0..ts.field_len() {
                 let field_value = ts.field(i).unwrap();
-                values.push(BsnValue::from_reflect(field_value, type_registry));
+                values.push(BsnValue::from_reflect_inner(field_value, type_registry, ctx));
             }
             BsnPatch::TupleStruct(BsnTupleStructData { type_path, values })
         }
@@ -640,7 +701,7 @@ pub fn component_to_bsn_patch(
                         let field_value = e.field_at(i).unwrap();
                         fields.push(BsnField {
                             name,
-                            value: BsnValue::from_reflect(field_value, type_registry),
+                            value: BsnValue::from_reflect_inner(field_value, type_registry, ctx),
                         });
                     }
                     if fields.is_empty() {
@@ -656,7 +717,7 @@ pub fn component_to_bsn_patch(
                     let mut values = Vec::new();
                     for i in 0..e.field_len() {
                         let field_value = e.field_at(i).unwrap();
-                        values.push(BsnValue::from_reflect(field_value, type_registry));
+                        values.push(BsnValue::from_reflect_inner(field_value, type_registry, ctx));
                     }
                     BsnPatch::TupleStruct(BsnTupleStructData {
                         type_path: full_path,

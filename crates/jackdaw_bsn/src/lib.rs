@@ -1,9 +1,10 @@
 //! Reader for the `.bsn` scene format.
 //!
 //! This crate provides the parser front-end (turning `.bsn` source text into a
-//! self-contained parser AST) plus the editor document model and the loader
-//! that adapts a parsed AST into it. Resolving the document AST to ECS and
-//! emitting `.bsn` are added by later work.
+//! self-contained parser AST), the editor document model, the loader that
+//! adapts a parsed AST into it, the apply path that resolves the document AST
+//! to ECS components, and the emitter that writes the document AST back to
+//! `.bsn` text.
 //!
 //! The parser and document layers both name some types `BsnPatch`, `BsnField`,
 //! and `BsnPatches`. The document (editor-facing) versions are re-exported at
@@ -11,6 +12,7 @@
 
 pub mod apply;
 pub mod document;
+pub mod emitter;
 pub mod loader;
 pub mod parse;
 
@@ -20,9 +22,11 @@ pub use parse::{
 };
 
 pub use document::{
-    AstNodeRef, BsnField, BsnPatch, BsnPatches, BsnStructData, BsnStructFields, BsnTupleStructData,
-    BsnValue, SceneBsnAst, component_to_bsn_patch,
+    AstNodeRef, BsnAssetContext, BsnField, BsnPatch, BsnPatches, BsnStructData, BsnStructFields,
+    BsnTupleStructData, BsnValue, SceneBsnAst, component_to_bsn_patch,
+    component_to_bsn_patch_with_assets,
 };
+pub use emitter::{emit_entities, emit_entity, emit_scene};
 pub use loader::{BsnLoadError, parse_bsn_text};
 
 pub use apply::{
