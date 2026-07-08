@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-bevy = { version = "0.19", default-features = false, features = ["std"] }
+bevy = { version = "0.19", default-features = false, features = ["std", "bevy_asset"] }
 lalrpop-util = "0.23"
 nom = "8"
 thiserror = "2"

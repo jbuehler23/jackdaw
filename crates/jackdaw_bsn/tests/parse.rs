@@ -1,7 +1,7 @@
 //! Parser tests for the `.bsn` front-end.
 
-use jackdaw_bsn::parse::BsnRoot;
-use jackdaw_bsn::{BsnExpr, BsnNamedTuple, BsnPatch, BsnPatches, BsnStruct, BsnVar, parse_bsn};
+use jackdaw_bsn::parse::{BsnPatch, BsnPatches, BsnRoot};
+use jackdaw_bsn::{BsnExpr, BsnNamedTuple, BsnStruct, BsnVar, parse_bsn};
 
 use bevy::ecs::entity::Entity;
 use jackdaw_bsn::BsnAst;
