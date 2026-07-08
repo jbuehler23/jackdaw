@@ -820,3 +820,339 @@ mod tests {
         assert!(matches!(val, Some(BsnValue::Bool(true))));
     }
 }
+
+/// Field-navigation matrix for `set_bsn_field`/`get_bsn_field`, mirroring the
+/// case list the JSN-path layer (`jackdaw_jsn::ast`) covers with
+/// `set_field_in_component_json`/`get_field_in_component_json`. Each case
+/// proves BSN field editing at parity with JSON-path editing, or (where the
+/// primitives don't yet cover a case) documents the gap with an ignored test.
+#[cfg(test)]
+mod field_navigation_matrix {
+    use super::*;
+    use crate::{BsnPatches, component_to_bsn_patch};
+    use bevy::reflect::Reflect;
+
+    fn type_path_of<T: Reflect>(registry: &TypeRegistry) -> String {
+        registry
+            .get(std::any::TypeId::of::<T>())
+            .expect("type should be registered")
+            .type_info()
+            .type_path()
+            .to_string()
+    }
+
+    fn one_patch_ast(patch: BsnPatch) -> (SceneBsnAst, Entity) {
+        let mut ast = SceneBsnAst::default();
+        let patch_entity = ast.world.spawn(patch).id();
+        let patches_entity = ast.world.spawn(BsnPatches(vec![patch_entity])).id();
+        (ast, patches_entity)
+    }
+
+    /// A `translation.x` style nested read: a struct component holding a
+    /// nested struct field, read via a dotted path. Mirrors
+    /// `get_field_reads_named_struct_field`.
+    #[test]
+    fn get_field_reads_named_struct_field() {
+        let (ast, patches_entity) = one_patch_ast(BsnPatch::Struct(BsnStructData {
+            type_path: "Transform".into(),
+            fields: BsnStructFields(vec![BsnField {
+                name: "translation".into(),
+                value: BsnValue::Struct(BsnStructData {
+                    type_path: "Vec3".into(),
+                    fields: BsnStructFields(vec![
+                        BsnField {
+                            name: "x".into(),
+                            value: BsnValue::Float(1.0),
+                        },
+                        BsnField {
+                            name: "y".into(),
+                            value: BsnValue::Float(2.0),
+                        },
+                        BsnField {
+                            name: "z".into(),
+                            value: BsnValue::Float(3.0),
+                        },
+                    ]),
+                }),
+            }]),
+        }));
+
+        let x = get_bsn_field(&ast, patches_entity, "Transform", "translation.x");
+        assert!(matches!(x, Some(BsnValue::Float(f)) if (f - 1.0).abs() < f64::EPSILON));
+
+        // Reading the intermediate struct returns the nested value whole.
+        let translation = get_bsn_field(&ast, patches_entity, "Transform", "translation");
+        assert!(matches!(translation, Some(BsnValue::Struct(_))));
+    }
+
+    /// GAP: `get_field_empty_path_returns_whole_component` in the JSON layer
+    /// treats `""` as "no further navigation, return the whole value". BSN's
+    /// `get_bsn_field` always splits on `.` and treats `""` as a literal field
+    /// name to look up, so it returns `None` instead of the component value.
+    #[test]
+    #[ignore = "parity gap: get_bsn_field has no empty-path special case (splits '' into a field named \"\", unlike the JSON layer which returns the whole component)"]
+    fn get_field_empty_path_returns_whole_component() {
+        let (ast, patches_entity) = one_patch_ast(BsnPatch::Struct(BsnStructData {
+            type_path: "Transform".into(),
+            fields: BsnStructFields(vec![BsnField {
+                name: "x".into(),
+                value: BsnValue::Float(5.0),
+            }]),
+        }));
+
+        let whole = get_bsn_field(&ast, patches_entity, "Transform", "");
+        assert!(
+            matches!(whole, Some(BsnValue::Struct(ref data)) if data.type_path == "Transform"),
+            "empty path should return the whole component value"
+        );
+    }
+
+    /// A path segment that doesn't exist on the struct returns `None`.
+    /// Mirrors `get_field_missing_path_returns_none`.
+    #[test]
+    fn get_field_missing_path_returns_none() {
+        let (ast, patches_entity) = one_patch_ast(BsnPatch::Struct(BsnStructData {
+            type_path: "Transform".into(),
+            fields: BsnStructFields(vec![BsnField {
+                name: "x".into(),
+                value: BsnValue::Float(5.0),
+            }]),
+        }));
+
+        let result = get_bsn_field(&ast, patches_entity, "Transform", "does_not_exist");
+        assert!(result.is_none());
+    }
+
+    /// Querying a type path with no matching patch in the AST returns `None`.
+    /// This is the BSN analog of `get_field_unregistered_type_returns_none`:
+    /// there is no reflect `TypeRegistry` lookup involved in `get_bsn_field`
+    /// at all (it addresses patches purely by their stored type-path string),
+    /// so "unregistered" here means "no patch of that type exists yet".
+    #[test]
+    fn get_field_unregistered_type_returns_none() {
+        let (ast, patches_entity) = one_patch_ast(BsnPatch::Struct(BsnStructData {
+            type_path: "Transform".into(),
+            fields: BsnStructFields::default(),
+        }));
+
+        let result = get_bsn_field(&ast, patches_entity, "not::A::RegisteredType", "translation");
+        assert!(result.is_none());
+    }
+
+    /// `set_bsn_field` then `get_bsn_field` round-trips a nested field.
+    /// Mirrors `get_field_round_trips_with_set_field`.
+    #[test]
+    fn get_field_round_trips_with_set_field() {
+        let (mut ast, patches_entity) = one_patch_ast(BsnPatch::Struct(BsnStructData {
+            type_path: "Transform".into(),
+            fields: BsnStructFields(vec![BsnField {
+                name: "translation".into(),
+                value: BsnValue::Struct(BsnStructData {
+                    type_path: "Vec3".into(),
+                    fields: BsnStructFields::default(),
+                }),
+            }]),
+        }));
+
+        let registry = TypeRegistry::default();
+        set_bsn_field(
+            &mut ast,
+            patches_entity,
+            "Transform",
+            "translation.y",
+            BsnValue::Float(7.0),
+            &registry,
+        );
+
+        let result = get_bsn_field(&ast, patches_entity, "Transform", "translation.y");
+        assert!(matches!(result, Some(BsnValue::Float(f)) if (f - 7.0).abs() < f64::EPSILON));
+    }
+
+    /// GAP: `set_field_in_component_json_empty_path_replaces_value` replaces
+    /// the whole component value in one call. `set_bsn_field` has no
+    /// empty-path special case either: it creates/overwrites a field
+    /// literally named `""` instead of replacing the struct's fields wholesale.
+    #[test]
+    #[ignore = "parity gap: set_bsn_field has no empty-path special case (sets a field named \"\" instead of replacing the whole component value, unlike the JSON layer)"]
+    fn set_field_empty_path_replaces_whole_value() {
+        let (mut ast, patches_entity) = one_patch_ast(BsnPatch::Struct(BsnStructData {
+            type_path: "Transform".into(),
+            fields: BsnStructFields(vec![BsnField {
+                name: "x".into(),
+                value: BsnValue::Float(0.0),
+            }]),
+        }));
+
+        let registry = TypeRegistry::default();
+        let replacement = BsnValue::Struct(BsnStructData {
+            type_path: "Transform".into(),
+            fields: BsnStructFields(vec![BsnField {
+                name: "x".into(),
+                value: BsnValue::Float(9.0),
+            }]),
+        });
+        set_bsn_field(&mut ast, patches_entity, "Transform", "", replacement, &registry);
+
+        let whole = get_bsn_field(&ast, patches_entity, "Transform", "x");
+        assert!(matches!(whole, Some(BsnValue::Float(f)) if (f - 9.0).abs() < f64::EPSILON));
+    }
+
+    /// GAP: `set_field_in_component_json_unregistered_type_is_noop` asserts
+    /// the JSON layer refuses to write a field for a type the reflect
+    /// `TypeRegistry` doesn't know about (it looks up the type before
+    /// writing, and no-ops when that lookup fails). `set_bsn_field` performs
+    /// no such check: it addresses patches purely by type-path string, so it
+    /// happily creates a brand-new struct patch for any type path, registered
+    /// or not. This test documents that `set_bsn_field` is NOT a no-op here.
+    #[test]
+    #[ignore = "parity gap: set_bsn_field has no registry-backed type check and creates a new patch for any type path instead of no-oping like the JSON layer"]
+    fn set_field_on_unregistered_type_is_noop() {
+        let mut ast = SceneBsnAst::default();
+        let patches_entity = ast.world.spawn(BsnPatches(Vec::new())).id();
+
+        let registry = TypeRegistry::default();
+        set_bsn_field(
+            &mut ast,
+            patches_entity,
+            "not::A::RegisteredType",
+            "translation",
+            BsnValue::Float(1.0),
+            &registry,
+        );
+
+        assert!(
+            ast.find_patch_by_type_path(patches_entity, "not::A::RegisteredType")
+                .is_none(),
+            "no patch should be created for an unregistered type"
+        );
+    }
+
+    // A small reflect-derived enum with a struct variant, mirroring the
+    // `TestShape` pattern from the JSN-path test suite.
+    #[derive(Component, Reflect, Clone)]
+    #[reflect(Default)]
+    enum TestShape {
+        Sphere { radius: f32 },
+        Box { half_x: f32, half_y: f32 },
+    }
+
+    impl Default for TestShape {
+        fn default() -> Self {
+            TestShape::Sphere { radius: 0.0 }
+        }
+    }
+
+    /// Reading a field of the active enum variant navigates through the
+    /// flattened struct-variant patch. `find_patch_by_type_path` matches the
+    /// base enum type path against the stored `Enum::Variant` path, and the
+    /// variant's fields land directly on that `BsnPatch::Struct`. Mirrors
+    /// `get_field_unwraps_enum_variant_and_reads_field`.
+    #[test]
+    fn get_field_unwraps_enum_variant_and_reads_field() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<TestShape>();
+        registry.register::<f32>();
+        let base_type_path = type_path_of::<TestShape>(&registry);
+
+        let shape = TestShape::Sphere { radius: 1.0 };
+        let patch = component_to_bsn_patch(&shape, &registry);
+        let (ast, patches_entity) = one_patch_ast(patch);
+
+        let result = get_bsn_field(&ast, patches_entity, &base_type_path, "radius");
+        assert!(matches!(result, Some(BsnValue::Float(f)) if (f - 1.0).abs() < f64::EPSILON));
+    }
+
+    // A reflect-derived struct wrapped in a tuple ("newtype") enum variant,
+    // mirroring the `TestModifier::Wrap(TestInner)` pattern from the JSN
+    // test suite.
+    #[derive(Component, Reflect, Default, Clone)]
+    #[reflect(Default)]
+    struct TestInner {
+        flag: bool,
+        amount: f32,
+    }
+
+    #[derive(Component, Reflect, Clone)]
+    #[reflect(Default)]
+    enum TestModifier {
+        Wrap(TestInner),
+    }
+
+    impl Default for TestModifier {
+        fn default() -> Self {
+            TestModifier::Wrap(TestInner::default())
+        }
+    }
+
+    /// GAP: `newtype_variant_field_round_trips_through_index_zero` reads and
+    /// writes a newtype-wrapped variant's inner field through index `0`
+    /// (`"0.flag"`). Bevy reflects a tuple-variant enum as a
+    /// `BsnPatch::TupleStruct` (see `component_to_bsn_patch_inner`'s
+    /// `VariantType::Tuple` arm), but `get_bsn_field`/`set_bsn_field` only
+    /// destructure `BsnPatch::Struct`, so they return `None`/no-op on any
+    /// tuple-struct or newtype-variant patch. There is currently no bracket-
+    /// or index-based navigation into `BsnValue::TupleStruct` at all.
+    #[test]
+    #[ignore = "parity gap: get_bsn_field/set_bsn_field only navigate BsnPatch::Struct; tuple-variant/newtype patches (BsnPatch::TupleStruct) have no index-0 field access"]
+    fn newtype_variant_field_round_trips_through_index_zero() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<TestModifier>();
+        registry.register::<TestInner>();
+        registry.register::<bool>();
+        registry.register::<f32>();
+        let base_type_path = type_path_of::<TestModifier>(&registry);
+
+        let modifier = TestModifier::Wrap(TestInner {
+            flag: false,
+            amount: 1.5,
+        });
+        let patch = component_to_bsn_patch(&modifier, &registry);
+        let (mut ast, patches_entity) = one_patch_ast(patch);
+
+        let read = get_bsn_field(&ast, patches_entity, &base_type_path, "0.flag");
+        assert!(matches!(read, Some(BsnValue::Bool(false))));
+
+        set_bsn_field(
+            &mut ast,
+            patches_entity,
+            &base_type_path,
+            "0.flag",
+            BsnValue::Bool(true),
+            &registry,
+        );
+        let read_back = get_bsn_field(&ast, patches_entity, &base_type_path, "0.flag");
+        assert!(matches!(read_back, Some(BsnValue::Bool(true))));
+    }
+
+    // A reflect-derived struct with a list field, mirroring the `TestList`
+    // pattern from the JSN-path test suite.
+    #[derive(Component, Reflect, Default, Clone)]
+    #[reflect(Default)]
+    struct TestList {
+        items: Vec<f32>,
+    }
+
+    /// GAP: `get_field_bracket_index_reads_list_element` reads a list element
+    /// via `items[1]` bracket syntax. `get_bsn_field`/`get_nested_field` only
+    /// split the field path on `.` and only recurse into `BsnValue::Struct`;
+    /// there is no bracket-index parsing and no `BsnValue::List` indexing at
+    /// all, so this returns `None` instead of the element.
+    #[test]
+    #[ignore = "parity gap: get_bsn_field has no bracket-index syntax and does not navigate into BsnValue::List at all"]
+    fn get_field_bracket_index_reads_list_element() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<TestList>();
+        registry.register::<Vec<f32>>();
+        registry.register::<f32>();
+        let base_type_path = type_path_of::<TestList>(&registry);
+
+        let list = TestList {
+            items: vec![10.0, 20.0, 30.0],
+        };
+        let patch = component_to_bsn_patch(&list, &registry);
+        let (ast, patches_entity) = one_patch_ast(patch);
+
+        let result = get_bsn_field(&ast, patches_entity, &base_type_path, "items[1]");
+        assert!(matches!(result, Some(BsnValue::Float(f)) if (f - 20.0).abs() < f64::EPSILON));
+    }
+}
