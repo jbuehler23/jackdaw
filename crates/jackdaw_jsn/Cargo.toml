@@ -17,6 +17,7 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_log",
 ] }
 jackdaw_geometry = { version = "0.5.0", path = "../jackdaw_geometry", default-features = false }
+jackdaw_scene_types = { version = "0.5.0", path = "../jackdaw_scene_types" }
 glam.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

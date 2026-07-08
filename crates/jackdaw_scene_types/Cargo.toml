@@ -1,0 +1,17 @@
+[package]
+name = "jackdaw_scene_types"
+version = "0.5.0"
+edition = "2024"
+description = "Internal crate for the jackdaw editor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = [
+    "reflect_auto_register",
+    "std",
+    "serialize",
+] }
+
+[lints]
+workspace = true

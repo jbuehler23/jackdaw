@@ -197,6 +197,7 @@ bevy = { version = "0.19", features = [
 ] }
 jackdaw_jsn = { version = "0.5.0", path = "crates/jackdaw_jsn" }
 jackdaw_geometry = { version = "0.5.0", path = "crates/jackdaw_geometry" }
+jackdaw_scene_types = { version = "0.5.0", path = "crates/jackdaw_scene_types" }
 jackdaw_csg = { version = "0.5.0", path = "crates/jackdaw_csg" }
 bevy_monitors = "0.3"
 bevy_window_chrome = { version = "0.1.0", path = "crates/bevy_window_chrome" }
