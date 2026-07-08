@@ -1,11 +1,27 @@
 pub mod ast;
-mod brush_chunks;
 pub mod editor_meta;
 pub mod format;
 mod loader;
+
+/// Brush render-chunk building, moved to `jackdaw_scene_types` so it is
+/// reachable without depending on the rest of the JSN scene format.
+pub mod brush_chunks {
+    pub use jackdaw_scene_types::brush_chunks::*;
+}
+
+/// Runtime brush mesh rebuild, moved to `jackdaw_scene_types` (render-gated,
+/// matching its own `render` feature).
 #[cfg(feature = "render")]
-pub mod mesh_rebuild;
-pub mod types;
+pub mod mesh_rebuild {
+    pub use jackdaw_scene_types::mesh_rebuild::*;
+}
+
+/// Format-independent component types (`Brush`, `Terrain`, etc.), moved to
+/// `jackdaw_scene_types` so consumer crates can depend on them without the
+/// JSN scene format.
+pub mod types {
+    pub use jackdaw_scene_types::types::*;
+}
 
 use bevy::prelude::*;
 

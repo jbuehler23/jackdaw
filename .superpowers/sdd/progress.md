@@ -14,4 +14,9 @@ Model plan (implementers): 1-4 sonnet, 5 opus, 6 fable, 7 opus, 8 fable, 9 opus,
 
 ## Progress
 
-(nothing complete yet)
+Task 1: complete (commit aee5303, review clean). Deferred minor: jackdaw_scene_types/src doc still says `use jackdaw_jsn::EditorCategory` (ignore doctest) and SkipSerialization doc says "never lands in .jsn" - fix at Task 4 (consumer repoint) or Task 25 (docs).
+Task 2: complete (commit c96afb0). Moved types.rs, brush_chunks.rs, mesh_rebuild.rs (+ jd_grid.png embedded asset) into jackdaw_scene_types with re-exports from jackdaw_jsn; render feature mirrors jackdaw_jsn (default=render enables jackdaw_geometry/render). Workspace check clean, 52 tests pass. Note: --no-default-features build of scene_types fails on render-gated jackdaw_geometry symbols in types.rs - this matches original jackdaw_jsn behavior (types.rs always needed render), NOT a regression. Review pending (running).
+
+Process notes:
+- Subagent commits are hook-blocked; controller commits after review. Tell implementers explicitly NOT to run git commit AND not to background their cargo verify (background jobs get reaped on session boundaries) - run cargo foreground.
+- Do NOT `git checkout` progress.md; edit it in place. (Lost Task 1 entry once this way; recovered from git log.)

@@ -17,6 +17,19 @@
 //! `jackdaw_runtime` and `jackdaw` re-export both newtypes
 //! through their preludes.
 
+pub mod brush_chunks;
+#[cfg(feature = "render")]
+pub mod mesh_rebuild;
+pub mod types;
+
+pub use brush_chunks::{MeshChunk, build_brush_chunks};
+#[cfg(feature = "render")]
+pub use mesh_rebuild::evaluate_brush_geometry;
+pub use types::{
+    Brush, BrushFaceData, BrushGroup, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
+    GltfSource, JsnPrefab, JsnPrefabBaseline, NavmeshRegion, PropertyValue, SceneRootTag, Terrain,
+};
+
 use bevy::prelude::*;
 use std::borrow::Cow;
 

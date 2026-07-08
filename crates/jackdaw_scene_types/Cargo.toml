@@ -12,6 +12,20 @@ bevy = { version = "0.19", default-features = false, features = [
     "std",
     "serialize",
 ] }
+jackdaw_geometry = { version = "0.5.0", path = "../jackdaw_geometry", default-features = false }
+glam.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[features]
+default = ["render"]
+render = [
+    "bevy/bevy_pbr",
+    "bevy/bevy_render",
+    "bevy/bevy_image",
+    "bevy/bevy_asset",
+    "jackdaw_geometry/render",
+]
 
 [lints]
 workspace = true

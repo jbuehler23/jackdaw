@@ -9,7 +9,7 @@ use bevy::{
 use crate::types::Brush;
 use jackdaw_geometry::compute_brush_geometry_from_planes;
 
-pub(super) struct MeshRebuildPlugin;
+pub struct MeshRebuildPlugin;
 
 impl Plugin for MeshRebuildPlugin {
     fn build(&self, app: &mut App) {
