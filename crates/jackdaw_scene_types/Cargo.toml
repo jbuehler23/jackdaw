@@ -16,6 +16,7 @@ jackdaw_geometry = { version = "0.5.0", path = "../jackdaw_geometry", default-fe
 glam.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+rand.workspace = true
 
 [features]
 default = ["render"]

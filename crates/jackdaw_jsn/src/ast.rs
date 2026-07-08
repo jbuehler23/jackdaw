@@ -1,51 +1,23 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::LazyLock;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-use rand::Rng;
 
 use bevy::reflect::{TypeRegistry, UnnamedField};
 use bevy::{prelude::*, reflect::NamedField};
 
 use crate::format::{JsnAssets, JsnEntity, JsnMetadata, JsnScene};
 
-/// Stable per-node identifier that persists in the `.jsn` and is attached to
-/// the spawned ECS entity. Lets a running game map a live entity back to the
-/// authored scene node it came from (PIE "save runtime values" needs this).
-///
-/// Like `BrushStableId`, it survives the snapshot respawn cycle and the
-/// save/load round-trip; unlike `BrushStableId`, it is carried as a structural
-/// field on the node (see `JsnEntityNode::id`) so it is the canonical on-disk
-/// form rather than just another reflected component.
-#[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug, Reflect)]
-#[reflect(Component, @crate::EditorHidden)]
-pub struct JsnNodeId(pub u64);
+/// Stable per-node identity, moved to `jackdaw_scene_types` as `SceneNodeId`
+/// since it is format-independent (identity, not JSON). Kept as an alias so
+/// existing code (`JsnNodeId(x)`, `JsnNodeId::next()`) keeps working.
+pub use jackdaw_scene_types::SceneNodeId as JsnNodeId;
+/// Lower bound of the sparse id range, re-exported from `jackdaw_scene_types`
+/// so this is the one source of truth.
+pub use jackdaw_scene_types::SPARSE_MIN;
 
-/// Reflect type path for [`JsnNodeId`], used when projecting the structural
-/// node id to and from the reflected-component representation.
-pub const JSN_NODE_ID_TYPE_PATH: &str = "jackdaw_jsn::ast::JsnNodeId";
-
-/// Lower bound of the sparse id range. Ids below this are legacy values minted
-/// by the old monotonic-from-1 counter and can collide across sessions.
-pub const SPARSE_MIN: u64 = 1 << 32;
-/// Upper bound of the random seed draw. The counter is seeded below this and
-/// then advances freely, so minted ids are not clamped to it; the value leaves
-/// headroom below `u64::MAX` for a session to mint without wrapping.
-const SPARSE_MAX: u64 = 1 << 63;
-
-/// Process-global source of fresh node ids, seeded once from a random base in
-/// `[SPARSE_MIN, SPARSE_MAX)`. A random base keeps ids unique across processes
-/// and across independently-authored files: two sessions land in different
-/// ranges, so their ids never collide. Within a session ids stay monotonic.
-static NEXT_NODE_ID: LazyLock<AtomicU64> =
-    LazyLock::new(|| AtomicU64::new(rand::rng().random_range(SPARSE_MIN..SPARSE_MAX)));
-
-impl JsnNodeId {
-    /// Mint a fresh node id by advancing the global counter.
-    pub fn next() -> Self {
-        JsnNodeId(NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed))
-    }
-}
+/// Reflect type path for [`JsnNodeId`] (now `SceneNodeId`), used when
+/// projecting the structural node id to and from the reflected-component
+/// representation. Re-points to the new type path; the old value was
+/// `jackdaw_jsn::ast::JsnNodeId`.
+pub const JSN_NODE_ID_TYPE_PATH: &str = jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH;
 
 /// Report whether a loaded scene carries node ids that break the global-key
 /// invariant: any duplicate id, any id below `SPARSE_MIN` (minted by the old

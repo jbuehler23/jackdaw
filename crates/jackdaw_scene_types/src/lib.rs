@@ -20,11 +20,13 @@
 pub mod brush_chunks;
 #[cfg(feature = "render")]
 pub mod mesh_rebuild;
+pub mod node_id;
 pub mod types;
 
 pub use brush_chunks::{MeshChunk, build_brush_chunks};
 #[cfg(feature = "render")]
 pub use mesh_rebuild::evaluate_brush_geometry;
+pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
 pub use types::{
     Brush, BrushFaceData, BrushGroup, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
     GltfSource, JsnPrefab, JsnPrefabBaseline, NavmeshRegion, PropertyValue, SceneRootTag, Terrain,
