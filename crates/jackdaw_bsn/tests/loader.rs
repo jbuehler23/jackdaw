@@ -219,3 +219,47 @@ bevy_ecs::hierarchy::Children [
         "#Shiny reference must bind to the embedded asset"
     );
 }
+
+#[test]
+fn stable_node_id_lookup_finds_nested_nodes() {
+    use bevy::app::App;
+    use bevy::ecs::reflect::AppTypeRegistry;
+
+    use jackdaw_bsn::{SceneBsnAst, apply_dirty_ast_patches, parse_bsn_text, spawn_from_ast};
+
+    let text = r##"
+bevy_ecs::hierarchy::Children [
+    #Parent
+    jackdaw_scene_types::node_id::SceneNodeId(11)
+    bevy_ecs::hierarchy::Children [
+        #Child
+        jackdaw_scene_types::node_id::SceneNodeId(22)
+    ]
+    ,
+    #Sibling
+    jackdaw_scene_types::node_id::SceneNodeId(33)
+]
+"##;
+
+    let mut app = App::new();
+    app.add_plugins(bevy::app::TaskPoolPlugin::default());
+    app.world_mut().init_resource::<AppTypeRegistry>();
+    let ast = parse_bsn_text(text).expect("parses");
+    app.world_mut().insert_resource(ast);
+    let spawned = spawn_from_ast(app.world_mut());
+    apply_dirty_ast_patches(app.world_mut());
+    assert_eq!(spawned.len(), 3);
+
+    let ast = app.world().resource::<SceneBsnAst>();
+    let child_node = ast.node_by_stable_id(22).expect("nested child found");
+    assert_eq!(ast.get_name(child_node), Some("Child"));
+    let sibling = ast.entity_for_stable_id(33).expect("sibling entity");
+    assert_eq!(
+        app.world()
+            .get::<bevy::prelude::Name>(sibling)
+            .unwrap()
+            .as_str(),
+        "Sibling"
+    );
+    assert!(ast.node_by_stable_id(999).is_none());
+}

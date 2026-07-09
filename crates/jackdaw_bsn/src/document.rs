@@ -249,6 +249,45 @@ impl SceneBsnAst {
         self.world.despawn(patch_entity);
     }
 
+    /// Find the document node carrying the given stable node id, i.e. a
+    /// `SceneNodeId(id)` tuple-struct patch. Linear over nodes; the stable id
+    /// is the cross-process identity used by the play-in-editor mapping.
+    pub fn node_by_stable_id(&self, id: u64) -> Option<Entity> {
+        let mut found = None;
+        let mut nodes: Vec<Entity> = self.roots.clone();
+        while let Some(node) = nodes.pop() {
+            if let Some(patches) = self.get_patches(node) {
+                for &pe in &patches.0 {
+                    match self.get_patch(pe) {
+                        Some(BsnPatch::TupleStruct(data))
+                            if data.type_path.ends_with("SceneNodeId")
+                                && matches!(
+                                    data.values.first(),
+                                    Some(BsnValue::Int(v)) if *v == i128::from(id)
+                                ) =>
+                        {
+                            found = Some(node);
+                        }
+                        Some(BsnPatch::Children(children)) => {
+                            nodes.extend(children.iter().copied());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+        }
+        found
+    }
+
+    /// The live ECS entity for the node carrying the given stable node id.
+    pub fn entity_for_stable_id(&self, id: u64) -> Option<Entity> {
+        self.node_by_stable_id(id)
+            .and_then(|node| self.ecs_for_ast(node))
+    }
+
     /// Get child AST entities from [`BsnPatch::Children`], if present.
     pub fn get_children_ast(&self, patches_entity: Entity) -> Vec<Entity> {
         let Some(patches) = self.get_patches(patches_entity) else {

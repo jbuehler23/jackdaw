@@ -29,18 +29,17 @@ pub use parse::{
 };
 
 pub use document::{
-    DerivedComponents,
     AstNodeRef, BsnAssetContext, BsnField, BsnPatch, BsnPatches, BsnStructData, BsnStructFields,
-    BsnTupleStructData, BsnValue, SceneBsnAst, component_to_bsn_patch,
+    BsnTupleStructData, BsnValue, DerivedComponents, SceneBsnAst, component_to_bsn_patch,
     component_to_bsn_patch_with_assets,
 };
 pub use emitter::{emit_entities, emit_entity, emit_scene};
 pub use loader::{BsnLoadError, parse_bsn_text};
 
 pub use apply::{
-    apply_component_patch,
-    AstDirty, BsnApplyAssets, BsnSceneAssets, apply_ast_to_ecs, apply_dirty_ast_patches,
-    bsn_value_to_reflect, get_bsn_field, parse_string_to_bsn_value, set_bsn_field, spawn_from_ast,
+    AstDirty, BsnApplyAssets, BsnSceneAssets, apply_ast_to_ecs, apply_component_patch,
+    apply_dirty_ast_patches, bsn_value_to_reflect, get_bsn_field, parse_string_to_bsn_value,
+    set_bsn_field, spawn_from_ast,
 };
 
 pub use sync::{
