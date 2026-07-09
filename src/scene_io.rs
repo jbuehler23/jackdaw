@@ -427,11 +427,19 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         }
     }
 
+    // A `.bsn` path saves the live BSN document text; anything else keeps
+    // writing the JSN JSON form.
+    let contents = if path.ends_with(".bsn") {
+        jackdaw_bsn::emit_scene(world.resource::<jackdaw_bsn::SceneBsnAst>())
+    } else {
+        json
+    };
+
     // Write to disk on the IO task pool
     let path_clone = path.clone();
     IoTaskPool::get()
         .spawn(async move {
-            match std::fs::write(&path_clone, &json) {
+            match std::fs::write(&path_clone, &contents) {
                 Ok(()) => info!("Scene saved to {path_clone}"),
                 Err(err) => warn!("Failed to write scene file: {err}"),
             }
@@ -1422,6 +1430,30 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
     // path into the dialog state.
     world.resource_mut::<SceneFilePath>().last_directory =
         chosen.parent().map(std::path::Path::to_path_buf);
+
+    if path.ends_with(".bsn") {
+        clear_scene_entities(world);
+        match jackdaw_bsn::load_bsn_scene(world, &json) {
+            Ok(loaded) => {
+                // Fill the JSN AST so tabs, undo, and save keep working while
+                // they still read it; the loaded entities already carry their
+                // BSN document links.
+                register_entities_in_ast(world, &loaded.entities);
+                info!(
+                    "Scene loaded from {path} ({} entities, {} embedded assets)",
+                    loaded.entities.len(),
+                    loaded.assets.len()
+                );
+            }
+            Err(err) => {
+                warn!("Failed to load BSN scene '{path}': {err}");
+                return;
+            }
+        }
+        world.resource_mut::<SceneFilePath>().path = Some(path);
+        world.resource_mut::<SceneDirtyState>().undo_len_at_save = 0;
+        return;
+    }
 
     if path.ends_with(".scene.json") {
         // Legacy format: raw DynamicWorld JSON

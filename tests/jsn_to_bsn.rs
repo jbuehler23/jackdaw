@@ -455,3 +455,82 @@ fn convert_project_walks_scenes_prefabs_and_catalog() {
     assert_eq!(second.catalogs.len(), 0);
     assert_eq!(second.failures.len(), 0);
 }
+
+#[test]
+fn editor_opens_and_saves_bsn_scenes() {
+    use jackdaw::scene_io::{SceneFilePath, load_scene_from_file, save_scene};
+
+    // Author + convert a scene to .bsn on disk.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bsn_path = dir.path().join("level.bsn");
+    {
+        let mut app = headless_app();
+        let id = SceneNodeId::next();
+        app.world_mut().spawn((
+            Name::new("Hero"),
+            Transform::from_xyz(4.0, 0.0, 0.0),
+            id,
+            jackdaw_scene_types::SceneRootTag,
+        ));
+        let scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app.world_mut());
+        let converted = convert_jsn_scene_to_bsn(app.world_mut(), &scene).expect("converts");
+        std::fs::write(&bsn_path, &converted.scene_bsn).unwrap();
+    }
+
+    fn editor_app() -> App {
+        let mut app = headless_app();
+        app.init_resource::<jackdaw::scene_io::SceneFilePath>();
+        app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
+        app.init_resource::<jackdaw::selection::Selection>();
+        app.init_resource::<jackdaw_commands::CommandHistory>();
+        app.init_resource::<jackdaw_jsn::SceneJsnAst>();
+        app
+    }
+
+    // Open the .bsn in the editor load path.
+    let mut app = editor_app();
+    load_scene_from_file(app.world_mut(), &bsn_path);
+    let hero = find_by_name(app.world_mut(), "Hero").expect("hero loaded from .bsn");
+    let x = app.world().get::<Transform>(hero).unwrap().translation.x;
+    assert!((x - 4.0).abs() < 1e-6);
+    assert!(
+        !app.world()
+            .resource::<jackdaw_jsn::SceneJsnAst>()
+            .nodes
+            .is_empty(),
+        "opening .bsn fills the JSN AST so tabs/undo/save keep working"
+    );
+    assert_eq!(
+        app.world().resource::<SceneFilePath>().path.as_deref(),
+        Some(bsn_path.to_string_lossy().as_ref())
+    );
+
+    // Save back to the same .bsn (async IO pool write; poll for it). The
+    // save path comes from the active tab.
+    {
+        let mut scenes = jackdaw::scenes::Scenes::default();
+        let mut tab = jackdaw::scenes::SceneTab::new_untitled(1);
+        tab.path = Some(bsn_path.clone());
+        scenes.push_tab(tab);
+        app.world_mut().insert_resource(scenes);
+    }
+    let before = std::fs::read_to_string(&bsn_path).unwrap();
+    std::fs::remove_file(&bsn_path).unwrap();
+    save_scene(app.world_mut());
+    let mut waited = 0;
+    while !bsn_path.exists() && waited < 200 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        waited += 1;
+    }
+    let after = std::fs::read_to_string(&bsn_path).expect("save wrote the .bsn");
+    assert!(
+        after.contains("#Hero"),
+        "saved text is BSN, not JSON:\n{after}"
+    );
+    assert_eq!(before.trim(), after.trim(), "load then save round-trips");
+
+    // Reload the saved file into a fresh editor world.
+    let mut app2 = editor_app();
+    load_scene_from_file(app2.world_mut(), &bsn_path);
+    assert!(find_by_name(app2.world_mut(), "Hero").is_some());
+}
