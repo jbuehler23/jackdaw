@@ -38,7 +38,13 @@ impl Plugin for TerrainPlugin {
 /// are missing.
 fn ensure_terrain_dirty_chunks(
     mut commands: Commands,
-    terrains: Query<Entity, (With<jackdaw_scene_types::Terrain>, Without<TerrainDirtyChunks>)>,
+    terrains: Query<
+        Entity,
+        (
+            With<jackdaw_scene_types::Terrain>,
+            Without<TerrainDirtyChunks>,
+        ),
+    >,
 ) {
     for entity in &terrains {
         commands.entity(entity).insert(TerrainDirtyChunks {

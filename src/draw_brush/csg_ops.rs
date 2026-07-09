@@ -931,13 +931,14 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
     // each subsequent brush into the running result. Works for both
     // convex and concave inputs.
 
-    let world_inputs: Vec<(Vec<BrushFaceData>, jackdaw_scene_types::BrushTopology)> = selected_brushes
-        .iter()
-        .map(|(_, brush, gt)| {
-            let (_, rotation, translation) = gt.to_scale_rotation_translation();
-            jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, rotation, translation)
-        })
-        .collect();
+    let world_inputs: Vec<(Vec<BrushFaceData>, jackdaw_scene_types::BrushTopology)> =
+        selected_brushes
+            .iter()
+            .map(|(_, brush, gt)| {
+                let (_, rotation, translation) = gt.to_scale_rotation_translation();
+                jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, rotation, translation)
+            })
+            .collect();
 
     let mut running = jackdaw_csg::CsgBrush {
         faces: world_inputs[0].0.clone(),

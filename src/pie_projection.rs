@@ -10,8 +10,8 @@ use bevy::ecs::component::ComponentId;
 use bevy::prelude::*;
 use bevy::reflect::serde::TypedReflectDeserializer;
 use jackdaw_jsn::ast::SceneJsnAst;
-use jackdaw_scene_types::SceneNodeId;
 use jackdaw_pie_protocol::StateEvent;
+use jackdaw_scene_types::SceneNodeId;
 use serde::de::{DeserializeSeed, IntoDeserializer};
 
 /// Marker on a preview entity that exists only because the running game spawned
@@ -654,9 +654,9 @@ mod tests {
     // ---- project_event integration tests ----
 
     use jackdaw_jsn::ast::{JsnEntityNode, SceneJsnAst};
-    use jackdaw_scene_types::SceneNodeId;
     use jackdaw_pie_protocol::StateEvent;
     use jackdaw_pie_protocol::snapshot::RemoteEntity;
+    use jackdaw_scene_types::SceneNodeId;
     use std::collections::HashSet;
 
     fn build_projection_world() -> (World, Entity, SceneNodeId) {

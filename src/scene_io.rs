@@ -2767,8 +2767,8 @@ mod tests {
     /// running game can map a live entity back to its authored node.
     #[test]
     fn spawned_entities_carry_node_id_and_round_trip() {
-        use jackdaw_scene_types::SceneNodeId;
         use jackdaw_jsn::format::JsnEntity;
+        use jackdaw_scene_types::SceneNodeId;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -2839,8 +2839,8 @@ mod tests {
     /// Authored Transform is `[1, 2, 3]`; the live ECS Transform is `[9, 9, 9]`.
     /// The save must write the authored values.
     fn build_live_save_world() -> World {
-        use jackdaw_scene_types::SceneNodeId;
         use jackdaw_jsn::ast::{JsnEntityNode, SceneJsnAst};
+        use jackdaw_scene_types::SceneNodeId;
 
         let mut world = World::new();
         world.init_resource::<AppTypeRegistry>();

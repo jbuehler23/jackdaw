@@ -172,7 +172,10 @@ fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
     if world.get::<Mesh3d>(entity).is_some() {
         return EntityCategory::Mesh;
     }
-    if world.get::<jackdaw_scene_types::SceneRootTag>(entity).is_some() {
+    if world
+        .get::<jackdaw_scene_types::SceneRootTag>(entity)
+        .is_some()
+    {
         return EntityCategory::Scene;
     }
     if world.get::<WorldAssetRoot>(entity).is_some() {
@@ -256,7 +259,9 @@ fn is_outliner_child(world: &World, child: Entity) -> bool {
     world.get_entity(child).is_ok()
         && world.get::<EditorEntity>(child).is_none()
         && world.get::<EditorHidden>(child).is_none()
-        && world.get::<jackdaw_scene_types::DerivedFaceMesh>(child).is_none()
+        && world
+            .get::<jackdaw_scene_types::DerivedFaceMesh>(child)
+            .is_none()
 }
 
 /// Returns true if `entity` has `PrefabEntityId` but NOT `IsA` -- meaning

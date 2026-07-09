@@ -56,7 +56,12 @@ fn real_scene_with_legacy_type_paths_converts_semantically() {
     let mut scene: jackdaw_jsn::JsnScene = serde_json::from_str(text).expect("fixture parses");
     jackdaw_jsn::format::canonicalize_scene(&mut scene);
     let local_assets = load_inline_assets(app_a.world_mut(), &scene.assets, Path::new(""));
-    let spawned_a = load_scene_from_jsn(app_a.world_mut(), &scene.scene, Path::new(""), &local_assets);
+    let spawned_a = load_scene_from_jsn(
+        app_a.world_mut(),
+        &scene.scene,
+        Path::new(""),
+        &local_assets,
+    );
     assert_eq!(spawned_a.len(), 2, "fixture has two entities");
 
     // Convert (from raw text, exercising the parse + canonicalize boundary).
@@ -64,7 +69,9 @@ fn real_scene_with_legacy_type_paths_converts_semantically() {
     let converted = convert_jsn_text(app_c.world_mut(), text).expect("conversion succeeds");
     assert_eq!(converted.report.entity_count, 2);
     assert!(
-        converted.scene_bsn.contains("jackdaw_scene_types::types::Brush"),
+        converted
+            .scene_bsn
+            .contains("jackdaw_scene_types::types::Brush"),
         "legacy Brush type path must convert to its current path:\n{}",
         converted.scene_bsn
     );
@@ -77,11 +84,30 @@ fn real_scene_with_legacy_type_paths_converts_semantically() {
     // The lit entity: light parameters and transform survive.
     let sun_a = find_by_name(app_a.world_mut(), "Sun").expect("light in world A");
     let sun_b = find_by_name(app_b.world_mut(), "Sun").expect("light in world B");
-    let lum_a = app_a.world().get::<DirectionalLight>(sun_a).expect("light A").illuminance;
-    let lum_b = app_b.world().get::<DirectionalLight>(sun_b).expect("light B").illuminance;
-    assert!((lum_a - lum_b).abs() < 1e-3, "illuminance {lum_a} vs {lum_b}");
-    let t_a = app_a.world().get::<Transform>(sun_a).expect("transform A").translation;
-    let t_b = app_b.world().get::<Transform>(sun_b).expect("transform B").translation;
+    let lum_a = app_a
+        .world()
+        .get::<DirectionalLight>(sun_a)
+        .expect("light A")
+        .illuminance;
+    let lum_b = app_b
+        .world()
+        .get::<DirectionalLight>(sun_b)
+        .expect("light B")
+        .illuminance;
+    assert!(
+        (lum_a - lum_b).abs() < 1e-3,
+        "illuminance {lum_a} vs {lum_b}"
+    );
+    let t_a = app_a
+        .world()
+        .get::<Transform>(sun_a)
+        .expect("transform A")
+        .translation;
+    let t_b = app_b
+        .world()
+        .get::<Transform>(sun_b)
+        .expect("transform B")
+        .translation;
     assert!((t_a - t_b).length() < 1e-5, "translation {t_a} vs {t_b}");
 
     // The brush entity: the Brush component (legacy type path) survives with
@@ -150,10 +176,24 @@ fn hierarchy_node_ids_and_custom_properties_round_trip() {
     let parent_b = find_by_node_id(app_b.world_mut(), parent_id).expect("parent by node id");
     let child_b = find_by_node_id(app_b.world_mut(), child_id).expect("child by node id");
 
-    let pt = app_b.world().get::<Transform>(parent_b).expect("parent transform").translation;
-    assert!((pt - Vec3::new(1.0, 2.0, 3.0)).length() < 1e-5, "parent translation {pt}");
-    let ct = app_b.world().get::<Transform>(child_b).expect("child transform").translation;
-    assert!((ct - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-5, "child translation {ct}");
+    let pt = app_b
+        .world()
+        .get::<Transform>(parent_b)
+        .expect("parent transform")
+        .translation;
+    assert!(
+        (pt - Vec3::new(1.0, 2.0, 3.0)).length() < 1e-5,
+        "parent translation {pt}"
+    );
+    let ct = app_b
+        .world()
+        .get::<Transform>(child_b)
+        .expect("child transform")
+        .translation;
+    assert!(
+        (ct - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-5,
+        "child translation {ct}"
+    );
 
     assert_eq!(
         app_b.world().get::<ChildOf>(child_b).map(|c| c.parent()),
@@ -199,8 +239,15 @@ fn legacy_v2_scene_converts() {
     let mut app_b = headless_app();
     spawn_bsn(&mut app_b, &converted.scene_bsn);
     let old = find_by_name(app_b.world_mut(), "Old").expect("v2 entity present");
-    let t = app_b.world().get::<Transform>(old).expect("transform").translation;
-    assert!((t - Vec3::new(1.0, 2.0, 3.0)).length() < 1e-5, "translation {t}");
+    let t = app_b
+        .world()
+        .get::<Transform>(old)
+        .expect("transform")
+        .translation;
+    assert!(
+        (t - Vec3::new(1.0, 2.0, 3.0)).length() < 1e-5,
+        "translation {t}"
+    );
 }
 
 #[test]
@@ -256,10 +303,8 @@ fn inline_material_reference_and_terrain_survive_conversion() {
             base_color: Color::srgb(0.8, 0.1, 0.1),
             ..Default::default()
         };
-        let serializer = bevy::reflect::serde::TypedReflectSerializer::new(
-            material.as_partial_reflect(),
-            &reg,
-        );
+        let serializer =
+            bevy::reflect::serde::TypedReflectSerializer::new(material.as_partial_reflect(), &reg);
         serde_json::to_value(serializer).expect("material serializes")
     };
     scene.assets.0.insert(
@@ -271,7 +316,10 @@ fn inline_material_reference_and_terrain_survive_conversion() {
     let entity = scene
         .scene
         .iter_mut()
-        .find(|e| e.components.contains_key("jackdaw_scene_types::types::Brush"))
+        .find(|e| {
+            e.components
+                .contains_key("jackdaw_scene_types::types::Brush")
+        })
         .expect("brush entity serialized");
     let brush = entity
         .components
@@ -283,17 +331,18 @@ fn inline_material_reference_and_terrain_survive_conversion() {
     let converted =
         convert_jsn_scene_to_bsn(app_c.world_mut(), &scene).expect("conversion succeeds");
 
-    // The scene text carries the reference name, not an empty string, and the
-    // catalog holds the material definition.
+    // The scene text carries the reference name (not an empty string) on the
+    // face, and embeds the material definition as a named asset root.
     assert!(
         converted.scene_bsn.contains("\"#RedMat\""),
         "face material must emit its inline reference name:\n{}",
         converted.scene_bsn
     );
     assert!(
-        converted.catalog_bsn.contains("#RedMat"),
-        "catalog must contain the inline material:\n{}",
-        converted.catalog_bsn
+        converted.scene_bsn.contains("#RedMat\n")
+            && converted.scene_bsn.contains("StandardMaterial"),
+        "scene must embed the inline material definition:\n{}",
+        converted.scene_bsn
     );
     assert_eq!(converted.report.asset_count, 1);
 
@@ -309,4 +358,100 @@ fn inline_material_reference_and_terrain_survive_conversion() {
     assert_eq!(terrain.heights.len(), 9);
     assert!((terrain.max_height - 2.5).abs() < 1e-6);
     assert!((terrain.heights[2] - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn convert_project_walks_scenes_prefabs_and_catalog() {
+    use jackdaw::jsn_to_bsn::convert_project;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("assets/scenes")).unwrap();
+    std::fs::create_dir_all(root.join("assets/prefabs")).unwrap();
+    std::fs::create_dir_all(root.join(".jsn")).unwrap();
+
+    // Two small scenes authored via the editor's own serializer.
+    let mut app = headless_app();
+    app.world_mut().spawn((
+        Name::new("LevelRoot"),
+        Transform::from_xyz(1.0, 0.0, 0.0),
+        SceneNodeId::next(),
+        jackdaw_scene_types::SceneRootTag,
+    ));
+    let scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app.world_mut());
+    let scene_json = serde_json::to_string(&scene).unwrap();
+    std::fs::write(root.join("assets/scenes/level.jsn"), &scene_json).unwrap();
+    std::fs::write(root.join("assets/prefabs/thing.jsn"), &scene_json).unwrap();
+
+    // A catalog with one project-wide material.
+    let material_json = {
+        let registry = app
+            .world()
+            .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+            .clone();
+        let reg = registry.read();
+        let material = StandardMaterial {
+            base_color: Color::srgb(0.2, 0.9, 0.2),
+            ..Default::default()
+        };
+        let serializer =
+            bevy::reflect::serde::TypedReflectSerializer::new(material.as_partial_reflect(), &reg);
+        serde_json::to_value(serializer).unwrap()
+    };
+    let catalog = serde_json::json!({
+        "jsn": {"format_version": [3, 0, 0], "editor_version": "0.5.0", "bevy_version": "0.19"},
+        "assets": {
+            "bevy_pbr::pbr_material::StandardMaterial": {"@GreenMat": material_json}
+        }
+    });
+    std::fs::write(
+        root.join(".jsn/catalog.jsn"),
+        serde_json::to_string(&catalog).unwrap(),
+    )
+    .unwrap();
+
+    // Config and backups that must be left alone.
+    std::fs::write(root.join(".jsn/project.jsn"), "{\"name\": \"t\"}").unwrap();
+    std::fs::write(root.join("assets/old.jsn.bak"), "old backup").unwrap();
+
+    let mut convert_app = headless_app();
+    let report = convert_project(convert_app.world_mut(), root);
+
+    assert_eq!(report.failures.len(), 0, "failures: {:?}", report.failures);
+    assert_eq!(report.scenes.len(), 2, "level + prefab converted");
+    assert_eq!(report.catalogs.len(), 1);
+
+    // Converted outputs exist; sources renamed to .jsn.bak.
+    assert!(root.join("assets/scenes/level.bsn").is_file());
+    assert!(root.join("assets/scenes/level.jsn.bak").is_file());
+    assert!(!root.join("assets/scenes/level.jsn").exists());
+    assert!(root.join("assets/prefabs/thing.bsn").is_file());
+    assert!(root.join(".jsn/catalog.bsn").is_file());
+    assert!(root.join(".jsn/catalog.jsn.bak").is_file());
+
+    // Config untouched; pre-existing backup untouched.
+    assert!(root.join(".jsn/project.jsn").is_file());
+    assert_eq!(
+        std::fs::read_to_string(root.join("assets/old.jsn.bak")).unwrap(),
+        "old backup"
+    );
+
+    // The converted catalog holds the material under its reference name.
+    let catalog_bsn = std::fs::read_to_string(root.join(".jsn/catalog.bsn")).unwrap();
+    assert!(catalog_bsn.contains("GreenMat"), "{catalog_bsn}");
+    assert!(catalog_bsn.contains("StandardMaterial"), "{catalog_bsn}");
+
+    // The converted scene parses and spawns.
+    let level_bsn = std::fs::read_to_string(root.join("assets/scenes/level.bsn")).unwrap();
+    let mut app_b = headless_app();
+    let spawned = spawn_bsn(&mut app_b, &level_bsn);
+    assert_eq!(spawned.len(), 1);
+    assert!(find_by_name(app_b.world_mut(), "LevelRoot").is_some());
+
+    // A second run finds nothing left to convert.
+    let mut app_c = headless_app();
+    let second = convert_project(app_c.world_mut(), root);
+    assert_eq!(second.scenes.len(), 0);
+    assert_eq!(second.catalogs.len(), 0);
+    assert_eq!(second.failures.len(), 0);
 }

@@ -27,13 +27,12 @@ use jackdaw_jsn::JsnScene;
 
 use crate::scene_io::{load_inline_assets, load_scene_from_jsn, should_skip_component};
 
-/// The result of converting a `JsnScene`: the scene `.bsn` text, the asset
-/// catalog `.bsn` text, and a short report of what was converted.
+/// The result of converting a `JsnScene`: the scene `.bsn` text (with any
+/// scene-inline assets embedded as named asset roots) and a short report of
+/// what was converted.
 pub struct ConvertedScene {
-    /// Scene entities and components as `.bsn` text.
+    /// Scene entities, components, and inline assets as `.bsn` text.
     pub scene_bsn: String,
-    /// Named inline assets as catalog `.bsn` text (empty when there are none).
-    pub catalog_bsn: String,
     /// Summary of the conversion for logging and tooling.
     pub report: ConversionReport,
 }
@@ -98,28 +97,20 @@ pub fn convert_jsn_scene_to_bsn_at(
     // Inline assets have no filesystem path; emit their reference names.
     let asset_names: bevy::platform::collections::HashMap<bevy::asset::UntypedAssetId, String> =
         local_assets
-        .iter()
-        .map(|(name, handle)| (handle.id(), name.clone()))
-        .collect();
+            .iter()
+            .map(|(name, handle)| (handle.id(), name.clone()))
+            .collect();
 
-    let scene_bsn = build_scene_bsn(world, &spawned, parent_path, &asset_names);
+    // Scene-inline assets embed as named asset roots in the same document,
+    // ahead of the entity roots, mirroring how a catalog file names entries.
+    let asset_refs = catalog_refs(&local_assets);
+    let asset_count = asset_refs.len();
+    let scene_bsn = build_scene_bsn(world, &spawned, parent_path, &asset_names, &asset_refs);
 
     world.remove_resource::<SceneBsnAst>();
     if let Some(ast) = saved_ast {
         world.insert_resource(ast);
     }
-
-    // Catalog from the resolved inline assets.
-    let asset_refs = catalog_refs(&local_assets);
-    let catalog_bsn = if asset_refs.is_empty() {
-        String::new()
-    } else {
-        serialize_assets_to_bsn(world, &asset_refs)
-    };
-    let asset_count = catalog_bsn
-        .lines()
-        .filter(|line| line.trim_start().starts_with('#'))
-        .count();
 
     let entity_count = spawned.len();
 
@@ -132,7 +123,6 @@ pub fn convert_jsn_scene_to_bsn_at(
 
     Ok(ConvertedScene {
         scene_bsn,
-        catalog_bsn,
         report: ConversionReport {
             entity_count,
             asset_count,
@@ -167,10 +157,17 @@ fn build_scene_bsn(
     spawned: &[Entity],
     parent_path: &Path,
     asset_names: &bevy::platform::collections::HashMap<bevy::asset::UntypedAssetId, String>,
+    asset_refs: &[CatalogAssetRef],
 ) -> String {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let asset_server = world.resource::<AssetServer>().clone();
     let skip = skip_type_ids();
+
+    if !asset_refs.is_empty() {
+        let mut ast = world.remove_resource::<SceneBsnAst>().unwrap_or_default();
+        jackdaw_bsn::append_assets_to_ast(&mut ast, world, asset_refs);
+        world.insert_resource(ast);
+    }
 
     // Parents must exist in the AST before their children so the hierarchy
     // relation resolves. Ordering by ancestor depth guarantees that.
@@ -183,10 +180,7 @@ fn build_scene_bsn(
             .filter(|p| spawned.contains(p));
         create_entity_in_ast(world, entity, parent);
 
-        let Some(patches_entity) = world
-            .resource::<SceneBsnAst>()
-            .ast_for(entity)
-        else {
+        let Some(patches_entity) = world.resource::<SceneBsnAst>().ast_for(entity) else {
             continue;
         };
 
@@ -215,11 +209,8 @@ fn build_scene_bsn(
                 let Some(component) = reflect_component.reflect(entity_ref) else {
                     continue;
                 };
-                let patch = component_to_bsn_patch_with_assets(
-                    component.as_partial_reflect(),
-                    &reg,
-                    &ctx,
-                );
+                let patch =
+                    component_to_bsn_patch_with_assets(component.as_partial_reflect(), &reg, &ctx);
                 collected.push((type_path.to_string(), patch));
             }
         }
@@ -278,4 +269,116 @@ fn catalog_refs(local_assets: &HashMap<String, UntypedHandle>) -> Vec<CatalogAss
             }
         })
         .collect()
+}
+
+/// What [`convert_project`] did to a project directory.
+#[derive(Default)]
+pub struct ProjectConversionReport {
+    /// Converted scene and prefab files (source path, per-scene report).
+    pub scenes: Vec<(std::path::PathBuf, ConversionReport)>,
+    /// Converted catalog files (source path).
+    pub catalogs: Vec<std::path::PathBuf>,
+    /// Files that failed to convert (source path, error). Failed files are
+    /// left untouched.
+    pub failures: Vec<(std::path::PathBuf, String)>,
+}
+
+/// Convert every `.jsn` scene, prefab, and catalog under `root` to `.bsn`,
+/// renaming each converted source to `<name>.jsn.bak`.
+///
+/// Skipped: the `.jsn/` config directory (project settings move separately),
+/// `project.jsn`, and existing `.jsn.bak` backups. Failures leave the source
+/// untouched and are collected in the report.
+pub fn convert_project(world: &mut World, root: &Path) -> ProjectConversionReport {
+    let mut report = ProjectConversionReport::default();
+    let mut files = Vec::new();
+    collect_jsn_files(root, &mut files);
+
+    for path in files {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let result = if name == "catalog.jsn" {
+            convert_catalog_file(world, &path).map(|()| report.catalogs.push(path.clone()))
+        } else {
+            convert_scene_file(world, &path)
+                .map(|scene_report| report.scenes.push((path.clone(), scene_report)))
+        };
+        if let Err(err) = result {
+            report.failures.push((path, err.to_string()));
+        }
+    }
+
+    report
+}
+
+fn collect_jsn_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            // `.jsn/` holds project config (which migrates separately), except
+            // for the catalog, which is scene data.
+            if dir_name == ".jsn" {
+                let catalog = path.join("catalog.jsn");
+                if catalog.is_file() {
+                    out.push(catalog);
+                }
+                continue;
+            }
+            if dir_name.starts_with('.') || dir_name == "target" {
+                continue;
+            }
+            collect_jsn_files(&path, out);
+            continue;
+        }
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.ends_with(".jsn") && name != "project.jsn" {
+            out.push(path);
+        }
+    }
+}
+
+fn convert_scene_file(world: &mut World, path: &Path) -> Result<ConversionReport, BevyError> {
+    let text = std::fs::read_to_string(path)?;
+    let (scene, _version) = jackdaw_jsn::format::parse_scene(&text)
+        .map_err(|e| BevyError::from(format!("could not parse {}: {e}", path.display())))?;
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let converted = convert_jsn_scene_to_bsn_at(world, &scene, parent)?;
+
+    let bsn_path = path.with_extension("bsn");
+    std::fs::write(&bsn_path, &converted.scene_bsn)?;
+    std::fs::rename(path, backup_path(path))?;
+    Ok(converted.report)
+}
+
+fn convert_catalog_file(world: &mut World, path: &Path) -> Result<(), BevyError> {
+    let text = std::fs::read_to_string(path)?;
+    let catalog: jackdaw_jsn::format::JsnCatalog = serde_json::from_str(&text)
+        .map_err(|e| BevyError::from(format!("could not parse {}: {e}", path.display())))?;
+
+    // Catalog keys are reflect type paths; rewrite any legacy ones.
+    let mut assets = jackdaw_jsn::format::JsnAssets::default();
+    for (type_path, entries) in catalog.assets.0 {
+        let key = jackdaw_jsn::format::canonical_type_path(&type_path).unwrap_or(type_path);
+        assets.0.insert(key, entries);
+    }
+
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let local_assets = load_inline_assets(world, &assets, parent);
+    let refs = catalog_refs(&local_assets);
+    let catalog_bsn = serialize_assets_to_bsn(world, &refs);
+
+    std::fs::write(path.with_extension("bsn"), catalog_bsn)?;
+    std::fs::rename(path, backup_path(path))?;
+    Ok(())
+}
+
+/// `scene.jsn` -> `scene.jsn.bak` (appends, so the original extension stays
+/// visible in the backup name).
+fn backup_path(path: &Path) -> std::path::PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".bak");
+    path.with_file_name(name)
 }

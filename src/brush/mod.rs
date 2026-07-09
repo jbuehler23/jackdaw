@@ -382,7 +382,12 @@ pub fn sync_brush_to_ast(world: &mut World, entity: Entity, brush: &Brush) {
     // and the AST ended up with a `types::brush::Brush` key that
     // `load_scene_from_jsn` then skipped with an `Unknown type`
     // warning and silently lost the Brush on every scene reload).
-    crate::commands::sync_component_to_ast(world, entity, "jackdaw_scene_types::types::Brush", brush);
+    crate::commands::sync_component_to_ast(
+        world,
+        entity,
+        "jackdaw_scene_types::types::Brush",
+        brush,
+    );
 }
 
 /// Watch for any `Changed<Brush>` and mirror the new state into the

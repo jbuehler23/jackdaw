@@ -20,8 +20,15 @@ struct TerrainMaterialHandle(Handle<StandardMaterial>);
 fn initialize_terrain_chunks(
     mut commands: Commands,
     mut terrains: Query<
-        (Entity, &jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks),
-        Or<(Added<jackdaw_scene_types::Terrain>, Changed<TerrainDirtyChunks>)>,
+        (
+            Entity,
+            &jackdaw_scene_types::Terrain,
+            &mut TerrainDirtyChunks,
+        ),
+        Or<(
+            Added<jackdaw_scene_types::Terrain>,
+            Changed<TerrainDirtyChunks>,
+        )>,
     >,
     existing_chunks: Query<(Entity, &TerrainChunk)>,
     mut meshes: ResMut<Assets<Mesh>>,

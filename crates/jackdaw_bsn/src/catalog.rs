@@ -118,14 +118,21 @@ fn asset_value_from_root(
 /// paths (when an [`AssetServer`] is present). Entries are sorted by name so
 /// the output is stable across calls.
 pub fn serialize_assets_to_bsn(world: &World, assets: &[CatalogAssetRef]) -> String {
+    let mut ast = SceneBsnAst::default();
+    append_assets_to_ast(&mut ast, world, assets);
+    emit_scene(&ast)
+}
+
+/// Append named asset entries to an existing document as roots, sorted by
+/// name. Scene conversion uses this to embed a scene's inline assets in the
+/// same `.bsn` document as its entities.
+pub fn append_assets_to_ast(ast: &mut SceneBsnAst, world: &World, assets: &[CatalogAssetRef]) {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let reg = registry.read();
     let asset_server = world.get_resource::<AssetServer>();
 
     let mut sorted: Vec<&CatalogAssetRef> = assets.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let mut ast = SceneBsnAst::default();
 
     for asset_ref in sorted {
         let Some(registration) = reg.get(asset_ref.type_id) else {
@@ -164,8 +171,6 @@ pub fn serialize_assets_to_bsn(world: &World, assets: &[CatalogAssetRef]) -> Str
             .id();
         ast.add_to_roots(root);
     }
-
-    emit_scene(&ast)
 }
 
 #[cfg(test)]

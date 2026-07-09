@@ -444,7 +444,9 @@ mod tests {
                 Icon::Mountain,
             ),
             (
-                world.spawn(jackdaw_scene_types::NavmeshRegion::default()).id(),
+                world
+                    .spawn(jackdaw_scene_types::NavmeshRegion::default())
+                    .id(),
                 Icon::Waypoints,
             ),
             (
