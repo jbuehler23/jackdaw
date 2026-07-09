@@ -1,3 +1,4 @@
+pub mod bsn_methods;
 pub mod diagnostics;
 pub mod explorer;
 mod methods;
@@ -105,7 +106,8 @@ impl Plugin for JackdawRemotePlugin {
                         "jackdaw/diagnostics",
                         diagnostics::jackdaw_diagnostics_handler,
                     )
-                    .with_method_main("jackdaw/playback", playback::jackdaw_playback_handler),
+                    .with_method_main("jackdaw/playback", playback::jackdaw_playback_handler)
+                    .with_method_main("jackdaw/apply_bsn", bsn_methods::jackdaw_apply_bsn_handler),
             );
             let cors = bevy::remote::http::Headers::new()
                 .insert("Access-Control-Allow-Origin", "*")
@@ -154,6 +156,10 @@ impl Plugin for JackdawRemotePlugin {
         });
         register_if_missing(world, "jackdaw/playback", |w| {
             let id = w.register_system(playback::jackdaw_playback_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
+        register_if_missing(world, "jackdaw/apply_bsn", |w| {
+            let id = w.register_system(bsn_methods::jackdaw_apply_bsn_handler);
             bevy::remote::RemoteMethodSystemId::Instant(id)
         });
     }

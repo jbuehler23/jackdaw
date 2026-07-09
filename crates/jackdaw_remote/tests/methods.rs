@@ -189,3 +189,103 @@ fn resume_after_step_keeps_running() {
         "resume after step must keep the sim running"
     );
 }
+
+const APPLY_BSN_SOURCE: &str = r#"
+#Spawned
+bevy_transform::components::transform::Transform {
+    translation: glam::Vec3 { x: 1.0, y: 2.0, z: 3.0 },
+}
+bevy_ecs::hierarchy::Children [
+    #SpawnedChild
+    bevy_transform::components::transform::Transform
+]
+"#;
+
+fn bsn_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.register_type::<Transform>();
+    app.register_type::<Name>();
+    app
+}
+
+#[test]
+fn apply_bsn_spawns_entities_with_components() {
+    let mut app = bsn_app();
+    let result = run_method(
+        &mut app,
+        jackdaw_remote::bsn_methods::jackdaw_apply_bsn_handler,
+        Some(json!({"source": APPLY_BSN_SOURCE})),
+    )
+    .expect("apply ok");
+
+    let spawned = result["entities"].as_array().expect("entities array");
+    assert_eq!(spawned.len(), 2, "root and child");
+
+    let world = app.world_mut();
+    let root = world
+        .query::<(&Name, &Transform)>()
+        .iter(world)
+        .find(|(name, _)| name.as_str() == "Spawned")
+        .expect("root spawned with Name");
+    assert_eq!(root.1.translation, Vec3::new(1.0, 2.0, 3.0));
+
+    let children_count = world
+        .query::<(&Name, &Children)>()
+        .iter(world)
+        .find(|(name, _)| name.as_str() == "Spawned")
+        .map(|(_, children)| children.len())
+        .expect("root has Children");
+    assert_eq!(children_count, 1);
+}
+
+#[test]
+fn apply_bsn_parse_error_is_reported() {
+    let mut app = bsn_app();
+    let result = run_method(
+        &mut app,
+        jackdaw_remote::bsn_methods::jackdaw_apply_bsn_handler,
+        Some(json!({"source": "bevy_transform::components::transform::Transform {"})),
+    );
+    let err = result.unwrap_err();
+    assert_eq!(err.code, bevy::remote::error_codes::INVALID_PARAMS);
+    assert!(!err.message.is_empty());
+}
+
+#[test]
+fn apply_bsn_without_source_is_invalid_params() {
+    let mut app = bsn_app();
+    let result = run_method(
+        &mut app,
+        jackdaw_remote::bsn_methods::jackdaw_apply_bsn_handler,
+        Some(json!({})),
+    );
+    assert_eq!(
+        result.unwrap_err().code,
+        bevy::remote::error_codes::INVALID_PARAMS
+    );
+}
+
+#[test]
+fn apply_bsn_preserves_host_scene_ast() {
+    use jackdaw_bsn::SceneBsnAst;
+
+    let mut app = bsn_app();
+    let mut host_ast = SceneBsnAst::default();
+    let node = host_ast.create_entity_node(Vec::new());
+    host_ast.add_to_roots(node);
+    app.world_mut().insert_resource(host_ast);
+
+    run_method(
+        &mut app,
+        jackdaw_remote::bsn_methods::jackdaw_apply_bsn_handler,
+        Some(json!({"source": APPLY_BSN_SOURCE})),
+    )
+    .expect("apply ok");
+
+    let restored = app
+        .world()
+        .get_resource::<SceneBsnAst>()
+        .expect("host SceneBsnAst restored after apply");
+    assert_eq!(restored.roots.len(), 1, "host AST roots preserved");
+}
