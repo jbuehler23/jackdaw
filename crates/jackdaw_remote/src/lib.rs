@@ -1,3 +1,4 @@
+pub mod diagnostics;
 pub mod explorer;
 mod methods;
 pub mod scene_snapshot;
@@ -92,7 +93,11 @@ impl Plugin for JackdawRemotePlugin {
             app.add_plugins(
                 RemotePlugin::default()
                     .with_method_main("jackdaw/app_info", jackdaw_app_info_handler)
-                    .with_method_main("jackdaw/scene_snapshot", scene_snapshot_handler),
+                    .with_method_main("jackdaw/scene_snapshot", scene_snapshot_handler)
+                    .with_method_main(
+                        "jackdaw/diagnostics",
+                        diagnostics::jackdaw_diagnostics_handler,
+                    ),
             );
             let cors = bevy::remote::http::Headers::new()
                 .insert("Access-Control-Allow-Origin", "*")
@@ -103,6 +108,10 @@ impl Plugin for JackdawRemotePlugin {
                     .with_port(self.port)
                     .with_headers(cors),
             );
+        }
+
+        if !app.is_plugin_added::<bevy::diagnostic::FrameTimeDiagnosticsPlugin>() {
+            app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default());
         }
 
         match explorer::start_explorer_server(self.explorer_port) {
@@ -116,34 +125,38 @@ impl Plugin for JackdawRemotePlugin {
     fn finish(&self, app: &mut App) {
         // If RemotePlugin was already added by the game before us,
         // inject our custom methods via the RemoteMethods resource.
-        // We check if our method is already registered by attempting to get it.
         use bevy::remote::RemoteMethods;
 
         let world = app.world_mut();
-
-        // Check which methods need registering (release the borrow before mutating)
-        let needs_app_info;
-        let needs_scene_snapshot;
-        if let Some(methods) = world.get_resource::<RemoteMethods>() {
-            needs_app_info = methods.get("jackdaw/app_info").is_none();
-            needs_scene_snapshot = methods.get("jackdaw/scene_snapshot").is_none();
-        } else {
+        if world.get_resource::<RemoteMethods>().is_none() {
             return;
         }
 
-        if needs_app_info {
-            let system_id = world.register_system(jackdaw_app_info_handler);
-            world.resource_mut::<RemoteMethods>().insert(
-                "jackdaw/app_info",
-                bevy::remote::RemoteMethodSystemId::Instant(system_id),
-            );
-        }
-        if needs_scene_snapshot {
-            let system_id = world.register_system(scene_snapshot_handler);
-            world.resource_mut::<RemoteMethods>().insert(
-                "jackdaw/scene_snapshot",
-                bevy::remote::RemoteMethodSystemId::Instant(system_id),
-            );
-        }
+        register_if_missing(world, "jackdaw/app_info", |w| {
+            let id = w.register_system(jackdaw_app_info_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
+        register_if_missing(world, "jackdaw/scene_snapshot", |w| {
+            let id = w.register_system(scene_snapshot_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
+        register_if_missing(world, "jackdaw/diagnostics", |w| {
+            let id = w.register_system(diagnostics::jackdaw_diagnostics_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
     }
+}
+
+/// Register a BRP method into `RemoteMethods` unless the name is taken.
+fn register_if_missing(
+    world: &mut World,
+    name: &str,
+    register: impl FnOnce(&mut World) -> bevy::remote::RemoteMethodSystemId,
+) {
+    use bevy::remote::RemoteMethods;
+    if world.resource::<RemoteMethods>().get(name).is_some() {
+        return;
+    }
+    let id = register(world);
+    world.resource_mut::<RemoteMethods>().insert(name, id);
 }
