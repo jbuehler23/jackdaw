@@ -220,3 +220,93 @@ fn conversion_is_deterministic() {
     };
     assert_eq!(strip(&first.scene_bsn), strip(&second.scene_bsn));
 }
+
+#[test]
+fn inline_material_reference_and_terrain_survive_conversion() {
+    use jackdaw_scene_types::Terrain;
+
+    // Author a scene with a Terrain component, then hand it an inline
+    // material asset and a brush face that references it by name, the way the
+    // editor's save path stores catalog-less materials.
+    let mut app_a = headless_app();
+    let node_id = SceneNodeId::next();
+    app_a.world_mut().spawn((
+        Name::new("Ground"),
+        Transform::default(),
+        node_id,
+        jackdaw_scene_types::Brush::cuboid(1.0, 1.0, 1.0),
+        Terrain {
+            resolution: 3,
+            size: Vec2::new(8.0, 8.0),
+            max_height: 2.5,
+            heights: vec![0.0, 0.5, 1.0, 0.0, 0.25, 0.75, 0.1, 0.2, 0.3],
+        },
+        jackdaw_scene_types::SceneRootTag,
+    ));
+    let mut scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app_a.world_mut());
+
+    // Inline material asset entry, reflect-serialized like the editor writes.
+    let material_json = {
+        let registry = app_a
+            .world()
+            .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+            .clone();
+        let reg = registry.read();
+        let material = StandardMaterial {
+            base_color: Color::srgb(0.8, 0.1, 0.1),
+            ..Default::default()
+        };
+        let serializer = bevy::reflect::serde::TypedReflectSerializer::new(
+            material.as_partial_reflect(),
+            &reg,
+        );
+        serde_json::to_value(serializer).expect("material serializes")
+    };
+    scene.assets.0.insert(
+        "bevy_pbr::pbr_material::StandardMaterial".to_string(),
+        std::collections::HashMap::from([("#RedMat".to_string(), material_json)]),
+    );
+
+    // Point the first brush face's material at the inline asset by name.
+    let entity = scene
+        .scene
+        .iter_mut()
+        .find(|e| e.components.contains_key("jackdaw_scene_types::types::Brush"))
+        .expect("brush entity serialized");
+    let brush = entity
+        .components
+        .get_mut("jackdaw_scene_types::types::Brush")
+        .unwrap();
+    brush["faces"][0]["material"] = serde_json::Value::String("#RedMat".to_string());
+
+    let mut app_c = headless_app();
+    let converted =
+        convert_jsn_scene_to_bsn(app_c.world_mut(), &scene).expect("conversion succeeds");
+
+    // The scene text carries the reference name, not an empty string, and the
+    // catalog holds the material definition.
+    assert!(
+        converted.scene_bsn.contains("\"#RedMat\""),
+        "face material must emit its inline reference name:\n{}",
+        converted.scene_bsn
+    );
+    assert!(
+        converted.catalog_bsn.contains("#RedMat"),
+        "catalog must contain the inline material:\n{}",
+        converted.catalog_bsn
+    );
+    assert_eq!(converted.report.asset_count, 1);
+
+    // Terrain round-trips semantically into the BSN-loaded world.
+    let mut app_b = headless_app();
+    spawn_bsn(&mut app_b, &converted.scene_bsn);
+    let ground = find_by_node_id(app_b.world_mut(), node_id).expect("ground by node id");
+    let terrain = app_b
+        .world()
+        .get::<Terrain>(ground)
+        .expect("terrain survives");
+    assert_eq!(terrain.resolution, 3);
+    assert_eq!(terrain.heights.len(), 9);
+    assert!((terrain.max_height - 2.5).abs() < 1e-6);
+    assert!((terrain.heights[2] - 1.0).abs() < 1e-6);
+}

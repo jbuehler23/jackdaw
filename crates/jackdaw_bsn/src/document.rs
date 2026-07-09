@@ -696,6 +696,18 @@ impl BsnValue {
             return BsnValue::List(items);
         }
 
+        // Fixed-size arrays emit like lists; the applier rebuilds them against
+        // the concrete array type.
+        if let ReflectRef::Array(a) = value.reflect_ref() {
+            let mut items = Vec::new();
+            for i in 0..a.len() {
+                if let Some(item) = a.get(i) {
+                    items.push(BsnValue::from_reflect_inner(item, type_registry, ctx));
+                }
+            }
+            return BsnValue::List(items);
+        }
+
         // Maps / HashMaps.
         if let ReflectRef::Map(m) = value.reflect_ref() {
             let mut entries = Vec::new();

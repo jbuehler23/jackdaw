@@ -84,16 +84,16 @@ pub fn convert_jsn_scene_to_bsn_at(
     };
     let scene = &scene;
 
+    // Set the fresh AST aside the editor's live document first, so nothing the
+    // transient spawn does can touch it. Restore whatever was there afterward.
+    let saved_ast = world.remove_resource::<SceneBsnAst>();
+    world.insert_resource(SceneBsnAst::default());
+
     // Resolve inline assets first so component handles can bind to them, then
     // spawn the scene with the Handle-aware loader (materials/textures resolve
     // to real handles instead of the null placeholder JSON stores for them).
     let local_assets = load_inline_assets(world, &scene.assets, parent_path);
     let spawned = load_scene_from_jsn(world, &scene.scene, parent_path, &local_assets);
-
-    // Build the scene document in a fresh AST so the editor's live document is
-    // untouched. Restore whatever was there afterward.
-    let saved_ast = world.remove_resource::<SceneBsnAst>();
-    world.insert_resource(SceneBsnAst::default());
 
     // Inline assets have no filesystem path; emit their reference names.
     let asset_names: bevy::platform::collections::HashMap<bevy::asset::UntypedAssetId, String> =
@@ -155,6 +155,9 @@ fn skip_type_ids() -> HashSet<TypeId> {
         TypeId::of::<Name>(),
         TypeId::of::<jackdaw_bsn::AstNodeRef>(),
         TypeId::of::<jackdaw_bsn::AstDirty>(),
+        // Derived handle attached to GltfSource entities at load time; the
+        // authored GltfSource is what persists.
+        TypeId::of::<bevy::world_serialization::WorldAssetRoot>(),
     ])
 }
 

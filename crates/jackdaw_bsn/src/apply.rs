@@ -280,7 +280,7 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
                             asset_server.as_ref(),
                         )
                     {
-                        target.apply(&*reflected);
+                        apply_authored_value(target, &*reflected);
                     }
                 }
             } else {
@@ -361,7 +361,7 @@ fn merge_bsn_value_into_reflect(
                 && let Some(reflected) =
                     bsn_value_to_reflect(value, type_info.type_id(), registry, asset_server)
             {
-                target.apply(&*reflected);
+                apply_authored_value(target, &*reflected);
             }
         }
     }
@@ -439,7 +439,7 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
                 bsn_value_to_reflect(bsn_val, field_info.ty().id(), &reg, asset_server.as_ref())
                 && let Some(target) = ts.field_mut(i)
             {
-                target.apply(&*reflected);
+                apply_authored_value(target, &*reflected);
             }
         }
     }
@@ -449,6 +449,21 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
         value.as_partial_reflect(),
         &reg,
     );
+}
+
+/// Apply an authored value onto a target field. Lists and maps replace the
+/// target's contents instead of merging: reflection `apply` writes elements
+/// by position/key and never removes the rest, which would leave stale
+/// entries from the seeded default (or the previous value) behind.
+fn apply_authored_value(target: &mut dyn PartialReflect, value: &dyn PartialReflect) {
+    if let ReflectMut::List(list) = target.reflect_mut() {
+        while !list.is_empty() {
+            list.remove(list.len() - 1);
+        }
+    } else if let ReflectMut::Map(map) = target.reflect_mut() {
+        map.drain();
+    }
+    target.apply(value);
 }
 
 /// Convert a [`BsnValue`] to a boxed reflected value given the expected type.
@@ -708,7 +723,7 @@ fn struct_value_to_reflect(
                     bsn_value_to_reflect(&field.value, field_info.ty().id(), registry, asset_server)
                 && let Some(target) = s.field_mut(&field.name)
             {
-                target.apply(&*reflected);
+                apply_authored_value(target, &*reflected);
             }
         }
     }
@@ -743,7 +758,7 @@ fn tuple_struct_value_to_reflect(
                     bsn_value_to_reflect(bsn_val, field_info.ty().id(), registry, asset_server)
                 && let Some(target) = ts.field_mut(i)
             {
-                target.apply(&*reflected);
+                apply_authored_value(target, &*reflected);
             }
         }
     }
@@ -757,6 +772,24 @@ fn list_value_to_reflect(
     asset_server: Option<&AssetServer>,
 ) -> Option<Box<dyn PartialReflect>> {
     let registration = registry.get(expected)?;
+
+    // Fixed-size arrays take the same `[a, b]` literal as lists.
+    if let Ok(array_info) = registration.type_info().as_array() {
+        let item_type_id = array_info.item_ty().id();
+        let mut converted = Vec::new();
+        for item in items {
+            converted.push(bsn_value_to_reflect(
+                item,
+                item_type_id,
+                registry,
+                asset_server,
+            )?);
+        }
+        let mut dynamic = bevy::reflect::array::DynamicArray::new(converted.into_boxed_slice());
+        dynamic.set_represented_type(Some(registration.type_info()));
+        return Some(Box::new(dynamic));
+    }
+
     let list_info = registration.type_info().as_list().ok()?;
     let item_type_id = list_info.item_ty().id();
 
