@@ -49,7 +49,7 @@ pub fn jackdaw_entity_bsn_handler(In(params): In<Option<Value>>, world: &mut Wor
     let bits = params
         .as_ref()
         .and_then(|p| p.get("entity"))
-        .and_then(|v| v.as_u64())
+        .and_then(Value::as_u64)
         .ok_or_else(|| invalid_params("expected {\"entity\": <entity bits>}".into()))?;
     let root = Entity::try_from_bits(bits)
         .ok_or_else(|| invalid_params(format!("invalid entity bits {bits}")))?;
@@ -127,7 +127,7 @@ fn reflected_component_type_ids(world: &World, entity: Entity) -> Vec<std::any::
         .components()
         .iter()
         .filter_map(|&component_id| world.components().get_info(component_id))
-        .filter_map(|info| info.type_id())
+        .filter_map(bevy::ecs::component::ComponentInfo::type_id)
         .filter(|type_id| !skip.contains(type_id))
         .filter(|type_id| {
             registry

@@ -326,9 +326,9 @@ fn entity_bsn_emits_components_and_children() {
 fn entity_bsn_unknown_entity_is_invalid_params() {
     let mut app = bsn_app();
     // Despawning frees the entity; its stale bits no longer resolve to a
-    // live entity, unlike an arbitrary raw u64 (see deviation note in the
-    // task 5 report: u32::MAX collides with a real entity under bevy 0.19's
-    // NonMaxU32 index encoding).
+    // live entity, unlike an arbitrary raw u64. Under bevy 0.19's NonMaxU32
+    // index encoding, u32::MAX bits decode to a live entity, so a spawned-
+    // then-despawned entity's stale bits are used instead.
     let despawned = app.world_mut().spawn_empty().id();
     app.world_mut().despawn(despawned);
 

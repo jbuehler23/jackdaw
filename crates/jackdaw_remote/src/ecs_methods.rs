@@ -33,7 +33,7 @@ pub fn jackdaw_archetypes_handler(In(_params): In<Option<Value>>, world: &mut Wo
             }),
         ));
     }
-    archetypes.sort_by(|a, b| b.0.cmp(&a.0));
+    archetypes.sort_by_key(|entry| std::cmp::Reverse(entry.0));
 
     Ok(json!({
         "archetypes": archetypes.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
