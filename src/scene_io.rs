@@ -1450,26 +1450,23 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
             Err(err) => warn!("Failed to write scene to world: {err}"),
         }
     } else {
-        // Try parsing as v3 first, fall back to v2
-        let jsn: JsnScene = match serde_json::from_str(&json) {
-            Ok(jsn) => jsn,
-            Err(_) => match serde_json::from_str::<jackdaw_jsn::format::JsnSceneV2>(&json) {
-                Ok(v2) => {
-                    if v2.jsn.format_version[0] < 2 {
-                        warn!(
-                            "JSN format version {:?} is not supported. Please re-save with the latest editor.",
-                            v2.jsn.format_version
-                        );
-                        return;
-                    }
-                    info!("Migrating JSN v2 scene to v3 format");
-                    v2.migrate_to_v3()
-                }
-                Err(err) => {
-                    warn!("Failed to parse JSN file: {err}");
+        let jsn = match jackdaw_jsn::format::parse_scene(&json) {
+            Ok((jsn, version)) => {
+                if version[0] < 2 {
+                    warn!(
+                        "JSN format version {version:?} is not supported. Please re-save with the latest editor.",
+                    );
                     return;
                 }
-            },
+                if version[0] < 3 {
+                    info!("Migrating JSN v2 scene to v3 format");
+                }
+                jsn
+            }
+            Err(err) => {
+                warn!("Failed to parse JSN file: {err}");
+                return;
+            }
         };
 
         clear_scene_entities(world);

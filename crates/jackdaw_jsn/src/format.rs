@@ -305,3 +305,154 @@ pub struct JsnProjectConfig {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub last_active_tab: usize,
 }
+
+/// Return the current type path for a component key found in a `.jsn` file,
+/// or `None` when the key is already current. Scene component types moved out
+/// of this crate into `jackdaw_scene_types`; files written before that move
+/// still carry the old paths.
+pub fn canonical_type_path(path: &str) -> Option<String> {
+    if path == "jackdaw_jsn::ast::JsnNodeId" {
+        return Some(jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH.to_string());
+    }
+    if let Some(rest) = path.strip_prefix("jackdaw_jsn::types::") {
+        return Some(format!("jackdaw_scene_types::types::{rest}"));
+    }
+    if let Some(rest) = path.strip_prefix("jackdaw_jsn::editor_meta::") {
+        return Some(format!("jackdaw_scene_types::{rest}"));
+    }
+    None
+}
+
+/// Rewrite every legacy component type path in `scene` to its current path,
+/// including the keys of the asset manifest and the nested component maps
+/// inside prefab baselines. Run once at the parse boundary so everything
+/// downstream (registry lookups, AST keys) sees only current paths.
+pub fn canonicalize_scene(scene: &mut JsnScene) {
+    for entity in &mut scene.scene {
+        canonicalize_components(&mut entity.components);
+    }
+    let assets = std::mem::take(&mut scene.assets.0);
+    scene.assets.0 = assets
+        .into_iter()
+        .map(|(type_path, entries)| {
+            let key = canonical_type_path(&type_path).unwrap_or(type_path);
+            (key, entries)
+        })
+        .collect();
+}
+
+fn canonicalize_components(components: &mut HashMap<String, serde_json::Value>) {
+    let entries = std::mem::take(components);
+    for (type_path, mut value) in entries {
+        let key = canonical_type_path(&type_path).unwrap_or(type_path);
+        if key == "jackdaw_scene_types::types::JsnPrefabBaseline"
+            && let Some(baseline_components) =
+                value.get_mut("components").and_then(|c| c.as_object_mut())
+        {
+            let inner = std::mem::take(baseline_components);
+            for (inner_path, inner_value) in inner {
+                let inner_key = canonical_type_path(&inner_path).unwrap_or(inner_path);
+                baseline_components.insert(inner_key, inner_value);
+            }
+        }
+        components.insert(key, value);
+    }
+}
+
+#[cfg(test)]
+mod canonicalize_tests {
+    use super::*;
+
+    #[test]
+    fn moved_type_paths_rewrite_to_scene_types() {
+        assert_eq!(
+            canonical_type_path("jackdaw_jsn::types::Brush").as_deref(),
+            Some("jackdaw_scene_types::types::Brush")
+        );
+        assert_eq!(
+            canonical_type_path("jackdaw_jsn::ast::JsnNodeId").as_deref(),
+            Some(jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH)
+        );
+        assert_eq!(
+            canonical_type_path("jackdaw_jsn::editor_meta::EditorHidden").as_deref(),
+            Some("jackdaw_scene_types::EditorHidden")
+        );
+        assert_eq!(
+            canonical_type_path("bevy_transform::components::transform::Transform"),
+            None
+        );
+    }
+
+    #[test]
+    fn canonicalize_scene_rewrites_components_assets_and_baselines() {
+        let json = serde_json::json!({
+            "jsn": {"format_version": [3, 0, 0], "editor_version": "0.5.0", "bevy_version": "0.19"},
+            "metadata": {"name": "t"},
+            "assets": {
+                "jackdaw_jsn::types::Terrain": {"#T": {}}
+            },
+            "editor": null,
+            "scene": [{
+                "components": {
+                    "jackdaw_jsn::types::Brush": {"x": 1},
+                    "jackdaw_jsn::types::JsnPrefabBaseline": {
+                        "components": {"jackdaw_jsn::types::Terrain": {"y": 2}}
+                    }
+                }
+            }]
+        });
+        let mut scene: JsnScene = serde_json::from_value(json).expect("fixture parses");
+        canonicalize_scene(&mut scene);
+
+        let components = &scene.scene[0].components;
+        assert!(components.contains_key("jackdaw_scene_types::types::Brush"));
+        let baseline = &components["jackdaw_scene_types::types::JsnPrefabBaseline"];
+        assert!(
+            baseline["components"]
+                .as_object()
+                .expect("baseline components object")
+                .contains_key("jackdaw_scene_types::types::Terrain")
+        );
+        assert!(
+            scene
+                .assets
+                .0
+                .contains_key("jackdaw_scene_types::types::Terrain")
+        );
+    }
+}
+
+/// Header-only probe used to pick the right parser for a `.jsn` file.
+#[derive(Deserialize)]
+struct VersionProbe {
+    jsn: JsnHeader,
+}
+
+/// Parse `.jsn` text into a current-format scene, dispatching on the header's
+/// `format_version` (v2 files migrate to v3) and rewriting legacy component
+/// type paths. Returns the scene together with the file's original version.
+///
+/// Version dispatch matters: v2 and v3 share their top-level field names and
+/// every v3 entity field is optional, so v2 text also parses as v3, silently
+/// dropping the structural name/transform/visibility fields. The header is
+/// the only reliable discriminator.
+pub fn parse_scene(text: &str) -> Result<(JsnScene, [u32; 3]), serde_json::Error> {
+    let version = serde_json::from_str::<VersionProbe>(text)
+        .map(|p| p.jsn.format_version)
+        .unwrap_or([3, 0, 0]);
+
+    let mut scene = if version[0] < 3 {
+        serde_json::from_str::<JsnSceneV2>(text)?.migrate_to_v3()
+    } else {
+        match serde_json::from_str::<JsnScene>(text) {
+            Ok(scene) => scene,
+            // Belt and suspenders for files with a v3 header but a v2 body.
+            Err(v3_err) => match serde_json::from_str::<JsnSceneV2>(text) {
+                Ok(v2) => v2.migrate_to_v3(),
+                Err(_) => return Err(v3_err),
+            },
+        }
+    };
+    canonicalize_scene(&mut scene);
+    Ok((scene, version))
+}

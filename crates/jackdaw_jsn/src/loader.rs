@@ -10,7 +10,7 @@ use bevy::{
 };
 use serde::de::DeserializeSeed;
 
-use crate::format::{JsnEntity, JsnScene, JsnSceneV2};
+use crate::format::JsnEntity;
 
 /// Asset loader for `.jsn` files -> `DynamicWorld`.
 #[derive(Debug, TypePath)]
@@ -46,13 +46,8 @@ impl AssetLoader for JsnAssetLoader {
 
         let text = std::str::from_utf8(&bytes).map_err(|e| JsnLoadError::Parse(e.to_string()))?;
 
-        let jsn: JsnScene = match serde_json::from_str(text) {
-            Ok(jsn) => jsn,
-            Err(v3_err) => match serde_json::from_str::<JsnSceneV2>(text) {
-                Ok(v2) => v2.migrate_to_v3(),
-                Err(_) => return Err(JsnLoadError::Parse(v3_err.to_string())),
-            },
-        };
+        let (jsn, _version) =
+            crate::format::parse_scene(text).map_err(|e| JsnLoadError::Parse(e.to_string()))?;
 
         // Build a DynamicScene by spawning into a temporary world
         let scene =

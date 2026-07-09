@@ -125,7 +125,10 @@ fn adapt_patches(
                 let values = adapt_tuple_values(bevy_ast, &tuple.1);
                 let pe = jd_ast
                     .world
-                    .spawn(BsnPatch::TupleStruct(BsnTupleStructData { type_path, values }))
+                    .spawn(BsnPatch::TupleStruct(BsnTupleStructData {
+                        type_path,
+                        values,
+                    }))
                     .id();
                 jd_patch_entities.push(pe);
             }
@@ -159,7 +162,10 @@ fn adapt_struct_fields(bevy_ast: &BsnAst, fields: &[ParserBsnField]) -> BsnStruc
 }
 
 fn adapt_tuple_values(bevy_ast: &BsnAst, expr_ids: &[Entity]) -> Vec<BsnValue> {
-    expr_ids.iter().map(|&id| adapt_expr(bevy_ast, id)).collect()
+    expr_ids
+        .iter()
+        .map(|&id| adapt_expr(bevy_ast, id))
+        .collect()
 }
 
 fn adapt_expr(bevy_ast: &BsnAst, expr_id: Entity) -> BsnValue {

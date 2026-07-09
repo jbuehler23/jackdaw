@@ -85,8 +85,7 @@ fn emit_patches(ast: &SceneBsnAst, patches_entity: Entity, indent: usize, out: &
         match patch {
             BsnPatch::Name(name) => {
                 write_indent(indent, out);
-                if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.is_empty()
-                {
+                if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.is_empty() {
                     writeln!(out, "#{name}").unwrap();
                 } else {
                     writeln!(out, "#\"{}\"", escape_string(name)).unwrap();

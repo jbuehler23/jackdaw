@@ -158,7 +158,10 @@ fn roundtrip_preserves_structure_and_emitted_text_is_stable() {
 
     // Text-level fixpoint: emitting the re-parsed document reproduces the
     // same text (no drift across a second round trip).
-    assert_eq!(emitted1, emitted2, "emitted text must be stable under re-emission");
+    assert_eq!(
+        emitted1, emitted2,
+        "emitted text must be stable under re-emission"
+    );
 
     // One more round trip for good measure, matching the exact assertion
     // shape requested: emit(parse(emit(parse(x)))) == emit(parse(x)).
@@ -174,7 +177,10 @@ fn emit_is_byte_identical_across_repeated_calls() {
 
     let a = emit_scene(&ast);
     let b = emit_scene(&ast);
-    assert_eq!(a, b, "emitting the same document twice must be byte-identical");
+    assert_eq!(
+        a, b,
+        "emitting the same document twice must be byte-identical"
+    );
 }
 
 #[test]
@@ -208,7 +214,10 @@ fn emit_preserves_document_field_order() {
 
     let text = emit_scene(&ast);
     let expected = "test::Ordered {\n    z_field: 1,\n    a_field: 2,\n    m_field: 3,\n}\n";
-    assert_eq!(text, expected, "field emission must follow document Vec order");
+    assert_eq!(
+        text, expected,
+        "field emission must follow document Vec order"
+    );
 }
 
 #[test]
@@ -242,7 +251,10 @@ fn emit_map_sorts_by_key_and_roundtrips() {
     let alpha = first.find("alpha").expect("alpha present");
     let bravo = first.find("bravo").expect("bravo present");
     let charlie = first.find("charlie").expect("charlie present");
-    assert!(alpha < bravo && bravo < charlie, "map keys must emit sorted:\n{first}");
+    assert!(
+        alpha < bravo && bravo < charlie,
+        "map keys must emit sorted:\n{first}"
+    );
 
     // Re-parses to a structurally equal document (entries preserved).
     let reparsed = parse_bsn_text(&first).expect("emitted map should re-parse");
@@ -284,10 +296,17 @@ fn emit_empty_map_roundtrips() {
     ast.roots.push(entity);
 
     let text = emit_scene(&ast);
-    assert!(text.contains("data: map[]"), "empty map emits as map[]:\n{text}");
+    assert!(
+        text.contains("data: map[]"),
+        "empty map emits as map[]:\n{text}"
+    );
 
     let reparsed = parse_bsn_text(&text).expect("empty map should re-parse");
-    assert_eq!(text, emit_scene(&reparsed), "empty map round trip is a fixpoint");
+    assert_eq!(
+        text,
+        emit_scene(&reparsed),
+        "empty map round trip is a fixpoint"
+    );
 }
 
 #[test]
@@ -357,6 +376,7 @@ fn component_to_bsn_patch_with_assets_resolves_handle_to_path() {
     let ctx = BsnAssetContext {
         asset_server: &asset_server,
         parent_path: Path::new(""),
+        asset_names: None,
     };
     let patch = component_to_bsn_patch_with_assets(&component, &reg, &ctx);
 
@@ -371,6 +391,77 @@ fn component_to_bsn_patch_with_assets_resolves_handle_to_path() {
         .expect("target field emitted");
     match &field.value {
         BsnValue::String(path) => assert_eq!(path, "probes/thing.probe"),
-        other => panic!("expected the handle to resolve to a path string, got {}", describe_value(other)),
+        other => panic!(
+            "expected the handle to resolve to a path string, got {}",
+            describe_value(other)
+        ),
+    }
+}
+
+#[test]
+fn handle_without_path_emits_catalog_name() {
+    use bevy::app::{App, TaskPoolPlugin};
+    use bevy::asset::{
+        Asset, AssetApp, AssetPlugin, AssetServer, Assets, Handle, ReflectHandle, UntypedAssetId,
+    };
+    use bevy::ecs::reflect::AppTypeRegistry;
+    use bevy::platform::collections::HashMap;
+    use bevy::reflect::Reflect;
+    use std::path::Path;
+
+    use jackdaw_bsn::{BsnAssetContext, component_to_bsn_patch_with_assets};
+
+    #[derive(Asset, Reflect, Default)]
+    struct ProbeAsset;
+
+    #[derive(Reflect)]
+    struct HasHandle {
+        target: Handle<ProbeAsset>,
+    }
+
+    let mut app = App::new();
+    app.add_plugins((TaskPoolPlugin::default(), AssetPlugin::default()));
+    app.init_asset::<ProbeAsset>();
+
+    let registry = AppTypeRegistry::default();
+    registry.write().register::<HasHandle>();
+    registry.write().register::<Handle<ProbeAsset>>();
+    registry
+        .write()
+        .register_type_data::<Handle<ProbeAsset>, ReflectHandle>();
+    app.world_mut().insert_resource(registry);
+
+    // An asset added directly to the store has no filesystem path.
+    let handle = app
+        .world_mut()
+        .resource_mut::<Assets<ProbeAsset>>()
+        .add(ProbeAsset);
+    let mut names: HashMap<UntypedAssetId, String> = HashMap::default();
+    names.insert(handle.id().untyped(), "#InlineMat".to_string());
+
+    let asset_server = app.world().resource::<AssetServer>().clone();
+    let registry = app.world().resource::<AppTypeRegistry>().clone();
+    let reg = registry.read();
+
+    let ctx = BsnAssetContext {
+        asset_server: &asset_server,
+        parent_path: Path::new(""),
+        asset_names: Some(&names),
+    };
+    let component = HasHandle { target: handle };
+    let patch = component_to_bsn_patch_with_assets(&component, &reg, &ctx);
+
+    let BsnPatch::Struct(data) = patch else {
+        panic!("expected a Struct patch");
+    };
+    let field = data
+        .fields
+        .0
+        .iter()
+        .find(|f| f.name == "target")
+        .expect("target field emitted");
+    match &field.value {
+        BsnValue::String(name) => assert_eq!(name, "#InlineMat"),
+        other => panic!("expected the catalog name, got {}", describe_value(other)),
     }
 }

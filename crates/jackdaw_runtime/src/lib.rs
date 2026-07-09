@@ -16,7 +16,7 @@ use bevy::reflect::serde::{ReflectDeserializerProcessor, TypedReflectDeserialize
 use bevy::reflect::{TypeRegistration, TypeRegistry};
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
 use jackdaw_jsn::JsnPlugin;
-use jackdaw_jsn::format::{JsnAssets, JsnCatalog, JsnScene, JsnSceneV2};
+use jackdaw_jsn::format::{JsnAssets, JsnCatalog, JsnScene};
 use serde::Deserializer;
 use serde::de::{DeserializeSeed, Visitor};
 
@@ -193,13 +193,8 @@ impl AssetLoader for JackdawSceneLoader {
         let text =
             std::str::from_utf8(&bytes).map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
 
-        let jsn: JsnScene = match serde_json::from_str(text) {
-            Ok(jsn) => jsn,
-            Err(v3_err) => match serde_json::from_str::<JsnSceneV2>(text) {
-                Ok(v2) => v2.migrate_to_v3(),
-                Err(_) => return Err(JackdawLoadError::Parse(v3_err.to_string())),
-            },
-        };
+        let (jsn, _version) = jackdaw_jsn::format::parse_scene(text)
+            .map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
 
         let source_path = load_context.path().path();
         let parent_path = source_path.parent().unwrap_or(Path::new("")).to_owned();

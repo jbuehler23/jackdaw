@@ -158,7 +158,11 @@ fn apply_type_patch(world: &mut World, entity: Entity, type_path: &str) {
             return;
         };
         let value = reflect_default.default();
-        reflect_component.insert(&mut world.entity_mut(entity), value.as_partial_reflect(), &reg);
+        reflect_component.insert(
+            &mut world.entity_mut(entity),
+            value.as_partial_reflect(),
+            &reg,
+        );
         return;
     }
 
@@ -182,7 +186,11 @@ fn apply_type_patch(world: &mut World, entity: Entity, type_path: &str) {
             let dynamic_enum = DynamicEnum::new(variant_name, DynamicVariant::Unit);
             e.apply(&dynamic_enum);
         }
-        reflect_component.insert(&mut world.entity_mut(entity), value.as_partial_reflect(), &reg);
+        reflect_component.insert(
+            &mut world.entity_mut(entity),
+            value.as_partial_reflect(),
+            &reg,
+        );
     }
 }
 
@@ -223,7 +231,11 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
             }
         }
 
-        reflect_component.insert(&mut world.entity_mut(entity), value.as_partial_reflect(), &reg);
+        reflect_component.insert(
+            &mut world.entity_mut(entity),
+            value.as_partial_reflect(),
+            &reg,
+        );
         return;
     }
 
@@ -312,7 +324,11 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
             }
         }
 
-        reflect_component.insert(&mut world.entity_mut(entity), value.as_partial_reflect(), &reg);
+        reflect_component.insert(
+            &mut world.entity_mut(entity),
+            value.as_partial_reflect(),
+            &reg,
+        );
     }
 }
 
@@ -360,9 +376,6 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
     let Some(registration) = reg.get_with_type_path(&data.type_path) else {
         return;
     };
-    let Some(reflect_default) = registration.data::<ReflectDefault>() else {
-        return;
-    };
     let Some(reflect_component) = registration.data::<ReflectComponent>() else {
         return;
     };
@@ -371,16 +384,50 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
         return;
     };
 
-    // Start from existing component value if present, otherwise from default.
-    let mut value: Box<dyn PartialReflect> = {
+    // Start from the existing component value if present, else from the
+    // type's default. A tuple struct without a default (like a stable-id
+    // newtype) is fully specified by its patch values: build it directly
+    // from the converted values and insert.
+    let existing: Option<Box<dyn PartialReflect>> = {
         let Ok(entity_ref) = world.get_entity(entity) else {
             return;
         };
-        if let Some(existing) = reflect_component.reflect(entity_ref) {
-            existing.to_dynamic()
-        } else {
-            reflect_default.default().into_partial_reflect()
-        }
+        reflect_component
+            .reflect(entity_ref)
+            .map(bevy::prelude::PartialReflect::to_dynamic)
+    };
+    let mut value: Box<dyn PartialReflect> = match existing {
+        Some(existing) => existing,
+        None => match registration.data::<ReflectDefault>() {
+            Some(reflect_default) => reflect_default.default().into_partial_reflect(),
+            None => {
+                let mut dynamic = bevy::reflect::tuple_struct::DynamicTupleStruct::default();
+                for (i, bsn_val) in data.values.iter().enumerate() {
+                    let Some(field_info) = tuple_info.field_at(i) else {
+                        return;
+                    };
+                    let Some(reflected) = bsn_value_to_reflect(
+                        bsn_val,
+                        field_info.ty().id(),
+                        &reg,
+                        asset_server.as_ref(),
+                    ) else {
+                        return;
+                    };
+                    dynamic.insert_boxed(reflected);
+                }
+                if dynamic.field_len() != tuple_info.field_len() {
+                    return;
+                }
+                dynamic.set_represented_type(Some(registration.type_info()));
+                reflect_component.insert(
+                    &mut world.entity_mut(entity),
+                    dynamic.as_partial_reflect(),
+                    &reg,
+                );
+                return;
+            }
+        },
     };
 
     if let ReflectMut::TupleStruct(ts) = value.reflect_mut() {
@@ -397,7 +444,11 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
         }
     }
 
-    reflect_component.insert(&mut world.entity_mut(entity), value.as_partial_reflect(), &reg);
+    reflect_component.insert(
+        &mut world.entity_mut(entity),
+        value.as_partial_reflect(),
+        &reg,
+    );
 }
 
 /// Convert a [`BsnValue`] to a boxed reflected value given the expected type.
@@ -474,7 +525,13 @@ pub fn bsn_value_to_reflect(
         BsnValue::Float(f) => float_to_reflect(*f, expected),
         BsnValue::Int(i) => int_to_reflect(*i, expected),
         BsnValue::Bool(b) => Some(Box::new(*b)),
-        BsnValue::String(s) => Some(Box::new(s.clone())),
+        BsnValue::String(s) => {
+            if expected == TypeId::of::<std::borrow::Cow<'static, str>>() {
+                Some(Box::new(std::borrow::Cow::<'static, str>::Owned(s.clone())))
+            } else {
+                Some(Box::new(s.clone()))
+            }
+        }
         BsnValue::Type(type_path) => type_value_to_reflect(type_path, expected, registry),
         BsnValue::Struct(data) => struct_value_to_reflect(data, registry, asset_server),
         BsnValue::TupleStruct(data) => tuple_struct_value_to_reflect(data, registry, asset_server),
@@ -534,8 +591,12 @@ fn enum_variant_value_to_reflect(
             let mut dynamic_struct = bevy::reflect::structs::DynamicStruct::default();
             for field in &data.fields.0 {
                 let field_info = struct_var.field(&field.name)?;
-                let reflected =
-                    bsn_value_to_reflect(&field.value, field_info.type_id(), registry, asset_server)?;
+                let reflected = bsn_value_to_reflect(
+                    &field.value,
+                    field_info.type_id(),
+                    registry,
+                    asset_server,
+                )?;
                 dynamic_struct.insert_boxed(&field.name, reflected);
             }
             (name.to_string(), DynamicVariant::Struct(dynamic_struct))
@@ -622,8 +683,22 @@ fn struct_value_to_reflect(
     asset_server: Option<&AssetServer>,
 ) -> Option<Box<dyn PartialReflect>> {
     let registration = registry.get_with_type_path(&data.type_path)?;
-    let reflect_default = registration.data::<ReflectDefault>()?;
     let struct_info = registration.type_info().as_struct().ok()?;
+
+    // Without a default to seed, build a dynamic struct from the emitted
+    // fields; the receiving container converts it via `FromReflect` (ignored
+    // fields fall back to their own defaults).
+    let Some(reflect_default) = registration.data::<ReflectDefault>() else {
+        let mut dynamic = bevy::reflect::structs::DynamicStruct::default();
+        for field in &data.fields.0 {
+            let field_info = struct_info.field(&field.name)?;
+            let reflected =
+                bsn_value_to_reflect(&field.value, field_info.ty().id(), registry, asset_server)?;
+            dynamic.insert_boxed(&field.name, reflected);
+        }
+        dynamic.set_represented_type(Some(registration.type_info()));
+        return Some(Box::new(dynamic));
+    };
 
     let mut value = reflect_default.default();
     if let ReflectMut::Struct(s) = value.reflect_mut() {
@@ -646,8 +721,19 @@ fn tuple_struct_value_to_reflect(
     asset_server: Option<&AssetServer>,
 ) -> Option<Box<dyn PartialReflect>> {
     let registration = registry.get_with_type_path(&data.type_path)?;
-    let reflect_default = registration.data::<ReflectDefault>()?;
     let tuple_info = registration.type_info().as_tuple_struct().ok()?;
+
+    let Some(reflect_default) = registration.data::<ReflectDefault>() else {
+        let mut dynamic = bevy::reflect::tuple_struct::DynamicTupleStruct::default();
+        for (i, bsn_val) in data.values.iter().enumerate() {
+            let field_info = tuple_info.field_at(i)?;
+            let reflected =
+                bsn_value_to_reflect(bsn_val, field_info.ty().id(), registry, asset_server)?;
+            dynamic.insert_boxed(reflected);
+        }
+        dynamic.set_represented_type(Some(registration.type_info()));
+        return Some(Box::new(dynamic));
+    };
 
     let mut value = reflect_default.default();
     if let ReflectMut::TupleStruct(ts) = value.reflect_mut() {
@@ -701,8 +787,7 @@ fn map_value_to_reflect(
 
     let mut dynamic_map = DynamicMap::default();
     for (key, value) in entries {
-        if let Some(reflected_key) =
-            bsn_value_to_reflect(key, key_type_id, registry, asset_server)
+        if let Some(reflected_key) = bsn_value_to_reflect(key, key_type_id, registry, asset_server)
             && let Some(reflected_value) =
                 bsn_value_to_reflect(value, value_type_id, registry, asset_server)
         {
@@ -923,9 +1008,7 @@ fn navigate_named<'a>(value: &'a BsnValue, name: &str) -> Option<&'a BsnValue> {
 fn index_into_value<'a>(value: &'a BsnValue, inner: &str) -> Option<&'a BsnValue> {
     match value {
         BsnValue::List(items) => inner.parse::<usize>().ok().and_then(|i| items.get(i)),
-        BsnValue::TupleStruct(data) => {
-            inner.parse::<usize>().ok().and_then(|i| data.values.get(i))
-        }
+        BsnValue::TupleStruct(data) => inner.parse::<usize>().ok().and_then(|i| data.values.get(i)),
         BsnValue::Map(entries) => entries
             .iter()
             .find(|(k, _)| key_matches(k, inner))
@@ -1012,7 +1095,10 @@ fn set_nested_value(
             set_nested_value(&mut field.value, rest, value, &nested_type_path, registry);
         }
         BsnValue::TupleStruct(data) => {
-            if let Some(target) = segment.parse::<usize>().ok().and_then(|i| data.values.get_mut(i))
+            if let Some(target) = segment
+                .parse::<usize>()
+                .ok()
+                .and_then(|i| data.values.get_mut(i))
             {
                 set_nested_value(target, rest, value, "", registry);
             }
@@ -1044,7 +1130,10 @@ fn navigate_named_mut<'a>(value: &'a mut BsnValue, name: &str) -> Option<&'a mut
             .parse::<usize>()
             .ok()
             .and_then(move |i| data.values.get_mut(i)),
-        BsnValue::List(items) => name.parse::<usize>().ok().and_then(move |i| items.get_mut(i)),
+        BsnValue::List(items) => name
+            .parse::<usize>()
+            .ok()
+            .and_then(move |i| items.get_mut(i)),
         BsnValue::Map(entries) => entries
             .iter_mut()
             .find(|(k, _)| key_matches(k, name))
@@ -1299,7 +1388,12 @@ mod field_navigation_matrix {
             fields: BsnStructFields::default(),
         }));
 
-        let result = get_bsn_field(&ast, patches_entity, "not::A::RegisteredType", "translation");
+        let result = get_bsn_field(
+            &ast,
+            patches_entity,
+            "not::A::RegisteredType",
+            "translation",
+        );
         assert!(result.is_none());
     }
 
@@ -1618,11 +1712,18 @@ mod apply_value_tests {
 
         let patch = {
             let registry = world.resource::<AppTypeRegistry>().read();
-            component_to_bsn_patch(&EnumFieldHolder { prop: Prop::Number(7.0) }, &registry)
+            component_to_bsn_patch(
+                &EnumFieldHolder {
+                    prop: Prop::Number(7.0),
+                },
+                &registry,
+            )
         };
         let entity = round_trip_patch(&mut world, patch);
 
-        let holder = world.get::<EnumFieldHolder>(entity).expect("holder applied");
+        let holder = world
+            .get::<EnumFieldHolder>(entity)
+            .expect("holder applied");
         assert_eq!(holder.prop, Prop::Number(7.0));
     }
 

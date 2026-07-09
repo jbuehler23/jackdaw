@@ -127,9 +127,9 @@ pub fn create_entity_in_ast(world: &mut World, entity: Entity, parent: Option<En
         ast_entity
     };
 
-    world
-        .entity_mut(entity)
-        .insert(crate::AstNodeRef { patches_entity: ast_entity });
+    world.entity_mut(entity).insert(crate::AstNodeRef {
+        patches_entity: ast_entity,
+    });
 }
 
 /// Remove an ECS entity's AST node and unlink it.
@@ -265,9 +265,9 @@ mod tests {
         let ast_entity = ast.create_entity_node(Vec::new());
         ast.add_to_roots(ast_entity);
         ast.link(entity, ast_entity);
-        world
-            .entity_mut(entity)
-            .insert(AstNodeRef { patches_entity: ast_entity });
+        world.entity_mut(entity).insert(AstNodeRef {
+            patches_entity: ast_entity,
+        });
 
         sync_to_ast(&mut world, entity, TypeId::of::<Transform>());
 

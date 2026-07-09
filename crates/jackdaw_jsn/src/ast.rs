@@ -5,12 +5,12 @@ use bevy::{prelude::*, reflect::NamedField};
 
 use crate::format::{JsnAssets, JsnEntity, JsnMetadata, JsnScene};
 
-/// Stable per-node identity, format-independent (identity, not JSON), so it
-/// lives in `jackdaw_scene_types`. `JsnEntityNode` (jackdaw_jsn's own API)
-/// stores it directly rather than re-exporting the type under a local alias.
-use jackdaw_scene_types::SceneNodeId;
 /// Lower bound of the sparse id range.
 use jackdaw_scene_types::SPARSE_MIN;
+/// Stable per-node identity, format-independent (identity, not JSON), so it
+/// lives in `jackdaw_scene_types`. `JsnEntityNode` (`jackdaw_jsn`'s own API)
+/// stores it directly rather than re-exporting the type under a local alias.
+use jackdaw_scene_types::SceneNodeId;
 
 /// Reflect type path for [`SceneNodeId`], used when projecting the
 /// structural node id to and from the reflected-component representation.

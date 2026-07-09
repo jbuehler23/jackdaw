@@ -87,7 +87,11 @@ fn loads_example_fixture() {
                                 panic!("translation should be a nested struct");
                             };
                             assert!(
-                                inner.fields.0.iter().all(|f| matches!(f.value, BsnValue::Float(_))),
+                                inner
+                                    .fields
+                                    .0
+                                    .iter()
+                                    .all(|f| matches!(f.value, BsnValue::Float(_))),
                                 "translation components should be floats"
                             );
                             saw_transform_translation_struct = true;
@@ -99,8 +103,14 @@ fn loads_example_fixture() {
         }
     }
 
-    assert!(saw_scene_root_tuple, "expected a SceneRoot(...) tuple patch");
-    assert!(saw_template, "expected an @CascadeShadowConfigBuilder template patch");
+    assert!(
+        saw_scene_root_tuple,
+        "expected a SceneRoot(...) tuple patch"
+    );
+    assert!(
+        saw_template,
+        "expected an @CascadeShadowConfigBuilder template patch"
+    );
     assert!(saw_intensity_float, "expected an intensity float field");
     assert!(
         saw_transform_translation_struct,

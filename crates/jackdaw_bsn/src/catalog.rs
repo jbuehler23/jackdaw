@@ -75,8 +75,7 @@ pub fn load_bsn_assets(
         };
         let type_id = registration.type_id();
 
-        let Some(value) =
-            bsn_value_to_reflect(&asset_value, type_id, &reg, asset_server.as_ref())
+        let Some(value) = bsn_value_to_reflect(&asset_value, type_id, &reg, asset_server.as_ref())
         else {
             continue;
         };
@@ -90,7 +89,10 @@ pub fn load_bsn_assets(
 
 /// Reconstruct the asset's type path and a [`BsnValue`] from an entry root's
 /// non-name patch.
-fn asset_value_from_root(ast: &SceneBsnAst, root: bevy::ecs::entity::Entity) -> Option<(String, BsnValue)> {
+fn asset_value_from_root(
+    ast: &SceneBsnAst,
+    root: bevy::ecs::entity::Entity,
+) -> Option<(String, BsnValue)> {
     let patches = ast.get_patches(root)?;
     for &pe in &patches.0 {
         match ast.get_patch(pe)? {
@@ -147,6 +149,7 @@ pub fn serialize_assets_to_bsn(world: &World, assets: &[CatalogAssetRef]) -> Str
             let ctx = BsnAssetContext {
                 asset_server: server,
                 parent_path: Path::new(""),
+                asset_names: None,
             };
             component_to_bsn_patch_with_assets(asset_value.as_partial_reflect(), &reg, &ctx)
         } else {
@@ -155,7 +158,10 @@ pub fn serialize_assets_to_bsn(world: &World, assets: &[CatalogAssetRef]) -> Str
 
         let name_patch = ast.world.spawn(BsnPatch::Name(asset_ref.name.clone())).id();
         let type_patch = ast.world.spawn(patch).id();
-        let root = ast.world.spawn(BsnPatches(vec![name_patch, type_patch])).id();
+        let root = ast
+            .world
+            .spawn(BsnPatches(vec![name_patch, type_patch]))
+            .id();
         ast.add_to_roots(root);
     }
 
@@ -318,10 +324,7 @@ mod tests {
 
     fn asset_app() -> App {
         let mut app = App::new();
-        app.add_plugins((
-            bevy::app::TaskPoolPlugin::default(),
-            AssetPlugin::default(),
-        ));
+        app.add_plugins((bevy::app::TaskPoolPlugin::default(), AssetPlugin::default()));
         app.init_asset::<Texture>();
         app.init_asset::<TexturedMaterial>();
         app.register_asset_reflect::<Texture>();
@@ -412,10 +415,7 @@ mod tests {
     #[test]
     fn option_handle_none_field_round_trips_as_none() {
         let mut app = App::new();
-        app.add_plugins((
-            bevy::app::TaskPoolPlugin::default(),
-            AssetPlugin::default(),
-        ));
+        app.add_plugins((bevy::app::TaskPoolPlugin::default(), AssetPlugin::default()));
         app.init_asset::<Texture>();
         app.init_asset::<OptionalTextureMaterial>();
         app.register_asset_reflect::<Texture>();

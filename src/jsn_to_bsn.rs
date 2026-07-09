@@ -63,13 +63,8 @@ pub fn convert_jsn_scene_to_bsn(
 /// Parse `.jsn` text (v3, falling back to the v2 layout) and convert it. Mirrors
 /// the loader's parse boundary so migration tooling can accept raw file bytes.
 pub fn convert_jsn_text(world: &mut World, text: &str) -> Result<ConvertedScene, BevyError> {
-    let scene: JsnScene = match serde_json::from_str(text) {
-        Ok(scene) => scene,
-        Err(v3_err) => match serde_json::from_str::<jackdaw_jsn::format::JsnSceneV2>(text) {
-            Ok(v2) => v2.migrate_to_v3(),
-            Err(_) => return Err(BevyError::from(format!("could not parse .jsn: {v3_err}"))),
-        },
-    };
+    let (scene, _version) = jackdaw_jsn::format::parse_scene(text)
+        .map_err(|e| BevyError::from(format!("could not parse .jsn: {e}")))?;
     convert_jsn_scene_to_bsn(world, &scene)
 }
 
@@ -80,6 +75,15 @@ pub fn convert_jsn_scene_to_bsn_at(
     scene: &JsnScene,
     parent_path: &Path,
 ) -> Result<ConvertedScene, BevyError> {
+    // Files written before the scene types moved crates carry old component
+    // type paths; rewrite them so registry lookups resolve.
+    let scene = {
+        let mut scene = scene.clone();
+        jackdaw_jsn::format::canonicalize_scene(&mut scene);
+        scene
+    };
+    let scene = &scene;
+
     // Resolve inline assets first so component handles can bind to them, then
     // spawn the scene with the Handle-aware loader (materials/textures resolve
     // to real handles instead of the null placeholder JSON stores for them).
@@ -91,7 +95,14 @@ pub fn convert_jsn_scene_to_bsn_at(
     let saved_ast = world.remove_resource::<SceneBsnAst>();
     world.insert_resource(SceneBsnAst::default());
 
-    let scene_bsn = build_scene_bsn(world, &spawned, parent_path);
+    // Inline assets have no filesystem path; emit their reference names.
+    let asset_names: bevy::platform::collections::HashMap<bevy::asset::UntypedAssetId, String> =
+        local_assets
+        .iter()
+        .map(|(name, handle)| (handle.id(), name.clone()))
+        .collect();
+
+    let scene_bsn = build_scene_bsn(world, &spawned, parent_path, &asset_names);
 
     world.remove_resource::<SceneBsnAst>();
     if let Some(ast) = saved_ast {
@@ -105,7 +116,10 @@ pub fn convert_jsn_scene_to_bsn_at(
     } else {
         serialize_assets_to_bsn(world, &asset_refs)
     };
-    let asset_count = catalog_bsn.matches('#').count();
+    let asset_count = catalog_bsn
+        .lines()
+        .filter(|line| line.trim_start().starts_with('#'))
+        .count();
 
     let entity_count = spawned.len();
 
@@ -145,7 +159,12 @@ fn skip_type_ids() -> HashSet<TypeId> {
 }
 
 /// Reflect every spawned entity into the fresh `SceneBsnAst` and emit it.
-fn build_scene_bsn(world: &mut World, spawned: &[Entity], parent_path: &Path) -> String {
+fn build_scene_bsn(
+    world: &mut World,
+    spawned: &[Entity],
+    parent_path: &Path,
+    asset_names: &bevy::platform::collections::HashMap<bevy::asset::UntypedAssetId, String>,
+) -> String {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let asset_server = world.resource::<AssetServer>().clone();
     let skip = skip_type_ids();
@@ -176,6 +195,7 @@ fn build_scene_bsn(world: &mut World, spawned: &[Entity], parent_path: &Path) ->
             let ctx = BsnAssetContext {
                 asset_server: &asset_server,
                 parent_path,
+                asset_names: Some(asset_names),
             };
             let entity_ref = world.entity(entity);
             for registration in reg.iter() {

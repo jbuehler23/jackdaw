@@ -8,7 +8,7 @@ use bevy::ecs::world::World;
 use bevy::math::Vec3;
 use bevy::transform::components::Transform;
 
-use jackdaw_bsn::{apply_dirty_ast_patches, parse_bsn_text, spawn_from_ast, SceneBsnAst};
+use jackdaw_bsn::{SceneBsnAst, apply_dirty_ast_patches, parse_bsn_text, spawn_from_ast};
 
 #[test]
 fn bsn_text_materializes_into_ecs() {
@@ -49,11 +49,7 @@ bevy_ecs::hierarchy::Children [
     let root = spawned
         .iter()
         .copied()
-        .find(|&e| {
-            world
-                .get::<Name>(e)
-                .is_some_and(|n| n.as_str() == "Root")
-        })
+        .find(|&e| world.get::<Name>(e).is_some_and(|n| n.as_str() == "Root"))
         .expect("root entity with Name(\"Root\")");
 
     // The root's Transform component exists and the overridden scalar landed,
@@ -91,9 +87,9 @@ bevy_ecs::hierarchy::Children [
 /// map's `FromReflect`-backed `insert_boxed` does the key/value conversion).
 #[test]
 fn bsn_map_literal_materializes_into_concrete_hashmap() {
+    use bevy::ecs::reflect::ReflectComponent;
     use bevy::reflect::Reflect;
     use bevy::reflect::prelude::ReflectDefault;
-    use bevy::ecs::reflect::ReflectComponent;
     use std::collections::HashMap;
 
     #[derive(bevy::ecs::component::Component, Reflect, Default)]
@@ -138,9 +134,9 @@ fn bsn_map_literal_materializes_into_concrete_hashmap() {
 /// structs.
 #[test]
 fn bsn_map_with_struct_values_materializes() {
+    use bevy::ecs::reflect::ReflectComponent;
     use bevy::reflect::Reflect;
     use bevy::reflect::prelude::ReflectDefault;
-    use bevy::ecs::reflect::ReflectComponent;
     use std::collections::HashMap;
 
     #[derive(Reflect, Default, PartialEq, Debug)]

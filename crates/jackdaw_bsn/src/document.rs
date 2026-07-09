@@ -440,10 +440,34 @@ impl SceneBsnAst {
 
 /// Context for resolving `Handle<T>` fields to asset-path strings during BSN
 /// emission. `parent_path` is the directory the emitted `.bsn` file lives in,
-/// used to make emitted asset paths relative.
+/// used to make emitted asset paths relative. `asset_names` maps assets that
+/// have no filesystem path (catalog and scene-inline assets) to their
+/// reference names (`@Name` or `#Name`), which are emitted verbatim.
 pub struct BsnAssetContext<'a> {
     pub asset_server: &'a AssetServer,
     pub parent_path: &'a Path,
+    pub asset_names: Option<&'a HashMap<bevy::asset::UntypedAssetId, String>>,
+}
+
+impl BsnAssetContext<'_> {
+    /// Resolve a handle to its emitted string: a (relative) asset path when the
+    /// asset came from disk, else its catalog/inline reference name, else an
+    /// empty string.
+    fn handle_string(&self, id: bevy::asset::UntypedAssetId) -> String {
+        if let Some(path) = self.asset_server.get_path(id) {
+            let path_str = path.to_string();
+            if let Some(relative) = pathdiff::diff_paths(&path_str, self.parent_path) {
+                return relative.to_string_lossy().into_owned();
+            }
+            return path_str;
+        }
+        if let Some(names) = self.asset_names
+            && let Some(name) = names.get(&id)
+        {
+            return name.clone();
+        }
+        String::new()
+    }
 }
 
 impl BsnValue {
@@ -479,6 +503,9 @@ impl BsnValue {
         }
         if let Some(v) = value.try_downcast_ref::<String>() {
             return BsnValue::String(v.clone());
+        }
+        if let Some(v) = value.try_downcast_ref::<std::borrow::Cow<'static, str>>() {
+            return BsnValue::String(v.to_string());
         }
         // Integer types.
         if let Some(v) = value.try_downcast_ref::<i32>() {
@@ -516,16 +543,12 @@ impl BsnValue {
         {
             let type_id = concrete.reflect_type_info().type_id();
             if let Some(reflect_handle) = type_registry.get_type_data::<ReflectHandle>(type_id) {
-                if let Some(untyped_handle) = reflect_handle.downcast_handle_untyped(concrete.as_any())
-                    && let Some(path) = ctx.asset_server.get_path(untyped_handle.id())
+                if let Some(untyped_handle) =
+                    reflect_handle.downcast_handle_untyped(concrete.as_any())
                 {
-                    let path_str = path.to_string();
-                    if let Some(relative) = pathdiff::diff_paths(&path_str, ctx.parent_path) {
-                        return BsnValue::String(relative.to_string_lossy().into_owned());
-                    }
-                    return BsnValue::String(path_str);
+                    return BsnValue::String(ctx.handle_string(untyped_handle.id()));
                 }
-                // Handle with no resolvable path: emit an empty string.
+                // Handle that failed to downcast: emit an empty string.
                 return BsnValue::String(String::new());
             }
         }
@@ -569,18 +592,7 @@ impl BsnValue {
                                 && let Some(untyped_handle) =
                                     reflect_handle.downcast_handle_untyped(concrete.as_any())
                             {
-                                if let Some(path) = ctx.asset_server.get_path(untyped_handle.id()) {
-                                    let path_str = path.to_string();
-                                    if let Some(relative) =
-                                        pathdiff::diff_paths(&path_str, ctx.parent_path)
-                                    {
-                                        return BsnValue::String(
-                                            relative.to_string_lossy().into_owned(),
-                                        );
-                                    }
-                                    return BsnValue::String(path_str);
-                                }
-                                return BsnValue::String(String::new());
+                                return BsnValue::String(ctx.handle_string(untyped_handle.id()));
                             }
                         }
                     }
@@ -619,7 +631,11 @@ impl BsnValue {
             let mut values = Vec::new();
             for i in 0..ts.field_len() {
                 let field_value = ts.field(i).unwrap();
-                values.push(BsnValue::from_reflect_inner(field_value, type_registry, ctx));
+                values.push(BsnValue::from_reflect_inner(
+                    field_value,
+                    type_registry,
+                    ctx,
+                ));
             }
             return BsnValue::TupleStruct(BsnTupleStructData { type_path, values });
         }
@@ -652,7 +668,11 @@ impl BsnValue {
                     let mut values = Vec::new();
                     for i in 0..e.field_len() {
                         let field_value = e.field_at(i).unwrap();
-                        values.push(BsnValue::from_reflect_inner(field_value, type_registry, ctx));
+                        values.push(BsnValue::from_reflect_inner(
+                            field_value,
+                            type_registry,
+                            ctx,
+                        ));
                     }
                     return BsnValue::TupleStruct(BsnTupleStructData {
                         type_path: full_path,
@@ -774,7 +794,11 @@ fn component_to_bsn_patch_inner(
             let mut values = Vec::new();
             for i in 0..ts.field_len() {
                 let field_value = ts.field(i).unwrap();
-                values.push(BsnValue::from_reflect_inner(field_value, type_registry, ctx));
+                values.push(BsnValue::from_reflect_inner(
+                    field_value,
+                    type_registry,
+                    ctx,
+                ));
             }
             BsnPatch::TupleStruct(BsnTupleStructData { type_path, values })
         }
@@ -806,7 +830,11 @@ fn component_to_bsn_patch_inner(
                     let mut values = Vec::new();
                     for i in 0..e.field_len() {
                         let field_value = e.field_at(i).unwrap();
-                        values.push(BsnValue::from_reflect_inner(field_value, type_registry, ctx));
+                        values.push(BsnValue::from_reflect_inner(
+                            field_value,
+                            type_registry,
+                            ctx,
+                        ));
                     }
                     BsnPatch::TupleStruct(BsnTupleStructData {
                         type_path: full_path,
