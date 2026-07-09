@@ -125,3 +125,97 @@ fn malformed_input_returns_error() {
     // A stray delimiter that cannot begin a patch.
     assert!(parse_bsn_text("]").is_err());
 }
+
+#[test]
+fn scene_load_routes_embedded_assets_and_resolves_references() {
+    use bevy::app::{App, TaskPoolPlugin};
+    use bevy::asset::{Asset, AssetApp, AssetPlugin, Assets, Handle, ReflectAsset, ReflectHandle};
+    use bevy::ecs::prelude::*;
+    use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
+    use bevy::prelude::ReflectDefault;
+    use bevy::reflect::Reflect;
+
+    use jackdaw_bsn::load_bsn_scene;
+
+    #[derive(Asset, Reflect, Clone, Default)]
+    #[reflect(Default)]
+    struct ProbeMaterial {
+        shininess: f32,
+    }
+
+    #[derive(Component, Reflect, Default)]
+    #[reflect(Component, Default)]
+    struct UsesMaterial {
+        material: Handle<ProbeMaterial>,
+    }
+
+    let mut app = App::new();
+    app.add_plugins((TaskPoolPlugin::default(), AssetPlugin::default()));
+    app.init_asset::<ProbeMaterial>();
+    {
+        let registry = app.world().resource::<AppTypeRegistry>().clone();
+        let mut w = registry.write();
+        w.register::<ProbeMaterial>();
+        w.register::<UsesMaterial>();
+        w.register::<Handle<ProbeMaterial>>();
+        w.register_type_data::<ProbeMaterial, ReflectAsset>();
+        w.register_type_data::<Handle<ProbeMaterial>, ReflectHandle>();
+    }
+    app.world_mut().init_resource::<jackdaw_bsn::SceneBsnAst>();
+
+    let text = r##"
+bevy_ecs::hierarchy::Children [
+    #Shiny
+    scene_load_routes_embedded_assets_and_resolves_references::ProbeMaterial {
+        shininess: 9.5,
+    }
+    ,
+    #Thing
+    scene_load_routes_embedded_assets_and_resolves_references::UsesMaterial {
+        material: "#Shiny",
+    }
+]
+"##;
+    // The test types' reflected type paths are module-qualified; rewrite the
+    // placeholder segment to each type's real reflect path.
+    use bevy::reflect::TypePath;
+    let text = text
+        .replace(
+            "scene_load_routes_embedded_assets_and_resolves_references::ProbeMaterial",
+            ProbeMaterial::type_path(),
+        )
+        .replace(
+            "scene_load_routes_embedded_assets_and_resolves_references::UsesMaterial",
+            UsesMaterial::type_path(),
+        );
+
+    let loaded = load_bsn_scene(app.world_mut(), &text).expect("scene loads");
+
+    // One asset entry landed in the store; one entity spawned (not two).
+    assert_eq!(loaded.assets.len(), 1);
+    assert_eq!(loaded.assets[0].name, "Shiny");
+    assert_eq!(loaded.entities.len(), 1);
+
+    let stored = app
+        .world()
+        .resource::<Assets<ProbeMaterial>>()
+        .get(&loaded.assets[0].handle.clone().typed::<ProbeMaterial>())
+        .expect("asset in store");
+    assert!((stored.shininess - 9.5).abs() < 1e-6);
+
+    // The spawned entity's handle resolves to that same asset.
+    let entity = loaded.entities[0];
+    let uses = app
+        .world()
+        .get::<UsesMaterial>(entity)
+        .expect("component applied");
+    assert_eq!(
+        uses.material.id(),
+        loaded.assets[0]
+            .handle
+            .clone()
+            .typed::<ProbeMaterial>()
+            .id(),
+        "#Shiny reference must bind to the embedded asset"
+    );
+}

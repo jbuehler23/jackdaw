@@ -27,14 +27,40 @@ use crate::{
 #[derive(Component)]
 pub struct AstDirty;
 
+/// Assets available while applying document values: the asset server for
+/// path-string handles, plus the scene's local named assets so `#Name` and
+/// `@Name` reference strings resolve to their loaded handles.
+pub struct BsnApplyAssets<'a> {
+    pub server: &'a AssetServer,
+    pub local: Option<&'a bevy::platform::collections::HashMap<String, bevy::asset::UntypedHandle>>,
+}
+
+/// The scene's named local assets (`#Name` inline entries and `@Name`
+/// catalog entries), kept as a resource so document applies after load can
+/// resolve reference strings.
+#[derive(Resource, Default)]
+pub struct BsnSceneAssets(
+    pub bevy::platform::collections::HashMap<String, bevy::asset::UntypedHandle>,
+);
+
 /// Spawn ECS entities from the [`SceneBsnAst`] resource, linking them back to
 /// AST nodes. All entities are marked [`AstDirty`] so a following call to
 /// [`apply_dirty_ast_patches`] populates ECS components.
 pub fn spawn_from_ast(world: &mut World) -> Vec<Entity> {
     let roots: Vec<Entity> = world.resource::<SceneBsnAst>().roots.clone();
+    let registry = world.resource::<AppTypeRegistry>().clone();
     let mut spawned = Vec::new();
 
     for root in roots {
+        // Named asset entries stay in the document for round-trip save but
+        // are not scene entities; the loader routes them into asset stores.
+        {
+            let reg = registry.read();
+            let ast = world.resource::<SceneBsnAst>();
+            if crate::catalog::is_asset_root(ast, root, &reg) {
+                continue;
+            }
+        }
         spawn_ast_node(world, root, None, &mut spawned);
     }
 
@@ -199,7 +225,12 @@ fn apply_type_patch(world: &mut World, entity: Entity, type_path: &str) {
 /// recursively so that partial patches like `Transform { translation: Vec3 { x: 5.0 } }`
 /// only update the specified sub-fields.
 fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
-    let asset_server = world.get_resource::<AssetServer>().cloned();
+    let server = world.get_resource::<AssetServer>().cloned();
+    let local = world.get_resource::<BsnSceneAssets>().map(|r| r.0.clone());
+    let assets_ctx = server.as_ref().map(|s| BsnApplyAssets {
+        server: s,
+        local: local.as_ref(),
+    });
     let registry = world.resource::<AppTypeRegistry>().clone();
     let reg = registry.read();
 
@@ -226,7 +257,7 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
         if let ReflectMut::Struct(s) = value.reflect_mut() {
             for field in &data.fields.0 {
                 if let Some(target) = s.field_mut(&field.name) {
-                    merge_bsn_value_into_reflect(target, &field.value, &reg, asset_server.as_ref());
+                    merge_bsn_value_into_reflect(target, &field.value, &reg, assets_ctx.as_ref());
                 }
             }
         }
@@ -277,7 +308,7 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
                             &field.value,
                             type_info.type_id(),
                             &reg,
-                            asset_server.as_ref(),
+                            assets_ctx.as_ref(),
                         )
                     {
                         apply_authored_value(target, &*reflected);
@@ -309,12 +340,9 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
                         .get(&field.name)
                         .copied()
                         .unwrap_or(std::any::TypeId::of::<f32>());
-                    if let Some(reflected) = bsn_value_to_reflect(
-                        &field.value,
-                        field_type_id,
-                        &reg,
-                        asset_server.as_ref(),
-                    ) {
+                    if let Some(reflected) =
+                        bsn_value_to_reflect(&field.value, field_type_id, &reg, assets_ctx.as_ref())
+                    {
                         dynamic_struct.insert_boxed(&field.name, reflected);
                     }
                 }
@@ -339,19 +367,14 @@ fn merge_bsn_value_into_reflect(
     target: &mut dyn PartialReflect,
     value: &BsnValue,
     registry: &TypeRegistry,
-    asset_server: Option<&AssetServer>,
+    assets: Option<&BsnApplyAssets>,
 ) {
     match value {
         BsnValue::Struct(data) => {
             if let ReflectMut::Struct(s) = target.reflect_mut() {
                 for field in &data.fields.0 {
                     if let Some(target_field) = s.field_mut(&field.name) {
-                        merge_bsn_value_into_reflect(
-                            target_field,
-                            &field.value,
-                            registry,
-                            asset_server,
-                        );
+                        merge_bsn_value_into_reflect(target_field, &field.value, registry, assets);
                     }
                 }
             }
@@ -359,7 +382,7 @@ fn merge_bsn_value_into_reflect(
         _ => {
             if let Some(type_info) = target.get_represented_type_info()
                 && let Some(reflected) =
-                    bsn_value_to_reflect(value, type_info.type_id(), registry, asset_server)
+                    bsn_value_to_reflect(value, type_info.type_id(), registry, assets)
             {
                 apply_authored_value(target, &*reflected);
             }
@@ -369,7 +392,12 @@ fn merge_bsn_value_into_reflect(
 
 /// Apply a tuple struct patch: merge over existing component (or default).
 fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleStructData) {
-    let asset_server = world.get_resource::<AssetServer>().cloned();
+    let server = world.get_resource::<AssetServer>().cloned();
+    let local = world.get_resource::<BsnSceneAssets>().map(|r| r.0.clone());
+    let assets_ctx = server.as_ref().map(|s| BsnApplyAssets {
+        server: s,
+        local: local.as_ref(),
+    });
     let registry = world.resource::<AppTypeRegistry>().clone();
     let reg = registry.read();
 
@@ -410,7 +438,7 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
                         bsn_val,
                         field_info.ty().id(),
                         &reg,
-                        asset_server.as_ref(),
+                        assets_ctx.as_ref(),
                     ) else {
                         return;
                     };
@@ -436,7 +464,7 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
                 continue;
             };
             if let Some(reflected) =
-                bsn_value_to_reflect(bsn_val, field_info.ty().id(), &reg, asset_server.as_ref())
+                bsn_value_to_reflect(bsn_val, field_info.ty().id(), &reg, assets_ctx.as_ref())
                 && let Some(target) = ts.field_mut(i)
             {
                 apply_authored_value(target, &*reflected);
@@ -471,20 +499,31 @@ pub fn bsn_value_to_reflect(
     value: &BsnValue,
     expected: TypeId,
     registry: &TypeRegistry,
-    asset_server: Option<&AssetServer>,
+    assets: Option<&BsnApplyAssets>,
 ) -> Option<Box<dyn PartialReflect>> {
     // If the expected type is a Handle<T>, resolve from an asset path string.
     if let Some(reflect_handle) = registry.get_type_data::<ReflectHandle>(expected) {
         if let BsnValue::String(path) = value
             && !path.is_empty()
-            && let Some(asset_server) = asset_server
+            && let Some(assets) = assets
         {
-            let asset_type_id = reflect_handle.asset_type_id();
-            let untyped = asset_server
-                .load_builder()
-                .load_erased(asset_type_id, path.to_owned());
-            let typed = reflect_handle.typed(untyped);
-            return Some(typed.into_partial_reflect());
+            if path.starts_with('#') || path.starts_with('@') {
+                if let Some(local) = assets.local
+                    && let Some(handle) = local.get(path)
+                {
+                    let typed = reflect_handle.typed(handle.clone());
+                    return Some(typed.into_partial_reflect());
+                }
+                // Unresolvable reference: fall through to the default handle.
+            } else {
+                let asset_type_id = reflect_handle.asset_type_id();
+                let untyped = assets
+                    .server
+                    .load_builder()
+                    .load_erased(asset_type_id, path.to_owned());
+                let typed = reflect_handle.typed(untyped);
+                return Some(typed.into_partial_reflect());
+            }
         }
         // Empty string or no asset server: return the default handle.
         if let Some(registration) = registry.get(expected)
@@ -509,7 +548,7 @@ pub fn bsn_value_to_reflect(
         let inner_ty = inner_field.type_id();
         if let BsnValue::String(path) = value
             && !path.is_empty()
-            && let Some(inner) = bsn_value_to_reflect(value, inner_ty, registry, asset_server)
+            && let Some(inner) = bsn_value_to_reflect(value, inner_ty, registry, assets)
         {
             let mut dynamic_tuple = bevy::reflect::tuple::DynamicTuple::default();
             dynamic_tuple.insert_boxed(inner);
@@ -531,7 +570,7 @@ pub fn bsn_value_to_reflect(
     if let Some(registration) = registry.get(expected)
         && let bevy::reflect::TypeInfo::Enum(enum_info) = registration.type_info()
         && let Some(result) =
-            enum_variant_value_to_reflect(value, enum_info, registration, registry, asset_server)
+            enum_variant_value_to_reflect(value, enum_info, registration, registry, assets)
     {
         return Some(result);
     }
@@ -548,10 +587,10 @@ pub fn bsn_value_to_reflect(
             }
         }
         BsnValue::Type(type_path) => type_value_to_reflect(type_path, expected, registry),
-        BsnValue::Struct(data) => struct_value_to_reflect(data, registry, asset_server),
-        BsnValue::TupleStruct(data) => tuple_struct_value_to_reflect(data, registry, asset_server),
-        BsnValue::List(items) => list_value_to_reflect(items, expected, registry, asset_server),
-        BsnValue::Map(entries) => map_value_to_reflect(entries, expected, registry, asset_server),
+        BsnValue::Struct(data) => struct_value_to_reflect(data, registry, assets),
+        BsnValue::TupleStruct(data) => tuple_struct_value_to_reflect(data, registry, assets),
+        BsnValue::List(items) => list_value_to_reflect(items, expected, registry, assets),
+        BsnValue::Map(entries) => map_value_to_reflect(entries, expected, registry, assets),
     }
 }
 
@@ -572,7 +611,7 @@ fn enum_variant_value_to_reflect(
     enum_info: &bevy::reflect::enums::EnumInfo,
     enum_registration: &bevy::reflect::TypeRegistration,
     registry: &TypeRegistry,
-    asset_server: Option<&AssetServer>,
+    assets: Option<&BsnApplyAssets>,
 ) -> Option<Box<dyn PartialReflect>> {
     use bevy::reflect::enums::VariantInfo;
 
@@ -592,8 +631,7 @@ fn enum_variant_value_to_reflect(
             let mut dynamic_tuple = bevy::reflect::tuple::DynamicTuple::default();
             for (i, item) in data.values.iter().enumerate() {
                 let field = tuple_var.field_at(i)?;
-                let reflected =
-                    bsn_value_to_reflect(item, field.type_id(), registry, asset_server)?;
+                let reflected = bsn_value_to_reflect(item, field.type_id(), registry, assets)?;
                 dynamic_tuple.insert_boxed(reflected);
             }
             (name.to_string(), DynamicVariant::Tuple(dynamic_tuple))
@@ -606,12 +644,8 @@ fn enum_variant_value_to_reflect(
             let mut dynamic_struct = bevy::reflect::structs::DynamicStruct::default();
             for field in &data.fields.0 {
                 let field_info = struct_var.field(&field.name)?;
-                let reflected = bsn_value_to_reflect(
-                    &field.value,
-                    field_info.type_id(),
-                    registry,
-                    asset_server,
-                )?;
+                let reflected =
+                    bsn_value_to_reflect(&field.value, field_info.type_id(), registry, assets)?;
                 dynamic_struct.insert_boxed(&field.name, reflected);
             }
             (name.to_string(), DynamicVariant::Struct(dynamic_struct))
@@ -695,7 +729,7 @@ fn type_value_to_reflect(
 fn struct_value_to_reflect(
     data: &BsnStructData,
     registry: &TypeRegistry,
-    asset_server: Option<&AssetServer>,
+    assets: Option<&BsnApplyAssets>,
 ) -> Option<Box<dyn PartialReflect>> {
     let registration = registry.get_with_type_path(&data.type_path)?;
     let struct_info = registration.type_info().as_struct().ok()?;
@@ -708,7 +742,7 @@ fn struct_value_to_reflect(
         for field in &data.fields.0 {
             let field_info = struct_info.field(&field.name)?;
             let reflected =
-                bsn_value_to_reflect(&field.value, field_info.ty().id(), registry, asset_server)?;
+                bsn_value_to_reflect(&field.value, field_info.ty().id(), registry, assets)?;
             dynamic.insert_boxed(&field.name, reflected);
         }
         dynamic.set_represented_type(Some(registration.type_info()));
@@ -720,7 +754,7 @@ fn struct_value_to_reflect(
         for field in &data.fields.0 {
             if let Some(field_info) = struct_info.field(&field.name)
                 && let Some(reflected) =
-                    bsn_value_to_reflect(&field.value, field_info.ty().id(), registry, asset_server)
+                    bsn_value_to_reflect(&field.value, field_info.ty().id(), registry, assets)
                 && let Some(target) = s.field_mut(&field.name)
             {
                 apply_authored_value(target, &*reflected);
@@ -733,7 +767,7 @@ fn struct_value_to_reflect(
 fn tuple_struct_value_to_reflect(
     data: &BsnTupleStructData,
     registry: &TypeRegistry,
-    asset_server: Option<&AssetServer>,
+    assets: Option<&BsnApplyAssets>,
 ) -> Option<Box<dyn PartialReflect>> {
     let registration = registry.get_with_type_path(&data.type_path)?;
     let tuple_info = registration.type_info().as_tuple_struct().ok()?;
@@ -742,8 +776,7 @@ fn tuple_struct_value_to_reflect(
         let mut dynamic = bevy::reflect::tuple_struct::DynamicTupleStruct::default();
         for (i, bsn_val) in data.values.iter().enumerate() {
             let field_info = tuple_info.field_at(i)?;
-            let reflected =
-                bsn_value_to_reflect(bsn_val, field_info.ty().id(), registry, asset_server)?;
+            let reflected = bsn_value_to_reflect(bsn_val, field_info.ty().id(), registry, assets)?;
             dynamic.insert_boxed(reflected);
         }
         dynamic.set_represented_type(Some(registration.type_info()));
@@ -755,7 +788,7 @@ fn tuple_struct_value_to_reflect(
         for (i, bsn_val) in data.values.iter().enumerate() {
             if let Some(field_info) = tuple_info.field_at(i)
                 && let Some(reflected) =
-                    bsn_value_to_reflect(bsn_val, field_info.ty().id(), registry, asset_server)
+                    bsn_value_to_reflect(bsn_val, field_info.ty().id(), registry, assets)
                 && let Some(target) = ts.field_mut(i)
             {
                 apply_authored_value(target, &*reflected);
@@ -769,7 +802,7 @@ fn list_value_to_reflect(
     items: &[BsnValue],
     expected: TypeId,
     registry: &TypeRegistry,
-    asset_server: Option<&AssetServer>,
+    assets: Option<&BsnApplyAssets>,
 ) -> Option<Box<dyn PartialReflect>> {
     let registration = registry.get(expected)?;
 
@@ -778,12 +811,7 @@ fn list_value_to_reflect(
         let item_type_id = array_info.item_ty().id();
         let mut converted = Vec::new();
         for item in items {
-            converted.push(bsn_value_to_reflect(
-                item,
-                item_type_id,
-                registry,
-                asset_server,
-            )?);
+            converted.push(bsn_value_to_reflect(item, item_type_id, registry, assets)?);
         }
         let mut dynamic = bevy::reflect::array::DynamicArray::new(converted.into_boxed_slice());
         dynamic.set_represented_type(Some(registration.type_info()));
@@ -795,7 +823,7 @@ fn list_value_to_reflect(
 
     let mut dynamic_list = DynamicList::default();
     for item in items {
-        if let Some(reflected) = bsn_value_to_reflect(item, item_type_id, registry, asset_server) {
+        if let Some(reflected) = bsn_value_to_reflect(item, item_type_id, registry, assets) {
             dynamic_list.push_box(reflected);
         }
     }
@@ -811,7 +839,7 @@ fn map_value_to_reflect(
     entries: &[(BsnValue, BsnValue)],
     expected: TypeId,
     registry: &TypeRegistry,
-    asset_server: Option<&AssetServer>,
+    assets: Option<&BsnApplyAssets>,
 ) -> Option<Box<dyn PartialReflect>> {
     let registration = registry.get(expected)?;
     let map_info = registration.type_info().as_map().ok()?;
@@ -820,9 +848,9 @@ fn map_value_to_reflect(
 
     let mut dynamic_map = DynamicMap::default();
     for (key, value) in entries {
-        if let Some(reflected_key) = bsn_value_to_reflect(key, key_type_id, registry, asset_server)
+        if let Some(reflected_key) = bsn_value_to_reflect(key, key_type_id, registry, assets)
             && let Some(reflected_value) =
-                bsn_value_to_reflect(value, value_type_id, registry, asset_server)
+                bsn_value_to_reflect(value, value_type_id, registry, assets)
         {
             dynamic_map.insert_boxed(reflected_key, reflected_value);
         }

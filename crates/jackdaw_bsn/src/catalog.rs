@@ -54,7 +54,11 @@ pub fn load_bsn_assets(
     let ast = parse_bsn_text(bsn_text)?;
 
     let registry = world.resource::<AppTypeRegistry>().clone();
-    let asset_server = world.get_resource::<AssetServer>().cloned();
+    let server = world.get_resource::<AssetServer>().cloned();
+    let assets_ctx = server.as_ref().map(|s| crate::BsnApplyAssets {
+        server: s,
+        local: None,
+    });
     let reg = registry.read();
 
     let mut entries = Vec::new();
@@ -75,7 +79,7 @@ pub fn load_bsn_assets(
         };
         let type_id = registration.type_id();
 
-        let Some(value) = bsn_value_to_reflect(&asset_value, type_id, &reg, asset_server.as_ref())
+        let Some(value) = bsn_value_to_reflect(&asset_value, type_id, &reg, assets_ctx.as_ref())
         else {
             continue;
         };
@@ -85,6 +89,96 @@ pub fn load_bsn_assets(
     }
 
     Ok(entries)
+}
+
+/// Whether a document root is a named asset entry (its type patch resolves to
+/// a registered `Asset` type). Scene loading routes these into `Assets<T>`
+/// stores instead of spawning them as entities.
+pub(crate) fn is_asset_root(
+    ast: &SceneBsnAst,
+    root: bevy::ecs::entity::Entity,
+    reg: &bevy::reflect::TypeRegistry,
+) -> bool {
+    asset_value_from_root(ast, root)
+        .and_then(|(type_path, _)| reg.get_with_type_path(&type_path))
+        .is_some_and(|registration| registration.data::<ReflectAsset>().is_some())
+}
+
+/// The result of loading a scene `.bsn`: spawned entities plus the named
+/// assets that were embedded in the document.
+pub struct LoadedBsnScene {
+    pub entities: Vec<bevy::ecs::entity::Entity>,
+    pub assets: Vec<CatalogEntry>,
+}
+
+/// Load scene `.bsn` text: embedded named asset entries go into their
+/// `Assets<T>` stores (recorded in the [`crate::BsnSceneAssets`] resource so
+/// `#Name`/`@Name` reference strings resolve during apply), entity roots spawn
+/// into the world, and the parsed document becomes the live [`SceneBsnAst`].
+pub fn load_bsn_scene(world: &mut World, text: &str) -> Result<LoadedBsnScene, BsnLoadError> {
+    let ast = parse_bsn_text(text)?;
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let mut assets = Vec::new();
+    {
+        let reg = registry.read();
+        let roots = ast.roots.clone();
+        for root in roots {
+            if !is_asset_root(&ast, root, &reg) {
+                continue;
+            }
+            let Some(name) = ast.get_name(root).map(str::to_owned) else {
+                continue;
+            };
+            let Some((type_path, asset_value)) = asset_value_from_root(&ast, root) else {
+                continue;
+            };
+            let Some(entry) = load_asset_entry(world, &reg, &name, &type_path, &asset_value) else {
+                continue;
+            };
+            assets.push(entry);
+        }
+    }
+
+    // Record both reference spellings: scene-inline (`#`) and catalog (`@`).
+    let mut names = bevy::platform::collections::HashMap::default();
+    for entry in &assets {
+        names.insert(format!("#{}", entry.name), entry.handle.clone());
+        names.insert(format!("@{}", entry.name), entry.handle.clone());
+    }
+    world.insert_resource(crate::BsnSceneAssets(names));
+
+    world.insert_resource(ast);
+    let entities = crate::spawn_from_ast(world);
+    crate::apply_dirty_ast_patches(world);
+
+    Ok(LoadedBsnScene { entities, assets })
+}
+
+/// Build one named asset from its document value and insert it into its
+/// `Assets<T>` store.
+fn load_asset_entry(
+    world: &mut World,
+    reg: &bevy::reflect::TypeRegistry,
+    name: &str,
+    type_path: &str,
+    asset_value: &BsnValue,
+) -> Option<CatalogEntry> {
+    let registration = reg.get_with_type_path(type_path)?;
+    let reflect_asset = registration.data::<ReflectAsset>()?;
+    let type_id = registration.type_id();
+
+    let server = world.get_resource::<AssetServer>().cloned();
+    let assets_ctx = server.as_ref().map(|s| crate::BsnApplyAssets {
+        server: s,
+        local: None,
+    });
+    let value = bsn_value_to_reflect(asset_value, type_id, reg, assets_ctx.as_ref())?;
+    let handle = reflect_asset.add(world, &*value);
+    Some(CatalogEntry {
+        name: name.to_owned(),
+        handle,
+    })
 }
 
 /// Reconstruct the asset's type path and a [`BsnValue`] from an entry root's
