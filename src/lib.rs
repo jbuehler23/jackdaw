@@ -34,6 +34,7 @@ pub mod hierarchy;
 pub mod history_ops;
 pub mod input_contexts;
 pub mod inspector;
+pub mod jsn_to_bsn;
 pub mod keybind_focus;
 pub mod keybind_settings;
 pub mod keybinds;
