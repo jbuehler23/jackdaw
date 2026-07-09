@@ -2623,6 +2623,52 @@ pub fn register_entity_in_ast(world: &mut World, entity: Entity) {
         components.len()
     );
     world.resource_mut::<jackdaw_jsn::SceneJsnAst>().nodes[idx].components = components;
+
+    register_entity_in_bsn_doc(world, entity);
+}
+
+/// Mirror a freshly registered entity into the BSN document: create and link
+/// its node, then upsert a patch for every serializable component.
+fn register_entity_in_bsn_doc(world: &mut World, entity: Entity) {
+    let Some(doc) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
+        return;
+    };
+    if doc.ast_for(entity).is_some() {
+        return;
+    }
+    let parent = world
+        .get::<ChildOf>(entity)
+        .map(ChildOf::parent)
+        .filter(|p| doc.ast_for(*p).is_some());
+    jackdaw_bsn::create_entity_in_ast(world, entity, parent);
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let skip_ids: HashSet<TypeId> = HashSet::from([
+        TypeId::of::<GlobalTransform>(),
+        TypeId::of::<InheritedVisibility>(),
+        TypeId::of::<ViewVisibility>(),
+        TypeId::of::<ChildOf>(),
+        TypeId::of::<Children>(),
+        TypeId::of::<Name>(),
+        TypeId::of::<jackdaw_bsn::AstNodeRef>(),
+        TypeId::of::<jackdaw_bsn::AstDirty>(),
+    ]);
+    let values: Vec<Box<dyn bevy::reflect::PartialReflect>> = {
+        let reg = registry.read();
+        let entity_ref = world.entity(entity);
+        reg.iter()
+            .filter(|registration| !skip_ids.contains(&registration.type_id()))
+            .filter(|registration| {
+                !should_skip_component(registration.type_info().type_path_table().path())
+            })
+            .filter_map(|registration| registration.data::<ReflectComponent>())
+            .filter_map(|reflect_component| reflect_component.reflect(entity_ref))
+            .map(bevy::reflect::PartialReflect::to_dynamic)
+            .collect()
+    };
+    for value in values {
+        crate::commands::sync_component_to_bsn_doc(world, entity, &*value, &registry);
+    }
 }
 
 /// Register multiple ECS entities in the AST.

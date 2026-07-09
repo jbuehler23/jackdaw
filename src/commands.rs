@@ -660,6 +660,7 @@ impl EditorCommand for SetJsnField {
             &self.field_path,
             &self.new_value,
         );
+        mirror_component_from_ecs_to_bsn(world, self.entity, &self.type_path);
     }
 
     fn undo(&mut self, world: &mut World) {
@@ -703,6 +704,7 @@ impl EditorCommand for SetJsnField {
                 &self.old_value,
             );
         }
+        mirror_component_from_ecs_to_bsn(world, self.entity, &self.type_path);
     }
 
     fn description(&self) -> &str {
@@ -960,15 +962,83 @@ pub fn sync_component_to_ast<T: bevy::reflect::Reflect>(
     value: &T,
 ) {
     let registry = world.resource::<AppTypeRegistry>().clone();
-    let registry = registry.read();
-    let processor = crate::scene_io::AstSerializerProcessor;
-    let serializer =
-        bevy::reflect::serde::TypedReflectSerializer::with_processor(value, &registry, &processor);
-    if let Ok(json_value) = serde_json::to_value(&serializer) {
-        drop(registry);
-        world
-            .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-            .set_component(entity, type_path, json_value);
+    {
+        let registry = registry.read();
+        let processor = crate::scene_io::AstSerializerProcessor;
+        let serializer = bevy::reflect::serde::TypedReflectSerializer::with_processor(
+            value, &registry, &processor,
+        );
+        if let Ok(json_value) = serde_json::to_value(&serializer) {
+            drop(registry);
+            world
+                .resource_mut::<jackdaw_jsn::SceneJsnAst>()
+                .set_component(entity, type_path, json_value);
+        }
+    }
+
+    // Mirror into the BSN document. The patch key comes from the value's own
+    // reflected type path, so a stale caller-supplied string cannot skew it.
+    sync_component_to_bsn_doc(world, entity, value.as_partial_reflect(), &registry);
+}
+
+/// Mirror the live ECS state of one component into the BSN document: upsert
+/// its patch from the current value, or drop the patch when the component no
+/// longer exists on the entity.
+pub(crate) fn mirror_component_from_ecs_to_bsn(world: &mut World, entity: Entity, type_path: &str) {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let value: Option<Box<dyn bevy::reflect::PartialReflect>> = {
+        let reg = registry.read();
+        reg.get_with_type_path(type_path)
+            .and_then(|registration| registration.data::<ReflectComponent>())
+            .and_then(|rc| {
+                world
+                    .get_entity(entity)
+                    .ok()
+                    .and_then(|entity_ref| rc.reflect(entity_ref))
+            })
+            .map(bevy::reflect::PartialReflect::to_dynamic)
+    };
+    match value {
+        Some(value) => sync_component_to_bsn_doc(world, entity, &*value, &registry),
+        None => {
+            if let Some(mut ast) = world.get_resource_mut::<jackdaw_bsn::SceneBsnAst>()
+                && let Some(patches_entity) = ast.ast_for(entity)
+            {
+                ast.remove_component_patch(patches_entity, type_path);
+            }
+        }
+    }
+}
+
+/// Upsert one component's patch on the entity's BSN document node from a
+/// reflected value.
+pub(crate) fn sync_component_to_bsn_doc(
+    world: &mut World,
+    entity: Entity,
+    value: &dyn bevy::reflect::PartialReflect,
+    registry: &AppTypeRegistry,
+) {
+    let patch = {
+        let reg = registry.read();
+        jackdaw_bsn::component_to_bsn_patch(value, &reg)
+    };
+    let type_path = match value.get_represented_type_info() {
+        Some(info) => info.type_path().to_string(),
+        None => return,
+    };
+    let Some(mut ast) = world.get_resource_mut::<jackdaw_bsn::SceneBsnAst>() else {
+        return;
+    };
+    let Some(patches_entity) = ast.ast_for(entity) else {
+        return;
+    };
+    if let Some(existing) = ast.find_patch_by_type_path(patches_entity, &type_path) {
+        ast.set_patch(existing, patch);
+    } else {
+        let patch_entity = ast.world.spawn(patch).id();
+        if let Some(patches) = ast.get_patches_mut(patches_entity) {
+            patches.0.push(patch_entity);
+        }
     }
 }
 
@@ -1077,6 +1147,55 @@ mod set_bsn_field_tests {
         app.add_plugins(MinimalPlugins);
         app.init_resource::<SceneBsnAst>();
         app
+    }
+
+    #[test]
+    fn jsn_edits_dual_write_into_the_bsn_document() {
+        let mut app = field_app();
+        app.init_resource::<jackdaw_jsn::SceneJsnAst>();
+        let entity = app
+            .world_mut()
+            .spawn((Name::new("Node"), Transform::from_xyz(3.0, 0.0, 0.0)))
+            .id();
+        crate::scene_io::register_entity_in_ast(app.world_mut(), entity);
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        {
+            let ast = app.world().resource::<SceneBsnAst>();
+            let pe = ast.ast_for(entity).expect("registered in BSN doc");
+            assert!(
+                ast.find_patch_by_type_path(pe, type_path).is_some(),
+                "registration mirrors the transform patch"
+            );
+            assert_eq!(ast.get_name(pe), Some("Node"));
+        }
+
+        let mut command = SetJsnField {
+            entity,
+            type_path: type_path.to_string(),
+            field_path: "translation.x".to_string(),
+            old_value: serde_json::json!(3.0),
+            new_value: serde_json::json!(8.0),
+            was_derived: false,
+        };
+        command.execute(app.world_mut());
+        {
+            let ast = app.world().resource::<SceneBsnAst>();
+            let pe = ast.ast_for(entity).unwrap();
+            let value = get_bsn_field(ast, pe, type_path, "translation.x");
+            assert!(
+                matches!(value, Some(BsnValue::Float(x)) if (x - 8.0).abs() < 1e-6),
+                "JSN edit lands in the BSN document"
+            );
+        }
+        command.undo(app.world_mut());
+        let ast = app.world().resource::<SceneBsnAst>();
+        let pe = ast.ast_for(entity).unwrap();
+        let value = get_bsn_field(ast, pe, type_path, "translation.x");
+        assert!(
+            matches!(value, Some(BsnValue::Float(x)) if (x - 3.0).abs() < 1e-6),
+            "undo restores the BSN document too"
+        );
     }
 
     #[test]
