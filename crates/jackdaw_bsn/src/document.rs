@@ -113,6 +113,12 @@ pub struct SceneBsnAst {
     pub ast_to_ecs: HashMap<Entity, Entity>,
 }
 
+/// Component types on a document node that were computed by editor systems
+/// rather than authored by the user. Derived components are skipped on save;
+/// an explicit user edit promotes the component to authored.
+#[derive(Component, Default)]
+pub struct DerivedComponents(pub bevy::platform::collections::HashSet<String>);
+
 /// Component on every ECS entity that was spawned from (or synced to) BSN.
 /// Points back to the AST node entity in [`SceneBsnAst::world`].
 #[derive(Component)]
@@ -198,6 +204,49 @@ impl SceneBsnAst {
             }
         }
         None
+    }
+
+    /// Whether `type_path` is marked derived (computed, not authored) on this
+    /// node.
+    pub fn is_derived(&self, patches_entity: Entity, type_path: &str) -> bool {
+        self.world
+            .get::<DerivedComponents>(patches_entity)
+            .is_some_and(|d| d.0.contains(type_path))
+    }
+
+    /// Clear the derived mark on `type_path` (a user edit makes it authored).
+    /// Returns true when the component was previously derived.
+    pub fn promote_derived(&mut self, patches_entity: Entity, type_path: &str) -> bool {
+        self.world
+            .get_mut::<DerivedComponents>(patches_entity)
+            .map(|mut d| d.0.remove(type_path))
+            .unwrap_or(false)
+    }
+
+    /// Mark `type_path` as derived on this node.
+    pub fn demote_to_derived(&mut self, patches_entity: Entity, type_path: &str) {
+        if let Some(mut d) = self.world.get_mut::<DerivedComponents>(patches_entity) {
+            d.0.insert(type_path.to_string());
+            return;
+        }
+        let mut set = bevy::platform::collections::HashSet::default();
+        set.insert(type_path.to_string());
+        if let Ok(mut node) = self.world.get_entity_mut(patches_entity) {
+            node.insert(DerivedComponents(set));
+        }
+    }
+
+    /// Remove the component patch for `type_path` from a node (the undo of
+    /// authoring a component that did not exist before). The patch entity is
+    /// despawned and dropped from the node's patch list.
+    pub fn remove_component_patch(&mut self, patches_entity: Entity, type_path: &str) {
+        let Some(patch_entity) = self.find_patch_by_type_path(patches_entity, type_path) else {
+            return;
+        };
+        if let Some(patches) = self.get_patches_mut(patches_entity) {
+            patches.0.retain(|&pe| pe != patch_entity);
+        }
+        self.world.despawn(patch_entity);
     }
 
     /// Get child AST entities from [`BsnPatch::Children`], if present.

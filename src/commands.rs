@@ -710,6 +710,109 @@ impl EditorCommand for SetJsnField {
     }
 }
 
+/// BSN-document counterpart of [`SetJsnField`]: write a field into the live
+/// [`jackdaw_bsn::SceneBsnAst`], promote the component to authored if it was
+/// derived, and mirror the change onto the live ECS entity. Becomes the
+/// dispatched field-edit command when the editor document switches to BSN.
+pub struct SetBsnField {
+    pub entity: Entity,
+    pub type_path: String,
+    pub field_path: String,
+    /// `None` when the component did not exist before this edit; undo then
+    /// removes the authored component instead of writing a value back.
+    pub old_value: Option<jackdaw_bsn::BsnValue>,
+    pub new_value: jackdaw_bsn::BsnValue,
+    /// True if the component was derived before this command ran. Set on
+    /// first execute so undo can demote the component back.
+    pub was_derived: bool,
+}
+
+impl SetBsnField {
+    /// Re-apply this command's component patch from the document to the live
+    /// entity, so ECS matches the document after execute or undo.
+    fn mirror_patch_to_ecs(&self, world: &mut World) {
+        let patch = {
+            let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+            let Some(patches_entity) = ast.ast_for(self.entity) else {
+                return;
+            };
+            ast.find_patch_by_type_path(patches_entity, &self.type_path)
+                .and_then(|pe| ast.get_patch(pe))
+                .cloned()
+        };
+        if let Some(patch) = patch {
+            jackdaw_bsn::apply_component_patch(world, self.entity, &patch);
+        }
+    }
+}
+
+impl EditorCommand for SetBsnField {
+    fn execute(&mut self, world: &mut World) {
+        {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            let registry = registry.read();
+            let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+            let Some(patches_entity) = ast.ast_for(self.entity) else {
+                return;
+            };
+            jackdaw_bsn::set_bsn_field(
+                &mut ast,
+                patches_entity,
+                &self.type_path,
+                &self.field_path,
+                self.new_value.clone(),
+                &registry,
+            );
+            if ast.promote_derived(patches_entity, &self.type_path) {
+                self.was_derived = true;
+                info!(
+                    "Promoted derived component '{}' to authored (user edited it)",
+                    self.type_path
+                );
+            }
+        }
+        self.mirror_patch_to_ecs(world);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        // A missing old value with an empty field path means execute authored
+        // a component that did not exist before; undo removes the entry.
+        let removes_component = self.field_path.is_empty() && self.old_value.is_none();
+        {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            let registry = registry.read();
+            let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+            let Some(patches_entity) = ast.ast_for(self.entity) else {
+                return;
+            };
+            if removes_component {
+                ast.remove_component_patch(patches_entity, &self.type_path);
+            } else if let Some(old_value) = &self.old_value {
+                jackdaw_bsn::set_bsn_field(
+                    &mut ast,
+                    patches_entity,
+                    &self.type_path,
+                    &self.field_path,
+                    old_value.clone(),
+                    &registry,
+                );
+                if self.was_derived {
+                    ast.demote_to_derived(patches_entity, &self.type_path);
+                }
+            }
+        }
+        if removes_component {
+            remove_component_from_ecs(world, self.entity, &self.type_path);
+        } else {
+            self.mirror_patch_to_ecs(world);
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Set component field"
+    }
+}
+
 /// Apply a JSON value to an ECS component  -- either full component replacement
 /// (empty `field_path`) or field-level update.
 ///
@@ -962,4 +1065,138 @@ pub fn sync_required_to_ast(world: &mut World, entity: Entity) -> Vec<String> {
     }
 
     promoted
+}
+
+#[cfg(test)]
+mod set_bsn_field_tests {
+    use super::*;
+    use jackdaw_bsn::{BsnValue, SceneBsnAst, create_entity_in_ast, get_bsn_field};
+
+    fn field_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<SceneBsnAst>();
+        app
+    }
+
+    #[test]
+    fn set_bsn_field_round_trips_document_and_ecs_with_undo() {
+        let mut app = field_app();
+        let entity = app
+            .world_mut()
+            .spawn(Transform::from_xyz(1.0, 0.0, 0.0))
+            .id();
+        create_entity_in_ast(app.world_mut(), entity, None);
+        // Author the transform into the document so the field edit has a
+        // baseline value to restore.
+        jackdaw_bsn::sync_to_ast(app.world_mut(), entity, std::any::TypeId::of::<Transform>());
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        let mut command = SetBsnField {
+            entity,
+            type_path: type_path.to_string(),
+            field_path: "translation.x".to_string(),
+            old_value: Some(BsnValue::Float(1.0)),
+            new_value: BsnValue::Float(9.0),
+            was_derived: false,
+        };
+
+        command.execute(app.world_mut());
+        {
+            let ast = app.world().resource::<SceneBsnAst>();
+            let pe = ast.ast_for(entity).expect("linked");
+            let value = get_bsn_field(ast, pe, type_path, "translation.x");
+            assert!(
+                matches!(value, Some(BsnValue::Float(x)) if (x - 9.0).abs() < 1e-6),
+                "document holds the new value"
+            );
+        }
+        let x = app.world().get::<Transform>(entity).unwrap().translation.x;
+        assert!((x - 9.0).abs() < 1e-6, "ECS mirrors the new value, got {x}");
+
+        command.undo(app.world_mut());
+        let x = app.world().get::<Transform>(entity).unwrap().translation.x;
+        assert!((x - 1.0).abs() < 1e-6, "undo restores ECS, got {x}");
+        {
+            let ast = app.world().resource::<SceneBsnAst>();
+            let pe = ast.ast_for(entity).expect("linked");
+            let value = get_bsn_field(ast, pe, type_path, "translation.x");
+            assert!(
+                matches!(value, Some(BsnValue::Float(x)) if (x - 1.0).abs() < 1e-6),
+                "undo restores the document"
+            );
+        }
+    }
+
+    #[test]
+    fn undo_removes_component_authored_by_execute() {
+        let mut app = field_app();
+        let entity = app.world_mut().spawn_empty().id();
+        create_entity_in_ast(app.world_mut(), entity, None);
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        let mut command = SetBsnField {
+            entity,
+            type_path: type_path.to_string(),
+            field_path: "translation.x".to_string(),
+            old_value: None,
+            new_value: BsnValue::Float(4.0),
+            was_derived: false,
+        };
+        // Execute authors the component; use an empty field path marker for
+        // the removal case per the command contract.
+        command.execute(app.world_mut());
+        assert!(app.world().get::<Transform>(entity).is_some());
+
+        command.field_path = String::new();
+        command.undo(app.world_mut());
+        assert!(
+            app.world().get::<Transform>(entity).is_none(),
+            "undo removes the component execute authored"
+        );
+        let ast = app.world().resource::<SceneBsnAst>();
+        let pe = ast.ast_for(entity).expect("linked");
+        assert!(
+            ast.find_patch_by_type_path(pe, type_path).is_none(),
+            "document no longer carries the authored patch"
+        );
+    }
+
+    #[test]
+    fn derived_component_promotes_on_edit_and_demotes_on_undo() {
+        let mut app = field_app();
+        let entity = app
+            .world_mut()
+            .spawn(Transform::from_xyz(2.0, 0.0, 0.0))
+            .id();
+        create_entity_in_ast(app.world_mut(), entity, None);
+        jackdaw_bsn::sync_to_ast(app.world_mut(), entity, std::any::TypeId::of::<Transform>());
+        let type_path = "bevy_transform::components::transform::Transform";
+        {
+            let mut ast = app.world_mut().resource_mut::<SceneBsnAst>();
+            let pe = ast.ast_for(entity).unwrap();
+            ast.demote_to_derived(pe, type_path);
+        }
+
+        let mut command = SetBsnField {
+            entity,
+            type_path: type_path.to_string(),
+            field_path: "translation.x".to_string(),
+            old_value: Some(BsnValue::Float(2.0)),
+            new_value: BsnValue::Float(7.0),
+            was_derived: false,
+        };
+        command.execute(app.world_mut());
+        assert!(command.was_derived, "execute records prior derived state");
+        {
+            let ast = app.world().resource::<SceneBsnAst>();
+            let pe = ast.ast_for(entity).unwrap();
+            assert!(!ast.is_derived(pe, type_path), "edit promotes to authored");
+        }
+
+        command.undo(app.world_mut());
+        let ast = app.world().resource::<SceneBsnAst>();
+        let pe = ast.ast_for(entity).unwrap();
+        assert!(ast.is_derived(pe, type_path), "undo restores derived state");
+    }
 }

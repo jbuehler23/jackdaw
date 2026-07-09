@@ -170,6 +170,21 @@ pub fn apply_ast_to_ecs(world: &mut World, entity: Entity) {
     }
 }
 
+/// Apply a single component patch to an ECS entity. The editor's field-edit
+/// command uses this to mirror a document change onto the live entity through
+/// the same code paths as scene load.
+pub fn apply_component_patch(world: &mut World, entity: Entity, patch: &BsnPatch) {
+    match patch {
+        BsnPatch::Type(type_path) => apply_type_patch(world, entity, type_path),
+        BsnPatch::Struct(data) => apply_struct_patch(world, entity, data),
+        BsnPatch::TupleStruct(data) => apply_tuple_struct_patch(world, entity, data),
+        BsnPatch::Name(_)
+        | BsnPatch::Base(_)
+        | BsnPatch::Template(_, _)
+        | BsnPatch::Children(_) => {}
+    }
+}
+
 /// Apply a bare type patch (unit struct or enum variant with all defaults).
 fn apply_type_patch(world: &mut World, entity: Entity, type_path: &str) {
     let registry = world.resource::<AppTypeRegistry>().clone();
