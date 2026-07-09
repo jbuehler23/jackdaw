@@ -1537,6 +1537,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
         // Spawn from the resolved AST (one ECS entity per resolved AST node).
         let resolved_jsn = jsn_scene_from_ast(&resolved_ast);
         let spawned = load_scene_from_jsn(world, &resolved_jsn.scene, parent_path, &local_assets);
+        rebuild_bsn_doc(world, &spawned);
 
         // Install the unresolved AST as the source of truth (so save still
         // emits sparse references), binding the first N spawned entities (the
@@ -2456,6 +2457,7 @@ pub fn apply_ast_to_world(world: &mut World, ast: &jackdaw_jsn::SceneJsnAst) {
         .unwrap_or_else(|| PathBuf::from("."));
     let local_assets = load_inline_assets(world, &scene.assets, &parent_path);
     let spawned = load_scene_from_jsn(world, &scene.scene, &parent_path, &local_assets);
+    rebuild_bsn_doc(world, &spawned);
 
     // Install the unresolved ast as live, with authored nodes rebound
     // to their freshly-spawned ECS entities. Inherited descendants live
@@ -2700,6 +2702,20 @@ fn register_entity_in_bsn_doc(world: &mut World, entity: Entity) {
     };
     for value in values {
         crate::commands::sync_component_to_bsn_doc(world, entity, &*value, &registry);
+    }
+}
+
+/// Rebuild the BSN document from a freshly spawned entity set. World
+/// respawns (undo restore, tab swap) re-mint every entity, so the previous
+/// document's links are stale; replace it wholesale. Entities must arrive
+/// parent-first, which both the load and undo spawn paths guarantee.
+pub(crate) fn rebuild_bsn_doc(world: &mut World, spawned: &[Entity]) {
+    if world.get_resource::<jackdaw_bsn::SceneBsnAst>().is_none() {
+        return;
+    }
+    world.insert_resource(jackdaw_bsn::SceneBsnAst::default());
+    for &entity in spawned {
+        register_entity_in_bsn_doc(world, entity);
     }
 }
 

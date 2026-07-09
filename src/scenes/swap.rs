@@ -168,6 +168,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
 
     let local_assets = HashMap::new();
     let spawned = load_scene_from_jsn(world, &jsn_for_spawn.scene, &parent, &local_assets);
+    crate::scene_io::rebuild_bsn_doc(world, &spawned);
 
     // Re-bind the unresolved AST's per-node ecs_entity to the freshly
     // spawned entities and rebuild ecs_to_jsn. The first N spawned entries

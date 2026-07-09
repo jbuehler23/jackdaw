@@ -1319,3 +1319,63 @@ mod set_bsn_field_tests {
         assert!(ast.is_derived(pe, type_path), "undo restores derived state");
     }
 }
+
+#[cfg(test)]
+mod bsn_doc_coherence_tests {
+    use super::*;
+    use jackdaw_bsn::{BsnValue, SceneBsnAst, get_bsn_field};
+
+    #[test]
+    fn undo_respawn_rebuilds_the_bsn_document() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        app.init_resource::<SceneBsnAst>();
+        app.init_resource::<jackdaw_jsn::SceneJsnAst>();
+        app.init_resource::<crate::selection::Selection>();
+        app.init_resource::<jackdaw_commands::CommandHistory>();
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Name::new("Node"),
+                Transform::from_xyz(1.0, 0.0, 0.0),
+                jackdaw_scene_types::SceneRootTag,
+            ))
+            .id();
+        crate::scene_io::register_entity_in_ast(app.world_mut(), entity);
+        let snapshot = app.world().resource::<jackdaw_jsn::SceneJsnAst>().clone();
+
+        let type_path = "bevy_transform::components::transform::Transform";
+        let mut command = SetJsnField {
+            entity,
+            type_path: type_path.to_string(),
+            field_path: "translation.x".to_string(),
+            old_value: serde_json::json!(1.0),
+            new_value: serde_json::json!(9.0),
+            was_derived: false,
+        };
+        command.execute(app.world_mut());
+
+        // Undo restore path: respawn the world from the snapshot AST.
+        crate::scene_io::apply_ast_to_world(app.world_mut(), &snapshot);
+
+        // The respawn re-minted the entity; the document must follow it.
+        let mut query = app
+            .world_mut()
+            .query_filtered::<Entity, With<jackdaw_scene_types::SceneRootTag>>();
+        let respawned = query.single(app.world()).expect("respawned entity");
+        let ast = app.world().resource::<SceneBsnAst>();
+        let pe = ast
+            .ast_for(respawned)
+            .expect("document links the respawned entity");
+        let value = get_bsn_field(ast, pe, type_path, "translation.x");
+        assert!(
+            matches!(value, Some(BsnValue::Float(x)) if (x - 1.0).abs() < 1e-6),
+            "document reflects the restored value"
+        );
+        assert!(
+            ast.ast_for(entity).is_none() || entity == respawned,
+            "no stale link to the pre-undo entity"
+        );
+    }
+}
