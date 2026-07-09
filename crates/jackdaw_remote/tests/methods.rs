@@ -368,3 +368,84 @@ fn entity_bsn_preserves_host_scene_ast() {
         .expect("host SceneBsnAst restored after entity_bsn");
     assert_eq!(restored.roots.len(), 1, "host AST roots preserved");
 }
+
+#[test]
+fn archetypes_counts_cover_spawned_entities() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.world_mut().spawn(Transform::default());
+    app.world_mut().spawn(Transform::default());
+    app.world_mut()
+        .spawn((Transform::default(), Name::new("n")));
+    app.update();
+
+    let result = run_method(
+        &mut app,
+        jackdaw_remote::ecs_methods::jackdaw_archetypes_handler,
+        None,
+    )
+    .expect("ok");
+
+    let archetypes = result["archetypes"].as_array().expect("array");
+    assert!(!archetypes.is_empty());
+
+    // Transform requires GlobalTransform and TransformTreeChanged, so the
+    // "Transform-only" archetype (the two entities spawned without a Name)
+    // carries all three; distinguish it from the Name-bearing archetype by
+    // the absence of Name rather than by component count.
+    let transform_only = archetypes
+        .iter()
+        .find(|a| {
+            let comps = a["components"].as_array().unwrap();
+            let strs: Vec<&str> = comps.iter().map(|c| c.as_str().unwrap()).collect();
+            strs.iter().any(|c| c.contains("::transform::Transform"))
+                && !strs.iter().any(|c| c.contains("::name::Name"))
+        })
+        .expect("Transform-only archetype listed");
+    assert_eq!(transform_only["entity_count"], json!(2));
+
+    // Sorted by count descending.
+    let counts: Vec<u64> = archetypes
+        .iter()
+        .map(|a| a["entity_count"].as_u64().unwrap())
+        .collect();
+    let mut sorted = counts.clone();
+    sorted.sort_unstable_by(|a, b| b.cmp(a));
+    assert_eq!(counts, sorted);
+}
+
+fn named_probe_system() {}
+
+#[test]
+fn schedules_lists_systems_in_run_order() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_systems(Update, named_probe_system);
+    app.update();
+
+    let result = run_method(
+        &mut app,
+        jackdaw_remote::ecs_methods::jackdaw_schedules_handler,
+        None,
+    )
+    .expect("ok");
+
+    let schedules = result["schedules"].as_array().expect("array");
+    // Exact match: several schedule labels (PreUpdate, PostUpdate,
+    // FixedUpdate, ...) contain "Update" as a substring.
+    let update = schedules
+        .iter()
+        .find(|s| s["schedule"].as_str().unwrap() == "Update")
+        .expect("Update schedule listed");
+    assert_eq!(update["initialized"], json!(true));
+    let systems: Vec<&str> = update["systems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s.as_str().unwrap())
+        .collect();
+    assert!(
+        systems.iter().any(|s| s.contains("named_probe_system")),
+        "got: {systems:?}"
+    );
+}

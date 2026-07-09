@@ -1,5 +1,6 @@
 pub mod bsn_methods;
 pub mod diagnostics;
+pub mod ecs_methods;
 pub mod explorer;
 mod methods;
 pub mod playback;
@@ -111,7 +112,12 @@ impl Plugin for JackdawRemotePlugin {
                     .with_method_main(
                         "jackdaw/entity_bsn",
                         bsn_methods::jackdaw_entity_bsn_handler,
-                    ),
+                    )
+                    .with_method_main(
+                        "jackdaw/archetypes",
+                        ecs_methods::jackdaw_archetypes_handler,
+                    )
+                    .with_method_main("jackdaw/schedules", ecs_methods::jackdaw_schedules_handler),
             );
             let cors = bevy::remote::http::Headers::new()
                 .insert("Access-Control-Allow-Origin", "*")
@@ -168,6 +174,14 @@ impl Plugin for JackdawRemotePlugin {
         });
         register_if_missing(world, "jackdaw/entity_bsn", |w| {
             let id = w.register_system(bsn_methods::jackdaw_entity_bsn_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
+        register_if_missing(world, "jackdaw/archetypes", |w| {
+            let id = w.register_system(ecs_methods::jackdaw_archetypes_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
+        register_if_missing(world, "jackdaw/schedules", |w| {
+            let id = w.register_system(ecs_methods::jackdaw_schedules_handler);
             bevy::remote::RemoteMethodSystemId::Instant(id)
         });
     }
