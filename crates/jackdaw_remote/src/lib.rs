@@ -1,6 +1,7 @@
 pub mod diagnostics;
 pub mod explorer;
 mod methods;
+pub mod playback;
 pub mod scene_snapshot;
 pub mod schema;
 
@@ -89,6 +90,12 @@ impl Plugin for JackdawRemotePlugin {
             bevy_version: "0.19".to_string(),
         });
 
+        app.init_resource::<playback::PlaybackStepState>();
+        app.add_systems(
+            First,
+            playback::playback_step_system.before(bevy::time::TimeSystems),
+        );
+
         if !app.is_plugin_added::<RemotePlugin>() {
             app.add_plugins(
                 RemotePlugin::default()
@@ -97,7 +104,8 @@ impl Plugin for JackdawRemotePlugin {
                     .with_method_main(
                         "jackdaw/diagnostics",
                         diagnostics::jackdaw_diagnostics_handler,
-                    ),
+                    )
+                    .with_method_main("jackdaw/playback", playback::jackdaw_playback_handler),
             );
             let cors = bevy::remote::http::Headers::new()
                 .insert("Access-Control-Allow-Origin", "*")
@@ -142,6 +150,10 @@ impl Plugin for JackdawRemotePlugin {
         });
         register_if_missing(world, "jackdaw/diagnostics", |w| {
             let id = w.register_system(diagnostics::jackdaw_diagnostics_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
+        register_if_missing(world, "jackdaw/playback", |w| {
+            let id = w.register_system(playback::jackdaw_playback_handler);
             bevy::remote::RemoteMethodSystemId::Instant(id)
         });
     }
