@@ -289,3 +289,82 @@ fn apply_bsn_preserves_host_scene_ast() {
         .expect("host SceneBsnAst restored after apply");
     assert_eq!(restored.roots.len(), 1, "host AST roots preserved");
 }
+
+#[test]
+fn entity_bsn_emits_components_and_children() {
+    let mut app = bsn_app();
+    let child = app
+        .world_mut()
+        .spawn(Transform::from_xyz(0.0, 1.0, 0.0))
+        .id();
+    let root = app
+        .world_mut()
+        .spawn((Name::new("Exported"), Transform::from_xyz(4.0, 5.0, 6.0)))
+        .add_child(child)
+        .id();
+
+    let result = run_method(
+        &mut app,
+        jackdaw_remote::bsn_methods::jackdaw_entity_bsn_handler,
+        Some(json!({"entity": root.to_bits()})),
+    )
+    .expect("emit ok");
+
+    let bsn = result["bsn"].as_str().expect("bsn text");
+    assert!(bsn.contains("#Exported"), "got: {bsn}");
+    assert!(
+        bsn.contains("bevy_transform::components::transform::Transform"),
+        "got: {bsn}"
+    );
+    assert!(bsn.contains("Children ["), "got: {bsn}");
+
+    // Round trip: the emitted text must be valid BSN.
+    jackdaw_bsn::parse_bsn_text(bsn).expect("emitted BSN parses");
+}
+
+#[test]
+fn entity_bsn_unknown_entity_is_invalid_params() {
+    let mut app = bsn_app();
+    // Despawning frees the entity; its stale bits no longer resolve to a
+    // live entity, unlike an arbitrary raw u64 (see deviation note in the
+    // task 5 report: u32::MAX collides with a real entity under bevy 0.19's
+    // NonMaxU32 index encoding).
+    let despawned = app.world_mut().spawn_empty().id();
+    app.world_mut().despawn(despawned);
+
+    let result = run_method(
+        &mut app,
+        jackdaw_remote::bsn_methods::jackdaw_entity_bsn_handler,
+        Some(json!({"entity": despawned.to_bits()})),
+    );
+    assert_eq!(
+        result.unwrap_err().code,
+        bevy::remote::error_codes::INVALID_PARAMS
+    );
+}
+
+#[test]
+fn entity_bsn_preserves_host_scene_ast() {
+    use jackdaw_bsn::SceneBsnAst;
+
+    let mut app = bsn_app();
+    let target = app.world_mut().spawn(Transform::default()).id();
+
+    let mut host_ast = SceneBsnAst::default();
+    let node = host_ast.create_entity_node(Vec::new());
+    host_ast.add_to_roots(node);
+    app.world_mut().insert_resource(host_ast);
+
+    run_method(
+        &mut app,
+        jackdaw_remote::bsn_methods::jackdaw_entity_bsn_handler,
+        Some(json!({"entity": target.to_bits()})),
+    )
+    .expect("emit ok");
+
+    let restored = app
+        .world()
+        .get_resource::<SceneBsnAst>()
+        .expect("host SceneBsnAst restored after entity_bsn");
+    assert_eq!(restored.roots.len(), 1, "host AST roots preserved");
+}
