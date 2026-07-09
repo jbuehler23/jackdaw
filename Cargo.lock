@@ -5651,6 +5651,7 @@ name = "jackdaw_remote"
 version = "0.5.0"
 dependencies = [
  "bevy",
+ "include_dir",
  "jackdaw_pie_protocol",
  "serde",
  "serde_json",

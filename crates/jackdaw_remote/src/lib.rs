@@ -1,3 +1,4 @@
+pub mod explorer;
 mod methods;
 pub mod scene_snapshot;
 pub mod schema;
@@ -25,9 +26,15 @@ pub const DEFAULT_PORT: u16 = 15702;
 /// ```rust,ignore
 /// app.add_plugins(JackdawRemotePlugin::default());
 /// ```
+///
+/// When the host app adds `RemoteHttpPlugin` itself, it must configure CORS
+/// headers itself for the browser explorer to reach BRP; see
+/// `RemoteHttpPlugin::with_headers`.
 pub struct JackdawRemotePlugin {
     /// BRP HTTP port (default: 15702).
     pub port: u16,
+    /// Explorer static server port (default: 15703).
+    pub explorer_port: u16,
     /// App name for identification in the editor.
     pub app_name: Option<String>,
 }
@@ -36,6 +43,7 @@ impl Default for JackdawRemotePlugin {
     fn default() -> Self {
         Self {
             port: DEFAULT_PORT,
+            explorer_port: explorer::DEFAULT_EXPLORER_PORT,
             app_name: None,
         }
     }
@@ -45,6 +53,12 @@ impl JackdawRemotePlugin {
     /// Set the HTTP port for BRP.
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = port;
+        self
+    }
+
+    /// Set the port for the explorer static server.
+    pub fn with_explorer_port(mut self, port: u16) -> Self {
+        self.explorer_port = port;
         self
     }
 
@@ -80,7 +94,20 @@ impl Plugin for JackdawRemotePlugin {
                     .with_method_main("jackdaw/app_info", jackdaw_app_info_handler)
                     .with_method_main("jackdaw/scene_snapshot", scene_snapshot_handler),
             );
-            app.add_plugins(RemoteHttpPlugin::default().with_port(self.port));
+            let cors = bevy::remote::http::Headers::new()
+                .insert("Access-Control-Allow-Origin", "*")
+                .insert("Access-Control-Allow-Headers", "Content-Type")
+                .insert("Access-Control-Allow-Methods", "POST, OPTIONS");
+            app.add_plugins(
+                RemoteHttpPlugin::default()
+                    .with_port(self.port)
+                    .with_headers(cors),
+            );
+        }
+
+        match explorer::start_explorer_server(self.explorer_port) {
+            Ok(port) => info!("Jackdaw explorer available at http://localhost:{port}"),
+            Err(err) => warn!("Jackdaw explorer server failed to start: {err}"),
         }
 
         app.add_systems(Startup, methods::generate_component_definitions);
