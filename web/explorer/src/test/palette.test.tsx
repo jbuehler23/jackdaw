@@ -13,7 +13,7 @@ vi.mock('../lib/brp', async (importOriginal) => {
 });
 
 import { CommandPalette, paletteOpen } from '../components/CommandPalette';
-import { treePoll } from '../components/TreePanel';
+import { treePoll } from '../lib/treeData';
 import { page, selectedEntity } from '../lib/state';
 
 beforeEach(async () => {

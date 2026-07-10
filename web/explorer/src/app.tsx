@@ -6,6 +6,7 @@ import {
   Boxes,
   Braces,
   ChartLine,
+  Network,
   Pause,
   Play,
   Search,
@@ -26,6 +27,7 @@ import { StatsPage } from './components/StatsPage';
 import { BsnPage } from './components/BsnPage';
 import { CommandPalette, paletteOpen } from './components/CommandPalette';
 import { page, pollingPaused, simPaused, type Page } from './lib/state';
+import { initialPage, writePage } from './lib/urlState';
 import { appInfo, startConnection, status } from './lib/connection';
 import { currentHost } from './lib/brp';
 import { diagnosticsPoll } from './lib/stats';
@@ -33,11 +35,15 @@ import { fmtNumber } from './lib/format';
 import { toasts, type ToastKind } from './lib/toasts';
 import { stepSim, toggleSim, togglePolling } from './lib/commands';
 
+page.value = initialPage() ?? 'entities';
+
 const RAIL_PAGES: { id: Page; title: string; icon: typeof Boxes }[] = [
   { id: 'entities', title: 'Entities', icon: Boxes },
+  { id: 'viewport', title: 'Viewport', icon: Box },
   { id: 'queries', title: 'Queries', icon: SearchCode },
   { id: 'stats', title: 'Stats', icon: ChartLine },
   { id: 'bsn', title: 'BSN', icon: Braces },
+  { id: 'ecs', title: 'ECS internals', icon: Network },
 ];
 
 function connectionLabel(): string {
@@ -121,6 +127,10 @@ function PageContent() {
       return <StatsPage />;
     case 'bsn':
       return <BsnPage />;
+    case 'viewport':
+      return <div class="pane" style="flex:1">Viewport page</div>;
+    case 'ecs':
+      return <div class="pane" style="flex:1">ECS internals page</div>;
     default:
       return null;
   }
@@ -132,6 +142,10 @@ export function App() {
     diagnosticsPoll.start();
     return () => diagnosticsPoll.stop();
   }, []);
+
+  useEffect(() => {
+    writePage(page.value);
+  }, [page.value]);
 
   useEffect(() => {
     function onKeyDown(ev: KeyboardEvent) {

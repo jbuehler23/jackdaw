@@ -14,7 +14,7 @@ import { jackdaw } from '../lib/brp';
 import { capabilities } from '../lib/connection';
 import { page, selectedEntity } from '../lib/state';
 import { toast } from '../lib/toasts';
-import { treePoll } from './TreePanel';
+import { treePoll } from '../lib/treeData';
 
 const DEFAULT_DOC = `// Applied to the running world via jackdaw/apply_bsn.
 // Full type paths, exactly like on-disk BSN scenes.

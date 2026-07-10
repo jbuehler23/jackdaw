@@ -20,7 +20,8 @@ vi.mock('../lib/brp', async (importOriginal) => {
   };
 });
 
-import { TreePanel, treePoll } from '../components/TreePanel';
+import { TreePanel } from '../components/TreePanel';
+import { treePoll } from '../lib/treeData';
 
 beforeEach(() => {
   selectedEntity.value = null;

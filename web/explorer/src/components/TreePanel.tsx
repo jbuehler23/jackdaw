@@ -5,14 +5,12 @@ import { useEffect } from 'preact/hooks';
 import { ChevronRight, ListTree, Plus, Search } from 'lucide-preact';
 import { Icon } from './Icon';
 import { ContextMenu, type ContextMenuTarget } from './ContextMenu';
-import { assembleTree, fetchTreeRows, type TreeNode } from '../lib/tree';
+import { type TreeNode } from '../lib/tree';
 import { world } from '../lib/brp';
-import { createPoll } from '../lib/poll';
+import { assembleTree, treePoll } from '../lib/treeData';
 import { selectedEntity } from '../lib/state';
 import { entityLabel } from '../lib/format';
 import { toast } from '../lib/toasts';
-
-export const treePoll = createPoll(fetchTreeRows, 2000);
 
 const filterText = signal('');
 const expanded = signal<Set<number>>(new Set());

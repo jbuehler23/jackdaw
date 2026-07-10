@@ -17,7 +17,7 @@ import { selectedEntity } from '../lib/state';
 import { entityLabel, shortTypeName } from '../lib/format';
 import { toast } from '../lib/toasts';
 import { capabilities } from '../lib/connection';
-import { treePoll } from './TreePanel';
+import { treePoll } from '../lib/treeData';
 import { assembleTree, type EntityKind, type TreeNode } from '../lib/tree';
 
 interface InspectorData {

@@ -5,7 +5,7 @@ import { useEffect, useRef } from 'preact/hooks';
 import { Boxes, Braces, ChartLine, Pause, Play, Search, SearchCode } from 'lucide-preact';
 import type { LucideIcon } from 'lucide-preact';
 import { Icon } from './Icon';
-import { treePoll } from './TreePanel';
+import { treePoll } from '../lib/treeData';
 import { assembleTree, type TreeNode } from '../lib/tree';
 import { page, pollingPaused, selectedEntity, simPaused, type Page } from '../lib/state';
 import { toggleSim, togglePolling } from '../lib/commands';
