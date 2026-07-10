@@ -2,7 +2,7 @@
 // shell actions. Ported from the PoC's paletteItems/renderPalette.
 import { signal } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
-import { Boxes, Braces, ChartLine, Pause, Play, Search, SearchCode } from 'lucide-preact';
+import { Box, Boxes, Braces, ChartLine, Network, Pause, Play, Search, SearchCode } from 'lucide-preact';
 import type { LucideIcon } from 'lucide-preact';
 import { Icon } from './Icon';
 import { treePoll } from '../lib/treeData';
@@ -56,6 +56,8 @@ function paletteItems(query: string): PaletteItem[] {
     { label: 'Go to Queries', hint: 'page', icon: SearchCode, dot: null, run: () => switchPage('queries') },
     { label: 'Go to Stats', hint: 'page', icon: ChartLine, dot: null, run: () => switchPage('stats') },
     { label: 'Go to BSN', hint: 'page', icon: Braces, dot: null, run: () => switchPage('bsn') },
+    { label: 'Go to Viewport', hint: 'page', icon: Box, dot: null, run: () => switchPage('viewport') },
+    { label: 'Go to ECS internals', hint: 'page', icon: Network, dot: null, run: () => switchPage('ecs') },
     {
       label: pollingPaused.value ? 'Resume polling' : 'Pause polling',
       hint: 'connection',

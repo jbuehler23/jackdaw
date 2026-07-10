@@ -285,7 +285,7 @@ describe('ScheduleTab', () => {
     expect(getByText(/timings not collected/i)).toBeTruthy();
   });
 
-  it('renders a legacy string[] systems shape without edges or set chips', async () => {
+  it('renders a pre-normalized systems objects render without edges without edges or set chips', async () => {
     schedulesMock.mockResolvedValue({
       schedules: [{ schedule: 'Update', initialized: true, systems: [{ name: 'a::legacy_sys', sets: [] }], edges: [] }],
     });
