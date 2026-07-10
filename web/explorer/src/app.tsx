@@ -1,6 +1,6 @@
 // app.tsx: workbench shell. Topbar (brand, sim playback, connection, polling toggle),
 // icon rail for page navigation, status bar, and toast overlay.
-import { useEffect } from 'preact/hooks';
+import { useEffect, useRef } from 'preact/hooks';
 import {
   Activity,
   Boxes,
@@ -19,6 +19,7 @@ import {
   Zap,
 } from 'lucide-preact';
 import { Icon } from './components/Icon';
+import { TreePanel } from './components/TreePanel';
 import { page, pollingPaused, simPaused, type Page } from './lib/state';
 import { appInfo, startConnection, status } from './lib/connection';
 import { currentHost, jackdaw } from './lib/brp';
@@ -84,10 +85,57 @@ function Toasts() {
   );
 }
 
+// Drag-resizes the pane with the given id, mirroring the PoC's wireDivider:
+// dirRight flips the drag direction for a divider that sits right of its pane.
+function useDividerDrag(paneId: string, dirRight: boolean) {
+  const drag = useRef<{ x: number; width: number } | null>(null);
+
+  function onPointerDown(ev: PointerEvent) {
+    const pane = document.getElementById(paneId);
+    if (!pane) return;
+    drag.current = { x: ev.clientX, width: pane.offsetWidth };
+    (ev.currentTarget as HTMLElement).classList.add('dragging');
+    (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);
+  }
+
+  function onPointerMove(ev: PointerEvent) {
+    const pane = document.getElementById(paneId);
+    if (!drag.current || !pane) return;
+    const dx = (ev.clientX - drag.current.x) * (dirRight ? -1 : 1);
+    pane.style.width = `${Math.max(200, Math.min(560, drag.current.width + dx))}px`;
+  }
+
+  function onPointerUp(ev: PointerEvent) {
+    drag.current = null;
+    (ev.currentTarget as HTMLElement).classList.remove('dragging');
+  }
+
+  return { onPointerDown, onPointerMove, onPointerUp };
+}
+
+function EntitiesPage() {
+  const divider = useDividerDrag('tree-pane', false);
+
+  return (
+    <>
+      <TreePanel />
+      <div
+        class="divider"
+        onPointerDown={divider.onPointerDown}
+        onPointerMove={divider.onPointerMove}
+        onPointerUp={divider.onPointerUp}
+      />
+      <div class="pane" style="flex:1">
+        Inspector
+      </div>
+    </>
+  );
+}
+
 function PageContent() {
   switch (page.value) {
     case 'entities':
-      return <div class="pane" style="flex:1">Entities page</div>;
+      return <EntitiesPage />;
     case 'queries':
       return <div class="pane" style="flex:1">Queries page</div>;
     case 'stats':

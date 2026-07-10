@@ -6,6 +6,17 @@ vi.mock('../lib/brp', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../lib/brp')>();
   return {
     ...mod,
+    world: {
+      query: vi.fn().mockResolvedValue([]),
+      listComponents: vi.fn().mockResolvedValue([]),
+      getComponents: vi.fn().mockResolvedValue({}),
+      mutateComponents: vi.fn().mockResolvedValue(undefined),
+      insertComponents: vi.fn().mockResolvedValue(undefined),
+      removeComponents: vi.fn().mockResolvedValue(undefined),
+      spawnEntity: vi.fn().mockResolvedValue(0),
+      despawnEntity: vi.fn().mockResolvedValue(undefined),
+      reparentEntities: vi.fn().mockResolvedValue(undefined),
+    },
     jackdaw: {
       ...mod.jackdaw,
       appInfo: vi.fn().mockResolvedValue({ app_name: 'Test Game', bevy_version: '0.19' }),
