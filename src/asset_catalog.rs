@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bevy::asset::UntypedAssetId;
 use bevy::prelude::*;
-use jackdaw_jsn::format::{JsnAssets, JsnCatalog, JsnHeader};
+use jackdaw_jsn::format::{JsnAssets, JsnCatalog};
 
 /// Project-level asset catalog for cross-scene deduplication.
 ///
@@ -52,10 +52,29 @@ pub fn load_catalog(world: &mut World) {
     let json = match std::fs::read_to_string(&catalog_path) {
         Ok(json) => json,
         Err(err) => {
-            warn!("Failed to read catalog.jsn: {err}");
+            warn!("Failed to read {}: {err}", catalog_path.display());
             return;
         }
     };
+
+    if catalog_path.extension().is_some_and(|e| e == "bsn") {
+        match jackdaw_bsn::load_bsn_assets(world, &json) {
+            Ok(entries) => {
+                let count = entries.len();
+                let mut catalog = world.resource_mut::<AssetCatalog>();
+                for entry in entries {
+                    // Scenes reference catalog assets as `@Name`.
+                    let name = format!("@{}", entry.name);
+                    catalog.id_to_name.insert(entry.handle.id(), name.clone());
+                    catalog.handles.insert(name, entry.handle);
+                }
+                catalog.dirty = false;
+                info!("Loaded asset catalog with {count} entries");
+            }
+            Err(err) => warn!("Failed to parse {}: {err}", catalog_path.display()),
+        }
+        return;
+    }
 
     let jsn_catalog: JsnCatalog = match serde_json::from_str(&json) {
         Ok(c) => c,
@@ -97,18 +116,18 @@ pub fn save_catalog(world: &mut World) {
         return;
     }
 
-    let jsn_catalog = JsnCatalog {
-        jsn: JsnHeader::default(),
-        assets: catalog.assets.clone(),
-    };
-
-    let json = match serde_json::to_string_pretty(&jsn_catalog) {
-        Ok(json) => json,
-        Err(err) => {
-            warn!("Failed to serialize catalog: {err}");
-            return;
-        }
-    };
+    // The catalog persists as `.bsn`, reflected from the live asset stores;
+    // the cached JSON values only feed legacy tooling until deletion.
+    let refs: Vec<jackdaw_bsn::CatalogAssetRef> = catalog
+        .id_to_name
+        .iter()
+        .map(|(&asset_id, name)| jackdaw_bsn::CatalogAssetRef {
+            name: name.trim_start_matches(['@', '#']).to_string(),
+            type_id: asset_id.type_id(),
+            asset_id,
+        })
+        .collect();
+    let json = jackdaw_bsn::serialize_assets_to_bsn(world, &refs);
 
     // Ensure parent directory exists
     if let Some(parent) = catalog_path.parent() {
@@ -145,23 +164,28 @@ pub fn add_to_catalog_assets(
 
 /// Resolve the catalog file path for loading.
 ///
-/// Prefers `.jsn/catalog.jsn`, falls back to legacy `assets/catalog.jsn`.
+/// Prefers the `.bsn` catalog (what conversion and saves write), then the
+/// `.jsn` one, in the config directory first and the legacy assets-dir
+/// location second.
 fn catalog_file_path(world: &World) -> Option<std::path::PathBuf> {
     let project = world.get_resource::<crate::project::ProjectRoot>()?;
-    let new_path = project.jsn_dir().join("catalog.jsn");
-    if new_path.is_file() {
-        return Some(new_path);
-    }
-    let legacy_path = project.assets_dir().join("catalog.jsn");
-    if legacy_path.is_file() {
-        return Some(legacy_path);
+    let candidates = [
+        project.jsn_dir().join("catalog.bsn"),
+        project.jsn_dir().join("catalog.jsn"),
+        project.assets_dir().join("catalog.bsn"),
+        project.assets_dir().join("catalog.jsn"),
+    ];
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
     }
     // No catalog exists yet
-    Some(new_path)
+    Some(project.jsn_dir().join("catalog.bsn"))
 }
 
-/// Always returns `.jsn/catalog.jsn`. Saves always go to the new location.
+/// Always returns `.jsn/catalog.bsn`. Saves always go to the new location.
 fn catalog_save_path(world: &World) -> Option<std::path::PathBuf> {
     let project = world.get_resource::<crate::project::ProjectRoot>()?;
-    Some(project.jsn_dir().join("catalog.jsn"))
+    Some(project.jsn_dir().join("catalog.bsn"))
 }

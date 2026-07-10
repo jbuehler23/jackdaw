@@ -534,3 +534,59 @@ fn editor_opens_and_saves_bsn_scenes() {
     load_scene_from_file(app2.world_mut(), &bsn_path);
     assert!(find_by_name(app2.world_mut(), "Hero").is_some());
 }
+
+#[test]
+fn catalog_round_trips_as_bsn() {
+    use jackdaw::asset_catalog::{AssetCatalog, load_catalog, save_catalog};
+    use jackdaw::project::ProjectRoot;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join(".jsn")).unwrap();
+
+    fn project_app(root: &std::path::Path) -> App {
+        let mut app = headless_app();
+        app.init_resource::<AssetCatalog>();
+        app.world_mut().insert_resource(ProjectRoot {
+            root: root.to_path_buf(),
+            config: jackdaw_jsn::JsnProject {
+                jsn: jackdaw_jsn::format::JsnHeader::default(),
+                project: jackdaw_jsn::JsnProjectConfig::default(),
+            },
+        });
+        app
+    }
+
+    // Populate a catalog with a live material and save it.
+    let mut app = project_app(dir.path());
+    let handle = app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial {
+            metallic: 0.75,
+            ..Default::default()
+        })
+        .untyped();
+    {
+        let mut catalog = app.world_mut().resource_mut::<AssetCatalog>();
+        catalog.insert("@Steel".to_string(), handle);
+        catalog.dirty = true;
+    }
+    save_catalog(app.world_mut());
+
+    let catalog_path = dir.path().join(".jsn/catalog.bsn");
+    let text = std::fs::read_to_string(&catalog_path).expect("catalog.bsn written");
+    assert!(text.contains("#Steel"), "{text}");
+    assert!(text.contains("metallic"), "{text}");
+
+    // A fresh app loads it back and exposes the @Name handle.
+    let mut app2 = project_app(dir.path());
+    load_catalog(app2.world_mut());
+    let catalog = app2.world().resource::<AssetCatalog>();
+    let loaded = catalog.handles.get("@Steel").expect("catalog entry loaded");
+    let material = app2
+        .world()
+        .resource::<Assets<StandardMaterial>>()
+        .get(&loaded.clone().typed::<StandardMaterial>())
+        .expect("material in store");
+    assert!((material.metallic - 0.75).abs() < 1e-6);
+}
