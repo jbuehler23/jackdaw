@@ -1,10 +1,11 @@
 // EcsPage.tsx: ECS internals page shell. Three doc-tabs (Relationships,
-// Schedule, Archetypes) swapped by a local signal; Schedule and Archetypes are
-// stubs here (Task 7 replaces them with the real views).
+// Schedule, Archetypes) swapped by a local signal.
 import { signal } from '@preact/signals';
 import { GitFork, Layers, Workflow } from 'lucide-preact';
 import { Icon } from './Icon';
 import { RelationshipsTab } from './RelationshipsTab';
+import { ScheduleTab } from './ScheduleTab';
+import { ArchetypesTab } from './ArchetypesTab';
 
 type EcsTab = 'rel' | 'sched' | 'arch';
 
@@ -36,20 +37,8 @@ export function EcsPage() {
       <div class={`ecs-body${ecsTab.value === 'rel' ? ' active' : ''}`}>
         {ecsTab.value === 'rel' && <RelationshipsTab />}
       </div>
-      <div class={`ecs-body${ecsTab.value === 'sched' ? ' active' : ''}`}>
-        {ecsTab.value === 'sched' && (
-          <div class="pane" style="flex:1">
-            Schedule
-          </div>
-        )}
-      </div>
-      <div class={`ecs-body${ecsTab.value === 'arch' ? ' active' : ''}`}>
-        {ecsTab.value === 'arch' && (
-          <div class="pane" style="flex:1">
-            Archetypes
-          </div>
-        )}
-      </div>
+      <div class={`ecs-body${ecsTab.value === 'sched' ? ' active' : ''}`}>{ecsTab.value === 'sched' && <ScheduleTab />}</div>
+      <div class={`ecs-body${ecsTab.value === 'arch' ? ' active' : ''}`}>{ecsTab.value === 'arch' && <ArchetypesTab />}</div>
     </div>
   );
 }

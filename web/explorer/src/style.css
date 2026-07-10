@@ -662,6 +662,41 @@ table.results tr:hover td { background: rgba(255,255,255,0.04); }
 .rel-legend .note { font-style: italic; }
 .rel-hint { position: absolute; bottom: 8px; left: 10px; font-size: 10px; color: var(--text-secondary); pointer-events: none; }
 
+.sched-scroll { position: absolute; inset: 0; overflow: auto; padding: 14px; }
+.sched-lanes { display: flex; gap: 10px; align-items: flex-start; min-width: max-content; position: relative; }
+.sched-set {
+  min-width: 190px;
+  background: var(--bg-window); border: 1px solid var(--border-subtle); border-radius: 5px;
+  padding: 8px;
+}
+.sched-set > h4 {
+  font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--warn); margin: 0 0 8px 2px;
+}
+.sys-box {
+  background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 3px;
+  padding: 5px 8px 6px; margin-bottom: 6px;
+  font-size: 11px;
+}
+.sys-box .sys-name { font-family: var(--font-mono); font-size: 10px; color: var(--text-primary); }
+.sys-box .sys-crate { font-size: 9px; color: var(--text-secondary); }
+.sys-box .sys-bar { height: 3px; border-radius: 2px; background: var(--bg-elevated); margin-top: 4px; overflow: hidden; }
+.sys-box .sys-bar i { display: block; height: 100%; background: var(--accent); }
+.sys-box .sys-time { font-family: var(--font-mono); font-size: 9px; color: var(--text-secondary); float: right; font-variant-numeric: tabular-nums; }
+.sys-box.user .sys-bar i { background: #42B983; }
+.sched-note { margin-top: 10px; font-size: 10px; color: var(--text-secondary); max-width: 720px; }
+
+.arch-scroll { position: absolute; inset: 0; overflow: auto; }
+.arch-meta { padding: 10px 12px 0; font-size: 11px; color: var(--text-secondary); }
+.comp-chip {
+  display: inline-block; margin: 1px 2px;
+  padding: 1px 6px; border-radius: 3px;
+  background: var(--bg-input); border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono); font-size: 9px; color: var(--text-value);
+}
+.count-bar { height: 4px; width: 120px; background: var(--bg-elevated); border-radius: 2px; overflow: hidden; display: inline-block; vertical-align: middle; }
+.count-bar i { display: block; height: 100%; background: var(--accent); }
+
 .rel-toolbar {
   position: absolute; top: 8px; left: 8px; z-index: 6;
   display: flex; gap: 6px; align-items: center;

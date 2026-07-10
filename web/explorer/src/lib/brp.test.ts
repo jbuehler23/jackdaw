@@ -59,6 +59,66 @@ describe('typed wrappers', () => {
   });
 });
 
+describe('jackdaw.schedules', () => {
+  it('normalizes the legacy systems: string[] shape with no edges', async () => {
+    mockFetchOnce({
+      jsonrpc: '2.0',
+      id: 1,
+      result: { schedules: [{ schedule: 'Update', initialized: true, systems: ['a::b::sys_one', 'c::sys_two'] }] },
+    });
+    const { schedules } = await jackdaw.schedules();
+    expect(schedules).toEqual([
+      {
+        schedule: 'Update',
+        initialized: true,
+        systems: [
+          { name: 'a::b::sys_one', sets: [] },
+          { name: 'c::sys_two', sets: [] },
+        ],
+        edges: [],
+      },
+    ]);
+  });
+
+  it('passes the enriched systems + edges shape through', async () => {
+    mockFetchOnce({
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        schedules: [
+          {
+            schedule: 'Update',
+            initialized: true,
+            systems: [
+              { name: 'a::sys_one', sets: ['Physics'] },
+              { name: 'b::sys_two', sets: [] },
+            ],
+            edges: [[0, 1]],
+          },
+        ],
+      },
+    });
+    const { schedules } = await jackdaw.schedules();
+    expect(schedules[0].systems).toEqual([
+      { name: 'a::sys_one', sets: ['Physics'] },
+      { name: 'b::sys_two', sets: [] },
+    ]);
+    expect(schedules[0].edges).toEqual([[0, 1]]);
+  });
+});
+
+describe('jackdaw.archetypes', () => {
+  it('types the response', async () => {
+    mockFetchOnce({
+      jsonrpc: '2.0',
+      id: 1,
+      result: { archetypes: [{ components: ['a::B'], entity_count: 3, bytes_per_entity: 12 }] },
+    });
+    const { archetypes } = await jackdaw.archetypes();
+    expect(archetypes).toEqual([{ components: ['a::B'], entity_count: 3, bytes_per_entity: 12 }]);
+  });
+});
+
 describe('discoverCapabilities', () => {
   it('returns the method-name set', async () => {
     mockFetchOnce({ jsonrpc: '2.0', id: 1, result: { methods: [{ name: 'jackdaw/diagnostics' }, { name: 'world.query' }] } });

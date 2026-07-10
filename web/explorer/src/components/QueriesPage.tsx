@@ -14,15 +14,15 @@ import { entityLabel, fmtNumber, shortTypeName } from '../lib/format';
 import { toast } from '../lib/toasts';
 import { NAME } from '../lib/tree';
 
-const fetchChips = signal<string[]>([]);
-const withChips = signal<string[]>([]);
+export const fetchChips = signal<string[]>([]);
+export const withChips = signal<string[]>([]);
 const withoutChips = signal<string[]>([]);
 const autoRefresh = signal(false);
 const queryRows = signal<QueryRow[] | null>(null);
 const queryNote = signal<string | null>(null);
 const queryDurationMs = signal(0);
 
-async function runQuery(options: { silent?: boolean } = {}) {
+export async function runQuery(options: { silent?: boolean } = {}) {
   const fetchTypes = fetchChips.value;
   const withTypes = withChips.value;
   const withoutTypes = withoutChips.value;
@@ -66,6 +66,16 @@ function compPreview(value: unknown, schema: ComponentSchema | undefined): strin
     }
   }
   return JSON.stringify(value).slice(0, 60);
+}
+
+/** Seeds the query builder's chips (e.g. from an archetype row's "query"
+ * button) and runs the query. Clears the without-filter so a stale
+ * exclusion from a prior manual query doesn't hide the seeded result. */
+export function seedQuery(fetch: string[], withList: string[]) {
+  fetchChips.value = fetch;
+  withChips.value = withList;
+  withoutChips.value = [];
+  void runQuery();
 }
 
 function jumpToEntity(entity: number) {

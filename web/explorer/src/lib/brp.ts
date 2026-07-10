@@ -64,6 +64,43 @@ export const world = {
     brpCall<void>('world.reparent_entities', parent === null ? { entities } : { entities, parent }),
 };
 
+export interface ScheduleSystem {
+  name: string;
+  sets: string[];
+}
+export interface ScheduleInfo {
+  schedule: string;
+  initialized: boolean;
+  systems: ScheduleSystem[];
+  edges: [number, number][];
+}
+export interface ArchetypeInfo {
+  components: string[];
+  entity_count: number;
+  bytes_per_entity: number;
+}
+
+// Raw wire shape for `jackdaw/schedules`: older servers send `systems` as a
+// plain array of names with no `edges`; the enriched shape sends
+// `{name, sets}` entries plus a run-order-indexed `edges` list. Both are
+// normalized to ScheduleInfo below so callers never branch on server version.
+interface RawScheduleSystem {
+  name?: string;
+  sets?: string[];
+}
+interface RawScheduleInfo {
+  schedule: string;
+  initialized: boolean;
+  systems: (string | RawScheduleSystem)[];
+  edges?: [number, number][];
+}
+
+function normalizeScheduleSystems(systems: (string | RawScheduleSystem)[]): ScheduleSystem[] {
+  return systems.map((system) =>
+    typeof system === 'string' ? { name: system, sets: [] } : { name: system.name ?? '', sets: system.sets ?? [] },
+  );
+}
+
 export const jackdaw = {
   appInfo: () => brpCall<{ app_name: string; bevy_version: string }>('jackdaw/app_info'),
   diagnostics: () =>
@@ -71,6 +108,18 @@ export const jackdaw = {
   playback: (action: 'pause' | 'resume' | 'step') => brpCall<{ paused: boolean }>('jackdaw/playback', { action }),
   applyBsn: (source: string) => brpCall<{ entities: number[] }>('jackdaw/apply_bsn', { source }),
   entityBsn: (entity: number) => brpCall<{ bsn: string }>('jackdaw/entity_bsn', { entity }),
+  schedules: async (): Promise<{ schedules: ScheduleInfo[] }> => {
+    const raw = await brpCall<{ schedules: RawScheduleInfo[] }>('jackdaw/schedules');
+    return {
+      schedules: raw.schedules.map((s) => ({
+        schedule: s.schedule,
+        initialized: s.initialized,
+        systems: normalizeScheduleSystems(s.systems),
+        edges: s.edges ?? [],
+      })),
+    };
+  },
+  archetypes: () => brpCall<{ archetypes: ArchetypeInfo[] }>('jackdaw/archetypes'),
 };
 
 export async function discoverCapabilities(): Promise<Set<string>> {

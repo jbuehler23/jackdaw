@@ -1,9 +1,11 @@
 import { fireEvent, render, waitFor } from '@testing-library/preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { queryMock, entityBsnMock } = vi.hoisted(() => ({
+const { queryMock, entityBsnMock, schedulesMock, archetypesMock } = vi.hoisted(() => ({
   queryMock: vi.fn().mockResolvedValue([]),
   entityBsnMock: vi.fn().mockResolvedValue({ bsn: '' }),
+  schedulesMock: vi.fn().mockResolvedValue({ schedules: [] }),
+  archetypesMock: vi.fn().mockResolvedValue({ archetypes: [] }),
 }));
 
 vi.mock('../lib/brp', async (importOriginal) => {
@@ -11,16 +13,27 @@ vi.mock('../lib/brp', async (importOriginal) => {
   return {
     ...mod,
     world: { ...mod.world, query: queryMock },
-    jackdaw: { ...mod.jackdaw, entityBsn: entityBsnMock },
+    jackdaw: { ...mod.jackdaw, entityBsn: entityBsnMock, schedules: schedulesMock, archetypes: archetypesMock },
   };
+});
+
+const { loadRegistryMock } = vi.hoisted(() => ({ loadRegistryMock: vi.fn().mockResolvedValue(new Map()) }));
+vi.mock('../lib/registry', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../lib/registry')>();
+  return { ...mod, loadRegistry: loadRegistryMock };
 });
 
 import { EcsPage } from '../components/EcsPage';
 import { buildGraphData, computeVisible, entityPath, pickNode, RelationshipsTab, shouldWarm } from '../components/RelationshipsTab';
+import { ScheduleTab, afterNotes, orderSchedules } from '../components/ScheduleTab';
+import { ArchetypesTab, seedFromArchetype } from '../components/ArchetypesTab';
+import { fetchChips, withChips } from '../components/QueriesPage';
 import { treePoll } from '../lib/treeData';
 import { page, selectedEntity } from '../lib/state';
+import { capabilities } from '../lib/connection';
 import { NAME, CHILD_OF } from '../lib/tree';
 import type { QueryRow } from '../lib/brp';
+import type { ComponentSchema } from '../lib/registry';
 
 // jsdom has no canvas implementation: stub getContext with a recording object
 // exposing every method/property the drawing code touches.
@@ -131,6 +144,7 @@ describe('EcsPage', () => {
     queryMock.mockResolvedValue([]);
     selectedEntity.value = null;
     page.value = 'ecs';
+    capabilities.value = new Set();
     treePoll.stop();
     treePoll.data.value = null;
     vi.spyOn(treePoll, 'refresh').mockResolvedValue(undefined);
@@ -173,5 +187,162 @@ describe('EcsPage', () => {
     expect(document.querySelector('.rel-info.on')).toBeTruthy();
     expect(document.querySelector('.rel-info')?.textContent).toContain('children');
     expect(document.querySelector('.rel-info')?.textContent).toContain('1');
+  });
+});
+
+describe('orderSchedules / afterNotes', () => {
+  it('orders fixed lifecycle schedules first, then others alphabetically, skipping uninitialized extras', () => {
+    const schedules = [
+      { schedule: 'Zeta', initialized: true, systems: [], edges: [] },
+      { schedule: 'Update', initialized: true, systems: [], edges: [] },
+      { schedule: 'First', initialized: true, systems: [], edges: [] },
+      { schedule: 'Alpha', initialized: false, systems: [], edges: [] },
+    ];
+    expect(orderSchedules(schedules).map((s) => s.schedule)).toEqual(['First', 'Update', 'Zeta']);
+  });
+
+  it('lists short names of systems with an edge into the given index, capped at 2', () => {
+    const systems = [{ name: 'a::sys_one', sets: [] }, { name: 'b::sys_two', sets: [] }, { name: 'c::sys_three', sets: [] }];
+    expect(afterNotes(systems, [[0, 2]], 2)).toEqual(['sys_one']);
+    expect(afterNotes(systems, [[0, 1], [0, 2]], 2)).toEqual(['sys_one']);
+  });
+
+  it('caps at 2 names plus a "+N more" suffix', () => {
+    const systems = Array.from({ length: 5 }, (_, i) => ({ name: `c::sys_${i}`, sets: [] }));
+    const edges: [number, number][] = [[0, 4], [1, 4], [2, 4], [3, 4]];
+    expect(afterNotes(systems, edges, 4)).toEqual(['sys_0', 'sys_1', '+2 more']);
+  });
+});
+
+describe('ScheduleTab', () => {
+  beforeEach(() => {
+    schedulesMock.mockReset();
+    schedulesMock.mockResolvedValue({ schedules: [] });
+    capabilities.value = new Set(['jackdaw/schedules']);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    capabilities.value = new Set();
+  });
+
+  it('shows a capability hint when jackdaw/schedules is absent', () => {
+    capabilities.value = new Set();
+    const { getByText } = render(<ScheduleTab />);
+    expect(getByText(/jackdaw\/schedules/)).toBeTruthy();
+  });
+
+  it('renders lanes from an enriched response, including set chips and an "after" note', async () => {
+    schedulesMock.mockResolvedValue({
+      schedules: [
+        {
+          schedule: 'Update',
+          initialized: true,
+          systems: [
+            { name: 'brick_breaker::player_movement', sets: ['Physics'] },
+            { name: 'brick_breaker::enemy_ai', sets: [] },
+          ],
+          edges: [[0, 1]],
+        },
+      ],
+    });
+
+    const { getByText } = render(<ScheduleTab />);
+
+    await waitFor(() => expect(getByText('enemy_ai')).toBeTruthy());
+    expect(getByText('player_movement')).toBeTruthy();
+    expect(getByText('Physics')).toBeTruthy();
+    expect(getByText(/after player_movement/)).toBeTruthy();
+    expect(getByText(/timings not collected/i)).toBeTruthy();
+  });
+
+  it('renders a legacy string[] systems shape without edges or set chips', async () => {
+    schedulesMock.mockResolvedValue({
+      schedules: [{ schedule: 'Update', initialized: true, systems: [{ name: 'a::legacy_sys', sets: [] }], edges: [] }],
+    });
+
+    const { getByText, queryByText } = render(<ScheduleTab />);
+
+    await waitFor(() => expect(getByText('legacy_sys')).toBeTruthy());
+    expect(queryByText(/after /)).toBeFalsy();
+  });
+});
+
+describe('seedFromArchetype', () => {
+  it('splits components into up to 3 non-marker fetch and up to 2 marker with', () => {
+    const registry = new Map<string, ComponentSchema>([
+      ['a::Position', { typePath: 'a::Position', shortName: 'Position', fields: [], defaultValue: () => ({}) }],
+      ['a::Velocity', { typePath: 'a::Velocity', shortName: 'Velocity', fields: [], defaultValue: () => ({}) }],
+      ['a::Marker', { typePath: 'a::Marker', shortName: 'Marker', fields: 'marker', defaultValue: () => ({}) }],
+    ]);
+    const result = seedFromArchetype(['a::Position', 'a::Velocity', 'a::Marker'], registry);
+    expect(result).toEqual({ fetch: ['a::Position', 'a::Velocity'], withList: ['a::Marker'] });
+  });
+
+  it('treats components missing from the registry as non-marker', () => {
+    const result = seedFromArchetype(['unknown::Type'], null);
+    expect(result).toEqual({ fetch: ['unknown::Type'], withList: [] });
+  });
+});
+
+describe('ArchetypesTab', () => {
+  beforeEach(() => {
+    archetypesMock.mockClear();
+    loadRegistryMock.mockReset();
+    loadRegistryMock.mockResolvedValue(new Map());
+    capabilities.value = new Set(['jackdaw/archetypes']);
+    fetchChips.value = [];
+    withChips.value = [];
+    page.value = 'ecs';
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    capabilities.value = new Set();
+  });
+
+  it('shows a capability hint when jackdaw/archetypes is absent', () => {
+    capabilities.value = new Set();
+    const { getByText } = render(<ArchetypesTab />);
+    expect(getByText(/jackdaw\/archetypes/)).toBeTruthy();
+  });
+
+  it('renders sorted rows with component chips and a meta summary', async () => {
+    archetypesMock.mockResolvedValue({
+      archetypes: [
+        { components: ['a::Position', 'a::Marker'], entity_count: 5, bytes_per_entity: 12 },
+        { components: ['a::Position'], entity_count: 2, bytes_per_entity: 8 },
+      ],
+    });
+
+    const { getByText, getAllByText } = render(<ArchetypesTab />);
+
+    await waitFor(() => expect(getByText('2 archetypes · 7 entities')).toBeTruthy());
+    expect(getAllByText('Position').length).toBe(2);
+    expect(getByText('Marker')).toBeTruthy();
+  });
+
+  it('seeds the query chips (non-markers to fetch, markers to with) and switches to the queries page', async () => {
+    const registry = new Map<string, ComponentSchema>([
+      ['a::Position', { typePath: 'a::Position', shortName: 'Position', fields: [], defaultValue: () => ({}) }],
+      ['a::Marker', { typePath: 'a::Marker', shortName: 'Marker', fields: 'marker', defaultValue: () => ({}) }],
+    ]);
+    loadRegistryMock.mockResolvedValue(registry);
+    archetypesMock.mockResolvedValue({
+      archetypes: [{ components: ['a::Position', 'a::Marker'], entity_count: 3, bytes_per_entity: 12 }],
+    });
+
+    const { getByText } = render(<ArchetypesTab />);
+
+    await waitFor(() => expect(getByText('Position')).toBeTruthy());
+    await waitFor(() => expect(loadRegistryMock).toHaveBeenCalled());
+    // Let the registry promise resolve into component state.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    fireEvent.click(getByText('query'));
+
+    expect(page.value).toBe('queries');
+    expect(fetchChips.value).toEqual(['a::Position']);
+    expect(withChips.value).toEqual(['a::Marker']);
   });
 });
