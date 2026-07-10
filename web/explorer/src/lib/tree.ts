@@ -20,13 +20,15 @@ import { world, type QueryRow } from './brp';
 
 export const NAME = 'bevy_ecs::name::Name';
 export const CHILD_OF = 'bevy_ecs::hierarchy::ChildOf';
+export const TRANSFORM = 'bevy_transform::components::transform::Transform';
 export const CAMERA = 'bevy_camera::components::Camera3d';
 export const POINT_LIGHT = 'bevy_light::point_light::PointLight';
 export const DIRECTIONAL_LIGHT = 'bevy_light::directional_light::DirectionalLight';
+export const SPOT_LIGHT = 'bevy_light::spot_light::SpotLight';
 export const MESH3D = 'bevy_mesh::components::Mesh3d';
 export const WORLD_ASSET_ROOT = 'bevy_world_serialization::components::WorldAssetRoot';
 
-const HAS_PATHS = [CAMERA, POINT_LIGHT, DIRECTIONAL_LIGHT, MESH3D, WORLD_ASSET_ROOT];
+export const HAS_PATHS = [CAMERA, POINT_LIGHT, DIRECTIONAL_LIGHT, SPOT_LIGHT, MESH3D, WORLD_ASSET_ROOT];
 
 export type EntityKind = 'camera' | 'light' | 'mesh' | 'prefab' | 'entity';
 
@@ -51,7 +53,7 @@ function parentEntity(value: unknown): number | null {
 export function classifyKind(has: Record<string, boolean> | undefined): EntityKind {
   const h = has ?? {};
   if (h[CAMERA]) return 'camera';
-  if (h[POINT_LIGHT] || h[DIRECTIONAL_LIGHT]) return 'light';
+  if (h[POINT_LIGHT] || h[DIRECTIONAL_LIGHT] || h[SPOT_LIGHT]) return 'light';
   if (h[WORLD_ASSET_ROOT]) return 'prefab';
   if (h[MESH3D]) return 'mesh';
   return 'entity';
