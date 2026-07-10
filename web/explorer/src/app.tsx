@@ -21,6 +21,8 @@ import {
 import { Icon } from './components/Icon';
 import { TreePanel } from './components/TreePanel';
 import { Inspector } from './components/Inspector';
+import { QueriesPage } from './components/QueriesPage';
+import { StatsPage } from './components/StatsPage';
 import { page, pollingPaused, simPaused, type Page } from './lib/state';
 import { appInfo, startConnection, status } from './lib/connection';
 import { currentHost, jackdaw } from './lib/brp';
@@ -136,9 +138,9 @@ function PageContent() {
     case 'entities':
       return <EntitiesPage />;
     case 'queries':
-      return <div class="pane" style="flex:1">Queries page</div>;
+      return <QueriesPage />;
     case 'stats':
-      return <div class="pane" style="flex:1">Stats page</div>;
+      return <StatsPage />;
     case 'bsn':
       return <div class="pane" style="flex:1">BSN page</div>;
     default:
