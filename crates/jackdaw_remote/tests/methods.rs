@@ -416,11 +416,22 @@ fn archetypes_counts_cover_spawned_entities() {
 
 fn named_probe_system() {}
 
+fn named_probe_after() {}
+
+#[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct ProbeSet;
+
 #[test]
 fn schedules_lists_systems_in_run_order() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
-    app.add_systems(Update, named_probe_system);
+    app.add_systems(
+        Update,
+        (
+            named_probe_system.in_set(ProbeSet),
+            named_probe_after.after(named_probe_system),
+        ),
+    );
     app.update();
 
     let result = run_method(
@@ -438,14 +449,115 @@ fn schedules_lists_systems_in_run_order() {
         .find(|s| s["schedule"].as_str().unwrap() == "Update")
         .expect("Update schedule listed");
     assert_eq!(update["initialized"], json!(true));
-    let systems: Vec<&str> = update["systems"]
+
+    let systems = update["systems"].as_array().unwrap();
+    let names: Vec<&str> = systems
+        .iter()
+        .map(|s| s["name"].as_str().expect("system entry has a name"))
+        .collect();
+    assert!(
+        names.iter().any(|s| s.contains("named_probe_system")),
+        "got: {names:?}"
+    );
+
+    let probe_index = names
+        .iter()
+        .position(|s| s.contains("named_probe_system") && !s.contains("named_probe_after"))
+        .expect("named_probe_system listed");
+    let after_index = names
+        .iter()
+        .position(|s| s.contains("named_probe_after"))
+        .expect("named_probe_after listed");
+
+    let probe_sets: Vec<&str> = systems[probe_index]["sets"]
         .as_array()
-        .unwrap()
+        .expect("sets array")
         .iter()
         .map(|s| s.as_str().unwrap())
         .collect();
     assert!(
-        systems.iter().any(|s| s.contains("named_probe_system")),
-        "got: {systems:?}"
+        probe_sets.iter().any(|s| s.contains("ProbeSet")),
+        "got: {probe_sets:?}"
     );
+
+    let edges: Vec<(u64, u64)> = update["edges"]
+        .as_array()
+        .expect("edges array")
+        .iter()
+        .map(|e| {
+            let pair = e.as_array().expect("edge pair");
+            (pair[0].as_u64().unwrap(), pair[1].as_u64().unwrap())
+        })
+        .collect();
+    assert!(
+        edges.contains(&(probe_index as u64, after_index as u64)),
+        "got: {edges:?}"
+    );
+}
+
+#[test]
+fn schedules_uninitialized_schedule_has_empty_fields() {
+    #[derive(bevy::ecs::schedule::ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
+    struct NeverRunSchedule;
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.world_mut()
+        .resource_mut::<bevy::ecs::schedule::Schedules>()
+        .insert(bevy::ecs::schedule::Schedule::new(NeverRunSchedule));
+    app.update();
+
+    let result = run_method(
+        &mut app,
+        jackdaw_remote::ecs_methods::jackdaw_schedules_handler,
+        None,
+    )
+    .expect("ok");
+
+    let schedules = result["schedules"].as_array().expect("array");
+    let never_run = schedules
+        .iter()
+        .find(|s| s["schedule"].as_str().unwrap() == "NeverRunSchedule")
+        .expect("NeverRunSchedule listed");
+    assert_eq!(never_run["initialized"], json!(false));
+    assert_eq!(never_run["systems"], json!([]));
+    assert_eq!(never_run["edges"], json!([]));
+}
+
+fn probe_grouped_a() {}
+
+fn probe_grouped_b() {}
+
+#[test]
+fn schedules_excludes_anonymous_sets_from_set_names() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_systems(Update, (probe_grouped_a, probe_grouped_b).run_if(|| true));
+    app.update();
+
+    let result = run_method(
+        &mut app,
+        jackdaw_remote::ecs_methods::jackdaw_schedules_handler,
+        None,
+    )
+    .expect("ok");
+
+    let schedules = result["schedules"].as_array().expect("array");
+    let update = schedules
+        .iter()
+        .find(|s| s["schedule"].as_str().unwrap() == "Update")
+        .expect("Update schedule listed");
+
+    let systems = update["systems"].as_array().unwrap();
+    for system in systems {
+        let sets = system["sets"].as_array().expect("sets array");
+        for set_name in sets {
+            let set_str = set_name.as_str().unwrap();
+            assert!(
+                !set_str.contains("AnonymousSet"),
+                "set name should not contain AnonymousSet, got: {}",
+                set_str
+            );
+        }
+    }
 }
