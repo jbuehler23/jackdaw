@@ -1,7 +1,7 @@
 import { render } from '@testing-library/preact';
 import { fireEvent } from '@testing-library/preact';
 import { describe, expect, it, vi } from 'vitest';
-import { EnumDataField, OpaqueJson } from '../components/FieldEditors';
+import { EnumDataField, OpaqueJson, VecRow } from '../components/FieldEditors';
 import type { EnumDataVariant } from '../lib/registry';
 
 const LINE_HEIGHT_VARIANTS: EnumDataVariant[] = [
@@ -58,6 +58,39 @@ describe('EnumDataField', () => {
     expect(container.querySelector('input')).toBeNull();
     fireEvent.change(select, { target: { value: 'Px' } });
     expect(onCommit).toHaveBeenCalledWith('', { Px: 0 });
+  });
+});
+
+describe('VecRow', () => {
+  it('renders an array-shaped vec2 value from indices, not dotted x/y lookups', () => {
+    const binding = { component: 'bevy_ui::ui_node::ComputedNode', path: 'content_size', kind: 'vec2' as const };
+    const { container } = render(<VecRow binding={binding} value={[360, 48]} onCommit={vi.fn()} />);
+    const cells = container.querySelectorAll<HTMLElement>('.num-cell');
+    expect(cells.length).toBe(2);
+    expect((cells[0].querySelector('input') as HTMLInputElement).value).toBe('360.0');
+    expect((cells[1].querySelector('input') as HTMLInputElement).value).toBe('48.0');
+  });
+
+  it('commits an edit to an array-shaped vec as the whole patched array, via the field path (no dotted axis path)', () => {
+    const onCommit = vi.fn();
+    const binding = { component: 'bevy_ui::ui_node::ComputedNode', path: 'content_size', kind: 'vec2' as const };
+    const { container } = render(<VecRow binding={binding} value={[360, 48]} onCommit={onCommit} />);
+    const yInput = container.querySelectorAll<HTMLElement>('.num-cell')[1].querySelector('input') as HTMLInputElement;
+    yInput.focus();
+    yInput.value = '99';
+    yInput.blur();
+    expect(onCommit).toHaveBeenCalledWith('content_size', [360, 99]);
+  });
+
+  it('commits an array-shaped whole-value vec (binding.path === "") via the empty path', () => {
+    const onCommit = vi.fn();
+    const binding = { component: 'demo::Thing', path: '', kind: 'vec2' as const };
+    const { container } = render(<VecRow binding={binding} value={[1, 2]} onCommit={onCommit} />);
+    const xInput = container.querySelectorAll<HTMLElement>('.num-cell')[0].querySelector('input') as HTMLInputElement;
+    xInput.focus();
+    xInput.value = '7';
+    xInput.blur();
+    expect(onCommit).toHaveBeenCalledWith('', [7, 2]);
   });
 });
 

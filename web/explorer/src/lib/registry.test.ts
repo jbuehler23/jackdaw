@@ -117,6 +117,79 @@ describe('schemaToComponentSchema', () => {
     expect(cs.defaultValue()).toEqual({ Px: 0 });
   });
 
+  it('maps a UVec2 field to vec2 (glam int/double vec refs use the same wire-array shape as Vec2/3/4)', () => {
+    const cs = schemaToComponentSchema('bevy_ui::ui_node::ComputedNode', {
+      shortPath: 'ComputedNode',
+      kind: 'Struct',
+      properties: {
+        size: { type: { $ref: '#/$defs/glam::Vec2' } },
+        content_size: { type: { $ref: '#/$defs/glam::UVec2' } },
+      },
+    });
+    expect(cs.fields).toEqual([
+      { name: 'size', kind: 'vec2' },
+      { name: 'content_size', kind: 'vec2' },
+    ]);
+  });
+
+  it('inlines a nested struct ref whose own fields are both vec2-mappable as prefixed sub-rows', () => {
+    const defs = {
+      'bevy_sprite::texture_slice::border_rect::BorderRect': {
+        shortPath: 'BorderRect',
+        kind: 'Struct',
+        properties: {
+          min_inset: { type: { $ref: '#/$defs/glam::Vec2' } },
+          max_inset: { type: { $ref: '#/$defs/glam::Vec2' } },
+        },
+      },
+    };
+    const cs = schemaToComponentSchema(
+      'bevy_ui::ui_node::ComputedNode',
+      {
+        shortPath: 'ComputedNode',
+        kind: 'Struct',
+        properties: {
+          border: { type: { $ref: '#/$defs/bevy_sprite::texture_slice::border_rect::BorderRect' } },
+        },
+      },
+      defs,
+    );
+    expect(cs.fields).toEqual([
+      { name: 'border.min_inset', kind: 'vec2' },
+      { name: 'border.max_inset', kind: 'vec2' },
+    ]);
+    expect(cs.defaultValue()).toEqual({ border: { min_inset: { x: 0, y: 0 }, max_inset: { x: 0, y: 0 } } });
+  });
+
+  it('leaves a nested struct ref as a single json row when one of its own fields is unmappable', () => {
+    const defs = {
+      'demo::Weird': {
+        shortPath: 'Weird',
+        kind: 'Struct',
+        properties: {
+          known: { type: { $ref: '#/$defs/glam::Vec2' } },
+          handle: { type: { $ref: '#/$defs/bevy_asset::handle::Handle<demo::Thing>' } },
+        },
+      },
+    };
+    const cs = schemaToComponentSchema(
+      'demo::Wrapper',
+      {
+        shortPath: 'Wrapper',
+        kind: 'Struct',
+        properties: {
+          weird: { type: { $ref: '#/$defs/demo::Weird' } },
+          note: { type: { $ref: '#/$defs/f32' } },
+        },
+      },
+      defs,
+    );
+    expect(cs.fields).toEqual([
+      { name: 'weird', kind: 'json' },
+      { name: 'note', kind: 'f32' },
+    ]);
+  });
+
   it('maps primitive numbers, bools, strings', () => {
     const cs = schemaToComponentSchema('game::Health', {
       shortPath: 'Health',

@@ -48,17 +48,57 @@ describe('createPoll', () => {
     poll.stop();
   });
 
-  it('refresh during an in-flight fetch resolves with that fetch result', async () => {
-    let resolveFetch: (v: number) => void = () => {};
+  it('refresh during an in-flight fetch chains a fresh fetch instead of joining the stale one', async () => {
+    let calls = 0;
+    const resolvers: Array<(v: number) => void> = [];
     const poll = createPoll(
-      () => new Promise<number>((resolve) => { resolveFetch = resolve; }),
+      () => new Promise<number>((resolve) => {
+        calls += 1;
+        resolvers.push(resolve);
+      }),
       1000,
     );
     poll.start();
+    await Promise.resolve();
+    expect(calls).toBe(1);
+
     const refreshed = poll.refresh();
-    resolveFetch(42);
+    expect(calls).toBe(1); // chained refresh doesn't fetch until the in-flight one settles
+
+    resolvers[0](1); // the stale, in-flight fetch resolves
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(2); // refresh() triggered a second, fresh fetcher invocation
+
+    resolvers[1](42);
     await refreshed;
     expect(poll.data.value).toBe(42);
+    poll.stop();
+  });
+
+  it('coalesces concurrent refresh calls into a single chained run', async () => {
+    let calls = 0;
+    const resolvers: Array<(v: number) => void> = [];
+    const poll = createPoll(
+      () => new Promise<number>((resolve) => {
+        calls += 1;
+        resolvers.push(resolve);
+      }),
+      1000,
+    );
+    poll.start();
+    await Promise.resolve();
+    expect(calls).toBe(1);
+
+    const first = poll.refresh();
+    const second = poll.refresh();
+
+    resolvers[0](1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(2); // only one chained follow-up fetch, not two
+
+    resolvers[1](7);
+    await Promise.all([first, second]);
+    expect(poll.data.value).toBe(7);
     poll.stop();
   });
 });

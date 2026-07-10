@@ -117,8 +117,17 @@ export function NumberCell({
   );
 }
 
+const AXES2 = ['x', 'y'] as const;
 const AXES3 = ['x', 'y', 'z'] as const;
 const AXES4 = ['x', 'y', 'z', 'w'] as const;
+
+type Axis = 'x' | 'y' | 'z' | 'w';
+
+function axesFor(kind: FieldBinding['kind']): readonly Axis[] {
+  if (kind === 'vec2') return AXES2;
+  if (kind === 'vec4' || kind === 'quat') return AXES4;
+  return AXES3;
+}
 
 export function VecRow({
   binding,
@@ -129,10 +138,11 @@ export function VecRow({
   value: Record<string, number> | number[];
   onCommit: Commit;
 }) {
-  const axes = binding.kind === 'vec4' || binding.kind === 'quat' ? AXES4 : AXES3;
+  const axes = axesFor(binding.kind);
   const step = binding.kind === 'quat' ? 0.01 : 0.1;
+  const arrayShaped = Array.isArray(value);
   const at = (axis: string, index: number): number =>
-    Array.isArray(value) ? (value[index] as number) : (value as Record<string, number>)[axis];
+    arrayShaped ? (value[index] as number) : (value as Record<string, number>)[axis];
   // A single-field tuple struct (e.g. avian's Position(Vec3)) unwraps to binding.path
   // === ''; there's no dotted reflection path an axis edit could mutate through, so
   // each axis commit has to replace the whole component value instead.
@@ -148,7 +158,17 @@ export function VecRow({
           axis={axis}
           step={step}
           onCommit={onCommit}
-          onCommitOverride={isWholeValue ? (next) => onCommit('', commitPath(value, axis, next)) : undefined}
+          onCommitOverride={
+            arrayShaped
+              ? (next) => {
+                  const patched = (value as number[]).slice();
+                  patched[index] = next;
+                  onCommit(isWholeValue ? '' : binding.path, patched);
+                }
+              : isWholeValue
+                ? (next) => onCommit('', commitPath(value, axis, next))
+                : undefined
+          }
         />
       ))}
       {binding.kind === 'vec3' && <span class="spacer" />}

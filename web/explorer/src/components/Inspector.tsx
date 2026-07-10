@@ -118,9 +118,10 @@ async function copyBsn(entity: number) {
   }
 }
 
-const NUMERIC_COLS_KINDS = new Set(['vec3', 'vec4', 'quat', 'f32', 'color']);
+const NUMERIC_COLS_KINDS = new Set(['vec2', 'vec3', 'vec4', 'quat', 'f32', 'color']);
 const LABEL_TINT: Partial<Record<FieldRow['binding']['kind'], string>> = {
   f32: 't-num',
+  vec2: 't-num',
   vec3: 't-num',
   vec4: 't-num',
   quat: 't-num',
@@ -135,6 +136,7 @@ const LABEL_TINT: Partial<Record<FieldRow['binding']['kind'], string>> = {
 function FieldEditor({ row, onCommit }: { row: FieldRow; onCommit: (path: string, value: unknown) => void }) {
   const { binding, value } = row;
   switch (binding.kind) {
+    case 'vec2':
     case 'vec3':
     case 'vec4':
     case 'quat':
@@ -256,7 +258,7 @@ export function Inspector() {
           {entityLabel(entity)} · {path}
         </div>
       </div>
-      {loaded && (
+      {loaded ? (
         <div class="pane-body">
           <div class="comp-cards">
             {Object.keys(loaded.components).map((component) => (
@@ -267,6 +269,10 @@ export function Inspector() {
             <Icon of={Plus} />
             Add component
           </button>
+        </div>
+      ) : (
+        <div class="pane-body">
+          <div class="marker-note">Loading components</div>
         </div>
       )}
       {addOpen && (

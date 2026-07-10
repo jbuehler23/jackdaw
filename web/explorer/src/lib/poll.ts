@@ -16,6 +16,7 @@ export function createPoll<T>(fetcher: () => Promise<T>, intervalMs: number): Po
   const error = signal<Error | null>(null);
   let timer: ReturnType<typeof setInterval> | null = null;
   let inFlight: Promise<void> | null = null;
+  let pendingRefresh: Promise<void> | null = null;
 
   function run(): Promise<void> {
     if (inFlight) return inFlight;
@@ -32,10 +33,24 @@ export function createPoll<T>(fetcher: () => Promise<T>, intervalMs: number): Po
     return inFlight;
   }
 
+  // A refresh mid-flight must not resolve with the stale run it joined: chain a
+  // fresh fetch after the in-flight one settles. Concurrent refresh() calls
+  // coalesce onto the same chained follow-up rather than each queuing their own.
+  function refresh(): Promise<void> {
+    if (!inFlight) return run();
+    if (!pendingRefresh) {
+      pendingRefresh = inFlight.then(() => {
+        pendingRefresh = null;
+        return run();
+      });
+    }
+    return pendingRefresh;
+  }
+
   return {
     data,
     error,
-    refresh: () => run(),
+    refresh,
     start() {
       if (timer !== null) return;
       void run();
