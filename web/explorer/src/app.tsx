@@ -23,12 +23,15 @@ import { TreePanel } from './components/TreePanel';
 import { Inspector } from './components/Inspector';
 import { QueriesPage } from './components/QueriesPage';
 import { StatsPage } from './components/StatsPage';
+import { BsnPage } from './components/BsnPage';
+import { CommandPalette, paletteOpen } from './components/CommandPalette';
 import { page, pollingPaused, simPaused, type Page } from './lib/state';
 import { appInfo, startConnection, status } from './lib/connection';
-import { currentHost, jackdaw } from './lib/brp';
+import { currentHost } from './lib/brp';
 import { diagnosticsPoll } from './lib/stats';
 import { fmtNumber } from './lib/format';
-import { toast, toasts, type ToastKind } from './lib/toasts';
+import { toasts, type ToastKind } from './lib/toasts';
+import { stepSim, toggleSim, togglePolling } from './lib/commands';
 
 const RAIL_PAGES: { id: Page; title: string; icon: typeof Boxes }[] = [
   { id: 'entities', title: 'Entities', icon: Boxes },
@@ -36,31 +39,6 @@ const RAIL_PAGES: { id: Page; title: string; icon: typeof Boxes }[] = [
   { id: 'stats', title: 'Stats', icon: ChartLine },
   { id: 'bsn', title: 'BSN', icon: Braces },
 ];
-
-async function toggleSim() {
-  const action = simPaused.value ? 'resume' : 'pause';
-  try {
-    const result = await jackdaw.playback(action);
-    simPaused.value = result.paused;
-    toast('info', `jackdaw/playback: ${action}`);
-  } catch (err) {
-    toast('err', `jackdaw/playback failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
-async function stepSim() {
-  try {
-    await jackdaw.playback('step');
-    toast('info', 'jackdaw/playback: step');
-  } catch (err) {
-    toast('err', `jackdaw/playback failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
-function togglePolling() {
-  pollingPaused.value = !pollingPaused.value;
-  toast('info', pollingPaused.value ? 'Polling paused; the game keeps running' : 'Polling resumed');
-}
 
 function connectionLabel(): string {
   if (pollingPaused.value) return 'Paused';
@@ -142,7 +120,7 @@ function PageContent() {
     case 'stats':
       return <StatsPage />;
     case 'bsn':
-      return <div class="pane" style="flex:1">BSN page</div>;
+      return <BsnPage />;
     default:
       return null;
   }
@@ -153,6 +131,17 @@ export function App() {
     void startConnection();
     diagnosticsPoll.start();
     return () => diagnosticsPoll.stop();
+  }, []);
+
+  useEffect(() => {
+    function onKeyDown(ev: KeyboardEvent) {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') {
+        ev.preventDefault();
+        paletteOpen.value = true;
+      }
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
   }, []);
 
   const diagnostics = diagnosticsPoll.data.value;
@@ -199,7 +188,13 @@ export function App() {
           <Icon of={pollingPaused.value ? Play : Pause} />
           <span>{pollingPaused.value ? 'Resume' : 'Polling'}</span>
         </button>
-        <button class="topbar-btn" title="Search (not in demo)">
+        <button
+          class="topbar-btn"
+          title="Search entities and run commands"
+          onClick={() => {
+            paletteOpen.value = true;
+          }}
+        >
           <Icon of={Search} />
           Search <span class="kbd">Ctrl K</span>
         </button>
@@ -220,7 +215,7 @@ export function App() {
             </button>
           ))}
           <div class="rail-spacer" />
-          <button class="rail-btn" title="Settings (not in demo)" disabled>
+          <button class="rail-btn" title="Settings" disabled>
             <Icon of={Settings} />
           </button>
         </nav>
@@ -251,6 +246,7 @@ export function App() {
       </footer>
 
       <Toasts />
+      <CommandPalette />
     </div>
   );
 }

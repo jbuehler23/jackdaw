@@ -1,9 +1,9 @@
 @import 'tailwindcss';
-@import '@fontsource/fira-sans/400.css';
-@import '@fontsource/fira-sans/400-italic.css';
-@import '@fontsource/fira-sans/500.css';
-@import '@fontsource/jetbrains-mono/400.css';
-@import '@fontsource/jetbrains-mono/500.css';
+@import '@fontsource/fira-sans/latin-400.css';
+@import '@fontsource/fira-sans/latin-400-italic.css';
+@import '@fontsource/fira-sans/latin-500.css';
+@import '@fontsource/jetbrains-mono/latin-400.css';
+@import '@fontsource/jetbrains-mono/latin-500.css';
 
 :root {
   --bg-window: #1F1F24;
@@ -455,6 +455,8 @@ table.results tr:hover td { background: rgba(255,255,255,0.04); }
 .bsn-toolbar .fname { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
 .bsn-toolbar .spacer { flex: 1; }
 .editor-shell { flex: 1; min-height: 0; position: relative; display: flex; overflow: hidden; background: #232327; }
+.editor-shell .cm-editor { flex: 1; min-width: 0; height: 100%; }
+.bsn-err-line { background: rgba(239,68,68,0.18); }
 .gutter {
   flex: none; width: 42px; overflow: hidden;
   padding: 8px 0;
