@@ -19,6 +19,7 @@ export interface SceneItem {
   entity: number;
   kind: SceneItemKind;
   pos: Vec3;
+  localTranslation: Vec3;
   name: string | null;
 }
 
@@ -89,6 +90,7 @@ export function buildScene(rows: ViewportRow[]): SceneItem[] {
       entity: row.entity,
       kind: classifyKind(row.has),
       pos,
+      localTranslation: { ...local },
       name: typeof name === 'string' ? name : null,
     });
   }

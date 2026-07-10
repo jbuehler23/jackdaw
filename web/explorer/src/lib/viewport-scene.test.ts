@@ -29,6 +29,17 @@ describe('buildScene', () => {
     expect(child.pos).toEqual({ x: 11, y: 2, z: 3 });
   });
 
+  it('keeps localTranslation as the entity own Transform value, distinct from summed world pos', () => {
+    const rows = [
+      row(1, { translation: { x: 10, y: 0, z: 0 } }),
+      row(2, { translation: { x: 1, y: 2, z: 3 }, parent: 1 }),
+    ];
+    const scene = buildScene(rows);
+    const child = scene.find((s) => s.entity === 2)!;
+    expect(child.pos).toEqual({ x: 11, y: 2, z: 3 });
+    expect(child.localTranslation).toEqual({ x: 1, y: 2, z: 3 });
+  });
+
   it('handles array-shaped translations and array/object ChildOf wire shapes', () => {
     const rows = [
       row(1, { translation: [5, 0, 0] }),
@@ -38,6 +49,8 @@ describe('buildScene', () => {
     const scene = buildScene(rows);
     expect(scene.find((s) => s.entity === 2)!.pos).toEqual({ x: 6, y: 1, z: 1 });
     expect(scene.find((s) => s.entity === 3)!.pos).toEqual({ x: 6, y: 1, z: 1 });
+    expect(scene.find((s) => s.entity === 2)!.localTranslation).toEqual({ x: 1, y: 1, z: 1 });
+    expect(scene.find((s) => s.entity === 3)!.localTranslation).toEqual({ x: 1, y: 1, z: 1 });
   });
 
   it('skips entities without a Transform', () => {
