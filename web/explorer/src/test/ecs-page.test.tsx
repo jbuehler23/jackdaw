@@ -24,7 +24,15 @@ vi.mock('../lib/registry', async (importOriginal) => {
 });
 
 import { EcsPage } from '../components/EcsPage';
-import { buildGraphData, computeVisible, entityPath, pickNode, RelationshipsTab, shouldWarm } from '../components/RelationshipsTab';
+import {
+  buildGraphData,
+  canRunFrame,
+  computeVisible,
+  entityPath,
+  pickNode,
+  RelationshipsTab,
+  shouldWarm,
+} from '../components/RelationshipsTab';
 import { ScheduleTab, afterNotes, orderSchedules } from '../components/ScheduleTab';
 import { ArchetypesTab, seedFromArchetype } from '../components/ArchetypesTab';
 import { fetchChips, withChips } from '../components/QueriesPage';
@@ -134,6 +142,27 @@ describe('shouldWarm', () => {
 
   it('returns false when needsWarm is false regardless of node count', () => {
     expect(shouldWarm(false, 100)).toBe(false);
+  });
+});
+
+describe('canRunFrame', () => {
+  // The RAF frame() body (graph seeding, warm start, fitView, stepping,
+  // drawing) must never run against an unmeasured 0x0 canvas: seeding scatters
+  // every node around (0, 0) and fitView clamps to its zoom floor there, and
+  // since nothing re-warms once the flag is consumed the graph is stuck as a
+  // squished blob. jsdom's getBoundingClientRect returns 0x0 by default, which
+  // is exactly the bug condition, so these pure-function cases stand in for
+  // it directly.
+  it('is false for a 0x0 canvas', () => {
+    expect(canRunFrame(0, 0)).toBe(false);
+  });
+
+  it('is false when only one axis has been measured', () => {
+    expect(canRunFrame(800, 0)).toBe(false);
+  });
+
+  it('is true once both axes have a real measurement', () => {
+    expect(canRunFrame(800, 600)).toBe(true);
   });
 });
 

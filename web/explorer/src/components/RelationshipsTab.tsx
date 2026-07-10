@@ -69,6 +69,15 @@ export function shouldWarm(needsWarm: boolean, idCount: number): boolean {
   return needsWarm && idCount > 0;
 }
 
+/** Whether the graph body (seeding, warm start, fitView, stepping, drawing)
+ * may run this frame. The canvas measures 0x0 on the first RAF ticks (and
+ * always in jsdom, which is exactly the bug this guards against): running the
+ * body then would scatter every node around (0, 0) and consume the warm flag
+ * before there's a real size to fit against. */
+export function canRunFrame(width: number, height: number): boolean {
+  return width > 0 && height > 0;
+}
+
 /** Assembles world.query rows into graph data: every entity id maps to a
  * parent (null for roots), a ChildOf edge per non-root, and per-id kind/name
  * lookups. Pure so it can be unit-tested without mounting the canvas. */
@@ -157,10 +166,14 @@ export function pickNode(m: Point, view: ViewTransform, nodes: Map<number, Graph
 function resizeRelCanvas(canvas: HTMLCanvasElement, size: { current: Size }) {
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
-  const width = Math.max(1, Math.round(rect.width));
-  const height = Math.max(1, Math.round(rect.height));
-  canvas.width = width * dpr;
-  canvas.height = height * dpr;
+  // Keep the true measured size (possibly 0 while the canvas hasn't been
+  // laid out yet, or while it's hidden) so canRunFrame can tell a real
+  // measurement apart from an unmeasured one. The backing bitmap still needs
+  // at least 1 device pixel per side.
+  const width = Math.round(rect.width);
+  const height = Math.round(rect.height);
+  canvas.width = Math.max(1, width) * dpr;
+  canvas.height = Math.max(1, height) * dpr;
   size.current = { width, height, dpr };
 }
 
@@ -312,29 +325,32 @@ export function RelationshipsTab() {
 
     function frame() {
       if (canvas && ctx) {
-        if (!sizeRef.current.width) resizeRelCanvas(canvas, sizeRef);
-        const currentGraph = graphRef.current;
-        const layout = layoutRef.current;
+        if (!sizeRef.current.width || !sizeRef.current.height) resizeRelCanvas(canvas, sizeRef);
 
-        let added = 0;
-        for (const id of currentGraph.ids) if (!layout.nodes.has(id)) added++;
-        syncNodes(layout, currentGraph.ids, currentGraph.parents, sizeRef.current.width, sizeRef.current.height);
-        if (added > 5) needsWarmRef.current = true;
+        if (canRunFrame(sizeRef.current.width, sizeRef.current.height)) {
+          const currentGraph = graphRef.current;
+          const layout = layoutRef.current;
 
-        const visible = computeVisible(currentGraph, filterRef.current, focusRef.current, selectedEntity.value);
+          let added = 0;
+          for (const id of currentGraph.ids) if (!layout.nodes.has(id)) added++;
+          syncNodes(layout, currentGraph.ids, currentGraph.parents, sizeRef.current.width, sizeRef.current.height);
+          if (added > 5) needsWarmRef.current = true;
 
-        if (shouldWarm(needsWarmRef.current, currentGraph.ids.length)) {
-          warmStart(layout, currentGraph.edges, visible, sizeRef.current.width, sizeRef.current.height);
-          needsWarmRef.current = false;
-          if (!userNavigatedRef.current) {
-            viewRef.current = fitView(layout.nodes.values(), sizeRef.current.width, sizeRef.current.height);
+          const visible = computeVisible(currentGraph, filterRef.current, focusRef.current, selectedEntity.value);
+
+          if (shouldWarm(needsWarmRef.current, currentGraph.ids.length)) {
+            warmStart(layout, currentGraph.edges, visible, sizeRef.current.width, sizeRef.current.height);
+            needsWarmRef.current = false;
+            if (!userNavigatedRef.current) {
+              viewRef.current = fitView(layout.nodes.values(), sizeRef.current.width, sizeRef.current.height);
+            }
+            step(layout, currentGraph.edges, visible, sizeRef.current.width, sizeRef.current.height);
+          } else {
+            step(layout, currentGraph.edges, visible, sizeRef.current.width, sizeRef.current.height);
           }
-          step(layout, currentGraph.edges, visible, sizeRef.current.width, sizeRef.current.height);
-        } else {
-          step(layout, currentGraph.edges, visible, sizeRef.current.width, sizeRef.current.height);
-        }
 
-        drawRel(ctx, sizeRef.current, layout, currentGraph, visible, viewRef.current, selectedEntity.value, hoverRef.current);
+          drawRel(ctx, sizeRef.current, layout, currentGraph, visible, viewRef.current, selectedEntity.value, hoverRef.current);
+        }
       }
       raf = requestAnimationFrame(frame);
     }
@@ -441,6 +457,7 @@ export function RelationshipsTab() {
   return (
     <>
       <canvas
+        ref={canvasRef}
         class="rel-canvas"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
