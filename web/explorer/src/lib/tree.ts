@@ -40,7 +40,7 @@ export interface TreeNode {
   children: TreeNode[];
 }
 
-function parentEntity(value: unknown): number | null {
+export function parentEntity(value: unknown): number | null {
   if (typeof value === 'number') return value;
   if (Array.isArray(value) && typeof value[0] === 'number') return value[0];
   if (value && typeof value === 'object') {

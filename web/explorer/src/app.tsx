@@ -26,6 +26,7 @@ import { QueriesPage } from './components/QueriesPage';
 import { StatsPage } from './components/StatsPage';
 import { BsnPage } from './components/BsnPage';
 import { ViewportPage } from './components/ViewportPage';
+import { EcsPage } from './components/EcsPage';
 import { CommandPalette, paletteOpen } from './components/CommandPalette';
 import { page, pollingPaused, simPaused, type Page } from './lib/state';
 import { initialPage, writePage } from './lib/urlState';
@@ -131,7 +132,7 @@ function PageContent() {
     case 'viewport':
       return <ViewportPage />;
     case 'ecs':
-      return <div class="pane" style="flex:1">ECS internals page</div>;
+      return <EcsPage />;
     default:
       return null;
   }
