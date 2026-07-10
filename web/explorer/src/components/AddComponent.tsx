@@ -8,6 +8,15 @@ import { tupleWireShape } from '../lib/inspector';
 import { world } from '../lib/brp';
 import { toast } from '../lib/toasts';
 
+// A schema can only seed a default value for insertion if every field is
+// mappable; a struct with any 'json' field (or a fully opaque schema) has no
+// constructible default, so it's left out of the add-component palette.
+function isInsertable(schema: ComponentSchema): boolean {
+  if (schema.fields === 'marker') return true;
+  if (schema.fields === 'opaque') return false;
+  return !schema.fields.some((field) => field.kind === 'json');
+}
+
 async function insertDefault(entity: number, schema: ComponentSchema) {
   const value = tupleWireShape(schema, schema.defaultValue());
   await world.insertComponents(entity, { [schema.typePath]: value });
@@ -44,6 +53,7 @@ export function AddComponent({
   const items = registry
     ? Array.from(registry.values())
         .filter((schema) => !existing.has(schema.typePath))
+        .filter(isInsertable)
         .filter((schema) => (schema.shortName + schema.typePath).toLowerCase().includes(query.toLowerCase()))
     : [];
 

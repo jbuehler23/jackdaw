@@ -7,6 +7,7 @@ import { ChevronRight, Link } from 'lucide-preact';
 import { Icon } from './Icon';
 import type { FieldBinding } from '../lib/inspector';
 import { commitPath, scrubValue } from '../lib/inspector';
+import type { EnumDataVariant } from '../lib/registry';
 import { fmtNumber, entityLabel } from '../lib/format';
 import { selectedEntity } from '../lib/state';
 
@@ -196,6 +197,70 @@ export function EnumSelect({
         </option>
       ))}
     </select>
+  );
+}
+
+// A data-carrying enum's wire value is either a bare string (the selected
+// unit variant) or a single-key object (the selected tuple variant mapped to
+// its payload), e.g. "Normal" or {"Px":0}. Falls back to the first variant
+// when the value doesn't match either shape.
+function parseEnumDataValue(value: unknown, variants: EnumDataVariant[]): { name: string; payload: number | null } {
+  if (typeof value === 'string') return { name: value, payload: null };
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 1 && typeof entries[0][1] === 'number') {
+      return { name: entries[0][0], payload: entries[0][1] as number };
+    }
+  }
+  return { name: variants[0]?.name ?? '', payload: null };
+}
+
+// Whole-component commit for a data-carrying enum: a variant select plus a
+// number cell for the payload when the selected variant carries one. There's
+// no dotted reflection path into an enum variant's payload, so every change
+// (variant switch or payload edit) replaces the entire component value.
+export function EnumDataField({
+  binding,
+  value,
+  variants,
+  onCommit,
+}: {
+  binding: FieldBinding;
+  value: unknown;
+  variants: EnumDataVariant[];
+  onCommit: Commit;
+}) {
+  const parsed = parseEnumDataValue(value, variants);
+  const selected = variants.find((v) => v.name === parsed.name) ?? variants[0];
+
+  function commitVariant(name: string) {
+    const next = variants.find((v) => v.name === name) ?? variants[0];
+    onCommit('', next.payload === 'none' ? next.name : { [next.name]: 0 });
+  }
+
+  return (
+    <>
+      <select
+        class="txt-cell"
+        value={selected?.name ?? ''}
+        onChange={(ev) => commitVariant((ev.target as HTMLSelectElement).value)}
+      >
+        {variants.map((variant) => (
+          <option key={variant.name} value={variant.name}>
+            {variant.name}
+          </option>
+        ))}
+      </select>
+      {selected?.payload === 'f32' && (
+        <NumberCell
+          binding={{ component: binding.component, path: '', kind: 'f32' }}
+          value={parsed.payload ?? 0}
+          step={0.1}
+          onCommit={() => {}}
+          onCommitOverride={(next) => onCommit('', { [selected.name]: next })}
+        />
+      )}
+    </>
   );
 }
 

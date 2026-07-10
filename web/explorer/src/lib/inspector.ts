@@ -2,7 +2,7 @@
 // Inspector.tsx and FieldEditors.tsx own the network/DOM side, this module only
 // shapes data: which rows a component's schema renders, immutable nested writes,
 // and the drag-scrub arithmetic for number cells.
-import type { ComponentSchema, FieldKind } from './registry';
+import type { ComponentSchema, EnumDataVariant, FieldKind } from './registry';
 
 export interface FieldBinding {
   component: string;
@@ -15,6 +15,7 @@ export interface FieldRow {
   binding: FieldBinding;
   value: unknown;
   options?: string[];
+  variants?: EnumDataVariant[];
 }
 
 function getByPath(value: unknown, path: string): unknown {
@@ -34,7 +35,7 @@ function getByPath(value: unknown, path: string): unknown {
 export function flattenFields(schema: ComponentSchema, value: unknown): FieldRow[] {
   if (schema.fields === 'marker' || schema.fields === 'opaque') return [];
   const fields = schema.fields;
-  if (fields.length === 1 && (fields[0].kind === 'enum' || fields[0].name === '0')) {
+  if (fields.length === 1 && (fields[0].kind === 'enum' || fields[0].kind === 'enumdata' || fields[0].name === '0')) {
     const field = fields[0];
     return [
       {
@@ -42,6 +43,7 @@ export function flattenFields(schema: ComponentSchema, value: unknown): FieldRow
         binding: { component: schema.typePath, path: '', kind: field.kind },
         value,
         options: field.options,
+        variants: field.variants,
       },
     ];
   }
@@ -50,6 +52,7 @@ export function flattenFields(schema: ComponentSchema, value: unknown): FieldRow
     binding: { component: schema.typePath, path: field.name, kind: field.kind },
     value: getByPath(value, field.name),
     options: field.options,
+    variants: field.variants,
   }));
 }
 

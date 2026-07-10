@@ -8,7 +8,7 @@ import { signal } from '@preact/signals';
 import { Braces, Plus, X } from 'lucide-preact';
 import { Icon } from './Icon';
 import { AddComponent } from './AddComponent';
-import { BoolSwitch, ColorField, EntityLink, EnumSelect, NumberCell, OpaqueJson, StringInput, VecRow } from './FieldEditors';
+import { BoolSwitch, ColorField, EntityLink, EnumDataField, EnumSelect, NumberCell, OpaqueJson, StringInput, VecRow } from './FieldEditors';
 import { commitPath, flattenFields, type FieldRow } from '../lib/inspector';
 import { loadRegistry, type ComponentSchema } from '../lib/registry';
 import { jackdaw, world } from '../lib/brp';
@@ -128,6 +128,7 @@ const LABEL_TINT: Partial<Record<FieldRow['binding']['kind'], string>> = {
   bool: 't-bool',
   string: 't-str',
   enum: 't-enum',
+  enumdata: 't-enum',
   entity: 't-entity',
 };
 
@@ -144,6 +145,8 @@ function FieldEditor({ row, onCommit }: { row: FieldRow; onCommit: (path: string
       return <BoolSwitch binding={binding} value={value as boolean} onCommit={onCommit} />;
     case 'enum':
       return <EnumSelect binding={binding} value={value as string} options={row.options ?? []} onCommit={onCommit} />;
+    case 'enumdata':
+      return <EnumDataField binding={binding} value={value} variants={row.variants ?? []} onCommit={onCommit} />;
     case 'string':
       return <StringInput binding={binding} value={value as string} onCommit={onCommit} />;
     case 'entity':
