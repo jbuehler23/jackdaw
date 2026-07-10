@@ -135,9 +135,6 @@ export function VecRow({
   // A single-field tuple struct (e.g. avian's Position(Vec3)) unwraps to binding.path
   // === ''; there's no dotted reflection path an axis edit could mutate through, so
   // each axis commit has to replace the whole component value instead.
-  // A single-field tuple struct (e.g. avian's Position(Vec3)) unwraps to binding.path
-  // === ''; there's no dotted reflection path an axis edit could mutate through, so
-  // each axis commit has to replace the whole component value instead.
   const isWholeValue = binding.path === '';
 
   return (

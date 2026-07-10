@@ -240,7 +240,7 @@ export function App() {
           </span>
           <span class="seg">
             <Icon of={Boxes} />
-            <b>{diagnostics?.entity_count != null ? fmtNumber(diagnostics.entity_count) : '…'}</b> entities
+            <b>{diagnostics?.entity_count != null ? String(diagnostics.entity_count) : '…'}</b> entities
           </span>
         </div>
       </footer>

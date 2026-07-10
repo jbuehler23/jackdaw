@@ -22,7 +22,7 @@ const queryRows = signal<QueryRow[] | null>(null);
 const queryNote = signal<string | null>(null);
 const queryDurationMs = signal(0);
 
-async function runQuery() {
+async function runQuery(options: { silent?: boolean } = {}) {
   const fetchTypes = fetchChips.value;
   const withTypes = withChips.value;
   const withoutTypes = withoutChips.value;
@@ -42,11 +42,17 @@ async function runQuery() {
     queryDurationMs.value = performance.now() - t0;
     queryNote.value = null;
   } catch (err) {
-    toast('err', err instanceof Error ? err.message : String(err));
+    const message = err instanceof Error ? err.message : String(err);
+    // The auto-refresh poll ticks every 2s; toasting on every failed tick would
+    // spam the user when the server dies with auto-refresh left on. Route poll
+    // failures into the same inline note used for other empty-state messages
+    // instead, and reserve the toast for a manual Run click.
+    if (options.silent) queryNote.value = message;
+    else toast('err', message);
   }
 }
 
-const queryPoll = createPoll(runQuery, 2000);
+const queryPoll = createPoll(() => runQuery({ silent: true }), 2000);
 
 function compPreview(value: unknown, schema: ComponentSchema | undefined): string {
   if (value === undefined) return '';

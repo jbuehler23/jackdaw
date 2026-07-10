@@ -148,8 +148,6 @@ button { font-family: inherit; cursor: pointer; }
 .icon svg { width: 100%; height: 100%; }
 
 .pages { flex: 1; min-width: 0; display: flex; }
-.page { flex: 1; min-width: 0; display: none; }
-.page.active { display: flex; }
 
 /* ---------- panes ---------- */
 .pane {
@@ -457,38 +455,6 @@ table.results tr:hover td { background: rgba(255,255,255,0.04); }
 .editor-shell { flex: 1; min-height: 0; position: relative; display: flex; overflow: hidden; background: #232327; }
 .editor-shell .cm-editor { flex: 1; min-width: 0; height: 100%; }
 .bsn-err-line { background: rgba(239,68,68,0.18); }
-.gutter {
-  flex: none; width: 42px; overflow: hidden;
-  padding: 8px 0;
-  background: var(--bg-window);
-  border-right: 1px solid var(--border-panel);
-  font-family: var(--font-mono); font-size: 11px; line-height: 19px;
-  color: #5B5B60; text-align: right;
-}
-.gutter div { padding-right: 10px; }
-.gutter div.err-line { color: var(--destructive); font-weight: 500; }
-.editor-stack { flex: 1; position: relative; min-width: 0; }
-.editor-stack pre, .editor-stack textarea {
-  position: absolute; inset: 0;
-  margin: 0; padding: 8px 12px;
-  font-family: var(--font-mono); font-size: 12px; line-height: 19px;
-  white-space: pre; overflow: auto;
-  tab-size: 4;
-}
-.editor-stack pre { pointer-events: none; color: var(--text-value); }
-.editor-stack textarea {
-  background: transparent; color: transparent; caret-color: var(--text-primary);
-  border: none; outline: none; resize: none;
-}
-.editor-stack textarea::selection { background: rgba(32,110,200,0.4); }
-.tok-comment { color: #77777D; font-style: italic; }
-.tok-str { color: var(--tint-str); }
-.tok-num { color: var(--tint-num); }
-.tok-type { color: var(--tint-bool); }
-.tok-label { color: var(--warn); }
-.tok-template { color: var(--tint-enum); }
-.tok-field { color: var(--text-value); }
-.err-mark { background: rgba(239,68,68,0.18); border-bottom: 1px dashed var(--destructive); }
 .bsn-status {
   flex: none; min-height: 26px;
   display: flex; align-items: center; gap: 7px; padding: 4px 10px;
@@ -515,6 +481,7 @@ table.results tr:hover td { background: rgba(255,255,255,0.04); }
 .side-card .spawn-log button { text-align: left; }
 
 /* ---------- viewport ---------- */
+/* viewport chrome kept for the upcoming viewport page */
 .viewport-pane { position: relative; background: #1A1A1E; }
 .viewport-pane canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: default; }
 .add-menu {
