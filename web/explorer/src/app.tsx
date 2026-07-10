@@ -20,6 +20,7 @@ import {
 } from 'lucide-preact';
 import { Icon } from './components/Icon';
 import { TreePanel } from './components/TreePanel';
+import { Inspector } from './components/Inspector';
 import { page, pollingPaused, simPaused, type Page } from './lib/state';
 import { appInfo, startConnection, status } from './lib/connection';
 import { currentHost, jackdaw } from './lib/brp';
@@ -125,9 +126,7 @@ function EntitiesPage() {
         onPointerMove={divider.onPointerMove}
         onPointerUp={divider.onPointerUp}
       />
-      <div class="pane" style="flex:1">
-        Inspector
-      </div>
+      <Inspector />
     </>
   );
 }
