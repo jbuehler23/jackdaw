@@ -136,6 +136,7 @@ button { font-family: inherit; cursor: pointer; }
   position: relative;
 }
 .rail-btn:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+.rail-btn:disabled { opacity: 0.35; pointer-events: none; }
 .rail-btn.active { background: var(--bg-active-tool); color: var(--text-primary); }
 .rail-btn.active::before {
   content: ''; position: absolute; left: -5px; top: 6px; bottom: 6px;

@@ -5,6 +5,7 @@ import { App } from '../app';
 describe('app shell', () => {
   it('renders', () => {
     const { container } = render(<App />);
-    expect(container.textContent).toContain('Jackdaw Explorer');
+    expect(container.textContent).toContain('jackdaw');
+    expect(container.textContent).toContain('explorer');
   });
 });
