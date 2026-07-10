@@ -5532,6 +5532,7 @@ version = "0.5.0"
 dependencies = [
  "bevy",
  "glam 0.32.1",
+ "jackdaw_bsn",
  "jackdaw_geometry",
  "jackdaw_scene_types",
  "rand 0.9.4",
@@ -5671,6 +5672,7 @@ dependencies = [
  "jackdaw_scene_types",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 

@@ -12,12 +12,12 @@ use bevy::reflect::serde::TypedReflectDeserializer;
 use bevy::time::Virtual;
 use serde::de::DeserializeSeed;
 
-use jackdaw_scene_types::SceneNodeId;
 use jackdaw_jsn::ast::JSN_NODE_ID_TYPE_PATH;
 use jackdaw_pie_protocol::event::{PieChannel, StateEvent, to_bytes};
 use jackdaw_pie_protocol::transport::PieTransport;
 use jackdaw_pie_protocol::transport_ipc::IpcChannelTransport;
 use jackdaw_pie_protocol::{ControlEvent, PieMode, build_snapshot};
+use jackdaw_scene_types::SceneNodeId;
 
 /// The active PIE link parameters, read from the environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -780,9 +780,9 @@ fn apply_remove_component(world: &mut World, entity_bits: u64, type_path: &str) 
 mod tests {
     use super::*;
     use bevy::app::AppExit;
-    use jackdaw_scene_types::SceneNodeId;
     use jackdaw_pie_protocol::event::{ControlEvent, PieChannel, to_bytes};
     use jackdaw_pie_protocol::{IpcChannelTransport, connect, serve};
+    use jackdaw_scene_types::SceneNodeId;
 
     /// Headless app with PIE systems and a single `Name` + `Transform` entity.
     fn headless_pie_app(transport: IpcChannelTransport) -> (App, Entity) {

@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod bsn_bridge;
 pub mod format;
 mod loader;
 

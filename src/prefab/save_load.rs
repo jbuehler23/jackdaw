@@ -63,8 +63,8 @@ fn resolve_source_path(source: &str, scene_dir: &Path) -> PathBuf {
 fn read_prefab_ast(path: &Path) -> Result<SceneJsnAst, std::io::Error> {
     let text = std::fs::read_to_string(path)?;
     if path.extension().is_some_and(|e| e == "bsn") {
-        let scene = crate::jsn_to_bsn::bsn_scene_to_jsn(&text)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        let scene = jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn(&text)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         return Ok(SceneJsnAst::from_jsn_scene(&scene, &[]));
     }
     let (scene, _version) = jackdaw_jsn::format::parse_scene(&text)

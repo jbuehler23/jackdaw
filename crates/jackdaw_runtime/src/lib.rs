@@ -193,10 +193,15 @@ impl AssetLoader for JackdawSceneLoader {
         let text =
             std::str::from_utf8(&bytes).map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
 
-        let (jsn, _version) = jackdaw_jsn::format::parse_scene(text)
-            .map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
-
         let source_path = load_context.path().path();
+        let jsn = if source_path.extension().is_some_and(|e| e == "bsn") {
+            jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn(text).map_err(JackdawLoadError::Parse)?
+        } else {
+            jackdaw_jsn::format::parse_scene(text)
+                .map_err(|e| JackdawLoadError::Parse(e.to_string()))?
+                .0
+        };
+
         let parent_path = source_path.parent().unwrap_or(Path::new("")).to_owned();
         let stem = source_path
             .file_stem()
@@ -210,7 +215,7 @@ impl AssetLoader for JackdawSceneLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["jsn"]
+        &["jsn", "bsn"]
     }
 }
 

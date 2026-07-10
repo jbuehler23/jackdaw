@@ -593,7 +593,7 @@ fn catalog_round_trips_as_bsn() {
 
 #[test]
 fn worldless_bridge_matches_reflect_deserialization() {
-    use jackdaw::jsn_to_bsn::bsn_scene_to_jsn;
+    use jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn;
 
     // Author a scene covering the reflect-JSON conventions the bridge maps:
     // struct (Transform), unit enum variant (Visibility), newtype tuple

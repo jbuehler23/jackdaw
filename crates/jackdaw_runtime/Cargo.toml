@@ -62,3 +62,6 @@ physics = ["dep:jackdaw_avian_integration"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = "3"
