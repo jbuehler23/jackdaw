@@ -122,4 +122,16 @@ describe('Inspector', () => {
       expect.anything(),
     );
   });
+
+  it('renders component cards inside a scrollable pane-body, not directly in the pane', async () => {
+    selectedEntity.value = 5;
+    const { container, getByText } = render(<Inspector />);
+
+    await waitFor(() => expect(getByText('translation')).toBeTruthy());
+
+    const paneBody = container.querySelector('.pane-body');
+    expect(paneBody).toBeTruthy();
+    expect(paneBody?.querySelector('.comp-cards')).toBeTruthy();
+    expect(paneBody?.querySelectorAll('.comp-card').length).toBe(1);
+  });
 });

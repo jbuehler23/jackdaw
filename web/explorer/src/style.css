@@ -311,6 +311,17 @@ select.txt-cell { cursor: pointer; color: var(--text-value); appearance: none;
 .entity-link .icon { width: 11px; height: 11px; }
 .color-swatch { width: 22px; height: 22px; border-radius: 3px; border: 1px solid var(--border-subtle); flex: none; }
 .marker-note { font-size: 11px; color: var(--text-secondary); font-style: italic; padding: 2px 0 4px; }
+.opaque-json-row { display: flex; align-items: center; gap: 6px; }
+.opaque-json-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-style: normal; }
+.opaque-json-toggle {
+  flex: none; width: 18px; height: 18px;
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: none; color: var(--text-secondary); padding: 0;
+}
+.opaque-json-toggle:hover { color: var(--text-primary); }
+.opaque-json-toggle .icon { width: 11px; height: 11px; transition: transform 0.1s; }
+.opaque-json-toggle.open .icon { transform: rotate(90deg); }
+.opaque-json pre { max-height: 240px; overflow: auto; margin-top: 4px; }
 .add-comp {
   margin: 0 8px 10px;
   display: flex; align-items: center; justify-content: center; gap: 6px;

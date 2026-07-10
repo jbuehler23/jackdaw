@@ -2,8 +2,8 @@
 // Every editor takes the field's current value and a binding (which component/path
 // it writes to) and calls onCommit(path, value); Inspector.tsx owns turning that
 // into the actual mutate_components/insert_components call.
-import { useEffect, useRef } from 'preact/hooks';
-import { Link } from 'lucide-preact';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { ChevronRight, Link } from 'lucide-preact';
 import { Icon } from './Icon';
 import type { FieldBinding } from '../lib/inspector';
 import { commitPath, scrubValue } from '../lib/inspector';
@@ -245,10 +245,33 @@ export function ColorField({ value }: { value: unknown }) {
   );
 }
 
+const OPAQUE_PREVIEW_MAX = 80;
+
+function opaquePreview(value: unknown): string {
+  const compact = JSON.stringify(value);
+  if (compact.length <= OPAQUE_PREVIEW_MAX) return compact;
+  return `${compact.slice(0, OPAQUE_PREVIEW_MAX)}...`;
+}
+
+// Unregistered/opaque field values (GlobalTransform's matrix, bevy_text's giant
+// layout objects) have no editable schema, so this is read-only. Collapsed by
+// default to a one-line preview; expands to the full pretty-printed JSON.
 export function OpaqueJson({ value }: { value: unknown }) {
+  const [open, setOpen] = useState(false);
+
   return (
-    <div class="marker-note">
-      <pre style="white-space:pre-wrap;font-family:var(--font-mono)">{JSON.stringify(value, null, 2)}</pre>
+    <div class="marker-note opaque-json">
+      <div class="opaque-json-row">
+        <span class="opaque-json-preview">{opaquePreview(value)}</span>
+        <button
+          class={`opaque-json-toggle${open ? ' open' : ''}`}
+          title={open ? 'Hide raw value' : 'Show raw value'}
+          onClick={() => setOpen(!open)}
+        >
+          <Icon of={ChevronRight} />
+        </button>
+      </div>
+      {open && <pre style="white-space:pre-wrap;font-family:var(--font-mono)">{JSON.stringify(value, null, 2)}</pre>}
     </div>
   );
 }

@@ -254,7 +254,7 @@ export function Inspector() {
         </div>
       </div>
       {loaded && (
-        <>
+        <div class="pane-body">
           <div class="comp-cards">
             {Object.keys(loaded.components).map((component) => (
               <ComponentCard key={component} entity={entity} component={component} value={loaded.components[component]} />
@@ -264,7 +264,7 @@ export function Inspector() {
             <Icon of={Plus} />
             Add component
           </button>
-        </>
+        </div>
       )}
       {addOpen && (
         <AddComponent
