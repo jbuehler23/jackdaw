@@ -38,16 +38,36 @@ pub fn populate_cache_for_scene(
 
 fn resolve_source_path(source: &str, scene_dir: &Path) -> PathBuf {
     let p = Path::new(source);
-    if p.is_absolute() {
+    let resolved = if p.is_absolute() {
         p.to_path_buf()
     } else {
         scene_dir.join(p)
+    };
+    // Scenes written before (or after) their prefab converted formats may
+    // reference the other extension; fall back to the sibling.
+    if !resolved.exists() {
+        let sibling = match resolved.extension().and_then(|e| e.to_str()) {
+            Some("jsn") => Some(resolved.with_extension("bsn")),
+            Some("bsn") => Some(resolved.with_extension("jsn")),
+            _ => None,
+        };
+        if let Some(sibling) = sibling
+            && sibling.exists()
+        {
+            return sibling;
+        }
     }
+    resolved
 }
 
 fn read_prefab_ast(path: &Path) -> Result<SceneJsnAst, std::io::Error> {
     let text = std::fs::read_to_string(path)?;
-    let scene: jackdaw_jsn::format::JsnScene = serde_json::from_str(&text)
+    if path.extension().is_some_and(|e| e == "bsn") {
+        let scene = crate::jsn_to_bsn::bsn_scene_to_jsn(&text)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        return Ok(SceneJsnAst::from_jsn_scene(&scene, &[]));
+    }
+    let (scene, _version) = jackdaw_jsn::format::parse_scene(&text)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     Ok(SceneJsnAst::from_jsn_scene(&scene, &[]))
 }

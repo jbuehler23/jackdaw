@@ -1493,7 +1493,14 @@ pub fn save_prefab_to_disk(world: &mut World, prefab_path: &Path) -> std::io::Re
         };
         crate::scene_io::jsn_scene_from_ast(ast)
     };
-    let text = serde_json::to_string_pretty(&prefab_jsn).map_err(std::io::Error::other)?;
+    let text = if prefab_path.extension().is_some_and(|e| e == "bsn") {
+        let parent = prefab_path.parent().unwrap_or(Path::new(""));
+        crate::jsn_to_bsn::convert_jsn_scene_to_bsn_at(world, &prefab_jsn, parent)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?
+            .scene_bsn
+    } else {
+        serde_json::to_string_pretty(&prefab_jsn).map_err(std::io::Error::other)?
+    };
     std::fs::write(prefab_path, text)?;
 
     let fingerprint = crate::prefab::cache::compute_file_fingerprint(prefab_path)?;

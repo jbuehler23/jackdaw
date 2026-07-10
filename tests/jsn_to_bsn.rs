@@ -590,3 +590,129 @@ fn catalog_round_trips_as_bsn() {
         .expect("material in store");
     assert!((material.metallic - 0.75).abs() < 1e-6);
 }
+
+#[test]
+fn worldless_bridge_matches_reflect_deserialization() {
+    use jackdaw::jsn_to_bsn::bsn_scene_to_jsn;
+
+    // Author a scene covering the reflect-JSON conventions the bridge maps:
+    // struct (Transform), unit enum variant (Visibility), newtype tuple
+    // struct (SceneNodeId as the id field), map values (CustomProperties),
+    // and hierarchy.
+    let mut app_a = headless_app();
+    let parent_id = SceneNodeId::next();
+    let child_id = SceneNodeId::next();
+    let mut props = BTreeMap::new();
+    props.insert("hp".to_string(), PropertyValue::Int(7));
+    let parent = app_a
+        .world_mut()
+        .spawn((
+            Name::new("Parent"),
+            Transform::from_xyz(1.5, 2.5, 3.5),
+            Visibility::Hidden,
+            parent_id,
+            CustomProperties { properties: props },
+            jackdaw_scene_types::SceneRootTag,
+        ))
+        .id();
+    app_a.world_mut().spawn((
+        Name::new("Child"),
+        Transform::from_xyz(6.0, 0.0, 0.0),
+        child_id,
+        ChildOf(parent),
+    ));
+    let scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app_a.world_mut());
+    let mut app_c = headless_app();
+    let bsn = convert_jsn_scene_to_bsn(app_c.world_mut(), &scene)
+        .expect("converts")
+        .scene_bsn;
+
+    // Bridge back to a JsnScene and load it through the REAL reflect
+    // deserializer; values must match the authored world.
+    let bridged = bsn_scene_to_jsn(&bsn).expect("bridge succeeds");
+    let mut app_b = headless_app();
+    let local = std::collections::HashMap::new();
+    let spawned = load_scene_from_jsn(app_b.world_mut(), &bridged.scene, Path::new(""), &local);
+    assert_eq!(spawned.len(), 2);
+
+    let parent_b = find_by_node_id(app_b.world_mut(), parent_id).expect("parent id bridged");
+    let child_b = find_by_node_id(app_b.world_mut(), child_id).expect("child id bridged");
+    let t = app_b
+        .world()
+        .get::<Transform>(parent_b)
+        .unwrap()
+        .translation;
+    assert!((t - Vec3::new(1.5, 2.5, 3.5)).length() < 1e-5, "{t}");
+    assert_eq!(
+        app_b.world().get::<Visibility>(parent_b),
+        Some(&Visibility::Hidden),
+        "unit enum variant bridges"
+    );
+    assert_eq!(
+        app_b
+            .world()
+            .get::<CustomProperties>(parent_b)
+            .unwrap()
+            .properties
+            .get("hp"),
+        Some(&PropertyValue::Int(7)),
+        "map of enum values bridges"
+    );
+    assert_eq!(
+        app_b.world().get::<ChildOf>(child_b).map(|c| c.parent()),
+        Some(parent_b),
+        "hierarchy bridges"
+    );
+    assert_eq!(
+        app_b.world().get::<Name>(parent_b).map(Name::as_str),
+        Some("Parent")
+    );
+}
+
+#[test]
+fn prefab_cache_reads_bsn_prefabs_with_stale_extension_references() {
+    use jackdaw::prefab::PrefabAstCache;
+    use jackdaw::prefab::save_load::populate_cache_for_scene;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("prefabs")).unwrap();
+
+    // A .bsn prefab baseline on disk.
+    let mut app = headless_app();
+    app.world_mut().spawn((
+        Name::new("Crate"),
+        Transform::from_xyz(0.0, 0.5, 0.0),
+        SceneNodeId::next(),
+        jackdaw_scene_types::SceneRootTag,
+    ));
+    let scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app.world_mut());
+    let mut app_c = headless_app();
+    let bsn = convert_jsn_scene_to_bsn(app_c.world_mut(), &scene)
+        .expect("converts")
+        .scene_bsn;
+    std::fs::write(dir.path().join("prefabs/crate.bsn"), &bsn).unwrap();
+
+    // A scene AST whose IsA still references the pre-conversion .jsn path.
+    let mut ast = jackdaw_jsn::SceneJsnAst::default();
+    let entity = app.world_mut().spawn_empty().id();
+    let idx = ast.create_node(entity, None);
+    ast.nodes[idx].components.insert(
+        "jackdaw::prefab::components::IsA".to_string(),
+        serde_json::json!({"source": "prefabs/crate.jsn"}),
+    );
+
+    let mut cache = PrefabAstCache::default();
+    populate_cache_for_scene(&ast, &mut cache, dir.path());
+
+    let cached = cache
+        .get(&dir.path().join("prefabs/crate.bsn"))
+        .or_else(|| cache.get(&dir.path().join("prefabs/crate.jsn")))
+        .expect("stale .jsn reference resolves to the .bsn sibling");
+    assert_eq!(cached.nodes.len(), 1);
+    assert!(
+        cached.nodes[0]
+            .components
+            .contains_key("bevy_transform::components::transform::Transform"),
+        "prefab baseline components survive the bridge"
+    );
+}
