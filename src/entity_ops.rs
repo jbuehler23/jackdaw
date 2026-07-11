@@ -849,8 +849,17 @@ fn copy_components(world: &mut World) {
         assets,
     };
 
-    let jsn_text = match serde_json::to_string_pretty(&payload) {
-        Ok(t) => t,
+    // Clipboard text is BSN: entities plus embedded asset entries, the same
+    // shape a saved scene uses, so it pastes into code editors readably.
+    let payload_scene = jackdaw_jsn::JsnScene {
+        jsn: jackdaw_jsn::format::JsnHeader::default(),
+        metadata: jackdaw_jsn::format::JsnMetadata::default(),
+        assets: payload.assets.clone(),
+        editor: None,
+        scene: payload.entities.clone(),
+    };
+    let jsn_text = match crate::jsn_to_bsn::convert_jsn_scene_to_bsn(world, &payload_scene) {
+        Ok(converted) => converted.scene_bsn,
         Err(e) => {
             warn!("Failed to serialize clipboard payload: {e}");
             return;
@@ -1029,9 +1038,25 @@ fn paste_components(world: &mut World) {
 
     let parsed_value = match serde_json::from_str::<serde_json::Value>(&jsn_text) {
         Ok(v) => v,
-        Err(e) => {
-            warn!("Clipboard text is not valid JSON: {e}");
-            return;
+        Err(_) => {
+            // Not JSON: treat the text as BSN, the format copy writes. The
+            // bridge routes embedded asset entries into the asset table.
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            let bridged = {
+                let reg = registry.read();
+                jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn_with_registry(&jsn_text, Some(&reg))
+            };
+            match bridged {
+                Ok(scene) => serde_json::to_value(jackdaw_jsn::format::ClipboardPayload {
+                    entities: scene.scene,
+                    assets: scene.assets,
+                })
+                .unwrap_or(serde_json::Value::Null),
+                Err(e) => {
+                    warn!("Clipboard text is neither JSON nor BSN: {e}");
+                    return;
+                }
+            }
         }
     };
 

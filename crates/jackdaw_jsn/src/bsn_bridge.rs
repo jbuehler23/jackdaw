@@ -16,15 +16,34 @@
 /// single-key objects). The prefab cache uses this to read `.bsn` prefab
 /// baselines in contexts that have no world access.
 pub fn bsn_scene_to_jsn(text: &str) -> Result<crate::format::JsnScene, String> {
+    bsn_scene_to_jsn_with_registry(text, None)
+}
+
+/// [`bsn_scene_to_jsn`] with asset-entry routing: when a registry is
+/// available, document roots whose type resolves to a registered `Asset`
+/// become entries in the scene's asset table (keyed `#Name`) instead of
+/// entities, matching how the editor embeds scene-inline assets.
+pub fn bsn_scene_to_jsn_with_registry(
+    text: &str,
+    registry: Option<&bevy::reflect::TypeRegistry>,
+) -> Result<crate::format::JsnScene, String> {
     let ast =
         jackdaw_bsn::parse_bsn_text(text).map_err(|e| format!("could not parse .bsn: {e}"))?;
 
+    let mut assets = crate::format::JsnAssets::default();
     let mut entities = Vec::new();
     let mut queue: Vec<(bevy::ecs::entity::Entity, Option<usize>)> =
         ast.roots.iter().map(|&r| (r, None)).collect();
     queue.reverse();
 
     while let Some((node, parent)) = queue.pop() {
+        if parent.is_none()
+            && let Some(registry) = registry
+            && let Some((type_path, name, value)) = asset_entry_from_root(&ast, node, registry)
+        {
+            assets.0.entry(type_path).or_default().insert(name, value);
+            continue;
+        }
         let mut entity = crate::format::JsnEntity {
             id: None,
             parent,
@@ -85,10 +104,47 @@ pub fn bsn_scene_to_jsn(text: &str) -> Result<crate::format::JsnScene, String> {
     Ok(crate::format::JsnScene {
         jsn: crate::format::JsnHeader::default(),
         metadata: crate::format::JsnMetadata::default(),
-        assets: crate::format::JsnAssets::default(),
+        assets,
         editor: None,
         scene: entities,
     })
+}
+
+/// When a root is a named asset entry (its non-name patch resolves to a
+/// registered `Asset` type), produce `(type_path, "#Name", reflect JSON)`.
+fn asset_entry_from_root(
+    ast: &jackdaw_bsn::SceneBsnAst,
+    root: bevy::ecs::entity::Entity,
+    registry: &bevy::reflect::TypeRegistry,
+) -> Option<(String, String, serde_json::Value)> {
+    use bevy::asset::ReflectAsset;
+
+    let patches = ast.get_patches(root)?;
+    let name = ast.get_name(root)?.to_string();
+    for &pe in &patches.0 {
+        let (type_path, value) = match ast.get_patch(pe)? {
+            jackdaw_bsn::BsnPatch::Struct(data) => (
+                data.type_path.clone(),
+                struct_fields_to_json(&data.type_path, &data.fields),
+            ),
+            jackdaw_bsn::BsnPatch::TupleStruct(data) => (
+                data.type_path.clone(),
+                tuple_values_to_json(&data.type_path, &data.values),
+            ),
+            jackdaw_bsn::BsnPatch::Type(type_path) => {
+                (type_path.clone(), type_patch_to_json(type_path).1)
+            }
+            _ => continue,
+        };
+        let is_asset = registry
+            .get_with_type_path(&type_path)
+            .is_some_and(|registration| registration.data::<ReflectAsset>().is_some());
+        if is_asset {
+            return Some((type_path, format!("#{name}"), value));
+        }
+        return None;
+    }
+    None
 }
 
 /// Strip a variant segment from `Enum::Variant` paths; plain paths pass

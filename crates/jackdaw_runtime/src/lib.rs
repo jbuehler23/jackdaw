@@ -164,12 +164,18 @@ pub struct JackdawSceneRoot(pub Handle<JackdawScene>);
 #[derive(Component)]
 struct SceneSpawned;
 
-#[derive(Debug, TypePath)]
-struct JackdawSceneLoader;
+#[derive(TypePath)]
+struct JackdawSceneLoader {
+    type_registry: bevy::ecs::reflect::AppTypeRegistry,
+}
 
 impl FromWorld for JackdawSceneLoader {
-    fn from_world(_world: &mut World) -> Self {
-        Self
+    fn from_world(world: &mut World) -> Self {
+        Self {
+            type_registry: world
+                .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+                .clone(),
+        }
     }
 }
 
@@ -195,7 +201,9 @@ impl AssetLoader for JackdawSceneLoader {
 
         let source_path = load_context.path().path();
         let jsn = if source_path.extension().is_some_and(|e| e == "bsn") {
-            jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn(text).map_err(JackdawLoadError::Parse)?
+            let registry = self.type_registry.read();
+            jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn_with_registry(text, Some(&registry))
+                .map_err(JackdawLoadError::Parse)?
         } else {
             jackdaw_jsn::format::parse_scene(text)
                 .map_err(|e| JackdawLoadError::Parse(e.to_string()))?

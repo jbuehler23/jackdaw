@@ -716,3 +716,87 @@ fn prefab_cache_reads_bsn_prefabs_with_stale_extension_references() {
         "prefab baseline components survive the bridge"
     );
 }
+
+#[test]
+fn clipboard_payload_round_trips_through_bsn_text() {
+    use jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn_with_registry;
+    use jackdaw_jsn::format::{ClipboardPayload, JsnHeader, JsnMetadata};
+
+    // A copy payload: one entity with a face material reference, plus the
+    // inline material it references.
+    let mut app = headless_app();
+    let material_json = {
+        let registry = app
+            .world()
+            .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+            .clone();
+        let reg = registry.read();
+        let material = StandardMaterial {
+            base_color: Color::srgb(0.1, 0.2, 0.9),
+            ..Default::default()
+        };
+        let serializer =
+            bevy::reflect::serde::TypedReflectSerializer::new(material.as_partial_reflect(), &reg);
+        serde_json::to_value(serializer).unwrap()
+    };
+    let mut assets = jackdaw_jsn::format::JsnAssets::default();
+    assets.0.insert(
+        "bevy_pbr::pbr_material::StandardMaterial".to_string(),
+        std::collections::HashMap::from([("#BlueMat".to_string(), material_json)]),
+    );
+    let payload = ClipboardPayload {
+        entities: vec![jackdaw_jsn::format::JsnEntity {
+            id: None,
+            parent: None,
+            components: std::collections::HashMap::from([
+                (
+                    "bevy_ecs::name::Name".to_string(),
+                    serde_json::json!("Copied"),
+                ),
+                (
+                    "bevy_transform::components::transform::Transform".to_string(),
+                    serde_json::json!({
+                        "translation": [7.0, 8.0, 9.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0],
+                    }),
+                ),
+            ]),
+        }],
+        assets,
+    };
+
+    // Copy side: payload -> BSN text (the exact conversion copy performs).
+    let payload_scene = jackdaw_jsn::JsnScene {
+        jsn: JsnHeader::default(),
+        metadata: JsnMetadata::default(),
+        assets: payload.assets.clone(),
+        editor: None,
+        scene: payload.entities.clone(),
+    };
+    let text = convert_jsn_scene_to_bsn(app.world_mut(), &payload_scene)
+        .expect("copy conversion")
+        .scene_bsn;
+    assert!(text.contains("#Copied"), "{text}");
+    assert!(text.contains("#BlueMat"), "{text}");
+
+    // Paste side: BSN text -> payload via the registry-aware bridge.
+    let registry = app
+        .world()
+        .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+        .clone();
+    let reg = registry.read();
+    let bridged = bsn_scene_to_jsn_with_registry(&text, Some(&reg)).expect("paste bridge");
+    assert_eq!(bridged.scene.len(), 1, "asset entry is not an entity");
+    assert!(
+        bridged.scene[0]
+            .components
+            .contains_key("bevy_transform::components::transform::Transform")
+    );
+    let materials = bridged
+        .assets
+        .0
+        .get("bevy_pbr::pbr_material::StandardMaterial")
+        .expect("asset table populated");
+    assert!(materials.contains_key("#BlueMat"));
+}
