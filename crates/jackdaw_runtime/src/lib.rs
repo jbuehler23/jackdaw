@@ -49,7 +49,9 @@ impl Plugin for JackdawPlugin {
         // and installs `MeshRebuildPlugin` (which embeds the
         // bundled grid texture used as the brush fallback
         // material).
-        app.add_plugins(JsnPlugin::default());
+        if !app.is_plugin_added::<JsnPlugin>() {
+            app.add_plugins(JsnPlugin::default());
+        }
 
         app.init_asset::<JackdawScene>()
             .init_asset_loader::<JackdawSceneLoader>()

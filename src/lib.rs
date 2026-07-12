@@ -351,8 +351,11 @@ impl Plugin for EditorCorePlugin {
             "EditorCorePlugin requires EnhancedInputPlugin first; \
              add `EnhancedInputPlugin` in main.rs before EditorPlugins."
         );
-        app.init_state::<AppState>()
-            .add_plugins((FeathersPlugins, EditorFeathersPlugin));
+        app.init_state::<AppState>();
+        if !app.is_plugin_added::<FeathersPlugins>() {
+            app.add_plugins(FeathersPlugins);
+        }
+        app.add_plugins((EditorFeathersPlugin));
         app.add_plugins((
             jackdaw_jsn::JsnPlugin {
                 runtime_mesh_rebuild: false,
