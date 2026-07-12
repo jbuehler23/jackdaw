@@ -28,7 +28,10 @@
 // the FFI boundary. Mirrors how `bevy/dynamic_linking` pulls in
 // `bevy_dylib`.
 #[cfg(feature = "dynamic_linking")]
-#[expect(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "used by the host binary and by loaded extensions"
+)]
 use jackdaw_dylib as _;
 
 // --- Extension authoring surface ---
@@ -45,7 +48,7 @@ pub use jackdaw_api_internal::lifecycle::ExtensionKind;
 /// carrying them. Extensions seed it through
 /// [`ExtensionContext::register_entity_icon`].
 pub mod entity_icons {
-    pub use jackdaw_api_internal::entity_icons::{EntityIconRegistry, registered_icon};
+    pub use jackdaw_api_internal::entity_icons::{registered_icon, EntityIconRegistry};
 }
 
 /// Inspector category registry: route components to category tabs and register
@@ -84,8 +87,8 @@ pub mod op {
 /// Data-driven keymap presets for operator bindings.
 pub mod keymap {
     pub use jackdaw_api_internal::keymap::{
-        DefaultKeymap, KeymapApplyReport, KeymapPreset, PresetBinding, PresetInput, PresetPhase,
-        PresetSpawnedBinding, apply_keymap_preset, key_code_from_name, key_code_name,
+        apply_keymap_preset, key_code_from_name, key_code_name, DefaultKeymap, KeymapApplyReport,
+        KeymapPreset, PresetBinding, PresetInput, PresetPhase, PresetSpawnedBinding,
     };
 }
 
@@ -123,7 +126,7 @@ pub use jackdaw_jsn as jsn;
 /// that hides the choice.
 pub mod ui {
     pub use jackdaw_feathers::button::{
-        ButtonProps, button, operator_button, operator_button_variant,
+        button, operator_button, operator_button_variant, ButtonProps,
     };
     pub use jackdaw_feathers::icons::Icon;
 
@@ -136,15 +139,15 @@ pub mod ui {
     /// Add [`RadialMenuPlugin`] once if the host has not already; the editor
     /// registers it for its own mesh quick-menu.
     pub use jackdaw_widgets::{
-        RadialMenuItem, RadialMenuPlugin, RadialMenuSelect, cancel_radial_menu,
-        confirm_radial_menu, open_radial_menu,
+        cancel_radial_menu, confirm_radial_menu, open_radial_menu, RadialMenuItem,
+        RadialMenuPlugin, RadialMenuSelect,
     };
 
     /// Build inspector cards matching the editor's look (header bar + bordered body)
     /// and standard field rows.
     pub use jackdaw_feathers::inspector_card::{
-        InspectorCardEntities, InspectorCardOpts, InspectorCardRemoveButton, spawn_inspector_card,
-        spawn_inspector_field_row,
+        spawn_inspector_card, spawn_inspector_field_row, InspectorCardEntities, InspectorCardOpts,
+        InspectorCardRemoveButton,
     };
 
     use crate::op::Operator;
@@ -184,9 +187,9 @@ pub mod prelude {
     pub use crate::pie::PlayState;
     pub use crate::runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems};
     pub use crate::{
-        DefaultArea, ExtensionContext, ExtensionKind, ExtensionPoint, HierarchyWindow,
+        operator, DefaultArea, ExtensionContext, ExtensionKind, ExtensionPoint, HierarchyWindow,
         InspectorWindow, JackdawExtension, MenuEntryDescriptor, PanelContext, TopLevelMenu,
-        WindowDescriptor, operator,
+        WindowDescriptor,
     };
 
     /// Helper [`SystemParam`](bevy::ecs::system::SystemParam) for
@@ -196,12 +199,12 @@ pub mod prelude {
     /// Editor button-construction surface. The trait is in scope so
     /// `ButtonProps::from_operator::<MyOp>()` works without a manual
     /// `use jackdaw_api::ui::ButtonPropsOpExt`.
-    pub use crate::ui::{ButtonProps, ButtonPropsOpExt as _, Icon, button};
+    pub use crate::ui::{button, ButtonProps, ButtonPropsOpExt as _, Icon};
 
     /// Radial quick-menu primitives so an extension can open its own pie
     /// menu and react to selections without an explicit `ui` import.
     pub use crate::ui::{
-        RadialMenuItem, RadialMenuSelect, cancel_radial_menu, confirm_radial_menu, open_radial_menu,
+        cancel_radial_menu, confirm_radial_menu, open_radial_menu, RadialMenuItem, RadialMenuSelect,
     };
 
     /// BEI types extension authors need for `actions!` / `bindings!`

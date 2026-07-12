@@ -352,10 +352,11 @@ impl Plugin for EditorCorePlugin {
              add `EnhancedInputPlugin` in main.rs before EditorPlugins."
         );
         app.init_state::<AppState>();
-        if !app.is_plugin_added::<FeathersPlugins>() {
+        // Check plugin from `FeathersPlugin` group is not already loaded.
+        if !app.is_plugin_added::<bevy::input_focus::tab_navigation::TabNavigationPlugin>() {
             app.add_plugins(FeathersPlugins);
         }
-        app.add_plugins((EditorFeathersPlugin));
+        app.add_plugins(EditorFeathersPlugin);
         app.add_plugins((
             jackdaw_jsn::JsnPlugin {
                 runtime_mesh_rebuild: false,
