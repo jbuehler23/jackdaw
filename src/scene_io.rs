@@ -430,7 +430,11 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     // A `.bsn` path saves the live BSN document text; anything else keeps
     // writing the JSN JSON form.
     let contents = if path.ends_with(".bsn") {
-        jackdaw_bsn::emit_scene(world.resource::<jackdaw_bsn::SceneBsnAst>())
+        let parent_path = Path::new(&path)
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        emit_bsn_scene_with_inline_assets(world, &parent_path)
     } else {
         json
     };
@@ -1213,6 +1217,384 @@ fn collect_handles_from_reflect(
         }
         bevy::reflect::ReflectRef::Opaque(_) => {}
     }
+}
+
+/// The runtime inline assets referenced by a BSN document's kept components,
+/// collected at emit time so they can be embedded and resolved.
+struct BsnInlineAssetPass {
+    /// Asset id to the reference string emitted for its `Handle<T>` fields:
+    /// `#Name` for scene-inline entries and `@Name` for catalog entries.
+    names: bevy::platform::collections::HashMap<UntypedAssetId, String>,
+    /// New runtime assets that must be embedded as `#Name` roots in the
+    /// emitted document. Already-embedded scene assets and catalog assets are
+    /// excluded (they resolve through their existing roots or the catalog).
+    refs: Vec<jackdaw_bsn::CatalogAssetRef>,
+    /// The (entity, component type path) pairs whose patch carries at least one
+    /// asset `Handle<T>` field, so it must be re-derived with an asset context
+    /// for the reference to survive emission.
+    touched: Vec<(Entity, String)>,
+}
+
+/// The document's entities in a stable pre-order (roots in order, each followed
+/// by its descendants). Asset roots have no ECS mapping and are skipped. A
+/// deterministic order makes the generated inline-asset names stable across
+/// repeated captures of the same state.
+fn doc_entities_in_order(ast: &jackdaw_bsn::SceneBsnAst) -> Vec<Entity> {
+    fn visit(ast: &jackdaw_bsn::SceneBsnAst, node: Entity, out: &mut Vec<Entity>) {
+        if let Some(ecs) = ast.ecs_for_ast(node) {
+            out.push(ecs);
+        }
+        for child in ast.get_children_ast(node) {
+            visit(ast, child, out);
+        }
+    }
+    let mut out = Vec::new();
+    for &root in &ast.roots {
+        visit(ast, root, &mut out);
+    }
+    out
+}
+
+/// Walk every kept component on `entities` for asset `Handle<T>` fields.
+///
+/// `names` is pre-seeded with the assets that already resolve (catalog `@Name`
+/// and scene-inline `#Name` entries); any handle found there is left alone.
+/// Pathless runtime handles that are not yet known get a fresh `#Name` and a
+/// [`jackdaw_bsn::CatalogAssetRef`] so they embed as document roots. Every
+/// component that references any asset handle is recorded in `touched`, since
+/// its patch was maintained without an asset context and must be re-derived.
+fn collect_bsn_inline_assets(
+    world: &World,
+    registry: &TypeRegistry,
+    entities: &[Entity],
+    mut names: bevy::platform::collections::HashMap<UntypedAssetId, String>,
+) -> BsnInlineAssetPass {
+    let skip_ids: HashSet<TypeId> = HashSet::from([
+        TypeId::of::<GlobalTransform>(),
+        TypeId::of::<InheritedVisibility>(),
+        TypeId::of::<ViewVisibility>(),
+        TypeId::of::<ChildOf>(),
+        TypeId::of::<Children>(),
+    ]);
+
+    let mut refs: Vec<jackdaw_bsn::CatalogAssetRef> = Vec::new();
+    let mut touched: Vec<(Entity, String)> = Vec::new();
+    let mut counters: HashMap<String, usize> = HashMap::new();
+
+    for &entity in entities {
+        let Ok(entity_ref) = world.get_entity(entity) else {
+            continue;
+        };
+        for registration in registry.iter() {
+            if skip_ids.contains(&registration.type_id()) {
+                continue;
+            }
+            let type_path = registration.type_info().type_path_table().path();
+            if should_skip_component(type_path) {
+                continue;
+            }
+            let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+                continue;
+            };
+            let Some(component) = reflect_component.reflect(entity_ref) else {
+                continue;
+            };
+            let found = collect_bsn_handles_from_reflect(
+                component.as_partial_reflect(),
+                registry,
+                &mut names,
+                &mut refs,
+                &mut counters,
+            );
+            if found {
+                touched.push((entity, type_path.to_string()));
+            }
+        }
+    }
+
+    BsnInlineAssetPass {
+        names,
+        refs,
+        touched,
+    }
+}
+
+/// Recursively walk a reflected value for asset `Handle<T>` fields. Returns
+/// whether any asset handle was seen. Pathless runtime handles not already in
+/// `names` are named and pushed to `refs`; path-backed, UUID, catalog, and
+/// already-known handles are recorded as seen but neither renamed nor embedded.
+fn collect_bsn_handles_from_reflect(
+    value: &dyn PartialReflect,
+    registry: &TypeRegistry,
+    names: &mut bevy::platform::collections::HashMap<UntypedAssetId, String>,
+    refs: &mut Vec<jackdaw_bsn::CatalogAssetRef>,
+    counters: &mut HashMap<String, usize>,
+) -> bool {
+    let Some(value) = value.try_as_reflect() else {
+        return false;
+    };
+    let type_id = value.reflect_type_info().type_id();
+
+    if let Some(reflect_handle) = registry.get_type_data::<ReflectHandle>(type_id) {
+        let Some(untyped_handle) = reflect_handle.downcast_handle_untyped(value.as_any()) else {
+            return false;
+        };
+        let id = untyped_handle.id();
+
+        // Already resolvable (catalog, an existing scene root, or collected
+        // earlier in this walk): the component still needs re-deriving so the
+        // reference survives, but no new root is embedded.
+        if names.contains_key(&id) {
+            return true;
+        }
+        // File-backed handles emit as their asset path through the asset
+        // server; nothing to embed.
+        if untyped_handle.path().is_some() {
+            return true;
+        }
+        // Default / UUID handles are not backed by a live asset.
+        if matches!(untyped_handle, UntypedHandle::Uuid { .. }) {
+            return true;
+        }
+
+        let asset_type_id = reflect_handle.asset_type_id();
+        let Some(asset_registration) = registry.get(asset_type_id) else {
+            return true;
+        };
+        if asset_registration.data::<ReflectAsset>().is_none() {
+            return true;
+        }
+        let asset_type_path = asset_registration
+            .type_info()
+            .type_path_table()
+            .path()
+            .to_string();
+        // Generic asset type paths cannot round-trip through the parser, so the
+        // embed would be dropped; leave the handle unresolved as before.
+        if asset_type_path.contains('<') {
+            return true;
+        }
+
+        let counter = counters.entry(asset_type_path.clone()).or_insert(0);
+        let short_name = asset_type_path
+            .rsplit("::")
+            .next()
+            .unwrap_or(&asset_type_path);
+        let ref_name = format!("{short_name}{counter}");
+        *counter += 1;
+
+        names.insert(id, format!("#{ref_name}"));
+        refs.push(jackdaw_bsn::CatalogAssetRef {
+            name: ref_name,
+            type_id: asset_type_id,
+            asset_id: id,
+        });
+        return true;
+    }
+
+    let mut found = false;
+    match value.reflect_ref() {
+        bevy::reflect::ReflectRef::Struct(s) => {
+            for i in 0..s.field_len() {
+                if let Some(field) = s.field_at(i) {
+                    found |= collect_bsn_handles_from_reflect(
+                        field, registry, names, refs, counters,
+                    );
+                }
+            }
+        }
+        bevy::reflect::ReflectRef::TupleStruct(ts) => {
+            for i in 0..ts.field_len() {
+                if let Some(field) = ts.field(i) {
+                    found |= collect_bsn_handles_from_reflect(
+                        field, registry, names, refs, counters,
+                    );
+                }
+            }
+        }
+        bevy::reflect::ReflectRef::Tuple(t) => {
+            for i in 0..t.field_len() {
+                if let Some(field) = t.field(i) {
+                    found |= collect_bsn_handles_from_reflect(
+                        field, registry, names, refs, counters,
+                    );
+                }
+            }
+        }
+        bevy::reflect::ReflectRef::List(l) => {
+            for i in 0..l.len() {
+                if let Some(item) = l.get(i) {
+                    found |= collect_bsn_handles_from_reflect(
+                        item, registry, names, refs, counters,
+                    );
+                }
+            }
+        }
+        bevy::reflect::ReflectRef::Array(a) => {
+            for i in 0..a.len() {
+                if let Some(item) = a.get(i) {
+                    found |= collect_bsn_handles_from_reflect(
+                        item, registry, names, refs, counters,
+                    );
+                }
+            }
+        }
+        bevy::reflect::ReflectRef::Map(m) => {
+            for (_k, v) in m.iter() {
+                found |=
+                    collect_bsn_handles_from_reflect(v, registry, names, refs, counters);
+            }
+        }
+        bevy::reflect::ReflectRef::Set(s) => {
+            for item in s.iter() {
+                found |= collect_bsn_handles_from_reflect(
+                    item, registry, names, refs, counters,
+                );
+            }
+        }
+        bevy::reflect::ReflectRef::Enum(e) => {
+            for i in 0..e.field_len() {
+                if let Some(field) = e.field_at(i) {
+                    found |= collect_bsn_handles_from_reflect(
+                        field, registry, names, refs, counters,
+                    );
+                }
+            }
+        }
+        bevy::reflect::ReflectRef::Opaque(_) => {}
+    }
+    found
+}
+
+/// Emit the live BSN document to text with runtime inline assets embedded and
+/// their handle references resolved.
+///
+/// The editor maintains the document incrementally with plain component
+/// patches, so any asset `Handle<T>` field on a kept component was recorded
+/// without an asset context and resolves to an empty string on a bare
+/// [`jackdaw_bsn::emit_scene`]. Mirroring the JSN snapshot path, this does a
+/// capture-time asset pass: it walks the document's entities for pathless
+/// runtime asset handles, embeds each as a `#Name` root, and re-derives the
+/// handle-bearing component patches so their fields emit the reference names.
+/// Assets that already carry a filesystem path or a catalog `@Name`, and scene
+/// assets already embedded as roots, resolve through their existing sources.
+///
+/// The document is restored to its prior state before returning, so emission
+/// stays read-only: the temporary roots are dropped and the rewritten patches
+/// are reverted.
+pub(crate) fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: &Path) -> String {
+    if world.get_resource::<jackdaw_bsn::SceneBsnAst>().is_none() {
+        return String::new();
+    }
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+
+    // Seed the reference map with assets that already resolve: catalog entries
+    // and scene-inline entries already embedded as document roots.
+    let mut seed: bevy::platform::collections::HashMap<UntypedAssetId, String> =
+        bevy::platform::collections::HashMap::default();
+    if let Some(catalog) = world.get_resource::<crate::asset_catalog::AssetCatalog>() {
+        for (id, name) in &catalog.id_to_name {
+            seed.entry(*id).or_insert_with(|| name.clone());
+        }
+    }
+    if let Some(scene_assets) = world.get_resource::<jackdaw_bsn::BsnSceneAssets>() {
+        for (ref_name, handle) in &scene_assets.0 {
+            if ref_name.starts_with('#') {
+                seed.insert(handle.id(), ref_name.clone());
+            }
+        }
+    }
+
+    let entities = doc_entities_in_order(world.resource::<jackdaw_bsn::SceneBsnAst>());
+    let pass = {
+        let reg = registry.read();
+        collect_bsn_inline_assets(world, &reg, &entities, seed)
+    };
+
+    // No kept component references an asset handle: the document already emits
+    // faithfully, so keep the original path byte-for-byte.
+    if pass.touched.is_empty() {
+        return jackdaw_bsn::emit_scene(world.resource::<jackdaw_bsn::SceneBsnAst>());
+    }
+
+    let asset_server = world.resource::<AssetServer>().clone();
+
+    // Take the document out of the world so `append_assets_to_ast` and the
+    // patch rewrite can borrow the world immutably alongside it.
+    let mut ast = world
+        .remove_resource::<jackdaw_bsn::SceneBsnAst>()
+        .unwrap_or_default();
+
+    let roots_before = ast.roots.len();
+    if !pass.refs.is_empty() {
+        jackdaw_bsn::append_assets_to_ast(&mut ast, world, &pass.refs);
+    }
+    let added_roots: Vec<Entity> = ast.roots[roots_before..].to_vec();
+
+    // Re-derive each handle-bearing component patch with the asset context so
+    // its handle fields emit reference names or asset paths. Remember the prior
+    // patch to restore the live document afterward.
+    let mut restore: Vec<(Entity, jackdaw_bsn::BsnPatch)> = Vec::new();
+    {
+        let reg = registry.read();
+        let ctx = jackdaw_bsn::BsnAssetContext {
+            asset_server: &asset_server,
+            parent_path,
+            asset_names: Some(&pass.names),
+        };
+        for (entity, type_path) in &pass.touched {
+            let Some(patches_entity) = ast.ast_for(*entity) else {
+                continue;
+            };
+            let Some(patch_entity) = ast.find_patch_by_type_path(patches_entity, type_path) else {
+                continue;
+            };
+            let Ok(entity_ref) = world.get_entity(*entity) else {
+                continue;
+            };
+            let Some(registration) = reg.get_with_type_path(type_path) else {
+                continue;
+            };
+            let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+                continue;
+            };
+            let Some(component) = reflect_component.reflect(entity_ref) else {
+                continue;
+            };
+            let new_patch = jackdaw_bsn::component_to_bsn_patch_with_assets(
+                component.as_partial_reflect(),
+                &reg,
+                &ctx,
+            );
+            if let Some(old) = ast.get_patch(patch_entity).cloned() {
+                restore.push((patch_entity, old));
+            }
+            ast.set_patch(patch_entity, new_patch);
+        }
+    }
+
+    let text = jackdaw_bsn::emit_scene(&ast);
+
+    // Restore the live document: revert the rewritten patches and drop the
+    // temporary asset roots so a later capture starts from the same state.
+    for (patch_entity, old) in restore {
+        ast.set_patch(patch_entity, old);
+    }
+    for root in added_roots {
+        let child_patches = ast
+            .get_patches(root)
+            .map(|p| p.0.clone())
+            .unwrap_or_default();
+        ast.remove_from_roots(root);
+        for pe in child_patches {
+            ast.world.despawn(pe);
+        }
+        ast.world.despawn(root);
+    }
+
+    world.insert_resource(ast);
+    text
 }
 
 /// Serialize a single runtime asset (and its nested handles like textures)

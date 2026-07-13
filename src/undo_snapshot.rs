@@ -135,10 +135,15 @@ pub struct BsnDocumentSnapshotter;
 
 impl SceneSnapshotter for BsnDocumentSnapshotter {
     fn capture(&self, world: &mut World) -> Box<dyn SceneSnapshot> {
-        let text = world
-            .get_resource::<jackdaw_bsn::SceneBsnAst>()
-            .map(jackdaw_bsn::emit_scene)
-            .unwrap_or_default();
+        // Emit through the inline-asset pass so runtime materials and other
+        // pathless asset handles on kept components survive undo/redo. The
+        // parent path only affects file-backed handles; project root (falling
+        // back to the working directory) matches the JSN snapshot path.
+        let parent_path = world
+            .get_resource::<crate::project::ProjectRoot>()
+            .map(|r| r.root.clone())
+            .unwrap_or_else(|| std::path::PathBuf::from(""));
+        let text = crate::scene_io::emit_bsn_scene_with_inline_assets(world, &parent_path);
         Box::new(BsnDocumentSnapshot {
             text,
             editor_state: EditorStateSnapshot::capture(world),
@@ -244,6 +249,126 @@ mod tests {
         app.init_resource::<PhysicsOverlayConfig>();
         app.init_resource::<GroupEditState>();
         app
+    }
+
+    // App that registers the brush and material types plus asset stores, so a
+    // brush face can reference a runtime `StandardMaterial` handle and the
+    // captured document can round-trip through the BSN loader.
+    fn material_snapshot_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins.build().disable::<TaskPoolPlugin>(),
+            TaskPoolPlugin::default(),
+            AssetPlugin::default(),
+        ));
+        app.add_plugins(jackdaw_jsn::JsnPlugin {
+            runtime_mesh_rebuild: false,
+        });
+        app.add_plugins(jackdaw_bsn::JackdawBsnPlugin);
+        app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+        app.init_resource::<crate::selection::Selection>();
+        app.init_resource::<EditMode>();
+        app.init_resource::<ActiveTool>();
+        app.init_resource::<GizmoSpace>();
+        app.init_resource::<SnapSettings>();
+        app.init_resource::<ViewModeSettings>();
+        app.init_resource::<OverlaySettings>();
+        app.init_resource::<PhysicsOverlayConfig>();
+        app.init_resource::<GroupEditState>();
+        app
+    }
+
+    // A runtime material handle assigned to a brush face must survive a capture:
+    // the incremental document records the `Brush` patch without an asset
+    // context, so a bare emit would drop the handle. The capture-time inline
+    // asset pass embeds the material and rewrites the reference.
+    #[test]
+    fn bsn_snapshot_embeds_runtime_face_material() {
+        use bevy::pbr::StandardMaterial;
+        use jackdaw_scene_types::Brush;
+
+        let mut app = material_snapshot_app();
+
+        // Ad-hoc runtime material (no filesystem path) with a non-default color.
+        let color = Color::srgb(0.9, 0.1, 0.2);
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial {
+                base_color: color,
+                ..Default::default()
+            });
+
+        // A brush whose first face references that runtime material.
+        let mut brush = Brush::cuboid(1.0, 1.0, 1.0);
+        brush.faces[0].material = handle.clone();
+
+        let entity = app
+            .world_mut()
+            .spawn((Name::new("Cube"), brush.clone()))
+            .id();
+
+        // Register the entity in the live document and sync its Brush patch the
+        // same way an editor edit does (this is the path that drops the handle).
+        jackdaw_bsn::create_entity_in_ast(app.world_mut(), entity, None);
+        crate::commands::mirror_component_from_ecs_to_bsn(
+            app.world_mut(),
+            entity,
+            "jackdaw_scene_types::types::Brush",
+        );
+
+        // Capture the document (the code path undo/redo and save both use).
+        let text = crate::scene_io::emit_bsn_scene_with_inline_assets(
+            app.world_mut(),
+            std::path::Path::new(""),
+        );
+
+        // The captured text embeds the material and references it by name, not
+        // as an empty string.
+        assert!(
+            text.contains("StandardMaterial"),
+            "captured document must embed the inline material:\n{text}"
+        );
+        assert!(
+            text.contains("\"#StandardMaterial0\""),
+            "the runtime face material must emit its inline reference name:\n{text}"
+        );
+
+        // Emission is read-only and idempotent: a second capture matches.
+        let text2 = crate::scene_io::emit_bsn_scene_with_inline_assets(
+            app.world_mut(),
+            std::path::Path::new(""),
+        );
+        assert_eq!(text, text2, "capture must be idempotent");
+
+        // Reload the captured text into a fresh world; the face material must
+        // resolve to a real asset with the original base color.
+        let mut fresh = material_snapshot_app();
+        jackdaw_bsn::load_bsn_scene(fresh.world_mut(), &text).expect("reload captured scene");
+
+        let reloaded_brush = {
+            let mut query = fresh.world_mut().query::<&Brush>();
+            query
+                .iter(fresh.world())
+                .next()
+                .cloned()
+                .expect("brush entity reloaded")
+        };
+        let face_handle = reloaded_brush.faces[0].material.clone();
+        let material = fresh
+            .world()
+            .resource::<Assets<StandardMaterial>>()
+            .get(&face_handle)
+            .expect("face material asset survived the round trip");
+
+        let want = color.to_linear();
+        let got = material.base_color.to_linear();
+        assert!(
+            (want.red - got.red).abs() < 1e-4
+                && (want.green - got.green).abs() < 1e-4
+                && (want.blue - got.blue).abs() < 1e-4,
+            "base color must survive: want {want:?}, got {got:?}"
+        );
     }
 
     fn doc(x: f32) -> String {
