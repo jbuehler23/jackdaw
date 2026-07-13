@@ -546,6 +546,127 @@ impl SceneBsnAst {
             patches.0.push(children_patch);
         }
     }
+
+    /// Every AST node (over all roots and their descendants) that carries a
+    /// component patch of `type_path`. The match honours enum-variant type
+    /// paths the same way [`find_patch_by_type_path`](Self::find_patch_by_type_path)
+    /// does. Nodes are returned in pre-order (each root before its descendants).
+    /// Returns an empty vector when no node carries the component.
+    pub fn entities_with_component(&self, type_path: &str) -> Vec<Entity> {
+        let mut out = Vec::new();
+        for &root in &self.roots {
+            if self.find_patch_by_type_path(root, type_path).is_some() {
+                out.push(root);
+            }
+            for descendant in self.descendants_of(root) {
+                if self.find_patch_by_type_path(descendant, type_path).is_some() {
+                    out.push(descendant);
+                }
+            }
+        }
+        out
+    }
+
+    /// All AST descendants of `root_ast`, excluding `root_ast` itself. Walks the
+    /// [`BsnPatch::Children`] relation recursively via
+    /// [`get_children_ast`](Self::get_children_ast). Returns an empty vector when
+    /// the node has no children.
+    pub fn descendants_of(&self, root_ast: Entity) -> Vec<Entity> {
+        let mut out = Vec::new();
+        let mut stack = vec![root_ast];
+        while let Some(current) = stack.pop() {
+            for child in self.get_children_ast(current) {
+                out.push(child);
+                stack.push(child);
+            }
+        }
+        out
+    }
+
+    /// The parent AST node that lists `ast` in its [`BsnPatch::Children`], or
+    /// `None` when `ast` is a root (or is not present in the document). Public
+    /// wrapper over the internal parentage walk.
+    pub fn ast_parent_of(&self, ast: Entity) -> Option<Entity> {
+        self.find_ast_parent_of(ast)
+    }
+
+    /// The nearest ancestor of `ast` (inclusive of `ast` itself) that carries a
+    /// component patch of `type_path`, walking parentage upward via
+    /// [`ast_parent_of`](Self::ast_parent_of). Returns `ast` when `ast` itself
+    /// has the component, or `None` when no node on the chain carries it.
+    pub fn ancestor_with_component(&self, ast: Entity, type_path: &str) -> Option<Entity> {
+        let mut current = ast;
+        loop {
+            if self.find_patch_by_type_path(current, type_path).is_some() {
+                return Some(current);
+            }
+            current = self.ast_parent_of(current)?;
+        }
+    }
+
+    /// The first AST node (over all roots and their descendants, in pre-order)
+    /// whose `type_path` component reads as a single integer equal to `value`.
+    /// The component is read whole via `get_bsn_field(node, type_path, "")` and
+    /// accepts either a bare integer scalar or a tuple struct wrapping exactly
+    /// one integer, which is how a `u32`-newtype marker such as a prefab entity
+    /// id serialises. Returns `None` when no node matches.
+    pub fn find_node_by_component_int(&self, type_path: &str, value: u64) -> Option<Entity> {
+        let mut nodes: Vec<Entity> = Vec::new();
+        for &root in &self.roots {
+            nodes.push(root);
+            nodes.extend(self.descendants_of(root));
+        }
+        for node in nodes {
+            let Some(whole) = crate::apply::get_bsn_field(self, node, type_path, "") else {
+                continue;
+            };
+            if bsn_value_as_int(&whole) == Some(i128::from(value)) {
+                return Some(node);
+            }
+        }
+        None
+    }
+}
+
+/// The integer a whole-component [`BsnValue`] represents, when it is either a
+/// bare integer scalar or a tuple struct wrapping exactly one integer scalar.
+/// `None` for every other shape.
+fn bsn_value_as_int(value: &BsnValue) -> Option<i128> {
+    match value {
+        BsnValue::Int(v) => Some(*v),
+        BsnValue::TupleStruct(data) => match data.values.as_slice() {
+            [BsnValue::Int(v)] => Some(*v),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Create a new AST node in `dst` under `dst_parent`, deep-copying the component
+/// patches of `src_node` from `src`. Every patch except the
+/// [`BsnPatch::Children`] relation is cloned, so the new node keeps its
+/// components, name, and base reference but adopts none of `src_node`'s
+/// children. `dst_parent` gains the new node as a child. Returns the new node's
+/// AST entity in `dst`.
+pub fn clone_node_into(
+    dst: &mut SceneBsnAst,
+    src: &SceneBsnAst,
+    src_node: Entity,
+    dst_parent: Entity,
+) -> Entity {
+    let cloned_patches: Vec<BsnPatch> = match src.get_patches(src_node) {
+        Some(patches) => patches
+            .0
+            .iter()
+            .filter_map(|&pe| src.get_patch(pe))
+            .filter(|patch| !matches!(patch, BsnPatch::Children(_)))
+            .cloned()
+            .collect(),
+        None => Vec::new(),
+    };
+    let new_node = dst.create_entity_node(cloned_patches);
+    dst.add_child_to_ast(dst_parent, new_node);
+    new_node
 }
 
 /// Context for resolving `Handle<T>` fields to asset-path strings during BSN
@@ -968,5 +1089,149 @@ fn component_to_bsn_patch_inner(
         }
 
         _ => BsnPatch::Type(type_path),
+    }
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+
+    const TRANSFORM: &str = "test::Transform";
+    const MESH: &str = "test::Mesh";
+    const PREFAB_ID: &str = "test::PrefabEntityId";
+
+    fn prefab_id_patch(id: i128) -> BsnPatch {
+        BsnPatch::TupleStruct(BsnTupleStructData {
+            type_path: PREFAB_ID.to_string(),
+            values: vec![BsnValue::Int(id)],
+        })
+    }
+
+    /// Builds this tree, returning the node entities in a fixed order:
+    ///
+    /// ```text
+    /// root       [Transform, PrefabEntityId(0)]
+    ///   child_a  [Mesh,      PrefabEntityId(1)]
+    ///     grand  [Transform, PrefabEntityId(2)]
+    ///   child_b  [Transform, PrefabEntityId(3)]
+    /// ```
+    struct Tree {
+        ast: SceneBsnAst,
+        root: Entity,
+        child_a: Entity,
+        grand: Entity,
+        child_b: Entity,
+    }
+
+    fn build_tree() -> Tree {
+        let mut ast = SceneBsnAst::default();
+
+        let root = ast.create_entity_node(vec![
+            BsnPatch::Type(TRANSFORM.to_string()),
+            prefab_id_patch(0),
+        ]);
+        let child_a =
+            ast.create_entity_node(vec![BsnPatch::Type(MESH.to_string()), prefab_id_patch(1)]);
+        let grand = ast.create_entity_node(vec![
+            BsnPatch::Type(TRANSFORM.to_string()),
+            prefab_id_patch(2),
+        ]);
+        let child_b = ast.create_entity_node(vec![
+            BsnPatch::Type(TRANSFORM.to_string()),
+            prefab_id_patch(3),
+        ]);
+
+        ast.add_to_roots(root);
+        ast.add_child_to_ast(root, child_a);
+        ast.add_child_to_ast(root, child_b);
+        ast.add_child_to_ast(child_a, grand);
+
+        Tree {
+            ast,
+            root,
+            child_a,
+            grand,
+            child_b,
+        }
+    }
+
+    #[test]
+    fn entities_with_component_spans_all_depths() {
+        let t = build_tree();
+        let mut found = t.ast.entities_with_component(TRANSFORM);
+        found.sort();
+        let mut expected = vec![t.root, t.grand, t.child_b];
+        expected.sort();
+        assert_eq!(found, expected);
+
+        assert_eq!(t.ast.entities_with_component(MESH), vec![t.child_a]);
+        assert!(t.ast.entities_with_component("test::Absent").is_empty());
+    }
+
+    #[test]
+    fn descendants_exclude_root() {
+        let t = build_tree();
+        let mut descendants = t.ast.descendants_of(t.root);
+        descendants.sort();
+        let mut expected = vec![t.child_a, t.child_b, t.grand];
+        expected.sort();
+        assert_eq!(descendants, expected);
+        assert!(!descendants.contains(&t.root));
+
+        assert!(t.ast.descendants_of(t.grand).is_empty());
+    }
+
+    #[test]
+    fn ast_parent_of_walks_children_relation() {
+        let t = build_tree();
+        assert_eq!(t.ast.ast_parent_of(t.root), None);
+        assert_eq!(t.ast.ast_parent_of(t.child_a), Some(t.root));
+        assert_eq!(t.ast.ast_parent_of(t.child_b), Some(t.root));
+        assert_eq!(t.ast.ast_parent_of(t.grand), Some(t.child_a));
+    }
+
+    #[test]
+    fn ancestor_with_component_is_inclusive_of_self() {
+        let t = build_tree();
+        // The node itself carries Transform, so it is its own nearest match.
+        assert_eq!(
+            t.ast.ancestor_with_component(t.grand, TRANSFORM),
+            Some(t.grand)
+        );
+        // Mesh lives only on child_a, an ancestor of grand.
+        assert_eq!(t.ast.ancestor_with_component(t.grand, MESH), Some(t.child_a));
+        // No node on child_b's chain carries Mesh.
+        assert_eq!(t.ast.ancestor_with_component(t.child_b, MESH), None);
+    }
+
+    #[test]
+    fn find_node_by_component_int_matches_tuple_struct_newtype() {
+        let t = build_tree();
+        assert_eq!(t.ast.find_node_by_component_int(PREFAB_ID, 2), Some(t.grand));
+        assert_eq!(t.ast.find_node_by_component_int(PREFAB_ID, 0), Some(t.root));
+        assert_eq!(t.ast.find_node_by_component_int(PREFAB_ID, 99), None);
+    }
+
+    #[test]
+    fn clone_node_into_copies_components_but_not_children() {
+        let src = build_tree();
+
+        let mut dst = SceneBsnAst::default();
+        let dst_root = dst.create_entity_node(vec![BsnPatch::Type("test::Root".to_string())]);
+        dst.add_to_roots(dst_root);
+
+        // child_a has a Mesh + PrefabEntityId patch and one child (grand).
+        let cloned = clone_node_into(&mut dst, &src.ast, src.child_a, dst_root);
+
+        assert_eq!(dst.get_children_ast(dst_root), vec![cloned]);
+
+        let mut components = dst.component_type_paths(cloned);
+        components.sort();
+        let mut expected = vec![MESH.to_string(), PREFAB_ID.to_string()];
+        expected.sort();
+        assert_eq!(components, expected);
+
+        // The single-node clone must not drag the source's children across.
+        assert!(dst.get_children_ast(cloned).is_empty());
     }
 }
