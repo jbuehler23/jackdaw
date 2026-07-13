@@ -738,6 +738,12 @@ impl BsnValue {
         if let Some(v) = value.try_downcast_ref::<std::borrow::Cow<'static, str>>() {
             return BsnValue::String(v.to_string());
         }
+        // Path types reflect as opaque and would otherwise hit the Debug
+        // fallback, which wraps the path in literal quotes. Emit the plain
+        // path string so it round-trips through one string value.
+        if let Some(v) = value.try_downcast_ref::<std::path::PathBuf>() {
+            return BsnValue::String(v.to_string_lossy().into_owned());
+        }
         // Integer types.
         if let Some(v) = value.try_downcast_ref::<i32>() {
             return BsnValue::Int(*v as i128);

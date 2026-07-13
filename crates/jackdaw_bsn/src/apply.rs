@@ -597,6 +597,8 @@ pub fn bsn_value_to_reflect(
         BsnValue::String(s) => {
             if expected == TypeId::of::<std::borrow::Cow<'static, str>>() {
                 Some(Box::new(std::borrow::Cow::<'static, str>::Owned(s.clone())))
+            } else if expected == TypeId::of::<std::path::PathBuf>() {
+                Some(Box::new(std::path::PathBuf::from(s.clone())))
             } else {
                 Some(Box::new(s.clone()))
             }
@@ -1471,6 +1473,72 @@ mod field_navigation_matrix {
             "translation",
         );
         assert!(result.is_none());
+    }
+
+    /// A `PathBuf` component field (as in the prefab `IsA.source` field)
+    /// serializes through `component_to_bsn_patch` as a plain
+    /// `BsnValue::String`, reads back through `get_bsn_field` without literal
+    /// quote characters, and applies back onto a reflected `PathBuf` field. The
+    /// prefab BSN resolver reads `IsA.source` as `BsnValue::String`, so a Debug
+    /// fallback (which wraps the path in quotes) would break cache lookups.
+    #[derive(bevy::reflect::Reflect, Default, PartialEq, Debug)]
+    struct PathBufProbe {
+        source: std::path::PathBuf,
+        deleted: Vec<u32>,
+    }
+
+    #[test]
+    fn pathbuf_field_round_trips_as_plain_string() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<PathBufProbe>();
+        registry.register::<std::path::PathBuf>();
+        registry.register::<Vec<u32>>();
+        let tp = type_path_of::<PathBufProbe>(&registry);
+
+        let probe = PathBufProbe {
+            source: std::path::PathBuf::from("prefabs/tree.bsn"),
+            deleted: vec![1, 2],
+        };
+        let patch = component_to_bsn_patch(probe.as_partial_reflect(), &registry);
+
+        let mut ast = SceneBsnAst::default();
+        let patch_entity = ast.world.spawn(patch).id();
+        let patches_entity = ast.world.spawn(BsnPatches(vec![patch_entity])).id();
+
+        let source = get_bsn_field(&ast, patches_entity, &tp, "source");
+        match source {
+            Some(BsnValue::String(s)) => {
+                assert_eq!(
+                    s, "prefabs/tree.bsn",
+                    "PathBuf must serialize as a plain string with no quote characters"
+                );
+            }
+            other => panic!("expected BsnValue::String, got {}", describe_value(&other)),
+        }
+
+        // The plain string applies back onto a reflected PathBuf field.
+        let reflected = bsn_value_to_reflect(
+            &BsnValue::String("prefabs/tree.bsn".to_string()),
+            std::any::TypeId::of::<std::path::PathBuf>(),
+            &registry,
+            None,
+        )
+        .expect("string converts to a reflected PathBuf");
+        let path = reflected
+            .try_downcast_ref::<std::path::PathBuf>()
+            .expect("reflected value is a PathBuf");
+        assert_eq!(path, &std::path::PathBuf::from("prefabs/tree.bsn"));
+    }
+
+    fn describe_value(value: &Option<BsnValue>) -> String {
+        match value {
+            None => "None".to_string(),
+            Some(BsnValue::String(s)) => format!("String({s:?})"),
+            Some(BsnValue::Struct(d)) => format!("Struct({})", d.type_path),
+            Some(BsnValue::TupleStruct(d)) => format!("TupleStruct({})", d.type_path),
+            Some(BsnValue::Type(t)) => format!("Type({t})"),
+            Some(_) => "Other".to_string(),
+        }
     }
 
     /// `set_bsn_field` then `get_bsn_field` round-trips a nested field.
