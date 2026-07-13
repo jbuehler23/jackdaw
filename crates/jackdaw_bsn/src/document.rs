@@ -195,6 +195,28 @@ impl SceneBsnAst {
         self.world.get::<BsnPatch>(patch_entity)
     }
 
+    /// The component type paths authored on `patches_entity`. Skips the
+    /// Children relation, base inheritance, and name references, which are
+    /// not components.
+    pub fn component_type_paths(&self, patches_entity: Entity) -> Vec<String> {
+        let Some(patches) = self.get_patches(patches_entity) else {
+            return Vec::new();
+        };
+        patches
+            .0
+            .iter()
+            .filter_map(|&patch_entity| {
+                self.get_patch(patch_entity).and_then(|patch| match patch {
+                    BsnPatch::Type(tp) => Some(tp.clone()),
+                    BsnPatch::Struct(data) => Some(data.type_path.clone()),
+                    BsnPatch::TupleStruct(data) => Some(data.type_path.clone()),
+                    BsnPatch::Template(tp, _) => Some(tp.clone()),
+                    _ => None,
+                })
+            })
+            .collect()
+    }
+
     /// Get the [`BsnPatch::Name`] value for an AST entity, if present.
     pub fn get_name(&self, patches_entity: Entity) -> Option<&str> {
         let patches = self.get_patches(patches_entity)?;

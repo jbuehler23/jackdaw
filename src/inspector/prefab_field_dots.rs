@@ -9,6 +9,7 @@ use bevy::{
 
 use super::{InspectorDirty, InspectorFieldRow};
 use crate::prefab::PrefabAstCache;
+use jackdaw_bsn::SceneBsnAst;
 use jackdaw_jsn::SceneJsnAst;
 
 /// Resolved prefab-instance context for a component being inspected. When
@@ -50,15 +51,15 @@ pub(crate) struct PrefabFieldOverrideDot {
 /// prefab cache so the inspector still has a baseline component set to
 /// render against.
 pub(crate) fn inspector_type_paths_for(
-    ast: &SceneJsnAst,
+    ast: &SceneBsnAst,
     prefab_cache: &PrefabAstCache,
     source_entity: Entity,
     entity_ref: bevy::ecs::world::EntityRef,
     child_of_query: &Query<&bevy::ecs::hierarchy::ChildOf>,
     isa_query: &Query<&crate::prefab::IsA>,
 ) -> HashSet<String> {
-    if let Some(node) = ast.node_for_entity(source_entity) {
-        return node.components.keys().cloned().collect();
+    if let Some(ast_node) = ast.ast_for(source_entity) {
+        return ast.component_type_paths(ast_node).into_iter().collect();
     }
     let Some(peid) = entity_ref.get::<crate::prefab::PrefabEntityId>() else {
         return HashSet::new();

@@ -48,6 +48,14 @@ use crate::prefab::PrefabAstCache;
 use bevy::picking::hover::Hovered;
 use jackdaw_jsn::SceneJsnAst;
 
+/// The live scene-document resources bundled into one param so systems
+/// that read both stay under the system param-count limit.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SceneAsts<'w> {
+    pub(crate) jsn: Res<'w, SceneJsnAst>,
+    pub(crate) bsn: Res<'w, jackdaw_bsn::SceneBsnAst>,
+}
+
 pub(crate) fn add_component_displays(
     _: On<Add, Selected>,
     mut commands: Commands,
@@ -60,7 +68,7 @@ pub(crate) fn add_component_displays(
     icon_font: Res<IconFont>,
     editor_font: Res<EditorFont>,
     materials: Res<Assets<StandardMaterial>>,
-    ast: Res<jackdaw_jsn::SceneJsnAst>,
+    asts: SceneAsts,
     prefab_cache: Res<PrefabAstCache>,
     child_of_query: Query<&bevy::ecs::hierarchy::ChildOf>,
     isa_query: Query<&crate::prefab::IsA>,
@@ -77,7 +85,7 @@ pub(crate) fn add_component_displays(
     let sel_count = selection.entities.len();
 
     let jsn_type_paths = inspector_type_paths_for(
-        &ast,
+        &asts.bsn,
         &prefab_cache,
         source_entity,
         entity_ref,
@@ -104,7 +112,7 @@ pub(crate) fn add_component_displays(
             false,
             &materials,
             &jsn_type_paths,
-            Some(&ast),
+            Some(&asts.jsn),
             Some(&prefab_cache),
             &collapse_state,
         );
@@ -595,7 +603,7 @@ pub(crate) fn on_inspector_dirty(
     editor_font: Res<EditorFont>,
     displays: Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
     materials: Res<Assets<StandardMaterial>>,
-    ast: Res<jackdaw_jsn::SceneJsnAst>,
+    asts: SceneAsts,
     prefab_cache: Res<PrefabAstCache>,
     child_of_query: Query<&bevy::ecs::hierarchy::ChildOf>,
     isa_query: Query<&crate::prefab::IsA>,
@@ -658,7 +666,7 @@ pub(crate) fn on_inspector_dirty(
         let sel_count = selection.entities.len();
 
         let jsn_type_paths = inspector_type_paths_for(
-            &ast,
+            &asts.bsn,
             &prefab_cache,
             source_entity,
             entity_ref,
@@ -681,7 +689,7 @@ pub(crate) fn on_inspector_dirty(
             false,
             &materials,
             &jsn_type_paths,
-            Some(&ast),
+            Some(&asts.jsn),
             Some(&prefab_cache),
             &collapse_state,
         );
