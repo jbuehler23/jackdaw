@@ -800,3 +800,121 @@ fn clipboard_payload_round_trips_through_bsn_text() {
         .expect("asset table populated");
     assert!(materials.contains_key("#BlueMat"));
 }
+
+#[test]
+fn migration_prompt_detects_converts_and_respects_decline() {
+    use jackdaw::migrate_dialog::{PendingMigration, count_legacy_files, resolve_migration};
+    use jackdaw::project::ProjectRoot;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("assets/scenes")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".jsn")).unwrap();
+
+    let mut app = headless_app();
+    app.world_mut().spawn((
+        Name::new("Thing"),
+        Transform::default(),
+        SceneNodeId::next(),
+        jackdaw_scene_types::SceneRootTag,
+    ));
+    let scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app.world_mut());
+    let scene_json = serde_json::to_string(&scene).unwrap();
+    std::fs::write(dir.path().join("assets/scenes/level.jsn"), &scene_json).unwrap();
+    // Config must not count as a legacy scene file.
+    std::fs::write(dir.path().join(".jsn/project.jsn"), "{}").unwrap();
+
+    assert_eq!(count_legacy_files(dir.path()), 1);
+
+    let mut editor = headless_app();
+    editor.init_resource::<PendingMigration>();
+    editor.world_mut().insert_resource(ProjectRoot {
+        root: dir.path().to_path_buf(),
+        config: jackdaw_jsn::JsnProject {
+            jsn: jackdaw_jsn::format::JsnHeader::default(),
+            project: jackdaw_jsn::JsnProjectConfig::default(),
+        },
+    });
+
+    // Decline: files stay, prompt state clears, detection still fires.
+    editor.world_mut().resource_mut::<PendingMigration>().file_count = Some(1);
+    resolve_migration(editor.world_mut(), false);
+    assert!(dir.path().join("assets/scenes/level.jsn").exists());
+    assert!(
+        editor
+            .world()
+            .resource::<PendingMigration>()
+            .file_count
+            .is_none()
+    );
+    assert_eq!(count_legacy_files(dir.path()), 1, "still prompts next open");
+
+    // Accept: project converts, backups kept, nothing left to prompt about.
+    editor.world_mut().resource_mut::<PendingMigration>().file_count = Some(1);
+    resolve_migration(editor.world_mut(), true);
+    assert!(dir.path().join("assets/scenes/level.bsn").exists());
+    assert!(dir.path().join("assets/scenes/level.jsn.bak").exists());
+    assert!(!dir.path().join("assets/scenes/level.jsn").exists());
+    assert!(dir.path().join(".jsn/project.jsn").exists(), "config untouched");
+    assert_eq!(count_legacy_files(dir.path()), 0);
+}
+
+#[test]
+fn migration_prompt_detects_and_converts_legacy_projects() {
+    use jackdaw::migrate_dialog::{PendingMigration, count_legacy_files, resolve_migration};
+    use jackdaw::project::ProjectRoot;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("assets/scenes")).unwrap();
+
+    let mut app = headless_app();
+    app.init_resource::<PendingMigration>();
+    app.world_mut().spawn((
+        Name::new("Thing"),
+        Transform::default(),
+        SceneNodeId::next(),
+        jackdaw_scene_types::SceneRootTag,
+    ));
+    let scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app.world_mut());
+    std::fs::write(
+        dir.path().join("assets/scenes/level.jsn"),
+        serde_json::to_string(&scene).unwrap(),
+    )
+    .unwrap();
+    // Backups and config never count as legacy files.
+    std::fs::write(dir.path().join("assets/old.jsn.bak"), "x").unwrap();
+    std::fs::create_dir_all(dir.path().join(".jsn")).unwrap();
+    std::fs::write(dir.path().join(".jsn/project.jsn"), "{}").unwrap();
+
+    assert_eq!(count_legacy_files(dir.path()), 1);
+
+    app.world_mut().insert_resource(ProjectRoot {
+        root: dir.path().to_path_buf(),
+        config: jackdaw_jsn::JsnProject {
+            jsn: jackdaw_jsn::format::JsnHeader::default(),
+            project: jackdaw_jsn::JsnProjectConfig::default(),
+        },
+    });
+
+    // Declining leaves the project untouched and clears the pending state.
+    app.world_mut()
+        .resource_mut::<PendingMigration>()
+        .file_count = Some(1);
+    resolve_migration(app.world_mut(), false);
+    assert!(dir.path().join("assets/scenes/level.jsn").is_file());
+    assert!(
+        app.world()
+            .resource::<PendingMigration>()
+            .file_count
+            .is_none()
+    );
+
+    // Accepting converts and backs up.
+    app.world_mut()
+        .resource_mut::<PendingMigration>()
+        .file_count = Some(1);
+    resolve_migration(app.world_mut(), true);
+    assert!(dir.path().join("assets/scenes/level.bsn").is_file());
+    assert!(dir.path().join("assets/scenes/level.jsn.bak").is_file());
+    assert!(!dir.path().join("assets/scenes/level.jsn").exists());
+    assert_eq!(count_legacy_files(dir.path()), 0, "nothing left to convert");
+}

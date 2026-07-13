@@ -35,6 +35,7 @@ pub mod history_ops;
 pub mod input_contexts;
 pub mod inspector;
 pub mod jsn_to_bsn;
+pub mod migrate_dialog;
 pub mod keybind_focus;
 pub mod keybind_settings;
 pub mod keybinds;
@@ -396,6 +397,7 @@ impl Plugin for EditorCorePlugin {
             brush::BrushPlugin,
             material_preview::MaterialPreviewPlugin,
             undo_snapshot::plugin,
+            migrate_dialog::plugin,
         ))
         .add_plugins((
             material_browser::MaterialBrowserPlugin,

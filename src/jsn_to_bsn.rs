@@ -310,7 +310,7 @@ pub fn convert_project(world: &mut World, root: &Path) -> ProjectConversionRepor
     report
 }
 
-fn collect_jsn_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+pub(crate) fn collect_jsn_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
