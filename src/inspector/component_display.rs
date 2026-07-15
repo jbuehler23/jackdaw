@@ -46,13 +46,11 @@ use super::{
 use crate::inspector::prefab_field_dots::{PrefabInstanceCtx, inspector_type_paths_for};
 use crate::prefab::PrefabAstCache;
 use bevy::picking::hover::Hovered;
-use jackdaw_jsn::SceneJsnAst;
 
-/// The live scene-document resources bundled into one param so systems
-/// that read both stay under the system param-count limit.
+/// The live scene-document resource bundled into one param so the systems
+/// that read it stay under the system param-count limit.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SceneAsts<'w> {
-    pub(crate) jsn: Res<'w, SceneJsnAst>,
     pub(crate) bsn: Res<'w, jackdaw_bsn::SceneBsnAst>,
 }
 
@@ -112,7 +110,7 @@ pub(crate) fn add_component_displays(
             false,
             &materials,
             &jsn_type_paths,
-            Some(&asts.jsn),
+            Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
         );
@@ -145,7 +143,7 @@ pub(crate) fn build_inspector_displays(
     _read_only: bool,
     materials: &Assets<StandardMaterial>,
     jsn_type_paths: &HashSet<String>,
-    scene_ast: Option<&SceneJsnAst>,
+    scene_ast: Option<&jackdaw_bsn::SceneBsnAst>,
     prefab_cache: Option<&PrefabAstCache>,
     collapse_state: &super::InspectorCollapseState,
 ) {
@@ -186,16 +184,16 @@ pub(crate) fn build_inspector_displays(
     // revert / right-click actions route to the new prefab operators.
     let prefab_ctx: Option<PrefabInstanceCtx> = scene_ast.and_then(|ast| {
         let cache = prefab_cache?;
-        let key = ast.key_for_entity(source_entity)?;
-        if !crate::prefab::overrides::is_inside_prefab_instance(ast, key) {
+        let node = ast.ast_for(source_entity)?;
+        if !crate::prefab::overrides_bsn::is_inside_prefab_instance(ast, node) {
             return None;
         }
-        let (path, prefab_entity_id) = crate::prefab::overrides::resolve_inheritance(ast, key)?;
-        let instance_root = ast.ancestor_with_component(key, "jackdaw::prefab::components::IsA")?;
-        let instance_entity = ast.nodes.get(instance_root).and_then(|n| n.ecs_entity)?;
+        let (path, prefab_entity_id) =
+            crate::prefab::overrides_bsn::resolve_inheritance(ast, node)?;
+        let instance_entity = ast
+            .ancestor_with_component(node, "jackdaw::prefab::components::IsA")
+            .and_then(|n| ast.ecs_for_ast(n))?;
         Some(PrefabInstanceCtx {
-            entity_key: key,
-            instance_root,
             instance_entity,
             has_cached_prefab: cache.get(&path).is_some(),
             prefab_path: path,
@@ -347,10 +345,14 @@ pub(crate) fn build_inspector_displays(
             let (Some(ast), Some(cache)) = (scene_ast, prefab_cache) else {
                 return false;
             };
-            crate::prefab::overrides::field_is_overridden(
+            let Some(node) = ast.ast_for(source_entity) else {
+                return false;
+            };
+            let get_prefab = |p: &std::path::Path| cache.get(p);
+            crate::prefab::overrides_bsn::field_is_overridden(
                 ast,
-                cache,
-                ctx.entity_key,
+                &get_prefab,
+                node,
                 type_path,
                 None,
             )
@@ -689,7 +691,7 @@ pub(crate) fn on_inspector_dirty(
             false,
             &materials,
             &jsn_type_paths,
-            Some(&asts.jsn),
+            Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
         );
@@ -1042,8 +1044,6 @@ pub(crate) fn spawn_component_display(
                 }
                 target.entity = Some(entity);
                 target.instance_entity = Some(menu_ctx.instance_entity);
-                target.entity_key = Some(menu_ctx.entity_key);
-                target.instance_root = Some(menu_ctx.instance_root);
                 target.prefab_entity_id = Some(menu_ctx.prefab_entity_id);
                 target.prefab_path = Some(menu_ctx.prefab_path.clone());
                 target.type_path = Some(menu_type_path.clone());

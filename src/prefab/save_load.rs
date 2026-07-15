@@ -13,6 +13,31 @@ const PREFAB_TYPE: &str = "jackdaw::prefab::components::Prefab";
 /// Walk a freshly-loaded scene AST for `IsA` references and load /
 /// cache each referenced prefab. Returns the list of prefab paths
 /// the watcher should track.
+/// BSN-document twin of [`populate_cache_for_scene`]: walk a freshly
+/// parsed scene document for `IsA` references and load / cache each
+/// referenced prefab. Returns the list of prefab paths the watcher
+/// should track.
+pub fn populate_cache_for_scene_bsn(
+    ast: &SceneBsnAst,
+    cache: &mut PrefabAstCache,
+    scene_dir: &Path,
+) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for node in ast.entities_with_component(ISA_TYPE) {
+        let Some(source) = crate::prefab::resolver_bsn::read_isa_source(ast, node) else {
+            continue;
+        };
+        let path = resolve_source_path(&source.to_string_lossy(), scene_dir);
+        if cache.get(&path).is_none()
+            && let Ok(prefab_ast) = read_prefab_ast(&path)
+        {
+            cache.insert(path.clone(), prefab_ast);
+        }
+        paths.push(path);
+    }
+    paths
+}
+
 pub fn populate_cache_for_scene(
     ast: &SceneJsnAst,
     cache: &mut PrefabAstCache,

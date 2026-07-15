@@ -12,10 +12,8 @@ use bevy::prelude::*;
 use jackdaw_feathers::{icons::EditorFont, tokens};
 
 pub(crate) fn plugin(app: &mut App) {
-    app.init_resource::<PendingMigration>().add_systems(
-        OnEnter(crate::AppState::Editor),
-        prompt_for_legacy_project,
-    );
+    app.init_resource::<PendingMigration>()
+        .add_systems(OnEnter(crate::AppState::Editor), prompt_for_legacy_project);
 }
 
 /// `Some(count)` while the migration dialog is displayed, holding the number
@@ -64,10 +62,7 @@ fn prompt_for_legacy_project(world: &mut World) {
 /// Apply the user's choice: convert the project (keeping `.jsn.bak`
 /// backups) or leave it as-is. Clears the pending state either way.
 pub fn resolve_migration(world: &mut World, convert: bool) {
-    let count = world
-        .resource_mut::<PendingMigration>()
-        .file_count
-        .take();
+    let count = world.resource_mut::<PendingMigration>().file_count.take();
     if !convert {
         info!(
             "Left {} legacy .jsn file(s) unconverted; the prompt returns on next open",

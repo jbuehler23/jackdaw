@@ -406,8 +406,6 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
 
     let jsn = scene_for_save(world);
 
-    let json = serde_json::to_string_pretty(&jsn)?;
-
     let path = {
         let scene_path = world.resource::<SceneFilePath>();
         scene_path
@@ -416,9 +414,25 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
             .expect("save_scene_inner called without a path set")
     };
 
+    // Scenes persist as BSN text. A legacy `.jsn` path redirects to its
+    // `.bsn` sibling, keeping the original as a `.jsn.bak` backup (the same
+    // convention project conversion uses), and the tab tracks the new path.
+    let (path, legacy_backup) = if path.ends_with(".jsn") {
+        let bsn_path = Path::new(&path)
+            .with_extension("bsn")
+            .to_string_lossy()
+            .into_owned();
+        (bsn_path, Some(path))
+    } else {
+        (path, None)
+    };
+
     // Save metadata back
     let mut scene_path = world.resource_mut::<SceneFilePath>();
     scene_path.metadata = jsn.metadata.clone();
+    if legacy_backup.is_some() {
+        scene_path.path = Some(path.clone());
+    }
 
     // Mark scene as clean
     let history_len = world
@@ -427,33 +441,41 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         .len();
     world.resource_mut::<SceneDirtyState>().undo_len_at_save = history_len;
 
-    // Clear the active scene tab's dirty flag and resync its history
-    // depth marker so `mark_active_dirty_on_history_growth` does not
-    // immediately re-dirty the tab on the next frame.
+    // Clear the active scene tab's dirty flag, resync its history depth
+    // marker so `mark_active_dirty_on_history_growth` does not immediately
+    // re-dirty the tab on the next frame, and retarget a redirected tab at
+    // its new `.bsn` path.
     if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
         let active = scenes.active;
         if let Some(tab) = scenes.tabs.get_mut(active) {
             tab.dirty = false;
             tab.history_depth_at_last_check = history_len;
+            if legacy_backup.is_some() {
+                tab.path = Some(PathBuf::from(&path));
+            }
         }
     }
 
-    // A `.bsn` path saves the live BSN document text; anything else keeps
-    // writing the JSN JSON form.
-    let contents = if path.ends_with(".bsn") {
+    let contents = {
         let parent_path = Path::new(&path)
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_default();
         emit_bsn_scene_with_inline_assets(world, &parent_path)
-    } else {
-        json
     };
 
-    // Write to disk on the IO task pool
+    // Write to disk on the IO task pool. A redirected save renames the
+    // legacy source to `.jsn.bak` first so a stale `.jsn` cannot shadow the
+    // fresh `.bsn` on the next open.
     let path_clone = path.clone();
     IoTaskPool::get()
         .spawn(async move {
+            if let Some(old_path) = legacy_backup {
+                let backup = format!("{old_path}.bak");
+                if let Err(err) = std::fs::rename(&old_path, &backup) {
+                    warn!("Could not back up legacy scene {old_path} to {backup}: {err}");
+                }
+            }
             match std::fs::write(&path_clone, &contents) {
                 Ok(()) => info!("Scene saved to {path_clone}"),
                 Err(err) => warn!("Failed to write scene file: {err}"),
@@ -1836,30 +1858,6 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
     world.resource_mut::<SceneFilePath>().last_directory =
         chosen.parent().map(std::path::Path::to_path_buf);
 
-    if path.ends_with(".bsn") {
-        clear_scene_entities(world);
-        match jackdaw_bsn::load_bsn_scene(world, &json) {
-            Ok(loaded) => {
-                // Fill the JSN AST so tabs, undo, and save keep working while
-                // they still read it; the loaded entities already carry their
-                // BSN document links.
-                register_entities_in_ast(world, &loaded.entities);
-                info!(
-                    "Scene loaded from {path} ({} entities, {} embedded assets)",
-                    loaded.entities.len(),
-                    loaded.assets.len()
-                );
-            }
-            Err(err) => {
-                warn!("Failed to load BSN scene '{path}': {err}");
-                return;
-            }
-        }
-        world.resource_mut::<SceneFilePath>().path = Some(path);
-        world.resource_mut::<SceneDirtyState>().undo_len_at_save = 0;
-        return;
-    }
-
     if path.ends_with(".scene.json") {
         // Legacy format: raw DynamicWorld JSON
         let registry = world.resource::<AppTypeRegistry>().clone();
@@ -1887,110 +1885,142 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
             Err(err) => warn!("Failed to write scene to world: {err}"),
         }
     } else {
-        let jsn = match jackdaw_jsn::format::parse_scene(&json) {
-            Ok((jsn, version)) => {
-                if version[0] < 2 {
-                    warn!(
-                        "JSN format version {version:?} is not supported. Please re-save with the latest editor.",
-                    );
+        let parent_path = Path::new(&path)
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+
+        // Scenes load through the BSN document path. Legacy `.jsn` text
+        // converts in memory first (the on-disk file stays `.jsn` until the
+        // next save redirects it, or the migration prompt converts it); its
+        // metadata, camera framing, and id-healing flag carry over below.
+        let (bsn_text, legacy_jsn) = if path.ends_with(".bsn") {
+            (json, None)
+        } else {
+            let jsn = match jackdaw_jsn::format::parse_scene(&json) {
+                Ok((jsn, version)) => {
+                    if version[0] < 2 {
+                        warn!(
+                            "JSN format version {version:?} is not supported. Please re-save with the latest editor.",
+                        );
+                        return;
+                    }
+                    if version[0] < 3 {
+                        info!("Migrating JSN v2 scene to v3 format");
+                    }
+                    jsn
+                }
+                Err(err) => {
+                    warn!("Failed to parse JSN file: {err}");
                     return;
                 }
-                if version[0] < 3 {
-                    info!("Migrating JSN v2 scene to v3 format");
+            };
+            // Heal colliding / missing node ids before conversion so the
+            // spawned entities and the emitted document share the re-minted
+            // ids. `from_jsn_scene` performs the healing.
+            let scene_to_convert = if jackdaw_jsn::needs_id_migration(&jsn) {
+                let healed = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &[]);
+                let mut healed_scene = healed.to_jsn_scene(jsn.metadata.clone());
+                healed_scene.editor = jsn.editor.clone();
+                healed_scene
+            } else {
+                jsn.clone()
+            };
+            let converted = match crate::jsn_to_bsn::convert_jsn_scene_to_bsn_at(
+                world,
+                &scene_to_convert,
+                &parent_path,
+            ) {
+                Ok(converted) => converted.scene_bsn,
+                Err(err) => {
+                    warn!("Failed to convert legacy scene '{path}': {err}");
+                    return;
                 }
-                jsn
-            }
-            Err(err) => {
-                warn!("Failed to parse JSN file: {err}");
-                return;
-            }
+            };
+            (converted, Some(jsn))
         };
 
         clear_scene_entities(world);
 
-        let parent_path = Path::new(&path).parent().unwrap_or(Path::new("."));
-
-        // Deserialize inline assets before entities
-        let local_assets = load_inline_assets(world, &jsn.assets, parent_path);
-
-        // Build the unresolved AST from the on-disk JsnScene.
-        let unresolved_ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &[]);
-
-        // Populate the prefab cache from any IsA references in the scene.
-        {
-            let mut cache = world.resource_mut::<crate::prefab::PrefabAstCache>();
-            crate::prefab::save_load::populate_cache_for_scene(
-                &unresolved_ast,
-                &mut cache,
-                parent_path,
-            );
-        }
-
-        // Resolve the AST against the cache. If resolution fails (e.g. cycle),
-        // fall back to the unresolved AST so the editor stays usable.
-        let resolved_ast = {
-            let cache = world.resource::<crate::prefab::PrefabAstCache>();
-            match crate::prefab::resolver::resolve_scene(&unresolved_ast, cache) {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!("prefab resolution failed: {e}; spawning unresolved scene");
-                    unresolved_ast.clone()
+        // Populate the prefab cache from the document's IsA references, then
+        // resolve instances so the spawn produces complete entities. A
+        // resolution failure (e.g. cycle) falls back to the authored text so
+        // the editor stays usable. Worlds without a prefab cache (headless
+        // harnesses) spawn the authored text directly.
+        let resolved_text = match jackdaw_bsn::parse_bsn_text(&bsn_text) {
+            Ok(authored) if world.contains_resource::<crate::prefab::PrefabAstCache>() => {
+                {
+                    let mut cache = world.resource_mut::<crate::prefab::PrefabAstCache>();
+                    crate::prefab::save_load::populate_cache_for_scene_bsn(
+                        &authored,
+                        &mut cache,
+                        &parent_path,
+                    );
                 }
+                let cache = world.resource::<crate::prefab::PrefabAstCache>();
+                let get_prefab = |p: &Path| cache.get(p);
+                match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
+                    Ok(resolved) => jackdaw_bsn::emit_scene(&resolved),
+                    Err(e) => {
+                        warn!("prefab resolution failed: {e}; spawning unresolved scene");
+                        bsn_text.clone()
+                    }
+                }
+            }
+            Ok(_) => bsn_text.clone(),
+            Err(err) => {
+                warn!("Failed to parse BSN scene '{path}': {err}");
+                return;
             }
         };
 
-        // Spawn from the resolved AST (one ECS entity per resolved AST node).
-        let resolved_jsn = jsn_scene_from_ast(&resolved_ast);
-        let spawned = load_scene_from_jsn(world, &resolved_jsn.scene, parent_path, &local_assets);
-        rebuild_bsn_doc(world, &spawned);
-
-        // Install the unresolved AST as the source of truth (so save still
-        // emits sparse references), binding the first N spawned entities (the
-        // authored ones) to its node indices; the remaining spawned entities
-        // are inherited and live ECS-only until edited. The AST is reused
-        // rather than rebuilt from `jsn`, because a second `from_jsn_scene`
-        // would re-mint a divergent id set and the live entities would no
-        // longer share ids with the installed AST.
-        let authored_count = unresolved_ast.nodes.len();
-        let authored_entities: Vec<_> = spawned.iter().copied().take(authored_count).collect();
-        let mut ast_with_ecs = unresolved_ast;
-        for (i, entity) in authored_entities.iter().enumerate() {
-            if let Some(node) = ast_with_ecs.nodes.get_mut(i) {
-                node.ecs_entity = Some(*entity);
+        match jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
+            Ok(loaded) => {
+                // Fill the JSN AST so the remaining mirror readers keep
+                // working; the loaded entities already carry their BSN
+                // document links.
+                register_entities_in_ast(world, &loaded.entities);
+                info!(
+                    "Scene loaded from {path} ({} entities, {} embedded assets)",
+                    loaded.entities.len(),
+                    loaded.assets.len()
+                );
             }
-            ast_with_ecs.ecs_to_jsn.insert(*entity, i);
+            Err(err) => {
+                warn!("Failed to load BSN scene '{path}': {err}");
+                return;
+            }
         }
-        *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast_with_ecs;
 
-        // A healed scene holds re-minted ids that differ from disk until saved;
-        // flag the active tab so the dirty indicator prompts that save. The
-        // tab registry is absent in headless/prefab-cache loads, where there
-        // is no dirty indicator to drive.
-        if jackdaw_jsn::needs_id_migration(&jsn) {
-            info!("scene node ids upgraded for uniqueness; save to persist them");
-            if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
-                let active = scenes.active;
-                if let Some(tab) = scenes.tabs.get_mut(active) {
-                    tab.dirty = true;
+        if let Some(jsn) = legacy_jsn {
+            // A healed scene holds re-minted ids that differ from disk until
+            // saved; flag the active tab so the dirty indicator prompts that
+            // save. The tab registry is absent in headless/prefab-cache
+            // loads, where there is no dirty indicator to drive.
+            if jackdaw_jsn::needs_id_migration(&jsn) {
+                info!("scene node ids upgraded for uniqueness; save to persist them");
+                if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
+                    let active = scenes.active;
+                    if let Some(tab) = scenes.tabs.get_mut(active) {
+                        tab.dirty = true;
+                    }
                 }
             }
-        }
 
-        // Restore the saved camera framing if present.
-        if let Some(camera) = jsn.editor.as_ref().and_then(|e| e.camera.as_ref()) {
-            let restored: Transform = camera.clone().into();
-            let mut q =
-                world.query_filtered::<&mut Transform, With<crate::viewport::MainViewportCamera>>();
-            for mut tf in q.iter_mut(world) {
-                *tf = restored;
+            // Restore the saved camera framing if present.
+            if let Some(camera) = jsn.editor.as_ref().and_then(|e| e.camera.as_ref()) {
+                let restored: Transform = camera.clone().into();
+                let mut q = world
+                    .query_filtered::<&mut Transform, With<crate::viewport::MainViewportCamera>>();
+                for mut tf in q.iter_mut(world) {
+                    *tf = restored;
+                }
             }
+
+            // Restore metadata
+            let mut scene_path = world.resource_mut::<SceneFilePath>();
+            scene_path.metadata = jsn.metadata;
         }
-
-        info!("Scene loaded from {path}");
-
-        // Restore metadata
-        let mut scene_path = world.resource_mut::<SceneFilePath>();
-        scene_path.metadata = jsn.metadata;
     }
 
     world.resource_mut::<SceneFilePath>().path = Some(path);
@@ -3024,6 +3054,14 @@ pub fn register_entity_in_ast(world: &mut World, entity: Entity) {
     let idx = world
         .resource_mut::<jackdaw_jsn::SceneJsnAst>()
         .create_node(entity, parent);
+    // Adopt the entity's stable node id: the document (and the spawned
+    // component) already carry it, so a freshly minted one would diverge.
+    if let Some(node_id) = world
+        .get::<jackdaw_scene_types::SceneNodeId>(entity)
+        .copied()
+    {
+        world.resource_mut::<jackdaw_jsn::SceneJsnAst>().nodes[idx].id = Some(node_id);
+    }
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();

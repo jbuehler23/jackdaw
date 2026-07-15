@@ -23,7 +23,56 @@ use jackdaw_bsn::{
     BsnPatch, BsnValue, SceneBsnAst, apply_deltas, bsn_value_eq, clone_node_into, get_bsn_field,
 };
 
-pub use crate::prefab::resolver::{CycleError, ResolveError, would_cycle};
+use std::fmt;
+
+#[derive(Debug)]
+pub struct CycleError {
+    pub chain: Vec<PathBuf>,
+}
+
+impl fmt::Display for CycleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "prefab IsA cycle:")?;
+        for path in &self.chain {
+            write!(f, " {}", path.display())?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for CycleError {}
+
+/// Returns `Some(err)` if visiting `next` while currently resolving
+/// the entries in `chain` would form a cycle. The detector treats
+/// `chain` as an inclusive list of paths currently being expanded.
+pub fn would_cycle(chain: &[PathBuf], next: &Path) -> Option<CycleError> {
+    if chain.iter().any(|p| p.as_path() == next) {
+        let mut cycle = chain.to_vec();
+        cycle.push(next.to_path_buf());
+        Some(CycleError { chain: cycle })
+    } else {
+        None
+    }
+}
+
+#[derive(Debug)]
+pub enum ResolveError {
+    Cycle(CycleError),
+    PrefabNotCached(PathBuf),
+    BadIsA(String),
+}
+
+impl fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cycle(c) => write!(f, "{c}"),
+            Self::PrefabNotCached(p) => write!(f, "prefab not cached: {}", p.display()),
+            Self::BadIsA(s) => write!(f, "bad IsA: {s}"),
+        }
+    }
+}
+
+impl std::error::Error for ResolveError {}
 
 pub(crate) const PREFAB_TYPE: &str = "jackdaw::prefab::components::Prefab";
 pub(crate) const PREFAB_ENTITY_ID_TYPE: &str = "jackdaw::prefab::components::PrefabEntityId";

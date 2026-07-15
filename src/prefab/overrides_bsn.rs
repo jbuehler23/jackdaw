@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use bevy::ecs::entity::Entity;
 
-use jackdaw_bsn::{SceneBsnAst, bsn_value_eq, get_bsn_field};
+use jackdaw_bsn::{BsnValue, SceneBsnAst, bsn_value_eq, get_bsn_field};
 
 use crate::prefab::resolver_bsn::{
     ISA_TYPE, PREFAB_ENTITY_ID_TYPE, PrefabLookup, read_isa_source, read_prefab_entity_id,
@@ -87,6 +87,59 @@ pub fn field_is_overridden(
         (Some(a), Some(b)) => !bsn_value_eq(&a, &b),
         (None, None) => false,
         _ => true,
+    }
+}
+
+/// Returns `(dot_path, leaf)` pairs for every leaf in `scene` that differs
+/// from `prefab`'s value at the same path. Struct branches recurse so a
+/// single Vec3 axis difference produces `translation.x` rather than a full
+/// Vec3 blob; every other shape (tuple struct, list, map, scalar) is a leaf.
+/// When `prefab` is `None` (the component itself was added on the instance),
+/// every leaf is reported.
+///
+/// Mirrors [`crate::prefab::overrides::collect_overridden_paths`].
+pub fn collect_overridden_paths(
+    scene: &BsnValue,
+    prefab: Option<&BsnValue>,
+) -> Vec<(String, BsnValue)> {
+    let mut out = Vec::new();
+    walk_leaves(scene, prefab, String::new(), &mut out);
+    out
+}
+
+fn walk_leaves(
+    scene: &BsnValue,
+    prefab: Option<&BsnValue>,
+    path: String,
+    out: &mut Vec<(String, BsnValue)>,
+) {
+    match scene {
+        BsnValue::Struct(data) => {
+            let prefab_fields = match prefab {
+                Some(BsnValue::Struct(p)) => Some(&p.fields),
+                _ => None,
+            };
+            for field in &data.fields.0 {
+                let next_path = if path.is_empty() {
+                    field.name.clone()
+                } else {
+                    format!("{path}.{}", field.name)
+                };
+                let prefab_field = prefab_fields
+                    .and_then(|fields| fields.0.iter().find(|f| f.name == field.name))
+                    .map(|f| &f.value);
+                walk_leaves(&field.value, prefab_field, next_path, out);
+            }
+        }
+        leaf => {
+            let differs = match prefab {
+                Some(p) => !bsn_value_eq(p, leaf),
+                None => true,
+            };
+            if differs && !path.is_empty() {
+                out.push((path, leaf.clone()));
+            }
+        }
     }
 }
 
