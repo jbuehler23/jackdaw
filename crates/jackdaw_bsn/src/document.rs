@@ -207,10 +207,9 @@ impl SceneBsnAst {
             .iter()
             .filter_map(|&patch_entity| {
                 self.get_patch(patch_entity).and_then(|patch| match patch {
-                    BsnPatch::Type(tp) => Some(tp.clone()),
+                    BsnPatch::Type(tp) | BsnPatch::Template(tp, _) => Some(tp.clone()),
                     BsnPatch::Struct(data) => Some(data.type_path.clone()),
                     BsnPatch::TupleStruct(data) => Some(data.type_path.clone()),
-                    BsnPatch::Template(tp, _) => Some(tp.clone()),
                     _ => None,
                 })
             })
@@ -559,7 +558,10 @@ impl SceneBsnAst {
                 out.push(root);
             }
             for descendant in self.descendants_of(root) {
-                if self.find_patch_by_type_path(descendant, type_path).is_some() {
+                if self
+                    .find_patch_by_type_path(descendant, type_path)
+                    .is_some()
+                {
                     out.push(descendant);
                 }
             }
@@ -1205,7 +1207,10 @@ mod query_tests {
             Some(t.grand)
         );
         // Mesh lives only on child_a, an ancestor of grand.
-        assert_eq!(t.ast.ancestor_with_component(t.grand, MESH), Some(t.child_a));
+        assert_eq!(
+            t.ast.ancestor_with_component(t.grand, MESH),
+            Some(t.child_a)
+        );
         // No node on child_b's chain carries Mesh.
         assert_eq!(t.ast.ancestor_with_component(t.child_b, MESH), None);
     }
@@ -1213,7 +1218,10 @@ mod query_tests {
     #[test]
     fn find_node_by_component_int_matches_tuple_struct_newtype() {
         let t = build_tree();
-        assert_eq!(t.ast.find_node_by_component_int(PREFAB_ID, 2), Some(t.grand));
+        assert_eq!(
+            t.ast.find_node_by_component_int(PREFAB_ID, 2),
+            Some(t.grand)
+        );
         assert_eq!(t.ast.find_node_by_component_int(PREFAB_ID, 0), Some(t.root));
         assert_eq!(t.ast.find_node_by_component_int(PREFAB_ID, 99), None);
     }

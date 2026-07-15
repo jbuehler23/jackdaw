@@ -302,7 +302,7 @@ fn resolve_prefab_value(
     type_path: &str,
 ) -> Option<serde_json::Value> {
     let (path, prefab_entity_id) = crate::prefab::overrides::resolve_inheritance(ast, entity_key)?;
-    let prefab_ast = cache.get(&path)?;
+    let prefab_ast = cache.get_as_jsn(&path)?;
     let prefab_key = prefab_ast.nodes.iter().enumerate().find_map(|(i, node)| {
         let id = node
             .components

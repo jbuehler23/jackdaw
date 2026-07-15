@@ -145,14 +145,10 @@ mod tests {
 
     fn make_prefab() -> SceneBsnAst {
         let mut ast = SceneBsnAst::default();
-        let root = ast.create_entity_node(vec![
-            BsnPatch::Type(PREFAB_TYPE.to_string()),
-            peid_patch(0),
-        ]);
-        let child = ast.create_entity_node(vec![
-            peid_patch(1),
-            transform_patch(vec3(0.0, 1.0, 0.0)),
-        ]);
+        let root =
+            ast.create_entity_node(vec![BsnPatch::Type(PREFAB_TYPE.to_string()), peid_patch(0)]);
+        let child =
+            ast.create_entity_node(vec![peid_patch(1), transform_patch(vec3(0.0, 1.0, 0.0))]);
         ast.add_to_roots(root);
         ast.add_child_to_ast(root, child);
         ast
@@ -163,10 +159,7 @@ mod tests {
     fn make_scene(translation: BsnValue) -> (SceneBsnAst, Entity, Entity) {
         let mut scene = SceneBsnAst::default();
         let instance = scene.create_entity_node(vec![isa_patch("prefab.bsn")]);
-        let child = scene.create_entity_node(vec![
-            peid_patch(1),
-            transform_patch(translation),
-        ]);
+        let child = scene.create_entity_node(vec![peid_patch(1), transform_patch(translation)]);
         scene.add_to_roots(instance);
         scene.add_child_to_ast(instance, child);
         (scene, instance, child)

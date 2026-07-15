@@ -1661,12 +1661,12 @@ fn on_context_menu_action(
                 return;
             };
             commands.queue(move |world: &mut World| {
-                let key = {
-                    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-                    ast.key_for_entity(target)
+                let node = {
+                    let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+                    ast.ast_for(target)
                 };
-                let Some(key) = key else { return };
-                crate::prefab::operators::apply_all_overrides_to_source(world, key);
+                let Some(node) = node else { return };
+                crate::prefab::operators::apply_all_overrides_to_source(world, node);
             });
         }
         "hierarchy.prefab.unbundle_instance" => {

@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use jackdaw_jsn::SceneJsnAst;
+use jackdaw_bsn::SceneBsnAst;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -20,24 +20,41 @@ pub struct SavedFingerprint {
 /// from here when an `IsA` reference needs to be expanded. Every
 /// mutation bumps `epoch` so on-change systems can detect work
 /// without diffing the whole map.
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Default)]
 pub struct PrefabAstCache {
-    entries: HashMap<CanonicalPrefabPath, SceneJsnAst>,
+    entries: HashMap<CanonicalPrefabPath, SceneBsnAst>,
     epoch: u64,
     dirty_paths: HashSet<CanonicalPrefabPath>,
     last_saved_fingerprints: HashMap<CanonicalPrefabPath, SavedFingerprint>,
 }
 
 impl PrefabAstCache {
-    pub fn get(&self, path: &Path) -> Option<&SceneJsnAst> {
+    pub fn get(&self, path: &Path) -> Option<&SceneBsnAst> {
         self.entries.get(&canonical_prefab_path(path))
     }
 
-    pub fn get_canonical(&self, path: &CanonicalPrefabPath) -> Option<&SceneJsnAst> {
+    pub fn get_canonical(&self, path: &CanonicalPrefabPath) -> Option<&SceneBsnAst> {
         self.entries.get(path)
     }
 
-    pub fn insert(&mut self, path: impl AsRef<Path>, ast: SceneJsnAst) {
+    /// A JSON-AST view of the cached prefab at `path`, produced by emitting
+    /// the stored BSN document and bridging it back through the `.jsn`
+    /// scene format. The JSON-scene resolution paths (legacy `.jsn` scene
+    /// open, tab swap, undo restore) consume this so they can keep merging
+    /// prefab inheritance while the cache stores BSN documents.
+    pub fn get_as_jsn(&self, path: &Path) -> Option<jackdaw_jsn::SceneJsnAst> {
+        self.get(path).map(bsn_ast_to_jsn_ast)
+    }
+
+    /// [`Self::get_as_jsn`] keyed by an already-canonical path.
+    pub fn get_canonical_as_jsn(
+        &self,
+        path: &CanonicalPrefabPath,
+    ) -> Option<jackdaw_jsn::SceneJsnAst> {
+        self.get_canonical(path).map(bsn_ast_to_jsn_ast)
+    }
+
+    pub fn insert(&mut self, path: impl AsRef<Path>, ast: SceneBsnAst) {
         let key = canonical_prefab_path(path);
         self.entries.insert(key.clone(), ast);
         self.epoch = self.epoch.wrapping_add(1);
@@ -47,7 +64,7 @@ impl PrefabAstCache {
     /// In-place mutation. Bumps the epoch and marks the path dirty.
     /// Returns `false` if no entry existed at this path (and does not
     /// invoke `mutator`).
-    pub fn mutate<F: FnOnce(&mut SceneJsnAst)>(&mut self, path: &Path, mutator: F) -> bool {
+    pub fn mutate<F: FnOnce(&mut SceneBsnAst)>(&mut self, path: &Path, mutator: F) -> bool {
         let key = canonical_prefab_path(path);
         let Some(entry) = self.entries.get_mut(&key) else {
             return false;
@@ -99,6 +116,22 @@ impl PrefabAstCache {
     pub fn last_saved_fingerprint(&self, path: &Path) -> Option<&SavedFingerprint> {
         self.last_saved_fingerprints
             .get(&canonical_prefab_path(path))
+    }
+}
+
+/// Bridge a cached BSN prefab document into a `SceneJsnAst`. Emits the
+/// document to `.bsn` text, parses it back through the `.jsn` bridge, and
+/// rebuilds a JSON AST. Node ids are re-minted by `from_jsn_scene`; that is
+/// fine because the JSON resolver only consumes prefab documents as
+/// read-only inheritance sources.
+pub fn bsn_ast_to_jsn_ast(ast: &SceneBsnAst) -> jackdaw_jsn::SceneJsnAst {
+    let text = jackdaw_bsn::emit_scene(ast);
+    match jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn(&text) {
+        Ok(scene) => jackdaw_jsn::SceneJsnAst::from_jsn_scene(&scene, &[]),
+        Err(err) => {
+            warn!("bsn_ast_to_jsn_ast: bridge failed: {err}");
+            jackdaw_jsn::SceneJsnAst::default()
+        }
     }
 }
 

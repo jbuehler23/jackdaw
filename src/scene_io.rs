@@ -369,10 +369,21 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
             })
     };
     if let Some(path) = prefab_path {
-        let live_ast = world.resource::<jackdaw_jsn::SceneJsnAst>().clone();
-        world
-            .resource_mut::<crate::prefab::PrefabAstCache>()
-            .insert(&path, live_ast);
+        // Snapshot the live BSN document as the prefab's cached form, then
+        // persist it. `save_prefab_to_disk` emits from the cache entry.
+        let parent = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let text = emit_bsn_scene_with_inline_assets(world, &parent);
+        match jackdaw_bsn::parse_bsn_text(&text) {
+            Ok(bsn) => {
+                world
+                    .resource_mut::<crate::prefab::PrefabAstCache>()
+                    .insert(&path, bsn);
+            }
+            Err(err) => warn!("scene.save: prefab snapshot parse failed: {err}"),
+        }
         if let Err(err) = crate::prefab::operators::save_prefab_to_disk(world, &path) {
             warn!("scene.save: prefab save failed: {err}");
         }
@@ -1397,67 +1408,58 @@ fn collect_bsn_handles_from_reflect(
         bevy::reflect::ReflectRef::Struct(s) => {
             for i in 0..s.field_len() {
                 if let Some(field) = s.field_at(i) {
-                    found |= collect_bsn_handles_from_reflect(
-                        field, registry, names, refs, counters,
-                    );
+                    found |=
+                        collect_bsn_handles_from_reflect(field, registry, names, refs, counters);
                 }
             }
         }
         bevy::reflect::ReflectRef::TupleStruct(ts) => {
             for i in 0..ts.field_len() {
                 if let Some(field) = ts.field(i) {
-                    found |= collect_bsn_handles_from_reflect(
-                        field, registry, names, refs, counters,
-                    );
+                    found |=
+                        collect_bsn_handles_from_reflect(field, registry, names, refs, counters);
                 }
             }
         }
         bevy::reflect::ReflectRef::Tuple(t) => {
             for i in 0..t.field_len() {
                 if let Some(field) = t.field(i) {
-                    found |= collect_bsn_handles_from_reflect(
-                        field, registry, names, refs, counters,
-                    );
+                    found |=
+                        collect_bsn_handles_from_reflect(field, registry, names, refs, counters);
                 }
             }
         }
         bevy::reflect::ReflectRef::List(l) => {
             for i in 0..l.len() {
                 if let Some(item) = l.get(i) {
-                    found |= collect_bsn_handles_from_reflect(
-                        item, registry, names, refs, counters,
-                    );
+                    found |=
+                        collect_bsn_handles_from_reflect(item, registry, names, refs, counters);
                 }
             }
         }
         bevy::reflect::ReflectRef::Array(a) => {
             for i in 0..a.len() {
                 if let Some(item) = a.get(i) {
-                    found |= collect_bsn_handles_from_reflect(
-                        item, registry, names, refs, counters,
-                    );
+                    found |=
+                        collect_bsn_handles_from_reflect(item, registry, names, refs, counters);
                 }
             }
         }
         bevy::reflect::ReflectRef::Map(m) => {
             for (_k, v) in m.iter() {
-                found |=
-                    collect_bsn_handles_from_reflect(v, registry, names, refs, counters);
+                found |= collect_bsn_handles_from_reflect(v, registry, names, refs, counters);
             }
         }
         bevy::reflect::ReflectRef::Set(s) => {
             for item in s.iter() {
-                found |= collect_bsn_handles_from_reflect(
-                    item, registry, names, refs, counters,
-                );
+                found |= collect_bsn_handles_from_reflect(item, registry, names, refs, counters);
             }
         }
         bevy::reflect::ReflectRef::Enum(e) => {
             for i in 0..e.field_len() {
                 if let Some(field) = e.field_at(i) {
-                    found |= collect_bsn_handles_from_reflect(
-                        field, registry, names, refs, counters,
-                    );
+                    found |=
+                        collect_bsn_handles_from_reflect(field, registry, names, refs, counters);
                 }
             }
         }
@@ -1512,19 +1514,38 @@ pub(crate) fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: 
         collect_bsn_inline_assets(world, &reg, &entities, seed)
     };
 
-    // No kept component references an asset handle: the document already emits
-    // faithfully, so keep the original path byte-for-byte.
-    if pass.touched.is_empty() {
-        return jackdaw_bsn::emit_scene(world.resource::<jackdaw_bsn::SceneBsnAst>());
-    }
-
-    let asset_server = world.resource::<AssetServer>().clone();
-
-    // Take the document out of the world so `append_assets_to_ast` and the
-    // patch rewrite can borrow the world immutably alongside it.
+    // Take the document out of the world so the sparsify pass,
+    // `append_assets_to_ast`, and the patch rewrite can borrow the world
+    // immutably alongside it.
     let mut ast = world
         .remove_resource::<jackdaw_bsn::SceneBsnAst>()
         .unwrap_or_default();
+
+    // Reduce inherited prefab-instance descendants to sparse override entries
+    // (`PrefabEntityId` plus only diverged fields). No-op when there is no
+    // prefab cache or no prefab instances. Recorded so the live document is
+    // restored after this read-only emit.
+    let sparsify_restore = if world
+        .get_resource::<crate::prefab::PrefabAstCache>()
+        .is_some()
+    {
+        let cache = world.resource::<crate::prefab::PrefabAstCache>();
+        let get_prefab = |p: &Path| cache.get(p);
+        crate::prefab::resolver_bsn::sparsify_inherited_descendants_recording(&mut ast, &get_prefab)
+    } else {
+        Vec::new()
+    };
+
+    // No kept component references an asset handle: the document already emits
+    // faithfully once sparsified.
+    if pass.touched.is_empty() {
+        let text = jackdaw_bsn::emit_scene(&ast);
+        crate::prefab::resolver_bsn::restore_sparsified(&mut ast, sparsify_restore);
+        world.insert_resource(ast);
+        return text;
+    }
+
+    let asset_server = world.resource::<AssetServer>().clone();
 
     let roots_before = ast.roots.len();
     if !pass.refs.is_empty() {
@@ -1592,6 +1613,8 @@ pub(crate) fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: 
         }
         ast.world.despawn(root);
     }
+
+    crate::prefab::resolver_bsn::restore_sparsified(&mut ast, sparsify_restore);
 
     world.insert_resource(ast);
     text
@@ -2751,7 +2774,7 @@ fn prefabify_inherited_descendants(
             // and leave the node alone.
             continue;
         };
-        let Some(prefab) = cache.get(&source) else {
+        let Some(prefab) = cache.get_as_jsn(&source) else {
             // Prefab not in cache; emit full node so the user's edits
             // aren't silently lost.
             continue;

@@ -112,7 +112,14 @@ fn merge_prefab_under_instance(
         .collect();
 
     inherit_root_components(ast, instance_root, prefab, prefab_root);
-    materialize_descendants(ast, instance_root, prefab, prefab_root, deleted, &existing_ids);
+    materialize_descendants(
+        ast,
+        instance_root,
+        prefab,
+        prefab_root,
+        deleted,
+        &existing_ids,
+    );
     merge_descendant_overrides(ast, instance_root, prefab, prefab_root);
 }
 
@@ -130,9 +137,7 @@ fn inherit_root_components(
         .component_type_paths(prefab_root)
         .into_iter()
         .filter(|tp| tp != PREFAB_TYPE && tp != ISA_TYPE)
-        .filter_map(|tp| {
-            get_bsn_field(prefab, prefab_root, &tp, "").map(|base| (tp, base))
-        })
+        .filter_map(|tp| get_bsn_field(prefab, prefab_root, &tp, "").map(|base| (tp, base)))
         .collect();
 
     for (type_path, base) in inherited {
@@ -143,6 +148,20 @@ fn inherit_root_components(
                 set_whole_component(ast, instance_root, &type_path, merged);
             }
             None => set_whole_component(ast, instance_root, &type_path, base),
+        }
+    }
+
+    // The prefab root's name is stored as a name-reference patch, not a
+    // component patch, so the loop above never copies it. Inherit it when the
+    // instance authors no name of its own; scene lifecycle (persistable-root
+    // queries, despawn collection) keys off named roots, so an unnamed
+    // instance would leak on reload and drop out of saves.
+    if ast.get_name(instance_root).is_none()
+        && let Some(name) = prefab.get_name(prefab_root).map(str::to_owned)
+    {
+        let patch_entity = ast.world.spawn(BsnPatch::Name(name)).id();
+        if let Some(patches) = ast.get_patches_mut(instance_root) {
+            patches.0.push(patch_entity);
         }
     }
 }
@@ -192,7 +211,10 @@ fn merge_descendant_overrides(
     let override_nodes: Vec<Entity> = ast
         .descendants_of(instance_root)
         .into_iter()
-        .filter(|node| ast.find_patch_by_type_path(*node, PREFAB_ENTITY_ID_TYPE).is_some())
+        .filter(|node| {
+            ast.find_patch_by_type_path(*node, PREFAB_ENTITY_ID_TYPE)
+                .is_some()
+        })
         .collect();
 
     for node in override_nodes {
@@ -253,15 +275,32 @@ fn merge_descendant_overrides(
 /// component whenever it differs from the baseline (not a shallow diff),
 /// matching that capture path's semantics.
 pub fn sparsify_inherited_descendants(ast: &mut SceneBsnAst, get_prefab: &PrefabLookup) {
+    let _ = sparsify_inherited_descendants_recording(ast, get_prefab);
+}
+
+/// Like [`sparsify_inherited_descendants`] but returns each stripped whole
+/// component as `(node, type_path, value)` so a read-only emit can restore the
+/// live document afterward with [`restore_sparsified`].
+pub fn sparsify_inherited_descendants_recording(
+    ast: &mut SceneBsnAst,
+    get_prefab: &PrefabLookup,
+) -> Vec<(Entity, String, BsnValue)> {
     let mut nodes: Vec<Entity> = Vec::new();
     for &root in &ast.roots {
         nodes.push(root);
         nodes.extend(ast.descendants_of(root));
     }
 
+    let mut stripped: Vec<(Entity, String, BsnValue)> = Vec::new();
     for node in nodes {
-        // Skip instance roots and nodes without a prefab entity id.
+        // Instance roots sparsify against their own prefab's root entry:
+        // resolve materializes the prefab root's components (and name) onto
+        // the instance, so the inverse strips whatever still matches that
+        // baseline. Without this, materialized values read as authored
+        // overrides on the next resolve and prefab root edits never
+        // propagate to existing instances.
         if ast.find_patch_by_type_path(node, ISA_TYPE).is_some() {
+            sparsify_instance_root(ast, node, get_prefab, &mut stripped);
             continue;
         }
         let Some(peid) = read_prefab_entity_id(ast, node) else {
@@ -290,23 +329,117 @@ pub fn sparsify_inherited_descendants(ast: &mut SceneBsnAst, get_prefab: &Prefab
             continue;
         };
 
-        let drop: Vec<String> = ast
+        let drop: Vec<(String, BsnValue)> = ast
             .component_type_paths(node)
             .into_iter()
             .filter(|tp| tp != PREFAB_ENTITY_ID_TYPE)
-            .filter(|tp| {
-                let Some(value) = get_bsn_field(ast, node, tp, "") else {
-                    return false;
-                };
-                match get_bsn_field(prefab, prefab_match, tp, "") {
-                    Some(base) => bsn_value_eq(&base, &value),
-                    None => false,
+            .filter_map(|tp| {
+                let value = get_bsn_field(ast, node, &tp, "")?;
+                match get_bsn_field(prefab, prefab_match, &tp, "") {
+                    Some(base) if bsn_value_eq(&base, &value) => Some((tp, value)),
+                    _ => None,
                 }
             })
             .collect();
-        for type_path in drop {
+        for (type_path, value) in drop {
             ast.remove_component_patch(node, &type_path);
+            stripped.push((node, type_path, value));
         }
+    }
+    stripped
+}
+
+/// Sentinel `type_path` used in the recording sparsify's return entries for a
+/// stripped name-reference patch, which is not a component. The value carries
+/// the name as a `BsnValue::String`.
+const NAME_PATCH_KEY: &str = "#name";
+
+/// Strip an instance root's components (and inherited name) that still match
+/// its prefab root's baseline, recording each removal. `IsA` and
+/// `PrefabEntityId` are kept unconditionally.
+fn sparsify_instance_root(
+    ast: &mut SceneBsnAst,
+    node: Entity,
+    get_prefab: &PrefabLookup,
+    stripped: &mut Vec<(Entity, String, BsnValue)>,
+) {
+    let Some(source) = read_isa_source(ast, node) else {
+        return;
+    };
+    let Some(prefab) = get_prefab(&source) else {
+        return;
+    };
+    let Some(prefab_root) = prefab
+        .roots
+        .iter()
+        .copied()
+        .find(|root| prefab.find_patch_by_type_path(*root, PREFAB_TYPE).is_some())
+    else {
+        return;
+    };
+
+    let drop: Vec<(String, BsnValue)> = ast
+        .component_type_paths(node)
+        .into_iter()
+        .filter(|tp| tp != ISA_TYPE && tp != PREFAB_ENTITY_ID_TYPE)
+        .filter_map(|tp| {
+            let value = get_bsn_field(ast, node, &tp, "")?;
+            match get_bsn_field(prefab, prefab_root, &tp, "") {
+                Some(base) if bsn_value_eq(&base, &value) => Some((tp, value)),
+                _ => None,
+            }
+        })
+        .collect();
+    for (type_path, value) in drop {
+        ast.remove_component_patch(node, &type_path);
+        stripped.push((node, type_path, value));
+    }
+
+    if let (Some(name), Some(prefab_name)) = (ast.get_name(node), prefab.get_name(prefab_root))
+        && name == prefab_name
+    {
+        let name = name.to_owned();
+        remove_name_patch(ast, node);
+        stripped.push((node, NAME_PATCH_KEY.to_string(), BsnValue::String(name)));
+    }
+}
+
+/// Remove the name-reference patch from `node`, if it has one.
+fn remove_name_patch(ast: &mut SceneBsnAst, node: Entity) {
+    let Some(patches) = ast.get_patches(node) else {
+        return;
+    };
+    let Some(pos) = patches
+        .0
+        .iter()
+        .position(|&pe| matches!(ast.get_patch(pe), Some(BsnPatch::Name(_))))
+    else {
+        return;
+    };
+    let patch_entity = patches.0[pos];
+    if let Some(patches) = ast.get_patches_mut(node) {
+        patches.0.remove(pos);
+    }
+    ast.world.despawn(patch_entity);
+}
+
+/// Re-insert whole components stripped by
+/// [`sparsify_inherited_descendants_recording`], restoring the live document
+/// after a read-only emit.
+pub fn restore_sparsified(ast: &mut SceneBsnAst, stripped: Vec<(Entity, String, BsnValue)>) {
+    for (node, type_path, value) in stripped {
+        if type_path == NAME_PATCH_KEY {
+            if let BsnValue::String(name) = value
+                && ast.get_name(node).is_none()
+            {
+                let patch_entity = ast.world.spawn(BsnPatch::Name(name)).id();
+                if let Some(patches) = ast.get_patches_mut(node) {
+                    patches.0.push(patch_entity);
+                }
+            }
+            continue;
+        }
+        set_whole_component(ast, node, &type_path, value);
     }
 }
 
@@ -353,7 +486,7 @@ fn bsn_value_int(value: &BsnValue) -> Option<i128> {
 
 /// Convert a whole-component `BsnValue` into the patch that stores it.
 /// Non-component shapes (scalars, lists, maps) yield `None`.
-fn value_to_patch(value: BsnValue) -> Option<BsnPatch> {
+pub(crate) fn value_to_patch(value: BsnValue) -> Option<BsnPatch> {
     match value {
         BsnValue::Struct(data) => Some(BsnPatch::Struct(data)),
         BsnValue::TupleStruct(data) => Some(BsnPatch::TupleStruct(data)),
@@ -366,7 +499,12 @@ fn value_to_patch(value: BsnValue) -> Option<BsnPatch> {
 /// existing patch or inserting a new one. Reflection-registry independent:
 /// it manipulates patches directly rather than routing through
 /// `set_bsn_field`, so it works for any authored type path.
-fn set_whole_component(ast: &mut SceneBsnAst, node: Entity, type_path: &str, value: BsnValue) {
+pub(crate) fn set_whole_component(
+    ast: &mut SceneBsnAst,
+    node: Entity,
+    type_path: &str,
+    value: BsnValue,
+) {
     let Some(patch) = value_to_patch(value) else {
         return;
     };
@@ -517,7 +655,9 @@ mod tests {
         ast
     }
 
-    fn lookup<'a>(map: &'a std::collections::HashMap<PathBuf, SceneBsnAst>) -> impl Fn(&Path) -> Option<&'a SceneBsnAst> {
+    fn lookup<'a>(
+        map: &'a std::collections::HashMap<PathBuf, SceneBsnAst>,
+    ) -> impl Fn(&Path) -> Option<&'a SceneBsnAst> {
         move |p: &Path| map.get(p)
     }
 
@@ -548,8 +688,7 @@ mod tests {
         assert_eq!(kids.len(), 1, "one inherited child");
         let child = kids[0];
         assert_eq!(read_prefab_entity_id(&resolved, child), Some(1));
-        let child_transform =
-            component_on(&resolved, child, TRANSFORM).expect("child transform");
+        let child_transform = component_on(&resolved, child, TRANSFORM).expect("child transform");
         assert!(bsn_value_eq(&child_transform, &transform(0.0, 1.0, 0.0)));
         assert!(resolved.find_patch_by_type_path(child, MESH).is_some());
     }
@@ -584,8 +723,7 @@ mod tests {
         assert_eq!(kids.len(), 1, "override reuses the existing child");
         let child = kids[0];
         // The delta merged onto the baseline: y overridden, x/z inherited.
-        let child_transform =
-            component_on(&resolved, child, TRANSFORM).expect("child transform");
+        let child_transform = component_on(&resolved, child, TRANSFORM).expect("child transform");
         assert!(
             bsn_value_eq(&child_transform, &transform(0.0, 9.0, 0.0)),
             "override merges onto the inherited baseline"
@@ -631,10 +769,8 @@ mod tests {
         // outer.bsn: root [Prefab, PrefabEntityId(0)] whose child is an
         // instance of inner.bsn carrying its own PrefabEntityId(2).
         let mut outer = SceneBsnAst::default();
-        let outer_root = outer.create_entity_node(vec![
-            BsnPatch::Type(PREFAB_TYPE.to_string()),
-            peid_patch(0),
-        ]);
+        let outer_root =
+            outer.create_entity_node(vec![BsnPatch::Type(PREFAB_TYPE.to_string()), peid_patch(0)]);
         let outer_instance =
             outer.create_entity_node(vec![peid_patch(2), isa_patch("inner.bsn", vec![])]);
         outer.add_to_roots(outer_root);

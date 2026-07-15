@@ -80,15 +80,21 @@ pub(crate) fn capture_active_tab(world: &mut World) {
     };
 
     if let Some(path) = prefab_target {
-        // Prefab tab: flush the live AST into the cache entry rather
-        // than onto the tab. The `TabContent::Prefab` key keeps
-        // pointing at the same cache entry from here on.
-        if let Some(mut cache) = world.get_resource_mut::<crate::prefab::PrefabAstCache>() {
-            // `insert` overwrites or creates, bumps the epoch, and
-            // marks the path dirty. That matches the semantics we
-            // want for both the "first capture" and "subsequent
-            // re-capture" cases without branching on existence.
-            cache.insert(path.as_path(), ast_snapshot);
+        // Prefab tab: flush the live BSN document into the cache entry rather
+        // than onto the tab. The `TabContent::Prefab` key keeps pointing at
+        // the same cache entry from here on. `insert` overwrites or creates,
+        // bumps the epoch, and marks the path dirty, matching both the "first
+        // capture" and "re-capture" cases without branching on existence.
+        let parent = path
+            .as_path()
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let text = crate::scene_io::emit_bsn_scene_with_inline_assets(world, &parent);
+        if let Ok(bsn) = jackdaw_bsn::parse_bsn_text(&text) {
+            world
+                .resource_mut::<crate::prefab::PrefabAstCache>()
+                .insert(path.as_path(), bsn);
         }
     } else {
         // Scene tab: store the captured AST directly on the tab.
@@ -123,7 +129,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
         TabContent::Scene(None) => jackdaw_jsn::SceneJsnAst::default(),
         TabContent::Prefab(path) => world
             .get_resource::<crate::prefab::PrefabAstCache>()
-            .and_then(|c| c.get_canonical(path).cloned())
+            .and_then(|c| c.get_canonical_as_jsn(path))
             .unwrap_or_default(),
     };
 

@@ -146,19 +146,6 @@ impl SceneTab {
             history_depth_at_last_check: 0,
         }
     }
-
-    /// Read the tab's AST regardless of variant. For `Prefab(path)`,
-    /// reads through `cache`. Returns `None` if no AST is available
-    /// (untitled scene, or prefab whose cache entry is missing).
-    pub fn ast_view<'a>(
-        &'a self,
-        cache: &'a crate::prefab::PrefabAstCache,
-    ) -> Option<&'a jackdaw_jsn::SceneJsnAst> {
-        match &self.content {
-            TabContent::Scene(opt) => opt.as_ref(),
-            TabContent::Prefab(path) => cache.get_canonical(path),
-        }
-    }
 }
 
 /// When `Scenes` mutates, mirror the open-tab paths into the project

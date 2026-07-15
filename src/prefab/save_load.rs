@@ -1,6 +1,7 @@
 //! Glue between the editor's `scene_io` and the prefab cache / resolver.
 
 use crate::prefab::cache::PrefabAstCache;
+use jackdaw_bsn::SceneBsnAst;
 use jackdaw_jsn::SceneJsnAst;
 use jackdaw_jsn::format::JsnEntity;
 use std::path::{Path, PathBuf};
@@ -60,16 +61,26 @@ fn resolve_source_path(source: &str, scene_dir: &Path) -> PathBuf {
     resolved
 }
 
-fn read_prefab_ast(path: &Path) -> Result<SceneJsnAst, std::io::Error> {
+pub(crate) fn read_prefab_ast(path: &Path) -> Result<SceneBsnAst, std::io::Error> {
     let text = std::fs::read_to_string(path)?;
     if path.extension().is_some_and(|e| e == "bsn") {
-        let scene = jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn(&text)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        return Ok(SceneJsnAst::from_jsn_scene(&scene, &[]));
+        return jackdaw_bsn::parse_bsn_text(&text)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()));
     }
-    let (scene, _version) = jackdaw_jsn::format::parse_scene(&text)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    Ok(SceneJsnAst::from_jsn_scene(&scene, &[]))
+    // TODO: legacy `.jsn` prefabs with no `.bsn` sibling cannot be cached
+    // here. A faithful `.jsn` -> BSN document conversion needs a `World` and
+    // its type registry to recover the type paths of nested component values,
+    // which the worldless structural bridge drops. The editor writes prefabs
+    // as `.bsn` and `resolve_source_path` prefers a `.bsn` sibling, so this
+    // only affects genuinely legacy files; callers tolerate the error by
+    // skipping the entry.
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!(
+            "legacy .jsn prefab {} cannot be cached as a BSN document without a world",
+            path.display()
+        ),
+    ))
 }
 
 /// Replace each component value of an instance-rooted entity with the
@@ -94,7 +105,7 @@ fn sparsify_one(mut entity: JsnEntity, cache: &PrefabAstCache, scene_dir: &Path)
         return entity;
     };
     let path = resolve_source_path(source, scene_dir);
-    let Some(prefab) = cache.get(&path) else {
+    let Some(prefab) = cache.get_as_jsn(&path) else {
         return entity;
     };
     // Match by PrefabEntityId. Default to 0 (the prefab root) if absent.

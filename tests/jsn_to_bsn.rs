@@ -196,7 +196,10 @@ fn hierarchy_node_ids_and_custom_properties_round_trip() {
     );
 
     assert_eq!(
-        app_b.world().get::<ChildOf>(child_b).map(|c| c.parent()),
+        app_b
+            .world()
+            .get::<ChildOf>(child_b)
+            .map(bevy::prelude::ChildOf::parent),
         Some(parent_b),
         "hierarchy survives conversion"
     );
@@ -495,10 +498,10 @@ fn editor_opens_and_saves_bsn_scenes() {
     assert!((x - 4.0).abs() < 1e-6);
     assert!(
         !app.world()
-            .resource::<jackdaw_jsn::SceneJsnAst>()
-            .nodes
+            .resource::<jackdaw_bsn::SceneBsnAst>()
+            .roots
             .is_empty(),
-        "opening .bsn fills the JSN AST so tabs/undo/save keep working"
+        "opening .bsn fills the live BSN document so tabs/undo/save keep working"
     );
     assert_eq!(
         app.world().resource::<SceneFilePath>().path.as_deref(),
@@ -659,7 +662,10 @@ fn worldless_bridge_matches_reflect_deserialization() {
         "map of enum values bridges"
     );
     assert_eq!(
-        app_b.world().get::<ChildOf>(child_b).map(|c| c.parent()),
+        app_b
+            .world()
+            .get::<ChildOf>(child_b)
+            .map(bevy::prelude::ChildOf::parent),
         Some(parent_b),
         "hierarchy bridges"
     );
@@ -708,11 +714,14 @@ fn prefab_cache_reads_bsn_prefabs_with_stale_extension_references() {
         .get(&dir.path().join("prefabs/crate.bsn"))
         .or_else(|| cache.get(&dir.path().join("prefabs/crate.jsn")))
         .expect("stale .jsn reference resolves to the .bsn sibling");
-    assert_eq!(cached.nodes.len(), 1);
+    assert_eq!(cached.roots.len(), 1);
     assert!(
-        cached.nodes[0]
-            .components
-            .contains_key("bevy_transform::components::transform::Transform"),
+        cached
+            .find_patch_by_type_path(
+                cached.roots[0],
+                "bevy_transform::components::transform::Transform"
+            )
+            .is_some(),
         "prefab baseline components survive the bridge"
     );
 }
@@ -836,7 +845,10 @@ fn migration_prompt_detects_converts_and_respects_decline() {
     });
 
     // Decline: files stay, prompt state clears, detection still fires.
-    editor.world_mut().resource_mut::<PendingMigration>().file_count = Some(1);
+    editor
+        .world_mut()
+        .resource_mut::<PendingMigration>()
+        .file_count = Some(1);
     resolve_migration(editor.world_mut(), false);
     assert!(dir.path().join("assets/scenes/level.jsn").exists());
     assert!(
@@ -849,12 +861,18 @@ fn migration_prompt_detects_converts_and_respects_decline() {
     assert_eq!(count_legacy_files(dir.path()), 1, "still prompts next open");
 
     // Accept: project converts, backups kept, nothing left to prompt about.
-    editor.world_mut().resource_mut::<PendingMigration>().file_count = Some(1);
+    editor
+        .world_mut()
+        .resource_mut::<PendingMigration>()
+        .file_count = Some(1);
     resolve_migration(editor.world_mut(), true);
     assert!(dir.path().join("assets/scenes/level.bsn").exists());
     assert!(dir.path().join("assets/scenes/level.jsn.bak").exists());
     assert!(!dir.path().join("assets/scenes/level.jsn").exists());
-    assert!(dir.path().join(".jsn/project.jsn").exists(), "config untouched");
+    assert!(
+        dir.path().join(".jsn/project.jsn").exists(),
+        "config untouched"
+    );
     assert_eq!(count_legacy_files(dir.path()), 0);
 }
 

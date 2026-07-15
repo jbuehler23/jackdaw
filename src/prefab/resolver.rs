@@ -95,8 +95,8 @@ fn expand_instances(
         if let Some(err) = would_cycle(chain, &source_path) {
             return Err(ResolveError::Cycle(err));
         }
-        let prefab = cache
-            .get(&source_path)
+        let mut prefab_clone = cache
+            .get_as_jsn(&source_path)
             .ok_or_else(|| ResolveError::PrefabNotCached(source_path.clone()))?;
         let deleted: Vec<u32> = isa_value
             .get("deleted")
@@ -111,7 +111,6 @@ fn expand_instances(
         let mut next_chain = chain.to_vec();
         next_chain.push(source_path.clone());
 
-        let mut prefab_clone = prefab.clone();
         expand_instances(&mut prefab_clone, cache, &next_chain)?;
 
         merge_prefab_under_instance(ast, key, &prefab_clone, &deleted);

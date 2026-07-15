@@ -152,10 +152,25 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     tab.content = match kind {
         crate::scenes::TabKind::Prefab => {
             let canonical_path = crate::prefab::canonical_prefab_path(&canonical);
-            if let Some(mut cache) = world.get_resource_mut::<crate::prefab::PrefabAstCache>()
-                && cache.get_canonical(&canonical_path).is_none()
-            {
-                cache.insert(canonical_path.as_path(), ast);
+            let needs_cache = world
+                .get_resource::<crate::prefab::PrefabAstCache>()
+                .is_some_and(|cache| cache.get_canonical(&canonical_path).is_none());
+            if needs_cache {
+                let parent = canonical
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                match crate::jsn_to_bsn::convert_jsn_scene_to_bsn_at(world, &jsn, &parent) {
+                    Ok(converted) => match jackdaw_bsn::parse_bsn_text(&converted.scene_bsn) {
+                        Ok(bsn) => {
+                            world
+                                .resource_mut::<crate::prefab::PrefabAstCache>()
+                                .insert(canonical_path.as_path(), bsn);
+                        }
+                        Err(err) => warn!("scene.open: prefab bsn parse failed: {err}"),
+                    },
+                    Err(err) => warn!("scene.open: prefab jsn->bsn convert failed: {err}"),
+                }
             }
             crate::scenes::TabContent::Prefab(canonical_path)
         }

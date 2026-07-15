@@ -108,7 +108,7 @@ pub fn field_is_overridden(
         return false;
     };
 
-    let Some(prefab_ast) = cache.get(&prefab_path) else {
+    let Some(prefab_ast) = cache.get_as_jsn(&prefab_path) else {
         return false;
     };
 

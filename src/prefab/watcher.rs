@@ -139,61 +139,98 @@ fn drain_changes(world: &mut World) {
             continue;
         }
 
-        match std::fs::read_to_string(&path) {
-            Ok(text) => match serde_json::from_str::<jackdaw_jsn::format::JsnScene>(&text) {
-                Ok(scene) => {
-                    let new_ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&scene, &[]);
-                    world
-                        .resource_mut::<PrefabAstCache>()
-                        .insert(cache_key.clone(), new_ast);
-                }
-                Err(e) => {
-                    warn!("prefab reload parse failed for {}: {e}", path.display());
-                    world
-                        .resource_mut::<PrefabAstCache>()
-                        .invalidate(&cache_key);
-                    continue;
-                }
-            },
+        // Capture the live document's sparse form BEFORE the cache updates:
+        // the sparsify pass strips values still matching the baseline the
+        // scene was last resolved against, so it must compare against the
+        // old prefab. Comparing against the new one would misread every
+        // changed inherited value as an authored override.
+        let sparse_text = capture_sparse_scene_text(world);
+
+        match crate::prefab::save_load::read_prefab_ast(&path) {
+            Ok(new_ast) => {
+                world
+                    .resource_mut::<PrefabAstCache>()
+                    .insert(cache_key.clone(), new_ast);
+            }
             Err(e) => {
-                warn!("prefab reload read failed for {}: {e}", path.display());
+                warn!("prefab reload parse failed for {}: {e}", path.display());
                 world
                     .resource_mut::<PrefabAstCache>()
                     .invalidate(&cache_key);
                 continue;
             }
         }
-        reload_instances_for_prefab(world, &cache_key);
+        if let Some(sparse_text) = &sparse_text {
+            respawn_from_sparse_text(world, sparse_text);
+        }
     }
 }
 
-fn reload_instances_for_prefab(world: &mut World, _prefab_path: &Path) {
-    reload_all_instances(world);
+/// Emit the live BSN document to sparse text against the CURRENT prefab
+/// cache: inherited descendants reduce to override entries and instance
+/// roots shed values still matching their baselines. `None` when there is
+/// no live document.
+pub fn capture_sparse_scene_text(world: &mut World) -> Option<String> {
+    world.get_resource::<jackdaw_bsn::SceneBsnAst>()?;
+    // Inline runtime assets are embedded so material handles resolve across
+    // a despawn + respawn.
+    let parent_path = world
+        .get_resource::<crate::project::ProjectRoot>()
+        .map(|r| r.root.clone())
+        .unwrap_or_else(|| PathBuf::from("."));
+    Some(crate::scene_io::emit_bsn_scene_with_inline_assets(
+        world,
+        &parent_path,
+    ))
 }
 
-/// Re-resolve every `IsA` instance in the live scene against the
-/// prefab cache, despawn the existing preview entities, and respawn
-/// the scene from the resolved AST. The unresolved (authored) AST is
-/// reinstalled as the source of truth so subsequent edits target the
-/// instance roots, not the materialized inherited entities.
+/// Re-resolve every `IsA` instance in the live BSN document against the
+/// prefab cache, despawn the existing preview entities, and respawn the
+/// scene from the resolved document.
+///
+/// The live [`jackdaw_bsn::SceneBsnAst`] is a full linked document (one node
+/// per spawned entity). Its authored mutations (a new instance root, an
+/// override on an inherited descendant) are captured by emitting it to sparse
+/// text, which the resolver reads back and expands: new `IsA` nodes
+/// materialize their prefab subtrees, and inherited values re-derive from the
+/// cached baselines. `load_bsn_scene` then reinstalls the resolved document
+/// as the live source of truth.
 pub fn reload_all_instances(world: &mut World) {
-    let unresolved_ast = world.resource::<jackdaw_jsn::SceneJsnAst>().clone();
-    let resolved = {
-        let cache = world.resource::<PrefabAstCache>();
-        match crate::prefab::resolver::resolve_scene(&unresolved_ast, cache) {
+    let Some(sparse_text) = capture_sparse_scene_text(world) else {
+        return;
+    };
+    respawn_from_sparse_text(world, &sparse_text);
+}
+
+/// Resolve `sparse_text` against the prefab cache and respawn the scene from
+/// the resolved document, preserving undo history and selection-independent
+/// editor state.
+pub fn respawn_from_sparse_text(world: &mut World, sparse_text: &str) {
+    // Parse the sparse form back and resolve every `IsA` instance against
+    // the prefab cache.
+    let resolved_text = {
+        let authored = match jackdaw_bsn::parse_bsn_text(sparse_text) {
             Ok(a) => a,
+            Err(e) => {
+                warn!("reload_all_instances: parse failed: {e}");
+                return;
+            }
+        };
+        let cache = world.resource::<PrefabAstCache>();
+        let get_prefab = |p: &Path| cache.get(p);
+        match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
+            Ok(resolved) => jackdaw_bsn::emit_scene(&resolved),
             Err(e) => {
                 warn!("reload_all_instances: resolver failed: {e}");
                 return;
             }
         }
     };
-    let jsn = crate::scene_io::jsn_scene_from_ast(&resolved);
+
     // Inlined despawn + clear that preserves `CommandHistory`.
     // `clear_scene_entities` truncates the undo stack (intended for
     // scene-file loads); prefab reloads must not lose history pushed
     // before this point or undo of preceding operators breaks.
-    world.resource_mut::<jackdaw_jsn::SceneJsnAst>().clear();
     world
         .resource_mut::<crate::selection::Selection>()
         .entities
@@ -204,34 +241,23 @@ pub fn reload_all_instances(world: &mut World) {
     if let Err(err) = crate::scene_io::despawn_scene_entities(world) {
         bevy::log::error!("reload_all_instances: despawn_scene_entities failed: {err}");
     }
-    let parent = std::path::Path::new(".");
-    let local = std::collections::HashMap::new();
-    let spawned = crate::scene_io::load_scene_from_jsn(world, &jsn.scene, parent, &local);
 
-    // Re-install the unresolved AST as the source of truth, rebinding
-    // the first N spawned entities (the authored ones) to their AST
-    // node indices. Inherited entities live ECS-only until edited.
-    let authored_count = unresolved_ast.nodes.len();
-    let mut new_ast = unresolved_ast;
-    for (i, node) in new_ast.nodes.iter_mut().enumerate().take(authored_count) {
-        node.ecs_entity = spawned.get(i).copied();
+    // Respawn from the resolved document. `load_bsn_scene` installs the
+    // resolved document as the live `SceneBsnAst`, re-adds inline assets, and
+    // applies patches, producing a full linked document once more.
+    if let Err(err) = jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
+        bevy::log::error!("reload_all_instances: load_bsn_scene failed: {err}");
+        return;
     }
-    new_ast.ecs_to_jsn = new_ast
-        .nodes
-        .iter()
-        .enumerate()
-        .filter_map(|(i, n)| n.ecs_entity.map(|e| (e, i)))
-        .collect();
-    *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = new_ast;
 
     // History is preserved across the inline despawn above, so the
     // dirty-state baselines stay valid and the status bar / per-tab
     // dirty dot keep tracking the correct undo depth.
 
     // Rebuild the outliner from scratch. Observer-driven row creation
-    // can fire mid-`insert_reflect` (Add<Transform> before IsA / Name
-    // land) and pin the wrong category icon; a clean rebuild classifies
-    // every row against the final archetype.
+    // can fire mid-apply (Add<Transform> before IsA / Name land) and pin
+    // the wrong category icon; a clean rebuild classifies every row
+    // against the final archetype.
     if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
         bevy::log::warn!("reload_all_instances: clear_all_tree_rows failed: {err}");
     }

@@ -76,7 +76,7 @@ pub(crate) fn inspector_type_paths_for(
         }
         current = parent;
     };
-    let Some(prefab) = prefab_cache.get(&isa_source) else {
+    let Some(prefab) = prefab_cache.get_as_jsn(&isa_source) else {
         return HashSet::new();
     };
     let prefab_entity_id_type = "jackdaw::prefab::components::PrefabEntityId";

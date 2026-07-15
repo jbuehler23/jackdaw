@@ -26,7 +26,7 @@ use crate::viewport_overlays::OverlaySettings;
 use crate::viewport_select::GroupEditState;
 
 pub(super) fn plugin(app: &mut App) {
-    app.insert_resource(ActiveSnapshotter(Box::new(JsnAstSnapshotter)));
+    app.insert_resource(ActiveSnapshotter(Box::new(BsnDocumentSnapshotter)));
 }
 
 pub struct JsnAstSnapshotter;
@@ -179,10 +179,36 @@ impl SceneSnapshot for BsnDocumentSnapshot {
             error!("Failed to clear tree rows: {err}");
         }
 
+        // Resolve prefab `IsA` references before spawning. The captured text
+        // stores inherited descendants sparsely (`PrefabEntityId` plus only
+        // diverged fields); the resolver materializes the inherited subtrees
+        // back so the respawn produces complete entities. Resolve the cache
+        // borrow before the spawn borrow.
+        let resolved_text = match world.get_resource::<crate::prefab::PrefabAstCache>() {
+            Some(_) => match jackdaw_bsn::parse_bsn_text(&self.text) {
+                Ok(authored) => {
+                    let cache = world.resource::<crate::prefab::PrefabAstCache>();
+                    let get_prefab = |p: &std::path::Path| cache.get(p);
+                    match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
+                        Ok(resolved) => jackdaw_bsn::emit_scene(&resolved),
+                        Err(e) => {
+                            warn!("undo snapshot: resolver failed: {e}; spawning unresolved");
+                            self.text.clone()
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("undo snapshot: parse failed: {e}; spawning raw text");
+                    self.text.clone()
+                }
+            },
+            None => self.text.clone(),
+        };
+
         if let Err(err) = crate::scene_io::despawn_scene_entities(world) {
             error!("undo snapshot: despawn_scene_entities failed: {err}");
         }
-        if let Err(err) = jackdaw_bsn::load_bsn_scene(world, &self.text) {
+        if let Err(err) = jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
             error!("undo snapshot failed to reload: {err}");
         }
 

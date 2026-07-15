@@ -239,6 +239,41 @@ fn apply_type_patch(world: &mut World, entity: Entity, type_path: &str) {
 /// default if it doesn't exist yet). Nested struct fields are merged
 /// recursively so that partial patches like `Transform { translation: Vec3 { x: 5.0 } }`
 /// only update the specified sub-fields.
+/// Build a `DynamicStruct` carrying the patch's fields, typed from the struct's
+/// reflected field info and tagged with its represented type. Used when a struct
+/// component has no `ReflectDefault` to seed from and is not already present on
+/// the entity, so the patch fields alone define the value. Fields the struct
+/// does not declare are ignored; fields the patch omits are left unset, which a
+/// strict `FromReflect` will reject for a type without a default.
+fn dynamic_struct_from_patch(
+    registration: &bevy::reflect::TypeRegistration,
+    data: &BsnStructData,
+    reg: &TypeRegistry,
+    assets_ctx: Option<&BsnApplyAssets>,
+) -> bevy::reflect::structs::DynamicStruct {
+    let field_types: std::collections::HashMap<String, std::any::TypeId> =
+        match registration.type_info() {
+            bevy::reflect::TypeInfo::Struct(struct_info) => (0..struct_info.field_len())
+                .filter_map(|i| struct_info.field_at(i))
+                .map(|field_info| (field_info.name().to_string(), field_info.type_id()))
+                .collect(),
+            _ => std::collections::HashMap::new(),
+        };
+
+    let mut dynamic_struct = bevy::reflect::structs::DynamicStruct::default();
+    dynamic_struct.set_represented_type(Some(registration.type_info()));
+    for field in &data.fields.0 {
+        let Some(&field_type_id) = field_types.get(&field.name) else {
+            continue;
+        };
+        if let Some(reflected) = bsn_value_to_reflect(&field.value, field_type_id, reg, assets_ctx)
+        {
+            dynamic_struct.insert_boxed(&field.name, reflected);
+        }
+    }
+    dynamic_struct
+}
+
 fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
     let server = world.get_resource::<AssetServer>().cloned();
     let local = world.get_resource::<BsnSceneAssets>().map(|r| r.0.clone());
@@ -251,12 +286,10 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
 
     // Direct lookup: the type_path is a struct component.
     if let Some(registration) = reg.get_with_type_path(&data.type_path) {
-        let Some(reflect_default) = registration.data::<ReflectDefault>() else {
-            return;
-        };
         let Some(reflect_component) = registration.data::<ReflectComponent>() else {
             return;
         };
+        let reflect_default = registration.data::<ReflectDefault>();
 
         let mut value: Box<dyn PartialReflect> = {
             let Ok(entity_ref) = world.get_entity(entity) else {
@@ -264,8 +297,19 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
             };
             if let Some(existing) = reflect_component.reflect(entity_ref) {
                 existing.to_dynamic()
-            } else {
+            } else if let Some(reflect_default) = reflect_default {
                 reflect_default.default().into_partial_reflect()
+            } else {
+                // No existing component and no ReflectDefault to seed from:
+                // build the struct fieldwise from the patch so components that
+                // do not derive Default (such as the prefab IsA marker) still
+                // apply instead of being silently dropped.
+                Box::new(dynamic_struct_from_patch(
+                    registration,
+                    data,
+                    &reg,
+                    assets_ctx.as_ref(),
+                ))
             }
         };
 
@@ -1352,6 +1396,59 @@ mod tests {
 
         let val = get_bsn_field(&ast, patches_entity, &type_path, "value");
         assert!(matches!(val, Some(BsnValue::Bool(true))));
+    }
+
+    // A struct component that registers no ReflectDefault, standing in for the
+    // prefab IsA marker.
+    #[derive(Component, Reflect, Clone)]
+    #[reflect(Component)]
+    struct NoDefaultMarker {
+        source: String,
+        count: u32,
+    }
+
+    #[test]
+    fn applies_default_less_struct_fieldwise() {
+        let mut world = World::new();
+        let registry = AppTypeRegistry::default();
+        {
+            let mut reg = registry.write();
+            reg.register::<NoDefaultMarker>();
+            reg.register::<String>();
+            reg.register::<u32>();
+        }
+        let type_path = {
+            let reg = registry.read();
+            reg.get(std::any::TypeId::of::<NoDefaultMarker>())
+                .unwrap()
+                .type_info()
+                .type_path()
+                .to_string()
+        };
+        world.insert_resource(registry);
+
+        let entity = world.spawn_empty().id();
+        let patch = BsnPatch::Struct(BsnStructData {
+            type_path,
+            fields: BsnStructFields(vec![
+                BsnField {
+                    name: "source".to_string(),
+                    value: BsnValue::String("prefabs/tree.bsn".to_string()),
+                },
+                BsnField {
+                    name: "count".to_string(),
+                    value: BsnValue::Int(3),
+                },
+            ]),
+        });
+
+        apply_component_patch(&mut world, entity, &patch);
+
+        let applied = world
+            .get::<NoDefaultMarker>(entity)
+            .expect("Default-less struct component must apply, not be dropped");
+        assert_eq!(applied.source, "prefabs/tree.bsn");
+        assert_eq!(applied.count, 3);
     }
 }
 

@@ -176,7 +176,7 @@ fn build_scene_bsn(
     for entity in order {
         let parent = world
             .get::<ChildOf>(entity)
-            .map(|c| c.parent())
+            .map(bevy::prelude::ChildOf::parent)
             .filter(|p| spawned.contains(p));
         create_entity_in_ast(world, entity, parent);
 
