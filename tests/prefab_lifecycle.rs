@@ -495,43 +495,51 @@ fn save_writes_sparse_deltas_only() {
     std::fs::write(&scene_path, scene_jsn).unwrap();
 
     let mut app = make_app_for_prefab_tests();
+    // Opening a legacy scene converts it (and its prefab dependency) to .bsn
+    // on disk; the originals stay as .jsn.bak.
     jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
+    let bsn_scene_path = scene_path.with_extension("bsn");
+    assert!(bsn_scene_path.exists(), "scene converted to .bsn on open");
+    assert!(
+        prefab_path.with_extension("bsn").exists(),
+        "prefab dependency converted to .bsn on open"
+    );
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::scene_io::SceneFilePath>()
+            .path
+            .as_deref(),
+        Some(bsn_scene_path.to_string_lossy().as_ref()),
+        "the open tracks the converted path"
+    );
 
-    // Tell save_scene which file to write back.
-    app.world_mut()
-        .resource_mut::<jackdaw::scene_io::SceneFilePath>()
-        .path = Some(scene_path.to_string_lossy().into_owned());
     jackdaw::scene_io::save_scene(app.world_mut());
 
     // save_scene spawns a task pool job; give it a tick to land.
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    let written = std::fs::read_to_string(&scene_path).expect("file exists");
-    let value: serde_json::Value = serde_json::from_str(&written).expect("valid json on disk");
+    let written = std::fs::read_to_string(&bsn_scene_path).expect("file exists");
+    let doc = bsn_ast(&written);
 
-    // Find the entry that has the IsA component (its index in scene[]
-    // may not be 0 if inherited entities also get serialized).
-    let scene_arr = value["scene"].as_array().expect("scene is array");
-    let instance = scene_arr
-        .iter()
-        .find(|e| {
-            e["components"]
-                .get("jackdaw::prefab::components::IsA")
-                .is_some()
-        })
+    // The instance node persists sparsely: the diverged Transform keeps only
+    // the translation delta, the baseline-matching fields drop.
+    let instance = doc
+        .entities_with_component(ISA_TYPE)
+        .first()
+        .copied()
         .expect("instance entity present on disk");
-    let transform = &instance["components"]["bevy_transform::components::transform::Transform"];
+    let transform = "bevy_transform::components::transform::Transform";
     assert!(
-        transform.get("translation").is_some(),
-        "sparse delta keeps translation; got {transform:?}"
+        jackdaw_bsn::get_bsn_field(&doc, instance, transform, "translation").is_some(),
+        "sparse delta keeps translation"
     );
     assert!(
-        transform.get("rotation").is_none(),
-        "sparse delta drops rotation; got {transform:?}"
+        jackdaw_bsn::get_bsn_field(&doc, instance, transform, "rotation").is_none(),
+        "sparse delta drops rotation"
     );
     assert!(
-        transform.get("scale").is_none(),
-        "sparse delta drops scale; got {transform:?}"
+        jackdaw_bsn::get_bsn_field(&doc, instance, transform, "scale").is_none(),
+        "sparse delta drops scale"
     );
 }
 

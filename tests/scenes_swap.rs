@@ -318,7 +318,10 @@ fn scene_open_dedupes_by_path() {
     jackdaw::scenes::operators::scene_open_system(app.world_mut(), &path);
 
     let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+    // The open converted the legacy file, so the surviving tab holds the
+    // .bsn path; the second .jsn open deduped against it.
+    let bsn_path = path.with_extension("bsn");
+    let canonical = bsn_path.canonicalize().unwrap_or_else(|_| bsn_path.clone());
     let matches = scenes
         .tabs
         .iter()
@@ -331,7 +334,7 @@ fn scene_open_dedupes_by_path() {
         .count();
     assert_eq!(matches, 1);
 
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&bsn_path);
 }
 
 fn make_app_with_n_tabs(n: usize) -> bevy::app::App {
@@ -511,12 +514,14 @@ fn project_config_persists_tab_paths_and_active_index() {
         .run_system_cached(jackdaw::scenes::persist_tabs_to_project_config)
         .unwrap();
 
-    // The on-disk project.jsn now lists that path.
+    // The on-disk project config lists the converted path: opening the
+    // legacy file converted it to .bsn.
     let saved = jackdaw::project::load_project_config(&tmp_root).unwrap();
-    assert_eq!(saved.project.last_open_tabs, vec!["level1.jsn".to_string()]);
+    assert_eq!(saved.project.last_open_tabs, vec!["level1.bsn".to_string()]);
 
     // Cleanup.
     let _ = std::fs::remove_file(&scene_path);
+    let _ = std::fs::remove_file(scene_path.with_extension("bsn"));
     let _ = std::fs::remove_dir_all(&tmp_root);
 }
 
@@ -858,12 +863,34 @@ fn scene_open_flags_dirty_when_ids_need_migration() {
 
     jackdaw::scenes::operators::scene_open_system(app.world_mut(), &path);
 
+    // Opening converts the legacy file on disk; the healed unique ids are
+    // persisted in the written .bsn, so the tab has nothing unsaved.
+    let bsn_path = path.with_extension("bsn");
+    let converted = std::fs::read_to_string(&bsn_path).expect("converted .bsn written");
+    let doc = jackdaw_bsn::parse_bsn_text(&converted).expect("converted .bsn parses");
+    let id_type = jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH;
+    let mut ids = Vec::new();
+    for &root in &doc.roots {
+        if let Some(jackdaw_bsn::BsnValue::TupleStruct(data)) =
+            jackdaw_bsn::get_bsn_field(&doc, root, id_type, "")
+            && let Some(jackdaw_bsn::BsnValue::Int(id)) = data.values.first()
+        {
+            ids.push(*id);
+        }
+    }
+    assert_eq!(ids.len(), 2, "both entities persisted with node ids");
+    assert_ne!(
+        ids[0], ids[1],
+        "colliding ids healed to unique values on disk"
+    );
+
     let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
     let active = scenes.active;
     assert!(
-        scenes.tabs[active].dirty,
-        "opening a scene with colliding ids must flag the tab dirty so the heal is saved"
+        !scenes.tabs[active].dirty,
+        "the heal persisted during conversion; nothing unsaved"
     );
+    let _ = std::fs::remove_file(&bsn_path);
 }
 
 #[test]

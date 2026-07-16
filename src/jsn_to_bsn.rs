@@ -300,7 +300,7 @@ pub fn convert_project(world: &mut World, root: &Path) -> ProjectConversionRepor
             convert_catalog_file(world, &path).map(|()| report.catalogs.push(path.clone()))
         } else {
             convert_scene_file(world, &path)
-                .map(|scene_report| report.scenes.push((path.clone(), scene_report)))
+                .map(|(_, scene_report)| report.scenes.push((path.clone(), scene_report)))
         };
         if let Err(err) = result {
             report.failures.push((path, err.to_string()));
@@ -340,17 +340,66 @@ pub(crate) fn collect_jsn_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-fn convert_scene_file(world: &mut World, path: &Path) -> Result<ConversionReport, BevyError> {
+/// Convert one legacy `.jsn` scene or prefab file to its `.bsn` sibling on
+/// disk, renaming the original to `.jsn.bak`. Colliding or missing node ids
+/// heal before conversion so the persisted document carries unique ids.
+/// Returns the `.bsn` path and the conversion report.
+pub fn convert_scene_file(
+    world: &mut World,
+    path: &Path,
+) -> Result<(std::path::PathBuf, ConversionReport), BevyError> {
     let text = std::fs::read_to_string(path)?;
     let (scene, _version) = jackdaw_jsn::format::parse_scene(&text)
         .map_err(|e| BevyError::from(format!("could not parse {}: {e}", path.display())))?;
+    let scene = if jackdaw_jsn::needs_id_migration(&scene) {
+        let healed = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&scene, &[]);
+        let mut healed_scene = healed.to_jsn_scene(scene.metadata.clone());
+        healed_scene.editor = scene.editor.clone();
+        healed_scene
+    } else {
+        scene
+    };
     let parent = path.parent().unwrap_or(Path::new(""));
     let converted = convert_jsn_scene_to_bsn_at(world, &scene, parent)?;
 
     let bsn_path = path.with_extension("bsn");
     std::fs::write(&bsn_path, &converted.scene_bsn)?;
     std::fs::rename(path, backup_path(path))?;
-    Ok(converted.report)
+
+    // Convert legacy prefabs the scene inherits from too: the prefab cache
+    // only loads `.bsn`, so an unconverted `.jsn` dependency would leave the
+    // scene's instances unresolved. Nested prefab chains convert recursively;
+    // already-converted paths are skipped by the sibling/backup checks.
+    for entity in &scene.scene {
+        let Some(isa) = entity.components.get("jackdaw::prefab::components::IsA") else {
+            continue;
+        };
+        let Some(source) = isa.get("source").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if !source.ends_with(".jsn") {
+            continue;
+        }
+        let source_path = {
+            let p = Path::new(source);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                parent.join(p)
+            }
+        };
+        if !source_path.exists() || source_path.with_extension("bsn").exists() {
+            continue;
+        }
+        if let Err(err) = convert_scene_file(world, &source_path) {
+            warn!(
+                "could not convert prefab dependency {}: {err}",
+                source_path.display()
+            );
+        }
+    }
+
+    Ok((bsn_path, converted.report))
 }
 
 fn convert_catalog_file(world: &mut World, path: &Path) -> Result<(), BevyError> {

@@ -1684,7 +1684,7 @@ pub fn load_scene_from_file(world: &mut World, chosen: &std::path::Path) {
 }
 
 fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
-    let path = chosen.to_string_lossy().to_string();
+    let mut path = chosen.to_string_lossy().to_string();
 
     let json = match std::fs::read_to_string(&path) {
         Ok(json) => json,
@@ -1732,10 +1732,12 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
             .unwrap_or(Path::new("."))
             .to_path_buf();
 
-        // Scenes load through the BSN document path. Legacy `.jsn` text
-        // converts in memory first (the on-disk file stays `.jsn` until the
-        // next save redirects it, or the migration prompt converts it); its
-        // metadata, camera framing, and id-healing flag carry over below.
+        // Scenes load through the BSN document path. Legacy `.jsn` files are
+        // not imported directly: they convert ON DISK first (writing the
+        // `.bsn` sibling, keeping the original as `.jsn.bak`), and the editor
+        // opens the converted file. Interactive open paths confirm with the
+        // user before reaching here; direct calls apply the conversion tool.
+        // The legacy metadata and camera framing carry over below.
         let (bsn_text, legacy_jsn) = if path.ends_with(".bsn") {
             (json, None)
         } else {
@@ -1757,29 +1759,30 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
                     return;
                 }
             };
-            // Heal colliding / missing node ids before conversion so the
-            // spawned entities and the emitted document share the re-minted
-            // ids. `from_jsn_scene` performs the healing.
-            let scene_to_convert = if jackdaw_jsn::needs_id_migration(&jsn) {
-                let healed = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &[]);
-                let mut healed_scene = healed.to_jsn_scene(jsn.metadata.clone());
-                healed_scene.editor = jsn.editor.clone();
-                healed_scene
-            } else {
-                jsn.clone()
-            };
-            let converted = match crate::jsn_to_bsn::convert_jsn_scene_to_bsn_at(
-                world,
-                &scene_to_convert,
-                &parent_path,
-            ) {
-                Ok(converted) => converted.scene_bsn,
+            let (bsn_path, _report) =
+                match crate::jsn_to_bsn::convert_scene_file(world, Path::new(&path)) {
+                    Ok(converted) => converted,
+                    Err(err) => {
+                        warn!("Failed to convert legacy scene '{path}': {err}");
+                        return;
+                    }
+                };
+            let bsn_text = match std::fs::read_to_string(&bsn_path) {
+                Ok(text) => text,
                 Err(err) => {
-                    warn!("Failed to convert legacy scene '{path}': {err}");
+                    warn!(
+                        "Failed to read converted scene '{}': {err}",
+                        bsn_path.display()
+                    );
                     return;
                 }
             };
-            (converted, Some(jsn))
+            info!(
+                "Converted legacy scene to {}; original kept as .jsn.bak",
+                bsn_path.display()
+            );
+            path = bsn_path.to_string_lossy().into_owned();
+            (bsn_text, Some(jsn))
         };
 
         clear_scene_entities(world);
@@ -1835,19 +1838,8 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
         }
 
         if let Some(jsn) = legacy_jsn {
-            // A healed scene holds re-minted ids that differ from disk until
-            // saved; flag the active tab so the dirty indicator prompts that
-            // save. The tab registry is absent in headless/prefab-cache
-            // loads, where there is no dirty indicator to drive.
-            if jackdaw_jsn::needs_id_migration(&jsn) {
-                info!("scene node ids upgraded for uniqueness; save to persist them");
-                if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
-                    let active = scenes.active;
-                    if let Some(tab) = scenes.tabs.get_mut(active) {
-                        tab.dirty = true;
-                    }
-                }
-            }
+            // Conversion persisted any re-minted node ids into the written
+            // `.bsn`, so no dirty flag is needed for id healing.
 
             // Restore the saved camera framing if present.
             if let Some(camera) = jsn.editor.as_ref().and_then(|e| e.camera.as_ref()) {
@@ -2464,7 +2456,12 @@ fn poll_scene_dialog(world: &mut World) {
                 return;
             };
             if let Some(file) = result {
-                finish_load_scene(world, file.path());
+                // Legacy .jsn picks confirm conversion before loading.
+                crate::migrate_dialog::request_open_with_conversion(
+                    world,
+                    file.path(),
+                    crate::migrate_dialog::ConversionOpenTarget::Scene,
+                );
             }
         }
     }

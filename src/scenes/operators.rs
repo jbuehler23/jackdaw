@@ -77,7 +77,12 @@ pub fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> Operator
         let Some(path) = pick_scene_file() else {
             return;
         };
-        scene_open_system(world, &path);
+        // Legacy .jsn picks confirm conversion before opening.
+        crate::migrate_dialog::request_open_with_conversion(
+            world,
+            &path,
+            crate::migrate_dialog::ConversionOpenTarget::Tab,
+        );
     });
     OperatorResult::Finished
 }
@@ -87,11 +92,20 @@ pub fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> Operator
 pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
-    // De-dupe: if a tab with this path is already open, switch to it.
+    // De-dupe: if a tab with this path is already open, switch to it. A
+    // legacy `.jsn` pick also matches its converted `.bsn` sibling, since
+    // opening it would convert to (or already produced) that file.
+    let bsn_sibling = canonical
+        .extension()
+        .is_some_and(|e| e == "jsn")
+        .then(|| canonical.with_extension("bsn"));
     let existing = world.resource::<Scenes>().tabs.iter().position(|t| {
         t.path
             .as_ref()
-            .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()) == canonical)
+            .map(|p| {
+                let tab_path = p.canonicalize().unwrap_or_else(|_| p.clone());
+                tab_path == canonical || Some(&tab_path) == bsn_sibling.as_ref()
+            })
             .unwrap_or(false)
     });
     if let Some(idx) = existing {
@@ -108,86 +122,55 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
         }
     };
 
-    // Build the tab's scene document. `.bsn` parses directly; legacy `.jsn`
-    // heals node ids and converts in memory (the on-disk file stays `.jsn`
-    // until the next save redirects it).
-    let parent = canonical
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let mut dirty = false;
+    // Build the tab's scene document. `.bsn` parses directly. Legacy `.jsn`
+    // is not imported: it converts ON DISK first (writing the `.bsn` sibling,
+    // keeping the original as `.jsn.bak`) and the tab opens the converted
+    // file. The interactive open path confirms before reaching here.
     let mut saved_camera: Option<Transform> = None;
-    let is_prefab;
-    let doc = if canonical.extension().is_some_and(|e| e == "bsn") {
-        match jackdaw_bsn::parse_bsn_text(&file_text) {
-            Ok(doc) => {
-                is_prefab = doc.roots.first().is_some_and(|&root| {
-                    doc.component_type_paths(root)
-                        .iter()
-                        .any(|tp| tp == "jackdaw::prefab::components::Prefab")
-                });
-                doc
-            }
-            Err(err) => {
-                warn!("scene.open: failed to parse {canonical:?}: {err}");
-                return;
-            }
-        }
+    let (canonical, file_text) = if canonical.extension().is_some_and(|e| e == "bsn") {
+        (canonical, file_text)
     } else {
-        let jsn: jackdaw_jsn::format::JsnScene = match serde_json::from_str(&file_text) {
-            Ok(j) => j,
+        // Read the camera framing sidecar before the source is renamed.
+        saved_camera = serde_json::from_str::<jackdaw_jsn::format::JsnScene>(&file_text)
+            .ok()
+            .and_then(|jsn| jsn.editor.as_ref().and_then(|e| e.camera.clone()))
+            .map(std::convert::Into::into);
+        let (bsn_path, _report) = match crate::jsn_to_bsn::convert_scene_file(world, &canonical) {
+            Ok(converted) => converted,
             Err(err) => {
-                warn!("scene.open: failed to parse {canonical:?}: {err}");
+                warn!("scene.open: legacy conversion of {canonical:?} failed: {err}");
                 return;
             }
         };
-        // The prefab marker is read off the raw JSON: the in-memory
-        // conversion drops components whose types are not registered, and a
-        // prefab file must classify as a prefab tab regardless.
-        is_prefab = jsn
-            .scene
-            .first()
-            .map(|e| {
-                e.components
-                    .contains_key("jackdaw::prefab::components::Prefab")
-            })
-            .unwrap_or(false);
-        // A healed scene holds re-minted ids that differ from disk until
-        // saved; the dirty flag prompts that save.
-        dirty = jackdaw_jsn::needs_id_migration(&jsn);
-        if dirty {
-            info!("scene node ids upgraded for uniqueness; save to persist them");
-        }
-        saved_camera = jsn
-            .editor
-            .as_ref()
-            .and_then(|e| e.camera.as_ref())
-            .map(|camera| camera.clone().into());
-        let scene_to_convert = if dirty {
-            let healed = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &[]);
-            let mut healed_scene = healed.to_jsn_scene(jsn.metadata.clone());
-            healed_scene.editor = jsn.editor.clone();
-            healed_scene
-        } else {
-            jsn
-        };
-        let converted =
-            match crate::jsn_to_bsn::convert_jsn_scene_to_bsn_at(world, &scene_to_convert, &parent)
-            {
-                Ok(converted) => converted.scene_bsn,
-                Err(err) => {
-                    warn!("scene.open: legacy conversion of {canonical:?} failed: {err}");
-                    return;
-                }
-            };
-        match jackdaw_bsn::parse_bsn_text(&converted) {
-            Ok(doc) => doc,
+        let text = match std::fs::read_to_string(&bsn_path) {
+            Ok(text) => text,
             Err(err) => {
-                warn!("scene.open: converted scene failed to parse: {err}");
+                warn!(
+                    "scene.open: failed to read converted {}: {err}",
+                    bsn_path.display()
+                );
                 return;
             }
+        };
+        info!(
+            "Converted legacy scene to {}; original kept as .jsn.bak",
+            bsn_path.display()
+        );
+        (bsn_path, text)
+    };
+    let dirty = false;
+    let doc = match jackdaw_bsn::parse_bsn_text(&file_text) {
+        Ok(doc) => doc,
+        Err(err) => {
+            warn!("scene.open: failed to parse {canonical:?}: {err}");
+            return;
         }
     };
+    let is_prefab = doc.roots.first().is_some_and(|&root| {
+        doc.component_type_paths(root)
+            .iter()
+            .any(|tp| tp == "jackdaw::prefab::components::Prefab")
+    });
 
     // Build the new tab.
     let display_name = canonical

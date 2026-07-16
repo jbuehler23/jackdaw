@@ -15,6 +15,7 @@ use bevy::platform::collections::{HashMap, HashSet};
 
 use jackdaw_bsn::{
     BsnPatch, BsnValue, SceneBsnAst, apply_deltas, bsn_value_eq, clone_node_into, get_bsn_field,
+    shallow_diff,
 };
 
 use std::fmt;
@@ -384,34 +385,65 @@ pub fn sparsify_inherited_descendants_recording(
             continue;
         };
 
-        let drop: Vec<(String, BsnValue)> = ast
-            .component_type_paths(node)
-            .into_iter()
-            .filter(|tp| tp != PREFAB_ENTITY_ID_TYPE)
-            .filter_map(|tp| {
-                let value = get_bsn_field(ast, node, &tp, "")?;
-                match get_bsn_field(prefab, prefab_match, &tp, "") {
-                    Some(base) if bsn_value_eq(&base, &value) => Some((tp, value)),
-                    _ => None,
-                }
-            })
-            .collect();
-        for (type_path, value) in drop {
-            ast.remove_component_patch(node, &type_path);
-            stripped.push((node, type_path, value));
-        }
-
-        // The name is a reference patch, not a component patch, so the loop
-        // above never sees it; strip it too when it matches the baseline.
-        if let (Some(name), Some(prefab_name)) = (ast.get_name(node), prefab.get_name(prefab_match))
-            && name == prefab_name
-        {
-            let name = name.to_owned();
-            remove_name_patch(ast, node);
-            stripped.push((node, NAME_PATCH_KEY.to_string(), BsnValue::String(name)));
-        }
+        sparsify_node_against_baseline(
+            ast,
+            node,
+            prefab,
+            prefab_match,
+            &[PREFAB_ENTITY_ID_TYPE],
+            &mut stripped,
+        );
     }
     stripped
+}
+
+/// Reduce one node's components to sparse deltas against a prefab baseline
+/// entry, recording each original whole value so a read-only emit can restore
+/// it. Components equal to the baseline are removed; diverged components keep
+/// only the fields that differ ([`shallow_diff`]); components absent from the
+/// baseline stay whole. A name matching the baseline's name is stripped too.
+fn sparsify_node_against_baseline(
+    ast: &mut SceneBsnAst,
+    node: Entity,
+    prefab: &SceneBsnAst,
+    prefab_match: Entity,
+    keep: &[&str],
+    stripped: &mut Vec<(Entity, String, BsnValue)>,
+) {
+    enum Action {
+        Remove,
+        Replace(BsnValue),
+    }
+    let changes: Vec<(String, BsnValue, Action)> = ast
+        .component_type_paths(node)
+        .into_iter()
+        .filter(|tp| !keep.contains(&tp.as_str()))
+        .filter_map(|tp| {
+            let value = get_bsn_field(ast, node, &tp, "")?;
+            let base = get_bsn_field(prefab, prefab_match, &tp, "")?;
+            match shallow_diff(&base, &value) {
+                None => Some((tp, value, Action::Remove)),
+                Some(delta) => Some((tp, value, Action::Replace(delta))),
+            }
+        })
+        .collect();
+    for (type_path, original, action) in changes {
+        match action {
+            Action::Remove => ast.remove_component_patch(node, &type_path),
+            Action::Replace(delta) => set_whole_component(ast, node, &type_path, delta),
+        }
+        stripped.push((node, type_path, original));
+    }
+
+    // The name is a reference patch, not a component patch, so the loop
+    // above never sees it; strip it too when it matches the baseline.
+    if let (Some(name), Some(prefab_name)) = (ast.get_name(node), prefab.get_name(prefab_match))
+        && name == prefab_name
+    {
+        let name = name.to_owned();
+        remove_name_patch(ast, node);
+        stripped.push((node, NAME_PATCH_KEY.to_string(), BsnValue::String(name)));
+    }
 }
 
 /// Sentinel `type_path` used in the recording sparsify's return entries for a
@@ -443,30 +475,14 @@ fn sparsify_instance_root(
         return;
     };
 
-    let drop: Vec<(String, BsnValue)> = ast
-        .component_type_paths(node)
-        .into_iter()
-        .filter(|tp| tp != ISA_TYPE && tp != PREFAB_ENTITY_ID_TYPE)
-        .filter_map(|tp| {
-            let value = get_bsn_field(ast, node, &tp, "")?;
-            match get_bsn_field(prefab, prefab_root, &tp, "") {
-                Some(base) if bsn_value_eq(&base, &value) => Some((tp, value)),
-                _ => None,
-            }
-        })
-        .collect();
-    for (type_path, value) in drop {
-        ast.remove_component_patch(node, &type_path);
-        stripped.push((node, type_path, value));
-    }
-
-    if let (Some(name), Some(prefab_name)) = (ast.get_name(node), prefab.get_name(prefab_root))
-        && name == prefab_name
-    {
-        let name = name.to_owned();
-        remove_name_patch(ast, node);
-        stripped.push((node, NAME_PATCH_KEY.to_string(), BsnValue::String(name)));
-    }
+    sparsify_node_against_baseline(
+        ast,
+        node,
+        prefab,
+        prefab_root,
+        &[ISA_TYPE, PREFAB_ENTITY_ID_TYPE],
+        stripped,
+    );
 }
 
 /// Remove the name-reference patch from `node`, if it has one.
