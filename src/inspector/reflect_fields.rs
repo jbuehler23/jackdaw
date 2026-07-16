@@ -1,4 +1,4 @@
-use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
+use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetBsnField};
 use crate::selection::Selection;
 
 use bevy::reflect::{NamedField, UnnamedField};
@@ -1778,28 +1778,33 @@ fn apply_color_with_undo(
     let selection = world.resource::<Selection>();
     let targets: Vec<Entity> = selection.entities.clone();
 
-    let new_json = serde_json::to_value(new_rgba).unwrap_or_default();
+    // The canonical reflect JSON (`{"Srgba": {..}}`) deserializes into any
+    // `Color`-typed field; the picker's raw sRGBA array does not.
+    let srgba = Srgba::new(new_rgba[0], new_rgba[1], new_rgba[2], new_rgba[3]);
+    let new_json = {
+        let reg = registry.read();
+        color_to_canonical_json(Color::Srgba(srgba), &reg)
+    };
 
-    let reg = registry.read();
     let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
 
     for &target in &targets {
-        let old_json = world
-            .resource::<jackdaw_jsn::SceneJsnAst>()
-            .get_component_field(target, type_path, field_path, &reg)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
+        let old_value = crate::commands::authored_bsn_field(world, target, type_path, field_path);
+        let Some(new_value) = crate::commands::json_field_edit_to_bsn_value(
+            world, target, type_path, field_path, &new_json,
+        ) else {
+            continue;
+        };
 
-        sub_commands.push(Box::new(SetJsnField {
+        sub_commands.push(Box::new(SetBsnField {
             entity: target,
             type_path: type_path.to_string(),
             field_path: field_path.to_string(),
-            old_value: old_json,
-            new_value: new_json.clone(),
+            old_value,
+            new_value,
             was_derived: false,
         }));
     }
-    drop(reg);
 
     if sub_commands.is_empty() {
         return;
@@ -1943,7 +1948,7 @@ fn spawn_editable_field(
 /// When the inspector is in PIE Live mode, apply a field edit to the selected
 /// preview entity immediately (so the viewport reflects the change) and stream
 /// a `SetComponent` to the focused running game instance. Returns `true` when
-/// handled as a live edit so the caller skips the authored `SetJsnField` path.
+/// handled as a live edit so the caller skips the authored `SetBsnField` path.
 ///
 /// The preview entity IS the normal `Selection` entity in Live mode (the
 /// projection has already applied the live overlay to it). A reverse-lookup
@@ -2048,32 +2053,29 @@ fn apply_field_value_with_undo(
         return;
     }
 
-    let registry = world.resource::<AppTypeRegistry>().clone();
-
     // Collect all selected entities
     let selection = world.resource::<Selection>();
     let targets: Vec<Entity> = selection.entities.clone();
 
-    let reg = registry.read();
     let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
 
     for &target in &targets {
-        let old_json = world
-            .resource::<jackdaw_jsn::SceneJsnAst>()
-            .get_component_field(target, type_path, field_path, &reg)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
+        let old_value = crate::commands::authored_bsn_field(world, target, type_path, field_path);
+        let Some(new_value) = crate::commands::json_field_edit_to_bsn_value(
+            world, target, type_path, field_path, &new_json,
+        ) else {
+            continue;
+        };
 
-        sub_commands.push(Box::new(SetJsnField {
+        sub_commands.push(Box::new(SetBsnField {
             entity: target,
             type_path: type_path.to_string(),
             field_path: field_path.to_string(),
-            old_value: old_json,
-            new_value: new_json.clone(),
+            old_value,
+            new_value,
             was_derived: false,
         }));
     }
-    drop(reg);
 
     if sub_commands.is_empty() {
         return;
@@ -2499,9 +2501,10 @@ pub(crate) fn on_text_edit_commit(
 
 /// Apply a drag-tick (non-final) numeric edit. Writes only the live ECS
 /// components for the current selection so the viewport tracks the drag,
-/// without touching the `SceneJsnAst` or minting an undo entry. The pre-drag
-/// value survives in the AST for the single `SetJsnField` pushed on
-/// `is_final`. In PIE Live mode it routes through the live-edit stream instead.
+/// without touching the scene document or minting an undo entry. The
+/// pre-drag value survives in the document for the single `SetBsnField`
+/// pushed on `is_final`. In PIE Live mode it routes through the live-edit
+/// stream instead.
 fn apply_field_value_live(
     world: &mut World,
     source_entity: Entity,
@@ -2521,7 +2524,7 @@ fn apply_field_value_live(
     }
     let targets: Vec<Entity> = world.resource::<Selection>().entities.clone();
     for target in targets {
-        crate::commands::apply_jsn_field_to_ecs(world, target, type_path, field_path, &new_json);
+        crate::commands::apply_json_field_to_ecs(world, target, type_path, field_path, &new_json);
     }
 }
 
@@ -2530,7 +2533,7 @@ fn apply_field_value_live(
 /// on drag-end, Enter, or blur with `is_final == true`, but never
 /// self-updates its value. This re-inserts `ScrubNumberInputValue` to move
 /// the display, applies live to the ECS each tick, and pushes the
-/// undo-backed `SetJsnField` only on the final event, giving one undo entry
+/// undo-backed `SetBsnField` only on the final event, giving one undo entry
 /// per drag.
 pub(crate) fn on_numeric_value_change_f64(
     event: On<ValueChange<f64>>,
@@ -3243,26 +3246,25 @@ fn apply_enum_variant_with_undo(
     let selection = world.resource::<Selection>();
     let targets: Vec<Entity> = selection.entities.clone();
 
-    let reg = registry.read();
     let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
 
     for &target in &targets {
-        let old_json = world
-            .resource::<jackdaw_jsn::SceneJsnAst>()
-            .get_component_field(target, type_path, field_path, &reg)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
+        let old_value = crate::commands::authored_bsn_field(world, target, type_path, field_path);
+        let Some(new_value) = crate::commands::json_field_edit_to_bsn_value(
+            world, target, type_path, field_path, &new_json,
+        ) else {
+            continue;
+        };
 
-        sub_commands.push(Box::new(SetJsnField {
+        sub_commands.push(Box::new(SetBsnField {
             entity: target,
             type_path: type_path.to_string(),
             field_path: field_path.to_string(),
-            old_value: old_json,
-            new_value: new_json.clone(),
+            old_value,
+            new_value,
             was_derived: false,
         }));
     }
-    drop(reg);
 
     if sub_commands.is_empty() {
         return;

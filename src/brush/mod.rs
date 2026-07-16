@@ -374,14 +374,13 @@ fn apply_brush(world: &mut World, entity: Entity, target: &Brush) {
     }
 }
 
-/// Serialize a Brush component to JSON and store it in the AST.
+/// Write a Brush component into the live scene document.
 pub fn sync_brush_to_ast(world: &mut World, entity: Entity, brush: &Brush) {
-    // `jackdaw_scene_types::types::Brush`; the canonical reflected type
-    // path (Brush is defined directly in `jackdaw_jsn::types`, not a
-    // `types::brush` submodule; historically this string was wrong
-    // and the AST ended up with a `types::brush::Brush` key that
-    // `load_scene_from_jsn` then skipped with an `Unknown type`
-    // warning and silently lost the Brush on every scene reload).
+    // `jackdaw_scene_types::types::Brush` is the canonical reflected type
+    // path (Brush lives directly in the crate's `types` module, not a
+    // `types::brush` submodule; historically this string was wrong and the
+    // document ended up with a `types::brush::Brush` key the loader skipped
+    // with an `Unknown type` warning, silently losing the Brush on reload).
     crate::commands::sync_component_to_ast(
         world,
         entity,
@@ -452,11 +451,9 @@ fn sync_changed_modifier_stacks_to_ast(
             crate::commands::sync_component_to_ast(world, entity, type_path, &stack);
         }
         for entity in removed_entities {
-            if let Some(node) = world
-                .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-                .node_for_entity_mut(entity)
-            {
-                node.components.remove(type_path);
+            let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+            if let Some(node) = ast.ast_for(entity) {
+                ast.remove_component_patch(node, type_path);
             }
         }
     });

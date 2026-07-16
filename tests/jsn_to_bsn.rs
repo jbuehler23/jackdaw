@@ -12,6 +12,119 @@ use jackdaw::scene_io::{load_inline_assets, load_scene_from_jsn};
 use jackdaw_bsn::{apply_dirty_ast_patches, parse_bsn_text, spawn_from_ast};
 use jackdaw_scene_types::{CustomProperties, PropertyValue, SceneNodeId};
 
+/// Serializer processor for fixture building: emits `Handle<T>` fields as
+/// their asset path (or null for runtime handles) and `Entity` fields as
+/// null, the shape the legacy JSON scene writer produced.
+struct FixtureSerializerProcessor;
+
+impl bevy::reflect::serde::ReflectSerializerProcessor for FixtureSerializerProcessor {
+    fn try_serialize<S>(
+        &self,
+        value: &dyn bevy::reflect::PartialReflect,
+        registry: &bevy::reflect::TypeRegistry,
+        serializer: S,
+    ) -> Result<Result<S::Ok, S>, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use bevy::asset::ReflectHandle;
+        let Some(value) = value.try_as_reflect() else {
+            return Ok(Err(serializer));
+        };
+        let type_id = value.reflect_type_info().type_id();
+        if let Some(reflect_handle) = registry.get_type_data::<ReflectHandle>(type_id) {
+            let untyped_handle = reflect_handle
+                .downcast_handle_untyped(value.as_any())
+                .expect("must be a handle");
+            if let Some(path) = untyped_handle.path() {
+                let path_str = path.path().to_string_lossy().into_owned();
+                return Ok(Ok(serde::Serializer::serialize_str(serializer, &path_str)?));
+            }
+            return Ok(Ok(serde::Serializer::serialize_unit(serializer)?));
+        }
+        if type_id == std::any::TypeId::of::<Entity>() {
+            return Ok(Ok(serde::Serializer::serialize_unit(serializer)?));
+        }
+        Ok(Err(serializer))
+    }
+}
+
+/// Build a legacy `JsnScene` fixture from a world, the shape the editor's
+/// removed JSON writer used to produce: one entry per `Name`-bearing entity
+/// in spawn order, components reflect-serialized, `SceneNodeId` lifted to
+/// the structural `id` field.
+fn world_to_jsn_scene(world: &mut World) -> jackdaw_jsn::JsnScene {
+    use bevy::ecs::reflect::ReflectComponent;
+    use bevy::reflect::serde::TypedReflectSerializer;
+    use std::any::TypeId;
+    use std::collections::HashMap;
+
+    let mut query = world.query_filtered::<Entity, With<Name>>();
+    let mut entities: Vec<Entity> = query.iter(world).collect();
+    entities.sort_unstable();
+    let index_of: HashMap<Entity, usize> =
+        entities.iter().enumerate().map(|(i, &e)| (e, i)).collect();
+
+    let registry = world
+        .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+        .clone();
+    let registry = registry.read();
+    let skip_ids = [
+        TypeId::of::<GlobalTransform>(),
+        TypeId::of::<InheritedVisibility>(),
+        TypeId::of::<ViewVisibility>(),
+        TypeId::of::<ChildOf>(),
+        TypeId::of::<Children>(),
+        TypeId::of::<SceneNodeId>(),
+    ];
+    let processor = FixtureSerializerProcessor;
+
+    let scene: Vec<jackdaw_jsn::format::JsnEntity> = entities
+        .iter()
+        .map(|&entity| {
+            let entity_ref = world.entity(entity);
+            let parent = entity_ref
+                .get::<ChildOf>()
+                .and_then(|c| index_of.get(&c.parent()).copied());
+            let id = entity_ref.get::<SceneNodeId>().map(|n| n.0);
+            let mut components = HashMap::new();
+            for registration in registry.iter() {
+                if skip_ids.contains(&registration.type_id()) {
+                    continue;
+                }
+                let type_path = registration.type_info().type_path_table().path();
+                if jackdaw::scene_io::should_skip_component(type_path) {
+                    continue;
+                }
+                let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+                    continue;
+                };
+                let Some(component) = reflect_component.reflect(entity_ref) else {
+                    continue;
+                };
+                let serializer =
+                    TypedReflectSerializer::with_processor(component, &registry, &processor);
+                if let Ok(value) = serde_json::to_value(&serializer) {
+                    components.insert(type_path.to_string(), value);
+                }
+            }
+            jackdaw_jsn::format::JsnEntity {
+                id,
+                parent,
+                components,
+            }
+        })
+        .collect();
+
+    jackdaw_jsn::JsnScene {
+        jsn: jackdaw_jsn::format::JsnHeader::default(),
+        metadata: jackdaw_jsn::format::JsnMetadata::default(),
+        assets: jackdaw_jsn::format::JsnAssets::default(),
+        editor: None,
+        scene,
+    }
+}
+
 fn headless_app() -> App {
     // Minimal plugin set: the converter needs the type registry, an asset
     // server, and the jackdaw scene plugins. bevy_render is deliberately
@@ -162,7 +275,7 @@ fn hierarchy_node_ids_and_custom_properties_round_trip() {
         ChildOf(parent),
     ));
 
-    let scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app_a.world_mut());
+    let scene = world_to_jsn_scene(app_a.world_mut());
     assert!(scene.scene.len() >= 2, "both entities serialize");
 
     let mut app_c = headless_app();
@@ -293,7 +406,7 @@ fn inline_material_reference_and_terrain_survive_conversion() {
         },
         jackdaw_scene_types::SceneRootTag,
     ));
-    let mut scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app_a.world_mut());
+    let mut scene = world_to_jsn_scene(app_a.world_mut());
 
     // Inline material asset entry, reflect-serialized like the editor writes.
     let material_json = {
@@ -381,7 +494,7 @@ fn convert_project_walks_scenes_prefabs_and_catalog() {
         SceneNodeId::next(),
         jackdaw_scene_types::SceneRootTag,
     ));
-    let scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app.world_mut());
+    let scene = world_to_jsn_scene(app.world_mut());
     let scene_json = serde_json::to_string(&scene).unwrap();
     std::fs::write(root.join("assets/scenes/level.jsn"), &scene_json).unwrap();
     std::fs::write(root.join("assets/prefabs/thing.jsn"), &scene_json).unwrap();
@@ -475,7 +588,7 @@ fn editor_opens_and_saves_bsn_scenes() {
             id,
             jackdaw_scene_types::SceneRootTag,
         ));
-        let scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app.world_mut());
+        let scene = world_to_jsn_scene(app.world_mut());
         let converted = convert_jsn_scene_to_bsn(app.world_mut(), &scene).expect("converts");
         std::fs::write(&bsn_path, &converted.scene_bsn).unwrap();
     }
@@ -486,7 +599,6 @@ fn editor_opens_and_saves_bsn_scenes() {
         app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
         app.init_resource::<jackdaw::selection::Selection>();
         app.init_resource::<jackdaw_commands::CommandHistory>();
-        app.init_resource::<jackdaw_jsn::SceneJsnAst>();
         app
     }
 
@@ -624,7 +736,7 @@ fn worldless_bridge_matches_reflect_deserialization() {
         child_id,
         ChildOf(parent),
     ));
-    let scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app_a.world_mut());
+    let scene = world_to_jsn_scene(app_a.world_mut());
     let mut app_c = headless_app();
     let bsn = convert_jsn_scene_to_bsn(app_c.world_mut(), &scene)
         .expect("converts")
@@ -678,7 +790,7 @@ fn worldless_bridge_matches_reflect_deserialization() {
 #[test]
 fn prefab_cache_reads_bsn_prefabs_with_stale_extension_references() {
     use jackdaw::prefab::PrefabAstCache;
-    use jackdaw::prefab::save_load::populate_cache_for_scene;
+    use jackdaw::prefab::save_load::populate_cache_for_scene_bsn;
 
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("prefabs")).unwrap();
@@ -691,24 +803,21 @@ fn prefab_cache_reads_bsn_prefabs_with_stale_extension_references() {
         SceneNodeId::next(),
         jackdaw_scene_types::SceneRootTag,
     ));
-    let scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app.world_mut());
+    let scene = world_to_jsn_scene(app.world_mut());
     let mut app_c = headless_app();
     let bsn = convert_jsn_scene_to_bsn(app_c.world_mut(), &scene)
         .expect("converts")
         .scene_bsn;
     std::fs::write(dir.path().join("prefabs/crate.bsn"), &bsn).unwrap();
 
-    // A scene AST whose IsA still references the pre-conversion .jsn path.
-    let mut ast = jackdaw_jsn::SceneJsnAst::default();
-    let entity = app.world_mut().spawn_empty().id();
-    let idx = ast.create_node(entity, None);
-    ast.nodes[idx].components.insert(
-        "jackdaw::prefab::components::IsA".to_string(),
-        serde_json::json!({"source": "prefabs/crate.jsn"}),
-    );
+    // A scene document whose IsA still references the pre-conversion .jsn
+    // path.
+    let ast =
+        parse_bsn_text("jackdaw::prefab::components::IsA { source: \"prefabs/crate.jsn\" }\n")
+            .expect("scene document parses");
 
     let mut cache = PrefabAstCache::default();
-    populate_cache_for_scene(&ast, &mut cache, dir.path());
+    populate_cache_for_scene_bsn(&ast, &mut cache, dir.path());
 
     let cached = cache
         .get(&dir.path().join("prefabs/crate.bsn"))
@@ -826,7 +935,7 @@ fn migration_prompt_detects_converts_and_respects_decline() {
         SceneNodeId::next(),
         jackdaw_scene_types::SceneRootTag,
     ));
-    let scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app.world_mut());
+    let scene = world_to_jsn_scene(app.world_mut());
     let scene_json = serde_json::to_string(&scene).unwrap();
     std::fs::write(dir.path().join("assets/scenes/level.jsn"), &scene_json).unwrap();
     // Config must not count as a legacy scene file.
@@ -892,7 +1001,7 @@ fn migration_prompt_detects_and_converts_legacy_projects() {
         SceneNodeId::next(),
         jackdaw_scene_types::SceneRootTag,
     ));
-    let scene = jackdaw::scene_io::serialize_world_to_jsn_scene(app.world_mut());
+    let scene = world_to_jsn_scene(app.world_mut());
     std::fs::write(
         dir.path().join("assets/scenes/level.jsn"),
         serde_json::to_string(&scene).unwrap(),

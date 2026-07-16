@@ -270,6 +270,21 @@ impl SceneBsnAst {
         self.world.despawn(patch_entity);
     }
 
+    /// The stable node id carried by a document node's `SceneNodeId(id)`
+    /// tuple-struct patch, if the node has one.
+    pub fn stable_id_of(&self, patches_entity: Entity) -> Option<u64> {
+        let patches = self.get_patches(patches_entity)?;
+        for &pe in &patches.0 {
+            if let Some(BsnPatch::TupleStruct(data)) = self.get_patch(pe)
+                && data.type_path.ends_with("SceneNodeId")
+                && let Some(BsnValue::Int(v)) = data.values.first()
+            {
+                return u64::try_from(*v).ok();
+            }
+        }
+        None
+    }
+
     /// Find the document node carrying the given stable node id, i.e. a
     /// `SceneNodeId(id)` tuple-struct patch. Linear over nodes; the stable id
     /// is the cross-process identity used by the play-in-editor mapping.

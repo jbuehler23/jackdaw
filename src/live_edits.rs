@@ -6,10 +6,9 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_jsn::SceneJsnAst;
-use jackdaw_scene_types::SceneNodeId;
+use jackdaw_bsn::SceneBsnAst;
 
-use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
+use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetBsnField};
 
 /// Identifies one tracked field. Keyed by the game-side entity bits only:
 /// the authored node id is resolved against whatever AST is open at record
@@ -82,12 +81,8 @@ impl LiveEditLog {
 /// The authored node id for a preview entity, when it maps to the open
 /// scene's AST. `None` for ephemeral projected entities.
 pub fn node_id_for_entity(world: &World, preview: Entity) -> Option<u64> {
-    let ast = world.resource::<SceneJsnAst>();
-    ast.ecs_to_jsn
-        .get(&preview)
-        .and_then(|&idx| ast.nodes.get(idx))
-        .and_then(|node| node.id)
-        .map(|id| id.0)
+    let ast = world.resource::<SceneBsnAst>();
+    ast.ast_for(preview).and_then(|node| ast.stable_id_of(node))
 }
 
 /// Reverse lookup of the game-entity bits behind a projected preview
@@ -163,15 +158,9 @@ pub fn record_live_edit(
     let registry = world.resource::<AppTypeRegistry>().clone();
     let baseline = {
         let registry = registry.read();
-        world
-            .resource::<SceneJsnAst>()
-            .get_component(preview, type_path)
-            .and_then(|component| {
-                jackdaw_jsn::ast::get_field_in_component_json(
-                    component, type_path, field_path, &registry,
-                )
-            })
-            .cloned()
+        let ast = world.resource::<SceneBsnAst>();
+        ast.ast_for(preview)
+            .and_then(|node| authored_field_json(ast, node, type_path, field_path, &registry))
     };
     let name = world
         .get::<Name>(preview)
@@ -199,17 +188,52 @@ pub fn record_live_edit(
 /// for the key's bits. `None` when neither resolves (entity despawned and
 /// unmapped).
 pub fn resolve_entry_entity(
-    ast: &SceneJsnAst,
+    ast: &SceneBsnAst,
     projection: &crate::pie_projection::PieProjection,
     key: &LiveEditKey,
     entry: &LiveEditEntry,
 ) -> Option<Entity> {
     if let Some(node_id) = entry.node_id
-        && let Some(entity) = ast.entity_for_node_id(SceneNodeId(node_id))
+        && let Some(entity) = ast.entity_for_stable_id(node_id)
     {
         return Some(entity);
     }
     projection.by_bits.get(&key.bits).copied()
+}
+
+/// Read one authored field from the live BSN document as reflect-format
+/// JSON, matching the serialization the live protocol uses. `None` when the
+/// component or field is not authored on the node.
+fn authored_field_json(
+    ast: &SceneBsnAst,
+    node: Entity,
+    type_path: &str,
+    field_path: &str,
+    registry: &bevy::reflect::TypeRegistry,
+) -> Option<serde_json::Value> {
+    use bevy::reflect::GetPath;
+    use bevy::reflect::serde::TypedReflectSerializer;
+
+    jackdaw_bsn::get_bsn_field(ast, node, type_path, field_path)?;
+    let whole = jackdaw_bsn::get_bsn_field(ast, node, type_path, "")?;
+    let registration = registry.get_with_type_path(type_path)?;
+    let reflected =
+        jackdaw_bsn::bsn_value_to_reflect(&whole, registration.type_id(), registry, None)?;
+    if field_path.is_empty() {
+        let serializer = TypedReflectSerializer::new(reflected.as_ref(), registry);
+        return serde_json::to_value(&serializer).ok();
+    }
+    // Path navigation needs a concrete (`Reflect`) value; promote dynamics
+    // through `FromReflect` when the conversion produced one.
+    let concrete: Box<dyn Reflect> = match reflected.try_into_reflect() {
+        Ok(concrete) => concrete,
+        Err(dynamic) => registration
+            .data::<bevy::reflect::ReflectFromReflect>()?
+            .from_reflect(dynamic.as_ref())?,
+    };
+    let field = concrete.reflect_path(field_path).ok()?;
+    let serializer = TypedReflectSerializer::new(field, registry);
+    serde_json::to_value(&serializer).ok()
 }
 
 /// The current full JSON of `entity`'s `type_path` component, serialized
@@ -272,26 +296,59 @@ fn build_save_command(
     key: &LiveEditKey,
     entry: &LiveEditEntry,
 ) -> Option<Box<dyn EditorCommand>> {
-    match entry.baseline.clone() {
-        Some(baseline) => Some(Box::new(SetJsnField {
-            entity,
-            type_path: key.type_path.clone(),
-            field_path: key.field_path.clone(),
-            old_value: baseline,
-            new_value: entry.live_value.clone(),
-            was_derived: false,
-        })),
-        None => {
+    // Branch on whether the COMPONENT is authored on the node, not on the
+    // entry's field baseline: the document stores sparse patches, so a
+    // default-valued field reads as no baseline even though the component
+    // exists. Writing the whole component in that case would clobber other
+    // authored fields (including edits applied earlier in the same group).
+    let component_authored = {
+        let ast = world.resource::<SceneBsnAst>();
+        ast.ast_for(entity)
+            .and_then(|node| jackdaw_bsn::get_bsn_field(ast, node, &key.type_path, ""))
+            .is_some()
+    };
+    match component_authored {
+        true => {
+            let old_value = {
+                let ast = world.resource::<SceneBsnAst>();
+                ast.ast_for(entity).and_then(|node| {
+                    jackdaw_bsn::get_bsn_field(ast, node, &key.type_path, &key.field_path)
+                })
+            };
+            let new_value = crate::commands::json_field_edit_to_bsn_value(
+                world,
+                entity,
+                &key.type_path,
+                &key.field_path,
+                &entry.live_value,
+            )?;
+            Some(Box::new(SetBsnField {
+                entity,
+                type_path: key.type_path.clone(),
+                field_path: key.field_path.clone(),
+                old_value,
+                new_value,
+                was_derived: false,
+            }))
+        }
+        false => {
             let full = serialize_component_json(world, entity, &key.type_path);
             if full.is_null() {
                 return None;
             }
-            Some(Box::new(SetJsnField {
+            let new_value = crate::commands::json_field_edit_to_bsn_value(
+                world,
+                entity,
+                &key.type_path,
+                "",
+                &full,
+            )?;
+            Some(Box::new(SetBsnField {
                 entity,
                 type_path: key.type_path.clone(),
                 field_path: String::new(),
-                old_value: serde_json::Value::Null,
-                new_value: full,
+                old_value: None,
+                new_value,
                 was_derived: false,
             }))
         }
@@ -300,7 +357,7 @@ fn build_save_command(
 
 /// Write one tracked edit into the authored scene as an undoable command,
 /// then drop the entry. Entries with an authored node write through
-/// [`SetJsnField`]; entries without one belong to a runtime-spawned entity
+/// [`SetBsnField`]; entries without one belong to a runtime-spawned entity
 /// and route through whole-entity promotion, which authors the entity and
 /// every tracked field on it in one step.
 pub fn save_entry_to_scene(world: &mut World, key: &LiveEditKey) {
@@ -313,7 +370,7 @@ pub fn save_entry_to_scene(world: &mut World, key: &LiveEditKey) {
     };
 
     if entry.node_id.is_some() {
-        let ast = world.resource::<SceneJsnAst>();
+        let ast = world.resource::<SceneBsnAst>();
         let projection = world.resource::<crate::pie_projection::PieProjection>();
         let Some(entity) = resolve_entry_entity(ast, projection, key, &entry) else {
             warn!(
@@ -372,7 +429,7 @@ pub fn revert_entry(world: &mut World, key: &LiveEditKey) {
         return;
     };
     let entity = {
-        let ast = world.resource::<SceneJsnAst>();
+        let ast = world.resource::<SceneBsnAst>();
         let projection = world.resource::<crate::pie_projection::PieProjection>();
         resolve_entry_entity(ast, projection, key, &entry)
     };
@@ -455,7 +512,7 @@ pub fn apply_all_to_scene(world: &mut World) {
 
     for (key, entry) in &entries {
         if entry.node_id.is_some() {
-            let ast = world.resource::<SceneJsnAst>();
+            let ast = world.resource::<SceneBsnAst>();
             let projection = world.resource::<crate::pie_projection::PieProjection>();
             let Some(entity) = resolve_entry_entity(ast, projection, key, entry) else {
                 stale += 1;
@@ -606,8 +663,7 @@ pub(crate) fn pie_live_edits_discard_all(
 mod tests {
     use super::*;
     use crate::pie_projection::PieProjection;
-    use jackdaw_jsn::ast::JsnEntityNode;
-    use std::collections::{HashMap, HashSet};
+    use jackdaw_scene_types::SceneNodeId;
 
     const TRANSFORM_PATH: &str = "bevy_transform::components::transform::Transform";
 
@@ -647,17 +703,22 @@ mod tests {
             .spawn((Name::new("player"), Transform::from_xyz(1.0, 2.0, 3.0)))
             .id();
         let node_id = SceneNodeId::next();
-        let mut components = HashMap::new();
-        components.insert(TRANSFORM_PATH.to_string(), transform_json());
-        let mut ast = SceneJsnAst::default();
-        ast.nodes.push(JsnEntityNode {
-            id: Some(node_id),
-            parent: None,
-            components,
-            derived_components: HashSet::new(),
-            ecs_entity: Some(preview_entity),
-        });
-        ast.ecs_to_jsn.insert(preview_entity, 0);
+        let mut ast = SceneBsnAst::default();
+        let patches = {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            let registry = registry.read();
+            let transform = Transform::from_xyz(1.0, 2.0, 3.0);
+            vec![
+                jackdaw_bsn::component_to_bsn_patch(&transform, &registry),
+                jackdaw_bsn::BsnPatch::TupleStruct(jackdaw_bsn::BsnTupleStructData {
+                    type_path: jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH.to_string(),
+                    values: vec![jackdaw_bsn::BsnValue::Int(node_id.0 as i128)],
+                }),
+            ]
+        };
+        let node = ast.create_entity_node(patches);
+        ast.add_to_roots(node);
+        ast.link(preview_entity, node);
         world.insert_resource(ast);
 
         (world, preview_entity, node_id)
@@ -800,7 +861,7 @@ mod tests {
         };
         assert_eq!(
             resolve_entry_entity(
-                world.resource::<SceneJsnAst>(),
+                world.resource::<SceneBsnAst>(),
                 world.resource::<PieProjection>(),
                 &key,
                 &entry
@@ -833,7 +894,7 @@ mod tests {
         };
         assert_eq!(
             resolve_entry_entity(
-                world.resource::<SceneJsnAst>(),
+                world.resource::<SceneBsnAst>(),
                 world.resource::<PieProjection>(),
                 &key,
                 &entry
@@ -959,20 +1020,21 @@ mod tests {
     }
 
     fn ast_field(world: &World, entity: Entity, field_path: &str) -> Option<serde_json::Value> {
+        doc_field(world, entity, TRANSFORM_PATH, field_path)
+    }
+
+    /// Read one authored field from the live BSN document as JSON.
+    fn doc_field(
+        world: &World,
+        entity: Entity,
+        type_path: &str,
+        field_path: &str,
+    ) -> Option<serde_json::Value> {
         let registry = world.resource::<AppTypeRegistry>().clone();
         let registry = registry.read();
-        world
-            .resource::<SceneJsnAst>()
-            .get_component(entity, TRANSFORM_PATH)
-            .and_then(|component| {
-                jackdaw_jsn::ast::get_field_in_component_json(
-                    component,
-                    TRANSFORM_PATH,
-                    field_path,
-                    &registry,
-                )
-            })
-            .cloned()
+        let ast = world.resource::<SceneBsnAst>();
+        let node = ast.ast_for(entity)?;
+        authored_field_json(ast, node, type_path, field_path, &registry)
     }
 
     #[test]
@@ -1204,10 +1266,8 @@ mod tests {
         save_unauthored_health(&mut world, preview);
 
         assert_eq!(
-            world
-                .resource::<SceneJsnAst>()
-                .get_component(preview, &health_path()),
-            Some(&serde_json::json!({ "current": 50.0 })),
+            doc_field(&world, preview, &health_path(), ""),
+            Some(serde_json::json!({ "current": 50.0 })),
             "the whole component is authored on the node"
         );
         assert!(world.resource::<LiveEditLog>().is_empty());
@@ -1228,9 +1288,7 @@ mod tests {
         cmd.undo(&mut world);
 
         assert_eq!(
-            world
-                .resource::<SceneJsnAst>()
-                .get_component(preview, &health_path()),
+            doc_field(&world, preview, &health_path(), ""),
             None,
             "undo removes the component entry instead of writing null"
         );
@@ -1365,10 +1423,15 @@ mod tests {
 
         save_entry_to_scene(&mut world, &key_for(42, "translation"));
 
-        let ast = world.resource::<SceneJsnAst>();
-        assert_eq!(ast.nodes.len(), 2, "promotion authored a new node");
-        assert_eq!(ast.nodes[1].ecs_entity, Some(ephemeral));
-        assert!(ast.nodes[1].components.contains_key(TRANSFORM_PATH));
+        let ast = world.resource::<SceneBsnAst>();
+        let node = ast
+            .ast_for(ephemeral)
+            .expect("promotion authored a new node");
+        assert!(
+            ast.component_type_paths(node)
+                .iter()
+                .any(|tp| tp == TRANSFORM_PATH)
+        );
         assert!(
             world.resource::<LiveEditLog>().is_empty(),
             "every entry for the promoted entity is dropped"

@@ -1,7 +1,6 @@
 use std::any::TypeId;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::fmt::{self, Formatter};
 use std::path::{Path, PathBuf};
 use std::result::Result;
@@ -19,12 +18,12 @@ use bevy::{
     transform::components::TransformTreeChanged,
     window::{PrimaryWindow, RawHandleWrapper},
 };
-use jackdaw_jsn::format::{JsnAssets, JsnEntity, JsnHeader, JsnMetadata, JsnScene};
+use jackdaw_jsn::format::{JsnAssets, JsnEntity, JsnMetadata};
 use rfd::{AsyncFileDialog, FileHandle};
 use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserializer, Serializer};
 
-use crate::{EditorEntity, EditorHidden, NonSerializable};
+use crate::EditorEntity;
 
 /// Component type path prefixes that should never be saved (runtime-only / internal).
 const SKIP_COMPONENT_PREFIXES: &[&str] = &[
@@ -226,132 +225,6 @@ pub fn save_scene_as(world: &mut World) {
     spawn_save_dialog(world);
 }
 
-/// Derive a transient `JsnScene` from a `SceneJsnAst` snapshot. Used at
-/// the tab-swap boundary so the spawn pipeline still gets a `JsnScene`
-/// without forcing every tab to keep one parallel to the AST. Editor
-/// state (camera, view) is dropped: it's already carried on the
-/// `SceneTab` and re-applied separately.
-pub fn jsn_scene_from_ast(ast: &jackdaw_jsn::SceneJsnAst) -> JsnScene {
-    ast.to_jsn_scene(jackdaw_jsn::format::JsnMetadata::default())
-}
-
-/// Build the `JsnScene` a save should persist. In Live view the preview world
-/// carries streamed game values, so the entity payload comes from the AST (the
-/// authored baseline that only commands mutate); the auxiliary sections
-/// (metadata, assets, editor framing) still come from the world. In Scene view
-/// the world and the AST agree and the world serializer is used unchanged.
-pub(crate) fn scene_for_save(world: &mut World) -> JsnScene {
-    let mut jsn = serialize_world_to_jsn_scene(world);
-    let live = world
-        .get_resource::<crate::pie_mirror::PieViewMode>()
-        .is_some_and(|mode| *mode == crate::pie_mirror::PieViewMode::Live);
-    if live {
-        let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-        jsn.scene = jsn_scene_from_ast(ast).scene;
-    }
-    jsn
-}
-
-/// Build a `JsnScene` snapshot of the live world. Pure: does not touch
-/// disk. Used by both `save_scene_inner` (which writes the result to a
-/// file) and by the multi-scene tab swap (which keeps the `JsnScene`
-/// in memory for inactive tabs).
-pub fn serialize_world_to_jsn_scene(world: &mut World) -> JsnScene {
-    let parent_path: Cow<'_, Path> = {
-        let raw_path = world.get_resource::<SceneFilePath>().and_then(|r| {
-            r.path
-                .as_deref()
-                .and_then(|p| Path::new(p).parent().map(std::path::Path::to_path_buf))
-        });
-        match raw_path {
-            Some(p) => Cow::Owned(p),
-            None => Cow::Owned(env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
-        }
-    };
-
-    // Pre-compute entity lists while we have &mut World.
-    let editor_set = world
-        .run_system_cached(collect_editor_entities)
-        .unwrap_or_else(|e| {
-            warn!("serialize_world_to_jsn_scene: collect_editor_entities failed: {e}");
-            Default::default()
-        });
-    let scene_entities = world
-        .run_system_cached_with(collect_scene_entities_from_set, editor_set)
-        .unwrap_or_else(|e| {
-            warn!("serialize_world_to_jsn_scene: collect_scene_entities failed: {e}");
-            Default::default()
-        });
-
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let registry_guard = registry.read();
-
-    // Get catalog reverse lookup for emitting @Name references.
-    let catalog_id_to_name = world
-        .get_resource::<crate::asset_catalog::AssetCatalog>()
-        .map(|c| c.id_to_name.clone())
-        .unwrap_or_default();
-
-    let (inline_assets, inline_asset_data) = collect_inline_assets(
-        world,
-        &registry_guard,
-        &parent_path,
-        &scene_entities,
-        &catalog_id_to_name,
-    );
-
-    let entities = build_scene_snapshot(
-        world,
-        &registry_guard,
-        &parent_path,
-        &inline_assets,
-        &scene_entities,
-    );
-
-    // Sparsify instance subtree components against cached prefabs.
-    let entities = if let Some(cache) = world.get_resource::<crate::prefab::PrefabAstCache>() {
-        crate::prefab::save_load::sparsify_instance_entities(entities, cache, &parent_path)
-    } else {
-        entities
-    };
-
-    let assets = JsnAssets(inline_asset_data);
-
-    drop(registry_guard);
-
-    // Build metadata.
-    let now = crate::timestamps::utc_rfc3339_now();
-    let mut metadata = world
-        .get_resource::<SceneFilePath>()
-        .map(|r| r.metadata.clone())
-        .unwrap_or_default();
-    metadata.modified = now.clone();
-    if metadata.created.is_empty() {
-        metadata.created = now;
-    }
-    if metadata.name.is_empty() {
-        metadata.name = "Untitled".to_string();
-    }
-
-    // Capture the current viewport camera framing so the next open
-    // lands the user back where they left off.
-    let camera_transform = {
-        let mut q = world.query_filtered::<&Transform, With<crate::viewport::MainViewportCamera>>();
-        q.iter(world).next().copied()
-    };
-    let editor_state = camera_transform.map(|t| jackdaw_jsn::format::JsnEditorState {
-        camera: Some(t.into()),
-    });
-
-    JsnScene {
-        jsn: JsnHeader::default(),
-        metadata,
-        assets,
-        editor: editor_state,
-        scene: entities,
-    }
-}
-
 fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     // If the active tab is a prefab, flush the live AST into the cache
     // and persist via the prefab-aware writer. Reflect-serializing the
@@ -404,8 +277,6 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         return Ok(());
     }
 
-    let jsn = scene_for_save(world);
-
     let path = {
         let scene_path = world.resource::<SceneFilePath>();
         scene_path
@@ -427,9 +298,16 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         (path, None)
     };
 
-    // Save metadata back
+    // Refresh the save timestamps carried on the scene metadata.
+    let now = crate::timestamps::utc_rfc3339_now();
     let mut scene_path = world.resource_mut::<SceneFilePath>();
-    scene_path.metadata = jsn.metadata.clone();
+    scene_path.metadata.modified = now.clone();
+    if scene_path.metadata.created.is_empty() {
+        scene_path.metadata.created = now;
+    }
+    if scene_path.metadata.name.is_empty() {
+        scene_path.metadata.name = "Untitled".to_string();
+    }
     if legacy_backup.is_some() {
         scene_path.path = Some(path.clone());
     }
@@ -486,13 +364,6 @@ fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     // Also persist the in-memory baked navmesh (if any) to a sibling
     // `<scene>.nav` file so it survives reload. No-op when nothing is baked.
     export_navmesh_sibling(world, &path);
-
-    // The live `SceneJsnAst` is the source of truth and stays untouched
-    // across save. Do not rebuild it from `jsn` here:
-    // `collect_scene_entities_from_set` iterates a `HashSet`, so a
-    // re-collection returns entities in a different order than the one
-    // used to serialize, which would rebind `ecs_to_jsn` to the wrong
-    // nodes.
 
     // Save catalog alongside scene if dirty
     crate::asset_catalog::save_catalog(world);
@@ -912,75 +783,6 @@ impl<'a> JsnDeserializerProcessor<'a> {
         }
         asset_path
     }
-}
-
-/// Walk all scene entity components, find `Handle<T>` fields that have no asset path
-/// (runtime-created), serialize them into the generic assets table, and return a map
-/// of asset ID -> inline name for the serializer processor.
-///
-/// Assets already in the `AssetCatalog` are emitted as `@Name` references and excluded
-/// from the scene-local asset table.
-fn collect_inline_assets(
-    world: &World,
-    registry: &TypeRegistry,
-    parent_path: &Path,
-    scene_entities: &[Entity],
-    catalog_id_to_name: &HashMap<UntypedAssetId, String>,
-) -> (
-    HashMap<UntypedAssetId, String>,
-    HashMap<String, HashMap<String, serde_json::Value>>,
-) {
-    let mut id_to_name: HashMap<UntypedAssetId, String> = HashMap::new();
-    let mut asset_data: HashMap<String, HashMap<String, serde_json::Value>> = HashMap::new();
-    let mut counters: HashMap<String, usize> = HashMap::new();
-
-    // Scan all scene entities' components for Handle<T> values,
-    // collect the ones without paths, serialize the underlying asset data.
-    let skip_ids: HashSet<TypeId> = HashSet::from([
-        TypeId::of::<GlobalTransform>(),
-        TypeId::of::<InheritedVisibility>(),
-        TypeId::of::<ViewVisibility>(),
-        TypeId::of::<ChildOf>(),
-        TypeId::of::<Children>(),
-    ]);
-
-    for &entity in scene_entities {
-        // Defensive: a stale/despawned entity can slip into `scene_entities`; skip it
-        // rather than panicking on `world.entity`.
-        let Ok(entity_ref) = world.get_entity(entity) else {
-            continue;
-        };
-
-        for registration in registry.iter() {
-            if skip_ids.contains(&registration.type_id()) {
-                continue;
-            }
-            let type_path = registration.type_info().type_path_table().path();
-            if should_skip_component(type_path) {
-                continue;
-            }
-            let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-                continue;
-            };
-            let Some(component) = reflect_component.reflect(entity_ref) else {
-                continue;
-            };
-
-            // Walk the reflected value looking for Handle<T> fields
-            collect_handles_from_reflect(
-                component.as_partial_reflect(),
-                registry,
-                world,
-                parent_path,
-                &mut id_to_name,
-                &mut asset_data,
-                &mut counters,
-                catalog_id_to_name,
-            );
-        }
-    }
-
-    (id_to_name, asset_data)
 }
 
 /// Recursively walk a reflected value looking for `Handle<T>` fields that are runtime-created.
@@ -1506,7 +1308,7 @@ fn collect_bsn_handles_from_reflect(
 /// The document is restored to its prior state before returning, so emission
 /// stays read-only: the temporary roots are dropped and the rewritten patches
 /// are reverted.
-pub(crate) fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: &Path) -> String {
+pub fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: &Path) -> String {
     if world.get_resource::<jackdaw_bsn::SceneBsnAst>().is_none() {
         return String::new();
     }
@@ -1642,6 +1444,164 @@ pub(crate) fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: 
     text
 }
 
+/// Emit a subset of the live BSN document (the given document nodes with
+/// their subtrees) as self-contained BSN text for the clipboard.
+///
+/// Referenced runtime inline assets embed as `#Name` roots so a cross-scene
+/// paste carries them along; only catalog `@Name` assets are assumed to
+/// resolve at the destination. Stable node ids are stripped from the emitted
+/// text, so a paste mints fresh ones. The live document is restored to its
+/// prior state before returning.
+pub(crate) fn emit_bsn_entities_with_inline_assets(
+    world: &mut World,
+    parent_path: &Path,
+    nodes: &[Entity],
+) -> String {
+    if world.get_resource::<jackdaw_bsn::SceneBsnAst>().is_none() {
+        return String::new();
+    }
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+
+    // Seed only catalog names: scene-inline assets referenced by the copied
+    // components must embed into the clipboard text to survive a paste into
+    // another scene.
+    let mut seed: bevy::platform::collections::HashMap<UntypedAssetId, String> =
+        bevy::platform::collections::HashMap::default();
+    if let Some(catalog) = world.get_resource::<crate::asset_catalog::AssetCatalog>() {
+        for (id, name) in &catalog.id_to_name {
+            seed.entry(*id).or_insert_with(|| name.clone());
+        }
+    }
+
+    // The copied subtrees' document nodes and their live ECS entities.
+    let (subtree_nodes, entities) = {
+        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        let mut subtree_nodes: Vec<Entity> = Vec::new();
+        for &node in nodes {
+            subtree_nodes.push(node);
+            subtree_nodes.extend(ast.descendants_of(node));
+        }
+        let entities: Vec<Entity> = subtree_nodes
+            .iter()
+            .filter_map(|&n| ast.ecs_for_ast(n))
+            .collect();
+        (subtree_nodes, entities)
+    };
+
+    let pass = {
+        let reg = registry.read();
+        collect_bsn_inline_assets(world, &reg, &entities, seed)
+    };
+
+    let mut ast = world
+        .remove_resource::<jackdaw_bsn::SceneBsnAst>()
+        .unwrap_or_default();
+
+    // Strip stable node ids from the copied subtrees; a paste mints fresh
+    // ones, so the clipboard must not carry the source ids.
+    let mut removed_id_patches: Vec<(Entity, jackdaw_bsn::BsnPatch)> = Vec::new();
+    for &node in &subtree_nodes {
+        let found = ast.get_patches(node).and_then(|patches| {
+            patches.0.iter().copied().find(|&pe| {
+                matches!(
+                    ast.get_patch(pe),
+                    Some(jackdaw_bsn::BsnPatch::TupleStruct(data))
+                        if data.type_path.ends_with("SceneNodeId")
+                )
+            })
+        });
+        if let Some(pe) = found {
+            if let Some(patch) = ast.get_patch(pe).cloned() {
+                removed_id_patches.push((node, patch));
+            }
+            if let Some(patches) = ast.get_patches_mut(node) {
+                patches.0.retain(|&x| x != pe);
+            }
+            ast.world.despawn(pe);
+        }
+    }
+
+    // Embed referenced runtime assets as roots and re-derive handle-bearing
+    // component patches so their fields emit the reference names.
+    let roots_before = ast.roots.len();
+    let mut restore: Vec<(Entity, jackdaw_bsn::BsnPatch)> = Vec::new();
+    let mut added_roots: Vec<Entity> = Vec::new();
+    if !pass.touched.is_empty() {
+        if !pass.refs.is_empty() {
+            jackdaw_bsn::append_assets_to_ast(&mut ast, world, &pass.refs);
+        }
+        added_roots = ast.roots[roots_before..].to_vec();
+
+        let asset_server = world.resource::<AssetServer>().clone();
+        let reg = registry.read();
+        let ctx = jackdaw_bsn::BsnAssetContext {
+            asset_server: &asset_server,
+            parent_path,
+            asset_names: Some(&pass.names),
+        };
+        for (entity, type_path) in &pass.touched {
+            let Some(patches_entity) = ast.ast_for(*entity) else {
+                continue;
+            };
+            let Some(patch_entity) = ast.find_patch_by_type_path(patches_entity, type_path) else {
+                continue;
+            };
+            let Ok(entity_ref) = world.get_entity(*entity) else {
+                continue;
+            };
+            let Some(registration) = reg.get_with_type_path(type_path) else {
+                continue;
+            };
+            let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+                continue;
+            };
+            let Some(component) = reflect_component.reflect(entity_ref) else {
+                continue;
+            };
+            let new_patch = jackdaw_bsn::component_to_bsn_patch_with_assets(
+                component.as_partial_reflect(),
+                &reg,
+                &ctx,
+            );
+            if let Some(old) = ast.get_patch(patch_entity).cloned() {
+                restore.push((patch_entity, old));
+            }
+            ast.set_patch(patch_entity, new_patch);
+        }
+    }
+
+    let mut emit_list = added_roots.clone();
+    emit_list.extend_from_slice(nodes);
+    let text = jackdaw_bsn::emit_entities(&ast, &emit_list);
+
+    // Restore the live document: revert rewritten patches, drop the
+    // temporary asset roots, and re-add the stripped id patches.
+    for (patch_entity, old) in restore {
+        ast.set_patch(patch_entity, old);
+    }
+    for root in added_roots {
+        let child_patches = ast
+            .get_patches(root)
+            .map(|p| p.0.clone())
+            .unwrap_or_default();
+        ast.remove_from_roots(root);
+        for pe in child_patches {
+            ast.world.despawn(pe);
+        }
+        ast.world.despawn(root);
+    }
+    for (node, patch) in removed_id_patches {
+        let pe = ast.world.spawn(patch).id();
+        if let Some(patches) = ast.get_patches_mut(node) {
+            patches.0.push(pe);
+        }
+    }
+
+    world.insert_resource(ast);
+    text
+}
+
 /// Serialize a single runtime asset (and its nested handles like textures)
 /// into `JsnAssets` format. `parent_path` is used to compute relative file paths
 /// (should be the assets directory so texture paths resolve correctly on reload).
@@ -1719,124 +1679,6 @@ pub fn serialize_asset_into(
     }
 }
 
-/// Build a `Vec<JsnEntity>` from scene entities using reflection.
-/// Uses the serializer processor to handle `Handle<T>` and `Entity` fields.
-pub(crate) fn build_scene_snapshot(
-    world: &World,
-    registry: &TypeRegistry,
-    parent_path: &Path,
-    inline_assets: &HashMap<UntypedAssetId, String>,
-    entities: &[Entity],
-) -> Vec<JsnEntity> {
-    // Build entity -> index map for parent and entity-field references
-    let entity_to_index: HashMap<Entity, usize> =
-        entities.iter().enumerate().map(|(i, &e)| (e, i)).collect();
-
-    let ser_processor = JsnSerializerProcessor {
-        parent_path: Cow::Borrowed(parent_path),
-        inline_assets,
-        entity_to_index: &entity_to_index,
-    };
-
-    // Component types to skip  -- only computed/internal components.
-    // `SceneNodeId` is skipped here because it is emitted as the structural
-    // `JsnEntity::id` field below, not as a reflected component entry.
-    let skip_ids: HashSet<TypeId> = HashSet::from([
-        TypeId::of::<GlobalTransform>(),
-        TypeId::of::<InheritedVisibility>(),
-        TypeId::of::<ViewVisibility>(),
-        TypeId::of::<ChildOf>(),
-        TypeId::of::<Children>(),
-        TypeId::of::<jackdaw_scene_types::SceneNodeId>(),
-    ]);
-
-    let ast = world.get_resource::<jackdaw_jsn::SceneJsnAst>();
-
-    entities
-        .iter()
-        .map(|&entity| {
-            let entity_ref = world.entity(entity);
-
-            let parent = entity_ref
-                .get::<ChildOf>()
-                .and_then(|c| entity_to_index.get(&c.parent()).copied());
-
-            // Carry the stable node id from the live entity into the
-            // structural field; fall back to the AST node when the live
-            // entity lacks the component (e.g. not yet backfilled).
-            let id = entity_ref
-                .get::<jackdaw_scene_types::SceneNodeId>()
-                .map(|nid| nid.0)
-                .or_else(|| {
-                    ast.and_then(|a| a.node_for_entity(entity))
-                        .and_then(|n| n.id)
-                        .map(|nid| nid.0)
-                });
-
-            // Derived components for this entity  -- skip them during save.
-            // Falls back to an empty set when the AST resource is absent
-            // (e.g. in unit tests that do not load the full editor).
-            let derived = ast
-                .and_then(|a| a.node_for_entity(entity))
-                .map(|n| n.derived_components.clone())
-                .unwrap_or_default();
-
-            // All components (including Name, Transform, Visibility) via reflection
-            let mut components = HashMap::new();
-            let mut skipped_derived = 0u32;
-
-            for registration in registry.iter() {
-                if skip_ids.contains(&registration.type_id()) {
-                    continue;
-                }
-
-                let type_path = registration.type_info().type_path_table().path();
-
-                if should_skip_component(type_path) {
-                    continue;
-                }
-
-                // Skip derived (auto-added via #[require]) components  --
-                // they contain stale runtime state and are recreated fresh.
-                if derived.contains(type_path) {
-                    skipped_derived += 1;
-                    continue;
-                }
-
-                let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-                    continue;
-                };
-                let Some(component) = reflect_component.reflect(entity_ref) else {
-                    continue;
-                };
-
-                // Serialize with processor  -- handles Handle<T> -> path and Entity -> index
-                let serializer =
-                    TypedReflectSerializer::with_processor(component, registry, &ser_processor);
-                if let Ok(value) = serde_json::to_value(&serializer) {
-                    components.insert(type_path.to_string(), value);
-                }
-            }
-
-            if skipped_derived > 0 {
-                info!(
-                    "Scene save: entity {entity}  -- skipped {skipped_derived} derived components"
-                );
-            }
-
-            JsnEntity {
-                id,
-                parent,
-                components,
-            }
-        })
-        .collect()
-}
-
-/// Public entry point for "load this specific `.jsn` file into the
-/// World". Called by the file-picker dialog (see
-/// `poll_scene_dialog`) and by `project_select`'s auto-load at
-/// project-open time.
 pub fn load_scene_from_file(world: &mut World, chosen: &std::path::Path) {
     finish_load_scene(world, chosen);
 }
@@ -2468,104 +2310,9 @@ fn cleanup_pending_new_scene(
     }
 }
 
-/// Type alias for the query that collects every "real scene" root.
-///
-/// BEI action entities carry a `Name` (via `Action<A>`'s
-/// `#[require(Name::new(any::type_name::<A>()), ActionSettings, ...)]`)
-/// but are editor infrastructure; filter them out via
-/// `Without<ActionSettings>` so they don't get serialized into
-/// undo snapshots and re-spawned as scene entities on undo.
-/// `Without<SkipSerialization>` drops editor-only helpers
-/// (e.g. `PlayerSpawn` visualisation children) for the same reason.
-/// `Without<PieEphemeral>` keeps live game-spawned previews out of saves: in
-/// Live view the running game's entities stream into the preview world with
-/// their `Name`s, and without the filter a plain save while playing writes
-/// every named runtime entity (avatars, projectiles) into the zone file.
-type ScenePersistableRootsQuery = QueryState<
-    Entity,
-    (
-        With<Name>,
-        Without<bevy_enhanced_input::prelude::ActionSettings>,
-        Without<crate::SkipSerialization>,
-        Without<crate::pie_projection::PieEphemeral>,
-    ),
->;
-
-/// Collect scene entities: every named non-editor root, plus its
-/// descendant subtree, minus children carrying `EditorHidden`,
-/// `NonSerializable`, or `SkipSerialization`. The result is the
-/// set the save path serializes into the `.jsn`.
-fn collect_scene_entities_from_set(
-    In(editor_set): In<HashSet<Entity>>,
-    world: &mut World,
-    roots_query: &mut ScenePersistableRootsQuery,
-) -> Vec<Entity> {
-    let roots: Vec<Entity> = roots_query
-        .iter(world)
-        .filter(|e| !editor_set.contains(e))
-        .collect();
-
-    // Bevy 0.19's gizmo plugin spawns named line-renderer entities in the main
-    // world (`LineGizmoRenderer` etc.); they carry only a `Name` and no scene
-    // marker, so the "every named non-editor entity" filter above would
-    // otherwise serialize them into every `.jsn` and undo snapshot. They're
-    // engine internals, not authored content, so drop them.
-    const BEVY_GIZMO_RENDERER_NAMES: &[&str] = &[
-        "LineGizmoRenderer",
-        "LineStripGizmoRenderer",
-        "LineJointGizmoRenderer",
-    ];
-    let roots: Vec<Entity> = roots
-        .into_iter()
-        .filter(|&e| {
-            world
-                .get::<Name>(e)
-                .is_none_or(|n| !BEVY_GIZMO_RENDERER_NAMES.contains(&n.as_str()))
-        })
-        .collect();
-
-    // Expand to include all descendants
-    let mut scene_set = HashSet::new();
-    let mut stack = roots;
-    while let Some(entity) = stack.pop() {
-        if !scene_set.insert(entity) {
-            continue;
-        }
-        if let Some(children) = world.get::<Children>(entity) {
-            for child in children.iter() {
-                // A duplicated subtree can leave a dangling child reference in a
-                // `Children` component (DynamicScene remaps an unmapped child ref to a
-                // dead placeholder entity). Skip children that are no longer alive so the
-                // serializer never walks a despawned entity.
-                if world.get_entity(child).is_err() {
-                    continue;
-                }
-                if world.get::<EditorHidden>(child).is_none()
-                    && world.get::<NonSerializable>(child).is_none()
-                    && world.get::<crate::SkipSerialization>(child).is_none()
-                    && world
-                        .get::<crate::pie_projection::PieEphemeral>(child)
-                        .is_none()
-                {
-                    stack.push(child);
-                }
-            }
-        }
-    }
-
-    // Return in a deterministic order. `scene_set` is a `HashSet`, whose
-    // iteration order varies between captures even for an identical entity set;
-    // sorting makes the snapshot AST canonical so undo equality and `.jsn`
-    // output don't shift when an unrelated entity moves archetypes.
-    let mut ordered: Vec<Entity> = scene_set.into_iter().collect();
-    ordered.sort_unstable();
-    ordered
-}
-
 /// Collect every editor entity: each `EditorEntity` root and its
-/// full descendant subtree. The save path uses this to exclude
-/// editor-internal trees (panels, gizmos, picker overlays) from
-/// the persisted scene.
+/// full descendant subtree. Used to exclude editor-internal trees
+/// (panels, gizmos, picker overlays) when despawning scene entities.
 fn collect_editor_entities(
     world: &mut World,
     roots_query: &mut QueryState<Entity, With<EditorEntity>>,
@@ -2587,7 +2334,9 @@ fn collect_editor_entities(
 
 /// Remove scene entities from the world (named non-editor entities + their descendants).
 pub(crate) fn clear_scene_entities(world: &mut World) {
-    world.resource_mut::<jackdaw_jsn::SceneJsnAst>().clear();
+    if world.contains_resource::<jackdaw_bsn::SceneBsnAst>() {
+        world.insert_resource(jackdaw_bsn::SceneBsnAst::default());
+    }
 
     world
         .resource_mut::<crate::selection::Selection>()
@@ -2670,269 +2419,6 @@ pub(crate) fn despawn_scene_entities(world: &mut World) -> Result<(), BevyError>
     Ok(())
 }
 
-/// Build a self-contained `SceneJsnAst` snapshot of the current
-/// scene by running the same full-scene serialization pass as
-/// `save_scene_inner`. This picks up **runtime asset handles** (ad-
-/// hoc materials etc.) as inline assets under `#Name` keys; the
-/// live `SceneJsnAst` resource can't do that because
-/// `sync_component_to_ast` uses the stateless `AstSerializerProcessor`
-/// which serializes runtime handles as `null`.
-///
-/// Used by `JsnAstSnapshotter::capture` so undo/redo round-trips
-/// include inline asset data. On the apply side, `apply_ast_to_world`
-/// already reads `scene.assets` via `load_inline_assets` and passes
-/// the resulting `local_assets` into `load_scene_from_jsn`, which
-/// wires runtime handles back up by `#Name`.
-///
-/// Cost: O(scene entities x registered components) per snapshot.
-/// Called once per history-creating operator dispatch, not per
-/// frame; acceptable for the current editor workload.
-pub fn build_snapshot_ast(world: &mut World) -> jackdaw_jsn::SceneJsnAst {
-    let ast = match build_snapshot_ast_inner(world) {
-        Ok(ast) => ast,
-        Err(err) => {
-            error!("build_snapshot_ast failed, returning empty snapshot: {err}");
-            jackdaw_jsn::SceneJsnAst::default()
-        }
-    };
-
-    // Reconcile the live `SceneJsnAst` with the captured snapshot.
-    // Operators mutate ECS directly during a drag; without this swap,
-    // a later reload reads the stale pre-edit AST and erases the work.
-    *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = ast.clone();
-    ast
-}
-
-fn build_snapshot_ast_inner(world: &mut World) -> Result<jackdaw_jsn::SceneJsnAst, BevyError> {
-    let parent_path: Cow<'_, Path> = match world
-        .get_resource::<crate::project::ProjectRoot>()
-        .map(|r| r.root.clone())
-    {
-        Some(p) => Cow::Owned(p),
-        None => Cow::Owned(env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
-    };
-
-    let editor_set = world.run_system_cached(collect_editor_entities)?;
-    let scene_entities =
-        world.run_system_cached_with(collect_scene_entities_from_set, editor_set)?;
-
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let registry_guard = registry.read();
-
-    let catalog_id_to_name = world
-        .get_resource::<crate::asset_catalog::AssetCatalog>()
-        .map(|c| c.id_to_name.clone())
-        .unwrap_or_default();
-
-    let (inline_assets, inline_asset_data) = collect_inline_assets(
-        world,
-        &registry_guard,
-        &parent_path,
-        &scene_entities,
-        &catalog_id_to_name,
-    );
-
-    let entities = build_scene_snapshot(
-        world,
-        &registry_guard,
-        &parent_path,
-        &inline_assets,
-        &scene_entities,
-    );
-
-    drop(registry_guard);
-
-    let jsn = JsnScene {
-        jsn: JsnHeader::default(),
-        metadata: JsnMetadata::default(),
-        assets: JsnAssets(inline_asset_data),
-        editor: None,
-        scene: entities,
-    };
-
-    let mut ast = jackdaw_jsn::SceneJsnAst::from_jsn_scene(&jsn, &scene_entities);
-
-    // Inherited descendants belong in the AST as sparse override
-    // entries (PrefabEntityId + only diverged fields), not as full
-    // authored entities. Reduce them so the snapshot and the live
-    // `SceneJsnAst` we install both reflect the data model.
-    if let Some(cache) = world.get_resource::<crate::prefab::PrefabAstCache>() {
-        prefabify_inherited_descendants(&mut ast, cache);
-    }
-
-    Ok(ast)
-}
-
-/// Reduce inherited descendants of prefab instances (snapshot nodes
-/// with `PrefabEntityId`, no `IsA`, and an `IsA`-bearing ancestor) to
-/// sparse override entries by stripping components that match the
-/// matching prefab entry's baseline.
-fn prefabify_inherited_descendants(
-    ast: &mut jackdaw_jsn::SceneJsnAst,
-    cache: &crate::prefab::PrefabAstCache,
-) {
-    const PREFAB_ENTITY_ID_TYPE: &str = "jackdaw::prefab::components::PrefabEntityId";
-    const ISA_TYPE: &str = "jackdaw::prefab::components::IsA";
-
-    let node_count = ast.nodes.len();
-    for idx in 0..node_count {
-        // Skip instance roots and entities without a PrefabEntityId.
-        if ast.nodes[idx].components.contains_key(ISA_TYPE) {
-            continue;
-        }
-        let Some(peid_value) = ast.nodes[idx].components.get(PREFAB_ENTITY_ID_TYPE) else {
-            continue;
-        };
-        let Some(peid) = peid_value.as_u64().map(|u| u as u32) else {
-            continue;
-        };
-
-        // Walk the parent chain looking for the instance root.
-        let mut cursor = ast.nodes[idx].parent;
-        let mut isa_source: Option<PathBuf> = None;
-        while let Some(p_idx) = cursor {
-            if let Some(isa) = ast.nodes[p_idx].components.get(ISA_TYPE)
-                && let Some(src) = isa.get("source").and_then(|v| v.as_str())
-            {
-                isa_source = Some(PathBuf::from(src));
-                break;
-            }
-            cursor = ast.nodes[p_idx].parent;
-        }
-        let Some(source) = isa_source else {
-            // PrefabEntityId without an IsA ancestor: treat as authored
-            // and leave the node alone.
-            continue;
-        };
-        let Some(prefab) = cache.get_as_jsn(&source) else {
-            // Prefab not in cache; emit full node so the user's edits
-            // aren't silently lost.
-            continue;
-        };
-
-        // Find the matching prefab entry by PrefabEntityId.
-        let Some(prefab_entry_idx) = prefab.nodes.iter().position(|n| {
-            n.components
-                .get(PREFAB_ENTITY_ID_TYPE)
-                .and_then(serde_json::Value::as_u64)
-                .map(|u| u as u32)
-                == Some(peid)
-        }) else {
-            // Prefab doesn't have this id; user has an orphan inherited
-            // entity. Leave as authored override carrying everything.
-            continue;
-        };
-        let prefab_entry = &prefab.nodes[prefab_entry_idx];
-
-        // Strip components matching the prefab baseline; keep
-        // PrefabEntityId so the resolver still recognises the
-        // override target.
-        ast.nodes[idx].components.retain(|type_path, value| {
-            if type_path == PREFAB_ENTITY_ID_TYPE {
-                return true;
-            }
-            match prefab_entry.components.get(type_path) {
-                Some(base) => base != value,
-                None => true,
-            }
-        });
-    }
-}
-
-/// Replace the current world's scene with the one encoded in `ast`.
-///
-/// Despawns existing scene entities (without touching undo/redo
-/// history), serialises the AST back to a `JsnScene`, and runs it
-/// through the regular load path so the snapshot apply doesn't have
-/// its own parallel spawn logic to maintain.
-pub fn apply_ast_to_world(world: &mut World, ast: &jackdaw_jsn::SceneJsnAst) {
-    use jackdaw_jsn::format::JsnMetadata;
-    use std::collections::HashMap;
-
-    // Snapshot the stable ids of selected entities; the reload
-    // respawns everything, so we restore selection by stable id
-    // afterwards (see the restore block below).
-    let selected_stable_ids: Vec<crate::draw_brush::BrushStableId> = world
-        .resource::<crate::selection::Selection>()
-        .entities
-        .iter()
-        .filter_map(|&e| world.get::<crate::draw_brush::BrushStableId>(e).copied())
-        .collect();
-
-    // Clear selection + tree rows so observers don't fire on stale
-    // references. `handle_undo_redo_keys` already cancels any active
-    // modal before we get here.
-    world
-        .resource_mut::<crate::selection::Selection>()
-        .entities
-        .clear();
-    if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
-        error!("Failed to clear tree rows: {err}");
-    }
-
-    if let Err(err) = despawn_scene_entities(world) {
-        error!("apply_ast_to_world: despawn_scene_entities failed: {err}");
-    }
-
-    // Resolve prefab IsA references before spawning. Snapshots store
-    // inherited descendants as sparse override entries (PrefabEntityId
-    // only, components matching the baseline stripped); the resolver
-    // fills them back in so the spawn produces complete entities.
-    let resolved_ast = match world.get_resource::<crate::prefab::PrefabAstCache>() {
-        Some(cache) => crate::prefab::resolver::resolve_scene(ast, cache).unwrap_or_else(|e| {
-            bevy::log::warn!("apply_ast_to_world: resolver failed: {e}; spawning unresolved");
-            ast.clone()
-        }),
-        None => ast.clone(),
-    };
-    let scene = resolved_ast.to_jsn_scene(JsnMetadata::default());
-    let parent_path = world
-        .get_resource::<crate::project::ProjectRoot>()
-        .map(|p| p.root.clone())
-        .unwrap_or_else(|| PathBuf::from("."));
-    let local_assets = load_inline_assets(world, &scene.assets, &parent_path);
-    let spawned = load_scene_from_jsn(world, &scene.scene, &parent_path, &local_assets);
-    rebuild_bsn_doc(world, &spawned);
-
-    // Install the unresolved ast as live, with authored nodes rebound
-    // to their freshly-spawned ECS entities. Inherited descendants live
-    // ECS-only until edited, same as `reload_all_instances`.
-    let mut new_ast = ast.clone();
-    for (i, node) in new_ast.nodes.iter_mut().enumerate() {
-        node.ecs_entity = spawned.get(i).copied();
-    }
-    new_ast.ecs_to_jsn = new_ast
-        .nodes
-        .iter()
-        .enumerate()
-        .filter_map(|(i, n)| n.ecs_entity.map(|e| (e, i)))
-        .collect();
-    *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = new_ast;
-
-    // Restore selection by stable id. Update `Selection.entities`
-    // BEFORE inserting `Selected` so `add_component_displays` (an
-    // `On<Add, Selected>` observer that reads `selection.primary()`)
-    // sees the new selection and rebuilds the inspector.
-    if !selected_stable_ids.is_empty() {
-        let mut stable_to_entity: HashMap<crate::draw_brush::BrushStableId, Entity> =
-            HashMap::new();
-        let mut q = world.query::<(Entity, &crate::draw_brush::BrushStableId)>();
-        for (entity, sid) in q.iter(world) {
-            stable_to_entity.insert(*sid, entity);
-        }
-        let restored: Vec<Entity> = selected_stable_ids
-            .iter()
-            .filter_map(|sid| stable_to_entity.get(sid).copied())
-            .collect();
-        world.resource_mut::<crate::selection::Selection>().entities = restored.clone();
-        for &entity in &restored {
-            if let Ok(mut ec) = world.get_entity_mut(entity) {
-                ec.insert(crate::selection::Selected);
-            }
-        }
-    }
-}
-
 fn poll_scene_dialog(world: &mut World) {
     let Some(mut task) = world.remove_resource::<SceneDialogTask>() else {
         return;
@@ -2984,135 +2470,26 @@ fn poll_scene_dialog(world: &mut World) {
     }
 }
 
-/// Register a single ECS entity in the `SceneJsnAst` by serializing all its
-/// scene-relevant components into JSON. Skips entities already in the AST.
-/// Serializer processor for AST registration: resolves `Handle<T>` to path
-/// strings and `Entity` to null (no scene-local index available at
-/// registration time).
-/// Matches BSN's `BsnValue::from_reflect_with_assets` pattern.
-pub struct AstSerializerProcessor;
-
-impl ReflectSerializerProcessor for AstSerializerProcessor {
-    fn try_serialize<S>(
-        &self,
-        value: &dyn PartialReflect,
-        registry: &TypeRegistry,
-        serializer: S,
-    ) -> Result<Result<S::Ok, S>, S::Error>
-    where
-        S: Serializer,
-    {
-        let Some(value) = value.try_as_reflect() else {
-            return Ok(Err(serializer));
-        };
-        let type_id = value.reflect_type_info().type_id();
-
-        // Handle<T> -> null (default handles have no path)
-        if let Some(reflect_handle) = registry.get_type_data::<ReflectHandle>(type_id) {
-            let untyped_handle = reflect_handle
-                .downcast_handle_untyped(value.as_any())
-                .expect("Must be a handle");
-
-            if let Some(path) = untyped_handle.path() {
-                let path_str = path.path().to_string_lossy().into_owned();
-                return Ok(Ok(serializer.serialize_str(&path_str)?));
-            }
-            // Default or runtime handle  -- serialize as null
-            return Ok(Ok(serializer.serialize_unit()?));
-        }
-
-        // Entity -> null (no scene-local index at registration time)
-        if type_id == TypeId::of::<Entity>() {
-            return Ok(Ok(serializer.serialize_unit()?));
-        }
-
-        // Non-finite floats
-        if type_id == TypeId::of::<f32>()
-            && let Some(&v) = value.as_any().downcast_ref::<f32>()
-            && !v.is_finite()
-        {
-            let s = if v == f32::INFINITY {
-                "inf"
-            } else if v == f32::NEG_INFINITY {
-                "-inf"
-            } else {
-                "NaN"
-            };
-            return Ok(Ok(serializer.serialize_str(s)?));
-        }
-
-        Ok(Err(serializer))
-    }
-}
-
+/// Register a single ECS entity in the live scene document: create and link
+/// its node, then upsert a patch for every serializable component. Ensures
+/// the entity carries a stable `SceneNodeId` (adopting an existing one,
+/// minting a fresh one otherwise) so the node keeps a cross-process
+/// identity. Skips entities already in the document.
 pub fn register_entity_in_ast(world: &mut World, entity: Entity) {
-    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-    if ast.contains_entity(entity) {
-        return;
-    }
-    let parent = world.get::<ChildOf>(entity).map(ChildOf::parent);
-    let idx = world
-        .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-        .create_node(entity, parent);
-    // Adopt the entity's stable node id: the document (and the spawned
-    // component) already carry it, so a freshly minted one would diverge.
-    if let Some(node_id) = world
-        .get::<jackdaw_scene_types::SceneNodeId>(entity)
-        .copied()
-    {
-        world.resource_mut::<jackdaw_jsn::SceneJsnAst>().nodes[idx].id = Some(node_id);
-    }
-
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let registry = registry.read();
-    let skip_ids: HashSet<TypeId> = HashSet::from([
-        TypeId::of::<GlobalTransform>(),
-        TypeId::of::<InheritedVisibility>(),
-        TypeId::of::<ViewVisibility>(),
-        TypeId::of::<ChildOf>(),
-        TypeId::of::<Children>(),
-    ]);
-    let processor = AstSerializerProcessor;
-    let entity_ref = world.entity(entity);
-    let mut components = HashMap::new();
-    for registration in registry.iter() {
-        if skip_ids.contains(&registration.type_id()) {
-            continue;
-        }
-        let type_path = registration.type_info().type_path_table().path();
-        if should_skip_component(type_path) {
-            continue;
-        }
-        let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-            continue;
-        };
-        let Some(component) = reflect_component.reflect(entity_ref) else {
-            continue;
-        };
-        let serializer = TypedReflectSerializer::with_processor(component, &registry, &processor);
-        if let Ok(value) = serde_json::to_value(&serializer) {
-            components.insert(type_path.to_string(), value);
-        }
-    }
-    drop(registry);
-    info!(
-        "Registered entity {entity} in AST with {} components",
-        components.len()
-    );
-    world.resource_mut::<jackdaw_jsn::SceneJsnAst>().nodes[idx].components = components;
-
-    register_entity_in_bsn_doc(world, entity);
-}
-
-/// Mirror a freshly registered entity into the BSN document: create and link
-/// its node, then upsert a patch for every serializable component.
-fn register_entity_in_bsn_doc(world: &mut World, entity: Entity) {
     let Some(doc) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
         return;
     };
     if doc.ast_for(entity).is_some() {
         return;
     }
+    if world
+        .get::<jackdaw_scene_types::SceneNodeId>(entity)
+        .is_none()
+        && let Ok(mut entity_mut) = world.get_entity_mut(entity)
+    {
+        entity_mut.insert(jackdaw_scene_types::SceneNodeId::next());
+    }
+    let doc = world.resource::<jackdaw_bsn::SceneBsnAst>();
     let parent = world
         .get::<ChildOf>(entity)
         .map(ChildOf::parent)
@@ -3148,21 +2525,7 @@ fn register_entity_in_bsn_doc(world: &mut World, entity: Entity) {
     }
 }
 
-/// Rebuild the BSN document from a freshly spawned entity set. World
-/// respawns (undo restore, tab swap) re-mint every entity, so the previous
-/// document's links are stale; replace it wholesale. Entities must arrive
-/// parent-first, which both the load and undo spawn paths guarantee.
-pub(crate) fn rebuild_bsn_doc(world: &mut World, spawned: &[Entity]) {
-    if world.get_resource::<jackdaw_bsn::SceneBsnAst>().is_none() {
-        return;
-    }
-    world.insert_resource(jackdaw_bsn::SceneBsnAst::default());
-    for &entity in spawned {
-        register_entity_in_bsn_doc(world, entity);
-    }
-}
-
-/// Register multiple ECS entities in the AST.
+/// Register multiple ECS entities in the live scene document.
 pub fn register_entities_in_ast(world: &mut World, entities: &[Entity]) {
     for &entity in entities {
         register_entity_in_ast(world, entity);
@@ -3172,7 +2535,6 @@ pub fn register_entities_in_ast(world: &mut World, entities: &[Entity]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SkipSerialization;
 
     /// A struct whose on-disk form lacks `added`, standing in for data
     /// that predates a field being added to the type.
@@ -3242,63 +2604,6 @@ mod tests {
         );
     }
 
-    /// `SkipSerialization` children must be excluded from the saved
-    /// scene graph alongside `EditorHidden` and `NonSerializable`.
-    /// This is the load-bearing check for Jan's showcase: a colored
-    /// helper mesh under `PlayerSpawn` shouldn't ride into the
-    /// shipped game's `.jsn`.
-    #[test]
-    fn skip_serialization_descendants_excluded_from_save() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-
-        let parent = app
-            .world_mut()
-            .spawn((Name::new("PlayerSpawn"), Transform::default()))
-            .id();
-        let plain_child = app
-            .world_mut()
-            .spawn((
-                Name::new("PlainChild"),
-                Transform::default(),
-                ChildOf(parent),
-            ))
-            .id();
-        let helper_child = app
-            .world_mut()
-            .spawn((
-                Name::new("Helper"),
-                Transform::default(),
-                SkipSerialization,
-                ChildOf(parent),
-            ))
-            .id();
-
-        let editor_set = app
-            .world_mut()
-            .run_system_cached(collect_editor_entities)
-            .expect("collect_editor_entities runs cleanly");
-        let scene_entities: HashSet<Entity> = app
-            .world_mut()
-            .run_system_cached_with(collect_scene_entities_from_set, editor_set)
-            .expect("collect_scene_entities_from_set runs cleanly")
-            .into_iter()
-            .collect();
-
-        assert!(
-            scene_entities.contains(&parent),
-            "parent must be in the saved scene",
-        );
-        assert!(
-            scene_entities.contains(&plain_child),
-            "plain (non-skipped) child must be in the saved scene",
-        );
-        assert!(
-            !scene_entities.contains(&helper_child),
-            "SkipSerialization child must NOT be in the saved scene",
-        );
-    }
-
     /// Every entity spawned from a scene carries a `SceneNodeId`, and the id
     /// survives a save (`build_scene_snapshot`) then load round-trip so the
     /// running game can map a live entity back to its authored node.
@@ -3342,41 +2647,24 @@ mod tests {
         assert_eq!(*id0, SceneNodeId(42));
         assert_eq!(*id1, SceneNodeId(99));
 
-        // Save the live world back out and confirm the ids land in the
-        // structural `id` field, not duplicated as a component entry.
-        let registry = app.world().resource::<AppTypeRegistry>().clone();
-        let guard = registry.read();
-        let snapshot = build_scene_snapshot(
-            app.world(),
-            &guard,
-            Path::new("."),
-            &HashMap::new(),
-            &spawned,
-        );
-        drop(guard);
-
-        let by_id: HashMap<Option<u64>, &JsnEntity> = snapshot.iter().map(|e| (e.id, e)).collect();
-        let saved0 = by_id.get(&Some(42)).expect("node 42 in snapshot");
-        let saved1 = by_id.get(&Some(99)).expect("node 99 in snapshot");
-        assert!(
-            !saved0
-                .components
-                .contains_key(jackdaw_jsn::ast::JSN_NODE_ID_TYPE_PATH),
-            "node id must not be double-encoded as a component",
-        );
-        assert!(
-            !saved1
-                .components
-                .contains_key(jackdaw_jsn::ast::JSN_NODE_ID_TYPE_PATH),
-        );
+        // Register the spawned entities in the live scene document and
+        // confirm the ids ride along as the nodes' stable ids.
+        app.world_mut()
+            .insert_resource(jackdaw_bsn::SceneBsnAst::default());
+        register_entities_in_ast(app.world_mut(), &spawned);
+        let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+        let node0 = ast.ast_for(spawned[0]).expect("node 42 registered");
+        let node1 = ast.ast_for(spawned[1]).expect("node 99 registered");
+        assert_eq!(ast.stable_id_of(node0), Some(42));
+        assert_eq!(ast.stable_id_of(node1), Some(99));
     }
 
-    /// In Live view the preview world carries streamed game values, so a save
+    /// In Live view the preview world carries streamed game values, so a save    /// In Live view the preview world carries streamed game values, so a save
     /// must persist the AST's authored entity payload, not the live overlay.
     /// Authored Transform is `[1, 2, 3]`; the live ECS Transform is `[9, 9, 9]`.
     /// The save must write the authored values.
     fn build_live_save_world() -> World {
-        use jackdaw_jsn::ast::{JsnEntityNode, SceneJsnAst};
+        use jackdaw_bsn::SceneBsnAst;
         use jackdaw_scene_types::SceneNodeId;
 
         let mut world = World::new();
@@ -3403,26 +2691,21 @@ mod tests {
             ))
             .id();
 
-        let mut authored_components = HashMap::new();
-        let transform_path = <Transform as bevy::reflect::TypePath>::type_path().to_string();
-        authored_components.insert(
-            transform_path,
-            serde_json::json!({
-                "translation": [1.0, 2.0, 3.0],
-                "rotation": [0.0, 0.0, 0.0, 1.0],
-                "scale": [1.0, 1.0, 1.0],
-            }),
-        );
-
-        let mut ast = SceneJsnAst::default();
-        ast.nodes.push(JsnEntityNode {
-            id: Some(node_id),
-            parent: None,
-            components: authored_components,
-            derived_components: Default::default(),
-            ecs_entity: Some(preview),
-        });
-        ast.ecs_to_jsn.insert(preview, 0);
+        let mut ast = SceneBsnAst::default();
+        let patches = {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            let registry = registry.read();
+            vec![
+                jackdaw_bsn::component_to_bsn_patch(&Transform::from_xyz(1.0, 2.0, 3.0), &registry),
+                jackdaw_bsn::BsnPatch::TupleStruct(jackdaw_bsn::BsnTupleStructData {
+                    type_path: jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH.to_string(),
+                    values: vec![jackdaw_bsn::BsnValue::Int(node_id.0 as i128)],
+                }),
+            ]
+        };
+        let node = ast.create_entity_node(patches);
+        ast.add_to_roots(node);
+        ast.link(preview, node);
         world.insert_resource(ast);
 
         world.insert_resource(crate::pie_mirror::PieViewMode::Live);
@@ -3432,73 +2715,21 @@ mod tests {
     #[test]
     fn live_mode_save_uses_authored_values_not_live_overlays() {
         let mut world = build_live_save_world();
-        let jsn = scene_for_save(&mut world);
 
-        let transform_path = <Transform as bevy::reflect::TypePath>::type_path();
-        let entity = jsn
-            .scene
-            .iter()
-            .find(|e| e.id == Some(node_id_of(&world)))
-            .expect("authored entity present in saved scene");
-        let translation = entity
-            .components
-            .get(transform_path)
-            .and_then(|t| t.get("translation"))
-            .expect("Transform translation present on authored entity")
-            .clone();
-
-        assert_eq!(
-            translation,
-            serde_json::json!([1.0, 2.0, 3.0]),
-            "Live save must persist authored values, not the live overlay",
+        // A save emits the live document, which holds only authored values;
+        // live overlays exist solely on the ECS entities.
+        let text = emit_bsn_scene_with_inline_assets(&mut world, Path::new("."));
+        let saved = jackdaw_bsn::parse_bsn_text(&text).expect("saved text parses");
+        let node = *saved.roots.first().expect("one authored node saved");
+        let translation = jackdaw_bsn::get_bsn_field(
+            &saved,
+            node,
+            "bevy_transform::components::transform::Transform",
+            "translation.x",
         );
-    }
-
-    /// The single authored node's id, read back from the installed AST.
-    fn node_id_of(world: &World) -> u64 {
-        world
-            .resource::<jackdaw_jsn::SceneJsnAst>()
-            .nodes
-            .first()
-            .and_then(|n| n.id)
-            .expect("fixture installs one authored node with an id")
-            .0
-    }
-
-    /// `SkipSerialization` at the root level is also filtered.
-    #[test]
-    fn skip_serialization_root_excluded_from_save() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-
-        let plain = app
-            .world_mut()
-            .spawn((Name::new("Authored"), Transform::default()))
-            .id();
-        let helper_root = app
-            .world_mut()
-            .spawn((
-                Name::new("HelperRoot"),
-                Transform::default(),
-                SkipSerialization,
-            ))
-            .id();
-
-        let editor_set = app
-            .world_mut()
-            .run_system_cached(collect_editor_entities)
-            .expect("collect_editor_entities runs cleanly");
-        let scene_entities: HashSet<Entity> = app
-            .world_mut()
-            .run_system_cached_with(collect_scene_entities_from_set, editor_set)
-            .expect("collect_scene_entities_from_set runs cleanly")
-            .into_iter()
-            .collect();
-
-        assert!(scene_entities.contains(&plain));
         assert!(
-            !scene_entities.contains(&helper_root),
-            "root entities tagged SkipSerialization must NOT appear in saved scene",
+            matches!(translation, Some(jackdaw_bsn::BsnValue::Float(x)) if (x - 1.0).abs() < 1e-6),
+            "Live save must persist authored values, not the live overlay",
         );
     }
 }

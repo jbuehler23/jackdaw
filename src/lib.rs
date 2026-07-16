@@ -473,7 +473,6 @@ impl Plugin for EditorCorePlugin {
         .init_resource::<layout::ActiveDocument>()
         .init_resource::<layout::SceneViewPreset>()
         .init_resource::<asset_catalog::AssetCatalog>()
-        .init_resource::<jackdaw_jsn::SceneJsnAst>()
         .init_resource::<MenuBarDirty>()
         // Always available so the Extensions dialog's runtime
         // "Install from file" path can push into it even when
@@ -815,8 +814,8 @@ fn on_clip_selector_change(
 }
 
 /// Observer: when the inline clip-name `text_edit` commits, route the
-/// rename through `SetJsnField` on the `Name` component so it
-/// participates in undo and round-trips through JSN.
+/// rename through `SetBsnField` on the `Name` component so it
+/// participates in undo and round-trips through the scene document.
 fn on_clip_name_commit(
     event: On<jackdaw_feathers::text_edit::TextEditCommitEvent>,
     name_inputs: Query<&jackdaw_animation::TimelineClipNameInput>,
@@ -1970,10 +1969,10 @@ fn sync_selected_keyframes_from_selection(
 }
 
 /// Observer: when the timeline header's duration field commits,
-/// route the edit through `SetJsnField` so it flows through the AST
-/// and participates in undo/redo + save/load. This is the hand-off
-/// point between the animation crate (which can't import
-/// `SetJsnField`) and the editor binary.
+/// route the edit through `SetBsnField` so it flows through the
+/// document and participates in undo/redo + save/load. This is the
+/// hand-off point between the animation crate (which can't import
+/// `SetBsnField`) and the editor binary.
 fn on_duration_input_commit(
     event: On<jackdaw_feathers::text_edit::TextEditCommitEvent>,
     duration_inputs: Query<&jackdaw_animation::TimelineDurationInput>,
@@ -2010,19 +2009,18 @@ fn on_duration_input_commit(
     if (new_value - clip.duration).abs() < f32::EPSILON {
         return;
     }
-    let old_json = serde_json::json!(clip.duration);
-    let new_json = serde_json::json!(new_value);
+    let old_duration = clip.duration;
     commands.queue(move |world: &mut World| {
         let mut history = world
             .remove_resource::<jackdaw_commands::CommandHistory>()
             .unwrap_or_default();
         history.execute(
-            Box::new(commands::SetJsnField {
+            Box::new(commands::SetBsnField {
                 entity: clip_entity,
                 type_path: "jackdaw_animation::clip::Clip".to_string(),
                 field_path: "duration".to_string(),
-                old_value: old_json,
-                new_value: new_json,
+                old_value: Some(jackdaw_bsn::BsnValue::Float(f64::from(old_duration))),
+                new_value: jackdaw_bsn::BsnValue::Float(f64::from(new_value)),
                 was_derived: false,
             }),
             world,

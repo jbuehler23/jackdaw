@@ -159,30 +159,22 @@ impl EditorCommand for ReparentEntity {
 }
 
 /// Reparent `entity` under `parent` (or to top-level if `None`), keeping
-/// the live AST authoritative: AST `node.parent` is the source of truth;
-/// the ECS `ChildOf` is mirrored from it so the visual scene tracks the
-/// AST. Preserves the entity's world position across the move.
+/// the live scene document authoritative: the node's place in the document
+/// hierarchy is the source of truth; the ECS `ChildOf` is mirrored from it
+/// so the visual scene tracks the document. Preserves the entity's world
+/// position across the move.
 ///
 /// Any code path that needs to change an entity's parent should call
 /// this (or push `ReparentEntity` through the command history) -- never
 /// `world.entity_mut(e).insert(ChildOf(..))` directly. Bypassing the
-/// AST update leaves `node.parent` stale, and later consumers (prefab
-/// save, scene serialization, tab swap) read the AST and silently
-/// disagree with the visible hierarchy.
+/// document update leaves the node's parent stale, and later consumers
+/// (prefab save, scene serialization, tab swap) read the document and
+/// silently disagree with the visible hierarchy.
 pub(crate) fn set_parent(world: &mut World, entity: Entity, parent: Option<Entity>) {
     let current_world = world.get::<GlobalTransform>(entity).copied();
     let new_parent_world = parent.and_then(|p| world.get::<GlobalTransform>(p).copied());
 
-    let parent_idx = {
-        let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-        parent.and_then(|p| ast.ecs_to_jsn.get(&p).copied())
-    };
-    {
-        let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
-        if let Some(node) = ast.node_for_entity_mut(entity) {
-            node.parent = parent_idx;
-        }
-    }
+    jackdaw_bsn::sync_hierarchy_to_ast(world, entity, parent);
 
     match parent {
         Some(p) => {
@@ -308,51 +300,36 @@ impl EditorCommand for AddComponent {
             self.entity, self.component_id
         );
 
-        // Sync the explicitly-added component to AST so it
-        // round-trips through scene save/load and the inspector's
-        // AST filter recognises it. Two failure modes worth
-        // logging because they leave the entity in a state the
-        // inspector might gloss over:
-        //
-        //   * Reflection-based serialization fails (the user's
-        //     `Reflect` impl couldn't be coerced to JSON via
-        //     `TypedReflectSerializer`). The component is on the
-        //     entity but the AST doesn't know about it; the
-        //     inspector's user-type fallback in
-        //     `component_display::build_inspector_displays` shows
-        //     it anyway, but save/load won't preserve it.
-        //   * The target entity isn't tracked in the AST (e.g.,
-        //     it was spawned outside the scene-loader path);
-        //     `set_component` is a silent no-op. Same UX
-        //     consequence as above.
-        let serializer =
-            bevy::reflect::serde::TypedReflectSerializer::new(default_value.as_ref(), &registry);
-        match serde_json::to_value(&serializer) {
-            Ok(json_value) => {
-                drop(registry);
-                let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
-                let entity_in_ast = ast.contains_entity(self.entity);
-                ast.set_component(self.entity, &self.type_path, json_value);
-                if !entity_in_ast {
-                    warn!(
-                        "AddComponent: entity {:?} is not tracked in the scene AST; \
-                         {} is on the entity but won't persist through save/load.",
-                        self.entity, self.type_path
-                    );
-                }
-            }
-            Err(err) => {
-                warn!(
-                    "AddComponent: failed to serialize default `{}` for AST: {err}. \
-                     Component is on the entity but the AST doesn't track it.",
-                    self.type_path
-                );
-            }
+        // Sync the explicitly-added component into the scene document so it
+        // round-trips through scene save/load and the inspector's document
+        // filter recognises it. An entity that is not tracked in the
+        // document (e.g. spawned outside the scene-loader path) keeps the
+        // component on the entity, but it won't persist through save/load;
+        // that is worth a warning because the inspector might gloss over it.
+        drop(registry);
+        let tracked = world
+            .resource::<jackdaw_bsn::SceneBsnAst>()
+            .ast_for(self.entity)
+            .is_some();
+        if tracked {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            sync_component_to_bsn_doc(
+                world,
+                self.entity,
+                default_value.as_partial_reflect(),
+                &registry,
+            );
+        } else {
+            warn!(
+                "AddComponent: entity {:?} is not tracked in the scene document; \
+                 {} is on the entity but won't persist through save/load.",
+                self.entity, self.type_path
+            );
         }
 
-        // Sync any components added by #[require] to the AST so they're
-        // editable and persist with the scene. This captures avian physics
-        // internals, required transform components, etc.
+        // Sync any components added by #[require] to the document so
+        // they're editable and persist with the scene. This captures avian
+        // physics internals, required transform components, etc.
         self.promoted_components = sync_required_to_ast(world, self.entity);
     }
 
@@ -377,16 +354,17 @@ impl EditorCommand for AddComponent {
                 entity.remove_by_id(*cid);
             }
         }
-        // Remove the explicitly-added component + all promoted components from AST
-        if let Some(node) = world
-            .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-            .node_for_entity_mut(self.entity)
+        // Remove the explicitly-added component + all promoted components
+        // from the document.
         {
-            node.components.remove(&self.type_path);
-            node.derived_components.remove(&self.type_path);
-            for promoted in &self.promoted_components {
-                node.components.remove(promoted);
-                node.derived_components.remove(promoted);
+            let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+            if let Some(node) = ast.ast_for(self.entity) {
+                ast.remove_component_patch(node, &self.type_path);
+                ast.promote_derived(node, &self.type_path);
+                for promoted in &self.promoted_components.clone() {
+                    ast.remove_component_patch(node, promoted);
+                    ast.promote_derived(node, promoted);
+                }
             }
         }
         // Trigger inspector rebuild so the UI reflects the removal immediately.
@@ -407,26 +385,28 @@ pub struct RemoveComponent {
     pub type_path: String,
     /// Snapshot of the component's value before removal, for undo.
     pub snapshot: Box<dyn PartialReflect>,
-    /// AST snapshot for undo.
-    pub ast_snapshot: Option<serde_json::Value>,
+    /// Document patch snapshot for undo.
+    pub ast_snapshot: Option<jackdaw_bsn::BsnPatch>,
 }
 
 impl EditorCommand for RemoveComponent {
     fn execute(&mut self, world: &mut World) {
-        // Snapshot from AST before removal
-        self.ast_snapshot = world
-            .resource::<jackdaw_jsn::SceneJsnAst>()
-            .get_component(self.entity, &self.type_path)
-            .cloned();
+        // Snapshot the document patch before removal
+        {
+            let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+            self.ast_snapshot = ast.ast_for(self.entity).and_then(|node| {
+                ast.find_patch_by_type_path(node, &self.type_path)
+                    .and_then(|pe| ast.get_patch(pe))
+                    .cloned()
+            });
+        }
         if let Ok(mut entity) = world.get_entity_mut(self.entity) {
             entity.remove_by_id(self.component_id);
         }
-        // Remove from AST
-        if let Some(node) = world
-            .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-            .node_for_entity_mut(self.entity)
-        {
-            node.components.remove(&self.type_path);
+        // Remove from the document
+        let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        if let Some(node) = ast.ast_for(self.entity) {
+            ast.remove_component_patch(node, &self.type_path);
         }
     }
 
@@ -448,11 +428,17 @@ impl EditorCommand for RemoveComponent {
         );
         drop(registry);
 
-        // Restore AST snapshot
-        if let Some(json_value) = self.ast_snapshot.take() {
-            world
-                .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-                .set_component(self.entity, &self.type_path, json_value);
+        // Restore the document patch snapshot
+        if let Some(patch) = self.ast_snapshot.take() {
+            let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+            if let Some(node) = ast.ast_for(self.entity)
+                && ast.find_patch_by_type_path(node, &self.type_path).is_none()
+            {
+                let pe = ast.world.spawn(patch).id();
+                if let Some(patches) = ast.get_patches_mut(node) {
+                    patches.0.push(pe);
+                }
+            }
         }
     }
 
@@ -479,8 +465,8 @@ impl EditorCommand for SpawnEntity {
         if let Some(entity) = self.spawned.take() {
             deselect_entities(world, &[entity]);
             world
-                .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-                .remove_node(entity);
+                .resource_mut::<jackdaw_bsn::SceneBsnAst>()
+                .remove_entity_node(entity);
             if let Ok(entity_mut) = world.get_entity_mut(entity) {
                 entity_mut.despawn();
             }
@@ -516,8 +502,8 @@ impl EditorCommand for DespawnEntity {
     fn execute(&mut self, world: &mut World) {
         deselect_entities(world, &[self.entity]);
         world
-            .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-            .remove_node(self.entity);
+            .resource_mut::<jackdaw_bsn::SceneBsnAst>()
+            .remove_entity_node(self.entity);
         if let Ok(entity_mut) = world.get_entity_mut(self.entity) {
             entity_mut.despawn();
         }
@@ -614,108 +600,12 @@ pub(crate) fn snapshot_rebuild(scene: &DynamicWorld) -> DynamicWorld {
     }
 }
 
-// ============================== JSN-First Commands ==============================
+// ============================== Document-First Commands ==============================
 
-pub struct SetJsnField {
-    pub entity: Entity,
-    pub type_path: String,
-    pub field_path: String,
-    pub old_value: serde_json::Value,
-    pub new_value: serde_json::Value,
-    /// True if the component was in the `derived_components` set before this
-    /// command ran. Set on first execute so undo can demote the component back.
-    pub was_derived: bool,
-}
-
-impl EditorCommand for SetJsnField {
-    fn execute(&mut self, world: &mut World) {
-        {
-            let registry = world.resource::<AppTypeRegistry>().clone();
-            let registry = registry.read();
-            let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
-            ast.set_component_field(
-                self.entity,
-                &self.type_path,
-                &self.field_path,
-                self.new_value.clone(),
-                &registry,
-            );
-            // If the user explicitly edits a derived component, promote it to
-            // "authored" so the change persists on save. Remember we did so,
-            // so undo can restore the derived state.
-            if let Some(node) = ast.node_for_entity_mut(self.entity)
-                && node.derived_components.remove(&self.type_path)
-            {
-                self.was_derived = true;
-                info!(
-                    "Promoted derived component '{}' to authored (user edited it)",
-                    self.type_path
-                );
-            }
-        }
-        apply_jsn_field_to_ecs(
-            world,
-            self.entity,
-            &self.type_path,
-            &self.field_path,
-            &self.new_value,
-        );
-        mirror_component_from_ecs_to_bsn(world, self.entity, &self.type_path);
-    }
-
-    fn undo(&mut self, world: &mut World) {
-        // An empty field path with a Null old value means execute authored a
-        // component that did not exist before; undo removes the entry rather
-        // than writing a literal null into the scene.
-        let removes_component = self.field_path.is_empty() && self.old_value.is_null();
-        {
-            let registry = world.resource::<AppTypeRegistry>().clone();
-            let registry = registry.read();
-            let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
-            if removes_component {
-                if let Some(node) = ast.node_for_entity_mut(self.entity) {
-                    node.components.remove(&self.type_path);
-                }
-                ast.mark_dirty(self.entity);
-            } else {
-                ast.set_component_field(
-                    self.entity,
-                    &self.type_path,
-                    &self.field_path,
-                    self.old_value.clone(),
-                    &registry,
-                );
-                // Restore derived state if execute promoted it to authored.
-                if self.was_derived
-                    && let Some(node) = ast.node_for_entity_mut(self.entity)
-                {
-                    node.derived_components.insert(self.type_path.clone());
-                }
-            }
-        }
-        if removes_component {
-            remove_component_from_ecs(world, self.entity, &self.type_path);
-        } else {
-            apply_jsn_field_to_ecs(
-                world,
-                self.entity,
-                &self.type_path,
-                &self.field_path,
-                &self.old_value,
-            );
-        }
-        mirror_component_from_ecs_to_bsn(world, self.entity, &self.type_path);
-    }
-
-    fn description(&self) -> &str {
-        "Set component field"
-    }
-}
-
-/// BSN-document counterpart of [`SetJsnField`]: write a field into the live
-/// [`jackdaw_bsn::SceneBsnAst`], promote the component to authored if it was
-/// derived, and mirror the change onto the live ECS entity. Becomes the
-/// dispatched field-edit command when the editor document switches to BSN.
+/// Write a field into the live [`jackdaw_bsn::SceneBsnAst`] document, promote
+/// the component to authored if it was derived, and mirror the change onto
+/// the live ECS entity. The dispatched field-edit command for inspector and
+/// tool edits.
 pub struct SetBsnField {
     pub entity: Entity,
     pub type_path: String,
@@ -729,7 +619,77 @@ pub struct SetBsnField {
     pub was_derived: bool,
 }
 
+/// Reflect type path of [`Name`], which the document stores as a
+/// [`jackdaw_bsn::BsnPatch::Name`] reference patch rather than a component
+/// patch. [`SetBsnField`] routes edits of this type through the name patch.
+pub(crate) const NAME_TYPE_PATH: &str = "bevy_ecs::name::Name";
+
+/// The string carried by a [`jackdaw_bsn::BsnValue`], for name edits.
+fn bsn_value_string(value: &jackdaw_bsn::BsnValue) -> Option<&str> {
+    match value {
+        jackdaw_bsn::BsnValue::String(s) => Some(s.as_str()),
+        _ => None,
+    }
+}
+
+/// Set, replace, or remove the [`jackdaw_bsn::BsnPatch::Name`] patch on a
+/// document node.
+fn set_name_patch(ast: &mut jackdaw_bsn::SceneBsnAst, node: Entity, name: Option<&str>) {
+    let existing = ast.get_patches(node).and_then(|patches| {
+        patches
+            .0
+            .iter()
+            .copied()
+            .find(|&pe| matches!(ast.get_patch(pe), Some(jackdaw_bsn::BsnPatch::Name(_))))
+    });
+    match name {
+        Some(name) => {
+            if let Some(pe) = existing {
+                ast.set_patch(pe, jackdaw_bsn::BsnPatch::Name(name.to_string()));
+            } else {
+                let pe = ast
+                    .world
+                    .spawn(jackdaw_bsn::BsnPatch::Name(name.to_string()))
+                    .id();
+                if let Some(patches) = ast.get_patches_mut(node) {
+                    patches.0.insert(0, pe);
+                }
+            }
+        }
+        None => {
+            if let Some(pe) = existing {
+                if let Some(patches) = ast.get_patches_mut(node) {
+                    patches.0.retain(|&x| x != pe);
+                }
+                ast.world.despawn(pe);
+            }
+        }
+    }
+}
+
 impl SetBsnField {
+    /// Write an entity name into the document's `#name` reference patch and
+    /// mirror it onto the live ECS entity. `None` removes both.
+    fn apply_name(&self, world: &mut World, name: Option<&str>) {
+        {
+            let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+            if let Some(node) = ast.ast_for(self.entity) {
+                set_name_patch(&mut ast, node, name);
+            }
+        }
+        let Ok(mut entity_mut) = world.get_entity_mut(self.entity) else {
+            return;
+        };
+        match name {
+            Some(name) => {
+                entity_mut.insert(Name::new(name.to_string()));
+            }
+            None => {
+                entity_mut.remove::<Name>();
+            }
+        }
+    }
+
     /// Re-apply this command's component patch from the document to the live
     /// entity, so ECS matches the document after execute or undo.
     fn mirror_patch_to_ecs(&self, world: &mut World) {
@@ -750,6 +710,15 @@ impl SetBsnField {
 
 impl EditorCommand for SetBsnField {
     fn execute(&mut self, world: &mut World) {
+        // Names live in the document as `#name` reference patches, not
+        // component patches, so route them through the name path.
+        if self.type_path == NAME_TYPE_PATH {
+            let new_name = bsn_value_string(&self.new_value)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            self.apply_name(world, new_name.as_deref());
+            return;
+        }
         {
             let registry = world.resource::<AppTypeRegistry>().clone();
             let registry = registry.read();
@@ -777,6 +746,16 @@ impl EditorCommand for SetBsnField {
     }
 
     fn undo(&mut self, world: &mut World) {
+        if self.type_path == NAME_TYPE_PATH {
+            let old_name = self
+                .old_value
+                .as_ref()
+                .and_then(bsn_value_string)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            self.apply_name(world, old_name.as_deref());
+            return;
+        }
         // A missing old value with an empty field path means execute authored
         // a component that did not exist before; undo removes the entry.
         let removes_component = self.field_path.is_empty() && self.old_value.is_none();
@@ -818,12 +797,13 @@ impl EditorCommand for SetBsnField {
 /// Apply a JSON value to an ECS component  -- either full component replacement
 /// (empty `field_path`) or field-level update.
 ///
-/// Writes only the live ECS component, leaving the `SceneJsnAst` untouched.
-/// The `SceneJsnAst` is the undo source of truth. The inspector's drag-scrub
+/// Writes only the live ECS component, leaving the scene document untouched.
+/// The document is the undo source of truth. The inspector's drag-scrub
 /// fields call this on each non-final tick so the viewport tracks the drag
-/// without minting an undo entry or dirtying the AST; the pre-drag value stays
-/// in the AST for the single `SetJsnField` undo pushed when the drag ends.
-pub(crate) fn apply_jsn_field_to_ecs(
+/// without minting an undo entry or dirtying the document; the pre-drag value
+/// stays in the document for the single `SetBsnField` undo pushed when the
+/// drag ends.
+pub(crate) fn apply_json_field_to_ecs(
     world: &mut World,
     entity: Entity,
     type_path: &str,
@@ -882,7 +862,7 @@ fn remove_component_from_ecs(world: &mut World, entity: Entity, type_path: &str)
 /// Convert a `serde_json::Value` into the matching reflect primitive and apply it.
 /// Falls back to Bevy's typed deserialization for complex types (enums, structs)
 /// that can't be handled by simple primitive downcasts.
-fn apply_json_to_reflect(
+pub(crate) fn apply_json_to_reflect(
     field: &mut dyn bevy::reflect::PartialReflect,
     value: &serde_json::Value,
     registry: &bevy::reflect::TypeRegistry,
@@ -954,60 +934,73 @@ fn try_typed_deserialize(
     }
 }
 
-/// Serialize a component to JSON and store it in the AST.
+/// The authored value of one field on `entity`'s document node, read from the
+/// live BSN document. `None` when the entity has no node or the component or
+/// field is not authored.
+pub(crate) fn authored_bsn_field(
+    world: &World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+) -> Option<jackdaw_bsn::BsnValue> {
+    let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+    let node = ast.ast_for(entity)?;
+    jackdaw_bsn::get_bsn_field(ast, node, type_path, field_path)
+}
+
+/// Convert one field edit given as reflect-format JSON into the
+/// [`jackdaw_bsn::BsnValue`] to author. Field-level edits merge the JSON into
+/// a copy of the entity's current component so nested values convert with
+/// their concrete types; whole-component edits deserialize the JSON directly.
+pub(crate) fn json_field_edit_to_bsn_value(
+    world: &World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+    value: &serde_json::Value,
+) -> Option<jackdaw_bsn::BsnValue> {
+    use bevy::reflect::GetPath;
+    use serde::de::DeserializeSeed;
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let registration = registry.get_with_type_path(type_path)?;
+    if field_path.is_empty() {
+        let deserializer =
+            bevy::reflect::serde::TypedReflectDeserializer::new(registration, &registry);
+        let reflected = deserializer.deserialize(value).ok()?;
+        return Some(jackdaw_bsn::BsnValue::from_reflect(
+            reflected.as_ref(),
+            &registry,
+        ));
+    }
+    let reflect_component = registration.data::<ReflectComponent>()?;
+    let entity_ref = world.get_entity(entity).ok()?;
+    let component = reflect_component.reflect(entity_ref)?;
+    // Path navigation needs a concrete (`Reflect`) clone of the component.
+    let mut merged: Box<dyn Reflect> = registration
+        .data::<bevy::reflect::ReflectFromReflect>()?
+        .from_reflect(component.as_partial_reflect())?;
+    if let Ok(field) = merged.reflect_path_mut(field_path) {
+        apply_json_to_reflect(field, value, &registry);
+    }
+    let field = merged.reflect_path(field_path).ok()?;
+    Some(jackdaw_bsn::BsnValue::from_reflect(field, &registry))
+}
+
+/// Write a component value into the live scene document. The patch key
+/// comes from the value's own reflected type path, so a stale
+/// caller-supplied string cannot skew it; `type_path` is kept in the
+/// signature for call-site clarity.
 pub fn sync_component_to_ast<T: bevy::reflect::Reflect>(
     world: &mut World,
     entity: Entity,
     type_path: &str,
     value: &T,
 ) {
+    let _ = type_path;
     let registry = world.resource::<AppTypeRegistry>().clone();
-    {
-        let registry = registry.read();
-        let processor = crate::scene_io::AstSerializerProcessor;
-        let serializer = bevy::reflect::serde::TypedReflectSerializer::with_processor(
-            value, &registry, &processor,
-        );
-        if let Ok(json_value) = serde_json::to_value(&serializer) {
-            drop(registry);
-            world
-                .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-                .set_component(entity, type_path, json_value);
-        }
-    }
-
-    // Mirror into the BSN document. The patch key comes from the value's own
-    // reflected type path, so a stale caller-supplied string cannot skew it.
     sync_component_to_bsn_doc(world, entity, value.as_partial_reflect(), &registry);
-}
-
-/// Mirror the live ECS state of one component into the BSN document: upsert
-/// its patch from the current value, or drop the patch when the component no
-/// longer exists on the entity.
-pub(crate) fn mirror_component_from_ecs_to_bsn(world: &mut World, entity: Entity, type_path: &str) {
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let value: Option<Box<dyn bevy::reflect::PartialReflect>> = {
-        let reg = registry.read();
-        reg.get_with_type_path(type_path)
-            .and_then(|registration| registration.data::<ReflectComponent>())
-            .and_then(|rc| {
-                world
-                    .get_entity(entity)
-                    .ok()
-                    .and_then(|entity_ref| rc.reflect(entity_ref))
-            })
-            .map(bevy::reflect::PartialReflect::to_dynamic)
-    };
-    match value {
-        Some(value) => sync_component_to_bsn_doc(world, entity, &*value, &registry),
-        None => {
-            if let Some(mut ast) = world.get_resource_mut::<jackdaw_bsn::SceneBsnAst>()
-                && let Some(patches_entity) = ast.ast_for(entity)
-            {
-                ast.remove_component_patch(patches_entity, type_path);
-            }
-        }
-    }
 }
 
 /// Upsert one component's patch on the entity's BSN document node from a
@@ -1059,14 +1052,14 @@ pub fn sync_required_to_ast(world: &mut World, entity: Entity) -> Vec<String> {
     use std::collections::HashSet;
 
     let registry = world.resource::<AppTypeRegistry>().clone();
-    let reg = registry.read();
 
-    // Snapshot what's currently in the AST for this entity
-    let existing: HashSet<String> = world
-        .resource::<jackdaw_jsn::SceneJsnAst>()
-        .node_for_entity(entity)
-        .map(|n| n.components.keys().cloned().collect())
-        .unwrap_or_default();
+    // Snapshot what the document already carries for this entity.
+    let existing: HashSet<String> = {
+        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        ast.ast_for(entity)
+            .map(|node| ast.component_type_paths(node).into_iter().collect())
+            .unwrap_or_default()
+    };
 
     let skip_ids: HashSet<TypeId> = HashSet::from([
         TypeId::of::<GlobalTransform>(),
@@ -1076,44 +1069,34 @@ pub fn sync_required_to_ast(world: &mut World, entity: Entity) -> Vec<String> {
         TypeId::of::<Children>(),
     ]);
 
-    let processor = crate::scene_io::AstSerializerProcessor;
-    let Ok(entity_ref) = world.get_entity(entity) else {
-        return vec![];
+    // Collect reflected components not yet in the document as patches.
+    let to_add: Vec<(String, jackdaw_bsn::BsnPatch)> = {
+        let reg = registry.read();
+        let Ok(entity_ref) = world.get_entity(entity) else {
+            return vec![];
+        };
+        reg.iter()
+            .filter(|registration| !skip_ids.contains(&registration.type_id()))
+            .filter_map(|registration| {
+                let type_path = registration
+                    .type_info()
+                    .type_path_table()
+                    .path()
+                    .to_string();
+                if existing.contains(&type_path) {
+                    return None;
+                }
+                if crate::scene_io::should_skip_component(&type_path) {
+                    return None;
+                }
+                let reflect_component = registration.data::<ReflectComponent>()?;
+                let component = reflect_component.reflect(entity_ref)?;
+                let patch =
+                    jackdaw_bsn::component_to_bsn_patch(component.as_partial_reflect(), &reg);
+                Some((type_path, patch))
+            })
+            .collect()
     };
-
-    // Collect serializable components not yet in the AST
-    let mut to_add: Vec<(String, serde_json::Value)> = Vec::new();
-
-    for registration in reg.iter() {
-        if skip_ids.contains(&registration.type_id()) {
-            continue;
-        }
-        let type_path = registration
-            .type_info()
-            .type_path_table()
-            .path()
-            .to_string();
-        if existing.contains(&type_path) {
-            continue;
-        }
-        if crate::scene_io::should_skip_component(&type_path) {
-            continue;
-        }
-        let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-            continue;
-        };
-        let Some(component) = reflect_component.reflect(entity_ref) else {
-            continue;
-        };
-        let serializer = bevy::reflect::serde::TypedReflectSerializer::with_processor(
-            component, &reg, &processor,
-        );
-        if let Ok(value) = serde_json::to_value(&serializer) {
-            to_add.push((type_path, value));
-        }
-    }
-
-    drop(reg);
 
     let promoted: Vec<String> = to_add.iter().map(|(path, _)| path.clone()).collect();
 
@@ -1122,14 +1105,18 @@ pub fn sync_required_to_ast(world: &mut World, entity: Entity) -> Vec<String> {
             "sync_required_to_ast: {} derived components promoted for entity {entity}",
             promoted.len()
         );
-        let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
-        for (type_path, value) in to_add {
-            ast.set_component(entity, &type_path, value);
-        }
-        // Mark as derived  -- displayed in inspector but NOT persisted on save.
-        if let Some(node) = ast.node_for_entity_mut(entity) {
+        let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        if let Some(node) = ast.ast_for(entity) {
+            for (_, patch) in to_add {
+                let pe = ast.world.spawn(patch).id();
+                if let Some(patches) = ast.get_patches_mut(node) {
+                    patches.0.push(pe);
+                }
+            }
+            // Mark as derived -- displayed in inspector but NOT persisted on
+            // save; an explicit user edit promotes them to authored.
             for path in &promoted {
-                node.derived_components.insert(path.clone());
+                ast.demote_to_derived(node, path);
             }
         }
     }
@@ -1147,55 +1134,6 @@ mod set_bsn_field_tests {
         app.add_plugins(MinimalPlugins);
         app.init_resource::<SceneBsnAst>();
         app
-    }
-
-    #[test]
-    fn jsn_edits_dual_write_into_the_bsn_document() {
-        let mut app = field_app();
-        app.init_resource::<jackdaw_jsn::SceneJsnAst>();
-        let entity = app
-            .world_mut()
-            .spawn((Name::new("Node"), Transform::from_xyz(3.0, 0.0, 0.0)))
-            .id();
-        crate::scene_io::register_entity_in_ast(app.world_mut(), entity);
-
-        let type_path = "bevy_transform::components::transform::Transform";
-        {
-            let ast = app.world().resource::<SceneBsnAst>();
-            let pe = ast.ast_for(entity).expect("registered in BSN doc");
-            assert!(
-                ast.find_patch_by_type_path(pe, type_path).is_some(),
-                "registration mirrors the transform patch"
-            );
-            assert_eq!(ast.get_name(pe), Some("Node"));
-        }
-
-        let mut command = SetJsnField {
-            entity,
-            type_path: type_path.to_string(),
-            field_path: "translation.x".to_string(),
-            old_value: serde_json::json!(3.0),
-            new_value: serde_json::json!(8.0),
-            was_derived: false,
-        };
-        command.execute(app.world_mut());
-        {
-            let ast = app.world().resource::<SceneBsnAst>();
-            let pe = ast.ast_for(entity).unwrap();
-            let value = get_bsn_field(ast, pe, type_path, "translation.x");
-            assert!(
-                matches!(value, Some(BsnValue::Float(x)) if (x - 8.0).abs() < 1e-6),
-                "JSN edit lands in the BSN document"
-            );
-        }
-        command.undo(app.world_mut());
-        let ast = app.world().resource::<SceneBsnAst>();
-        let pe = ast.ast_for(entity).unwrap();
-        let value = get_bsn_field(ast, pe, type_path, "translation.x");
-        assert!(
-            matches!(value, Some(BsnValue::Float(x)) if (x - 3.0).abs() < 1e-6),
-            "undo restores the BSN document too"
-        );
     }
 
     #[test]
@@ -1323,6 +1261,7 @@ mod set_bsn_field_tests {
 #[cfg(test)]
 mod bsn_doc_coherence_tests {
     use super::*;
+    use jackdaw_api_internal::snapshot::SceneSnapshotter;
     use jackdaw_bsn::{BsnValue, SceneBsnAst, get_bsn_field};
 
     #[test]
@@ -1330,9 +1269,17 @@ mod bsn_doc_coherence_tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
         app.init_resource::<SceneBsnAst>();
-        app.init_resource::<jackdaw_jsn::SceneJsnAst>();
         app.init_resource::<crate::selection::Selection>();
         app.init_resource::<jackdaw_commands::CommandHistory>();
+        // Editor-state resources the snapshotter captures alongside the doc.
+        app.init_resource::<crate::brush::EditMode>();
+        app.init_resource::<crate::active_tool::ActiveTool>();
+        app.init_resource::<crate::gizmos::GizmoSpace>();
+        app.init_resource::<crate::snapping::SnapSettings>();
+        app.init_resource::<crate::view_modes::ViewModeSettings>();
+        app.init_resource::<crate::viewport_overlays::OverlaySettings>();
+        app.init_resource::<jackdaw_avian_integration::PhysicsOverlayConfig>();
+        app.init_resource::<crate::viewport_select::GroupEditState>();
 
         let entity = app
             .world_mut()
@@ -1343,21 +1290,23 @@ mod bsn_doc_coherence_tests {
             ))
             .id();
         crate::scene_io::register_entity_in_ast(app.world_mut(), entity);
-        let snapshot = app.world().resource::<jackdaw_jsn::SceneJsnAst>().clone();
+
+        // Snapshot through the document snapshotter (the undo baseline).
+        let snapshot = crate::undo_snapshot::BsnDocumentSnapshotter.capture(app.world_mut());
 
         let type_path = "bevy_transform::components::transform::Transform";
-        let mut command = SetJsnField {
+        let mut command = SetBsnField {
             entity,
             type_path: type_path.to_string(),
             field_path: "translation.x".to_string(),
-            old_value: serde_json::json!(1.0),
-            new_value: serde_json::json!(9.0),
+            old_value: Some(BsnValue::Float(1.0)),
+            new_value: BsnValue::Float(9.0),
             was_derived: false,
         };
         command.execute(app.world_mut());
 
-        // Undo restore path: respawn the world from the snapshot AST.
-        crate::scene_io::apply_ast_to_world(app.world_mut(), &snapshot);
+        // Undo restore path: respawn the world from the snapshot.
+        snapshot.apply(app.world_mut());
 
         // The respawn re-minted the entity; the document must follow it.
         let mut query = app

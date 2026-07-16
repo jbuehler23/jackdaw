@@ -37,23 +37,6 @@ impl PrefabAstCache {
         self.entries.get(path)
     }
 
-    /// A JSON-AST view of the cached prefab at `path`, produced by emitting
-    /// the stored BSN document and bridging it back through the `.jsn`
-    /// scene format. The JSON-scene resolution paths (legacy `.jsn` scene
-    /// open, tab swap, undo restore) consume this so they can keep merging
-    /// prefab inheritance while the cache stores BSN documents.
-    pub fn get_as_jsn(&self, path: &Path) -> Option<jackdaw_jsn::SceneJsnAst> {
-        self.get(path).map(bsn_ast_to_jsn_ast)
-    }
-
-    /// [`Self::get_as_jsn`] keyed by an already-canonical path.
-    pub fn get_canonical_as_jsn(
-        &self,
-        path: &CanonicalPrefabPath,
-    ) -> Option<jackdaw_jsn::SceneJsnAst> {
-        self.get_canonical(path).map(bsn_ast_to_jsn_ast)
-    }
-
     pub fn insert(&mut self, path: impl AsRef<Path>, ast: SceneBsnAst) {
         let key = canonical_prefab_path(path);
         self.entries.insert(key.clone(), ast);
@@ -119,25 +102,6 @@ impl PrefabAstCache {
     }
 }
 
-/// Bridge a cached BSN prefab document into a `SceneJsnAst`. Emits the
-/// document to `.bsn` text, parses it back through the `.jsn` bridge, and
-/// rebuilds a JSON AST. Node ids are re-minted by `from_jsn_scene`; that is
-/// fine because the JSON resolver only consumes prefab documents as
-/// read-only inheritance sources.
-pub fn bsn_ast_to_jsn_ast(ast: &SceneBsnAst) -> jackdaw_jsn::SceneJsnAst {
-    let text = jackdaw_bsn::emit_scene(ast);
-    match jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn(&text) {
-        Ok(scene) => jackdaw_jsn::SceneJsnAst::from_jsn_scene(&scene, &[]),
-        Err(err) => {
-            warn!("bsn_ast_to_jsn_ast: bridge failed: {err}");
-            jackdaw_jsn::SceneJsnAst::default()
-        }
-    }
-}
-
-/// Read `path`'s metadata + bytes and produce a `SavedFingerprint`.
-/// Used by save paths to record what they just wrote and by the
-/// watcher to decide whether an event describes our own echo.
 pub fn compute_file_fingerprint(path: &Path) -> std::io::Result<SavedFingerprint> {
     use std::hash::{Hash, Hasher};
     let metadata = std::fs::metadata(path)?;

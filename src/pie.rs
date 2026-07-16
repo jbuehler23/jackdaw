@@ -693,25 +693,25 @@ pub(crate) fn can_save_live_to_scene(world: &World) -> bool {
     }
     // Authored entities are saveable when the AST still holds their node (Path A).
     world
-        .resource::<jackdaw_jsn::SceneJsnAst>()
-        .contains_entity(preview)
+        .resource::<jackdaw_bsn::SceneBsnAst>()
+        .ast_for(preview)
+        .is_some()
 }
 
-/// Serialize all non-skipped reflected components from `entity` into a
-/// `Vec<(type_path, json_value)>`, using the same processor and filter that
+/// Collect all non-skipped reflected components from `entity` as
+/// `(type_path, BsnValue)` pairs, using the same filter that
 /// `register_entity_in_ast` uses when it first captures a live entity.
 ///
 /// Components with no `ReflectComponent` data, types not registered in the
 /// `AppTypeRegistry`, and paths matched by [`should_skip_component`](crate::scene_io::should_skip_component) are
 /// silently omitted. The result is sorted by type path for deterministic undo
 /// batching.
-fn serialize_preview_entity_components(
+fn preview_entity_components_as_bsn(
     world: &World,
     entity: Entity,
-) -> Vec<(String, serde_json::Value)> {
+) -> Vec<(String, jackdaw_bsn::BsnValue)> {
     use std::any::TypeId;
 
-    use bevy::reflect::serde::TypedReflectSerializer;
     use bevy::{
         ecs::reflect::AppTypeRegistry,
         prelude::{ChildOf, Children, GlobalTransform, InheritedVisibility, ViewVisibility},
@@ -719,7 +719,6 @@ fn serialize_preview_entity_components(
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
-    let processor = crate::scene_io::AstSerializerProcessor;
 
     let Ok(entity_ref) = world.get_entity(entity) else {
         return Vec::new();
@@ -734,7 +733,7 @@ fn serialize_preview_entity_components(
         TypeId::of::<Children>(),
     ];
 
-    let mut out: Vec<(String, serde_json::Value)> = registry
+    let mut out: Vec<(String, jackdaw_bsn::BsnValue)> = registry
         .iter()
         .filter(|reg| !skip_ids.contains(&reg.type_id()))
         .filter_map(|reg| {
@@ -744,9 +743,8 @@ fn serialize_preview_entity_components(
             }
             let reflect_component = reg.data::<ReflectComponent>()?;
             let component = reflect_component.reflect(entity_ref)?;
-            let serializer =
-                TypedReflectSerializer::with_processor(component, &registry, &processor);
-            let value = serde_json::to_value(&serializer).ok()?;
+            let value =
+                jackdaw_bsn::BsnValue::from_reflect(component.as_partial_reflect(), &registry);
             Some((type_path.to_string(), value))
         })
         .collect();
@@ -761,13 +759,13 @@ fn serialize_preview_entity_components(
 /// Path A: the preview entity is already bound to an AST node (it is an
 /// authored entity with a live overlay). Each non-skipped reflected component
 /// is read from the preview entity, serialized, and written into the node
-/// through a [`SetJsnField`](crate::commands::SetJsnField) command. The commands are grouped into one
+/// through a [`SetBsnField`](crate::commands::SetBsnField) command. The commands are grouped into one
 /// undoable [`CommandGroup`](jackdaw_commands::CommandGroup) so a single Ctrl+Z reverts the whole promote.
 ///
 /// Path B: the preview entity carries [`PieEphemeral`](crate::pie_projection::PieEphemeral) (the game spawned it
-/// at runtime with no authored counterpart). A new [`JsnEntityNode`](jackdaw_jsn::ast::JsnEntityNode) is
-/// appended to the AST, its `components` filled from the preview entity's
-/// reflected components, its `ecs_entity` bound to this entity. The entity
+/// at runtime with no authored counterpart). A new node is registered in the
+/// live BSN document, its patches filled from the preview entity's
+/// reflected components and bound to this entity. The entity
 /// receives a [`SceneNodeId`](jackdaw_scene_types::SceneNodeId) component and loses [`PieEphemeral`](crate::pie_projection::PieEphemeral) so it is
 /// now treated as an authored entity. Path B is not undoable in v1 (no
 /// remove-node command exists that mirrors the insert).
@@ -810,33 +808,30 @@ pub(crate) fn save_live_entity_to_scene(world: &mut World) {
     }
 }
 
-/// Path A: preview entity is bound to an existing AST node. Serialize its
-/// current component values and write them through `SetJsnField` commands.
+/// Path A: preview entity is bound to an existing AST node. Capture its
+/// current component values and write them through `SetBsnField` commands.
 fn promote_authored_overlay(world: &mut World, preview: Entity, bits: u64) {
-    use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
+    use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetBsnField};
 
-    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-    let Some(&node_idx) = ast.ecs_to_jsn.get(&preview) else {
-        warn!("save to scene: preview entity {preview:?} (bits {bits:x}) has no AST node");
-        return;
+    let node_id = {
+        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        let Some(node) = ast.ast_for(preview) else {
+            warn!("save to scene: preview entity {preview:?} (bits {bits:x}) has no AST node");
+            return;
+        };
+        ast.stable_id_of(node).unwrap_or(0)
     };
-    let node_id = ast
-        .nodes
-        .get(node_idx)
-        .and_then(|n| n.id)
-        .map(|id| id.0)
-        .unwrap_or(0);
 
-    let entries = serialize_preview_entity_components(world, preview);
+    let entries = preview_entity_components_as_bsn(world, preview);
 
     let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
     for (type_path, new_value) in entries {
-        let old_value = world
-            .resource::<jackdaw_jsn::SceneJsnAst>()
-            .get_component(preview, &type_path)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        sub_commands.push(Box::new(SetJsnField {
+        let old_value = {
+            let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+            ast.ast_for(preview)
+                .and_then(|node| jackdaw_bsn::get_bsn_field(ast, node, &type_path, ""))
+        };
+        sub_commands.push(Box::new(SetBsnField {
             entity: preview,
             type_path,
             field_path: String::new(),
@@ -867,33 +862,19 @@ fn promote_authored_overlay(world: &mut World, preview: Entity, bits: u64) {
 }
 
 /// Path B: preview entity has no AST node (game-spawned runtime entity).
-/// Create a new authored node from its reflected components, bind it, and
-/// remove the ephemeral marker. Not undoable in v1.
+/// Mint a stable node id for it, drop the ephemeral marker, and register it
+/// in the live BSN document, which captures its reflected components as a
+/// new authored node. Not undoable in v1.
 pub(crate) fn promote_ephemeral_to_authored(world: &mut World, preview: Entity, bits: u64) {
     use crate::pie_projection::PieEphemeral;
 
-    let entries = serialize_preview_entity_components(world, preview);
-
     let node_id = jackdaw_scene_types::SceneNodeId::next();
-    let idx = {
-        let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
-        let idx = ast.nodes.len();
-        ast.nodes.push(jackdaw_jsn::ast::JsnEntityNode {
-            id: Some(node_id),
-            parent: None,
-            components: entries.into_iter().collect(),
-            derived_components: std::collections::HashSet::new(),
-            ecs_entity: Some(preview),
-        });
-        ast.ecs_to_jsn.insert(preview, idx);
-        idx
-    };
-
     world.entity_mut(preview).remove::<PieEphemeral>();
     world.entity_mut(preview).insert(node_id);
+    crate::scene_io::register_entity_in_ast(world, preview);
 
     info!(
-        "save to scene: promoted ephemeral {preview:?} (bits {bits:x}) to new AST node {} (idx {idx})",
+        "save to scene: promoted ephemeral {preview:?} (bits {bits:x}) to new authored node {}",
         node_id.0
     );
 }
@@ -1459,9 +1440,8 @@ fn drain_game_events(world: &mut World) {
 #[cfg(test)]
 mod save_to_scene_tests {
     use bevy::ecs::reflect::AppTypeRegistry;
-    use bevy::reflect::serde::TypedReflectSerializer;
+    use jackdaw_bsn::SceneBsnAst;
     use jackdaw_commands::CommandHistory;
-    use jackdaw_jsn::SceneJsnAst;
     use jackdaw_scene_types::SceneNodeId;
 
     use super::*;
@@ -1470,19 +1450,18 @@ mod save_to_scene_tests {
 
     const TRANSFORM_PATH: &str = "bevy_transform::components::transform::Transform";
 
-    /// Canonical reflect JSON for a Transform, matching what
-    /// `TypedReflectSerializer` produces and `SetJsnField` deserializes back.
-    fn canonical(value: &Transform, registry: &AppTypeRegistry) -> serde_json::Value {
-        let reg = registry.read();
-        let serializer = TypedReflectSerializer::new(value, &reg);
-        serde_json::to_value(&serializer).expect("serialize transform")
+    /// The whole authored Transform value stored on an entity's document node.
+    fn stored_transform(world: &World, entity: Entity) -> Option<jackdaw_bsn::BsnValue> {
+        let ast = world.resource::<SceneBsnAst>();
+        let node = ast.ast_for(entity)?;
+        jackdaw_bsn::get_bsn_field(ast, node, TRANSFORM_PATH, "")
     }
 
     /// Build a minimal world for Path A tests: an authored preview entity
-    /// carrying the LIVE transform value, bound to an AST node that stores
-    /// the authored (identity) value, and a `PieProjection` entry mapping
-    /// `bits -> preview_entity`.
-    fn setup_path_a() -> (World, Entity, u64, serde_json::Value) {
+    /// carrying the LIVE transform value, bound to a document node that
+    /// stores the authored (identity) value, and a `PieProjection` entry
+    /// mapping `bits -> preview_entity`.
+    fn setup_path_a() -> (World, Entity, u64, jackdaw_bsn::BsnValue) {
         let mut world = World::new();
         let registry = AppTypeRegistry::default();
         registry.write().register::<Transform>();
@@ -1495,12 +1474,19 @@ mod save_to_scene_tests {
         let live_transform = Transform::from_xyz(1.0, 2.0, 3.0);
         let editor_entity = world.spawn(live_transform).id();
 
-        // AST node stores the authored (identity) value.
+        // The document node stores the authored (identity) value.
         let registry = world.resource::<AppTypeRegistry>().clone();
-        let authored_json = canonical(&Transform::IDENTITY, &registry);
-        let mut ast = SceneJsnAst::default();
-        let node = ast.create_node(editor_entity, None);
-        ast.set_component(editor_entity, TRANSFORM_PATH, authored_json);
+        let (authored_patch, live_value) = {
+            let reg = registry.read();
+            (
+                jackdaw_bsn::component_to_bsn_patch(&Transform::IDENTITY, &reg),
+                jackdaw_bsn::BsnValue::from_reflect(&live_transform, &reg),
+            )
+        };
+        let mut ast = SceneBsnAst::default();
+        let node = ast.create_entity_node(vec![authored_patch]);
+        ast.add_to_roots(node);
+        ast.link(editor_entity, node);
         world.insert_resource(ast);
 
         // PieProjection: bits -> preview entity. Selection: preview entity is selected.
@@ -1513,16 +1499,14 @@ mod save_to_scene_tests {
             entities: vec![editor_entity],
         });
 
-        let live_json = canonical(&live_transform, &registry);
-        let _ = node;
-        (world, editor_entity, bits, live_json)
+        (world, editor_entity, bits, live_value)
     }
 
     // ---- Path A tests ---------------------------------------------------
 
     #[test]
     fn path_a_promote_writes_live_values_to_ast_and_preview_ecs() {
-        let (mut world, editor_entity, _bits, live_json) = setup_path_a();
+        let (mut world, editor_entity, _bits, live_value) = setup_path_a();
 
         assert!(
             can_save_live_to_scene(&world),
@@ -1531,15 +1515,15 @@ mod save_to_scene_tests {
 
         save_live_entity_to_scene(&mut world);
 
-        // AST node now holds the live Transform.
-        let stored = world
-            .resource::<SceneJsnAst>()
-            .get_component(editor_entity, TRANSFORM_PATH)
-            .cloned()
-            .expect("transform present in node after promote");
-        assert_eq!(stored, live_json);
+        // The document node now holds the live Transform.
+        let stored =
+            stored_transform(&world, editor_entity).expect("transform present after promote");
+        assert!(
+            jackdaw_bsn::bsn_value_eq(&stored, &live_value),
+            "the document holds the promoted live Transform"
+        );
 
-        // The preview ECS entity was refreshed through SetJsnField.
+        // The preview ECS entity was refreshed through SetBsnField.
         let tf = world.get::<Transform>(editor_entity).copied().unwrap();
         assert_eq!(tf.translation, Vec3::new(1.0, 2.0, 3.0));
 
@@ -1549,7 +1533,7 @@ mod save_to_scene_tests {
 
     #[test]
     fn path_a_promote_is_undoable_back_to_authored_value() {
-        let (mut world, editor_entity, _bits, _live_json) = setup_path_a();
+        let (mut world, editor_entity, _bits, _live_value) = setup_path_a();
         save_live_entity_to_scene(&mut world);
 
         let mut cmd = world
@@ -1579,7 +1563,11 @@ mod save_to_scene_tests {
         world.init_resource::<CommandHistory>();
         world.init_resource::<PieProjection>();
         world.insert_resource(PieViewMode::Live);
-        world.insert_resource(SceneJsnAst::default());
+        world.insert_resource(SceneBsnAst::default());
+        {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            registry.write().register::<SceneNodeId>();
+        }
 
         // Ephemeral entity: game-spawned at runtime, never in the AST.
         let ephemeral = world
@@ -1613,17 +1601,17 @@ mod save_to_scene_tests {
 
         save_live_entity_to_scene(&mut world);
 
-        // A new AST node should exist and be bound to the former ephemeral entity.
-        let ast = world.resource::<SceneJsnAst>();
-        assert_eq!(ast.nodes.len(), 1, "one node was created");
-        assert_eq!(
-            ast.nodes[0].ecs_entity,
-            Some(ephemeral),
-            "node is bound to the promoted entity"
-        );
+        // A new document node should exist and be bound to the former
+        // ephemeral entity.
+        let ast = world.resource::<SceneBsnAst>();
+        let node = ast
+            .ast_for(ephemeral)
+            .expect("node is bound to the promoted entity");
         assert!(
-            ast.nodes[0].components.contains_key(TRANSFORM_PATH),
-            "node carries the serialized Transform"
+            ast.component_type_paths(node)
+                .iter()
+                .any(|tp| tp == TRANSFORM_PATH),
+            "node carries the captured Transform"
         );
 
         // The entity now has a SceneNodeId and no longer PieEphemeral.
@@ -1636,9 +1624,9 @@ mod save_to_scene_tests {
             "PieEphemeral is removed after promotion"
         );
 
-        // The AST node's id matches the entity's SceneNodeId.
+        // The document node's id matches the entity's SceneNodeId.
         let node_id = world.get::<SceneNodeId>(ephemeral).copied().unwrap();
-        assert_eq!(ast.nodes[0].id, Some(node_id));
+        assert_eq!(ast.stable_id_of(node), Some(node_id.0));
     }
 
     // ---- guard / no-op tests -------------------------------------------
@@ -1648,7 +1636,7 @@ mod save_to_scene_tests {
         let mut world = World::new();
         world.init_resource::<PieProjection>();
         world.insert_resource(PieViewMode::Live);
-        world.insert_resource(SceneJsnAst::default());
+        world.insert_resource(SceneBsnAst::default());
         world.init_resource::<CommandHistory>();
         world.insert_resource(Selection::default());
 
@@ -1664,7 +1652,7 @@ mod save_to_scene_tests {
         let mut world = World::new();
         world.init_resource::<PieProjection>();
         world.insert_resource(PieViewMode::Live);
-        world.insert_resource(SceneJsnAst::default());
+        world.insert_resource(SceneBsnAst::default());
         world.init_resource::<CommandHistory>();
 
         // Spawn a non-projected entity and select it.
@@ -1683,10 +1671,8 @@ mod save_to_scene_tests {
 mod stop_cleanup_tests {
     use bevy::ecs::reflect::AppTypeRegistry;
     use bevy::reflect::TypePath;
+    use jackdaw_bsn::SceneBsnAst;
     use jackdaw_commands::CommandHistory;
-    use jackdaw_jsn::SceneJsnAst;
-    use jackdaw_jsn::ast::JsnEntityNode;
-    use jackdaw_scene_types::SceneNodeId;
 
     use super::*;
     use crate::pie_mirror::{InstanceBuffer, PieMirrorEntry};
@@ -1720,16 +1706,10 @@ mod stop_cleanup_tests {
         world.init_resource::<PieProjection>();
 
         let preview_entity = world.spawn(Mutable(0)).id();
-        let node_id = SceneNodeId::next();
-        let mut ast = SceneJsnAst::default();
-        ast.nodes.push(JsnEntityNode {
-            id: Some(node_id),
-            parent: None,
-            components: std::collections::HashMap::new(),
-            derived_components: std::collections::HashSet::new(),
-            ecs_entity: Some(preview_entity),
-        });
-        ast.ecs_to_jsn.insert(preview_entity, 0);
+        let mut ast = SceneBsnAst::default();
+        let node = ast.create_entity_node(Vec::new());
+        ast.add_to_roots(node);
+        ast.link(preview_entity, node);
         world.insert_resource(ast);
 
         world.init_resource::<CommandHistory>();

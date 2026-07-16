@@ -19,7 +19,7 @@ use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::brush::{BrushSelection, EditMode};
-use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
+use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetBsnField};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::draw_brush::DrawBrushState;
 use crate::selection::Selection;
@@ -446,7 +446,7 @@ fn physics_tool_drag(
 }
 
 /// Diff snapshots vs current transforms, push one undoable `CommandGroup`
-/// of `SetJsnField` commands.
+/// of `SetBsnField` commands.
 fn commit_physics_transforms(world: &mut World) {
     let snapshots = world.resource::<PhysicsToolState>().snapshots.clone();
 
@@ -455,7 +455,6 @@ fn commit_physics_transforms(world: &mut World) {
     }
 
     let registry_res = world.resource::<AppTypeRegistry>().clone();
-    let processor = crate::scene_io::AstSerializerProcessor;
     let type_path = "bevy_transform::components::transform::Transform";
 
     let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
@@ -476,26 +475,16 @@ fn commit_physics_transforms(world: &mut World) {
         }
 
         let registry = registry_res.read();
-        let old_ser = bevy::reflect::serde::TypedReflectSerializer::with_processor(
-            old_tf, &registry, &processor,
-        );
-        let Ok(old_json) = serde_json::to_value(&old_ser) else {
-            continue;
-        };
-        let new_ser = bevy::reflect::serde::TypedReflectSerializer::with_processor(
-            &new_tf, &registry, &processor,
-        );
-        let Ok(new_json) = serde_json::to_value(&new_ser) else {
-            continue;
-        };
+        let old_value = jackdaw_bsn::BsnValue::from_reflect(old_tf, &registry);
+        let new_value = jackdaw_bsn::BsnValue::from_reflect(&new_tf, &registry);
         drop(registry);
 
-        sub_commands.push(Box::new(SetJsnField {
+        sub_commands.push(Box::new(SetBsnField {
             entity: *entity,
             type_path: type_path.to_string(),
             field_path: String::new(),
-            old_value: old_json,
-            new_value: new_json,
+            old_value: Some(old_value),
+            new_value,
             was_derived: false,
         }));
     }

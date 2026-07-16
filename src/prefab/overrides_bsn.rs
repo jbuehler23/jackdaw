@@ -2,11 +2,9 @@
 //! node inside a prefab instance diverges from its inherited baseline, and
 //! what prefab entry it inherits from.
 //!
-//! This mirrors [`crate::prefab::overrides`] (which operates on the
-//! JSON-AST `SceneJsnAst`) on [`jackdaw_bsn::SceneBsnAst`]. Values compare
-//! through [`jackdaw_bsn::bsn_value_eq`], since [`jackdaw_bsn::BsnValue`]
-//! has no derived `PartialEq`. Prefabs are supplied through the same
-//! caller-owned lookup the BSN resolver uses.
+//! Values compare through [`jackdaw_bsn::bsn_value_eq`], since
+//! [`jackdaw_bsn::BsnValue`] has no derived `PartialEq`. Prefabs are
+//! supplied through the same caller-owned lookup the resolver uses.
 
 use std::path::PathBuf;
 

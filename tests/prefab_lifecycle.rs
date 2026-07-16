@@ -45,35 +45,6 @@ fn prefab_cache_stores_and_retrieves() {
 }
 
 #[test]
-fn override_applier_sets_scalar_field() {
-    use serde_json::json;
-    let mut base = json!({
-        "translation": [0.0, 0.0, 0.0],
-        "scale": { "x": 1.0, "y": 1.0, "z": 1.0 }
-    });
-    let deltas = json!({
-        "scale.x": 1.5
-    });
-    jackdaw::prefab::overrides::apply_deltas(&mut base, &deltas).expect("applier handles dot-path");
-    assert_eq!(base["scale"]["x"].as_f64(), Some(1.5));
-    assert_eq!(base["scale"]["y"].as_f64(), Some(1.0));
-}
-
-#[test]
-fn override_applier_sets_nested_struct() {
-    use serde_json::json;
-    let mut base = json!({
-        "translation": { "x": 0.0, "y": 0.0, "z": 0.0 }
-    });
-    let deltas = json!({
-        "translation": { "x": 10.0, "y": 5.0, "z": 0.0 }
-    });
-    jackdaw::prefab::overrides::apply_deltas(&mut base, &deltas).unwrap();
-    assert_eq!(base["translation"]["x"].as_f64(), Some(10.0));
-    assert_eq!(base["translation"]["y"].as_f64(), Some(5.0));
-}
-
-#[test]
 fn cycle_detector_accepts_simple_chain() {
     use std::path::PathBuf;
     let chain = vec![
@@ -82,7 +53,7 @@ fn cycle_detector_accepts_simple_chain() {
         PathBuf::from("b.jsn"),
     ];
     let next = PathBuf::from("c.jsn");
-    assert!(jackdaw::prefab::resolver::would_cycle(&chain, &next).is_none());
+    assert!(jackdaw::prefab::resolver_bsn::would_cycle(&chain, &next).is_none());
 }
 
 #[test]
@@ -90,8 +61,8 @@ fn cycle_detector_rejects_revisit() {
     use std::path::PathBuf;
     let chain = vec![PathBuf::from("a.jsn"), PathBuf::from("b.jsn")];
     let next = PathBuf::from("a.jsn");
-    let err =
-        jackdaw::prefab::resolver::would_cycle(&chain, &next).expect("cycle should be reported");
+    let err = jackdaw::prefab::resolver_bsn::would_cycle(&chain, &next)
+        .expect("cycle should be reported");
     assert!(err.to_string().contains("a.jsn"));
 }
 
@@ -806,46 +777,37 @@ fn field_is_overridden_detects_changed_field() {
              }",
         ),
     );
+    let get = |p: &std::path::Path| cache.get(p);
 
-    let mut scene_ast = jackdaw_jsn::SceneJsnAst::default();
-    let instance = scene_ast.add_root();
-    scene_ast.insert_component(
-        instance,
-        "jackdaw::prefab::components::IsA",
-        serde_json::json!({ "source": "p.jsn", "deleted": [] }),
+    // Instance node overriding translation.x only.
+    let scene = bsn_ast(
+        "jackdaw::prefab::components::IsA { source: \"p.jsn\" }\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         bevy_transform::components::transform::Transform {\n\
+             translation: glam::Vec3 { x: 10.0, y: 0.0, z: 0.0 },\n\
+             rotation: glam::Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },\n\
+             scale: glam::Vec3 { x: 1.0, y: 1.0, z: 1.0 },\n\
+         }",
     );
-    scene_ast.insert_component(
-        instance,
-        "jackdaw::prefab::components::PrefabEntityId",
-        serde_json::json!(0),
-    );
-    scene_ast.insert_component(
-        instance,
-        "bevy_transform::components::transform::Transform",
-        serde_json::json!({
-            "translation": [10.0, 0.0, 0.0],
-            "rotation": [0.0, 0.0, 0.0, 1.0],
-            "scale": [1.0, 1.0, 1.0]
-        }),
-    );
+    let instance = scene.roots[0];
 
-    assert!(jackdaw::prefab::overrides::field_is_overridden(
-        &scene_ast,
-        &cache,
+    assert!(jackdaw::prefab::overrides_bsn::field_is_overridden(
+        &scene,
+        &get,
         instance,
         "bevy_transform::components::transform::Transform",
         None,
     ));
-    assert!(jackdaw::prefab::overrides::field_is_overridden(
-        &scene_ast,
-        &cache,
+    assert!(jackdaw::prefab::overrides_bsn::field_is_overridden(
+        &scene,
+        &get,
         instance,
         "bevy_transform::components::transform::Transform",
         Some("translation"),
     ));
-    assert!(!jackdaw::prefab::overrides::field_is_overridden(
-        &scene_ast,
-        &cache,
+    assert!(!jackdaw::prefab::overrides_bsn::field_is_overridden(
+        &scene,
+        &get,
         instance,
         "bevy_transform::components::transform::Transform",
         Some("rotation"),
@@ -855,16 +817,16 @@ fn field_is_overridden_detects_changed_field() {
 #[test]
 fn field_is_overridden_returns_false_outside_isa_subtree() {
     let cache = jackdaw::prefab::PrefabAstCache::default();
-    let mut scene_ast = jackdaw_jsn::SceneJsnAst::default();
-    let entity = scene_ast.add_root();
-    scene_ast.insert_component(
-        entity,
-        "bevy_transform::components::transform::Transform",
-        serde_json::json!({ "translation": [3.0, 0.0, 0.0] }),
+    let get = |p: &std::path::Path| cache.get(p);
+    let scene = bsn_ast(
+        "bevy_transform::components::transform::Transform {\n\
+             translation: glam::Vec3 { x: 3.0, y: 0.0, z: 0.0 },\n\
+         }",
     );
-    assert!(!jackdaw::prefab::overrides::field_is_overridden(
-        &scene_ast,
-        &cache,
+    let entity = scene.roots[0];
+    assert!(!jackdaw::prefab::overrides_bsn::field_is_overridden(
+        &scene,
+        &get,
         entity,
         "bevy_transform::components::transform::Transform",
         None,
@@ -1525,20 +1487,16 @@ fn save_round_trip_preserves_prefab_markers() {
         bevy::math::Vec3::ZERO,
     );
 
-    // Serialize the live world the same way save_scene does. This is
+    // Capture the live document the same way save_scene does. This is
     // the boundary where `should_skip_component` runs, so it's the
     // exact path that previously dropped the prefab marker components.
-    let jsn = jackdaw::scene_io::serialize_world_to_jsn_scene(app.world_mut());
-    let value = serde_json::to_value(&jsn).expect("serializes to json");
-
-    let has_isa = value["scene"].as_array().unwrap().iter().any(|e| {
-        e["components"]
-            .get("jackdaw::prefab::components::IsA")
-            .is_some()
-    });
+    let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
     assert!(
-        has_isa,
-        "saved scene must preserve IsA on the instance; got {value:#}"
+        text.contains("jackdaw::prefab::components::IsA"),
+        "saved scene must preserve IsA on the instance; got {text}"
     );
 }
 
@@ -1856,19 +1814,13 @@ fn prefab_edit_propagates_to_instance_in_other_tab_on_swap() {
     {
         let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
         let mut tab_a = jackdaw::scenes::SceneTab::new_untitled(1);
-        let mut scene_ast = jackdaw_jsn::SceneJsnAst::default();
-        let instance = scene_ast.add_root();
-        scene_ast.insert_component(
-            instance,
-            "jackdaw::prefab::components::IsA",
-            serde_json::json!({ "source": prefab_path.to_string_lossy(), "deleted": [] }),
-        );
-        scene_ast.insert_component(
-            instance,
-            "jackdaw::prefab::components::PrefabEntityId",
-            serde_json::json!(0),
-        );
-        tab_a.content = jackdaw::scenes::TabContent::Scene(Some(scene_ast));
+        let mut scene_ast = jackdaw_bsn::SceneBsnAst::default();
+        let instance = scene_ast.create_entity_node(vec![
+            isa_patch(&prefab_path.to_string_lossy()),
+            peid_patch(0),
+        ]);
+        scene_ast.add_to_roots(instance);
+        tab_a.content = jackdaw::scenes::TabContent::Scene(Some(Box::new(scene_ast)));
         scenes.tabs.push(tab_a);
         scenes.active = 0;
 
@@ -1988,9 +1940,9 @@ fn scene_save_on_prefab_tab_clears_dirty_state() {
         .insert(
             &prefab_path,
             bsn_ast(
-                "jackdaw::prefab::components::Prefab\n\
-                 jackdaw::prefab::components::PrefabEntityId(0)\n\
-                 bevy_ecs::name::Name(\"p\")",
+                "#p\n\
+                 jackdaw::prefab::components::Prefab\n\
+                 jackdaw::prefab::components::PrefabEntityId(0)",
             ),
         );
 
@@ -2883,19 +2835,14 @@ fn set_transform_sync_after_external_execute_writes_to_ast() {
             bevy::prelude::Transform::from_xyz(0.0, 0.0, 0.0),
         ))
         .id();
-    {
-        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
-        let key = ast.create_node(entity, None);
-        ast.insert_component(
-            key,
-            "bevy_transform::components::transform::Transform",
-            serde_json::json!({
-                "translation": [0.0, 0.0, 0.0],
-                "rotation": [0.0, 0.0, 0.0, 1.0],
-                "scale": [1.0, 1.0, 1.0],
-            }),
-        );
-    }
+    register_live_root(
+        &mut app,
+        entity,
+        vec![
+            jackdaw_bsn::BsnPatch::Name("e".to_string()),
+            transform_patch(0.0, 0.0, 0.0),
+        ],
+    );
 
     let dragged_to = Vec3::new(7.0, 0.0, -3.0);
     if let Some(mut t) = app.world_mut().get_mut::<bevy::prelude::Transform>(entity) {
@@ -2909,21 +2856,27 @@ fn set_transform_sync_after_external_execute_writes_to_ast() {
     };
     cmd.sync_after_external_execute(app.world_mut());
 
-    let ast = app.world().resource::<jackdaw_jsn::SceneJsnAst>();
-    let key = ast.key_for_entity(entity).unwrap();
-    let tx = ast
-        .get_component_at(key, "bevy_transform::components::transform::Transform")
-        .unwrap();
-    let translation = tx["translation"].as_array().unwrap();
-    let x = translation[0].as_f64().unwrap() as f32;
-    let z = translation[2].as_f64().unwrap() as f32;
-    assert!(
-        (x - 7.0).abs() < 1e-4,
-        "AST Transform.x reflects the dragged value (7.0); got {x}"
+    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    let node = ast.ast_for(entity).expect("entity in the live document");
+    let x = jackdaw_bsn::get_bsn_field(
+        ast,
+        node,
+        "bevy_transform::components::transform::Transform",
+        "translation.x",
+    );
+    let z = jackdaw_bsn::get_bsn_field(
+        ast,
+        node,
+        "bevy_transform::components::transform::Transform",
+        "translation.z",
     );
     assert!(
-        (z - (-3.0)).abs() < 1e-4,
-        "AST Transform.z reflects the dragged value (-3.0); got {z}"
+        matches!(x, Some(jackdaw_bsn::BsnValue::Float(v)) if (v - 7.0).abs() < 1e-4),
+        "document Transform.x reflects the dragged value (7.0)"
+    );
+    assert!(
+        matches!(z, Some(jackdaw_bsn::BsnValue::Float(v)) if (v - (-3.0)).abs() < 1e-4),
+        "document Transform.z reflects the dragged value (-3.0)"
     );
 }
 
@@ -3004,48 +2957,54 @@ fn snapshot_captures_inherited_descendant_edit_as_override() {
     {
         t.translation = Vec3::new(99.0, 0.0, 0.0);
     }
+    // Mirror the edit into the live document, as command dispatch does.
+    jackdaw_bsn::sync_to_ast(
+        app.world_mut(),
+        child_entity,
+        std::any::TypeId::of::<bevy::prelude::Transform>(),
+    );
 
     // Capture a snapshot. The result must encode the edit as an override.
-    let snapshot = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+    let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
+    let snapshot = bsn_ast(&text);
 
-    // The instance entity (with IsA) should still have a child node
-    // carrying PrefabEntityId(1). The child node should NOT have a Name
-    // (matches prefab, omitted), but SHOULD have a Transform (differs
-    // from prefab).
+    // The instance node (with IsA) should still have a child node carrying
+    // PrefabEntityId(1). The child node should NOT have a Transform equal
+    // to the prefab baseline stripped away entirely: the Transform differs
+    // from the prefab, so it stays, while the matching Name is omitted.
     let isa_type = "jackdaw::prefab::components::IsA";
-    let prefab_entity_id_type = "jackdaw::prefab::components::PrefabEntityId";
-    let instance_idx = snapshot
-        .nodes
-        .iter()
-        .position(|n| n.components.contains_key(isa_type))
+    let instance = snapshot
+        .entities_with_component(isa_type)
+        .first()
+        .copied()
         .expect("instance node in snapshot");
     let override_node = snapshot
-        .nodes
-        .iter()
-        .find(|n| {
-            n.parent == Some(instance_idx)
-                && n.components
-                    .get(prefab_entity_id_type)
-                    .and_then(serde_json::Value::as_u64)
-                    == Some(1)
-        })
-        .expect("override node for PrefabEntityId 1 under the instance");
+        .find_node_by_component_int(PEID_TYPE, 1)
+        .expect("override node for PrefabEntityId 1 in snapshot");
+    assert_eq!(
+        snapshot.ast_parent_of(override_node),
+        Some(instance),
+        "override node sits under the instance"
+    );
 
     assert!(
-        !override_node
-            .components
-            .contains_key("bevy_ecs::name::Name"),
+        snapshot.get_name(override_node).is_none(),
         "name matched the prefab baseline; should be omitted from the override. got components: {:?}",
-        override_node.components.keys().collect::<Vec<_>>()
+        snapshot.component_type_paths(override_node)
     );
-    let tx = override_node
-        .components
-        .get("bevy_transform::components::transform::Transform")
-        .expect("Transform diverged from prefab and should appear in the override");
-    let x = tx["translation"].as_array().unwrap()[0].as_f64().unwrap();
+    let x = jackdaw_bsn::get_bsn_field(
+        &snapshot,
+        override_node,
+        "bevy_transform::components::transform::Transform",
+        "translation.x",
+    )
+    .expect("Transform diverged from prefab and should appear in the override");
     assert!(
-        (x - 99.0).abs() < 1e-4,
-        "override carries the edited translation X (99.0); got {x}"
+        matches!(x, jackdaw_bsn::BsnValue::Float(v) if (v - 99.0).abs() < 1e-4),
+        "override carries the edited translation X (99.0)"
     );
 }
 
@@ -3109,8 +3068,11 @@ fn snapshot_install_plus_reload_keeps_inherited_child_visible() {
         Vec3::new(10.0, 0.0, 0.0),
     );
 
-    // Capture the snapshot (the install side effect updates live AST).
-    let _ = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+    // Capture a snapshot (exercises the sparse capture side effects).
+    let _ = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
 
     // Drag in a second instance, which triggers reload_all_instances.
     jackdaw::prefab::operators::spawn_instance(
@@ -3175,8 +3137,11 @@ fn snapshot_round_trip_undoes_spawn_instance() {
         &serde_json::to_string(&prefab_json).unwrap(),
     );
 
-    // Capture the "before" snapshot AST.
-    let before_ast = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+    // Capture the "before" snapshot text.
+    let before_text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
     {
         let world = app.world_mut();
         let mut q = world.query::<&jackdaw::prefab::IsA>();
@@ -3195,8 +3160,8 @@ fn snapshot_round_trip_undoes_spawn_instance() {
         assert_eq!(q.iter(world).count(), 1, "instance spawned");
     }
 
-    // Apply the before-snapshot (what SnapshotDiff::undo does).
-    jackdaw::scene_io::apply_ast_to_world(app.world_mut(), &before_ast);
+    // Apply the before-snapshot (what snapshot undo does).
+    jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &before_text);
     {
         let world = app.world_mut();
         let mut q = world.query::<&jackdaw::prefab::IsA>();
@@ -3323,14 +3288,20 @@ fn save_3_brushes_survives_snapshot_capture_and_install() {
     }
     app.update();
 
-    // Simulate the operator framework: before-snapshot capture (which
-    // installs as live AST), then the actual save, then after-snapshot
-    // (also installs as live), then a reload triggered by cache change.
-    let _before = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+    // Simulate the operator framework: before-snapshot capture, then the
+    // actual save, then after-snapshot, then a reload triggered by cache
+    // change.
+    let _before = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
 
     jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &entities, &target);
 
-    let _after = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+    let _after = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
 
     // The cache-driven driver respawn (next-frame side effect of cache
     // mutation in save_as_prefab_from_selection):
@@ -3423,7 +3394,7 @@ fn spawn_instance_undo_via_framework_snapshot_round_trip_removes_instance() {
         &prefab_path,
         &serde_json::to_string(&prefab_json).unwrap(),
     );
-    // The JsnAstSnapshotter captures editor state alongside the AST;
+    // The snapshotter captures editor state alongside the document;
     // initialize the resources it reads so its capture/apply don't panic.
     app.init_resource::<jackdaw::brush::EditMode>();
     app.init_resource::<jackdaw::active_tool::ActiveTool>();
@@ -3435,7 +3406,7 @@ fn spawn_instance_undo_via_framework_snapshot_round_trip_removes_instance() {
     app.init_resource::<jackdaw::viewport_select::GroupEditState>();
 
     app.world_mut().insert_resource(ActiveSnapshotter(Box::new(
-        jackdaw::undo_snapshot::JsnAstSnapshotter,
+        jackdaw::undo_snapshot::BsnDocumentSnapshotter,
     )));
 
     let before = app
@@ -3589,8 +3560,11 @@ fn unbundle_resolves_key_from_entity_after_snapshot_install() {
             .expect("instance node links to a spawned entity")
     };
 
-    // Simulate the framework's before-snapshot install step during dispatch.
-    let _ = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+    // Simulate the framework's before-snapshot capture during dispatch.
+    let _ = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
 
     // Resolve the document node fresh from the Entity, as the dispatch site
     // does; the operator takes the document node, not a captured key.
@@ -3677,34 +3651,33 @@ fn apply_ast_with_override_entries_resolves_inherited_components() {
         Vec3::new(0.0, 0.0, 0.0),
     );
 
-    // Capture a snapshot. This prefabifies the inherited brush into
-    // an override entry with just PrefabEntityId.
-    let snapshot_ast = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+    // Capture a snapshot. This reduces the inherited child to a sparse
+    // override entry with just PrefabEntityId.
+    let snapshot_text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
 
     // Confirm the snapshot does carry a sparse override (the test
-    // is meaningful only if prefabify ran).
-    let override_node = snapshot_ast.nodes.iter().find(|n| {
-        n.components
-            .contains_key("jackdaw::prefab::components::PrefabEntityId")
-            && !n
-                .components
-                .contains_key("jackdaw::prefab::components::IsA")
-    });
+    // is meaningful only if the sparsify ran).
+    let snapshot_ast = bsn_ast(&snapshot_text);
+    let override_node = snapshot_ast
+        .find_node_by_component_int(PEID_TYPE, 1)
+        .expect("snapshot contains a sparse override entry for the inherited child");
     assert!(
-        override_node.is_some(),
-        "snapshot contains a sparse override entry for the inherited child"
+        snapshot_ast
+            .find_patch_by_type_path(override_node, ISA_TYPE)
+            .is_none(),
+        "the override entry is a descendant, not the instance root"
     );
     assert!(
-        !override_node
-            .unwrap()
-            .components
-            .contains_key("bevy_ecs::name::Name"),
+        snapshot_ast.get_name(override_node).is_none(),
         "sparse override omits the Name (matches prefab baseline)"
     );
 
     // Despawn everything, then re-apply the snapshot. This is the
-    // path SnapshotDiff::undo takes.
-    jackdaw::scene_io::apply_ast_to_world(app.world_mut(), &snapshot_ast);
+    // path snapshot undo takes.
+    jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &snapshot_text);
 
     // Verify the inherited child is back in the world WITH its
     // inherited Name + Transform (resolved from the prefab cache).
@@ -3783,7 +3756,10 @@ fn snapshot_round_trip_redo_brings_back_instance() {
         &serde_json::to_string(&prefab_json).unwrap(),
     );
 
-    let before = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+    let before = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
 
     jackdaw::prefab::operators::spawn_instance(
         app.world_mut(),
@@ -3791,10 +3767,13 @@ fn snapshot_round_trip_redo_brings_back_instance() {
         Vec3::new(0.0, 0.0, 0.0),
     );
 
-    let after = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+    let after = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
 
     // Undo
-    jackdaw::scene_io::apply_ast_to_world(app.world_mut(), &before);
+    jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &before);
     {
         let world = app.world_mut();
         let mut q = world.query::<&jackdaw::prefab::IsA>();
@@ -3802,7 +3781,7 @@ fn snapshot_round_trip_redo_brings_back_instance() {
     }
 
     // Redo
-    jackdaw::scene_io::apply_ast_to_world(app.world_mut(), &after);
+    jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &after);
     {
         let world = app.world_mut();
         let mut q = world.query::<&jackdaw::prefab::IsA>();
@@ -3900,7 +3879,7 @@ fn typed_command_and_snapshot_diff_interleave_cleanly_on_undo() {
     app.init_resource::<jackdaw::viewport_select::GroupEditState>();
     app.world_mut()
         .insert_resource(jackdaw_api_internal::snapshot::ActiveSnapshotter(Box::new(
-            jackdaw::undo_snapshot::JsnAstSnapshotter,
+            jackdaw::undo_snapshot::BsnDocumentSnapshotter,
         )));
 
     use bevy::prelude::Mut;
@@ -3978,15 +3957,6 @@ fn scene_save_reopen_round_trip_preserves_instance_and_override() {
     // the scene, simulate a reload, verify the instance is back with
     // the inherited child carrying the OVERRIDE value (not the prefab
     // baseline). This is what `Ctrl+S` then close+reopen would do.
-    //
-    // TODO: blocked source-side. `inherit_root_components`
-    // (src/prefab/resolver_bsn.rs:122) copies only component patches
-    // (`component_type_paths` skips `BsnPatch::Name`), so the instance root
-    // never inherits the prefab root's name and its ECS entity spawns
-    // unnamed. `build_snapshot_ast` collects scene entities through
-    // `ScenePersistableRootsQuery` (src/scene_io.rs:2463), which is
-    // `With<Name>`, so the unnamed instance is dropped from the snapshot and
-    // the reopened scene restores zero instances.
     use bevy::math::Vec3;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -4036,35 +4006,44 @@ fn scene_save_reopen_round_trip_preserves_instance_and_override() {
     {
         t.translation.x = 99.0;
     }
+    // Mirror the edit into the live document, as command dispatch does.
+    jackdaw_bsn::sync_to_ast(
+        app.world_mut(),
+        child_entity,
+        std::any::TypeId::of::<bevy::prelude::Transform>(),
+    );
 
-    // "Save": serialize the world to a SceneJsnAst (prefabified).
-    let snapshot_ast = jackdaw::scene_io::build_snapshot_ast(app.world_mut());
+    // "Save": capture the live document as sparse scene text.
+    let snapshot_text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
 
     // Verify the on-disk shape: an override entry with the edit only.
-    let scene_jsn = snapshot_ast.to_jsn_scene(jackdaw_jsn::format::JsnMetadata::default());
-    let override_entry = scene_jsn
-        .scene
-        .iter()
-        .find(|e| {
-            e.components
-                .get("jackdaw::prefab::components::PrefabEntityId")
-                .and_then(serde_json::Value::as_u64)
-                == Some(1)
-                && !e
-                    .components
-                    .contains_key("jackdaw::prefab::components::IsA")
-        })
+    let snapshot_ast = bsn_ast(&snapshot_text);
+    let override_entry = snapshot_ast
+        .find_node_by_component_int(PEID_TYPE, 1)
         .expect("override entry on disk for the edited child");
-    let tx = override_entry
-        .components
-        .get("bevy_transform::components::transform::Transform")
-        .expect("override carries the Transform diff");
     assert!(
-        (tx["translation"][0].as_f64().unwrap() - 99.0).abs() < 1e-4,
+        snapshot_ast
+            .find_patch_by_type_path(override_entry, ISA_TYPE)
+            .is_none(),
+        "the override entry is a descendant, not the instance root"
+    );
+    let tx = jackdaw_bsn::get_bsn_field(
+        &snapshot_ast,
+        override_entry,
+        "bevy_transform::components::transform::Transform",
+        "translation.x",
+    )
+    .expect("override carries the Transform diff");
+    assert!(
+        matches!(tx, jackdaw_bsn::BsnValue::Float(v) if (v - 99.0).abs() < 1e-4),
         "on-disk override stores the edited translation X (99.0)"
     );
 
-    // "Reopen": fresh app, apply the AST (mimics finish_load_scene).
+    // "Reopen": fresh app, respawn from the sparse text (mimics
+    // finish_load_scene).
     let mut app2 = make_app_for_prefab_tests();
     // Re-prime the prefab cache (loading from disk would do this).
     {
@@ -4073,7 +4052,7 @@ fn scene_save_reopen_round_trip_preserves_instance_and_override() {
             .resource_mut::<jackdaw::prefab::PrefabAstCache>()
             .insert(&prefab_path, bsn_ast(&scene_text));
     }
-    jackdaw::scene_io::apply_ast_to_world(app2.world_mut(), &snapshot_ast);
+    jackdaw::prefab::watcher::respawn_from_sparse_text(app2.world_mut(), &snapshot_text);
 
     let world = app2.world_mut();
     let mut isa_q = world.query::<&jackdaw::prefab::IsA>();

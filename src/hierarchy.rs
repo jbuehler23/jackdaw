@@ -27,7 +27,7 @@ use jackdaw_widgets::tree_view::{
 
 use crate::{
     EditorEntity, EditorHidden, OP_PREFIX,
-    commands::{CommandHistory, EditorCommand, ReparentEntity, SetJsnField},
+    commands::{CommandHistory, EditorCommand, ReparentEntity, SetBsnField},
     entity_ops,
     layout::HierarchyFilter,
     selection::{Selected, Selection},
@@ -1243,8 +1243,8 @@ fn on_tree_row_dropped(
                 // inside its queued closure (after the framework's
                 // before-snapshot install reshuffles indices).
                 let both_in_ast = {
-                    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-                    ast.key_for_entity(dragged).is_some() && ast.key_for_entity(target).is_some()
+                    let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+                    ast.ast_for(dragged).is_some() && ast.ast_for(target).is_some()
                 };
                 if both_in_ast {
                     let _ = world
@@ -1622,8 +1622,8 @@ fn on_context_menu_action(
                 // inside its queued closure (after the framework's
                 // before-snapshot install reshuffles indices).
                 if world
-                    .resource::<jackdaw_jsn::SceneJsnAst>()
-                    .key_for_entity(target)
+                    .resource::<jackdaw_bsn::SceneBsnAst>()
+                    .ast_for(target)
                     .is_none()
                 {
                     return;
@@ -1706,7 +1706,7 @@ fn on_context_menu_action(
 
 /// Spawn an entity from `template` and reparent it under `parent` (if
 /// provided). Goes through the AST-aware `set_parent` so the live
-/// `SceneJsnAst` stays in sync with the ECS hierarchy.
+/// scene document stays in sync with the ECS hierarchy.
 fn add_child_entity(
     commands: &mut Commands,
     parent: Option<Entity>,
@@ -2079,12 +2079,17 @@ fn on_tree_row_renamed(event: On<TreeRowRenamed>, mut commands: Commands, names:
     }
 
     commands.queue(move |world: &mut World| {
-        let cmd = SetJsnField {
+        let old_value = if old_name.is_empty() {
+            None
+        } else {
+            Some(jackdaw_bsn::BsnValue::String(old_name))
+        };
+        let cmd = SetBsnField {
             entity: source,
-            type_path: "bevy_ecs::name::Name".to_string(),
+            type_path: crate::commands::NAME_TYPE_PATH.to_string(),
             field_path: String::new(),
-            old_value: serde_json::Value::String(old_name),
-            new_value: serde_json::Value::String(new_name),
+            old_value,
+            new_value: jackdaw_bsn::BsnValue::String(new_name),
             was_derived: false,
         };
         let mut cmd = Box::new(cmd);

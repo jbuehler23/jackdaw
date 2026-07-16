@@ -1,6 +1,6 @@
 //! Multi-scene editor state. Owns the tab list; the active tab's
 //! contents live in the live Bevy world, inactive tabs hold a
-//! `SceneJsnAst` snapshot plus the per-tab view state and history.
+//! scene-document snapshot plus the per-tab view state and history.
 
 pub mod confirm_dialog;
 pub mod operators;
@@ -102,12 +102,13 @@ pub enum TabKind {
 pub enum TabContent {
     /// Scene document. `None` is the just-pushed / never-captured state
     /// for an untitled tab; `Some` is what `capture_active_tab` stores
-    /// during a swap.
-    Scene(Option<jackdaw_jsn::SceneJsnAst>),
+    /// during a swap. Boxed: the document holds a whole ECS world, so the
+    /// variant would otherwise dwarf `Prefab` (a path).
+    Scene(Option<Box<jackdaw_bsn::SceneBsnAst>>),
     /// Prefab document. The AST lives in `PrefabAstCache`, keyed by
-    /// this canonical path. Capturing flushes the live `SceneJsnAst`
-    /// resource into the cache entry; activating installs the cache
-    /// entry back into the resource.
+    /// this canonical path. Capturing flushes the live scene document
+    /// into the cache entry; activating installs the cache entry back
+    /// into the live world.
     Prefab(crate::prefab::CanonicalPrefabPath),
 }
 

@@ -264,7 +264,7 @@ fn find_text_edit_entities_local(world: &World, outer_entity: Entity) -> Option<
 }
 
 /// Handle `TextEditCommitEvent` for Name field inputs.
-/// Pushes a `SetJsnField` command so the rename can be undone.
+/// Pushes a `SetBsnField` command so the rename can be undone.
 fn on_name_field_commit(
     event: On<jackdaw_feathers::text_edit::TextEditCommitEvent>,
     name_inputs: Query<&NameFieldInput>,
@@ -301,12 +301,17 @@ fn on_name_field_commit(
     }
 
     commands.queue(move |world: &mut World| {
-        let cmd = crate::commands::SetJsnField {
+        let old_value = if old_name.is_empty() {
+            None
+        } else {
+            Some(jackdaw_bsn::BsnValue::String(old_name))
+        };
+        let cmd = crate::commands::SetBsnField {
             entity: source_entity,
-            type_path: "bevy_ecs::name::Name".to_string(),
+            type_path: crate::commands::NAME_TYPE_PATH.to_string(),
             field_path: String::new(),
-            old_value: serde_json::Value::String(old_name),
-            new_value: serde_json::Value::String(new_name),
+            old_value,
+            new_value: jackdaw_bsn::BsnValue::String(new_name),
             was_derived: false,
         };
         let mut cmd: Box<dyn jackdaw_commands::EditorCommand> = Box::new(cmd);

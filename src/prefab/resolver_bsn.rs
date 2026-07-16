@@ -3,12 +3,6 @@
 //! document gets its inherited subtree materialized, with the instance's
 //! sparse field deltas applied on top.
 //!
-//! This mirrors [`crate::prefab::resolver`] (which operates on the
-//! JSON-AST `SceneJsnAst`) on the BSN document model
-//! [`jackdaw_bsn::SceneBsnAst`]. The two paths coexist while the editor
-//! migrates from the JSON AST to the BSN document; the JSON path stays
-//! untouched.
-//!
 //! Prefabs are supplied through a caller-owned lookup closure rather than
 //! the `PrefabAstCache` the JSON resolver reads, so the port does not
 //! depend on the cache's element type. The live cutover passes the real
@@ -310,6 +304,18 @@ fn merge_descendant_overrides(
                 set_whole_component(ast, node, &type_path, merged);
             }
         }
+
+        // The name is a reference patch, not a component patch, so the
+        // fill-in above never restores it; sparse override entries shed a
+        // baseline-matching name at capture, so inherit it back here.
+        if ast.get_name(node).is_none()
+            && let Some(name) = prefab.get_name(prefab_match).map(str::to_owned)
+        {
+            let patch_entity = ast.world.spawn(BsnPatch::Name(name)).id();
+            if let Some(patches) = ast.get_patches_mut(node) {
+                patches.0.push(patch_entity);
+            }
+        }
     }
 }
 
@@ -393,6 +399,16 @@ pub fn sparsify_inherited_descendants_recording(
         for (type_path, value) in drop {
             ast.remove_component_patch(node, &type_path);
             stripped.push((node, type_path, value));
+        }
+
+        // The name is a reference patch, not a component patch, so the loop
+        // above never sees it; strip it too when it matches the baseline.
+        if let (Some(name), Some(prefab_name)) = (ast.get_name(node), prefab.get_name(prefab_match))
+            && name == prefab_name
+        {
+            let name = name.to_owned();
+            remove_name_patch(ast, node);
+            stripped.push((node, NAME_PATCH_KEY.to_string(), BsnValue::String(name)));
         }
     }
     stripped
