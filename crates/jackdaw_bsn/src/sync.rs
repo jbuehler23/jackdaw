@@ -59,49 +59,6 @@ pub fn sync_to_ast(world: &mut World, entity: Entity, component_type_id: TypeId)
     }
 }
 
-/// Ensure an entity has an AST node. Creates one on the fly if missing,
-/// reflecting all current components into BSN patches. Returns the
-/// `patches_entity` in the AST world.
-pub fn ensure_ast_node(world: &mut World, entity: Entity) -> Entity {
-    if let Some(ast_ref) = world.get::<AstNodeRef>(entity) {
-        return ast_ref.patches_entity;
-    }
-    create_entity_in_ast(world, entity, None);
-    world
-        .get::<AstNodeRef>(entity)
-        .expect("create_entity_in_ast should have inserted AstNodeRef")
-        .patches_entity
-}
-
-/// After adding a component to an ECS entity, add a corresponding BSN patch.
-pub fn add_component_to_ast(world: &mut World, entity: Entity, component_type_id: TypeId) {
-    // Same as sync_to_ast; it creates the patch if it doesn't exist.
-    sync_to_ast(world, entity, component_type_id);
-}
-
-/// After removing a component from an ECS entity, remove its BSN patch.
-pub fn remove_component_from_ast(world: &mut World, entity: Entity, type_path: &str) {
-    let Some(ast_ref) = world.get::<AstNodeRef>(entity) else {
-        return;
-    };
-    let patches_entity = ast_ref.patches_entity;
-
-    let mut ast = world.resource_mut::<SceneBsnAst>();
-    let Some(existing) = ast.find_patch_by_type_path(patches_entity, type_path) else {
-        return;
-    };
-
-    // Remove from patches list
-    if let Some(patches) = ast.get_patches_mut(patches_entity) {
-        patches.0.retain(|&e| e != existing);
-    }
-
-    // Despawn the patch entity from the AST world
-    if let Ok(entity_mut) = ast.world.get_entity_mut(existing) {
-        entity_mut.despawn();
-    }
-}
-
 /// Create an AST node for a new ECS entity and link them.
 ///
 /// Inserts the node into the parent's `Children` patch (or roots if no parent).

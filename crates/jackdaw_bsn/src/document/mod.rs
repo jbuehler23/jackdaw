@@ -1,10 +1,8 @@
 //! Editor document model for the `.bsn` scene format.
 //!
 //! This is a flat, string-typed AST that the editor mutates and later emits
-//! back to `.bsn` text. It is a distinct model from the parser AST in
-//! [`crate::parse`]: the parser AST captures the exact parsed structure, while
-//! this document AST is the editor's stable working representation. The loader
-//! bridges the two.
+//! back to `.bsn` text. The parser in [`crate::parse`] builds it directly
+//! from source text; there is no separate parse-time representation.
 //!
 //! Nodes live as entities in a private [`World`] held by [`SceneBsnAst`].
 

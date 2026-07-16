@@ -35,18 +35,14 @@ pub use loader::{BsnLoadError, parse_bsn_text};
 
 pub use apply::{
     AstDirty, BsnApplyAssets, BsnSceneAssets, apply_ast_to_ecs, apply_component_patch,
-    apply_dirty_ast_patches, bsn_value_to_reflect, get_bsn_field, parse_string_to_bsn_value,
-    remove_bsn_field, set_bsn_field, spawn_from_ast,
+    apply_dirty_ast_patches, bsn_value_to_reflect, get_bsn_field, remove_bsn_field, set_bsn_field,
+    spawn_from_ast,
 };
 
-pub use sync::{
-    add_component_to_ast, create_entity_in_ast, delete_entity_from_ast, ensure_ast_node,
-    remove_component_from_ast, sync_hierarchy_to_ast, sync_to_ast,
-};
+pub use sync::{create_entity_in_ast, delete_entity_from_ast, sync_hierarchy_to_ast, sync_to_ast};
 
 pub use writer::{
     BsnWriterConfig, append_world_to_ast, serialize_to_bsn, serialize_to_bsn_with_config,
-    serialize_world_scene,
 };
 
 use bevy::prelude::*;

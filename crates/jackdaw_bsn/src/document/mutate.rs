@@ -1,3 +1,6 @@
+//! Document mutation: node creation, hierarchy edits, patch writes, and
+//! deep cloning.
+
 use bevy::ecs::entity::Entity;
 
 use super::{BsnPatch, BsnPatches, DerivedComponents, SceneBsnAst};

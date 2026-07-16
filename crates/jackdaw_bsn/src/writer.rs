@@ -195,7 +195,7 @@ pub fn serialize_to_bsn_with_config(world: &World, config: &BsnWriterConfig) -> 
 /// filesystem path to their `#Name`/`@Name` reference strings. Hierarchy
 /// among the given entities emits as nested `Children [...]` blocks; a parent
 /// outside the set is treated as absent.
-pub fn serialize_world_scene(
+pub(crate) fn serialize_world_scene(
     world: &World,
     entities: &[Entity],
     parent_path: &Path,

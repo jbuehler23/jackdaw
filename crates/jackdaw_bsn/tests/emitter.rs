@@ -488,3 +488,35 @@ fn generic_type_paths_are_skipped_on_emit() {
     assert!(text.contains("Transform"), "non-generic patches still emit");
     parse_bsn_text(&text).expect("emitted text stays parseable");
 }
+
+/// String values with non-ASCII characters and control characters must
+/// survive the emit-parse round trip; the emitter escapes what the lexer
+/// cannot pass through raw.
+#[test]
+fn unicode_and_control_characters_round_trip() {
+    use jackdaw_bsn::{BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnValue, SceneBsnAst};
+
+    let tricky = "u\u{00fc}ber \u{1f426}\nline two\ttabbed \"quoted\"";
+    let mut ast = SceneBsnAst::default();
+    let node = ast.create_entity_node(vec![
+        BsnPatch::Name("n\u{00e4}me".to_string()),
+        BsnPatch::Struct(BsnStructData {
+            type_path: "test::Labeled".to_string(),
+            fields: BsnStructFields(vec![BsnField {
+                name: "text".to_string(),
+                value: BsnValue::String(tricky.to_string()),
+            }]),
+        }),
+    ]);
+    ast.add_to_roots(node);
+
+    let text = jackdaw_bsn::emit_scene(&ast);
+    let reparsed = jackdaw_bsn::parse_bsn_text(&text).expect("emitted text parses");
+    let root = reparsed.roots[0];
+    assert_eq!(reparsed.get_name(root), Some("n\u{00e4}me"));
+    let value = jackdaw_bsn::get_bsn_field(&reparsed, root, "test::Labeled", "text");
+    assert!(
+        matches!(&value, Some(BsnValue::String(s)) if s == tricky),
+        "string survives the round trip; emitted:\n{text}"
+    );
+}

@@ -69,7 +69,7 @@ pub fn jackdaw_entity_bsn_handler(In(params): In<Option<Value>>, world: &mut Wor
         visited.push(entity);
 
         for type_id in reflected_component_type_ids(world, entity) {
-            jackdaw_bsn::add_component_to_ast(world, entity, type_id);
+            jackdaw_bsn::sync_to_ast(world, entity, type_id);
         }
 
         let children: Vec<Entity> = world

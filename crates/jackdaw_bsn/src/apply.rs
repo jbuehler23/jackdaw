@@ -322,6 +322,8 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
             for field in &data.fields.0 {
                 if let Some(target) = s.field_mut(&field.name) {
                     merge_bsn_value_into_reflect(target, &field.value, &reg, assets_ctx.as_ref());
+                } else {
+                    log::warn!("unknown field '{}' on '{}'", field.name, data.type_path);
                 }
             }
         }
@@ -1344,32 +1346,6 @@ fn get_field_type_path(
     let field_info = struct_info.field(field_name)?;
     let field_reg = registry.get(field_info.ty().id())?;
     Some(field_reg.type_info().type_path().to_string())
-}
-
-/// Parse a string (from inspector text input) into a [`BsnValue`], given the
-/// expected field type.
-pub fn parse_string_to_bsn_value(value_str: &str, expected: TypeId) -> Option<BsnValue> {
-    if expected == TypeId::of::<f32>() || expected == TypeId::of::<f64>() {
-        value_str.parse::<f64>().ok().map(BsnValue::Float)
-    } else if expected == TypeId::of::<i8>()
-        || expected == TypeId::of::<u8>()
-        || expected == TypeId::of::<i16>()
-        || expected == TypeId::of::<u16>()
-        || expected == TypeId::of::<i32>()
-        || expected == TypeId::of::<u32>()
-        || expected == TypeId::of::<i64>()
-        || expected == TypeId::of::<u64>()
-        || expected == TypeId::of::<isize>()
-        || expected == TypeId::of::<usize>()
-    {
-        value_str.parse::<i128>().ok().map(BsnValue::Int)
-    } else if expected == TypeId::of::<bool>() {
-        value_str.parse::<bool>().ok().map(BsnValue::Bool)
-    } else if expected == TypeId::of::<String>() {
-        Some(BsnValue::String(value_str.to_string()))
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

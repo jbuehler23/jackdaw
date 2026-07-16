@@ -1,3 +1,6 @@
+//! Read-only queries over the document: node lookups, hierarchy walks,
+//! and component-patch searches.
+
 use bevy::ecs::entity::Entity;
 
 use super::{BsnPatch, BsnPatches, BsnValue, DerivedComponents, SceneBsnAst};
