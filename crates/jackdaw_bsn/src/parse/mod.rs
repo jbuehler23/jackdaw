@@ -1,19 +1,18 @@
-//! Parser front-end for the `.bsn` scene format.
+//! Parser for `.bsn` source text.
 //!
-//! This turns `.bsn` source text into a self-contained parser AST
-//! ([`ast::BsnAst`]). It is the parse-only half of the format: it does not
-//! resolve symbols to concrete component values. That resolution to ECS is
-//! handled elsewhere.
-//!
-//! Parser vendored from Bevy's dynamic BSN work.
+//! The grammar rules track the dynamic-BSN grammar from bevyengine/bevy#23576
+//! (plus the jackdaw `map[...]` literal and duplicate-field rejection); the
+//! parser builds the editor document types directly, so its output is a
+//! [`SceneBsnAst`] with no separate parse-time representation.
 
 use std::cell::RefCell;
 
-use bevy::ecs::{entity::Entity, prelude::Resource, world::World};
+use bevy::ecs::entity::Entity;
 use lalrpop_util::lalrpop_mod;
 use thiserror::Error;
 
-pub mod ast;
+use crate::document::{BsnField, BsnPatch, BsnStructData, BsnValue, SceneBsnAst};
+
 pub mod lexer;
 
 lalrpop_mod!(
@@ -29,18 +28,6 @@ lalrpop_mod!(
     "/parse/grammar.rs"
 );
 
-pub use ast::{
-    BsnAst, BsnExpr, BsnField, BsnNameStore, BsnNamedTuple, BsnPatch, BsnPatches, BsnRelation,
-    BsnStruct, BsnSymbol, BsnVar,
-};
-
-/// Identifies the root [`BsnPatches`] node inside a parsed [`BsnAst`]'s world.
-///
-/// Stored as a resource so the root stays reachable across the `BsnAst`
-/// boundary without altering the vendored `BsnAst(World)` shape.
-#[derive(Resource, Clone, Copy)]
-pub struct BsnRoot(pub Entity);
-
 /// An error produced while parsing `.bsn` source text.
 #[derive(Error, Debug)]
 pub enum ParseError {
@@ -55,58 +42,18 @@ pub enum ParseError {
     DuplicateField { type_name: String, field: String },
 }
 
-/// Reject structs that name the same field twice: applying such a patch
-/// would silently let the last occurrence win, hiding hand-edit mistakes.
-fn check_duplicate_fields(ast: &mut BsnAst) -> Result<(), ParseError> {
-    fn find_duplicate(symbol: &ast::BsnSymbol, fields: &[ast::BsnField]) -> Option<ParseError> {
-        let mut seen = std::collections::HashSet::new();
-        for ast::BsnField(name, _) in fields {
-            if !seen.insert(name.as_str()) {
-                return Some(ParseError::DuplicateField {
-                    type_name: symbol.1.clone(),
-                    field: name.clone(),
-                });
-            }
-        }
-        None
-    }
-
-    let mut patches = ast.0.query::<&ast::BsnPatch>();
-    for patch in patches.iter(&ast.0) {
-        if let ast::BsnPatch::Struct(ast::BsnStruct(symbol, fields, _)) = patch
-            && let Some(err) = find_duplicate(symbol, fields)
-        {
-            return Err(err);
-        }
-    }
-    let mut exprs = ast.0.query::<&ast::BsnExpr>();
-    for expr in exprs.iter(&ast.0) {
-        if let ast::BsnExpr::Struct(ast::BsnStruct(symbol, fields, _)) = expr
-            && let Some(err) = find_duplicate(symbol, fields)
-        {
-            return Err(err);
-        }
-    }
-    Ok(())
-}
-
-/// Parse `.bsn` source text into a [`BsnAst`].
-///
-/// On success the returned AST holds every parsed node in its internal world,
-/// with the root [`BsnPatches`] reachable via the entity returned by the
-/// top-level parser.
-pub fn parse_bsn(text: &str) -> Result<BsnAst, ParseError> {
-    let mut world = World::new();
-    world.init_resource::<BsnNameStore>();
-    let ast = RefCell::new(BsnAst(world));
+/// Parse `.bsn` source text into a document, returning the document and the
+/// entity of the top-level patch group (which may be a multi-root `Children`
+/// wrapper; the loader unwraps it).
+pub fn parse_bsn(text: &str) -> Result<(SceneBsnAst, Entity), ParseError> {
+    let ast = RefCell::new(SceneBsnAst::default());
 
     let lexer = lexer::Lexer::new(text);
     match grammar::TopLevelPatchesParser::new().parse(&ast, lexer) {
         Ok(root) => {
             let mut ast = ast.into_inner();
             check_duplicate_fields(&mut ast)?;
-            ast.0.insert_resource(BsnRoot(root));
-            Ok(ast)
+            Ok((ast, root))
         }
         Err(err) => {
             if let lalrpop_util::ParseError::User {
@@ -119,4 +66,53 @@ pub fn parse_bsn(text: &str) -> Result<BsnAst, ParseError> {
             }
         }
     }
+}
+
+/// Reject structs that name the same field twice: applying such a patch
+/// would silently let the last occurrence win, hiding hand-edit mistakes.
+fn check_duplicate_fields(ast: &mut SceneBsnAst) -> Result<(), ParseError> {
+    fn find_duplicate(data: &BsnStructData) -> Option<ParseError> {
+        let mut seen = std::collections::HashSet::new();
+        for BsnField { name, value } in &data.fields.0 {
+            if !seen.insert(name.as_str()) {
+                return Some(ParseError::DuplicateField {
+                    type_name: data.type_path.clone(),
+                    field: name.clone(),
+                });
+            }
+            if let Some(err) = find_duplicate_in_value(value) {
+                return Some(err);
+            }
+        }
+        None
+    }
+
+    fn find_duplicate_in_value(value: &BsnValue) -> Option<ParseError> {
+        match value {
+            BsnValue::Struct(data) => find_duplicate(data),
+            BsnValue::TupleStruct(data) => data.values.iter().find_map(find_duplicate_in_value),
+            BsnValue::List(items) => items.iter().find_map(find_duplicate_in_value),
+            BsnValue::Map(entries) => entries.iter().find_map(|(k, v)| {
+                find_duplicate_in_value(k).or_else(|| find_duplicate_in_value(v))
+            }),
+            _ => None,
+        }
+    }
+
+    let mut patches = ast.world.query::<&BsnPatch>();
+    for patch in patches.iter(&ast.world) {
+        let found = match patch {
+            BsnPatch::Struct(data) => find_duplicate(data),
+            BsnPatch::Template(_, Some(fields)) => fields
+                .0
+                .iter()
+                .find_map(|f| find_duplicate_in_value(&f.value)),
+            BsnPatch::TupleStruct(data) => data.values.iter().find_map(find_duplicate_in_value),
+            _ => None,
+        };
+        if let Some(err) = found {
+            return Err(err);
+        }
+    }
+    Ok(())
 }

@@ -1,108 +1,87 @@
-//! Parser tests for the `.bsn` front-end.
-
-use jackdaw_bsn::parse::{BsnPatch, BsnPatches, BsnRoot};
-use jackdaw_bsn::{BsnExpr, BsnNamedTuple, BsnStruct, BsnVar, parse_bsn};
+//! Parser tests for the `.bsn` front-end. The parser builds the editor
+//! document directly, so assertions inspect [`SceneBsnAst`] patches and owned
+//! [`BsnValue`] trees.
 
 use bevy::ecs::entity::Entity;
-use jackdaw_bsn::BsnAst;
+use jackdaw_bsn::{BsnPatch, BsnValue, SceneBsnAst, parse_bsn};
 
-/// Fetch the root list of patch entities from a parsed AST.
-fn root_patches(ast: &BsnAst) -> Vec<Entity> {
-    let root = ast.0.resource::<BsnRoot>().0;
-    ast.0
-        .get::<BsnPatches>(root)
-        .expect("root BsnPatches")
-        .0
-        .clone()
+/// Parse text and return the document plus the top-level patch group's
+/// patch entities.
+fn parse(text: &str) -> (SceneBsnAst, Vec<Entity>) {
+    let (ast, root) = parse_bsn(text).expect("text should parse");
+    let patches = ast.get_patches(root).expect("root patch group").0.clone();
+    (ast, patches)
 }
 
-fn patch(ast: &BsnAst, id: Entity) -> &BsnPatch {
-    ast.0.get::<BsnPatch>(id).expect("BsnPatch node")
-}
-
-fn expr(ast: &BsnAst, id: Entity) -> &BsnExpr {
-    ast.0.get::<BsnExpr>(id).expect("BsnExpr node")
+fn patch(ast: &SceneBsnAst, id: Entity) -> &BsnPatch {
+    ast.get_patch(id).expect("patch node")
 }
 
 #[test]
 fn parses_example_fixture() {
     let text = include_str!("fixtures/example.bsn");
-    let ast = parse_bsn(text).expect("example.bsn should parse");
-
-    let patches = root_patches(&ast);
+    let (ast, patches) = parse(text);
     // #Root, Transform, Visibility::Visible, Children [...]
     assert_eq!(patches.len(), 4, "top-level patch count");
 
     // First patch is the `#Root` name.
     match patch(&ast, patches[0]) {
-        BsnPatch::Name(name, _index) => assert_eq!(name, "Root"),
+        BsnPatch::Name(name) => assert_eq!(name, "Root"),
         _ => panic!("expected a Name patch first"),
     }
 
-    // A bare type-path Var patch: Transform.
+    // A bare type-path patch: Transform.
     match patch(&ast, patches[1]) {
-        BsnPatch::Var(BsnVar(symbol, is_template)) => {
-            assert!(!is_template);
-            assert_eq!(symbol.1, "Transform");
-        }
-        _ => panic!("expected a Var patch for Transform"),
+        BsnPatch::Type(path) => assert!(path.ends_with("Transform"), "got {path}"),
+        _ => panic!("expected a Type patch for Transform"),
     }
 
     // An enum unit-variant patch: Visibility::Visible.
     match patch(&ast, patches[2]) {
-        BsnPatch::Var(BsnVar(symbol, _)) => {
-            assert_eq!(symbol.1, "Visible");
-            assert!(symbol.0.iter().any(|seg| seg == "Visibility"));
+        BsnPatch::Type(path) => {
+            assert!(path.ends_with("::Visible"));
+            assert!(path.contains("Visibility"));
         }
-        _ => panic!("expected a Var patch for Visibility::Visible"),
+        _ => panic!("expected a Type patch for Visibility::Visible"),
     }
 
-    // The Children relation and its grouped child patches.
-    let BsnPatch::Relation(relation) = patch(&ast, patches[3]) else {
-        panic!("expected a Relation patch for Children");
+    // The Children relation and its grouped child nodes.
+    let BsnPatch::Children(children) = patch(&ast, patches[3]) else {
+        panic!("expected a Children patch");
     };
-    assert_eq!(relation.0.1, "Children");
     // Groups are comma-separated; the fixture has three groups.
-    assert_eq!(relation.1.len(), 3, "Children group count");
+    assert_eq!(children.len(), 3, "Children group count");
 
     // First group bundles four patches onto one child.
-    let group0 = ast
-        .0
-        .get::<BsnPatches>(relation.1[0])
-        .expect("group patches");
+    let group0 = ast.get_patches(children[0]).expect("group patches");
     assert_eq!(group0.0.len(), 4);
 
     // A struct patch with a known field lives in the first group.
-    let mut saw_struct_field = false;
-    for &child in &group0.0 {
-        if let BsnPatch::Struct(BsnStruct(_symbol, fields, _)) = patch(&ast, child)
-            && fields.iter().any(|f| f.0 == "intensity")
-        {
-            saw_struct_field = true;
-        }
-    }
+    let saw_struct_field = group0.0.iter().any(|&child| {
+        matches!(
+            patch(&ast, child),
+            BsnPatch::Struct(data) if data.fields.0.iter().any(|f| f.name == "intensity")
+        )
+    });
     assert!(
         saw_struct_field,
         "expected a struct patch with an `intensity` field"
     );
 
-    // A tuple patch: SceneRoot("...").
+    // A tuple patch: SceneRoot("..."), and a template patch:
+    // @CascadeShadowConfigBuilder.
     let mut saw_tuple = false;
-    // A template patch: @CascadeShadowConfigBuilder.
     let mut saw_template = false;
-    for &group_id in &relation.1 {
-        let group = ast.0.get::<BsnPatches>(group_id).expect("group patches");
+    for &group_id in children {
+        let group = ast.get_patches(group_id).expect("group patches");
         for &child in &group.0 {
             match patch(&ast, child) {
-                BsnPatch::NamedTuple(BsnNamedTuple(symbol, args, _)) if symbol.1 == "SceneRoot" => {
+                BsnPatch::TupleStruct(data) if data.type_path.ends_with("SceneRoot") => {
                     saw_tuple = true;
-                    assert_eq!(args.len(), 1);
-                    assert!(matches!(expr(&ast, args[0]), BsnExpr::StringLit(_)));
+                    assert_eq!(data.values.len(), 1);
+                    assert!(matches!(&data.values[0], BsnValue::String(_)));
                 }
-                BsnPatch::Struct(BsnStruct(symbol, _, is_template))
-                    if symbol.1 == "CascadeShadowConfigBuilder" =>
-                {
-                    assert!(*is_template, "template patch should carry the @ marker");
+                BsnPatch::Template(path, _) if path.ends_with("CascadeShadowConfigBuilder") => {
                     saw_template = true;
                 }
                 _ => {}
@@ -118,87 +97,75 @@ fn parses_example_fixture() {
 
 #[test]
 fn parses_bare_type_path() {
-    let ast = parse_bsn("foo::bar::Baz").unwrap();
-    let patches = root_patches(&ast);
+    let (ast, patches) = parse("foo::bar::Baz");
     assert_eq!(patches.len(), 1);
-    let BsnPatch::Var(BsnVar(symbol, is_template)) = patch(&ast, patches[0]) else {
-        panic!("expected Var");
+    let BsnPatch::Type(path) = patch(&ast, patches[0]) else {
+        panic!("expected Type");
     };
-    assert!(!is_template);
-    assert_eq!(symbol.0, vec!["foo".to_string(), "bar".to_string()]);
-    assert_eq!(symbol.1, "Baz");
+    assert_eq!(path, "foo::bar::Baz");
 }
 
 #[test]
 fn parses_struct_with_fields() {
-    let ast = parse_bsn("Thing { a: 1, b: 2.5 }").unwrap();
-    let patches = root_patches(&ast);
-    let BsnPatch::Struct(BsnStruct(symbol, fields, _)) = patch(&ast, patches[0]) else {
+    let (ast, patches) = parse("Thing { a: 1, b: 2.5 }");
+    let BsnPatch::Struct(data) = patch(&ast, patches[0]) else {
         panic!("expected Struct");
     };
-    assert_eq!(symbol.1, "Thing");
-    assert_eq!(fields.len(), 2);
-    assert_eq!(fields[0].0, "a");
-    assert!(matches!(expr(&ast, fields[0].1), BsnExpr::IntLit(1)));
-    assert!(matches!(expr(&ast, fields[1].1), BsnExpr::FloatLit(_)));
+    assert_eq!(data.type_path, "Thing");
+    assert_eq!(data.fields.0.len(), 2);
+    assert_eq!(data.fields.0[0].name, "a");
+    assert!(matches!(data.fields.0[0].value, BsnValue::Int(1)));
+    assert!(matches!(data.fields.0[1].value, BsnValue::Float(_)));
 }
 
 #[test]
 fn parses_tuple() {
-    let ast = parse_bsn(r#"Wrap("hello", true)"#).unwrap();
-    let patches = root_patches(&ast);
-    let BsnPatch::NamedTuple(BsnNamedTuple(symbol, args, _)) = patch(&ast, patches[0]) else {
-        panic!("expected NamedTuple");
+    let (ast, patches) = parse(r#"Wrap("hello", true)"#);
+    let BsnPatch::TupleStruct(data) = patch(&ast, patches[0]) else {
+        panic!("expected TupleStruct");
     };
-    assert_eq!(symbol.1, "Wrap");
-    assert_eq!(args.len(), 2);
-    assert!(matches!(expr(&ast, args[0]), BsnExpr::StringLit(s) if s == "hello"));
-    assert!(matches!(expr(&ast, args[1]), BsnExpr::BoolLit(true)));
+    assert_eq!(data.type_path, "Wrap");
+    assert_eq!(data.values.len(), 2);
+    assert!(matches!(&data.values[0], BsnValue::String(s) if s == "hello"));
+    assert!(matches!(data.values[1], BsnValue::Bool(true)));
 }
 
 #[test]
 fn parses_list_literal() {
-    let ast = parse_bsn("Holder { items: [1, 2, 3] }").unwrap();
-    let patches = root_patches(&ast);
-    let BsnPatch::Struct(BsnStruct(_, fields, _)) = patch(&ast, patches[0]) else {
+    let (ast, patches) = parse("Holder { items: [1, 2, 3] }");
+    let BsnPatch::Struct(data) = patch(&ast, patches[0]) else {
         panic!("expected Struct");
     };
-    let BsnExpr::List(items) = expr(&ast, fields[0].1) else {
-        panic!("expected List expr");
+    let BsnValue::List(items) = &data.fields.0[0].value else {
+        panic!("expected List value");
     };
     assert_eq!(items.len(), 3);
 }
 
 #[test]
 fn parses_map_literal() {
-    let ast = parse_bsn(r#"Comp { data: map[("a", 1), ("b", 2)] }"#).unwrap();
-    let patches = root_patches(&ast);
-    let BsnPatch::Struct(BsnStruct(_, fields, _)) = patch(&ast, patches[0]) else {
+    let (ast, patches) = parse(r#"Comp { data: map[("a", 1), ("b", 2)] }"#);
+    let BsnPatch::Struct(data) = patch(&ast, patches[0]) else {
         panic!("expected Struct");
     };
-    let BsnExpr::Map(entries) = expr(&ast, fields[0].1) else {
-        panic!("expected Map expr");
+    let BsnValue::Map(entries) = &data.fields.0[0].value else {
+        panic!("expected Map value");
     };
     assert_eq!(entries.len(), 2);
-    // First entry: ("a", 1).
-    let (k0, v0) = entries[0];
-    assert!(matches!(expr(&ast, k0), BsnExpr::StringLit(s) if s == "a"));
-    assert!(matches!(expr(&ast, v0), BsnExpr::IntLit(1)));
-    // Second entry: ("b", 2).
-    let (k1, v1) = entries[1];
-    assert!(matches!(expr(&ast, k1), BsnExpr::StringLit(s) if s == "b"));
-    assert!(matches!(expr(&ast, v1), BsnExpr::IntLit(2)));
+    assert!(matches!(&entries[0].0, BsnValue::String(s) if s == "a"));
+    assert!(matches!(entries[0].1, BsnValue::Int(1)));
+    assert!(matches!(&entries[1].0, BsnValue::String(s) if s == "b"));
+    assert!(matches!(entries[1].1, BsnValue::Int(2)));
 }
 
 #[test]
 fn parses_empty_map_literal() {
-    let ast = parse_bsn("Comp { data: map[] }").unwrap();
-    let patches = root_patches(&ast);
-    let BsnPatch::Struct(BsnStruct(_, fields, _)) = patch(&ast, patches[0]) else {
+    let (ast, patches) = parse("Comp { data: map[] }");
+    let BsnPatch::Struct(data) = patch(&ast, patches[0]) else {
         panic!("expected Struct");
     };
-    let BsnExpr::Map(entries) = expr(&ast, fields[0].1) else {
-        panic!("expected Map expr");
+    let BsnValue::Map(entries) = &data.fields.0[0].value else {
+        panic!("expected Map value");
     };
     assert!(entries.is_empty());
 }
@@ -207,38 +174,34 @@ fn parses_empty_map_literal() {
 fn map_is_a_contextual_keyword() {
     // `map` is only special immediately before `[`. As a field name, component
     // name, or path segment it remains an ordinary identifier.
-    let ast = parse_bsn("Comp { map: 1 }").unwrap();
-    let patches = root_patches(&ast);
-    let BsnPatch::Struct(BsnStruct(_, fields, _)) = patch(&ast, patches[0]) else {
+    let (ast, patches) = parse("Comp { map: 1 }");
+    let BsnPatch::Struct(data) = patch(&ast, patches[0]) else {
         panic!("expected Struct");
     };
-    assert_eq!(fields[0].0, "map");
+    assert_eq!(data.fields.0[0].name, "map");
 
-    let ast = parse_bsn("map { x: 1 }").unwrap();
-    let patches = root_patches(&ast);
-    let BsnPatch::Struct(BsnStruct(symbol, _, _)) = patch(&ast, patches[0]) else {
+    let (ast, patches) = parse("map { x: 1 }");
+    let BsnPatch::Struct(data) = patch(&ast, patches[0]) else {
         panic!("expected Struct named map");
     };
-    assert_eq!(symbol.1, "map");
+    assert_eq!(data.type_path, "map");
 }
 
 #[test]
 fn parses_empty_list_literal() {
-    let ast = parse_bsn("Holder { items: [] }").unwrap();
-    let patches = root_patches(&ast);
-    let BsnPatch::Struct(BsnStruct(_, fields, _)) = patch(&ast, patches[0]) else {
+    let (ast, patches) = parse("Holder { items: [] }");
+    let BsnPatch::Struct(data) = patch(&ast, patches[0]) else {
         panic!("expected Struct");
     };
-    let BsnExpr::List(items) = expr(&ast, fields[0].1) else {
-        panic!("expected List expr");
+    let BsnValue::List(items) = &data.fields.0[0].value else {
+        panic!("expected List value");
     };
     assert!(items.is_empty());
 }
 
 #[test]
 fn parses_base_inherit() {
-    let ast = parse_bsn(r#":"base.bsn""#).unwrap();
-    let patches = root_patches(&ast);
+    let (ast, patches) = parse(r#":"base.bsn""#);
     let BsnPatch::Base(path) = patch(&ast, patches[0]) else {
         panic!("expected Base");
     };
@@ -247,9 +210,8 @@ fn parses_base_inherit() {
 
 #[test]
 fn parses_name_with_spaces() {
-    let ast = parse_bsn(r#"#"a name with spaces""#).unwrap();
-    let patches = root_patches(&ast);
-    let BsnPatch::Name(name, _) = patch(&ast, patches[0]) else {
+    let (ast, patches) = parse(r#"#"a name with spaces""#);
+    let BsnPatch::Name(name) = patch(&ast, patches[0]) else {
         panic!("expected Name");
     };
     assert_eq!(name, "a name with spaces");
@@ -257,13 +219,12 @@ fn parses_name_with_spaces() {
 
 #[test]
 fn parses_template_marker() {
-    let ast = parse_bsn("@Foo { x: 1 }").unwrap();
-    let patches = root_patches(&ast);
-    let BsnPatch::Struct(BsnStruct(symbol, _, is_template)) = patch(&ast, patches[0]) else {
-        panic!("expected Struct");
+    let (ast, patches) = parse("@Foo { x: 1 }");
+    let BsnPatch::Template(path, fields) = patch(&ast, patches[0]) else {
+        panic!("expected Template");
     };
-    assert_eq!(symbol.1, "Foo");
-    assert!(is_template);
+    assert_eq!(path, "Foo");
+    assert!(fields.is_some());
 }
 
 #[test]
@@ -273,20 +234,18 @@ fn ignores_comments() {
 Foo /* block /* nested */ comment */ { a: 1 }
 // trailing
 ";
-    let ast = parse_bsn(text).unwrap();
-    let patches = root_patches(&ast);
+    let (ast, patches) = parse(text);
     assert_eq!(patches.len(), 1);
     assert!(matches!(patch(&ast, patches[0]), BsnPatch::Struct(_)));
 }
 
 #[test]
 fn allows_trailing_commas() {
-    let ast = parse_bsn("Foo { a: 1, b: 2, }").unwrap();
-    let patches = root_patches(&ast);
-    let BsnPatch::Struct(BsnStruct(_, fields, _)) = patch(&ast, patches[0]) else {
+    let (ast, patches) = parse("Foo { a: 1, b: 2, }");
+    let BsnPatch::Struct(data) = patch(&ast, patches[0]) else {
         panic!("expected Struct");
     };
-    assert_eq!(fields.len(), 2);
+    assert_eq!(data.fields.0.len(), 2);
 }
 
 #[test]

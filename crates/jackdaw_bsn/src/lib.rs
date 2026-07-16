@@ -1,14 +1,10 @@
-//! Reader for the `.bsn` scene format.
+//! Reader, editor document, and writer for the `.bsn` scene format.
 //!
-//! This crate provides the parser front-end (turning `.bsn` source text into a
-//! self-contained parser AST), the editor document model, the loader that
-//! adapts a parsed AST into it, the apply path that resolves the document AST
-//! to ECS components, and the emitter that writes the document AST back to
-//! `.bsn` text.
-//!
-//! The parser and document layers both name some types `BsnPatch`, `BsnField`,
-//! and `BsnPatches`. The document (editor-facing) versions are re-exported at
-//! the crate root; the parser versions stay under [`crate::parse`].
+//! The parser builds the editor document ([`SceneBsnAst`]) directly from
+//! `.bsn` source text; there is no separate parse-time representation. The
+//! apply path resolves the document to ECS components, and the emitter
+//! writes the document back to `.bsn` text. The grammar rules track the
+//! dynamic-BSN work in bevyengine/bevy#23576.
 
 pub mod apply;
 pub mod catalog;
@@ -25,10 +21,7 @@ pub use catalog::{
     load_bsn_scene, serialize_assets_to_bsn,
 };
 
-pub use parse::{
-    BsnAst, BsnExpr, BsnNameStore, BsnNamedTuple, BsnRelation, BsnRoot, BsnStruct, BsnSymbol,
-    BsnVar, ParseError, parse_bsn,
-};
+pub use parse::{ParseError, parse_bsn};
 
 pub use delta::{apply_deltas, bsn_value_eq, shallow_diff};
 
