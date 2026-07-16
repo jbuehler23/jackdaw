@@ -201,6 +201,38 @@ pub fn resolve_entry_entity(
     projection.by_bits.get(&key.bits).copied()
 }
 
+/// Whether the entry's component is authored on the entity's document node.
+fn component_authored_for_entry(world: &World, key: &LiveEditKey, entry: &LiveEditEntry) -> bool {
+    let ast = world.resource::<SceneBsnAst>();
+    let projection = world.resource::<crate::pie_projection::PieProjection>();
+    let Some(entity) = resolve_entry_entity(ast, projection, key, entry) else {
+        return false;
+    };
+    ast.ast_for(entity)
+        .is_some_and(|node| ast.find_patch_by_type_path(node, &key.type_path).is_some())
+}
+
+/// The default value of one field of a reflected type, serialized to the
+/// wire JSON the live protocol uses. `None` when the type has no
+/// `ReflectDefault` or the path does not resolve.
+fn default_field_json(
+    world: &World,
+    type_path: &str,
+    field_path: &str,
+) -> Option<serde_json::Value> {
+    use bevy::reflect::GetPath;
+    use bevy::reflect::prelude::ReflectDefault;
+    use bevy::reflect::serde::TypedReflectSerializer;
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let registration = registry.get_with_type_path(type_path)?;
+    let default_instance = registration.data::<ReflectDefault>()?.default();
+    let field = default_instance.reflect_path(field_path).ok()?;
+    let serializer = TypedReflectSerializer::new(field, &registry);
+    serde_json::to_value(&serializer).ok()
+}
+
 /// Read one authored field from the live BSN document as reflect-format
 /// JSON, matching the serialization the live protocol uses. `None` when the
 /// component or field is not authored on the node.
@@ -421,12 +453,24 @@ pub fn revert_entry(world: &mut World, key: &LiveEditKey) {
         );
         return;
     };
-    let Some(baseline) = entry.baseline.clone() else {
-        warn!(
-            "revert live edit: '{}' has no authored baseline",
-            entry.label
-        );
-        return;
+    // A missing baseline usually means the component itself is unauthored,
+    // but a sparse patch also elides default-valued fields: when the
+    // component IS authored, the effective baseline is the field's default.
+    let baseline = match entry.baseline.clone() {
+        Some(baseline) => baseline,
+        None => {
+            let authored_default = component_authored_for_entry(world, key, &entry)
+                .then(|| default_field_json(world, &key.type_path, &key.field_path))
+                .flatten();
+            let Some(baseline) = authored_default else {
+                warn!(
+                    "revert live edit: '{}' has no authored baseline",
+                    entry.label
+                );
+                return;
+            };
+            baseline
+        }
     };
     let entity = {
         let ast = world.resource::<SceneBsnAst>();

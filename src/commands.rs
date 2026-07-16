@@ -756,9 +756,11 @@ impl EditorCommand for SetBsnField {
             self.apply_name(world, old_name.as_deref());
             return;
         }
-        // A missing old value with an empty field path means execute authored
-        // a component that did not exist before; undo removes the entry.
+        // A missing old value means execute authored something that did not
+        // exist before: a whole component (empty field path) or a single
+        // field of a sparse patch. Undo removes what execute authored.
         let removes_component = self.field_path.is_empty() && self.old_value.is_none();
+        let removes_field = !self.field_path.is_empty() && self.old_value.is_none();
         {
             let registry = world.resource::<AppTypeRegistry>().clone();
             let registry = registry.read();
@@ -768,6 +770,13 @@ impl EditorCommand for SetBsnField {
             };
             if removes_component {
                 ast.remove_component_patch(patches_entity, &self.type_path);
+            } else if removes_field {
+                jackdaw_bsn::remove_bsn_field(
+                    &mut ast,
+                    patches_entity,
+                    &self.type_path,
+                    &self.field_path,
+                );
             } else if let Some(old_value) = &self.old_value {
                 jackdaw_bsn::set_bsn_field(
                     &mut ast,
@@ -784,6 +793,11 @@ impl EditorCommand for SetBsnField {
         }
         if removes_component {
             remove_component_from_ecs(world, self.entity, &self.type_path);
+        } else if removes_field {
+            // The doc field is gone; restore the ECS field to the type's
+            // default, which is what the sparse patch resolves to when the
+            // field is absent.
+            reset_ecs_field_to_default(world, self.entity, &self.type_path, &self.field_path);
         } else {
             self.mirror_patch_to_ecs(world);
         }
@@ -844,6 +858,43 @@ pub(crate) fn apply_json_field_to_ecs(
 
 /// Remove a reflected component from an ECS entity by type path. A no-op when
 /// the type is unregistered or the entity is gone.
+/// Reset one field of a live ECS component to the type's default value:
+/// the state a sparse patch resolves to when the field is not authored.
+fn reset_ecs_field_to_default(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+) {
+    use bevy::reflect::GetPath;
+    use bevy::reflect::prelude::ReflectDefault;
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let Some(registration) = registry.get_with_type_path(type_path) else {
+        return;
+    };
+    let Some(reflect_default) = registration.data::<ReflectDefault>() else {
+        return;
+    };
+    let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+        return;
+    };
+
+    let default_instance = reflect_default.default();
+    let Ok(default_field) = default_instance.reflect_path(field_path) else {
+        return;
+    };
+    let default_field = default_field.to_dynamic();
+
+    let Some(component) = reflect_component.reflect_mut(world.entity_mut(entity)) else {
+        return;
+    };
+    if let Ok(field) = component.into_inner().reflect_path_mut(field_path) {
+        field.apply(&*default_field);
+    }
+}
+
 fn remove_component_from_ecs(world: &mut World, entity: Entity, type_path: &str) {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
@@ -1177,6 +1228,64 @@ mod set_bsn_field_tests {
                 "undo restores the document"
             );
         }
+    }
+
+    /// A field-level execute with no old value authored a previously-absent
+    /// field of a sparse patch; undo removes the field again and resets the
+    /// live ECS field to the type's default.
+    #[test]
+    fn undo_removes_field_authored_by_execute() {
+        let mut app = field_app();
+        let entity = app
+            .world_mut()
+            .spawn(Transform::from_xyz(5.0, 0.0, 0.0))
+            .id();
+        create_entity_in_ast(app.world_mut(), entity, None);
+        let type_path = "bevy_transform::components::transform::Transform";
+        // Author only translation.x, mirroring a sparse patch.
+        let mut cmd_translation = SetBsnField {
+            entity,
+            type_path: type_path.to_string(),
+            field_path: "translation.x".to_string(),
+            old_value: None,
+            new_value: BsnValue::Float(5.0),
+            was_derived: false,
+        };
+        cmd_translation.execute(app.world_mut());
+
+        // Author a second, previously-absent field.
+        let mut cmd_scale = SetBsnField {
+            entity,
+            type_path: type_path.to_string(),
+            field_path: "scale.x".to_string(),
+            old_value: None,
+            new_value: BsnValue::Float(3.0),
+            was_derived: false,
+        };
+        cmd_scale.execute(app.world_mut());
+        assert_eq!(app.world().get::<Transform>(entity).unwrap().scale.x, 3.0);
+
+        cmd_scale.undo(app.world_mut());
+
+        // The doc field is gone and the ECS field is back at the default.
+        {
+            let ast = app.world().resource::<SceneBsnAst>();
+            let node = ast.ast_for(entity).expect("linked");
+            assert!(
+                get_bsn_field(ast, node, type_path, "scale.x").is_none(),
+                "undo removes the authored field from the sparse patch"
+            );
+        }
+        assert_eq!(
+            app.world().get::<Transform>(entity).unwrap().scale.x,
+            1.0,
+            "the live field resets to the type default"
+        );
+        // The other authored field is untouched.
+        assert_eq!(
+            app.world().get::<Transform>(entity).unwrap().translation.x,
+            5.0
+        );
     }
 
     #[test]

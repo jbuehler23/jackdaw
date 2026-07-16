@@ -1147,6 +1147,52 @@ fn index_into_value<'a>(value: &'a BsnValue, inner: &str) -> Option<&'a BsnValue
 /// Write `value` at `segments` within `current`, mirroring the read navigation.
 /// Named struct fields (and intermediate structs) are created on demand; tuple
 /// struct / list / map elements are only navigated when they already exist.
+/// Remove one named field from a component's sparse patch: the inverse of a
+/// [`set_bsn_field`] that authored a previously-absent field. Only dotted
+/// struct paths are supported; the leaf field is dropped from its enclosing
+/// struct value, and intermediate structs emptied by the removal stay (they
+/// are harmless in a sparse patch). A missing patch, path, or field is a
+/// no-op.
+pub fn remove_bsn_field(
+    ast: &mut SceneBsnAst,
+    patches_entity: Entity,
+    type_path: &str,
+    field_path: &str,
+) {
+    if field_path.is_empty() {
+        ast.remove_component_patch(patches_entity, type_path);
+        return;
+    }
+    let Some(patch_entity) = ast.find_patch_by_type_path(patches_entity, type_path) else {
+        return;
+    };
+    let Some(patch) = ast.world.get_mut::<BsnPatch>(patch_entity) else {
+        return;
+    };
+    let patch = patch.into_inner();
+    let BsnPatch::Struct(data) = patch else {
+        return;
+    };
+
+    let segments: Vec<&str> = field_path.split('.').filter(|s| !s.is_empty()).collect();
+    let Some((leaf, parents)) = segments.split_last() else {
+        return;
+    };
+
+    // Walk to the struct that holds the leaf field.
+    let mut fields = &mut data.fields;
+    for segment in parents {
+        let Some(next) = fields.0.iter_mut().find(|f| f.name == *segment) else {
+            return;
+        };
+        let BsnValue::Struct(inner) = &mut next.value else {
+            return;
+        };
+        fields = &mut inner.fields;
+    }
+    fields.0.retain(|f| f.name != *leaf);
+}
+
 fn set_nested_value(
     current: &mut BsnValue,
     segments: &[&str],

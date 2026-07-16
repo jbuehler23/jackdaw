@@ -465,3 +465,26 @@ fn handle_without_path_emits_catalog_name() {
         other => panic!("expected the catalog name, got {}", describe_value(other)),
     }
 }
+
+/// A patch whose type path is generic cannot round-trip (the grammar has no
+/// angle brackets); the emitter skips it instead of writing unparseable text.
+#[test]
+fn generic_type_paths_are_skipped_on_emit() {
+    use jackdaw_bsn::{BsnPatch, SceneBsnAst, parse_bsn_text};
+
+    let mut ast = SceneBsnAst::default();
+    let node = ast.create_entity_node(vec![
+        BsnPatch::Name("thing".to_string()),
+        BsnPatch::Type("bevy_pbr::MeshMaterial3d<StandardMaterial>".to_string()),
+        BsnPatch::Type("bevy_transform::components::transform::Transform".to_string()),
+    ]);
+    ast.add_to_roots(node);
+
+    let text = jackdaw_bsn::emit_scene(&ast);
+    assert!(
+        !text.contains('<'),
+        "generic path must not be emitted:\n{text}"
+    );
+    assert!(text.contains("Transform"), "non-generic patches still emit");
+    parse_bsn_text(&text).expect("emitted text stays parseable");
+}

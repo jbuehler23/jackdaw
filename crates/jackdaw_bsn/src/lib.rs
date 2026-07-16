@@ -36,7 +36,7 @@ pub use loader::{BsnLoadError, parse_bsn_text};
 pub use apply::{
     AstDirty, BsnApplyAssets, BsnSceneAssets, apply_ast_to_ecs, apply_component_patch,
     apply_dirty_ast_patches, bsn_value_to_reflect, get_bsn_field, parse_string_to_bsn_value,
-    set_bsn_field, spawn_from_ast,
+    remove_bsn_field, set_bsn_field, spawn_from_ast,
 };
 
 pub use sync::{

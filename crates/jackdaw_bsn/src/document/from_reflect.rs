@@ -295,7 +295,15 @@ impl BsnValue {
             return BsnValue::Map(entries);
         }
 
-        // Fallback: emit as string via Debug.
+        // Fallback: emit as string via Debug. The quoted string parses back,
+        // but the original typed value is not recoverable from it.
+        log::warn!(
+            "value of type '{}' has no BSN representation; storing its Debug form as a string",
+            value
+                .get_represented_type_info()
+                .map(bevy::reflect::TypeInfo::type_path)
+                .unwrap_or("<unknown>")
+        );
         BsnValue::String(format!("{value:?}"))
     }
 }
