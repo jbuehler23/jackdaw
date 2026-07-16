@@ -12,7 +12,6 @@ use bevy::reflect::serde::TypedReflectDeserializer;
 use bevy::time::Virtual;
 use serde::de::DeserializeSeed;
 
-use jackdaw_jsn::ast::JSN_NODE_ID_TYPE_PATH;
 use jackdaw_pie_protocol::event::{PieChannel, StateEvent, to_bytes};
 use jackdaw_pie_protocol::transport::PieTransport;
 use jackdaw_pie_protocol::transport_ipc::IpcChannelTransport;
@@ -127,7 +126,9 @@ fn lift_scene_node_id(
     entity_bits: u64,
     remote: &mut jackdaw_pie_protocol::RemoteEntity,
 ) {
-    remote.components.remove(JSN_NODE_ID_TYPE_PATH);
+    remote
+        .components
+        .remove(jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH);
     let entity = Entity::from_bits(entity_bits);
     if let Ok(entity_ref) = world.get_entity(entity)
         && let Some(node_id) = entity_ref.get::<SceneNodeId>()
@@ -806,7 +807,7 @@ mod tests {
     ///    `scene_node_id == None`.
     #[test]
     fn scene_node_id_lifted_out_of_components() {
-        const JSN_NODE_ID_TYPE_PATH: &str = jackdaw_jsn::ast::JSN_NODE_ID_TYPE_PATH;
+        const JSN_NODE_ID_TYPE_PATH: &str = jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH;
 
         let (handle, rendezvous) = serve().expect("serve");
 

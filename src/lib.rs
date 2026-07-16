@@ -20,6 +20,7 @@ pub mod clip_ops;
 pub mod command_palette;
 pub mod command_runner;
 pub mod commands;
+pub mod component_json;
 pub mod custom_properties;
 pub mod default_style;
 pub mod draw_brush;
@@ -356,7 +357,7 @@ impl Plugin for EditorCorePlugin {
         app.init_state::<AppState>()
             .add_plugins((FeathersPlugins, EditorFeathersPlugin));
         app.add_plugins((
-            jackdaw_jsn::JsnPlugin {
+            jackdaw_scene_types::SceneTypesPlugin {
                 runtime_mesh_rebuild: false,
             },
             jackdaw_bsn::JackdawBsnPlugin,

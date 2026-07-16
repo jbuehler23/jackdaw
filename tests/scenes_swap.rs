@@ -74,7 +74,7 @@ fn document_capture_includes_brushes() {
             })
             .disable::<WinitPlugin>(),
     );
-    app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
     let brush = app
         .world_mut()
@@ -112,7 +112,7 @@ fn swap_round_trips_a_single_brush() {
             })
             .disable::<WinitPlugin>(),
     );
-    app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
@@ -188,7 +188,7 @@ fn swap_preserves_camera_transform_per_tab() {
             })
             .disable::<WinitPlugin>(),
     );
-    app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
@@ -244,7 +244,7 @@ fn scene_new_appends_an_untitled_tab() {
             })
             .disable::<WinitPlugin>(),
     );
-    app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
@@ -291,7 +291,7 @@ fn scene_open_dedupes_by_path() {
             })
             .disable::<WinitPlugin>(),
     );
-    app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
@@ -352,7 +352,7 @@ fn make_app_with_n_tabs(n: usize) -> bevy::app::App {
             })
             .disable::<WinitPlugin>(),
     );
-    app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
@@ -696,7 +696,7 @@ fn tab_swap_preserves_entity_ordering_and_components() {
             })
             .disable::<WinitPlugin>(),
     );
-    app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
@@ -834,7 +834,7 @@ fn scene_open_flags_dirty_when_ids_need_migration() {
             })
             .disable::<WinitPlugin>(),
     );
-    app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
@@ -991,7 +991,7 @@ fn finish_load_scene_entities_and_ast_share_ids_after_heal() {
             })
             .disable::<WinitPlugin>(),
     );
-    app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();

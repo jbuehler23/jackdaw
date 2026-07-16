@@ -838,7 +838,7 @@ fn prefab_cache_reads_bsn_prefabs_with_stale_extension_references() {
 #[test]
 fn clipboard_payload_round_trips_through_bsn_text() {
     use jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn_with_registry;
-    use jackdaw_jsn::format::{ClipboardPayload, JsnHeader, JsnMetadata};
+    use jackdaw_jsn::format::{JsnHeader, JsnMetadata};
 
     // A copy payload: one entity with a face material reference, plus the
     // inline material it references.
@@ -862,35 +862,32 @@ fn clipboard_payload_round_trips_through_bsn_text() {
         "bevy_pbr::pbr_material::StandardMaterial".to_string(),
         std::collections::HashMap::from([("#BlueMat".to_string(), material_json)]),
     );
-    let payload = ClipboardPayload {
-        entities: vec![jackdaw_jsn::format::JsnEntity {
-            id: None,
-            parent: None,
-            components: std::collections::HashMap::from([
-                (
-                    "bevy_ecs::name::Name".to_string(),
-                    serde_json::json!("Copied"),
-                ),
-                (
-                    "bevy_transform::components::transform::Transform".to_string(),
-                    serde_json::json!({
-                        "translation": [7.0, 8.0, 9.0],
-                        "rotation": [0.0, 0.0, 0.0, 1.0],
-                        "scale": [1.0, 1.0, 1.0],
-                    }),
-                ),
-            ]),
-        }],
-        assets,
-    };
+    let payload_entities = vec![jackdaw_jsn::format::JsnEntity {
+        id: None,
+        parent: None,
+        components: std::collections::HashMap::from([
+            (
+                "bevy_ecs::name::Name".to_string(),
+                serde_json::json!("Copied"),
+            ),
+            (
+                "bevy_transform::components::transform::Transform".to_string(),
+                serde_json::json!({
+                    "translation": [7.0, 8.0, 9.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "scale": [1.0, 1.0, 1.0],
+                }),
+            ),
+        ]),
+    }];
 
     // Copy side: payload -> BSN text (the exact conversion copy performs).
     let payload_scene = jackdaw_jsn::JsnScene {
         jsn: JsnHeader::default(),
         metadata: JsnMetadata::default(),
-        assets: payload.assets.clone(),
+        assets,
         editor: None,
-        scene: payload.entities.clone(),
+        scene: payload_entities,
     };
     let text = convert_jsn_scene_to_bsn(app.world_mut(), &payload_scene)
         .expect("copy conversion")

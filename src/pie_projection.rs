@@ -513,7 +513,7 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
-        app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+        app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
 
         let cuboid = Brush::cuboid(1.0, 1.0, 1.0);
         let want_faces = cuboid.faces.len();

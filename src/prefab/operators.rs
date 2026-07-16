@@ -245,35 +245,51 @@ fn shift_node_translation(live: &mut SceneBsnAst, node: Entity, offset: Vec3) {
     }
 }
 
-/// Write a prefab document to `target_path`. `.bsn` targets emit directly;
-/// legacy `.jsn` targets bridge the emitted document through the `.jsn` scene
-/// format. Returns false on write failure.
-fn write_prefab_doc(target_path: &Path, prefab: &SceneBsnAst, op_id: &str) -> bool {
-    if let Some(parent) = target_path.parent() {
+/// Map a prefab target path to the `.bsn` file that actually gets written.
+/// Prefabs persist as BSN text (the cache loader reads only `.bsn`), so a
+/// legacy `.jsn` target redirects to its `.bsn` sibling. `IsA` sources still
+/// pointing at the old `.jsn` resolve through `resolve_source_path`'s sibling
+/// fallback.
+fn prefab_bsn_path(target_path: &Path) -> PathBuf {
+    if target_path.extension().is_some_and(|e| e == "jsn") {
+        target_path.with_extension("bsn")
+    } else {
+        target_path.to_path_buf()
+    }
+}
+
+/// Rename an existing legacy `.jsn` prefab to `.jsn.bak` (the same convention
+/// scene saves use) so a stale `.jsn` cannot shadow the fresh `.bsn` sibling.
+fn back_up_legacy_prefab(original: &Path) {
+    if !original.exists() {
+        return;
+    }
+    let mut backup = original.as_os_str().to_owned();
+    backup.push(".bak");
+    if let Err(err) = std::fs::rename(original, &backup) {
+        warn!(
+            "could not back up legacy prefab {}: {err}",
+            original.display()
+        );
+    }
+}
+
+/// Write a prefab document as BSN text. A `.jsn` target redirects to its
+/// `.bsn` sibling, backing up the legacy file. Returns the path actually
+/// written, or `None` on write failure.
+fn write_prefab_doc(target_path: &Path, prefab: &SceneBsnAst, op_id: &str) -> Option<PathBuf> {
+    let path = prefab_bsn_path(target_path);
+    if path != target_path {
+        back_up_legacy_prefab(target_path);
+    }
+    if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let text = if target_path.extension().is_some_and(|e| e == "bsn") {
-        emit_scene(prefab)
-    } else {
-        match jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn(&emit_scene(prefab)) {
-            Ok(scene) => match serde_json::to_string_pretty(&scene) {
-                Ok(t) => t,
-                Err(err) => {
-                    warn!("{op_id}: serialize failed: {err}");
-                    return false;
-                }
-            },
-            Err(err) => {
-                warn!("{op_id}: bsn to jsn bridge failed: {err}");
-                return false;
-            }
-        }
-    };
-    if let Err(err) = std::fs::write(target_path, text) {
-        warn!("{op_id}: failed to write {}: {err}", target_path.display());
-        return false;
+    if let Err(err) = std::fs::write(&path, emit_scene(prefab)) {
+        warn!("{op_id}: failed to write {}: {err}", path.display());
+        return None;
     }
-    true
+    Some(path)
 }
 
 fn collect_descendants(world: &World, root: Entity, out: &mut Vec<Entity>) {
@@ -384,7 +400,11 @@ pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target
         let cache = world.resource::<PrefabAstCache>();
         live.ast_for(root).and_then(|node| {
             let source = read_isa_source(live, node)?;
-            if source.as_path() == target_path && cache.get(target_path).is_some() {
+            // A legacy `.jsn` source or target still names the same prefab
+            // as its `.bsn` sibling, so compare the redirected forms.
+            if prefab_bsn_path(&source) == prefab_bsn_path(target_path)
+                && cache.get(&prefab_bsn_path(target_path)).is_some()
+            {
                 Some(node)
             } else {
                 None
@@ -464,9 +484,10 @@ fn save_selection_as_new_prefab(world: &mut World, normalized: &[Entity], target
         prefab.add_child_to_ast(prefab_parent, prefab_node);
     }
 
-    if !write_prefab_doc(target_path, &prefab, "save_as_prefab_from_selection") {
+    let Some(target_path) = write_prefab_doc(target_path, &prefab, "save_as_prefab_from_selection")
+    else {
         return;
-    }
+    };
 
     // Remove the packaged entities from the live document so the upcoming
     // reload doesn't respawn them alongside the new instance.
@@ -479,7 +500,7 @@ fn save_selection_as_new_prefab(world: &mut World, normalized: &[Entity], target
 
     // spawn_instance adds the instance node and triggers a reload that
     // materializes the inherited children from the prefab we just wrote.
-    spawn_instance(world, target_path, centroid);
+    spawn_instance(world, &target_path, centroid);
 }
 
 /// Propagate path: snapshot the instance's current subtree from the live
@@ -523,17 +544,18 @@ fn propagate_instance_to_prefab(world: &mut World, instance_node: Entity, target
         }
     }
 
-    if !write_prefab_doc(target_path, &prefab, "propagate_instance_to_prefab") {
+    let Some(target_path) = write_prefab_doc(target_path, &prefab, "propagate_instance_to_prefab")
+    else {
         return;
-    }
+    };
 
     world
         .resource_mut::<PrefabAstCache>()
-        .insert(target_path, prefab);
-    if let Ok(fp) = crate::prefab::cache::compute_file_fingerprint(target_path) {
+        .insert(&target_path, prefab);
+    if let Ok(fp) = crate::prefab::cache::compute_file_fingerprint(&target_path) {
         world
             .resource_mut::<PrefabAstCache>()
-            .record_saved_fingerprint(target_path, fp);
+            .record_saved_fingerprint(&target_path, fp);
     }
 
     // Clear local override / local-only entries under the instance. After
@@ -643,6 +665,13 @@ pub fn unbundle_instance(world: &mut World, instance_root_node: Entity) {
 /// the active tab so its content, kind, path, and `display_name` reflect the
 /// new prefab.
 pub fn save_scene_as_prefab(world: &mut World, target_path: &Path) {
+    // Prefabs persist as BSN text, so the cache entry, tab path, and file
+    // path all use the `.bsn` form of the target.
+    let bsn_target = prefab_bsn_path(target_path);
+    if bsn_target != target_path {
+        back_up_legacy_prefab(target_path);
+    }
+    let target_path = &bsn_target;
     let display_name = target_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -974,13 +1003,13 @@ pub fn save_as_variant(world: &mut World, instance_root: Entity, target_path: &P
         variant.add_child_to_ast(variant_root, child);
     }
 
-    if !write_prefab_doc(target_path, &variant, "save_as_variant") {
+    let Some(target_path) = write_prefab_doc(target_path, &variant, "save_as_variant") else {
         return;
-    }
+    };
 
     world
         .resource_mut::<PrefabAstCache>()
-        .insert(target_path, variant);
+        .insert(&target_path, variant);
 
     // Rewire the source instance to the variant and clear its now-redundant
     // descendant overrides (they live in the variant's base now).
@@ -1296,20 +1325,20 @@ pub fn save_prefab_to_disk(world: &mut World, prefab_path: &Path) -> std::io::Re
                 format!("prefab not cached: {}", prefab_path.display()),
             ));
         };
-        if prefab_path.extension().is_some_and(|e| e == "bsn") {
-            emit_scene(ast)
-        } else {
-            let scene = jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn(&emit_scene(ast))
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            serde_json::to_string_pretty(&scene).map_err(std::io::Error::other)?
-        }
+        emit_scene(ast)
     };
-    std::fs::write(prefab_path, text)?;
+    // Prefabs persist as BSN text; a legacy `.jsn` path writes the `.bsn`
+    // sibling and keeps the old file as a `.jsn.bak` backup.
+    let write_path = prefab_bsn_path(prefab_path);
+    if write_path != prefab_path {
+        back_up_legacy_prefab(prefab_path);
+    }
+    std::fs::write(&write_path, text)?;
 
-    let fingerprint = crate::prefab::cache::compute_file_fingerprint(prefab_path)?;
+    let fingerprint = crate::prefab::cache::compute_file_fingerprint(&write_path)?;
     world
         .resource_mut::<PrefabAstCache>()
-        .record_saved_fingerprint(prefab_path, fingerprint);
+        .record_saved_fingerprint(&write_path, fingerprint);
     Ok(())
 }
 

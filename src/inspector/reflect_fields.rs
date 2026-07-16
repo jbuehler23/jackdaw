@@ -1991,17 +1991,21 @@ fn try_route_pie_live_field_edit(
     {
         let reg = registry.read();
         let raw = field_value.clone();
-        jackdaw_jsn::ast::set_field_in_component_json(
+        crate::component_json::set_field_in_component_json(
             &mut full_value,
             type_path,
             field_path,
             field_value,
             &reg,
         );
-        field_value_for_log =
-            jackdaw_jsn::ast::get_field_in_component_json(&full_value, type_path, field_path, &reg)
-                .cloned()
-                .unwrap_or(raw);
+        field_value_for_log = crate::component_json::get_field_in_component_json(
+            &full_value,
+            type_path,
+            field_path,
+            &reg,
+        )
+        .cloned()
+        .unwrap_or(raw);
     }
 
     crate::pie::send_control_to_focused(

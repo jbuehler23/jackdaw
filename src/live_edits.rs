@@ -462,7 +462,7 @@ pub fn revert_entry(world: &mut World, key: &LiveEditKey) {
     let mut merged = serialize_component_json(world, entity, &key.type_path);
     {
         let registry = registry.read();
-        jackdaw_jsn::ast::set_field_in_component_json(
+        crate::component_json::set_field_in_component_json(
             &mut merged,
             &key.type_path,
             &key.field_path,

@@ -231,7 +231,7 @@ mod tests {
             TaskPoolPlugin::default(),
             AssetPlugin::default(),
         ));
-        app.add_plugins(jackdaw_jsn::JsnPlugin {
+        app.add_plugins(jackdaw_scene_types::SceneTypesPlugin {
             runtime_mesh_rebuild: false,
         });
         app.add_plugins(jackdaw_bsn::JackdawBsnPlugin);

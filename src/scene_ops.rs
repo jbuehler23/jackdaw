@@ -86,8 +86,8 @@ pub(crate) fn scene_save_selection_as_prefab(
             .and_then(|e| world.get::<Name>(*e).map(|n| n.as_str().to_string()))
             .unwrap_or_else(|| "prefab".to_string());
         let target = match world.get_resource::<crate::project::ProjectRoot>() {
-            Some(root) => root.root.join("assets/prefabs").join(format!("{name}.jsn")),
-            None => std::path::PathBuf::from(format!("{name}.jsn")),
+            Some(root) => root.root.join("assets/prefabs").join(format!("{name}.bsn")),
+            None => std::path::PathBuf::from(format!("{name}.bsn")),
         };
         crate::prefab::operators::save_as_prefab_from_selection(world, &selection, &target);
     });

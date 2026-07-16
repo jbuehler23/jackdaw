@@ -328,13 +328,12 @@ fn make_app_for_prefab_tests() -> bevy::prelude::App {
             })
             .disable::<WinitPlugin>(),
     );
-    app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
     app.add_plugins(jackdaw_bsn::JackdawBsnPlugin);
     app.add_plugins(jackdaw::prefab::PrefabPlugin);
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw::scene_io::SceneFilePath>();
     app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
-    app.init_resource::<jackdaw_jsn::SceneJsnAst>();
     app.init_resource::<jackdaw::selection::Selection>();
     app
 }
@@ -989,24 +988,26 @@ fn save_as_variant_writes_prefab_with_isa_and_overrides() {
 
     jackdaw::prefab::operators::save_as_variant(app.world_mut(), instance_entity, &variant_path);
 
-    assert!(variant_path.exists(), "variant file written");
-    let value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&variant_path).unwrap()).unwrap();
-    let root_components = &value["scene"][0]["components"];
+    // Prefabs persist as BSN text: a `.jsn` target redirects to its `.bsn`
+    // sibling.
+    let written_path = variant_path.with_extension("bsn");
+    assert!(written_path.exists(), "variant file written as .bsn");
     assert!(
-        root_components
-            .get("jackdaw::prefab::components::Prefab")
-            .is_some(),
+        !variant_path.exists(),
+        "no legacy .jsn variant file is written"
+    );
+    let written = bsn_ast(&std::fs::read_to_string(&written_path).unwrap());
+    let root = written.roots[0];
+    assert!(
+        written.find_patch_by_type_path(root, PREFAB_TYPE).is_some(),
         "variant root has Prefab"
     );
     assert!(
-        root_components
-            .get("jackdaw::prefab::components::IsA")
-            .is_some(),
+        written.find_patch_by_type_path(root, ISA_TYPE).is_some(),
         "variant root has IsA pointing at base"
     );
 
-    // Source scene's instance now points at the variant.
+    // Source scene's instance now points at the variant's written path.
     let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
     let instance_node = ast
         .entities_with_component(ISA_TYPE)
@@ -1017,7 +1018,7 @@ fn save_as_variant_writes_prefab_with_isa_and_overrides() {
     let rewired = matches!(
         source,
         Some(jackdaw_bsn::BsnValue::String(ref s))
-            if s == variant_path.to_string_lossy().as_ref()
+            if s == written_path.to_string_lossy().as_ref()
     );
     assert!(rewired, "instance rewired to variant");
 }
@@ -1654,40 +1655,38 @@ fn save_as_prefab_strips_inherited_prefab_markers() {
     // neither the synthetic root nor any packaged child carries the
     // inherited IsA.
     let tmp = tempfile::tempdir().unwrap();
-    let target = tmp.path().join("fresh.jsn");
+    let target = tmp.path().join("fresh.bsn");
 
     let mut app = make_app_for_prefab_tests();
     let entity = app
         .world_mut()
         .spawn(bevy::prelude::Name::new("source"))
         .id();
-    {
-        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
-        let key = ast.create_node(entity, None);
-        ast.insert_component(
-            key,
-            "jackdaw::prefab::components::IsA",
-            serde_json::json!({ "source": "/tmp/some_other_prefab.jsn", "deleted": [] }),
-        );
-    }
+    register_live_root(
+        &mut app,
+        entity,
+        vec![
+            jackdaw_bsn::BsnPatch::Name("source".to_string()),
+            isa_patch("/tmp/some_other_prefab.bsn"),
+        ],
+    );
 
     jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[entity], &target);
 
-    let value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
-    let scene = value["scene"].as_array().unwrap();
+    let written = bsn_ast(&std::fs::read_to_string(&target).unwrap());
+    let root = written.roots[0];
     assert!(
-        scene[0]["components"]
-            .get("jackdaw::prefab::components::Prefab")
-            .is_some(),
+        written.find_patch_by_type_path(root, PREFAB_TYPE).is_some(),
         "synthetic root has fresh Prefab marker"
     );
-    for entry in scene {
+    let mut nodes = written.roots.clone();
+    for &r in &written.roots {
+        nodes.extend(written.descendants_of(r));
+    }
+    for node in nodes {
         assert!(
-            entry["components"]
-                .get("jackdaw::prefab::components::IsA")
-                .is_none(),
-            "no packaged entity may carry inherited IsA: entry={entry:?}"
+            written.find_patch_by_type_path(node, ISA_TYPE).is_none(),
+            "no packaged entity may carry inherited IsA"
         );
     }
 }
@@ -1699,34 +1698,34 @@ fn save_as_prefab_does_not_bake_self_isa_into_file() {
     // the source entity; the source's pre-existing IsA must be stripped
     // from the written file so the prefab does not reference itself.
     let tmp = tempfile::tempdir().unwrap();
-    let target = tmp.path().join("box.jsn");
+    let target = tmp.path().join("box.bsn");
 
     let mut app = make_app_for_prefab_tests();
     let entity = app
         .world_mut()
         .spawn(bevy::prelude::Name::new("source"))
         .id();
-    {
-        let mut ast = app.world_mut().resource_mut::<jackdaw_jsn::SceneJsnAst>();
-        let key = ast.create_node(entity, None);
-        ast.insert_component(
-            key,
-            "jackdaw::prefab::components::IsA",
-            serde_json::json!({ "source": target.to_string_lossy(), "deleted": [] }),
-        );
-    }
+    register_live_root(
+        &mut app,
+        entity,
+        vec![
+            jackdaw_bsn::BsnPatch::Name("source".to_string()),
+            isa_patch(&target.to_string_lossy()),
+        ],
+    );
 
     jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[entity], &target);
 
     assert!(target.exists(), "always-wrap path writes the file");
-    let value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
-    for entry in value["scene"].as_array().unwrap() {
+    let written = bsn_ast(&std::fs::read_to_string(&target).unwrap());
+    let mut nodes = written.roots.clone();
+    for &r in &written.roots {
+        nodes.extend(written.descendants_of(r));
+    }
+    for node in nodes {
         assert!(
-            entry["components"]
-                .get("jackdaw::prefab::components::IsA")
-                .is_none(),
-            "no entry in the written prefab carries a self-IsA: entry={entry:?}"
+            written.find_patch_by_type_path(node, ISA_TYPE).is_none(),
+            "no entry in the written prefab carries a self-IsA"
         );
     }
 }
@@ -1734,9 +1733,8 @@ fn save_as_prefab_does_not_bake_self_isa_into_file() {
 #[test]
 fn repair_self_cycles_strips_self_isa_from_cached_prefab() {
     let tmp = tempfile::tempdir().unwrap();
-    // The prefab file keeps a `.jsn` extension so the repair's disk write goes
-    // through the BSN->JSON bridge and the on-disk assertion below can read it
-    // as JSON. The cached document is BSN, as the cache now stores.
+    // The cache entry is keyed at a legacy `.jsn` path; the repair's disk
+    // write redirects to the `.bsn` sibling and backs up the old file.
     let path = tmp.path().join("poisoned.jsn");
     let poisoned = format!(
         "jackdaw::prefab::components::Prefab\n\
@@ -1768,13 +1766,22 @@ fn repair_self_cycles_strips_self_isa_from_cached_prefab() {
         "Prefab marker preserved"
     );
 
-    let written: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let written_path = path.with_extension("bsn");
+    let written = bsn_ast(&std::fs::read_to_string(&written_path).unwrap());
+    let written_root = written.roots[0];
     assert!(
-        written["scene"][0]["components"]
-            .get("jackdaw::prefab::components::IsA")
+        written
+            .find_patch_by_type_path(written_root, ISA_TYPE)
             .is_none(),
         "disk file also has IsA stripped"
+    );
+    assert!(
+        path.with_extension("jsn.bak").exists(),
+        "legacy .jsn file backed up as .jsn.bak"
+    );
+    assert!(
+        !path.exists(),
+        "legacy .jsn file no longer shadows the .bsn"
     );
 }
 
@@ -2064,6 +2071,9 @@ fn save_scene_as_prefab_converts_tab_to_prefab() {
 
     jackdaw::prefab::operators::save_scene_as_prefab(app.world_mut(), &target);
 
+    // Prefabs persist as BSN text: the `.jsn` target redirects to its `.bsn`
+    // sibling, and the tab tracks the written path.
+    let written_path = target.with_extension("bsn");
     let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
     let tab = &scenes.tabs[0];
     assert!(
@@ -2074,33 +2084,29 @@ fn save_scene_as_prefab_converts_tab_to_prefab() {
         matches!(&tab.content, jackdaw::scenes::TabContent::Prefab(_)),
         "tab content references the prefab cache, not a Scene AST"
     );
-    assert_eq!(tab.path.as_deref(), Some(target.as_path()));
+    assert_eq!(tab.path.as_deref(), Some(written_path.as_path()));
     assert!(!tab.dirty, "tab cleared dirty flag after save");
     assert_eq!(tab.display_name, "box");
 
-    assert!(target.exists(), "prefab file written");
-    let written: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
-    let components = &written["scene"][0]["components"];
+    assert!(written_path.exists(), "prefab file written as .bsn");
+    assert!(!target.exists(), "no legacy .jsn prefab file is written");
+    let written = bsn_ast(&std::fs::read_to_string(&written_path).unwrap());
+    let root = written.roots[0];
     assert!(
-        components
-            .get("jackdaw::prefab::components::Prefab")
-            .is_some(),
+        written.find_patch_by_type_path(root, PREFAB_TYPE).is_some(),
         "root has Prefab marker"
     );
     assert!(
-        components
-            .get("jackdaw::prefab::components::PrefabEntityId")
-            .is_some(),
+        written.find_patch_by_type_path(root, PEID_TYPE).is_some(),
         "root has PrefabEntityId(0)"
     );
     assert!(
-        components.get("jackdaw::prefab::components::IsA").is_none(),
+        written.find_patch_by_type_path(root, ISA_TYPE).is_none(),
         "root has NO IsA (this is the prefab definition, not an instance)"
     );
 
     let cache = app.world().resource::<jackdaw::prefab::PrefabAstCache>();
-    assert!(cache.get(&target).is_some(), "new prefab cached");
+    assert!(cache.get(&written_path).is_some(), "new prefab cached");
 }
 
 #[test]
@@ -2108,7 +2114,7 @@ fn save_scene_as_prefab_with_multiple_roots_uses_synthetic_root() {
     use bevy::prelude::*;
 
     let tmp = tempfile::tempdir().unwrap();
-    let target = tmp.path().join("multi.jsn");
+    let target = tmp.path().join("multi.bsn");
 
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
@@ -2139,15 +2145,17 @@ fn save_scene_as_prefab_with_multiple_roots_uses_synthetic_root() {
 
     jackdaw::prefab::operators::save_scene_as_prefab(app.world_mut(), &target);
 
-    let written: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
-    let scene = written["scene"].as_array().unwrap();
-    assert_eq!(scene.len(), 3, "synthetic root + 2 children = 3 entries");
+    let written = bsn_ast(&std::fs::read_to_string(&target).unwrap());
+    assert_eq!(written.roots.len(), 1, "one synthetic root wraps the scene");
+    let root = written.roots[0];
     assert!(
-        scene[0]["components"]
-            .get("jackdaw::prefab::components::Prefab")
-            .is_some(),
-        "first entry is the synthetic Prefab root"
+        written.find_patch_by_type_path(root, PREFAB_TYPE).is_some(),
+        "the root entry is the synthetic Prefab root"
+    );
+    assert_eq!(
+        written.descendants_of(root).len(),
+        2,
+        "synthetic root carries the 2 former top-level roots"
     );
 }
 

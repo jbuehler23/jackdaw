@@ -68,7 +68,7 @@ const ALWAYS_SAVE_PATHS: &[&str] = &[
     // entity back to its authored node. It is written as the structural
     // `JsnEntity::id` field rather than a component entry, but this keeps
     // any other save path from stripping it.
-    jackdaw_jsn::ast::JSN_NODE_ID_TYPE_PATH,
+    jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH,
     // Prefab marker components must round-trip through save and AST
     // registration; stripping them breaks instance inheritance and
     // causes `revert_component` to lose track of the prefab source.
