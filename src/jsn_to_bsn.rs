@@ -11,21 +11,19 @@
 //! Emitted components are always plain: no `@template` or `:base` inheritance.
 //! The stable node id travels as an ordinary `SceneNodeId` component patch.
 
-use std::any::TypeId;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use bevy::asset::UntypedHandle;
-use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::prelude::*;
 
 use jackdaw_bsn::{
-    BsnAssetContext, CatalogAssetRef, SceneBsnAst, component_to_bsn_patch_with_assets,
-    create_entity_in_ast, emit_scene, serialize_assets_to_bsn,
+    BsnWriterConfig, CatalogAssetRef, SceneBsnAst, append_world_to_ast, emit_scene,
+    serialize_assets_to_bsn,
 };
 use jackdaw_jsn::JsnScene;
 
-use crate::scene_io::{load_inline_assets, load_scene_from_jsn, should_skip_component};
+use crate::scene_io::{editor_writer_config, load_inline_assets, load_scene_from_jsn};
 
 /// The result of converting a `JsnScene`: the scene `.bsn` text (with any
 /// scene-inline assets embedded as named asset roots) and a short report of
@@ -130,121 +128,39 @@ pub fn convert_jsn_scene_to_bsn_at(
     })
 }
 
-/// Component types that are computed, structural, or transient and must not be
-/// emitted as authored patches. Hierarchy is emitted structurally (via the AST
-/// `Children` relation), and `Name` is emitted by `create_entity_in_ast`, so
-/// both are excluded here. `SceneNodeId` is deliberately NOT excluded: it is
-/// emitted as a plain component patch.
-fn skip_type_ids() -> HashSet<TypeId> {
-    let mut ids = crate::scene_io::doc_skip_type_ids();
-    // Derived handle attached to GltfSource entities at load time; the
-    // authored GltfSource is what persists.
-    ids.insert(TypeId::of::<bevy::world_serialization::WorldAssetRoot>());
-    ids
+/// The editor skip policy plus the converter's extra exclusions. Hierarchy
+/// and `Name` emit structurally (the writer hard-skips them), and
+/// `SceneNodeId` is deliberately NOT excluded: it is emitted as a plain
+/// component patch.
+fn converter_writer_config() -> BsnWriterConfig {
+    use bevy::reflect::TypePath;
+    // WorldAssetRoot is a derived handle attached to GltfSource entities at
+    // load time; the authored GltfSource is what persists.
+    editor_writer_config().skip_path(bevy::world_serialization::WorldAssetRoot::type_path())
 }
 
-/// Reflect every spawned entity into the fresh `SceneBsnAst` and emit it.
+/// Reflect every spawned entity into a fresh document (inline asset roots
+/// first, entity roots after) and emit it.
 fn build_scene_bsn(
-    world: &mut World,
+    world: &World,
     spawned: &[Entity],
     parent_path: &Path,
     asset_names: &bevy::platform::collections::HashMap<bevy::asset::UntypedAssetId, String>,
     asset_refs: &[CatalogAssetRef],
 ) -> String {
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let asset_server = world.resource::<AssetServer>().clone();
-    let skip = skip_type_ids();
-
+    let mut ast = SceneBsnAst::default();
     if !asset_refs.is_empty() {
-        let mut ast = world.remove_resource::<SceneBsnAst>().unwrap_or_default();
         jackdaw_bsn::append_assets_to_ast(&mut ast, world, asset_refs);
-        world.insert_resource(ast);
     }
-
-    // Parents must exist in the AST before their children so the hierarchy
-    // relation resolves. Ordering by ancestor depth guarantees that.
-    let order = parent_first_order(world, spawned);
-
-    for entity in order {
-        let parent = world
-            .get::<ChildOf>(entity)
-            .map(bevy::prelude::ChildOf::parent)
-            .filter(|p| spawned.contains(p));
-        create_entity_in_ast(world, entity, parent);
-
-        let Some(patches_entity) = world.resource::<SceneBsnAst>().ast_for(entity) else {
-            continue;
-        };
-
-        // Reflect the entity's authored components into patches. Collect first
-        // (immutable borrow of world), then write into the AST resource.
-        let mut collected: Vec<(String, jackdaw_bsn::BsnPatch)> = Vec::new();
-        {
-            let reg = registry.read();
-            let ctx = BsnAssetContext {
-                asset_server: &asset_server,
-                parent_path,
-                asset_names: Some(asset_names),
-            };
-            let entity_ref = world.entity(entity);
-            for registration in reg.iter() {
-                if skip.contains(&registration.type_id()) {
-                    continue;
-                }
-                let type_path = registration.type_info().type_path();
-                if should_skip_component(type_path) {
-                    continue;
-                }
-                let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-                    continue;
-                };
-                let Some(component) = reflect_component.reflect(entity_ref) else {
-                    continue;
-                };
-                let patch =
-                    component_to_bsn_patch_with_assets(component.as_partial_reflect(), &reg, &ctx);
-                collected.push((type_path.to_string(), patch));
-            }
-        }
-
-        let mut ast = world.resource_mut::<SceneBsnAst>();
-        for (type_path, patch) in collected {
-            if let Some(existing) = ast.find_patch_by_type_path(patches_entity, &type_path) {
-                ast.set_patch(existing, patch);
-            } else {
-                let patch_entity = ast.world.spawn(patch).id();
-                if let Some(patches) = ast.get_patches_mut(patches_entity) {
-                    patches.0.push(patch_entity);
-                }
-            }
-        }
-    }
-
-    emit_scene(world.resource::<SceneBsnAst>())
-}
-
-/// Order entities so every entity comes after its ancestors within the set.
-/// Stable by original index within the same depth.
-fn parent_first_order(world: &World, entities: &[Entity]) -> Vec<Entity> {
-    let set: HashSet<Entity> = entities.iter().copied().collect();
-    let mut order = entities.to_vec();
-    order.sort_by_key(|&entity| {
-        let mut depth = 0usize;
-        let mut current = entity;
-        while let Some(child_of) = world.get::<ChildOf>(current) {
-            let parent = child_of.parent();
-            if !set.contains(&parent) {
-                break;
-            }
-            depth += 1;
-            current = parent;
-            if depth > entities.len() {
-                break;
-            }
-        }
-        depth
-    });
-    order
+    append_world_to_ast(
+        &mut ast,
+        world,
+        spawned,
+        parent_path,
+        Some(asset_names),
+        &converter_writer_config(),
+    );
+    emit_scene(&ast)
 }
 
 /// Turn resolved inline assets into catalog references, stripping the `#`/`@`

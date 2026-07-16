@@ -18,6 +18,7 @@ pub mod emitter;
 pub mod loader;
 pub mod parse;
 pub mod sync;
+pub mod writer;
 
 pub use catalog::{
     CatalogAssetRef, CatalogEntry, LoadedBsnScene, append_assets_to_ast, load_bsn_assets,
@@ -48,6 +49,11 @@ pub use apply::{
 pub use sync::{
     add_component_to_ast, create_entity_in_ast, delete_entity_from_ast, ensure_ast_node,
     remove_component_from_ast, sync_hierarchy_to_ast, sync_to_ast,
+};
+
+pub use writer::{
+    BsnWriterConfig, append_world_to_ast, serialize_to_bsn, serialize_to_bsn_with_config,
+    serialize_world_scene,
 };
 
 use bevy::prelude::*;

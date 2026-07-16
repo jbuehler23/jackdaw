@@ -96,6 +96,31 @@ pub fn should_skip_component(type_path: &str) -> bool {
     SKIP_COMPONENT_PATHS.contains(&type_path)
 }
 
+/// The editor's component skip policy as a [`jackdaw_bsn::BsnWriterConfig`]
+/// for the world-to-text BSN writer. Mirrors [`should_skip_component`]
+/// (prefixes, exact paths, the `jackdaw::` internals prefix, and the
+/// always-save overrides) plus the structural components the engine rebuilds
+/// on spawn.
+pub fn editor_writer_config() -> jackdaw_bsn::BsnWriterConfig {
+    use bevy::reflect::TypePath;
+
+    let mut config = jackdaw_bsn::BsnWriterConfig::include_all();
+    config.skip_prefixes.push("jackdaw::".to_string());
+    for prefix in SKIP_COMPONENT_PREFIXES {
+        config.skip_prefixes.push((*prefix).to_string());
+    }
+    for path in SKIP_COMPONENT_PATHS {
+        config.skip_paths.push((*path).to_string());
+    }
+    for path in ALWAYS_SAVE_PATHS {
+        config.always_save_paths.push((*path).to_string());
+    }
+    config
+        .skip_path(GlobalTransform::type_path())
+        .skip_path(InheritedVisibility::type_path())
+        .skip_path(ViewVisibility::type_path())
+}
+
 /// Component types that never persist to the scene document: derived
 /// structural state the engine rebuilds every frame or on spawn (transform
 /// propagation, visibility resolution, hierarchy links).
