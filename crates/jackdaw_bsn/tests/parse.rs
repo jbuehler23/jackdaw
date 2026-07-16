@@ -296,3 +296,47 @@ fn malformed_input_errors_without_panic() {
     // A stray delimiter that cannot begin a patch.
     assert!(parse_bsn("]").is_err());
 }
+
+#[test]
+fn unterminated_containers_error_without_panic() {
+    // A map literal whose bracket never closes.
+    assert!(parse_bsn(r#"Comp { data: map[("a", 1) }"#).is_err());
+    // A struct body whose brace never closes.
+    assert!(parse_bsn("Comp { a: 1").is_err());
+    // A list literal whose bracket never closes.
+    assert!(parse_bsn("Holder { items: [1, 2 }").is_err());
+}
+
+#[test]
+fn malformed_type_paths_error_without_panic() {
+    // A path separator with nothing after it.
+    assert!(parse_bsn("foo::").is_err());
+    // A doubled path separator inside a variant path.
+    assert!(parse_bsn("Visibility::::Visible").is_err());
+}
+
+#[test]
+fn malformed_number_literals_error_without_panic() {
+    // Two decimal points in one literal.
+    assert!(parse_bsn("Foo { a: 1.2.3 }").is_err());
+    // Letters glued onto a number where a value is expected.
+    assert!(parse_bsn("Foo { a: 12abc }").is_err());
+}
+
+/// The grammar accepts a struct body that repeats a field name; every
+/// occurrence is kept in document order, and the applier writes them in
+/// sequence so the last one wins on the reflected value. This pins the
+/// accept-and-keep-both behavior rather than endorsing duplicate authoring.
+#[test]
+fn duplicate_field_names_parse_keeping_both_occurrences() {
+    let ast = parse_bsn("Foo { a: 1, a: 2 }").expect("duplicate fields parse");
+    let patches = root_patches(&ast);
+    let BsnPatch::Struct(BsnStruct(_, fields, _)) = patch(&ast, patches[0]) else {
+        panic!("expected Struct");
+    };
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].0, "a");
+    assert_eq!(fields[1].0, "a");
+    assert!(matches!(expr(&ast, fields[0].1), BsnExpr::IntLit(1)));
+    assert!(matches!(expr(&ast, fields[1].1), BsnExpr::IntLit(2)));
+}

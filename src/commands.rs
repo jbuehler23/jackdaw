@@ -1250,6 +1250,123 @@ mod set_bsn_field_tests {
         let pe = ast.ast_for(entity).unwrap();
         assert!(ast.is_derived(pe, type_path), "undo restores derived state");
     }
+
+    /// The `#name` reference patches on an entity's document node.
+    fn name_patch_count(ast: &SceneBsnAst, node: Entity) -> usize {
+        ast.get_patches(node)
+            .map(|patches| {
+                patches
+                    .0
+                    .iter()
+                    .filter(|&&pe| {
+                        matches!(ast.get_patch(pe), Some(jackdaw_bsn::BsnPatch::Name(_)))
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    /// The document name and the ECS `Name` for an entity, together.
+    fn doc_and_ecs_name(app: &App, entity: Entity) -> (Option<String>, Option<String>) {
+        let ast = app.world().resource::<SceneBsnAst>();
+        let doc = ast
+            .ast_for(entity)
+            .and_then(|node| ast.get_name(node))
+            .map(str::to_string);
+        let ecs = app
+            .world()
+            .get::<Name>(entity)
+            .map(|n| n.as_str().to_string());
+        (doc, ecs)
+    }
+
+    fn name_command(entity: Entity, old: Option<&str>, new: &str) -> SetBsnField {
+        SetBsnField {
+            entity,
+            type_path: NAME_TYPE_PATH.to_string(),
+            field_path: String::new(),
+            old_value: old.map(|s| BsnValue::String(s.to_string())),
+            new_value: BsnValue::String(new.to_string()),
+            was_derived: false,
+        }
+    }
+
+    #[test]
+    fn naming_an_unnamed_entity_inserts_the_name_patch_and_undo_removes_it() {
+        let mut app = field_app();
+        let entity = app.world_mut().spawn_empty().id();
+        create_entity_in_ast(app.world_mut(), entity, None);
+
+        let mut command = name_command(entity, None, "Hero");
+        command.execute(app.world_mut());
+        assert_eq!(
+            doc_and_ecs_name(&app, entity),
+            (Some("Hero".to_string()), Some("Hero".to_string())),
+            "document and ECS agree after execute"
+        );
+
+        command.undo(app.world_mut());
+        assert_eq!(
+            doc_and_ecs_name(&app, entity),
+            (None, None),
+            "undo removes the name from both document and ECS"
+        );
+    }
+
+    #[test]
+    fn renaming_replaces_the_existing_name_patch_and_undo_restores_it() {
+        let mut app = field_app();
+        let entity = app.world_mut().spawn(Name::new("Old")).id();
+        // create_entity_in_ast seeds the node's name patch from the ECS Name.
+        create_entity_in_ast(app.world_mut(), entity, None);
+
+        let mut command = name_command(entity, Some("Old"), "New");
+        command.execute(app.world_mut());
+        assert_eq!(
+            doc_and_ecs_name(&app, entity),
+            (Some("New".to_string()), Some("New".to_string()))
+        );
+        {
+            let ast = app.world().resource::<SceneBsnAst>();
+            let node = ast.ast_for(entity).unwrap();
+            assert_eq!(
+                name_patch_count(ast, node),
+                1,
+                "a rename replaces the patch instead of stacking a second one"
+            );
+        }
+
+        command.undo(app.world_mut());
+        assert_eq!(
+            doc_and_ecs_name(&app, entity),
+            (Some("Old".to_string()), Some("Old".to_string())),
+            "undo restores the old name in both document and ECS"
+        );
+        let ast = app.world().resource::<SceneBsnAst>();
+        let node = ast.ast_for(entity).unwrap();
+        assert_eq!(name_patch_count(ast, node), 1);
+    }
+
+    #[test]
+    fn renaming_to_an_empty_string_removes_the_name_and_undo_restores_it() {
+        let mut app = field_app();
+        let entity = app.world_mut().spawn(Name::new("Old")).id();
+        create_entity_in_ast(app.world_mut(), entity, None);
+
+        let mut command = name_command(entity, Some("Old"), "");
+        command.execute(app.world_mut());
+        assert_eq!(
+            doc_and_ecs_name(&app, entity),
+            (None, None),
+            "an empty name removes the patch and the ECS Name"
+        );
+
+        command.undo(app.world_mut());
+        assert_eq!(
+            doc_and_ecs_name(&app, entity),
+            (Some("Old".to_string()), Some("Old".to_string()))
+        );
+    }
 }
 
 #[cfg(test)]

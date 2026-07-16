@@ -220,6 +220,91 @@ bevy_ecs::hierarchy::Children [
     );
 }
 
+/// A scene may reference an embedded named asset by either spelling: the
+/// scene-inline `#Name` or the catalog `@Name`. The loader records both, so
+/// two components using one spelling each resolve to the same asset.
+#[test]
+fn scene_load_resolves_both_inline_and_catalog_reference_spellings() {
+    use bevy::app::{App, TaskPoolPlugin};
+    use bevy::asset::{Asset, AssetApp, AssetPlugin, Handle, ReflectAsset, ReflectHandle};
+    use bevy::ecs::prelude::*;
+    use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
+    use bevy::prelude::ReflectDefault;
+    use bevy::reflect::{Reflect, TypePath};
+
+    use jackdaw_bsn::load_bsn_scene;
+
+    #[derive(Asset, Reflect, Clone, Default)]
+    #[reflect(Default)]
+    struct SpellingMaterial {
+        shininess: f32,
+    }
+
+    #[derive(Component, Reflect, Default)]
+    #[reflect(Component, Default)]
+    struct SpellingUser {
+        material: Handle<SpellingMaterial>,
+    }
+
+    let mut app = App::new();
+    app.add_plugins((TaskPoolPlugin::default(), AssetPlugin::default()));
+    app.init_asset::<SpellingMaterial>();
+    {
+        let registry = app.world().resource::<AppTypeRegistry>().clone();
+        let mut w = registry.write();
+        w.register::<SpellingMaterial>();
+        w.register::<SpellingUser>();
+        w.register::<Handle<SpellingMaterial>>();
+        w.register_type_data::<SpellingMaterial, ReflectAsset>();
+        w.register_type_data::<Handle<SpellingMaterial>, ReflectHandle>();
+    }
+    app.world_mut().init_resource::<jackdaw_bsn::SceneBsnAst>();
+
+    let text = r##"
+bevy_ecs::hierarchy::Children [
+    #Shiny
+    MATERIAL_TYPE {
+        shininess: 2.5,
+    }
+    ,
+    #InlineUser
+    USER_TYPE {
+        material: "#Shiny",
+    }
+    ,
+    #CatalogUser
+    USER_TYPE {
+        material: "@Shiny",
+    }
+]
+"##;
+    let text = text
+        .replace("MATERIAL_TYPE", SpellingMaterial::type_path())
+        .replace("USER_TYPE", SpellingUser::type_path());
+
+    let loaded = load_bsn_scene(app.world_mut(), &text).expect("scene loads");
+
+    assert_eq!(loaded.assets.len(), 1);
+    assert_eq!(loaded.entities.len(), 2, "one asset root, two entity roots");
+
+    let asset_id = loaded.assets[0]
+        .handle
+        .clone()
+        .typed::<SpellingMaterial>()
+        .id();
+    for &entity in &loaded.entities {
+        let user = app
+            .world()
+            .get::<SpellingUser>(entity)
+            .expect("component applied");
+        assert_eq!(
+            user.material.id(),
+            asset_id,
+            "both #Name and @Name spellings must bind to the embedded asset"
+        );
+    }
+}
+
 #[test]
 fn stable_node_id_lookup_finds_nested_nodes() {
     use bevy::app::App;

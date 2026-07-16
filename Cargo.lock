@@ -5429,6 +5429,7 @@ dependencies = [
  "bevy",
  "lalrpop",
  "lalrpop-util",
+ "log",
  "nom 8.0.0",
  "pathdiff",
  "thiserror 2.0.18",
