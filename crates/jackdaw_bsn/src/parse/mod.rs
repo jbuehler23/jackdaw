@@ -50,6 +50,44 @@ pub enum ParseError {
     /// The grammar rejected the token stream.
     #[error("parse error: {0}")]
     Parse(String),
+    /// A struct gave the same field name twice.
+    #[error("duplicate field '{field}' in '{type_name}'")]
+    DuplicateField { type_name: String, field: String },
+}
+
+/// Reject structs that name the same field twice: applying such a patch
+/// would silently let the last occurrence win, hiding hand-edit mistakes.
+fn check_duplicate_fields(ast: &mut BsnAst) -> Result<(), ParseError> {
+    fn find_duplicate(symbol: &ast::BsnSymbol, fields: &[ast::BsnField]) -> Option<ParseError> {
+        let mut seen = std::collections::HashSet::new();
+        for ast::BsnField(name, _) in fields {
+            if !seen.insert(name.as_str()) {
+                return Some(ParseError::DuplicateField {
+                    type_name: symbol.1.clone(),
+                    field: name.clone(),
+                });
+            }
+        }
+        None
+    }
+
+    let mut patches = ast.0.query::<&ast::BsnPatch>();
+    for patch in patches.iter(&ast.0) {
+        if let ast::BsnPatch::Struct(ast::BsnStruct(symbol, fields, _)) = patch
+            && let Some(err) = find_duplicate(symbol, fields)
+        {
+            return Err(err);
+        }
+    }
+    let mut exprs = ast.0.query::<&ast::BsnExpr>();
+    for expr in exprs.iter(&ast.0) {
+        if let ast::BsnExpr::Struct(ast::BsnStruct(symbol, fields, _)) = expr
+            && let Some(err) = find_duplicate(symbol, fields)
+        {
+            return Err(err);
+        }
+    }
+    Ok(())
 }
 
 /// Parse `.bsn` source text into a [`BsnAst`].
@@ -66,6 +104,7 @@ pub fn parse_bsn(text: &str) -> Result<BsnAst, ParseError> {
     match grammar::TopLevelPatchesParser::new().parse(&ast, lexer) {
         Ok(root) => {
             let mut ast = ast.into_inner();
+            check_duplicate_fields(&mut ast)?;
             ast.0.insert_resource(BsnRoot(root));
             Ok(ast)
         }

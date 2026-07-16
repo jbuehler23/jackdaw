@@ -323,20 +323,19 @@ fn malformed_number_literals_error_without_panic() {
     assert!(parse_bsn("Foo { a: 12abc }").is_err());
 }
 
-/// The grammar accepts a struct body that repeats a field name; every
-/// occurrence is kept in document order, and the applier writes them in
-/// sequence so the last one wins on the reflected value. This pins the
-/// accept-and-keep-both behavior rather than endorsing duplicate authoring.
+/// A struct body that repeats a field name is rejected: applying it would
+/// silently let the last occurrence win, hiding hand-edit mistakes.
 #[test]
-fn duplicate_field_names_parse_keeping_both_occurrences() {
-    let ast = parse_bsn("Foo { a: 1, a: 2 }").expect("duplicate fields parse");
-    let patches = root_patches(&ast);
-    let BsnPatch::Struct(BsnStruct(_, fields, _)) = patch(&ast, patches[0]) else {
-        panic!("expected Struct");
+fn duplicate_field_names_are_rejected() {
+    let message = match parse_bsn("Foo { a: 1, a: 2 }") {
+        Err(err) => err.to_string(),
+        Ok(_) => panic!("duplicate fields must be rejected"),
     };
-    assert_eq!(fields.len(), 2);
-    assert_eq!(fields[0].0, "a");
-    assert_eq!(fields[1].0, "a");
-    assert!(matches!(expr(&ast, fields[0].1), BsnExpr::IntLit(1)));
-    assert!(matches!(expr(&ast, fields[1].1), BsnExpr::IntLit(2)));
+    assert!(
+        message.contains("duplicate field 'a'"),
+        "error names the duplicated field: {message}"
+    );
+
+    // Nested struct values are checked too.
+    assert!(parse_bsn("Foo { t: Bar { x: 1, x: 2 } }").is_err());
 }
