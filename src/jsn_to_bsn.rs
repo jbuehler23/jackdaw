@@ -136,19 +136,11 @@ pub fn convert_jsn_scene_to_bsn_at(
 /// both are excluded here. `SceneNodeId` is deliberately NOT excluded: it is
 /// emitted as a plain component patch.
 fn skip_type_ids() -> HashSet<TypeId> {
-    HashSet::from([
-        TypeId::of::<GlobalTransform>(),
-        TypeId::of::<InheritedVisibility>(),
-        TypeId::of::<ViewVisibility>(),
-        TypeId::of::<ChildOf>(),
-        TypeId::of::<Children>(),
-        TypeId::of::<Name>(),
-        TypeId::of::<jackdaw_bsn::AstNodeRef>(),
-        TypeId::of::<jackdaw_bsn::AstDirty>(),
-        // Derived handle attached to GltfSource entities at load time; the
-        // authored GltfSource is what persists.
-        TypeId::of::<bevy::world_serialization::WorldAssetRoot>(),
-    ])
+    let mut ids = crate::scene_io::doc_skip_type_ids();
+    // Derived handle attached to GltfSource entities at load time; the
+    // authored GltfSource is what persists.
+    ids.insert(TypeId::of::<bevy::world_serialization::WorldAssetRoot>());
+    ids
 }
 
 /// Reflect every spawned entity into the fresh `SceneBsnAst` and emit it.

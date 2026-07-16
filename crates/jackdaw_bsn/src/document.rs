@@ -29,11 +29,11 @@ fn is_enum_variant_of(stored_path: &str, base_path: &str) -> bool {
 
 /// A list of patches that together define one BSN entity.
 /// Each child entity has a [`BsnPatch`] component.
-#[derive(Component)]
+#[derive(Component, Debug, Clone)]
 pub struct BsnPatches(pub Vec<Entity>);
 
 /// A single patch within a [`BsnPatches`] list.
-#[derive(Component, Clone)]
+#[derive(Component, Debug, Clone)]
 pub enum BsnPatch {
     /// `#Name` entity name reference.
     Name(String),
@@ -52,32 +52,32 @@ pub enum BsnPatch {
 }
 
 /// Fields of a BSN struct patch: `TypePath { field: expr, ... }`.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct BsnStructData {
     pub type_path: String,
     pub fields: BsnStructFields,
 }
 
 /// Ordered list of named fields.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct BsnStructFields(pub Vec<BsnField>);
 
 /// A single `name: value` field.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct BsnField {
     pub name: String,
     pub value: BsnValue,
 }
 
 /// Tuple struct data: `TypePath(value, ...)`.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct BsnTupleStructData {
     pub type_path: String,
     pub values: Vec<BsnValue>,
 }
 
 /// A BSN expression value (the right-hand side of a field or tuple element).
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum BsnValue {
     /// `1.0`
     Float(f64),
@@ -116,7 +116,7 @@ pub struct SceneBsnAst {
 /// Component types on a document node that were computed by editor systems
 /// rather than authored by the user. Derived components are skipped on save;
 /// an explicit user edit promotes the component to authored.
-#[derive(Component, Default)]
+#[derive(Component, Debug, Default)]
 pub struct DerivedComponents(pub bevy::platform::collections::HashSet<String>);
 
 /// Component on every ECS entity that was spawned from (or synced to) BSN.
@@ -375,41 +375,6 @@ impl SceneBsnAst {
         None
     }
 
-    /// Update or insert a struct patch for a given type path within an entity's
-    /// patches list. If no patch for that type exists, creates one. Returns the
-    /// patch entity.
-    pub fn upsert_struct_patch(
-        &mut self,
-        patches_entity: Entity,
-        type_path: &str,
-        fields: BsnStructFields,
-    ) -> Entity {
-        if let Some(existing) = self.find_patch_by_type_path(patches_entity, type_path) {
-            self.set_patch(
-                existing,
-                BsnPatch::Struct(BsnStructData {
-                    type_path: type_path.to_string(),
-                    fields,
-                }),
-            );
-            return existing;
-        }
-
-        let patch_entity = self
-            .world
-            .spawn(BsnPatch::Struct(BsnStructData {
-                type_path: type_path.to_string(),
-                fields,
-            }))
-            .id();
-
-        if let Some(patches) = self.get_patches_mut(patches_entity) {
-            patches.0.push(patch_entity);
-        }
-
-        patch_entity
-    }
-
     /// Move an AST node from one parent's Children to another.
     pub fn move_to_parent(
         &mut self,
@@ -665,6 +630,54 @@ fn bsn_value_as_int(value: &BsnValue) -> Option<i128> {
 /// components, name, and base reference but adopts none of `src_node`'s
 /// children. `dst_parent` gains the new node as a child. Returns the new node's
 /// AST entity in `dst`.
+impl SceneBsnAst {
+    /// Deep-copy the whole document into a fresh one: every root and its
+    /// subtree, all component patches, and the node-to-ECS links (re-keyed to
+    /// the clone's node entities). The clone's node entities are new; only
+    /// the linked ECS entities carry over. Useful for read-only emission or
+    /// resolution passes that must not mutate the live document.
+    pub fn deep_clone(&self) -> SceneBsnAst {
+        fn clone_subtree(
+            dst: &mut SceneBsnAst,
+            src: &SceneBsnAst,
+            src_node: Entity,
+            dst_parent: Option<Entity>,
+        ) -> Entity {
+            let new_node = match dst_parent {
+                Some(parent) => clone_node_into(dst, src, src_node, parent),
+                None => {
+                    let patches: Vec<BsnPatch> = match src.get_patches(src_node) {
+                        Some(patches) => patches
+                            .0
+                            .iter()
+                            .filter_map(|&pe| src.get_patch(pe))
+                            .filter(|patch| !matches!(patch, BsnPatch::Children(_)))
+                            .cloned()
+                            .collect(),
+                        None => Vec::new(),
+                    };
+                    let node = dst.create_entity_node(patches);
+                    dst.add_to_roots(node);
+                    node
+                }
+            };
+            if let Some(ecs) = src.ecs_for_ast(src_node) {
+                dst.link(ecs, new_node);
+            }
+            for child in src.get_children_ast(src_node) {
+                clone_subtree(dst, src, child, Some(new_node));
+            }
+            new_node
+        }
+
+        let mut dst = SceneBsnAst::default();
+        for &root in &self.roots {
+            clone_subtree(&mut dst, self, root, None);
+        }
+        dst
+    }
+}
+
 pub fn clone_node_into(
     dst: &mut SceneBsnAst,
     src: &SceneBsnAst,

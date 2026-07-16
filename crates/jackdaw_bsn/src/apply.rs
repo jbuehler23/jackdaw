@@ -193,9 +193,11 @@ fn apply_type_patch(world: &mut World, entity: Entity, type_path: &str) {
     // Try as a direct type first.
     if let Some(registration) = reg.get_with_type_path(type_path) {
         let Some(reflect_default) = registration.data::<ReflectDefault>() else {
+            log::warn!("cannot apply '{type_path}': no ReflectDefault registered");
             return;
         };
         let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+            log::warn!("cannot apply '{type_path}': not a reflectable component");
             return;
         };
         let value = reflect_default.default();
@@ -213,12 +215,15 @@ fn apply_type_patch(world: &mut World, entity: Entity, type_path: &str) {
         let variant_name = &type_path[last_sep + 2..];
 
         let Some(registration) = reg.get_with_type_path(enum_path) else {
+            log::warn!("cannot apply '{type_path}': type not in the registry");
             return;
         };
         let Some(reflect_default) = registration.data::<ReflectDefault>() else {
+            log::warn!("cannot apply '{enum_path}': no ReflectDefault registered");
             return;
         };
         let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+            log::warn!("cannot apply '{enum_path}': not a reflectable component");
             return;
         };
 

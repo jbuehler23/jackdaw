@@ -331,23 +331,12 @@ fn merge_descendant_overrides(
 /// component whenever it differs from the baseline (not a shallow diff),
 /// matching that capture path's semantics.
 pub fn sparsify_inherited_descendants(ast: &mut SceneBsnAst, get_prefab: &PrefabLookup) {
-    let _ = sparsify_inherited_descendants_recording(ast, get_prefab);
-}
-
-/// Like [`sparsify_inherited_descendants`] but returns each stripped whole
-/// component as `(node, type_path, value)` so a read-only emit can restore the
-/// live document afterward with [`restore_sparsified`].
-pub fn sparsify_inherited_descendants_recording(
-    ast: &mut SceneBsnAst,
-    get_prefab: &PrefabLookup,
-) -> Vec<(Entity, String, BsnValue)> {
     let mut nodes: Vec<Entity> = Vec::new();
     for &root in &ast.roots {
         nodes.push(root);
         nodes.extend(ast.descendants_of(root));
     }
 
-    let mut stripped: Vec<(Entity, String, BsnValue)> = Vec::new();
     for node in nodes {
         // Instance roots sparsify against their own prefab's root entry:
         // resolve materializes the prefab root's components (and name) onto
@@ -356,7 +345,7 @@ pub fn sparsify_inherited_descendants_recording(
         // overrides on the next resolve and prefab root edits never
         // propagate to existing instances.
         if ast.find_patch_by_type_path(node, ISA_TYPE).is_some() {
-            sparsify_instance_root(ast, node, get_prefab, &mut stripped);
+            sparsify_instance_root(ast, node, get_prefab);
             continue;
         }
         let Some(peid) = read_prefab_entity_id(ast, node) else {
@@ -385,36 +374,27 @@ pub fn sparsify_inherited_descendants_recording(
             continue;
         };
 
-        sparsify_node_against_baseline(
-            ast,
-            node,
-            prefab,
-            prefab_match,
-            &[PREFAB_ENTITY_ID_TYPE],
-            &mut stripped,
-        );
+        sparsify_node_against_baseline(ast, node, prefab, prefab_match, &[PREFAB_ENTITY_ID_TYPE]);
     }
-    stripped
 }
 
 /// Reduce one node's components to sparse deltas against a prefab baseline
-/// entry, recording each original whole value so a read-only emit can restore
-/// it. Components equal to the baseline are removed; diverged components keep
-/// only the fields that differ ([`shallow_diff`]); components absent from the
-/// baseline stay whole. A name matching the baseline's name is stripped too.
+/// entry. Components equal to the baseline are removed; diverged components
+/// keep only the fields that differ ([`shallow_diff`]); components absent
+/// from the baseline stay whole. A name matching the baseline's name is
+/// stripped too.
 fn sparsify_node_against_baseline(
     ast: &mut SceneBsnAst,
     node: Entity,
     prefab: &SceneBsnAst,
     prefab_match: Entity,
     keep: &[&str],
-    stripped: &mut Vec<(Entity, String, BsnValue)>,
 ) {
     enum Action {
         Remove,
         Replace(BsnValue),
     }
-    let changes: Vec<(String, BsnValue, Action)> = ast
+    let changes: Vec<(String, Action)> = ast
         .component_type_paths(node)
         .into_iter()
         .filter(|tp| !keep.contains(&tp.as_str()))
@@ -422,17 +402,16 @@ fn sparsify_node_against_baseline(
             let value = get_bsn_field(ast, node, &tp, "")?;
             let base = get_bsn_field(prefab, prefab_match, &tp, "")?;
             match shallow_diff(&base, &value) {
-                None => Some((tp, value, Action::Remove)),
-                Some(delta) => Some((tp, value, Action::Replace(delta))),
+                None => Some((tp, Action::Remove)),
+                Some(delta) => Some((tp, Action::Replace(delta))),
             }
         })
         .collect();
-    for (type_path, original, action) in changes {
+    for (type_path, action) in changes {
         match action {
             Action::Remove => ast.remove_component_patch(node, &type_path),
             Action::Replace(delta) => set_whole_component(ast, node, &type_path, delta),
         }
-        stripped.push((node, type_path, original));
     }
 
     // The name is a reference patch, not a component patch, so the loop
@@ -440,26 +419,14 @@ fn sparsify_node_against_baseline(
     if let (Some(name), Some(prefab_name)) = (ast.get_name(node), prefab.get_name(prefab_match))
         && name == prefab_name
     {
-        let name = name.to_owned();
         remove_name_patch(ast, node);
-        stripped.push((node, NAME_PATCH_KEY.to_string(), BsnValue::String(name)));
     }
 }
 
-/// Sentinel `type_path` used in the recording sparsify's return entries for a
-/// stripped name-reference patch, which is not a component. The value carries
-/// the name as a `BsnValue::String`.
-const NAME_PATCH_KEY: &str = "#name";
-
 /// Strip an instance root's components (and inherited name) that still match
-/// its prefab root's baseline, recording each removal. `IsA` and
-/// `PrefabEntityId` are kept unconditionally.
-fn sparsify_instance_root(
-    ast: &mut SceneBsnAst,
-    node: Entity,
-    get_prefab: &PrefabLookup,
-    stripped: &mut Vec<(Entity, String, BsnValue)>,
-) {
+/// its prefab root's baseline. `IsA` and `PrefabEntityId` are kept
+/// unconditionally.
+fn sparsify_instance_root(ast: &mut SceneBsnAst, node: Entity, get_prefab: &PrefabLookup) {
     let Some(source) = read_isa_source(ast, node) else {
         return;
     };
@@ -481,7 +448,6 @@ fn sparsify_instance_root(
         prefab,
         prefab_root,
         &[ISA_TYPE, PREFAB_ENTITY_ID_TYPE],
-        stripped,
     );
 }
 
@@ -502,26 +468,6 @@ fn remove_name_patch(ast: &mut SceneBsnAst, node: Entity) {
         patches.0.remove(pos);
     }
     ast.world.despawn(patch_entity);
-}
-
-/// Re-insert whole components stripped by
-/// [`sparsify_inherited_descendants_recording`], restoring the live document
-/// after a read-only emit.
-pub fn restore_sparsified(ast: &mut SceneBsnAst, stripped: Vec<(Entity, String, BsnValue)>) {
-    for (node, type_path, value) in stripped {
-        if type_path == NAME_PATCH_KEY {
-            if let BsnValue::String(name) = value
-                && ast.get_name(node).is_none()
-            {
-                let patch_entity = ast.world.spawn(BsnPatch::Name(name)).id();
-                if let Some(patches) = ast.get_patches_mut(node) {
-                    patches.0.push(patch_entity);
-                }
-            }
-            continue;
-        }
-        set_whole_component(ast, node, &type_path, value);
-    }
 }
 
 /// The `PrefabEntityId` on `node`, read from its whole-component value. The
@@ -599,51 +545,11 @@ pub(crate) fn set_whole_component(
     }
 }
 
-/// Deep-copy an entire scene document into a fresh one, preserving the root
-/// list and every node's component patches and child hierarchy. Component
-/// patches are cloned; the AST world and its entity ids are new. Needed
-/// because [`SceneBsnAst`] holds a `World` and is not `Clone`.
+/// Deep-copy an entire scene document into a fresh one. Thin alias over
+/// [`SceneBsnAst::deep_clone`] kept for the resolver's call sites.
 pub(crate) fn clone_scene(src: &SceneBsnAst) -> SceneBsnAst {
-    let mut dst = SceneBsnAst::default();
-    for &root in &src.roots {
-        clone_subtree(&mut dst, src, root, None);
-    }
-    dst
+    src.deep_clone()
 }
-
-/// Recursively copy `src_node` and its children into `dst`. A `None`
-/// `dst_parent` adds the copy to `dst`'s roots; otherwise it becomes a
-/// child of `dst_parent`.
-fn clone_subtree(
-    dst: &mut SceneBsnAst,
-    src: &SceneBsnAst,
-    src_node: Entity,
-    dst_parent: Option<Entity>,
-) -> Entity {
-    let new_node = match dst_parent {
-        Some(parent) => clone_node_into(dst, src, src_node, parent),
-        None => {
-            let patches: Vec<BsnPatch> = match src.get_patches(src_node) {
-                Some(patches) => patches
-                    .0
-                    .iter()
-                    .filter_map(|&pe| src.get_patch(pe))
-                    .filter(|patch| !matches!(patch, BsnPatch::Children(_)))
-                    .cloned()
-                    .collect(),
-                None => Vec::new(),
-            };
-            let node = dst.create_entity_node(patches);
-            dst.add_to_roots(node);
-            node
-        }
-    };
-    for child in src.get_children_ast(src_node) {
-        clone_subtree(dst, src, child, Some(new_node));
-    }
-    new_node
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

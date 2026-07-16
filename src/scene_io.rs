@@ -96,6 +96,30 @@ pub fn should_skip_component(type_path: &str) -> bool {
     SKIP_COMPONENT_PATHS.contains(&type_path)
 }
 
+/// Component types that never persist to the scene document: derived
+/// structural state the engine rebuilds every frame or on spawn (transform
+/// propagation, visibility resolution, hierarchy links).
+pub(crate) fn structural_skip_type_ids() -> HashSet<TypeId> {
+    HashSet::from([
+        TypeId::of::<GlobalTransform>(),
+        TypeId::of::<InheritedVisibility>(),
+        TypeId::of::<ViewVisibility>(),
+        TypeId::of::<ChildOf>(),
+        TypeId::of::<Children>(),
+    ])
+}
+
+/// [`structural_skip_type_ids`] plus the document's own bookkeeping
+/// components and `Name`, which persists as a `#name` reference patch
+/// rather than a component patch.
+pub(crate) fn doc_skip_type_ids() -> HashSet<TypeId> {
+    let mut ids = structural_skip_type_ids();
+    ids.insert(TypeId::of::<Name>());
+    ids.insert(TypeId::of::<jackdaw_bsn::AstNodeRef>());
+    ids.insert(TypeId::of::<jackdaw_bsn::AstDirty>());
+    ids
+}
+
 pub struct SceneIoPlugin;
 
 impl Plugin for SceneIoPlugin {
@@ -1104,13 +1128,7 @@ fn collect_bsn_inline_assets(
     entities: &[Entity],
     mut names: bevy::platform::collections::HashMap<UntypedAssetId, String>,
 ) -> BsnInlineAssetPass {
-    let skip_ids: HashSet<TypeId> = HashSet::from([
-        TypeId::of::<GlobalTransform>(),
-        TypeId::of::<InheritedVisibility>(),
-        TypeId::of::<ViewVisibility>(),
-        TypeId::of::<ChildOf>(),
-        TypeId::of::<Children>(),
-    ]);
+    let skip_ids = structural_skip_type_ids();
 
     let mut refs: Vec<jackdaw_bsn::CatalogAssetRef> = Vec::new();
     let mut touched: Vec<(Entity, String)> = Vec::new();
@@ -1298,20 +1316,21 @@ fn collect_bsn_handles_from_reflect(
 /// The editor maintains the document incrementally with plain component
 /// patches, so any asset `Handle<T>` field on a kept component was recorded
 /// without an asset context and resolves to an empty string on a bare
-/// [`jackdaw_bsn::emit_scene`]. Mirroring the JSN snapshot path, this does a
-/// capture-time asset pass: it walks the document's entities for pathless
-/// runtime asset handles, embeds each as a `#Name` root, and re-derives the
-/// handle-bearing component patches so their fields emit the reference names.
-/// Assets that already carry a filesystem path or a catalog `@Name`, and scene
-/// assets already embedded as roots, resolve through their existing sources.
+/// [`jackdaw_bsn::emit_scene`]. This does a capture-time asset pass: it walks
+/// the document's entities for pathless runtime asset handles, embeds each as
+/// a `#Name` root, and re-derives the handle-bearing component patches so
+/// their fields emit the reference names. Assets that already carry a
+/// filesystem path or a catalog `@Name`, and scene assets already embedded as
+/// roots, resolve through their existing sources. Inherited prefab-instance
+/// content reduces to sparse override entries.
 ///
-/// The document is restored to its prior state before returning, so emission
-/// stays read-only: the temporary roots are dropped and the rewritten patches
-/// are reverted.
+/// All of that happens on a deep clone of the document, so emission never
+/// mutates the live state.
 pub fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: &Path) -> String {
-    if world.get_resource::<jackdaw_bsn::SceneBsnAst>().is_none() {
+    let Some(live) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
         return String::new();
-    }
+    };
+    let mut ast = live.deep_clone();
 
     let registry = world.resource::<AppTypeRegistry>().clone();
 
@@ -1332,116 +1351,86 @@ pub fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: &Path) 
         }
     }
 
-    let entities = doc_entities_in_order(world.resource::<jackdaw_bsn::SceneBsnAst>());
+    let entities = doc_entities_in_order(&ast);
     let pass = {
         let reg = registry.read();
         collect_bsn_inline_assets(world, &reg, &entities, seed)
     };
 
-    // Take the document out of the world so the sparsify pass,
-    // `append_assets_to_ast`, and the patch rewrite can borrow the world
-    // immutably alongside it.
-    let mut ast = world
-        .remove_resource::<jackdaw_bsn::SceneBsnAst>()
-        .unwrap_or_default();
-
-    // Reduce inherited prefab-instance descendants to sparse override entries
+    // Reduce inherited prefab-instance content to sparse override entries
     // (`PrefabEntityId` plus only diverged fields). No-op when there is no
-    // prefab cache or no prefab instances. Recorded so the live document is
-    // restored after this read-only emit.
-    let sparsify_restore = if world
+    // prefab cache or no prefab instances.
+    if world
         .get_resource::<crate::prefab::PrefabAstCache>()
         .is_some()
     {
         let cache = world.resource::<crate::prefab::PrefabAstCache>();
         let get_prefab = |p: &Path| cache.get(p);
-        crate::prefab::resolver_bsn::sparsify_inherited_descendants_recording(&mut ast, &get_prefab)
-    } else {
-        Vec::new()
-    };
+        crate::prefab::resolver_bsn::sparsify_inherited_descendants(&mut ast, &get_prefab);
+    }
 
     // No kept component references an asset handle: the document already emits
     // faithfully once sparsified.
     if pass.touched.is_empty() {
-        let text = jackdaw_bsn::emit_scene(&ast);
-        crate::prefab::resolver_bsn::restore_sparsified(&mut ast, sparsify_restore);
-        world.insert_resource(ast);
-        return text;
+        return jackdaw_bsn::emit_scene(&ast);
     }
 
-    let asset_server = world.resource::<AssetServer>().clone();
-
-    let roots_before = ast.roots.len();
     if !pass.refs.is_empty() {
         jackdaw_bsn::append_assets_to_ast(&mut ast, world, &pass.refs);
     }
-    let added_roots: Vec<Entity> = ast.roots[roots_before..].to_vec();
 
     // Re-derive each handle-bearing component patch with the asset context so
-    // its handle fields emit reference names or asset paths. Remember the prior
-    // patch to restore the live document afterward.
-    let mut restore: Vec<(Entity, jackdaw_bsn::BsnPatch)> = Vec::new();
-    {
-        let reg = registry.read();
-        let ctx = jackdaw_bsn::BsnAssetContext {
-            asset_server: &asset_server,
-            parent_path,
-            asset_names: Some(&pass.names),
+    // its handle fields emit reference names or asset paths.
+    rederive_handle_patches(world, &mut ast, &registry, parent_path, &pass);
+
+    jackdaw_bsn::emit_scene(&ast)
+}
+
+/// Re-derive every component patch listed in `pass.touched` from its live ECS
+/// value with the asset context, so `Handle<T>` fields emit reference names
+/// or asset paths instead of the placeholder an asset-blind capture stored.
+fn rederive_handle_patches(
+    world: &World,
+    ast: &mut jackdaw_bsn::SceneBsnAst,
+    registry: &AppTypeRegistry,
+    parent_path: &Path,
+    pass: &BsnInlineAssetPass,
+) {
+    let Some(asset_server) = world.get_resource::<AssetServer>().cloned() else {
+        return;
+    };
+    let reg = registry.read();
+    let ctx = jackdaw_bsn::BsnAssetContext {
+        asset_server: &asset_server,
+        parent_path,
+        asset_names: Some(&pass.names),
+    };
+    for (entity, type_path) in &pass.touched {
+        let Some(patches_entity) = ast.ast_for(*entity) else {
+            continue;
         };
-        for (entity, type_path) in &pass.touched {
-            let Some(patches_entity) = ast.ast_for(*entity) else {
-                continue;
-            };
-            let Some(patch_entity) = ast.find_patch_by_type_path(patches_entity, type_path) else {
-                continue;
-            };
-            let Ok(entity_ref) = world.get_entity(*entity) else {
-                continue;
-            };
-            let Some(registration) = reg.get_with_type_path(type_path) else {
-                continue;
-            };
-            let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-                continue;
-            };
-            let Some(component) = reflect_component.reflect(entity_ref) else {
-                continue;
-            };
-            let new_patch = jackdaw_bsn::component_to_bsn_patch_with_assets(
-                component.as_partial_reflect(),
-                &reg,
-                &ctx,
-            );
-            if let Some(old) = ast.get_patch(patch_entity).cloned() {
-                restore.push((patch_entity, old));
-            }
-            ast.set_patch(patch_entity, new_patch);
-        }
+        let Some(patch_entity) = ast.find_patch_by_type_path(patches_entity, type_path) else {
+            continue;
+        };
+        let Ok(entity_ref) = world.get_entity(*entity) else {
+            continue;
+        };
+        let Some(registration) = reg.get_with_type_path(type_path) else {
+            continue;
+        };
+        let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+            continue;
+        };
+        let Some(component) = reflect_component.reflect(entity_ref) else {
+            continue;
+        };
+        let new_patch = jackdaw_bsn::component_to_bsn_patch_with_assets(
+            component.as_partial_reflect(),
+            &reg,
+            &ctx,
+        );
+        ast.set_patch(patch_entity, new_patch);
     }
-
-    let text = jackdaw_bsn::emit_scene(&ast);
-
-    // Restore the live document: revert the rewritten patches and drop the
-    // temporary asset roots so a later capture starts from the same state.
-    for (patch_entity, old) in restore {
-        ast.set_patch(patch_entity, old);
-    }
-    for root in added_roots {
-        let child_patches = ast
-            .get_patches(root)
-            .map(|p| p.0.clone())
-            .unwrap_or_default();
-        ast.remove_from_roots(root);
-        for pe in child_patches {
-            ast.world.despawn(pe);
-        }
-        ast.world.despawn(root);
-    }
-
-    crate::prefab::resolver_bsn::restore_sparsified(&mut ast, sparsify_restore);
-
-    world.insert_resource(ast);
-    text
 }
 
 /// Emit a subset of the live BSN document (the given document nodes with
@@ -1450,16 +1439,25 @@ pub fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: &Path) 
 /// Referenced runtime inline assets embed as `#Name` roots so a cross-scene
 /// paste carries them along; only catalog `@Name` assets are assumed to
 /// resolve at the destination. Stable node ids are stripped from the emitted
-/// text, so a paste mints fresh ones. The live document is restored to its
-/// prior state before returning.
+/// text, so a paste mints fresh ones. Works on a deep clone of the document,
+/// so emission never mutates the live state.
 pub(crate) fn emit_bsn_entities_with_inline_assets(
     world: &mut World,
     parent_path: &Path,
     nodes: &[Entity],
 ) -> String {
-    if world.get_resource::<jackdaw_bsn::SceneBsnAst>().is_none() {
+    let Some(live) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
         return String::new();
-    }
+    };
+
+    // Translate the live document nodes into the clone through their linked
+    // ECS entities (the clone re-mints node entities but keeps the links).
+    let node_entities: Vec<Entity> = nodes.iter().filter_map(|&n| live.ecs_for_ast(n)).collect();
+    let mut ast = live.deep_clone();
+    let clone_nodes: Vec<Entity> = node_entities
+        .iter()
+        .filter_map(|&e| ast.ast_for(e))
+        .collect();
 
     let registry = world.resource::<AppTypeRegistry>().clone();
 
@@ -1475,32 +1473,23 @@ pub(crate) fn emit_bsn_entities_with_inline_assets(
     }
 
     // The copied subtrees' document nodes and their live ECS entities.
-    let (subtree_nodes, entities) = {
-        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
-        let mut subtree_nodes: Vec<Entity> = Vec::new();
-        for &node in nodes {
-            subtree_nodes.push(node);
-            subtree_nodes.extend(ast.descendants_of(node));
-        }
-        let entities: Vec<Entity> = subtree_nodes
-            .iter()
-            .filter_map(|&n| ast.ecs_for_ast(n))
-            .collect();
-        (subtree_nodes, entities)
-    };
+    let mut subtree_nodes: Vec<Entity> = Vec::new();
+    for &node in &clone_nodes {
+        subtree_nodes.push(node);
+        subtree_nodes.extend(ast.descendants_of(node));
+    }
+    let entities: Vec<Entity> = subtree_nodes
+        .iter()
+        .filter_map(|&n| ast.ecs_for_ast(n))
+        .collect();
 
     let pass = {
         let reg = registry.read();
         collect_bsn_inline_assets(world, &reg, &entities, seed)
     };
 
-    let mut ast = world
-        .remove_resource::<jackdaw_bsn::SceneBsnAst>()
-        .unwrap_or_default();
-
     // Strip stable node ids from the copied subtrees; a paste mints fresh
     // ones, so the clipboard must not carry the source ids.
-    let mut removed_id_patches: Vec<(Entity, jackdaw_bsn::BsnPatch)> = Vec::new();
     for &node in &subtree_nodes {
         let found = ast.get_patches(node).and_then(|patches| {
             patches.0.iter().copied().find(|&pe| {
@@ -1512,9 +1501,6 @@ pub(crate) fn emit_bsn_entities_with_inline_assets(
             })
         });
         if let Some(pe) = found {
-            if let Some(patch) = ast.get_patch(pe).cloned() {
-                removed_id_patches.push((node, patch));
-            }
             if let Some(patches) = ast.get_patches_mut(node) {
                 patches.0.retain(|&x| x != pe);
             }
@@ -1525,81 +1511,17 @@ pub(crate) fn emit_bsn_entities_with_inline_assets(
     // Embed referenced runtime assets as roots and re-derive handle-bearing
     // component patches so their fields emit the reference names.
     let roots_before = ast.roots.len();
-    let mut restore: Vec<(Entity, jackdaw_bsn::BsnPatch)> = Vec::new();
-    let mut added_roots: Vec<Entity> = Vec::new();
     if !pass.touched.is_empty() {
         if !pass.refs.is_empty() {
             jackdaw_bsn::append_assets_to_ast(&mut ast, world, &pass.refs);
         }
-        added_roots = ast.roots[roots_before..].to_vec();
-
-        let asset_server = world.resource::<AssetServer>().clone();
-        let reg = registry.read();
-        let ctx = jackdaw_bsn::BsnAssetContext {
-            asset_server: &asset_server,
-            parent_path,
-            asset_names: Some(&pass.names),
-        };
-        for (entity, type_path) in &pass.touched {
-            let Some(patches_entity) = ast.ast_for(*entity) else {
-                continue;
-            };
-            let Some(patch_entity) = ast.find_patch_by_type_path(patches_entity, type_path) else {
-                continue;
-            };
-            let Ok(entity_ref) = world.get_entity(*entity) else {
-                continue;
-            };
-            let Some(registration) = reg.get_with_type_path(type_path) else {
-                continue;
-            };
-            let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-                continue;
-            };
-            let Some(component) = reflect_component.reflect(entity_ref) else {
-                continue;
-            };
-            let new_patch = jackdaw_bsn::component_to_bsn_patch_with_assets(
-                component.as_partial_reflect(),
-                &reg,
-                &ctx,
-            );
-            if let Some(old) = ast.get_patch(patch_entity).cloned() {
-                restore.push((patch_entity, old));
-            }
-            ast.set_patch(patch_entity, new_patch);
-        }
+        rederive_handle_patches(world, &mut ast, &registry, parent_path, &pass);
     }
+    let added_roots: Vec<Entity> = ast.roots[roots_before..].to_vec();
 
-    let mut emit_list = added_roots.clone();
-    emit_list.extend_from_slice(nodes);
-    let text = jackdaw_bsn::emit_entities(&ast, &emit_list);
-
-    // Restore the live document: revert rewritten patches, drop the
-    // temporary asset roots, and re-add the stripped id patches.
-    for (patch_entity, old) in restore {
-        ast.set_patch(patch_entity, old);
-    }
-    for root in added_roots {
-        let child_patches = ast
-            .get_patches(root)
-            .map(|p| p.0.clone())
-            .unwrap_or_default();
-        ast.remove_from_roots(root);
-        for pe in child_patches {
-            ast.world.despawn(pe);
-        }
-        ast.world.despawn(root);
-    }
-    for (node, patch) in removed_id_patches {
-        let pe = ast.world.spawn(patch).id();
-        if let Some(patches) = ast.get_patches_mut(node) {
-            patches.0.push(pe);
-        }
-    }
-
-    world.insert_resource(ast);
-    text
+    let mut emit_list = added_roots;
+    emit_list.extend_from_slice(&clone_nodes);
+    jackdaw_bsn::emit_entities(&ast, &emit_list)
 }
 
 /// Serialize a single runtime asset (and its nested handles like textures)
@@ -2494,16 +2416,7 @@ pub fn register_entity_in_ast(world: &mut World, entity: Entity) {
     jackdaw_bsn::create_entity_in_ast(world, entity, parent);
 
     let registry = world.resource::<AppTypeRegistry>().clone();
-    let skip_ids: HashSet<TypeId> = HashSet::from([
-        TypeId::of::<GlobalTransform>(),
-        TypeId::of::<InheritedVisibility>(),
-        TypeId::of::<ViewVisibility>(),
-        TypeId::of::<ChildOf>(),
-        TypeId::of::<Children>(),
-        TypeId::of::<Name>(),
-        TypeId::of::<jackdaw_bsn::AstNodeRef>(),
-        TypeId::of::<jackdaw_bsn::AstDirty>(),
-    ]);
+    let skip_ids = doc_skip_type_ids();
     let values: Vec<Box<dyn bevy::reflect::PartialReflect>> = {
         let reg = registry.read();
         let entity_ref = world.entity(entity);

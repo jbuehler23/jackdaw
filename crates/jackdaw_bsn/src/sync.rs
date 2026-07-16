@@ -154,53 +154,9 @@ pub fn sync_hierarchy_to_ast(world: &mut World, entity: Entity, new_parent: Opti
 
     let parent_ast = new_parent.and_then(|p| world.get::<AstNodeRef>(p).map(|r| r.patches_entity));
 
-    // Determine old parent AST.
-    // We need to find which AST node currently contains this node as a child;
-    // for now, search roots and all Children patches.
     let mut ast = world.resource_mut::<SceneBsnAst>();
-
-    let old_parent_ast = find_ast_parent(&ast, node_ast);
-
+    let old_parent_ast = ast.ast_parent_of(node_ast);
     ast.move_to_parent(node_ast, old_parent_ast, parent_ast);
-}
-
-/// Find which AST entity is the parent of `child_ast` (contains it in a
-/// Children patch). Returns None if child is a root.
-fn find_ast_parent(ast: &SceneBsnAst, child_ast: Entity) -> Option<Entity> {
-    // Check roots
-    if ast.roots.contains(&child_ast) {
-        return None;
-    }
-
-    // Search all patches entities for a Children patch containing child_ast
-    for &root in &ast.roots {
-        if let Some(parent) = find_parent_recursive(ast, root, child_ast) {
-            return Some(parent);
-        }
-    }
-
-    None
-}
-
-fn find_parent_recursive(ast: &SceneBsnAst, current: Entity, target: Entity) -> Option<Entity> {
-    let patches = ast.get_patches(current)?;
-
-    for &patch_entity in &patches.0 {
-        if let Some(crate::BsnPatch::Children(children)) = ast.get_patch(patch_entity) {
-            // Check if target is a direct child
-            if children.contains(&target) {
-                return Some(current);
-            }
-            // Recurse into children
-            for &child in children {
-                if let Some(parent) = find_parent_recursive(ast, child, target) {
-                    return Some(parent);
-                }
-            }
-        }
-    }
-
-    None
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ lalrpop-util = "0.23"
 nom = "8"
 pathdiff.workspace = true
 thiserror = "2"
+log = "0.4"
 
 [build-dependencies]
 lalrpop = "0.23"

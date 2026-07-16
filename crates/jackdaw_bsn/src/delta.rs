@@ -10,13 +10,18 @@
 
 use crate::document::{BsnField, BsnStructData, BsnStructFields, BsnValue};
 
-/// Structural equality of two [`BsnValue`] trees. Struct fields and map entries
-/// compare independent of order (matching how a JSON object compares), so two
-/// structs with the same named fields in a different order are equal. Lists and
-/// tuple-struct values compare in order.
-///
-/// [`BsnValue`] has no derived `PartialEq`, so this is the crate's canonical
-/// value comparison; the diff and merge helpers rely on it.
+impl PartialEq for BsnValue {
+    /// Structural equality: struct fields and map entries compare independent
+    /// of order (matching how a JSON object compares), so two structs with
+    /// the same named fields in a different order are equal. Lists and
+    /// tuple-struct values compare in order.
+    fn eq(&self, other: &Self) -> bool {
+        bsn_value_eq(self, other)
+    }
+}
+
+/// Structural equality of two [`BsnValue`] trees; the body behind
+/// [`BsnValue`]'s `PartialEq`. Prefer `==` at call sites.
 pub fn bsn_value_eq(a: &BsnValue, b: &BsnValue) -> bool {
     match (a, b) {
         (BsnValue::Float(x), BsnValue::Float(y)) => x == y,

@@ -710,12 +710,7 @@ fn preview_entity_components_as_bsn(
     world: &World,
     entity: Entity,
 ) -> Vec<(String, jackdaw_bsn::BsnValue)> {
-    use std::any::TypeId;
-
-    use bevy::{
-        ecs::reflect::AppTypeRegistry,
-        prelude::{ChildOf, Children, GlobalTransform, InheritedVisibility, ViewVisibility},
-    };
+    use bevy::ecs::reflect::AppTypeRegistry;
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
@@ -725,13 +720,7 @@ fn preview_entity_components_as_bsn(
     };
 
     // The same structural/derived components that register_entity_in_ast skips.
-    let skip_ids = [
-        TypeId::of::<GlobalTransform>(),
-        TypeId::of::<InheritedVisibility>(),
-        TypeId::of::<ViewVisibility>(),
-        TypeId::of::<ChildOf>(),
-        TypeId::of::<Children>(),
-    ];
+    let skip_ids = crate::scene_io::structural_skip_type_ids();
 
     let mut out: Vec<(String, jackdaw_bsn::BsnValue)> = registry
         .iter()

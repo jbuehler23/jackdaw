@@ -1061,13 +1061,7 @@ pub fn sync_required_to_ast(world: &mut World, entity: Entity) -> Vec<String> {
             .unwrap_or_default()
     };
 
-    let skip_ids: HashSet<TypeId> = HashSet::from([
-        TypeId::of::<GlobalTransform>(),
-        TypeId::of::<InheritedVisibility>(),
-        TypeId::of::<ViewVisibility>(),
-        TypeId::of::<ChildOf>(),
-        TypeId::of::<Children>(),
-    ]);
+    let skip_ids = crate::scene_io::structural_skip_type_ids();
 
     // Collect reflected components not yet in the document as patches.
     let to_add: Vec<(String, jackdaw_bsn::BsnPatch)> = {
