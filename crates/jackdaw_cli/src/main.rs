@@ -21,6 +21,7 @@ fn main() -> ExitCode {
     match args.get(1).map(String::as_str) {
         Some("build") => cmd_build(&args[2..]),
         Some("run") => cmd_run(&args[2..]),
+        Some("setup") => cmd_setup(),
         Some("--help" | "-h" | "help") => {
             usage();
             ExitCode::SUCCESS
@@ -42,8 +43,25 @@ fn usage() {
         "usage: jackdaw-cli <command>\n\n\
          commands:\n  \
          build [--project <path>]   Build the project so the editor picks up new or changed components\n  \
-         run   [--project <path>]   Build, then launch the game standalone"
+         run   [--project <path>]   Build, then launch the game standalone\n  \
+         setup                      Build the SDK into the cache (one-time; needs rustup)"
     );
+}
+
+/// `jackdaw-cli setup`: build the SDK into `~/.jackdaw/sdk/...` so builds
+/// work without a jackdaw source checkout. Requires a binary built with
+/// the `embed-recipe` feature (packaged releases).
+fn cmd_setup() -> ExitCode {
+    match jackdaw_project_build::bootstrap::ensure_sdk(|phase| println!("jackdaw setup: {phase}")) {
+        Ok(cache) => {
+            println!("jackdaw setup: SDK ready at {}", cache.display());
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("jackdaw setup: {err}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// `jackdaw-cli build [--project <path>]`: run the same pipeline the

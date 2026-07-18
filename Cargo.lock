@@ -5134,6 +5134,7 @@ dependencies = [
  "jackdaw_scene_types",
  "serde",
  "serde_json",
+ "toml",
  "tracing",
 ]
 

@@ -10,6 +10,12 @@ repository = "https://github.com/jbuehler23/jackdaw"
 name = "jackdaw-cli"
 path = "src/main.rs"
 
+[features]
+# Bake the SDK-builder recipe in so `jackdaw-cli setup` can bootstrap the
+# SDK on a machine without the jackdaw source. Off by default; packaged
+# releases turn it on.
+embed-recipe = ["jackdaw_project_build/embed-recipe"]
+
 [dependencies]
 jackdaw_project_build.workspace = true
 

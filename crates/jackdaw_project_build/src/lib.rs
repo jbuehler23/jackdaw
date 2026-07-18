@@ -19,3 +19,11 @@ pub mod shim;
 mod build;
 
 pub use build::{ProjectBuild, ProjectBuildError, build_project_dylib, shim_spec_for_project};
+
+// The embedded SDK-builder recipe (relative path + bytes), assembled by
+// `build.rs`. Empty when this crate was compiled outside the workspace.
+include!(concat!(env!("OUT_DIR"), "/recipe_data.rs"));
+
+/// A stable content hash of the embedded recipe. Part of the cache stamp
+/// so a jackdaw upgrade that changes the recipe rebuilds the SDK.
+pub const RECIPE_HASH: &str = env!("RECIPE_HASH");

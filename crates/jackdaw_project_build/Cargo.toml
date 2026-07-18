@@ -11,6 +11,11 @@ repository = "https://github.com/jbuehler23/jackdaw"
 # throwaway extractor process (the game runner). The editor and CLI
 # consume the wire schema without it.
 reflect = ["dep:bevy", "dep:jackdaw_scene_types"]
+# Bake the SDK-builder recipe into the binary so a shipped jackdaw can
+# bootstrap its SDK on first use. Off by default: assembling and
+# embedding the crate sources is only wanted in packaged release builds,
+# and it would slow ordinary dev compiles.
+embed-recipe = []
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
@@ -18,6 +23,11 @@ serde_json.workspace = true
 tracing = { workspace = true }
 bevy = { workspace = true, optional = true }
 jackdaw_scene_types = { workspace = true, optional = true }
+
+[build-dependencies]
+# The build script assembles the embedded SDK-builder recipe: it parses
+# the workspace manifest to generate the recipe's `[workspace.dependencies]`.
+toml = "0.8"
 
 [lints]
 workspace = true

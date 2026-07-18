@@ -10,6 +10,7 @@
 //! cargo build, arrange the artifacts) lands on top of this.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
@@ -114,6 +115,26 @@ pub fn cache_resolves(cache: &Path, triple: &str) -> bool {
             .is_file()
 }
 
+/// Whether an SDK-builder recipe is baked into this binary. False when
+/// this crate was compiled outside the workspace (for example as a
+/// crates.io dependency, or the recipe building itself), where there is
+/// nothing to bootstrap from.
+pub fn recipe_is_embedded() -> bool {
+    !crate::RECIPE_FILES.is_empty()
+}
+
+/// Extract the embedded recipe into `dst`, ready for `cargo build`.
+pub fn write_recipe(dst: &Path) -> std::io::Result<()> {
+    for (rel, bytes) in crate::RECIPE_FILES {
+        let path = dst.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, bytes)?;
+    }
+    Ok(())
+}
+
 /// Remove cache dirs for other (version, toolchain) keys, keeping the
 /// current one. Best-effort; called after a successful build.
 pub fn gc_other_versions() {
@@ -129,6 +150,167 @@ pub fn gc_other_versions() {
             let _ = std::fs::remove_dir_all(entry.path());
         }
     }
+}
+
+/// Build the SDK into the cache if it is missing or stale, and return the
+/// cache dir, which [`SdkPaths::compute`](crate::sdk_paths::SdkPaths::compute)
+/// then resolves with no env var. The first call is slow: it installs the
+/// pinned toolchain via rustup and compiles the SDK (~10-15 min); later
+/// calls with a matching stamp return at once. `progress` receives phase
+/// strings for the setup UI.
+///
+/// The artifact arrangement mirrors the dev/CI layout (SDK dylib, runner,
+/// and their deps built with `--target`; the wrapper built for the host),
+/// so `for_workspace_profile` locates the build outputs and
+/// `for_installed_root` names their cache destinations. These paths are
+/// validated against the first real bootstrap build.
+pub fn ensure_sdk(mut progress: impl FnMut(&str)) -> Result<PathBuf, String> {
+    if !recipe_is_embedded() {
+        return Err("this jackdaw was built without an embedded SDK recipe \
+                    (the `embed-recipe` feature); it cannot bootstrap an SDK"
+            .to_string());
+    }
+    let triple = crate::sdk_paths::host_triple().to_string();
+    let cache = cache_dir().ok_or_else(|| "no home directory for the SDK cache".to_string())?;
+
+    if read_stamp(&cache).is_some_and(|s| s.matches(&triple, crate::RECIPE_HASH))
+        && cache_resolves(&cache, &triple)
+    {
+        return Ok(cache);
+    }
+
+    progress("Installing the pinned Rust toolchain");
+    install_toolchain()?;
+
+    let build_dir = cache.join("build");
+    let _ = std::fs::remove_dir_all(&build_dir);
+    progress("Unpacking SDK sources");
+    write_recipe(&build_dir).map_err(|e| format!("unpack recipe: {e}"))?;
+
+    progress("Building the SDK (one-time; this can take several minutes)");
+    build_recipe(&build_dir, &triple)?;
+
+    progress("Installing the SDK");
+    arrange(&build_dir, &cache, &triple)?;
+
+    write_stamp(&cache, &Stamp::current(&triple, crate::RECIPE_HASH))
+        .map_err(|e| format!("write stamp: {e}"))?;
+    gc_other_versions();
+    progress("SDK ready");
+    Ok(cache)
+}
+
+fn install_toolchain() -> Result<(), String> {
+    let status = Command::new("rustup")
+        .args([
+            "toolchain",
+            "install",
+            SDK_TOOLCHAIN_CHANNEL,
+            "--profile",
+            "minimal",
+        ])
+        .status()
+        .map_err(|e| format!("rustup is required to build the SDK but could not run: {e}"))?;
+    if !status.success() {
+        return Err(format!("failed to install the {SDK_TOOLCHAIN_CHANNEL} toolchain"));
+    }
+    Ok(())
+}
+
+fn build_recipe(build_dir: &Path, triple: &str) -> Result<(), String> {
+    // SDK dylib + runner are cross-target artifacts (`--target`); their
+    // deps land in `target/<triple>/release` and proc-macro host deps in
+    // `target/release`.
+    run_cargo(
+        build_dir,
+        &[
+            "build",
+            "--release",
+            "--target",
+            triple,
+            "-p",
+            "jackdaw_sdk",
+            "-p",
+            "jackdaw_runner",
+        ],
+    )?;
+    // The rustc wrapper is a host tool; build it without `--target` so it
+    // lands in `target/release`, where `for_workspace_profile` looks.
+    run_cargo(build_dir, &["build", "--release", "-p", "jackdaw_rustc_wrapper"])
+}
+
+fn run_cargo(build_dir: &Path, args: &[&str]) -> Result<(), String> {
+    let output = Command::new("cargo")
+        .arg(format!("+{SDK_TOOLCHAIN_CHANNEL}"))
+        .args(args)
+        .env("CARGO_INCREMENTAL", "0")
+        .current_dir(build_dir)
+        .output()
+        .map_err(|e| format!("cargo build: {e}"))?;
+    if !output.status.success() {
+        let log = String::from_utf8_lossy(&output.stderr);
+        let tail: Vec<&str> = log.lines().rev().take(30).collect();
+        let tail: String = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+        return Err(format!("SDK build failed:\n{tail}"));
+    }
+    Ok(())
+}
+
+fn arrange(build_dir: &Path, cache: &Path, triple: &str) -> Result<(), String> {
+    let built = crate::sdk_paths::SdkPaths::for_workspace_profile(build_dir, "release");
+    let out = crate::sdk_paths::SdkPaths::for_installed_root(cache);
+
+    // Fresh install layout under the cache.
+    let _ = std::fs::remove_dir_all(cache.join("sdk"));
+    mkdirs(&cache.join("sdk").join(triple))?;
+    mkdirs(&cache.join("sdk").join("host-deps"))?;
+
+    copy_file(&built.dylib, &out.dylib)?;
+    copy_dir(&built.deps, &out.deps)?;
+    copy_dir(&built.host_deps, &out.host_deps)?;
+    copy_file(&built.runner, &out.runner)?;
+    copy_file(&built.wrapper, &out.wrapper)?;
+    copy_file(&build_dir.join("Cargo.lock"), &out.lockfile)?;
+    std::fs::write(cache.join("toolchain.txt"), SDK_TOOLCHAIN_CHANNEL).map_err(io)?;
+
+    // The extern-redirect manifest project builds consult.
+    let manifest = crate::plan::SdkManifest::generate_dev(build_dir, &built)
+        .map_err(|e| format!("generate SDK manifest: {e}"))?;
+    manifest
+        .write(&out.manifest)
+        .map_err(|e| format!("write SDK manifest: {e}"))
+}
+
+fn io(e: std::io::Error) -> String {
+    e.to_string()
+}
+
+fn mkdirs(p: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(p).map_err(io)
+}
+
+fn copy_file(from: &Path, to: &Path) -> Result<(), String> {
+    if let Some(parent) = to.parent() {
+        mkdirs(parent)?;
+    }
+    std::fs::copy(from, to)
+        .map(|_| ())
+        .map_err(|e| format!("copy {} -> {}: {e}", from.display(), to.display()))
+}
+
+fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
+    mkdirs(to)?;
+    let entries = std::fs::read_dir(from).map_err(|e| format!("read {}: {e}", from.display()))?;
+    for entry in entries.flatten() {
+        let f = entry.path();
+        let t = to.join(entry.file_name());
+        if f.is_dir() {
+            copy_dir(&f, &t)?;
+        } else {
+            std::fs::copy(&f, &t).map_err(io)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
