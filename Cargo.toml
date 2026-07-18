@@ -365,10 +365,6 @@ name = "jackdaw-rustc-wrapper"
 path = "src/bin/jackdaw-rustc-wrapper.rs"
 doc = false
 
-[[bin]]
-name = "jackdaw-runner"
-path = "src/bin/jackdaw_runner.rs"
-required-features = ["runner"]
 
 [[example]]
 name = "minimal_extension"

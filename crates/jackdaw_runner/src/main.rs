@@ -12,7 +12,7 @@
 //!
 //! * `jackdaw-runner --extract-schema <project-dylib>` dlopens the
 //!   dylib, drains its reflected types, prints the project schema (see
-//!   [`jackdaw::project_build::schema`]) as JSON to stdout, and exits.
+//!   [`jackdaw_project_build::schema`]) as JSON to stdout, and exits.
 //!   The editor runs this per build so it learns the project's
 //!   component types WITHOUT mapping project code into its own process
 //!   (a loaded dylib can never be unmapped, so an in-editor load would
@@ -20,6 +20,11 @@
 //!
 //! The dylib is never unloaded: unloading live Rust code is undefined
 //! behavior, and the process exits to reclaim it.
+//!
+//! Kept out of the editor package so it links only the bevy-light build
+//! pipeline plus the headless runtime, not the whole editor. That keeps
+//! it a small, standalone artifact the SDK bootstrap can build on its
+//! own.
 
 use bevy::prelude::*;
 
@@ -53,7 +58,7 @@ fn extract_schema(dylib: &str) {
     registry.register_derived_types();
     std::mem::forget(lib);
 
-    let schema = jackdaw::project_build::schema::extract_from_registry(&registry);
+    let schema = jackdaw_project_build::schema::extract_from_registry(&registry);
     match serde_json::to_string(&schema) {
         Ok(json) => println!("{json}"),
         Err(err) => {
@@ -76,9 +81,8 @@ fn run_game(dylib: &str) {
     let lib = unsafe { libloading::Library::new(dylib) }
         .unwrap_or_else(|err| panic!("failed to load {dylib}: {err}"));
     {
-        let entry: libloading::Symbol<fn(&mut App)> =
-            unsafe { lib.get(b"jackdaw_runner_entry") }
-                .unwrap_or_else(|err| panic!("no jackdaw_runner_entry in {dylib}: {err}"));
+        let entry: libloading::Symbol<fn(&mut App)> = unsafe { lib.get(b"jackdaw_runner_entry") }
+            .unwrap_or_else(|err| panic!("no jackdaw_runner_entry in {dylib}: {err}"));
         entry(&mut app);
     }
     std::mem::forget(lib);

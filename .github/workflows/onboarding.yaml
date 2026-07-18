@@ -55,10 +55,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: onboarding-${{ matrix.os }}
 
-      - name: Build the SDK and wrapper
+      - name: Build the SDK, runner, and wrapper
         run: |
           set -euxo pipefail
           cargo build -j 4 -p jackdaw --features dylib --target "$TRIPLE"
+          cargo build -j 4 -p jackdaw_runner --target "$TRIPLE"
           cargo build -p jackdaw_rustc_wrapper
 
       - name: Spike 1 - auto-registration across dlopen

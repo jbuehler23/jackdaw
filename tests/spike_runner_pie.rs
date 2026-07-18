@@ -41,17 +41,7 @@ fn runner_boots_a_project_dylib_over_pie_ipc() {
     // Build the runner binary (prebuilt in production; here it shares
     // the SDK's cached build graph).
     let status = Command::new("cargo")
-        .args([
-            "build",
-            "-p",
-            "jackdaw",
-            "--bin",
-            "jackdaw-runner",
-            "--features",
-            "runner",
-            "--target",
-            &triple,
-        ])
+        .args(["build", "-p", "jackdaw_runner", "--target", &triple])
         .current_dir(workspace_root())
         .status()
         .expect("build jackdaw-runner");

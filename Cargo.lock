@@ -5150,6 +5150,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "jackdaw_runner"
+version = "0.5.0"
+dependencies = [
+ "bevy",
+ "jackdaw_project_build",
+ "jackdaw_runtime",
+ "libloading",
+ "serde_json",
+]
+
+[[package]]
 name = "jackdaw_runtime"
 version = "0.5.0"
 dependencies = [

@@ -60,20 +60,17 @@ pub struct SdkPaths {
 impl SdkPaths {
     pub fn compute() -> Self {
         let triple = host_triple().to_string();
+        // 1. Explicit override: a packaged distribution.
         if let Ok(from_env) = std::env::var("JACKDAW_SDK_DIR") {
-            let root = PathBuf::from(from_env);
-            let sdk = root.join("sdk").join(&triple);
-            return Self {
-                dylib: sdk.join(dylib_name()),
-                deps: sdk.join("deps"),
-                host_deps: root.join("sdk").join("host-deps"),
-                wrapper: root.join(wrapper_name()),
-                runner: root.join(runner_name()),
-                manifest: root.join("sdk").join("manifest.txt"),
-                triple,
-                toolchain: read_toolchain_txt(&root.join("toolchain.txt")),
-                lockfile: root.join("Cargo.lock"),
-            };
+            return Self::for_installed_root(std::path::Path::new(&from_env));
+        }
+        // 2. The bootstrap cache: an SDK this binary built for itself on
+        //    first use. Auto-discovered with no env var so a downloaded
+        //    jackdaw "just works" once setup has run.
+        if let Some(cache) = crate::bootstrap::cache_dir()
+            && crate::bootstrap::cache_resolves(&cache, &triple)
+        {
+            return Self::for_installed_root(&cache);
         }
 
         // Dev checkout. The editor runs either from
@@ -113,6 +110,27 @@ impl SdkPaths {
             triple,
             toolchain: read_toolchain_channel(&target_dir.join("../rust-toolchain.toml")),
             lockfile: target_dir.join("../Cargo.lock"),
+        }
+    }
+
+    /// Build the paths for a packaged / bootstrapped "installed layout"
+    /// rooted at `root`: `sdk/<triple>/libjackdaw_sdk.*` + `deps/`,
+    /// `sdk/host-deps/`, `sdk/manifest.txt`, the wrapper and runner
+    /// binaries in `root`, `toolchain.txt`, and `Cargo.lock`. Shared by
+    /// the `JACKDAW_SDK_DIR` override and the bootstrap cache.
+    pub fn for_installed_root(root: &std::path::Path) -> Self {
+        let triple = host_triple().to_string();
+        let sdk = root.join("sdk").join(&triple);
+        Self {
+            dylib: sdk.join(dylib_name()),
+            deps: sdk.join("deps"),
+            host_deps: root.join("sdk").join("host-deps"),
+            wrapper: root.join(wrapper_name()),
+            runner: root.join(runner_name()),
+            manifest: root.join("sdk").join("manifest.txt"),
+            triple,
+            toolchain: read_toolchain_txt(&root.join("toolchain.txt")),
+            lockfile: root.join("Cargo.lock"),
         }
     }
 
@@ -201,7 +219,7 @@ fn read_toolchain_txt(path: &std::path::Path) -> Option<String> {
         .map(str::to_string)
 }
 
-fn dylib_name() -> &'static str {
+pub(crate) fn dylib_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "jackdaw_sdk.dll"
     } else if cfg!(target_os = "macos") {
@@ -211,7 +229,7 @@ fn dylib_name() -> &'static str {
     }
 }
 
-fn wrapper_name() -> &'static str {
+pub(crate) fn wrapper_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "jackdaw-rustc-wrapper.exe"
     } else {
@@ -219,7 +237,7 @@ fn wrapper_name() -> &'static str {
     }
 }
 
-fn runner_name() -> &'static str {
+pub(crate) fn runner_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "jackdaw-runner.exe"
     } else {

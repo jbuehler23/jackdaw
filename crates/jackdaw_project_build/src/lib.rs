@@ -7,6 +7,7 @@
 //! Bevy CLI subcommand): only the `reflect` feature, used by the
 //! throwaway extractor process, pulls bevy.
 
+pub mod bootstrap;
 pub mod cargo_meta;
 pub mod detect;
 pub mod linkage;

@@ -1,0 +1,21 @@
+[package]
+name = "jackdaw_runner"
+version = "0.5.0"
+edition = "2024"
+description = "Prebuilt game runner and out-of-process schema extractor for the Jackdaw editor: turns a project dylib into a running game, or dumps its reflected type schema without mapping project code into the editor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[[bin]]
+name = "jackdaw-runner"
+path = "src/main.rs"
+
+[dependencies]
+bevy = { workspace = true }
+libloading = "0.8"
+serde_json = { workspace = true }
+jackdaw_project_build = { workspace = true, features = ["reflect"] }
+jackdaw_runtime = { workspace = true, features = ["pie"] }
+
+[lints]
+workspace = true
