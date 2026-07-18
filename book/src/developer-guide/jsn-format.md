@@ -1,10 +1,12 @@
 # JSN format
 
 JSN ("Jackdaw Scene Notation") is the on-disk format for
-scenes, projects, and the asset catalog. It is JSON with a
-fixed schema, designed to be human-readable, line-diffable in
-git, and to round-trip through Bevy's reflect system without
-losing information.
+project config and the asset catalog, and the legacy scene
+format. Scenes are now authored as `.bsn`; existing `.jsn`
+scenes still load (import-only) and can be re-saved as `.bsn`.
+JSN is JSON with a fixed schema, designed to be
+human-readable, line-diffable in git, and to round-trip
+through Bevy's reflect system without losing information.
 
 The types live in `crates/jackdaw_jsn/src/format.rs`. Source
 of truth for the field list is the structs there; this page
@@ -12,8 +14,9 @@ is the orientation.
 
 ## Three file kinds
 
-- `*.jsn` (scene): one entity tree. Authored in the editor,
-  loaded by the standalone runtime.
+- `*.jsn` (scene, legacy): one entity tree. New scenes are
+  authored as `.bsn`; the editor and the standalone runtime
+  still load `.jsn` scenes for migration.
 - `.jsn/project.jsn` (project config, legacy fallback at
   `<root>/project.jsn`): default scene, persisted dock
   layout, project metadata.

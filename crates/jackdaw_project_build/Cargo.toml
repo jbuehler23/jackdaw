@@ -1,0 +1,23 @@
+[package]
+name = "jackdaw_project_build"
+version = "0.5.0"
+edition = "2024"
+description = "Editor-independent project build pipeline for the Jackdaw 3D level editor: from an open Bevy project to a loadable dylib plus its extracted type schema"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[features]
+# Pulls bevy reflection for `schema::extract_from_registry`, used by the
+# throwaway extractor process (the game runner). The editor and CLI
+# consume the wire schema without it.
+reflect = ["dep:bevy", "dep:jackdaw_scene_types"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing = { workspace = true }
+bevy = { workspace = true, optional = true }
+jackdaw_scene_types = { workspace = true, optional = true }
+
+[lints]
+workspace = true

@@ -36,7 +36,14 @@ include = [
 default-run = "jackdaw"
 
 [features]
-default = ["multiplayer", "camera_rig"]
+# `dylib` is on by default because the editor loads project code
+# in-process to show its components, which requires sharing the SDK's
+# type graph. Run the editor with `cargo run --target <host-triple>`
+# so it links the same SDK the build pipeline compiles project dylibs
+# against (the SDK lives in `target/<triple>/debug`, kept apart from
+# host-side build artifacts). A fast UI-only editor that skips all of
+# this is `cargo run --no-default-features`.
+default = ["multiplayer", "camera_rig", "dylib"]
 # Bundles the editor-only networking authoring extension into the
 # editor: registers the proxy reflection types (`Replication`,
 # `NetworkRoom`) plus the user-toggleable networking extension. The
@@ -45,26 +52,23 @@ default = ["multiplayer", "camera_rig"]
 # default; opt out with `--no-default-features` for a slimmer build.
 multiplayer = ["dep:jackdaw_multiplayer", "dep:jackdaw_multiplayer_editor"]
 camera_rig = ["dep:jackdaw_camera_rig"]
-hot-reload = ["dep:bevy_simple_subsecond_system"]
-# Experimental dylib-based extension flow. Enables Bevy's
-# `dynamic_linking` plus jackdaw's `bevy_dylib`-style facade so
-# the editor and every loaded extension share one compiled copy
-# of every type that crosses the boundary, and pulls in
-# `jackdaw_sdk`, the proxy dylib that scaffolded extension
-# projects link against via
-# `--extern bevy=libjackdaw_sdk.{so,dll,dylib}`.
-#
-# Off by default. The recommended path is the static templates,
-# which compile plainly against `bevy` and produce normal Bevy
-# crates with no rustc-wrapper, no SDK proxy, and no dlopen.
-# Opt in with `--features dylib` to exercise the experimental
-# hot-reloadable dylib flow. ABI mismatches, install state, and
-# Windows-specific linker setup are still rough; expect issues.
+# The SDK-backed project flow: enables Bevy's `dynamic_linking` plus
+# `jackdaw_sdk`, the proxy dylib that project builds link against via
+# `--extern bevy=libjackdaw_sdk.{so,dll,dylib}`, so the editor and
+# every loaded project dylib share one compiled copy of every type
+# that crosses the boundary. Off by default only because linking the
+# SDK dylib slows plain dev builds; release editor builds enable it.
 #
 # Windows builds route through `rust-lld` via `.cargo/config.toml`
 # so the SDK proxy clears MSVC's 65,535 PE export cap when this
-# feature is enabled.
-dylib = ["dep:jackdaw_sdk", "jackdaw_api/dynamic_linking"]
+# feature is enabled. Build with CARGO_INCREMENTAL=0: incremental
+# codegen leaves undefined hidden anon constants across the dylib
+# boundary at link time.
+dylib = ["dep:jackdaw_sdk", "jackdaw_api/dynamic_linking", "jackdaw_project_build/reflect"]
+# The prebuilt game runner: dlopens a project dylib built through the
+# SDK pipeline and runs it over the PIE link with zero play-time
+# compilation.
+runner = ["dylib", "jackdaw_runtime/pie", "dep:libloading"]
 
 [workspace]
 members = [
@@ -80,6 +84,7 @@ jackdaw_jsn.workspace = true
 jackdaw_bsn.workspace = true
 jackdaw_geometry.workspace = true
 jackdaw_scene_types.workspace = true
+jackdaw_project_build.workspace = true
 jackdaw_csg.workspace = true
 bevy_monitors.workspace = true
 bevy_window_chrome.workspace = true
@@ -115,6 +120,8 @@ jackdaw_api.workspace = true
 # doesn't re-export.
 jackdaw_api_internal.workspace = true
 jackdaw_loader.workspace = true
+# Used by the jackdaw-runner binary to dlopen project dylibs.
+libloading = { version = "0.8", optional = true }
 # `jackdaw_runtime` hosts the standalone scene loader plus the
 # `EditorMeta`/`ReflectEditorMeta` trait that user game crates
 # implement. The editor depends on it (rather than the other way
@@ -174,7 +181,6 @@ syn = { version = "2", features = ["full", "extra-traits"] }
 quote = "1"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 prettyplease = "0.2"
-bevy_simple_subsecond_system = { version = "0.2", optional = true }
 winit.workspace = true
 image.workspace = true
 time.workspace = true
@@ -200,6 +206,7 @@ bevy = { version = "0.19", features = [
 jackdaw_jsn = { version = "0.5.0", path = "crates/jackdaw_jsn" }
 jackdaw_geometry = { version = "0.5.0", path = "crates/jackdaw_geometry" }
 jackdaw_scene_types = { version = "0.5.0", path = "crates/jackdaw_scene_types" }
+jackdaw_project_build = { version = "0.5.0", path = "crates/jackdaw_project_build" }
 jackdaw_bsn = { version = "0.5.0", path = "crates/jackdaw_bsn" }
 jackdaw_csg = { version = "0.5.0", path = "crates/jackdaw_csg" }
 bevy_monitors = "0.3"
@@ -307,6 +314,8 @@ redundant_closure_for_method_calls = "warn"
 [dev-dependencies]
 bevy = { workspace = true, features = ["dynamic_linking"] }
 jackdaw_runtime.workspace = true
+libloading = "0.8"
+serde_json.workspace = true
 tempfile = "3"
 # Pulled in so cargo builds the fixture cdylib as part of the
 # workspace test-target graph. `tests/dylib_loading.rs` dlopens the
@@ -355,6 +364,11 @@ codegen-units = 1
 name = "jackdaw-rustc-wrapper"
 path = "src/bin/jackdaw-rustc-wrapper.rs"
 doc = false
+
+[[bin]]
+name = "jackdaw-runner"
+path = "src/bin/jackdaw_runner.rs"
+required-features = ["runner"]
 
 [[example]]
 name = "minimal_extension"

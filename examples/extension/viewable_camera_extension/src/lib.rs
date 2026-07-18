@@ -63,6 +63,13 @@ impl JackdawExtension for ViewableCameraExtension {
     }
 }
 
+// Exposes `jackdaw_extension_ctor` so the editor's dylib loader can
+// discover this extension when built as a cdylib.
+#[unsafe(no_mangle)]
+pub fn jackdaw_extension_ctor() -> Box<dyn JackdawExtension> {
+    Box::new(ViewableCameraExtension)
+}
+
 /// BEI context for this extension; gives key-binding isolation.
 #[derive(Component, Default)]
 pub struct ViewableCameraContext;

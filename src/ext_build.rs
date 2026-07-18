@@ -1,25 +1,13 @@
-//! Editor-driven build pipeline for extension and game projects.
+//! Cargo build helpers shared by the editor: streaming progress
+//! parsing and the installed-extension-from-source build.
 //!
-//! User-scaffolded projects are plain single-crate cargo projects
-//! with `bevy = "0.18"` in `[dependencies]` and `crate-type =
-//! ["cdylib"]` on the library. Jackdaw compiles them via `cargo
-//! build` with `RUSTC_WRAPPER` pointing at `jackdaw-rustc-wrapper`,
-//! which intercepts rustc and rewrites `--extern bevy=<user>.rlib`
-//! to `--extern bevy=libjackdaw_sdk.so`. That keeps the user's
-//! cdylib `TypeIds` in sync with the editor.
-//!
-//! Why not `bevy build`? The bevy CLI's build subcommand requires
-//! a binary target and errors on library-only projects ("No
-//! binaries available!"). Scaffolded jackdaw projects are cdylibs
-//! so the editor can `dlopen` them, so `bevy build` can't drive
-//! them. We still use `bevy new` for scaffolding; that part of
-//! the toolchain fits cleanly.
-//!
-//! [`build_extension_project`] is the simple entry point.
-//! [`build_extension_project_with_progress`] additionally streams
-//! per-crate progress + tailing log lines into a shared sink the
-//! UI can read each frame. The function blocks until cargo exits;
-//! use an `AsyncComputeTaskPool` task for non-blocking builds.
+//! New game and extension projects build through
+//! [`crate::project_build`] (shim crate, per-edge redirect plan,
+//! isolated target dir). This module keeps the cargo-JSON progress
+//! plumbing that surfaces per-crate compile status in the UI, plus
+//! [`build_extension_project_with_progress`], which builds a
+//! self-contained extension crate through the rustc wrapper so its
+//! `TypeId`s line up with the editor.
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
@@ -29,32 +17,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::new_project::TemplateLinkage;
 use crate::sdk_paths::SdkPaths;
 
-/// Shared cargo target directory for building user-project editor and game
-/// binaries. A jackdaw source checkout routes into a dir under the checkout; an
-/// installed jackdaw uses a per-version dir under the user cache. Either way
-/// bevy + jackdaw + their dependencies compile once per machine, so every
-/// project after the first opens in seconds instead of recompiling the whole
-/// tree. Returns `None` when no cache dir is resolvable; callers then fall back
-/// to the project's own `target/`.
-///
-/// Keyed by jackdaw's version so an upgrade (different ABI) starts a fresh cache
-/// rather than mixing incompatible artifacts.
-fn shared_build_target_dir() -> Option<PathBuf> {
-    if let Some(checkout) = crate::new_project::jackdaw_dev_checkout() {
-        return Some(checkout.join("target").join("user-projects"));
-    }
-    dirs::cache_dir().map(|cache| {
-        cache
-            .join("jackdaw")
-            .join(env!("CARGO_PKG_VERSION"))
-            .join("target")
-    })
-}
-
-/// Everything that can go wrong while building an extension/game
+/// Everything that can go wrong while building an extension
 /// project.
 #[derive(Debug)]
 pub enum BuildError {
@@ -237,15 +202,12 @@ fn discover_sdk() -> Result<SdkPaths, BuildError> {
     Ok(paths)
 }
 
-/// Build the extension or game project rooted at `project_dir`.
+/// Build the extension project rooted at `project_dir`.
 ///
 /// Convenience wrapper around
 /// [`build_extension_project_with_progress`] that ignores progress.
-pub fn build_extension_project(
-    project_dir: &Path,
-    linkage: TemplateLinkage,
-) -> Result<PathBuf, BuildError> {
-    build_extension_project_with_progress(project_dir, None, linkage, None)
+pub fn build_extension_project(project_dir: &Path) -> Result<PathBuf, BuildError> {
+    build_extension_project_with_progress(project_dir, None, None)
 }
 
 /// Build the project and (optionally) stream progress into `sink`.
@@ -259,7 +221,6 @@ pub fn build_extension_project(
 pub fn build_extension_project_with_progress(
     project_dir: &Path,
     sink: Option<Arc<Mutex<BuildProgress>>>,
-    linkage: TemplateLinkage,
     cancel: Option<Arc<AtomicBool>>,
 ) -> Result<PathBuf, BuildError> {
     let project_dir = project_dir
@@ -274,14 +235,7 @@ pub fn build_extension_project_with_progress(
         return Err(BuildError::MissingCargoToml(project_dir));
     }
 
-    // The wrapper only applies to dylib builds. A static project
-    // depends on `jackdaw` directly; rewriting `--extern bevy` to the
-    // SDK dylib gives it a bevy whose hash doesn't match what cargo
-    // compiled, and the build fails with `can't find crate for jackdaw`.
-    let sdk = match linkage {
-        TemplateLinkage::Dylib => Some(discover_sdk()?),
-        TemplateLinkage::Static => None,
-    };
+    let sdk = discover_sdk()?;
 
     // Best-effort: probe the expected artifact count via cargo
     // metadata before kicking off the real build. Runs in the
@@ -304,194 +258,18 @@ pub fn build_extension_project_with_progress(
             .expect("Cargo.toml path must be valid UTF-8"),
         "--message-format=json-render-diagnostics",
     ]);
-    if let Some(sdk) = sdk.as_ref() {
-        cmd.env("RUSTC_WRAPPER", &sdk.wrapper);
-        cmd.env("JACKDAW_SDK_DYLIB", &sdk.dylib);
-        cmd.env("JACKDAW_SDK_DEPS", &sdk.deps);
-    }
+    cmd.env("RUSTC_WRAPPER", &sdk.wrapper);
+    cmd.env("JACKDAW_SDK_DYLIB", &sdk.dylib);
+    cmd.env("JACKDAW_SDK_DEPS", &sdk.deps);
 
     run_cargo_with_progress(cmd, sink.as_ref(), cancel.as_ref())?;
 
-    match linkage {
-        TemplateLinkage::Dylib => {
-            let artifact_name = artifact_file_name(&project_dir);
-            let artifact = project_dir.join("target/debug").join(&artifact_name);
-            if !artifact.is_file() {
-                return Err(BuildError::OutputNotProduced { expected: artifact });
-            }
-            Ok(artifact)
-        }
-        // Static builds have no cdylib to install; return the project
-        // dir so the caller can `enter_project(..)` on it.
-        TemplateLinkage::Static => Ok(project_dir),
+    let artifact_name = artifact_file_name(&project_dir);
+    let artifact = project_dir.join("target/debug").join(&artifact_name);
+    if !artifact.is_file() {
+        return Err(BuildError::OutputNotProduced { expected: artifact });
     }
-}
-
-/// Build a static-template project's editor binary with the
-/// `editor` cargo feature on. Used by the launcher's
-/// background-build flow to produce
-/// `<project>/target/debug/editor`, which carries the user's
-/// `MyGamePlugin` statically linked next to jackdaw's editor stack.
-///
-/// Streams progress into `sink` the same way
-/// [`build_extension_project_with_progress`] does. Returns the path
-/// to the built binary on success; the caller can then spawn it as
-/// a subprocess to hand off the editor session.
-pub fn build_static_editor_with_progress(
-    project_dir: &Path,
-    sink: Option<Arc<Mutex<BuildProgress>>>,
-    cancel: Option<Arc<AtomicBool>>,
-) -> Result<PathBuf, BuildError> {
-    let project_dir = project_dir
-        .canonicalize()
-        .map_err(|_| BuildError::NotADirectory(project_dir.to_path_buf()))?;
-    if !project_dir.is_dir() {
-        return Err(BuildError::NotADirectory(project_dir));
-    }
-    let manifest = project_dir.join("Cargo.toml");
-    if !manifest.is_file() {
-        return Err(BuildError::MissingCargoToml(project_dir));
-    }
-
-    if let Some(ref s) = sink
-        && let Some(total) = estimate_total_artifacts(&project_dir)
-        && let Ok(mut g) = s.lock()
-    {
-        g.artifacts_total = Some(total);
-    }
-
-    let mut cmd = Command::new("cargo");
-    cmd.current_dir(&project_dir);
-    cmd.args([
-        "build",
-        "--manifest-path",
-        manifest
-            .to_str()
-            .expect("Cargo.toml path must be valid UTF-8"),
-        "--bin",
-        "editor",
-        "--features",
-        "editor",
-        // The `jackdaw` editor crate is enormous; the Bevy dev profile's
-        // `package."*" opt-level = 3` optimizes it like any other dep, needing
-        // ~8GB to compile (it OOMs alongside the running editor). Build it at
-        // opt-level 1 (how the workspace itself builds it). It's editor-only,
-        // never linked into the shipped game, so there's no runtime cost. Other
-        // deps (bevy) keep opt-level 3.
-        "--config",
-        "profile.dev.package.jackdaw.opt-level=1",
-        "--message-format=json-render-diagnostics",
-    ]);
-
-    // Build into the shared, cross-project cache (see
-    // `shared_build_target_dir`): jackdaw + bevy + their deps compile once per
-    // machine, so the first project pays the full build and every project after
-    // it opens in seconds. Falls back to the project's own `target/` only when
-    // no cache dir is resolvable.
-    let editor_target_dir = shared_build_target_dir().unwrap_or_else(|| project_dir.join("target"));
-    let editor_target_str = editor_target_dir
-        .to_str()
-        .expect("CARGO_TARGET_DIR path must be valid UTF-8");
-    cmd.env("CARGO_TARGET_DIR", editor_target_str);
-
-    run_cargo_with_progress(cmd, sink.as_ref(), cancel.as_ref())?;
-
-    let bin_name = if cfg!(target_os = "windows") {
-        "editor.exe"
-    } else {
-        "editor"
-    };
-    let bin = editor_target_dir.join("debug").join(bin_name);
-    if !bin.is_file() {
-        return Err(BuildError::OutputNotProduced { expected: bin });
-    }
-    Ok(bin)
-}
-
-/// Inputs for building one game binary for PIE.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct BuildSpec {
-    /// Package owning the bin (`cargo build -p`).
-    pub package: String,
-    /// Binary target (`--bin`).
-    pub bin: String,
-    /// Fully resolved feature flags (already includes the pie feature).
-    pub features: Vec<String>,
-}
-
-/// Build the game binary described by `spec` with the PIE hook on.
-/// The resulting executable connects back to the editor over
-/// ipc-channel when launched with `JACKDAW_PIE` set. Builds into the
-/// project's own `target/`, the same directory the developer's `cargo
-/// build` uses, so Play reuses already-compiled dependencies and the
-/// binary lands where they expect it. Streams progress into `sink` and
-/// returns the path to `<target>/debug/<bin>`. Package, bin, and
-/// features all come from `spec`.
-pub fn build_game_bin_with_progress(
-    project_dir: &Path,
-    spec: &BuildSpec,
-    sink: Option<Arc<Mutex<BuildProgress>>>,
-    cancel: Option<Arc<AtomicBool>>,
-) -> Result<PathBuf, BuildError> {
-    let project_dir = project_dir
-        .canonicalize()
-        .map_err(|_| BuildError::NotADirectory(project_dir.to_path_buf()))?;
-    if !project_dir.is_dir() {
-        return Err(BuildError::NotADirectory(project_dir));
-    }
-    let manifest = project_dir.join("Cargo.toml");
-    if !manifest.is_file() {
-        return Err(BuildError::MissingCargoToml(project_dir));
-    }
-
-    if let Some(ref s) = sink
-        && let Some(total) = estimate_total_artifacts(&project_dir)
-        && let Ok(mut g) = s.lock()
-    {
-        g.artifacts_total = Some(total);
-    }
-
-    let mut cmd = Command::new("cargo");
-    cmd.current_dir(&project_dir);
-    cmd.args([
-        "build",
-        "--manifest-path",
-        manifest
-            .to_str()
-            .expect("Cargo.toml path must be valid UTF-8"),
-        "-p",
-        &spec.package,
-        "--bin",
-        &spec.bin,
-        "--message-format=json-render-diagnostics",
-    ]);
-    if !spec.features.is_empty() {
-        cmd.arg("--features").arg(spec.features.join(","));
-    }
-
-    // Build into the same shared cache as the editor build (see
-    // `shared_build_target_dir`), so the game (PIE) build reuses the editor
-    // build's already-compiled bevy + jackdaw rather than recompiling the tree
-    // per project. Falls back to the project's own `target/` when no cache dir
-    // is resolvable.
-    let game_target_dir = shared_build_target_dir().unwrap_or_else(|| project_dir.join("target"));
-    let game_target_str = game_target_dir
-        .to_str()
-        .expect("CARGO_TARGET_DIR path must be valid UTF-8");
-    cmd.env("CARGO_TARGET_DIR", game_target_str);
-
-    run_cargo_with_progress(cmd, sink.as_ref(), cancel.as_ref())?;
-
-    let bin_name = if cfg!(target_os = "windows") {
-        format!("{}.exe", spec.bin)
-    } else {
-        spec.bin.clone()
-    };
-    let bin = game_target_dir.join("debug").join(bin_name);
-    if !bin.is_file() {
-        return Err(BuildError::OutputNotProduced { expected: bin });
-    }
-    Ok(bin)
+    Ok(artifact)
 }
 
 /// Spawn `cmd` with stdout/stderr piped, pump cargo's JSON
@@ -499,11 +277,6 @@ pub fn build_game_bin_with_progress(
 /// sink `finished = true` on the way out (success or failure) and
 /// returns a [`BuildError::BuildFailed`] with a short stderr tail
 /// when cargo exits non-zero.
-///
-/// Shared between [`build_extension_project_with_progress`] (used
-/// by the dylib install flow and the scaffold-time build) and
-/// [`build_static_editor_with_progress`] (used by the background
-/// static-editor handoff).
 fn run_cargo_with_progress(
     mut cmd: Command,
     sink: Option<&Arc<Mutex<BuildProgress>>>,

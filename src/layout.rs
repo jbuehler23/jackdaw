@@ -307,6 +307,11 @@ fn play_pause_controls(icon_font: Handle<Font>) -> impl Bundle {
         BackgroundColor(tokens::HEADER_CONTROL_BG),
         BorderColor::all(tokens::HEADER_CONTROL_BORDER),
         children![
+            pie_transport_button(
+                crate::pie::PieButton::Rebuild,
+                Icon::Hammer,
+                icon_font.clone(),
+            ),
             pie_transport_button(crate::pie::PieButton::Play, Icon::Play, icon_font.clone(),),
             pie_menu_button(icon_font.clone()),
             pie_transport_button(crate::pie::PieButton::Pause, Icon::Pause, icon_font.clone(),),

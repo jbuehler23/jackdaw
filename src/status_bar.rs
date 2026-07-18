@@ -47,7 +47,7 @@ impl Plugin for StatusBarPlugin {
         // spawned alongside it, hidden until a build runs.
         app.add_systems(
             OnEnter(crate::AppState::Editor),
-            (attach_status_bar_click_observer, spawn_build_bar),
+            spawn_build_bar,
         );
     }
 }
@@ -172,21 +172,18 @@ fn update_status_right(
             color.0 = jackdaw_feathers::tokens::TEXT_SECONDARY;
             return;
         }
-        BuildState::Ready { .. } => {
-            text.0 = "Project editor ready - Reload".to_string();
-            color.0 = jackdaw_feathers::tokens::TEXT_ACCENT;
+        BuildState::Ready { components, .. } => {
+            text.0 = if *components == 0 {
+                "Project built".to_string()
+            } else {
+                format!("Project built - {components} components")
+            };
+            color.0 = jackdaw_feathers::tokens::TEXT_SUCCESS;
             return;
         }
-        BuildState::Failed { log_tail, .. } => {
-            // Tail is multi-line cargo error text; the right-side
-            // region is one line of UI, so trim to the first non-
-            // empty line. Click handler can surface the full tail.
-            let head = log_tail
-                .lines()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("see terminal for details");
-            text.0 = format!("Build failed: {head}");
-            color.0 = bevy::color::Color::srgb(0.95, 0.4, 0.4);
+        BuildState::Failed { .. } => {
+            text.0 = "Build failed - click for log".to_string();
+            color.0 = jackdaw_feathers::tokens::TEXT_ERROR;
             return;
         }
         BuildState::Idle => {
@@ -264,43 +261,6 @@ fn update_status_right(
     };
 
     text.0 = format!("{mode_str} ({space_str})");
-}
-
-/// Attach a `Pointer<Click>` observer to the `StatusBarRight`
-/// node so the user can click the "Reload" / "Build failed"
-/// indicator. Idempotent across re-entry into Editor (the layout
-/// is rebuilt across project switches; each fresh entity needs
-/// its own observer).
-fn attach_status_bar_click_observer(
-    mut commands: Commands,
-    targets: Query<Entity, With<StatusBarRight>>,
-) {
-    for entity in targets.iter() {
-        commands.entity(entity).observe(handle_status_bar_click);
-    }
-}
-
-fn handle_status_bar_click(
-    _click: On<Pointer<Click>>,
-    build_status: Res<BuildStatus>,
-    mut commands: Commands,
-) {
-    match &build_status.state {
-        BuildState::Ready { project, bin, .. } => {
-            let project = project.clone();
-            let bin = bin.clone();
-            commands.queue(move |world: &mut World| {
-                crate::project_select::do_handoff(world, &bin, &project);
-            });
-        }
-        BuildState::Failed { log_tail, .. } => {
-            // Surface the tail to the terminal for now. A modal
-            // log viewer is a follow-up; this is the cheapest path
-            // that doesn't lose the user's debug info.
-            warn!("Static editor build failed:\n{log_tail}");
-        }
-        _ => {}
-    }
 }
 
 /// System to update the scene stats text in the hierarchy panel footer.

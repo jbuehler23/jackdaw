@@ -12,6 +12,7 @@ mod material_display;
 mod modifier_display;
 pub(crate) mod ops;
 pub(crate) mod physics_display;
+pub(crate) mod project_component_display;
 mod prefab_field_dots;
 pub(crate) mod prefab_menu;
 pub(crate) mod reflect_fields;

@@ -1,0 +1,83 @@
+name: Onboarding pipeline
+
+# The four spike probes are the regression suite for the SDK build
+# pipeline (extern redirect plan, linkage identity, auto-registration
+# across dlopen, and the game runner over PIE IPC). They build the
+# whole editor with the dylib feature per platform, so they run only
+# on pull requests, not on every push.
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  toolchain: nightly-2026-03-05
+  # Incremental codegen and dylib linking do not mix: incremental
+  # reuse leaves references to hidden anon constants inside the SDK
+  # dylib, failing the link with undefined hidden symbols.
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  spikes:
+    name: Spikes - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.toolchain }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+
+      - name: Resolve host triple
+        run: echo "TRIPLE=$(rustc -vV | sed -n 's/host: //p')" >> "$GITHUB_ENV"
+
+      - name: Populate target directory from cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: onboarding-${{ matrix.os }}
+
+      - name: Build the SDK and wrapper
+        run: |
+          set -euxo pipefail
+          cargo build -j 4 -p jackdaw --features dylib --target "$TRIPLE"
+          cargo build -p jackdaw_rustc_wrapper
+
+      - name: Spike 1 - auto-registration across dlopen
+        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test spike_auto_register -- --nocapture
+
+      - name: Spike 3 - linkage identity
+        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test spike_compat_identity -- --nocapture
+
+      - name: Spike 2 - ecosystem extern redirect
+        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test spike_ecosystem_redirect -- --nocapture
+
+      - name: Extension loading
+        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test dylib_loading -- --nocapture
+
+      - name: Spike 4 - game runner over PIE IPC
+        # Headless runners have no GPU on every platform; the runner
+        # spike needs a working wgpu adapter for the Frames lane, so it
+        # runs only where lavapipe provides one.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install --no-install-recommends -y mesa-vulkan-drivers
+          cargo test -j 4 --features dylib --target "$TRIPLE" --test spike_runner_pie -- --nocapture

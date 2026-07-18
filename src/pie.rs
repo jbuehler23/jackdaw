@@ -1,15 +1,15 @@
 //! Play-In-Editor runtime.
 //!
-//! Builds a run configuration's binary with the `jackdaw_runtime/pie`
-//! feature, launches it as a child process, and drives it over an
-//! `ipc-channel` connection. Children stream `StateEvent`s back and
-//! respond to `ControlEvent`s (Pause / Resume / Stop). Stop reaps the
-//! children; the authored scene is never mutated.
+//! Builds the project dylib through the SDK pipeline, launches the
+//! prebuilt game runner against it as a child process, and drives it
+//! over an `ipc-channel` connection. Children stream `StateEvent`s
+//! back and respond to `ControlEvent`s (Pause / Resume / Stop). Stop
+//! reaps the children; the authored scene is never mutated.
 //!
 //! Instances are keyed by [`InstanceKey`] (config label plus 1-based
-//! instance number). Builds are deduped by
-//! [`BuildSpec`]: several instances of the
-//! same config wait on one build and spawn together when it finishes.
+//! instance number). All run configurations of a project share one
+//! dylib build, keyed by the project root: several instances wait on
+//! one build and spawn together when it finishes.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, BufReader};
@@ -29,17 +29,18 @@ use jackdaw_pie_protocol::{
 };
 
 use crate::build_status::BuildStatus;
-use crate::ext_build::{BuildProgress, BuildSpec};
+use crate::ext_build::BuildProgress;
 use crate::pie_mirror::{PieInstances, PieViewMode};
-use crate::run_config::{CargoMeta, RunConfigs, resolve_build_spec};
+use crate::project_build::shim::ShimSpec;
+use crate::run_config::RunConfigs;
+use crate::sdk_paths::SdkPaths;
 
 /// How many trailing stderr lines to keep from a game process, so a
 /// crash can be reported without buffering unbounded output.
 const STDERR_TAIL_LINES: usize = 40;
 
 /// How long to wait for a launched child to connect back before giving
-/// up on it. A child that runs but never connects usually means its
-/// build lacks the `jackdaw_runtime/pie` feature.
+/// up on it.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Marker for the toolbar transport buttons. `PiePlugin` installs
@@ -51,6 +52,11 @@ pub enum PieButton {
     Pause,
     Stop,
     Reload,
+    /// Rebuild the project so new or changed game code appears in the
+    /// editor. Distinct from `Reload` (which rebuilds and relaunches the
+    /// running game): `Rebuild` is the edit-mode refresh of the component
+    /// list, and dispatches `project.build`.
+    Rebuild,
 }
 
 /// Identifies one running instance: a config label plus its 1-based
@@ -90,14 +96,21 @@ enum ChildStage {
     },
 }
 
-/// An in-flight or finished build, deduped by `BuildSpec`. Instances
+/// The product of a completed project-dylib build: the dylib path (for
+/// Play) and the extracted type schema (for the editor's dynamic
+/// representation). The schema is `None` when extraction could not run.
+struct DylibBuildResult {
+    dylib: PathBuf,
+}
+
+/// An in-flight or finished build, deduped by project root. Instances
 /// waiting on it are spawned when it finishes.
 enum BuildState {
     /// `cargo build` is running on a task pool; `pending` lists the
     /// instances to spawn once the binary is ready. `progress` is the
     /// sink cargo writes compile progress into, surfaced in the footer.
     Running {
-        task: Task<io::Result<PathBuf>>,
+        task: Task<io::Result<DylibBuildResult>>,
         pending: Vec<PendingSpawn>,
         progress: Arc<Mutex<BuildProgress>>,
     },
@@ -119,7 +132,7 @@ struct PendingSpawn {
 #[derive(Default)]
 pub struct PieSession {
     children: HashMap<InstanceKey, ChildStage>,
-    builds: HashMap<BuildSpec, BuildState>,
+    builds: HashMap<PathBuf, BuildState>,
 }
 
 impl Drop for PieSession {
@@ -175,6 +188,9 @@ impl Plugin for PiePlugin {
             .init_resource::<crate::live_highlight::LastHighlight>()
             .init_resource::<PieWindowMode>()
             .init_resource::<PiePrebuildState>()
+            .init_resource::<crate::project_types::ProjectTypes>()
+            .init_resource::<ProjectSchemaWatch>()
+            .init_resource::<EditorBuildSettings>()
             // PIE is an editor-only subsystem; gate it to the editor state so it
             // never ticks in the launcher (`ProjectSelect`). Without this,
             // `reconcile_build_status` resets the shared `BuildStatus` from
@@ -186,6 +202,8 @@ impl Plugin for PiePlugin {
                 (
                     advance_pie_session,
                     prebuild_play_target,
+                    watch_project_source_for_edit,
+                    watch_project_schema,
                     drain_game_events,
                     crate::live_highlight::sync_selection_highlight,
                 )
@@ -244,6 +262,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<PiePauseOp>()
         .register_operator::<PieStopOp>()
         .register_operator::<PieReloadOp>()
+        .register_operator::<ProjectBuildOp>()
+        .register_operator::<ProjectToggleAutoBuildOp>()
         .register_operator::<PieWindowModeToggleOp>()
         .register_operator::<crate::live_input::PiePlayInputToggleOp>()
         .register_operator::<crate::live_edits::PieLiveEditSaveOp>()
@@ -310,6 +330,49 @@ pub(crate) fn pie_stop(_: In<OperatorParameters>, mut commands: Commands) -> Ope
 )]
 pub(crate) fn pie_reload(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(handle_reload);
+    OperatorResult::Finished
+}
+
+/// Rebuild the project dylib now so new or changed game code (added
+/// components, edited fields) is picked up by the editor. This is the
+/// manual counterpart to auto-build: it runs the same pipeline as an
+/// out-of-editor `jackdaw build`, persisting the schema the editor then
+/// reloads.
+#[operator(
+    id = "project.build",
+    label = "Rebuild Project",
+    description = "Rebuild the project so new or changed components appear in the editor."
+)]
+pub(crate) fn project_build(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        if let Some(root) = project_root(world) {
+            spawn_project_build(world, &root);
+        }
+    });
+    OperatorResult::Finished
+}
+
+/// Turn automatic rebuild-on-source-change on or off. Off by default so
+/// the editor never builds behind the user's back; enabling it gives
+/// live pickup for those who want it.
+#[operator(
+    id = "project.toggle_auto_build",
+    label = "Toggle Auto Build",
+    description = "Turn automatic rebuild-on-source-change on or off."
+)]
+pub(crate) fn project_toggle_auto_build(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        let mut settings = world.resource_mut::<EditorBuildSettings>();
+        settings.auto_build = !settings.auto_build;
+        let enabled = settings.auto_build;
+        info!(
+            "PIE: auto-build {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
+    });
     OperatorResult::Finished
 }
 
@@ -411,6 +474,7 @@ fn wire_pie_button(
         PieButton::Pause => PiePauseOp::ID,
         PieButton::Stop => PieStopOp::ID,
         PieButton::Reload => PieReloadOp::ID,
+        PieButton::Rebuild => ProjectBuildOp::ID,
     };
     commands
         .entity(entity)
@@ -453,46 +517,43 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
     let Some(root) = project_root(world) else {
         return;
     };
-    let Some(meta) = CargoMeta::load(&root) else {
-        warn!("PIE: cargo metadata failed for {}", root.display());
-        return;
-    };
-    let Some(spec) = resolve_build_spec(&meta, &run) else {
-        warn!("PIE: no buildable package for bin `{}`", run.bin);
-        return;
-    };
 
-    // If the build is cached, spawn from it immediately; the session
-    // borrow is dropped before spawn_instance reads the world.
-    if let Some(BuildState::Done(path)) = world.non_send::<PieSession>().builds.get(&spec) {
-        let path = path.clone();
-        if let Some(stage) = spawn_instance(world, &key, &run, &path) {
-            world
-                .non_send_mut::<PieSession>()
-                .children
-                .insert(key, stage);
+    // If the project dylib is built AND still current, spawn from it
+    // immediately. A source edit since the last build invalidates the
+    // cache so Play runs the new code: each Play is a fresh runner
+    // process, so rebuilding is safe (no loaded-dylib to reconcile).
+    if let Some(BuildState::Done(path)) = world.non_send::<PieSession>().builds.get(&root) {
+        if source_is_current(&root, path) {
+            let path = path.clone();
+            if let Some(stage) = spawn_instance(world, &key, &run, &path) {
+                world
+                    .non_send_mut::<PieSession>()
+                    .children
+                    .insert(key, stage);
+            }
+            return;
         }
-        return;
+        info!("PIE: project source changed; rebuilding before Play");
+        world.non_send_mut::<PieSession>().builds.remove(&root);
     }
+
+    let Some(spec) = project_shim_spec(world, &root) else {
+        warn!("PIE: no lib crate found in {}", root.display());
+        return;
+    };
 
     // Join an in-flight build's pending list, or start a new build.
     let mut session = world.non_send_mut::<PieSession>();
-    match session.builds.get_mut(&spec) {
+    match session.builds.get_mut(&root) {
         Some(BuildState::Running { pending, .. }) => {
             pending.push(PendingSpawn { key, run });
         }
         Some(BuildState::Done(_)) => unreachable!("handled above"),
         Some(BuildState::Failed) | None => {
-            let progress = Arc::new(Mutex::new(BuildProgress::default()));
-            let build_spec = spec.clone();
-            let sink = Arc::clone(&progress);
-            let task = AsyncComputeTaskPool::get().spawn(async move {
-                crate::ext_build::build_game_bin_with_progress(&root, &build_spec, Some(sink), None)
-                    .map_err(|err| io::Error::other(err.to_string()))
-            });
-            info!("PIE: building game for {key}");
+            info!("PIE: building the project dylib for {key}");
+            let (task, progress) = spawn_dylib_build(&root, spec);
             session.builds.insert(
-                spec,
+                root,
                 BuildState::Running {
                     task,
                     pending: vec![PendingSpawn { key, run }],
@@ -501,6 +562,116 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
             );
         }
     }
+}
+
+/// Whether the built dylib is newer than the project's source. A stale
+/// dylib (source edited since the build) means Play must rebuild.
+/// `Cargo.toml` and everything under `src/` are checked; a missing
+/// dylib counts as stale.
+fn source_is_current(root: &Path, dylib: &Path) -> bool {
+    let Ok(dylib_mtime) = std::fs::metadata(dylib).and_then(|m| m.modified()) else {
+        return false;
+    };
+    let newest_source = newest_mtime(&root.join("src"))
+        .into_iter()
+        .chain(
+            std::fs::metadata(root.join("Cargo.toml"))
+                .and_then(|m| m.modified())
+                .ok(),
+        )
+        .max();
+    match newest_source {
+        Some(src_mtime) => src_mtime <= dylib_mtime,
+        None => true,
+    }
+}
+
+/// The newest modification time under `dir`, recursively; `None` when
+/// the directory is missing or empty.
+fn newest_mtime(dir: &Path) -> Option<std::time::SystemTime> {
+    let mut newest = None;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if entry_path.is_dir() {
+                stack.push(entry_path);
+            } else if let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) {
+                newest = Some(newest.map_or(mtime, |n: std::time::SystemTime| n.max(mtime)));
+            }
+        }
+    }
+    newest
+}
+
+/// The shim spec for the open project: lib crate name from cargo
+/// metadata plus whatever entry types the project exposes. A game
+/// plugin comes from `jackdaw.toml`, then source detection, then the
+/// `GamePlugin` convention (only when no extension is present, so a
+/// pure extension project does not reference a nonexistent plugin).
+/// An extension type comes from a `JackdawExtension` impl. A project
+/// may expose both, one, or neither (a plain component library still
+/// contributes its reflected types).
+fn project_shim_spec(world: &World, root: &Path) -> Option<ShimSpec> {
+    let configured = world
+        .get_resource::<RunConfigs>()
+        .and_then(|rc| rc.manifest.plugin.clone());
+    crate::project_build::shim_spec_for_project(root, configured)
+}
+
+/// Start the project-dylib build on the compute pool, returning the
+/// task and the progress sink the footer polls.
+fn spawn_dylib_build(
+    root: &Path,
+    spec: ShimSpec,
+) -> (Task<io::Result<DylibBuildResult>>, Arc<Mutex<BuildProgress>>) {
+    let progress = Arc::new(Mutex::new(BuildProgress::default()));
+    let sink = Arc::clone(&progress);
+    let jackdaw_dir = root.join(".jackdaw");
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        if let Ok(mut p) = sink.lock() {
+            p.push_log("building the project dylib".to_string());
+        }
+        let sdk = SdkPaths::compute();
+        let dev_workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let dev_workspace = dev_workspace.exists().then_some(dev_workspace);
+        let result = crate::project_build::build_project_dylib(
+            &spec,
+            &jackdaw_dir,
+            &sdk,
+            dev_workspace.as_deref(),
+        );
+        match result {
+            Ok(build) => {
+                if let Ok(mut p) = sink.lock() {
+                    let types = build
+                        .schema
+                        .as_ref()
+                        .map(|s| s.components.len())
+                        .unwrap_or(0);
+                    p.push_log(format!(
+                        "project dylib ready ({} redirect edges, {types} types)",
+                        build.edges
+                    ));
+                }
+                Ok(DylibBuildResult { dylib: build.dylib })
+            }
+            Err(err) => {
+                if let (crate::project_build::ProjectBuildError::Compile { log }, Ok(mut p)) =
+                    (&err, sink.lock())
+                {
+                    for line in log.lines().rev().take(30).collect::<Vec<_>>().iter().rev() {
+                        p.push_log((*line).to_string());
+                    }
+                }
+                Err(io::Error::other(err.to_string()))
+            }
+        }
+    });
+    (task, progress)
 }
 
 /// Stop one instance: ask a live child to exit, reap it, and drop it.
@@ -886,54 +1057,200 @@ pub struct PiePrebuildState {
     attempted: bool,
 }
 
-/// Pre-build the default Play target in the background once the editor opens, so
-/// the first Play reuses a warm cache instead of compiling the game's Bevy
-/// variant on demand. Mirrors `launch_instance`'s build but with no pending
-/// spawn: it only drives `PieSession.builds` to `Done`, which a later Play
-/// reuses immediately.
+/// Pre-build the project dylib in the background once the editor opens, so
+/// the first Play reuses a warm artifact instead of compiling on demand.
+/// Mirrors `launch_instance`'s build but with no pending spawn: it only
+/// drives `PieSession.builds` to `Done`, which a later Play reuses
+/// immediately.
 fn prebuild_play_target(world: &mut World) {
     if world.resource::<PiePrebuildState>().attempted {
         return;
     }
     // Wait until the project's run configs have loaded.
-    let run = match world.get_resource::<RunConfigs>() {
-        None => return,
-        Some(rc) => rc.manifest.runs.first().cloned(),
-    };
+    if world.get_resource::<RunConfigs>().is_none() {
+        return;
+    }
     // Run configs are loaded; this is the one-shot attempt regardless of outcome.
     world.resource_mut::<PiePrebuildState>().attempted = true;
-    let Some(run) = run else {
-        return; // no run config to pre-build
-    };
     let Some(root) = project_root(world) else {
         return;
     };
-    let Some(meta) = CargoMeta::load(&root) else {
-        return;
-    };
-    let Some(spec) = resolve_build_spec(&meta, &run) else {
+    let Some(spec) = project_shim_spec(world, &root) else {
         return;
     };
     let mut session = world.non_send_mut::<PieSession>();
-    if session.builds.contains_key(&spec) {
+    if session.builds.contains_key(&root) {
         return; // already built or building (the user may have hit Play already)
     }
-    let progress = Arc::new(Mutex::new(BuildProgress::default()));
-    let sink = Arc::clone(&progress);
-    let build_spec = spec.clone();
-    let task = AsyncComputeTaskPool::get().spawn(async move {
-        crate::ext_build::build_game_bin_with_progress(&root, &build_spec, Some(sink), None)
-            .map_err(|err| io::Error::other(err.to_string()))
-    });
-    info!("PIE: pre-building the Play target in the background for a fast first Play");
+    info!("PIE: pre-building the project dylib in the background for a fast first Play");
+    let (task, progress) = spawn_dylib_build(&root, spec);
     session.builds.insert(
-        spec,
+        root,
         BuildState::Running {
             task,
             pending: Vec::new(),
             progress,
         },
     );
+}
+
+/// Throttle so the edit-mode source scan runs about once a second
+/// rather than every frame.
+#[derive(Resource)]
+struct EditRebuildThrottle(Timer);
+
+impl Default for EditRebuildThrottle {
+    fn default() -> Self {
+        Self(Timer::from_seconds(1.0, TimerMode::Repeating))
+    }
+}
+
+/// Editor-wide project build preferences.
+#[derive(Resource, Default)]
+struct EditorBuildSettings {
+    /// When true, the editor rebuilds the project automatically on source
+    /// change. Opt-in and off by default: otherwise a rebuild fires
+    /// behind the user's back and competes with a `cargo build` they may
+    /// have started themselves. When off, rebuilds come from the Rebuild
+    /// action or an out-of-editor `jackdaw build`.
+    auto_build: bool,
+}
+
+/// Start a project dylib build for `root` unless one is already in
+/// flight. Shared by the source watcher (auto-build) and the manual
+/// Rebuild operator. The finished build persists `.jackdaw/schema.json`,
+/// which [`watch_project_schema`] picks up to refresh the editor's types.
+fn spawn_project_build(world: &mut World, root: &Path) {
+    if matches!(
+        world.non_send::<PieSession>().builds.get(root),
+        Some(BuildState::Running { .. })
+    ) {
+        return;
+    }
+    let Some(spec) = project_shim_spec(world, root) else {
+        return;
+    };
+    info!("PIE: building the project dylib");
+    let (task, progress) = spawn_dylib_build(root, spec);
+    world.non_send_mut::<PieSession>().builds.insert(
+        root.to_path_buf(),
+        BuildState::Running {
+            task,
+            pending: Vec::new(),
+            progress,
+        },
+    );
+}
+
+/// While editing (not playing) and only when auto-build is enabled,
+/// rebuild the project dylib when its source changes so a newly added or
+/// edited component appears in the editor without a restart. The
+/// completed build persists the schema, which `watch_project_schema`
+/// loads. Off by default; the manual Rebuild action is the normal path.
+fn watch_project_source_for_edit(world: &mut World) {
+    if *world.resource::<State<PlayState>>().get() != PlayState::Stopped {
+        return;
+    }
+    if !world.resource::<EditorBuildSettings>().auto_build {
+        return;
+    }
+    {
+        let delta = world.resource::<Time>().delta();
+        let mut throttle = world.get_resource_or_insert_with(EditRebuildThrottle::default);
+        if !throttle.0.tick(delta).just_finished() {
+            return;
+        }
+    }
+    let Some(root) = project_root(world) else {
+        return;
+    };
+    // Only rebuild once the project has been built and loaded at least
+    // once; the initial build is driven by `prebuild_play_target`.
+    let built_path = match world.non_send::<PieSession>().builds.get(&root) {
+        Some(BuildState::Done(path)) => path.clone(),
+        _ => return,
+    };
+    if source_is_current(&root, &built_path) {
+        return;
+    }
+    spawn_project_build(world, &root);
+}
+
+/// Throttle for the schema-file poll so it stats the file about twice a
+/// second rather than every frame.
+#[derive(Resource)]
+struct ProjectSchemaWatch {
+    last_mtime: Option<std::time::SystemTime>,
+    throttle: Timer,
+}
+
+impl Default for ProjectSchemaWatch {
+    fn default() -> Self {
+        Self {
+            last_mtime: None,
+            throttle: Timer::from_seconds(0.5, TimerMode::Repeating),
+        }
+    }
+}
+
+/// Refresh the editor's known project component types from
+/// `<project>/.jackdaw/schema.json` whenever that file changes. This is
+/// the single pickup path for project types: the editor's own build and
+/// an out-of-editor `jackdaw build` both write the file, and only this
+/// system reads it into `ProjectTypes`. On editor start it also loads a
+/// schema left by a previous session, so components are known before any
+/// rebuild.
+fn watch_project_schema(world: &mut World) {
+    {
+        let delta = world.resource::<Time>().delta();
+        let mut watch = world.resource_mut::<ProjectSchemaWatch>();
+        if !watch.throttle.tick(delta).just_finished() {
+            return;
+        }
+    }
+    let Some(root) = world
+        .get_resource::<crate::project::ProjectRoot>()
+        .map(|p| p.root.clone())
+    else {
+        return;
+    };
+    let jackdaw_dir = root.join(".jackdaw");
+    let path = crate::project_build::schema::schema_path(&jackdaw_dir);
+    let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+        return;
+    };
+    if world.resource::<ProjectSchemaWatch>().last_mtime == Some(mtime) {
+        return;
+    }
+    let Some(schema) = crate::project_build::schema::read_schema(&jackdaw_dir) else {
+        return;
+    };
+    let native =
+        crate::project_types::native_type_paths(&world.resource::<AppTypeRegistry>().read());
+    let component_count = {
+        let mut project_types = world.resource_mut::<crate::project_types::ProjectTypes>();
+        project_types.update(&schema, &native);
+        project_types.components().count()
+    };
+    world.resource_mut::<ProjectSchemaWatch>().last_mtime = Some(mtime);
+
+    // Surface the outcome in the footer so the user knows the build
+    // finished and how many of their components loaded.
+    world.resource_mut::<crate::build_status::BuildStatus>().state =
+        crate::build_status::BuildState::Ready {
+            at: Instant::now(),
+            components: component_count,
+        };
+
+    // Repaint the open inspector: a shape change (a field added, removed,
+    // or retyped in game code) must show without a reselect.
+    let selected: Vec<Entity> = world.resource::<crate::selection::Selection>().entities.clone();
+    for entity in selected {
+        if let Ok(mut ec) = world.get_entity_mut(entity) {
+            ec.insert(crate::inspector::InspectorDirty);
+        }
+    }
+    info!("PIE: refreshed project types from schema ({component_count} project components)");
 }
 
 /// Mirror the active game build into the editor's `BuildStatus` so the
@@ -962,14 +1279,22 @@ fn reconcile_build_status(world: &mut World) {
                 progress,
             };
         }
-        None => {
-            if matches!(
-                status.state,
-                crate::build_status::BuildState::Building { .. }
-            ) {
+        None => match &status.state {
+            // A build ended with no outcome latched yet: go Idle.
+            // `poll_builds` (Failed) and `watch_project_schema` (Ready)
+            // set the real outcome the same or next frame.
+            crate::build_status::BuildState::Building { .. } => {
                 status.state = crate::build_status::BuildState::Idle;
             }
-        }
+            // Keep a recent outcome on screen, then let it fade to Idle.
+            crate::build_status::BuildState::Ready { at, .. }
+            | crate::build_status::BuildState::Failed { at } => {
+                if at.elapsed() > Duration::from_secs(6) {
+                    status.state = crate::build_status::BuildState::Idle;
+                }
+            }
+            crate::build_status::BuildState::Idle => {}
+        },
     }
 }
 
@@ -987,18 +1312,32 @@ fn poll_builds(world: &mut World) {
         };
         match future::block_on(future::poll_once(task)) {
             None => {}
-            Some(Ok(path)) => {
+            Some(Ok(result)) => {
+                // The build persisted the project's type schema to
+                // `.jackdaw/schema.json`; `watch_project_schema` picks it
+                // up and refreshes `ProjectTypes`. Pickup is deliberately
+                // decoupled from building so an out-of-editor `jackdaw
+                // build` flows through the same path. The editor never
+                // maps the dylib itself (a loaded dylib can never be
+                // unmapped, so an in-editor load would leak on refresh);
+                // Play uses the same artifact in a fresh process below.
                 for spawn in pending.drain(..) {
-                    if let Some(stage) = spawn_instance(world, &spawn.key, &spawn.run, &path) {
+                    if let Some(stage) =
+                        spawn_instance(world, &spawn.key, &spawn.run, &result.dylib)
+                    {
                         spawned.push((spawn.key, stage));
                     }
                 }
-                *state = BuildState::Done(path);
+                *state = BuildState::Done(result.dylib);
             }
             Some(Err(err)) => {
                 let keys: Vec<String> = pending.iter().map(|p| p.key.to_string()).collect();
                 error!("PIE: game build failed for {}: {err}", keys.join(", "));
                 *state = BuildState::Failed;
+                world.resource_mut::<crate::build_status::BuildStatus>().state =
+                    crate::build_status::BuildState::Failed {
+                        at: Instant::now(),
+                    };
             }
         }
     }
@@ -1141,15 +1480,16 @@ fn reconcile_play_state(world: &mut World) {
     }
 }
 
-/// Launch one instance's game binary, point it at a fresh rendezvous,
-/// start draining its stderr, and begin awaiting its connection on a
-/// task pool. Returns the `Connecting` stage; on rendezvous or spawn
-/// failure logs and returns `None` so the caller skips it.
+/// Launch the game runner against the project dylib for one instance,
+/// point it at a fresh rendezvous, start draining its stderr, and begin
+/// awaiting its connection on a task pool. Returns the `Connecting`
+/// stage; on rendezvous or spawn failure logs and returns `None` so the
+/// caller skips it.
 fn spawn_instance(
     world: &World,
     key: &InstanceKey,
     run: &RunConfig,
-    bin: &Path,
+    dylib: &Path,
 ) -> Option<ChildStage> {
     let root = project_root(world)?;
 
@@ -1162,14 +1502,17 @@ fn spawn_instance(
     };
 
     // A relative `cwd` is joined against the project root; an absolute
-    // path replaces it (standard `Path::join` semantics).
+    // path replaces it (standard `Path::join` semantics). Assets
+    // resolve from here, exactly as for a directly-run game binary.
     let cwd = match run.cwd.as_ref() {
         Some(dir) => root.join(dir),
         None => root.clone(),
     };
 
-    let mut command = Command::new(bin);
+    let runner = SdkPaths::compute().runner;
+    let mut command = Command::new(&runner);
     command
+        .arg(dylib)
         .current_dir(&cwd)
         .envs(&run.env)
         .env("JACKDAW_PIE", &server_name)
@@ -1224,7 +1567,7 @@ fn spawn_instance(
     let mut child = match spawn {
         Ok(child) => child,
         Err(err) => {
-            error!("PIE: {key} failed to launch ({}): {err}", bin.display());
+            error!("PIE: {key} failed to launch ({}): {err}", runner.display());
             return None;
         }
     };

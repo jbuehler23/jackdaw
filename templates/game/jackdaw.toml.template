@@ -1,0 +1,12 @@
+# jackdaw project settings. Everything here has a working default;
+# delete any line you are not using.
+
+# The game plugin type inside your lib crate. Uncomment to override
+# source detection.
+# plugin = "GamePlugin"
+
+[[run]]
+name = "Play"
+# instances = 2
+# env = { SERVER_ADDR = "127.0.0.1:5000" }
+# args = []

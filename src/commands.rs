@@ -378,6 +378,84 @@ impl EditorCommand for AddComponent {
     }
 }
 
+/// Add a project (dylib-provided) component to an entity as a
+/// document-only patch. Project types are never registered as real ECS
+/// components in the editor -- loading their dylib would leak -- so the
+/// component lives purely in the scene document as a default-valued
+/// struct patch, editable through the inspector's document path and
+/// materialized as a real component only in the game runner at Play.
+pub struct AddProjectComponent {
+    pub entity: Entity,
+    pub type_path: String,
+    /// Whether execute actually inserted a patch (false if the node
+    /// already carried the component or is untracked); gates undo.
+    added: bool,
+}
+
+impl AddProjectComponent {
+    pub fn new(entity: Entity, type_path: String) -> Self {
+        Self {
+            entity,
+            type_path,
+            added: false,
+        }
+    }
+}
+
+impl EditorCommand for AddProjectComponent {
+    fn execute(&mut self, world: &mut World) {
+        let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        let Some(node) = ast.ast_for(self.entity) else {
+            warn!(
+                "AddProjectComponent: entity {:?} is not tracked in the scene document; \
+                 project component {} cannot be added.",
+                self.entity, self.type_path
+            );
+            self.added = false;
+            return;
+        };
+        if ast.find_patch_by_type_path(node, &self.type_path).is_some() {
+            self.added = false;
+            return;
+        }
+        // A struct patch with no field overrides materializes as the
+        // type's Default at Play; the inspector shows the schema
+        // defaults until a field is edited (which writes an override).
+        let patch = jackdaw_bsn::BsnPatch::Struct(jackdaw_bsn::BsnStructData {
+            type_path: self.type_path.clone(),
+            fields: jackdaw_bsn::BsnStructFields(Vec::new()),
+        });
+        let patch_entity = ast.world.spawn(patch).id();
+        if let Some(patches) = ast.get_patches_mut(node) {
+            patches.0.push(patch_entity);
+        }
+        self.added = true;
+
+        if let Ok(mut ec) = world.get_entity_mut(self.entity) {
+            ec.insert(crate::inspector::InspectorDirty);
+        }
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        if !self.added {
+            return;
+        }
+        {
+            let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+            if let Some(node) = ast.ast_for(self.entity) {
+                ast.remove_component_patch(node, &self.type_path);
+            }
+        }
+        if let Ok(mut ec) = world.get_entity_mut(self.entity) {
+            ec.insert(crate::inspector::InspectorDirty);
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Add component"
+    }
+}
+
 pub struct RemoveComponent {
     pub entity: Entity,
     pub type_id: TypeId,
@@ -719,6 +797,9 @@ impl EditorCommand for SetBsnField {
             self.apply_name(world, new_name.as_deref());
             return;
         }
+        let is_project = world
+            .get_resource::<crate::project_types::ProjectTypes>()
+            .is_some_and(|pt| pt.is_project_component(&self.type_path));
         {
             let registry = world.resource::<AppTypeRegistry>().clone();
             let registry = registry.read();
@@ -726,14 +807,24 @@ impl EditorCommand for SetBsnField {
             let Some(patches_entity) = ast.ast_for(self.entity) else {
                 return;
             };
-            jackdaw_bsn::set_bsn_field(
-                &mut ast,
-                patches_entity,
-                &self.type_path,
-                &self.field_path,
-                self.new_value.clone(),
-                &registry,
-            );
+            if is_project {
+                set_project_field(
+                    &mut ast,
+                    patches_entity,
+                    &self.type_path,
+                    &self.field_path,
+                    self.new_value.clone(),
+                );
+            } else {
+                jackdaw_bsn::set_bsn_field(
+                    &mut ast,
+                    patches_entity,
+                    &self.type_path,
+                    &self.field_path,
+                    self.new_value.clone(),
+                    &registry,
+                );
+            }
             if ast.promote_derived(patches_entity, &self.type_path) {
                 self.was_derived = true;
                 info!(
@@ -742,7 +833,11 @@ impl EditorCommand for SetBsnField {
                 );
             }
         }
-        self.mirror_patch_to_ecs(world);
+        // A project component has no real ECS counterpart to mirror into; the
+        // document is the whole of its editor state.
+        if !is_project {
+            self.mirror_patch_to_ecs(world);
+        }
     }
 
     fn undo(&mut self, world: &mut World) {
@@ -761,6 +856,9 @@ impl EditorCommand for SetBsnField {
         // field of a sparse patch. Undo removes what execute authored.
         let removes_component = self.field_path.is_empty() && self.old_value.is_none();
         let removes_field = !self.field_path.is_empty() && self.old_value.is_none();
+        let is_project = world
+            .get_resource::<crate::project_types::ProjectTypes>()
+            .is_some_and(|pt| pt.is_project_component(&self.type_path));
         {
             let registry = world.resource::<AppTypeRegistry>().clone();
             let registry = registry.read();
@@ -778,18 +876,33 @@ impl EditorCommand for SetBsnField {
                     &self.field_path,
                 );
             } else if let Some(old_value) = &self.old_value {
-                jackdaw_bsn::set_bsn_field(
-                    &mut ast,
-                    patches_entity,
-                    &self.type_path,
-                    &self.field_path,
-                    old_value.clone(),
-                    &registry,
-                );
+                if is_project {
+                    set_project_field(
+                        &mut ast,
+                        patches_entity,
+                        &self.type_path,
+                        &self.field_path,
+                        old_value.clone(),
+                    );
+                } else {
+                    jackdaw_bsn::set_bsn_field(
+                        &mut ast,
+                        patches_entity,
+                        &self.type_path,
+                        &self.field_path,
+                        old_value.clone(),
+                        &registry,
+                    );
+                }
                 if self.was_derived {
                     ast.demote_to_derived(patches_entity, &self.type_path);
                 }
             }
+        }
+        // Project components have no ECS counterpart; the document write above
+        // is the whole of the undo.
+        if is_project {
+            return;
         }
         if removes_component {
             remove_component_from_ecs(world, self.entity, &self.type_path);
@@ -1015,7 +1128,12 @@ pub(crate) fn json_field_edit_to_bsn_value(
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
-    let registration = registry.get_with_type_path(type_path)?;
+    let Some(registration) = registry.get_with_type_path(type_path) else {
+        // Project (dylib-provided) components have no editor registration; the
+        // field's authored value comes straight from the extracted schema type.
+        drop(registry);
+        return project_field_edit_to_bsn_value(world, type_path, field_path, value);
+    };
     if field_path.is_empty() {
         let deserializer =
             bevy::reflect::serde::TypedReflectDeserializer::new(registration, &registry);
@@ -1037,6 +1155,87 @@ pub(crate) fn json_field_edit_to_bsn_value(
     }
     let field = merged.reflect_path(field_path).ok()?;
     Some(jackdaw_bsn::BsnValue::from_reflect(field, &registry))
+}
+
+/// Convert a field edit on a project (dylib-provided) component into the
+/// [`jackdaw_bsn::BsnValue`] to author, without an editor registration. The
+/// field's scalar variant is chosen from its schema type path.
+fn project_field_edit_to_bsn_value(
+    world: &World,
+    type_path: &str,
+    field_path: &str,
+    value: &serde_json::Value,
+) -> Option<jackdaw_bsn::BsnValue> {
+    let schema = world
+        .get_resource::<crate::project_types::ProjectTypes>()?
+        .component(type_path)?;
+    let name = field_path.split('.').next().unwrap_or(field_path);
+    let field = schema.fields.iter().find(|f| f.name == name)?;
+    Some(
+        crate::inspector::project_component_display::json_to_bsn_value_typed(
+            &field.type_path,
+            value,
+        ),
+    )
+}
+
+/// Author a flat field value on a project component's document patch without a
+/// registration. Project types are never in the editor registry, so the
+/// registry-gated [`jackdaw_bsn::set_bsn_field`] refuses them; this upserts the
+/// named field directly on the node's struct patch instead. Nested paths set
+/// only their leading segment (v1 only renders flat scalar fields).
+fn set_project_field(
+    ast: &mut jackdaw_bsn::SceneBsnAst,
+    node: Entity,
+    type_path: &str,
+    field_path: &str,
+    value: jackdaw_bsn::BsnValue,
+) {
+    let patch_entity = match ast.find_patch_by_type_path(node, type_path) {
+        Some(pe) => pe,
+        None => {
+            let pe = ast
+                .world
+                .spawn(jackdaw_bsn::BsnPatch::Struct(jackdaw_bsn::BsnStructData {
+                    type_path: type_path.to_string(),
+                    fields: jackdaw_bsn::BsnStructFields(Vec::new()),
+                }))
+                .id();
+            if let Some(patches) = ast.get_patches_mut(node) {
+                patches.0.push(pe);
+            }
+            pe
+        }
+    };
+    let Some(patch) = ast.world.get_mut::<jackdaw_bsn::BsnPatch>(patch_entity) else {
+        return;
+    };
+    let patch = patch.into_inner();
+    if let jackdaw_bsn::BsnPatch::Type(existing) = patch {
+        let existing = existing.clone();
+        *patch = jackdaw_bsn::BsnPatch::Struct(jackdaw_bsn::BsnStructData {
+            type_path: existing,
+            fields: jackdaw_bsn::BsnStructFields(Vec::new()),
+        });
+    }
+    if field_path.is_empty() {
+        if let jackdaw_bsn::BsnValue::Struct(data) = value {
+            *patch = jackdaw_bsn::BsnPatch::Struct(data);
+        }
+        return;
+    }
+    let jackdaw_bsn::BsnPatch::Struct(data) = patch else {
+        return;
+    };
+    let name = field_path.split('.').next().unwrap_or(field_path);
+    if let Some(existing) = data.fields.0.iter_mut().find(|f| f.name == name) {
+        existing.value = value;
+    } else {
+        data.fields.0.push(jackdaw_bsn::BsnField {
+            name: name.to_string(),
+            value,
+        });
+    }
 }
 
 /// Write a component value into the live scene document. The patch key

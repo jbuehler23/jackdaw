@@ -265,6 +265,8 @@ pub(crate) fn on_add_component_button_click(
     components: &Components,
     entity_query: Query<&Archetype, (With<Selected>, Without<EditorEntity>)>,
     denylist: Res<PickerDenylist>,
+    project_types: Res<crate::project_types::ProjectTypes>,
+    doc: Res<jackdaw_bsn::SceneBsnAst>,
 ) {
     if add_buttons.get(event.entity).is_err() {
         return;
@@ -298,7 +300,7 @@ pub(crate) fn on_add_component_button_click(
 
     let registry = type_registry.read();
 
-    let searchable_components: Vec<ComponentInfo> =
+    let mut searchable_components: Vec<ComponentInfo> =
         enumerate_pickable_components(&registry, &existing_types, &denylist)
             .into_iter()
             .map(|p| {
@@ -318,6 +320,32 @@ pub(crate) fn on_add_component_button_click(
                 }
             })
             .collect();
+
+    // Project (dylib-provided) components are not real ECS components in the
+    // editor, so they never appear in the registry pass above. They live as
+    // schema entries; add each one the target does not already carry in the
+    // scene document.
+    let authored: HashSet<String> = doc
+        .ast_for(target)
+        .map(|node| doc.component_type_paths(node).into_iter().collect())
+        .unwrap_or_default();
+    for schema in project_types.components() {
+        if schema.hidden || authored.contains(&schema.type_path) {
+            continue;
+        }
+        let group = if !schema.category.is_empty() {
+            GroupOrder::Custom(schema.category.clone())
+        } else {
+            GroupOrder::Game
+        };
+        searchable_components.push(ComponentInfo {
+            short_name: schema.short_name.clone(),
+            module_path: schema.module_path.clone(),
+            group,
+            description: schema.description.clone(),
+            type_path_full: schema.type_path.clone(),
+        });
+    }
 
     let picker = PickerProps::new(spawn_item, on_select)
         .items(searchable_components)

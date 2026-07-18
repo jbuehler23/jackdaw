@@ -52,6 +52,7 @@ use bevy::picking::hover::Hovered;
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SceneAsts<'w> {
     pub(crate) bsn: Res<'w, jackdaw_bsn::SceneBsnAst>,
+    pub(crate) project_types: Res<'w, crate::project_types::ProjectTypes>,
 }
 
 pub(crate) fn add_component_displays(
@@ -113,6 +114,7 @@ pub(crate) fn add_component_displays(
             Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
+            Some(&asts.project_types),
         );
 
         // Set up monitoring: watch the selected entity for InspectorDirty
@@ -146,6 +148,7 @@ pub(crate) fn build_inspector_displays(
     scene_ast: Option<&jackdaw_bsn::SceneBsnAst>,
     prefab_cache: Option<&PrefabAstCache>,
     collapse_state: &super::InspectorCollapseState,
+    project_types: Option<&crate::project_types::ProjectTypes>,
 ) {
     // Show multi-selection header when multiple entities are selected
     if selection_count > 1 {
@@ -532,6 +535,51 @@ pub(crate) fn build_inspector_displays(
         ));
     }
 
+    // Project (dylib-provided) components are not real ECS components in the
+    // editor, so the archetype pass above never sees them. Render each one the
+    // document authored on this entity from its extracted schema; values come
+    // from the document and edits round-trip back through the same field
+    // widgets (see `project_component_display`).
+    if let (Some(project_types), Some(ast)) = (project_types, scene_ast)
+        && let Some(node) = ast.ast_for(source_entity)
+    {
+        for type_path in ast.component_type_paths(node) {
+            let Some(schema) = project_types.component(&type_path) else {
+                continue;
+            };
+            let (display_entity, body_entity) = spawn_component_display(
+                commands,
+                ComponentDisplaySpec {
+                    name: &schema.short_name,
+                    type_path: &type_path,
+                    entity: source_entity,
+                    component: None,
+                    is_overridden: false,
+                    prefab_ctx: None,
+                    revert_through_prefab: false,
+                    icon_font: &icon_font.0,
+                    editor_font: &editor_font.0,
+                    collapse_state,
+                },
+            );
+            commands
+                .entity(display_entity)
+                .insert(ChildOf(inspector_entity));
+            super::project_component_display::spawn_project_component_fields(
+                commands,
+                body_entity,
+                schema,
+                ast,
+                node,
+                source_entity,
+                type_registry,
+                &editor_font.0,
+                &icon_font.0,
+                names,
+            );
+        }
+    }
+
     // Add Component button is in the static layout header (layout.rs entity_inspector)
     // so we don't spawn a dynamic one here.
 
@@ -694,6 +742,7 @@ pub(crate) fn on_inspector_dirty(
             Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
+            Some(&asts.project_types),
         );
     }
 

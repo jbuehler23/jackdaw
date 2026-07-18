@@ -9,7 +9,8 @@ use jackdaw_api::prelude::*;
 
 use super::physics_display::{DisablePhysics, enable_physics};
 use super::prefab_field_dots::revert_component_to_baseline;
-use crate::commands::{AddComponent, CommandHistory, EditorCommand};
+use crate::commands::{AddComponent, AddProjectComponent, CommandHistory, EditorCommand};
+use crate::project_types::ProjectTypes;
 use crate::selection::Selection;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -137,8 +138,22 @@ pub(crate) fn component_add(
         // Live mode: stream the add to the running game; the next state
         // delta repopulates the mirror and the inspector.
         if let Some(bits) = pie_live_target_bits(world, entity) {
-            let value =
-                default_component_json(world, &type_path).unwrap_or(serde_json::Value::Null);
+            // The running game has the project type registered for real, so
+            // a project component streams to it like any other; fall back to
+            // the extracted schema default when the editor cannot build one.
+            let value = default_component_json(world, &type_path)
+                .or_else(|| {
+                    // The schema default is `ReflectSerializer`-wrapped
+                    // (`{type_path: value}`); the game deserializes with
+                    // `TypedReflectDeserializer`, which wants the inner value.
+                    world
+                        .get_resource::<ProjectTypes>()
+                        .and_then(|pt| pt.component(&type_path))
+                        .and_then(|schema| schema.default.as_ref())
+                        .and_then(|d| d.as_object())
+                        .and_then(|o| o.get(&type_path).cloned())
+                })
+                .unwrap_or(serde_json::Value::Null);
             crate::pie::send_control_to_focused(
                 world,
                 jackdaw_pie_protocol::ControlEvent::AddComponent {
@@ -147,6 +162,22 @@ pub(crate) fn component_add(
                     value,
                 },
             );
+            return;
+        }
+        // A project (dylib-provided) component is never a real ECS component
+        // in the editor. It lives in the scene document as a dynamic patch;
+        // its real type exists only in the game runner at Play.
+        if world
+            .get_resource::<ProjectTypes>()
+            .is_some_and(|pt| pt.is_project_component(&type_path))
+        {
+            let mut cmd: Box<dyn EditorCommand> =
+                Box::new(AddProjectComponent::new(entity, type_path));
+            cmd.execute(world);
+            world.resource_mut::<CommandHistory>().push_executed(cmd);
+            if let Ok(mut ec) = world.get_entity_mut(entity) {
+                ec.insert(super::InspectorDirty);
+            }
             return;
         }
         let Some((component_id, type_id)) = component_id_for_path(world, &type_path) else {

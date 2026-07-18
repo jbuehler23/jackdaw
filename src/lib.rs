@@ -18,7 +18,6 @@ pub mod build_status;
 pub mod builtin_extensions;
 pub mod clip_ops;
 pub mod command_palette;
-pub mod command_runner;
 pub mod commands;
 pub mod component_json;
 pub mod custom_properties;
@@ -72,6 +71,8 @@ pub mod modal_transform;
 pub mod modifier_ops;
 pub mod navmesh;
 pub mod new_project;
+pub mod project_build;
+pub mod project_types;
 pub mod numeric_transform;
 pub mod operator_tooltip;
 pub mod physics_brush_bridge;
@@ -138,7 +139,7 @@ pub mod prelude {
     pub use crate::windowing::{editor_window_plugin, primary_window_attributes};
     pub use crate::{
         DylibLoaderPlugin, EditorCategory, EditorDescription, EditorHidden, EditorPlugins,
-        ExtensionPlugin, SkipSerialization, editor_main,
+        ExtensionPlugin, SkipSerialization,
     };
     pub use jackdaw_api::prelude::*;
 
@@ -273,75 +274,6 @@ impl PluginGroup for EditorPlugins {
     }
 }
 
-/// One-call entry point for a per-project editor binary. Encapsulates the full
-/// `DefaultPlugins` + ambient-plugin + `EditorPlugins` + auto-open setup so a
-/// project's `src/bin/editor.rs` is a single line:
-///
-/// ```ignore
-/// fn main() -> AppExit {
-///     jackdaw::editor_main(my_game::MyGamePlugin)
-/// }
-/// ```
-///
-/// Pass the game's plugin (or a tuple of plugins) so the editor links the
-/// project's reflected component types into its registry. Without that
-/// reference the linker strips the registrations and the component picker comes
-/// up empty (Bevy's `reflect_auto_register` only sees referenced crates).
-///
-/// The project opens automatically: the launcher hands off via the
-/// `JACKDAW_PROJECT` env var, and `cargo editor` from a project shell falls back
-/// to the current directory. The asset root is the project's `assets/`, and the
-/// `Repeat` image sampler matches how brush materials tile at runtime.
-pub fn editor_main<M>(game: impl bevy::app::Plugins<M>) -> AppExit {
-    use bevy::asset::AssetPlugin;
-    use bevy::image::{ImageAddressMode, ImagePlugin, ImageSamplerDescriptor};
-
-    // Claim SIGINT/SIGTERM before wgpu/gilrs install handlers that swallow it.
-    let _ = ctrlc::set_handler(|| std::process::exit(130));
-
-    let project_root = std::env::var_os("JACKDAW_PROJECT")
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::current_dir().ok());
-    let asset_root = project_root
-        .as_ref()
-        .map(|p| p.join("assets").to_string_lossy().to_string())
-        .unwrap_or_else(|| "assets".to_string());
-
-    let mut app = App::new();
-    app.set_error_handler(bevy::ecs::error::error)
-        .add_plugins(
-            DefaultPlugins
-                .set(AssetPlugin {
-                    file_path: asset_root,
-                    ..default()
-                })
-                .set(ImagePlugin {
-                    default_sampler: ImageSamplerDescriptor {
-                        address_mode_u: ImageAddressMode::Repeat,
-                        address_mode_v: ImageAddressMode::Repeat,
-                        address_mode_w: ImageAddressMode::Repeat,
-                        ..ImageSamplerDescriptor::linear()
-                    },
-                })
-                .set(crate::windowing::editor_window_plugin()),
-        )
-        .add_plugins((
-            avian3d::prelude::PhysicsPlugins::default(),
-            bevy_enhanced_input::prelude::EnhancedInputPlugin,
-        ))
-        .add_plugins(EditorPlugins::default())
-        .add_plugins(game);
-
-    if let Some(root) = project_root.filter(|p| p.is_dir()) {
-        // This binary IS the editor; no build step to wait for.
-        app.insert_resource(crate::project_select::PendingAutoOpen {
-            path: root,
-            skip_build: true,
-        });
-    }
-
-    app.run()
-}
 
 /// Plugin required for the Jackdaw's core functionality.
 #[derive(Default)]

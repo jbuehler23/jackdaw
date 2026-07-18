@@ -93,8 +93,8 @@ fine; one message or several, whichever is easier.
 
     Your answer:
 
-15. Static-template (default) or dylib path? Did you hit any
-    build issues either way?
+15. New project from the launcher, or an imported existing
+    project? Did you hit any build issues either way?
 
     Your answer:
 

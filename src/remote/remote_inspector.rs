@@ -255,6 +255,7 @@ pub fn build_remote_inspector_displays(
         None,
         None,
         &collapse_state,
+        None,
     );
 
     // Spawn JSON fallback section for unregistered components

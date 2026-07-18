@@ -24,8 +24,8 @@ What you do here:
 - Drag a `.glb` into the viewport to spawn a model entity.
 - Drag a `.jsn` to open it.
 - Drop new files into `assets/` from your file manager.
-  Bevy's `file_watcher` is on in the templates, so they show
-  up without a manual refresh.
+  The editor watches `assets/`, so they show up without a
+  manual refresh.
 
 If you only need a texture and no PBR parameters, this is
 the path. The "texture browser" that older docs and tutorials
@@ -90,7 +90,7 @@ The browser shows both, with the source labelled.
   Filename heuristics are coarse. Rename the files or open
   the affected definition and split it manually.
 - **Material disappears in the standalone build.** Standalone
-  loads `assets/scene.jsn` plus `.jsn/catalog.jsn`. Scene-local
+  loads the scene file plus `.jsn/catalog.jsn`. Scene-local
   materials still ship inline; project references resolve
   from the catalog at load time, so a missing catalog file
   causes `@Name` references to fall back to defaults.

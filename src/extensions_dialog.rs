@@ -353,10 +353,6 @@ fn poll_install_task(
         Some(picked) => {
             let src = picked.path().to_path_buf();
             commands.queue(move |world: &mut World| {
-                // load_from_path handles games in-process: if the
-                // name was already loaded, it runs the prior
-                // teardown first and then calls the new build.
-                // No restart needed.
                 if let Err(err) = world.run_system_cached_with(handle_install, src) {
                     error!("Failed to install extension: {err}");
                 }
@@ -387,17 +383,17 @@ fn sync_status_text(
 /// despawns the dialog's content so the list rebuilds on the next
 /// frame.
 /// Route a freshly-built `.so` / `.dylib` / `.dll` through the
-/// install pipeline: peek kind, copy to `extensions/` or `games/`,
-/// try to live-load, and set an `InstallStatus` message describing
-/// the result.
+/// install pipeline: copy to `extensions/`, try to live-load, and
+/// set an `InstallStatus` message describing the result.
 ///
-/// Returns `Ok(kind)` on success or `Err(LoadError)` so callers
-/// can inspect the failure. Use `LoadError::is_symbol_mismatch()`
-/// for "SDK rebuilt, stale project cache" recovery.
+/// Returns the extension id on success or `Err(LoadError)` so
+/// callers can inspect the failure. Use
+/// `LoadError::is_symbol_mismatch()` for "SDK rebuilt, stale project
+/// cache" recovery.
 pub fn handle_install_from_path(
     world: &mut World,
     src: std::path::PathBuf,
-) -> Result<jackdaw_loader::LoadedKind, jackdaw_loader::LoadError> {
+) -> Result<String, jackdaw_loader::LoadError> {
     world
         .run_system_cached_with(handle_install, src)
         .map_err(BevyError::from)
@@ -409,9 +405,8 @@ fn handle_install(
     In(src): In<PathBuf>,
     world: &mut World,
     extension_dialogs: &mut QueryState<Entity, With<ExtensionsDialogContent>>,
-) -> Result<jackdaw_loader::LoadedKind, jackdaw_loader::LoadError> {
-    let target = classify_for_install(&src);
-    let dest = match install_picked_file(&src, target) {
+) -> Result<String, jackdaw_loader::LoadError> {
+    let dest = match install_picked_file(&src) {
         Ok(d) => d,
         Err(err) => {
             warn!("Failed to install dylib: {err}");
@@ -423,13 +418,9 @@ fn handle_install(
 
     let result = jackdaw_loader::load_from_path(world, &dest);
     let msg = match &result {
-        Ok(jackdaw_loader::LoadedKind::Extension(name)) => {
+        Ok(name) => {
             info!("Live-loaded extension `{name}` from {}", dest.display());
             format!("Loaded extension `{name}`. BEI keybinds (if any) activate on next restart.")
-        }
-        Ok(jackdaw_loader::LoadedKind::Game(name)) => {
-            info!("Game `{name}` loaded from {}", dest.display());
-            format!("Loaded game `{name}`.")
         }
         Err(err) => {
             warn!("Live-load failed for {}: {err}", dest.display());
@@ -460,16 +451,9 @@ fn handle_install(
     result
 }
 
-/// Which directory under the user's config root a given dylib
-/// should be installed to.
-enum InstallTarget {
-    Extension,
-    Game,
-}
-
-/// Install a built dylib into the per-user subdirectory for its
-/// kind. Returns the destination path on success. Creates the
-/// directory if missing.
+/// Install a built dylib into the per-user extensions directory.
+/// Returns the destination path on success. Creates the directory
+/// if missing.
 ///
 /// Uses write-to-tempfile + rename instead of `std::fs::copy` so we
 /// never truncate a file that's currently mmapped by the running
@@ -479,7 +463,7 @@ enum InstallTarget {
 /// walking `/proc/self/maps`).
 ///
 /// Install the picked `.so` into the per-user dir with a **unique
-/// filename per install** (e.g., `libmy_game-1745678901234.so`), then
+/// filename per install** (e.g., `libmy_ext-1745678901234.so`), then
 /// clean up any prior sibling files matching the same basename so the
 /// dir doesn't accumulate stale copies.
 ///
@@ -487,32 +471,26 @@ enum InstallTarget {
 /// by absolute path after realpath resolution. A second `dlopen` of
 /// the same path returns the original handle even if the on-disk
 /// file was atomically replaced; the mapping doesn't re-check inode.
-/// Hot-reloading a game by overwriting one `libmy_game.so` path
-/// would silently return the first-loaded code forever. Giving each
-/// install a fresh path forces glibc to mmap the new file. The old
-/// mapping stays valid for any currently-held fn pointers (like the
-/// catalog's prior `teardown` we call before swapping) until its
-/// `libloading::Library` handle is dropped.
+/// Re-installing a rebuilt extension by overwriting one
+/// `libmy_ext.so` path would silently return the first-loaded code
+/// forever. Giving each install a fresh path forces glibc to mmap
+/// the new file. The old mapping stays valid for any currently-held
+/// fn pointers until its `libloading::Library` handle is dropped
+/// (which the loader never does).
 ///
 /// Cleanup after the rename removes any sibling files that share the
-/// same stem (e.g. `libmy_game-*.so`), so at most one file per game
-/// lives in the dir after a successful install. Cleanup failure is
-/// a warning, not an error: the load has already succeeded, and the
-/// stale file will be cleaned on the next install.
-fn install_picked_file(
-    src: &std::path::Path,
-    target: InstallTarget,
-) -> std::io::Result<std::path::PathBuf> {
+/// same stem (e.g. `libmy_ext-*.so`), so at most one file per
+/// extension lives in the dir after a successful install. Cleanup
+/// failure is a warning, not an error: the load has already
+/// succeeded, and the stale file will be cleaned on the next
+/// install.
+fn install_picked_file(src: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
     let Some(config) = config_dir() else {
         return Err(std::io::Error::other(
             "platform config directory is unavailable",
         ));
     };
-    let subdir = match target {
-        InstallTarget::Extension => "extensions",
-        InstallTarget::Game => "games",
-    };
-    let dest_dir = config.join(subdir);
+    let dest_dir = config.join("extensions");
     std::fs::create_dir_all(&dest_dir)?;
     let file_name = src.file_name().ok_or_else(|| {
         std::io::Error::new(
@@ -521,8 +499,8 @@ fn install_picked_file(
         )
     })?;
 
-    // Split `libmy_game.so` into `"libmy_game"` + `".so"` (or `"libmy_game.dylib"`
-    // / `"my_game.dll"` on other platforms). We suffix the stem with a
+    // Split `libmy_ext.so` into `"libmy_ext"` + `".so"` (or `"libmy_ext.dylib"`
+    // / `"my_ext.dll"` on other platforms). We suffix the stem with a
     // monotonic millisecond timestamp.
     let file_name_str = file_name.to_string_lossy();
     let (stem, ext_with_dot) = match file_name_str.rfind('.') {
@@ -599,13 +577,3 @@ fn cleanup_prior_installs(
     }
 }
 
-/// Peek at the dylib's entry symbol to decide whether it belongs in
-/// `extensions/` or `games/`. Falls back to Extension if the peek
-/// fails; the caller's own load-from-path will surface the real
-/// error on the follow-up dlopen.
-fn classify_for_install(path: &std::path::Path) -> InstallTarget {
-    match jackdaw_loader::peek_kind(path) {
-        Ok(jackdaw_loader::LoadedKind::Game(_)) => InstallTarget::Game,
-        _ => InstallTarget::Extension,
-    }
-}

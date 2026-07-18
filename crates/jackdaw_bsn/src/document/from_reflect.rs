@@ -112,18 +112,24 @@ impl BsnValue {
         }
 
         // Handle<T> fields: resolve to an asset-path string when an asset
-        // context is available.
-        if let Some(ctx) = ctx
-            && let Some(concrete) = value.try_as_reflect()
-        {
+        // context is available. Without a context a handle has no stable text
+        // form, so emit an empty string rather than descending into its
+        // `AssetId` (whose `Uuid` / `Index` has no BSN representation and only
+        // produces "no BSN representation" noise on every sync). This is
+        // recognised regardless of `ctx` so a context-free sync (e.g. the live
+        // brush-confirm mirror, whose material handles are runtime-only) does
+        // not fall through to the reflect walk.
+        if let Some(concrete) = value.try_as_reflect() {
             let type_id = concrete.reflect_type_info().type_id();
             if let Some(reflect_handle) = type_registry.get_type_data::<ReflectHandle>(type_id) {
-                if let Some(untyped_handle) =
-                    reflect_handle.downcast_handle_untyped(concrete.as_any())
+                if let Some(ctx) = ctx
+                    && let Some(untyped_handle) =
+                        reflect_handle.downcast_handle_untyped(concrete.as_any())
                 {
                     return BsnValue::String(ctx.handle_string(untyped_handle.id()));
                 }
-                // Handle that failed to downcast: emit an empty string.
+                // No context (or a handle that failed to downcast): emit an
+                // empty string.
                 return BsnValue::String(String::new());
             }
         }

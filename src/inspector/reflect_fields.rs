@@ -292,7 +292,7 @@ fn is_editable_primitive(value: &dyn PartialReflect) -> bool {
         || value.try_downcast_ref::<String>().is_some()
 }
 
-fn spawn_field_row(
+pub(crate) fn spawn_field_row(
     commands: &mut Commands,
     parent: Entity,
     name: &str,

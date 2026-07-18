@@ -1,36 +1,33 @@
-//! {{project-name}} — a jackdaw extension.
+//! {{project-name}}: a jackdaw editor extension.
+//!
+//! Open this folder in jackdaw and the extension loads into the
+//! running editor; rebuilds hot-reload it. The `jackdaw` repository's
+//! `examples/extension/` directory shows the full API surface:
+//! operators, menu entries, panels, windows, and keybindings.
 
-use std::sync::Arc;
-
-// `use bevy::prelude::*` reaches everything — jackdaw's SDK proxy
-// exposes bevy primitives and jackdaw extension APIs
-// (`JackdawExtension`, `ExtensionContext`, `WindowDescriptor`, …)
-// through a single unified prelude. No need for a separate
-// `use jackdaw_api::prelude::*;`.
 use bevy::prelude::*;
+use jackdaw_api::prelude::*;
 
-pub struct {{crate_name | pascal_case}};
+/// The extension type. The editor finds it by name (override with
+/// `plugin = "..."` in jackdaw.toml) and calls [`JackdawExtension::register`]
+/// when it loads.
+#[derive(Default)]
+pub struct MyExtension;
 
-impl JackdawExtension for {{crate_name | pascal_case}} {
-    fn name(&self) -> &str {
-        "{{project-name}}"
+impl JackdawExtension for MyExtension {
+    fn id(&self) -> String {
+        "{{project-name}}".to_string()
     }
 
-    fn register(&self, ctx: &mut ExtensionContext) {
-        ctx.register_window(WindowDescriptor {
-            id: "{{project-name}}.hello".into(),
-            name: "Hello from {{project-name}}".into(),
-            icon: None,
-            default_area: None,
-            priority: None,
-            build: Arc::new(|world: &mut World, parent: Entity| {
-                world.spawn((
-                    ChildOf(parent),
-                    Text::new("Hello from {{project-name}}!"),
-                ));
-            }),
-        });
+    fn label(&self) -> String {
+        "{{project-name | title_case}}".to_string()
+    }
+
+    fn description(&self) -> String {
+        "Describe what your extension adds to the editor.".to_string()
+    }
+
+    fn register(&self, _ctx: &mut ExtensionContext) {
+        info!("{{project-name}} registered");
     }
 }
-
-jackdaw_api::export_extension!("{{project-name}}", || Box::new({{crate_name | pascal_case}}));

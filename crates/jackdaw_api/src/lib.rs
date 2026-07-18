@@ -3,9 +3,9 @@
 //! A thin facade over [`jackdaw_api_internal`]. Only types and
 //! functions intended for third-party extension and game authors are
 //! re-exported here. Editor-host plumbing (the loader plugin, the
-//! catalog, enable/disable helpers, internal component markers, and
-//! the FFI entry structs) stays behind `jackdaw_api_internal` and is
-//! used by the editor binary and by `jackdaw_loader`.
+//! catalog, enable/disable helpers, and internal component markers)
+//! stays behind `jackdaw_api_internal` and is used by the editor
+//! binary and by `jackdaw_loader`.
 //!
 //! # Static consumer
 //!
@@ -28,7 +28,6 @@
 // the FFI boundary. Mirrors how `bevy/dynamic_linking` pulls in
 // `bevy_dylib`.
 #[cfg(feature = "dynamic_linking")]
-#[expect(unused_imports)]
 use jackdaw_dylib as _;
 
 // --- Extension authoring surface ---
@@ -57,12 +56,6 @@ pub mod inspector {
 /// `#[operator]` attribute macro. See [`jackdaw_api_macros`] for the
 /// supported keys.
 pub use jackdaw_api_macros::operator;
-
-/// Emit the FFI entry symbol a dylib extension needs.
-pub use jackdaw_api_internal::export_extension;
-
-/// Emit the FFI entry symbol a dylib game needs.
-pub use jackdaw_api_internal::export_game;
 
 // --- Sub-modules (curated) ---
 

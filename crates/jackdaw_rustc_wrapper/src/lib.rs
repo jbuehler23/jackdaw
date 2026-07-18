@@ -3,27 +3,33 @@
 //! # What it does
 //!
 //! Cargo invokes this binary as `RUSTC_WRAPPER`, so every rustc call
-//! in the project passes through here. For the user's primary crate
-//! (detected via `CARGO_PRIMARY_PACKAGE=1`) we rewrite the argv:
+//! in the project passes through here. Target-side invocations are
+//! rewritten so the whole dependency graph shares the SDK's crates:
 //!
 //! * `--extern bevy=<anything>` becomes
-//!   `--extern bevy=$JACKDAW_SDK_DYLIB`. The user's Cargo.toml still
-//!   declares `bevy = "0.18"` so bevy's proc macros find it via
-//!   `CARGO_MANIFEST_DIR` and emit `::bevy::...` paths. Cargo compiles
-//!   real bevy into the user's target dir; the resulting rlib is
-//!   ignored because the wrapper points the `--extern` at
-//!   `libjackdaw_sdk.so`. The extra compile is a one-time cost that
-//!   keeps the user's Cargo.toml normal (no patches, no stub crate).
-//! * `--extern jackdaw_api=$JACKDAW_SDK_DYLIB` is injected. The user
-//!   never declares `jackdaw_api`; the wrapper makes
-//!   `use jackdaw_api::...` work anyway.
+//!   `--extern bevy=$JACKDAW_SDK_DYLIB` for every consumer. The user's
+//!   Cargo.toml still declares a normal bevy dependency so bevy's proc
+//!   macros find it via `CARGO_MANIFEST_DIR` and emit `::bevy::...`
+//!   paths. Cargo compiles real bevy into the project's target dir;
+//!   those rlibs are ignored because every `--extern` that matters
+//!   points at the SDK's artifacts.
+//! * Every dependency edge listed in the `$JACKDAW_SDK_EXTERN_MAP`
+//!   redirect plan is rewritten to the SDK artifact it names. The plan
+//!   covers the SDK's full runtime closure (bevy subcrates plus public
+//!   deps like glam and serde), per edge, only where the project's
+//!   resolved version is byte-identical to the SDK's.
+//! * `--extern jackdaw_api=$JACKDAW_SDK_DYLIB` is injected for the
+//!   primary crate. The user never declares `jackdaw_api`; the wrapper
+//!   makes `use jackdaw_api::...` work anyway.
 //! * `-L dependency=$JACKDAW_SDK_DEPS` is appended so rustc can find
 //!   transitive rlib metadata when resolving re-exported types.
 //! * `-C prefer-dynamic` is appended so rustc links through the SDK
 //!   dylib rather than statically embedding its rlib form.
 //!
-//! Every other rustc invocation (build scripts, dependency
-//! compilation, etc.) passes through untouched.
+//! Host-side invocations (no `--target`: build scripts, proc-macro
+//! crates and their deps) and compiles of plan-replaced packages pass
+//! through untouched. The driving cargo invocation must therefore
+//! always pass an explicit `--target` (the host triple).
 //!
 //! # Why the wrapper exists as a library plus a binary
 //!
@@ -46,12 +52,15 @@
 //!
 //! # Env vars the wrapper reads
 //!
-//! | Var                     | Required       | Purpose                              |
-//! |-------------------------|----------------|--------------------------------------|
-//! | `JACKDAW_SDK_DYLIB`     | yes            | Absolute path to `libjackdaw_sdk.so` |
-//! | `JACKDAW_SDK_DEPS`      | yes            | Absolute path to the `deps/` dir     |
-//! | `JACKDAW_WRAPPER_LOG`   | no             | If `1`, log rewrites to stderr       |
-//! | `CARGO_PRIMARY_PACKAGE` | (set by cargo) | `1` while compiling the user crate   |
+//! | Var                      | Required       | Purpose                              |
+//! |--------------------------|----------------|--------------------------------------|
+//! | `JACKDAW_SDK_DYLIB`      | yes            | Absolute path to `libjackdaw_sdk.so` |
+//! | `JACKDAW_SDK_DEPS`       | yes            | Absolute path to the `deps/` dir     |
+//! | `JACKDAW_SDK_HOST_DEPS`  | no             | Host deps dir (proc-macro dylibs)    |
+//! | `JACKDAW_SDK_EXTERN_MAP` | no             | Path to the per-edge redirect plan   |
+//! | `JACKDAW_WRAPPER_LOG`    | no             | If `1`, log rewrites to stderr       |
+//! | `CARGO_PRIMARY_PACKAGE`  | (set by cargo) | `1` while compiling the user crate   |
+//! | `CARGO_PKG_NAME`         | (set by cargo) | Consumer key for plan edge lookups   |
 
 use std::env;
 use std::ffi::OsString;
@@ -60,8 +69,10 @@ use tracing::error;
 
 const ENV_SDK_DYLIB: &str = "JACKDAW_SDK_DYLIB";
 const ENV_SDK_DEPS: &str = "JACKDAW_SDK_DEPS";
+const ENV_SDK_HOST_DEPS: &str = "JACKDAW_SDK_HOST_DEPS";
 const ENV_PRIMARY_PACKAGE: &str = "CARGO_PRIMARY_PACKAGE";
 const ENV_LOG: &str = "JACKDAW_WRAPPER_LOG";
+const ENV_EXTERN_MAP: &str = "JACKDAW_SDK_EXTERN_MAP";
 
 /// Crate aliases we redirect to `libjackdaw_sdk.so` whenever cargo
 /// emits an `--extern` flag for them. User code writes
@@ -80,7 +91,12 @@ const INJECTED_CRATES: &[&str] = &["jackdaw_api"];
 /// Returns the exit code rustc produced (or 1 on a wrapper-side
 /// failure).
 pub fn run() -> ExitCode {
-    tracing_subscriber::fmt::init();
+    // Stderr only: cargo parses this wrapper's stdout during its
+    // `--print=file-names` probe invocations, and any stray line there
+    // corrupts cargo's idea of what every unit emits.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
     let mut argv: Vec<OsString> = env::args_os().collect();
     // argv[0] is our binary; argv[1] is the real rustc path; argv[2..]
     // are rustc's args.
@@ -94,7 +110,11 @@ pub fn run() -> ExitCode {
     let is_primary = env::var_os(ENV_PRIMARY_PACKAGE).is_some_and(|v| v == "1");
     let log = env::var_os(ENV_LOG).is_some_and(|v| v == "1");
 
-    if is_primary && let Err(e) = rewrite_primary_args(&mut rustc_args, log) {
+    // The redirects apply to EVERY target-side crate in the graph, so
+    // ecosystem dependencies (physics, etc.) compile against the same
+    // SDK bevy and closure crates the user's crate does: one instance
+    // of every shared crate. Host-side units pass through unchanged.
+    if let Err(e) = rewrite_args(&mut rustc_args, is_primary, log) {
         error!("jackdaw-rustc-wrapper: {e}");
         return ExitCode::from(1);
     }
@@ -110,21 +130,51 @@ pub fn run() -> ExitCode {
     }
 }
 
-/// Rewrite the rustc argv for the user's primary-package compile.
-/// Redirects `--extern bevy=...` and `--extern jackdaw_api=...` to
-/// the SDK dylib, appends a `-L dependency=$JACKDAW_SDK_DEPS` so
-/// rustc can find transitive rlib metadata, and adds
-/// `-C prefer-dynamic` so the linker prefers the dylib form.
-fn rewrite_primary_args(argv: &mut Vec<OsString>, log: bool) -> Result<(), String> {
+/// Rewrite one rustc invocation. The `bevy` facade extern redirects to
+/// the SDK dylib; any other extern named in the SDK extern map (the
+/// SDK's runtime dependency closure: bevy subcrates plus their public
+/// deps like `glam` and `serde`) redirects to the exact artifact the
+/// SDK was built with. When any redirect fired, a
+/// `-L dependency=$JACKDAW_SDK_DEPS` and `-C prefer-dynamic` are
+/// appended so the redirected metadata resolves and the final link goes
+/// through the dylib. The primary package additionally gets
+/// `--extern jackdaw_api=` injected.
+///
+/// Host-side units (no `--target` flag) pass through untouched. Every
+/// target-side unit is rewritten uniformly, including compiles of
+/// crates the plan itself replaces: a unit compiled vanilla could
+/// consume a rewritten sibling and see two instances of one crate, so
+/// coherence requires the SDK-preferred resolution to apply everywhere
+/// or nowhere.
+fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result<(), String> {
     let dylib = env::var_os(ENV_SDK_DYLIB)
         .ok_or_else(|| format!("{ENV_SDK_DYLIB} not set; cannot redirect --extern"))?;
     let deps = env::var_os(ENV_SDK_DEPS)
         .ok_or_else(|| format!("{ENV_SDK_DEPS} not set; cannot point -L at deps/"))?;
+    let extern_map = load_extern_map();
 
+    // Host-side units (no --target: build scripts, proc-macro crates
+    // and their deps) run against their own host dep units and must
+    // never see SDK artifacts. This requires the driving cargo
+    // invocation to pass an explicit --target (the host triple), which
+    // is what makes cargo omit the flag on host units.
+    if !argv.iter().any(|a| a == "--target") {
+        return Ok(());
+    }
+
+    // The consumer key is name@version: a graph can hold two versions
+    // of one crate, and the plan records a distinct redirect per
+    // version. cargo sets both vars for every compile.
+    let consumer = match (env::var("CARGO_PKG_NAME"), env::var("CARGO_PKG_VERSION")) {
+        (Ok(name), Ok(version)) => format!("{}@{version}", name.replace('-', "_")),
+        _ => String::new(),
+    };
+
+    let mut redirected = false;
     let mut i = 0;
     while i < argv.len() {
         if argv[i] == "--extern" && i + 1 < argv.len() {
-            if let Some(new_value) = rewrite_extern(&argv[i + 1], &dylib) {
+            if let Some(new_value) = rewrite_extern(&argv[i + 1], &dylib, &extern_map, &consumer) {
                 if log {
                     error!(
                         "jackdaw-rustc-wrapper: rewrite --extern {:?} -> {:?}",
@@ -133,6 +183,7 @@ fn rewrite_primary_args(argv: &mut Vec<OsString>, log: bool) -> Result<(), Strin
                     );
                 }
                 argv[i + 1] = new_value;
+                redirected = true;
             }
             i += 2;
             continue;
@@ -140,49 +191,123 @@ fn rewrite_primary_args(argv: &mut Vec<OsString>, log: bool) -> Result<(), Strin
         i += 1;
     }
 
-    for alias in INJECTED_CRATES {
-        let mut flag = OsString::from(alias);
-        flag.push("=");
-        flag.push(&dylib);
-        argv.push(OsString::from("--extern"));
-        argv.push(flag);
-        if log {
-            error!(
-                "jackdaw-rustc-wrapper: injected --extern {}={}",
-                alias,
-                dylib.to_string_lossy()
-            );
+    if is_primary {
+        for alias in INJECTED_CRATES {
+            let mut flag = OsString::from(alias);
+            flag.push("=");
+            flag.push(&dylib);
+            argv.push(OsString::from("--extern"));
+            argv.push(flag);
+            if log {
+                error!(
+                    "jackdaw-rustc-wrapper: injected --extern {}={}",
+                    alias,
+                    dylib.to_string_lossy()
+                );
+            }
         }
     }
 
+    // Every target-side unit gets the SDK deps dir as a search path: a
+    // unit that was NOT itself rewritten can still consume a crate that
+    // was, and loading that crate's metadata requires resolving the SDK
+    // artifacts it references. rustc matches transitive crates by exact
+    // SVH, so the extra path cannot shadow the user graph's own crates.
     let mut deps_flag = OsString::from("dependency=");
     deps_flag.push(&deps);
     argv.push(OsString::from("-L"));
     argv.push(deps_flag);
-    argv.push(OsString::from("-C"));
-    argv.push(OsString::from("prefer-dynamic"));
+    // SDK rlibs can reference host-side proc-macro dylibs (a MacrosOnly
+    // dependency like thiserror's derive crate); those live in the SDK
+    // build's host deps dir, not the triple dir.
+    if let Some(host_deps) = env::var_os(ENV_SDK_HOST_DEPS) {
+        let mut host_flag = OsString::from("dependency=");
+        host_flag.push(&host_deps);
+        argv.push(OsString::from("-L"));
+        argv.push(host_flag);
+    }
 
-    if log {
-        error!(
-            "jackdaw-rustc-wrapper: appended -L dependency={} -C prefer-dynamic",
-            deps.to_string_lossy()
-        );
+    if redirected || is_primary {
+        argv.push(OsString::from("-C"));
+        argv.push(OsString::from("prefer-dynamic"));
+        if log {
+            error!("jackdaw-rustc-wrapper: appended -C prefer-dynamic");
+        }
     }
 
     Ok(())
 }
 
-/// If `value` is `<alias>=<path>` with `<alias>` in
-/// [`REDIRECTED_CRATES`], return the redirected form pointing at the
-/// SDK dylib. Otherwise return `None` so the caller leaves it alone.
-fn rewrite_extern(value: &OsString, sdk_dylib: &OsString) -> Option<OsString> {
+/// Parse `$JACKDAW_SDK_EXTERN_MAP`, the per-project redirect plan the
+/// editor generates by joining the SDK's artifact list against the
+/// project's resolve graph. Each `consumer@version:alias=artifact`
+/// line redirects one dependency edge; the consumer carries its exact
+/// version so two versions of one crate get distinct redirects. Lines
+/// are only emitted where the consumer's resolved version of the
+/// dependency is byte-identical to the SDK's. Absent or unreadable
+/// plans degrade to facade-only redirection.
+fn load_extern_map() -> ExternMap {
+    let mut map = ExternMap::default();
+    let Some(path) = env::var_os(ENV_EXTERN_MAP) else {
+        return map;
+    };
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        error!(
+            "jackdaw-rustc-wrapper: could not read extern map at {:?}; \
+             falling back to facade-only redirection",
+            path
+        );
+        return map;
+    };
+    for line in contents.lines() {
+        if let Some((edge, artifact)) = line.split_once('=') {
+            if let Some((consumer, alias)) = edge.split_once(':') {
+                map.edges.push((
+                    consumer.to_string(),
+                    alias.to_string(),
+                    OsString::from(artifact),
+                ));
+            }
+        }
+    }
+    map
+}
+
+#[derive(Default)]
+struct ExternMap {
+    edges: Vec<(String, String, OsString)>,
+}
+
+impl ExternMap {
+    fn edge_artifact(&self, consumer: &str, alias: &str) -> Option<&OsString> {
+        self.edges
+            .iter()
+            .find(|(c, a, _)| c == consumer && a == alias)
+            .map(|(_, _, artifact)| artifact)
+    }
+}
+
+/// If `value` is `<alias>=<path>` with a redirect target, return the
+/// redirected form. The `bevy` facade goes to the SDK dylib; an edge
+/// listed in the plan for this consumer goes to its recorded artifact.
+/// Otherwise `None`, and the caller leaves the flag alone.
+fn rewrite_extern(
+    value: &OsString,
+    sdk_dylib: &OsString,
+    extern_map: &ExternMap,
+    consumer: &str,
+) -> Option<OsString> {
     let s = value.to_str()?;
     let (alias, _rest) = s.split_once('=')?;
-    if !REDIRECTED_CRATES.contains(&alias) {
-        return None;
+    if REDIRECTED_CRATES.contains(&alias) {
+        let mut out = OsString::from(alias);
+        out.push("=");
+        out.push(sdk_dylib);
+        return Some(out);
     }
+    let artifact = extern_map.edge_artifact(consumer, alias)?;
     let mut out = OsString::from(alias);
     out.push("=");
-    out.push(sdk_dylib);
+    out.push(artifact);
     Some(out)
 }

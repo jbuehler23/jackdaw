@@ -95,8 +95,8 @@ jobs:
       fail-fast: false
       matrix:
         template:
-          - game-static
-          - extension-static
+          - game
+          - extension
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -119,9 +119,6 @@ jobs:
       - name: Install Wild
         run: cargo binstall wild-linker --locked --force
 
-      - name: Install cargo-generate
-        run: cargo binstall cargo-generate --locked --force
-
       - name: Install nextest
         run: cargo binstall cargo-nextest --locked --force
 
@@ -136,34 +133,42 @@ jobs:
           shared-key: template
 
       - name: Scaffold ${{ matrix.template }}
-        env:
-          # Suppress cargo-generate's interactive author prompt; the
-          # scaffolder fills `authors` from this env in CI.
-          CARGO_GENERATE_VALUE_AUTHORS: "ci@jackdaw"
         run: |
           set -euxo pipefail
           checkout="$GITHUB_WORKSPACE"
           template="${{ matrix.template }}"
           name="test_$(echo "$template" | tr - _)"
-          rm -rf "$RUNNER_TEMP/$name"
-          cargo generate \
-            --path "$checkout/templates/$template" \
-            --name "$name" \
-            --destination "$RUNNER_TEMP" \
-            --silent
+          dest="$RUNNER_TEMP/$name"
+          rm -rf "$dest"
+          # Instantiate the embedded template the same way the editor
+          # does: copy, strip the .template suffix, substitute the
+          # placeholders. gitignore is stored undotted.
+          mkdir -p "$dest"
+          cd "$checkout/templates/$template"
+          find . -type f | while read -r f; do
+            rel="${f#./}"
+            out="$dest/${rel%.template}"
+            case "$out" in
+              */gitignore) out="${out%gitignore}.gitignore" ;;
+            esac
+            mkdir -p "$(dirname "$out")"
+            if [[ "$rel" == *.template ]]; then
+              sed -e "s/{{project-name | title_case}}/Test $template/g" \
+                  -e "s/{{project-name}}/$name/g" \
+                  -e "s/{{crate_name}}/$name/g" \
+                  -e "s/{{authors}}/ci@jackdaw/g" "$f" > "$out"
+            else
+              cp "$f" "$out"
+            fi
+          done
           cp -r "$checkout/.cargo" "$RUNNER_TEMP/"
-          # Pin the scaffolded project's `jackdaw` / `jackdaw_runtime`
-          # deps to THIS checkout so we test the template against
-          # the PR under review, not against whatever's on crates.io
-          # (or even before 0.4.0 ships at all). `[patch.crates-io]`
-          # overrides the source: cargo resolves the version
-          # constraint against the patched path's Cargo.toml, so
-          # this works pre-publish.
-          cat >> "$RUNNER_TEMP/$name/Cargo.toml" <<EOF
+          # Pin the scaffolded project's jackdaw deps to THIS checkout
+          # so the template is tested against the PR under review.
+          cat >> "$dest/Cargo.toml" <<EOF
 
           [patch.crates-io]
-          jackdaw = { path = "$checkout" }
           jackdaw_runtime = { path = "$checkout/crates/jackdaw_runtime" }
+          jackdaw_api = { path = "$checkout/crates/jackdaw_api" }
           EOF
 
       - name: Run cargo fmt
@@ -183,16 +188,12 @@ jobs:
           cargo clippy --workspace --all-targets --target-dir "$GITHUB_WORKSPACE/target" --features bevy/dynamic_linking -- --deny warnings
 
       - name: Run tests
-        # Game-static ships a smoke test that exercises the
-        # editor's component picker against the project's own
-        # `MyGamePlugin`. Skip for templates without a `tests/`
-        # directory.
         run: |
           set -euxo pipefail
           name="test_$(echo "${{ matrix.template }}" | tr - _)"
           cd "$RUNNER_TEMP/$name"
           if [[ -d tests ]]; then
-            cargo nextest run --locked --workspace --lib --bins --tests --no-fail-fast --no-tests warn --features editor,bevy/dynamic_linking --target-dir "$GITHUB_WORKSPACE/target"
+            cargo nextest run --workspace --lib --bins --tests --no-fail-fast --no-tests warn --features bevy/dynamic_linking --target-dir "$GITHUB_WORKSPACE/target"
           else
             echo "no tests/ directory in scaffolded ${{ matrix.template }}; skipping"
           fi

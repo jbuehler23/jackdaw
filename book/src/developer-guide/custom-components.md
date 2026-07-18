@@ -14,17 +14,18 @@ use bevy::prelude::*;
 pub struct PlayerSpawn;
 ```
 
-That's it. Compile, restart the editor, open the inspector
-on an entity, click `+ Add Component`, type `PlayerSpawn`. It
-shows up.
+That's it. The editor builds your project's library in the
+background (it starts a build when the project opens); once the
+build finishes, open the inspector on an entity, click
+`+ Add Component`, type `PlayerSpawn`. It shows up.
 
 A few things make this work without ceremony:
 
-- Bevy 0.18's `reflect_auto_register` registers the type at app
-  build, so you don't need `app.register_type::<PlayerSpawn>()`,
-  as long as your crate is linked into the editor binary and
-  something references it (the editor adds your `MyGamePlugin`,
-  which does). A type in a crate the editor never references is
+- Bevy's `reflect_auto_register` registers the type when the
+  editor loads your project's library, so you don't need
+  `app.register_type::<PlayerSpawn>()` and there is no
+  jackdaw-specific registration code anywhere. A type in a
+  dependency crate that your library never references can be
   stripped by the linker before registration runs; register it
   explicitly if it never shows up.
 - The `reflect_documentation` cargo feature is on
@@ -100,7 +101,7 @@ fn spawn_player(
 ```
 
 `GlobalTransform` is correct here, even when the entity is
-loading from `.jsn`. The scene loader propagates transforms
+loading from a scene file. The scene loader propagates transforms
 inline before firing observers, so you get the entity's true
 world-space pose. You don't need `On<SceneInstanceReady>` or
 the recursive-walk pattern from vanilla Bevy.
@@ -108,7 +109,7 @@ the recursive-walk pattern from vanilla Bevy.
 Register the observer in your plugin:
 
 ```rust
-impl Plugin for MyGamePlugin {
+impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(spawn_player);
     }
@@ -143,8 +144,8 @@ fn spawn_player(
 ```
 
 The red cube renders in the editor. When the user saves, the
-cube is skipped from `assets/scene.jsn`. The shipped game
-never sees it.
+cube is skipped from the scene file. The shipped game never
+sees it.
 
 You can also do this entirely in the editor without code: make
 a brush, set it as a child of an empty that holds your
@@ -165,8 +166,8 @@ of:
 - Missing `#[reflect(Component)]`.
 - Has `@EditorHidden` somewhere (intentional or pasted from a
   template).
-- The crate that defines the component isn't loaded yet (if
-  you're using the dylib path). Restart the editor.
+- The editor's background build of your project hasn't
+  finished yet. Components appear once it does.
 
 **Doc comment doesn't show as tooltip.** The
 `reflect_documentation` feature has to be on for the type's

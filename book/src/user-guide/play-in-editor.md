@@ -13,14 +13,20 @@ PIE keeps two surfaces strictly separate:
 
 ## What you need
 
-PIE launches your game from its **run configurations**. A project that
-plays in the editor has at least one runnable config in its `jackdaw.toml`,
-and the config that streams into the editor builds with the `pie` feature.
-See [Scene Management](scene-management.md) for where project config lives,
-and your game crate's `jackdaw.toml` for the configs themselves.
+Nothing compiles at play time. The editor already built your project's
+library when the project opened; Play launches the prebuilt game runner
+with that library and connects to it over IPC.
+
+The Play dropdown is filled from the **run configurations** in your
+project's `jackdaw.toml` (`[[run]]` entries carrying a name, environment
+variables, arguments, an instance count, and a working directory). A
+project with no `jackdaw.toml` still plays: the editor synthesizes a
+single default run. See [Configuration](../reference/configuration.md)
+for the fields.
 
 How many configs you define is up to your game. Some games run a single
-process; others split into several that you launch together. PIE treats
+process; others split into several that you launch together. Configs
+differ only in launch environment, never in what gets built. PIE treats
 each launched process as an instance and streams the focused one.
 
 Open the **Game** panel before you start. It docks in the bottom dock area

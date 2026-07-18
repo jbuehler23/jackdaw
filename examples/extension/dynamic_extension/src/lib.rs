@@ -91,9 +91,11 @@ fn hello_time(_: In<OperatorParameters>, time: Res<Time>) -> OperatorResult {
     OperatorResult::Finished
 }
 
-// Exposes `jackdaw_extension_entry_v1` so the editor's dylib loader
-// can discover this extension from disk. Always emitted: the
-// cdylib output needs it; the rlib output that's statically
-// linked into the prebuilt binary just carries a dead symbol,
-// which is harmless.
-jackdaw_api::export_extension!(SampleExtension);
+// Exposes `jackdaw_extension_ctor` so the editor's dylib loader can
+// discover this extension from disk. Always emitted: the cdylib
+// output needs it; the rlib output that's statically linked into
+// the prebuilt binary just carries a dead symbol, which is harmless.
+#[unsafe(no_mangle)]
+pub fn jackdaw_extension_ctor() -> Box<dyn JackdawExtension> {
+    Box::new(SampleExtension)
+}

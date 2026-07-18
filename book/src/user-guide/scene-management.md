@@ -1,10 +1,10 @@
 # Scene management
 
-A "scene" in jackdaw is one `.jsn` file. A "project" is a
-folder with a `.jsn/project.jsn` config file (legacy projects
-keep it at the root), an `assets/` directory, and a
-`Cargo.toml` if you scaffolded with the static template.
-Scenes live under `assets/`.
+A "scene" in jackdaw is one `.bsn` file. A "project" is a
+normal Bevy crate: a folder with a `Cargo.toml`, a
+`jackdaw.toml`, an `assets/` directory, and a
+`.jsn/project.jsn` editor-settings file (legacy projects keep
+it at the root). Scenes live under `assets/`.
 
 ## Save and load
 
@@ -16,9 +16,10 @@ Scenes live under `assets/`.
 - `Ctrl+Shift+N` creates a new empty scene in memory; it is
   unsaved until you `Ctrl+S` it.
 
-The format details are in [JSN Format](../developer-guide/jsn-format.md).
-The short version: human-readable, line-diffable, and
-designed to read in `git diff` without making you cry.
+Scene files are human-readable, line-diffable, and designed to
+read in `git diff` without making you cry. Legacy `.jsn` scenes
+still open (import-only); see
+[JSN Format](../developer-guide/jsn-format.md).
 
 ## Project select screen
 
@@ -26,9 +27,10 @@ The launcher (`AppState::ProjectSelect`) is the first thing
 you see when you run `jackdaw` with no arguments. It shows:
 
 - Recent projects, with timestamp and last-opened scene.
-- A `+ New Project` button for the scaffolds.
-- A `+ New Extension` and `+ New Game` button if you want to
-  start an extension or game crate.
+- A **New Project** button: pick **Game** or **Extension**,
+  instantiated from a template embedded in the editor.
+- An **Import** action for opening an existing Bevy project;
+  see [Migrating an Existing Project](../getting-started/migrating-an-existing-project.md).
 
 Recent projects with missing folders are filtered out (we
 fixed this in #222). Click a project to open it; the editor
@@ -39,7 +41,7 @@ default scene.
 
 `.jsn/project.jsn` carries a `default_scene` field. When set,
 the editor opens that scene automatically when you load the
-project. If unset, the launcher tries `assets/scene.jsn` as
+project. If unset, the launcher tries `assets/scene.bsn` as
 the convention; if that's missing too, you start in an empty
 viewport and `Ctrl+O` from there.
 
@@ -49,7 +51,7 @@ edits show up without a restart.
 
 ## Multi-scene projects
 
-Nothing stops you from putting many `.jsn` files in
+Nothing stops you from putting many `.bsn` files in
 `assets/scenes/`. The editor doesn't currently have a "scene
 list" panel, so you switch between them via `File > Open`.
 
@@ -61,10 +63,10 @@ for what scene-as-asset would look like.
 ## Project files outside `assets/`
 
 The editor only watches `assets/`. Code lives next to it
-(`src/`, `bin/`), and Bevy's runtime asset path points at
-`assets/`. If you put a `.jsn` somewhere else, jackdaw can
-load it with `File > Open`, but the standalone binary won't
-find it via Bevy's asset server.
+(`src/`), and Bevy's runtime asset path points at `assets/`.
+If you put a scene file somewhere else, jackdaw can load it
+with `File > Open`, but the standalone binary won't find it
+via Bevy's asset server.
 
 ## Common gotchas
 
@@ -74,5 +76,5 @@ find it via Bevy's asset server.
 - **`File > Save` greys out.** No scene is open. Either
   `File > New Scene` or open one from the launcher.
 - **Saved file has a weird path.** First save from a "New
-  Scene" defaults to the project's `assets/scene.jsn`. If
+  Scene" defaults to the project's `assets/scene.bsn`. If
   you want a different path, use `File > Save As`.

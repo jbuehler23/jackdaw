@@ -5,18 +5,21 @@ with one cube in it. Five minutes, give or take.
 
 ## Pick a starting point
 
-The launcher has two starting paths:
+Two starting paths:
 
-- **+ New Project** with the `game-static` template. You get
-  a `lib.rs` with a `MyGamePlugin`, a `bin/editor.rs` that
-  hosts the editor, and a `main.rs` that runs the standalone
-  game. Pick this if you want to ship a real binary later.
-- **+ New Scene** inside an already-open project. Use this
-  if you just want to author a `.jsn` next to ones you have.
+- **New Project > Game** on the launcher (or `jackdaw new
+  my-game` from the terminal). You get a normal Bevy crate: a
+  `lib.rs` with a `GamePlugin`, a `main.rs` that runs the
+  standalone game, a starter scene, and a `jackdaw.toml`. Pick
+  this if you want to ship a real binary later.
+- **New Scene** inside an already-open project. Use this if you
+  just want to author a scene next to ones you have.
 
-If you used the static template, the launcher offers to build
-the editor binary on first open. Say yes; subsequent opens are
-fast incremental rebuilds.
+A new project opens immediately. The editor builds the project's
+library in the background (into the gitignored `.jackdaw/`
+directory); your own components show up in the inspector once
+that build finishes. Placing brushes and saving scenes works
+right away.
 
 ## Place a cube
 
@@ -39,24 +42,23 @@ do that.
 ## Save the scene
 
 `File > Save` (or `Ctrl+S`). The first save asks where to put
-the file; pick `assets/scene.jsn` to match what the static
-template's standalone binary expects.
+the file; pick `assets/scene.bsn` to match what the template's
+standalone binary expects.
 
-Open that `.jsn` in your text editor if you want to peek. It
-is plain JSON-ish text, with one entry per entity and reflect
-component data inline. The format is documented in
-[JSN Format](../developer-guide/jsn-format.md).
+Open that `.bsn` in your text editor if you want to peek. It
+is plain text, with one entry per entity and reflected
+component data inline.
 
 ## See it run outside the editor
 
-If you scaffolded with `game-static`:
+From the project folder:
 
 ```sh
 cargo run
 ```
 
 This launches the standalone binary. It loads
-`assets/scene.jsn` from disk and runs your `MyGamePlugin`. No
+`assets/scene.bsn` from disk and runs your `GamePlugin`. No
 editor in the loop. The cube sits where you placed it, and
 any components you attached in the inspector are alive on
 the entity.

@@ -7,14 +7,13 @@
 Jackdaw is a 3D level editor built with
 [Bevy](https://bevyengine.org/). It does brush-based geometry,
 material and texture management, heightmap terrain, and a
-human-readable scene format (`.jsn`). The editor is itself a
+human-readable scene format (`.bsn`). The editor is itself a
 Bevy plugin, so you can drop it into a project alongside your
 own gameplay code without a separate runtime.
 
-We are pre-1.0. Things change. Some pieces are in active
-flux (PIE, plugin / dylib loading, the BSN migration), and
-this book tries to call out what is solid versus what is in
-flight.
+We are pre-1.0. Things change. Some pieces are still in
+active flux, and this book tries to call out what is solid
+versus what is in flight.
 
 ## What you can do today
 
@@ -41,7 +40,7 @@ Two audiences:
 If you are coming from Hammer, TrenchBroom, or Unreal's
 brush workflow, the brush model will feel familiar. If you
 are coming from Unity or Godot, the closest analogue is the
-scene editor; jackdaw's `.jsn` files play the role of
+scene editor; jackdaw's `.bsn` files play the role of
 `.unity` / `.tscn` scenes.
 
 ## What this book covers
@@ -52,7 +51,7 @@ scene editor; jackdaw's `.jsn` files play the role of
 - **Developer Guide**: how the editor is put together, how
   to write custom components, how to extend the editor with
   your own operators and windows.
-- **Reference**: feature flags, configuration, file paths.
+- **Reference**: configuration, file paths.
 - [Open Challenges](developer-guide/open-challenges.md)
   lists what we have not built yet but want to. If you came
   here looking for something to hack on, start there.

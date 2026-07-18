@@ -6,8 +6,8 @@
 //!
 //! ## Scope
 //!
-//! These tests cover the **loader's job**: dlopen, ABI version
-//! check, catalog registration, library-handle retention, error
+//! These tests cover the **loader's job**: dlopen, ctor symbol
+//! lookup, catalog registration, library-handle retention, error
 //! paths. They do **not** cover invoking operators or querying
 //! components from the loaded extension: without the `dylib` feature
 //! and the `jackdaw_sdk` proxy dylib, host and cdylib get separate
@@ -16,11 +16,14 @@
 //! coverage belongs in a follow-up test harness built with
 //! `--features dylib` that wires the proxy SDK.
 
-use std::{mem::ManuallyDrop, path::PathBuf};
+use std::{
+    mem::ManuallyDrop,
+    path::{Path, PathBuf},
+};
 
 use bevy::prelude::*;
 use jackdaw_api_internal::lifecycle::ExtensionCatalog;
-use jackdaw_loader::{LoadError, LoadedDylibs, LoadedKind, load_from_path, peek_kind};
+use jackdaw_loader::{LoadError, LoadedDylibs, load_from_path};
 
 mod util;
 
@@ -29,40 +32,41 @@ mod util;
 ///
 /// `test_fixture_extension` is a `dev-dependency` of the root
 /// `jackdaw` crate (see `Cargo.toml`), so cargo compiles its cdylib
-/// before any test binary runs. Cargo drops the `.so` in
-/// `target/<profile>/deps/` and (when a top-level build is what
-/// drove the compile) also copies it to `target/<profile>/`. CI's
-/// nextest-only invocation skips the top-level copy, so we check
-/// the `deps/` location first.
+/// before any test binary runs. This test binary and the fixture
+/// land in the same `deps/` directory (including under an explicit
+/// `--target <triple>`), so resolving relative to `current_exe`
+/// always picks the fixture from this compilation session rather
+/// than a stale copy under another target dir. `target/<profile>/`
+/// is a fallback for harnesses that copied the artifact top-level.
 fn fixture_path() -> PathBuf {
-    let target_root = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
-    let profile_dir = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
     let filename = format!(
         "{}test_fixture_extension{}",
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX,
     );
-    let profile_root = target_root.join(profile_dir);
-    let candidates = [
-        profile_root.join("deps").join(&filename),
-        profile_root.join(&filename),
-    ];
+    let exe_deps_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let mut candidates = Vec::new();
+    if let Some(deps) = &exe_deps_dir {
+        candidates.push(deps.join(&filename));
+        if let Some(profile_root) = deps.parent() {
+            candidates.push(profile_root.join(&filename));
+        }
+    }
     for candidate in &candidates {
         if candidate.exists() {
             return candidate.clone();
         }
     }
     panic!(
-        "fixture artifact missing. Checked {} and {}. If running a trimmed \
-         test harness, `cargo build -p test_fixture_extension --lib` first.",
-        candidates[0].display(),
-        candidates[1].display(),
+        "fixture artifact missing. Checked: {}. If running a trimmed test \
+         harness, `cargo build -p test_fixture_extension --lib` first.",
+        candidates
+            .iter()
+            .map(|c| c.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
     );
 }
 
@@ -91,16 +95,6 @@ impl Drop for LeakyApp {
 }
 
 #[test]
-fn peek_kind_classifies_extension() {
-    let path = fixture_path();
-    let kind = peek_kind(&path).expect("peek_kind should succeed on a valid fixture");
-    match kind {
-        LoadedKind::Extension(name) => assert_eq!(name, "test_fixture"),
-        other => panic!("expected Extension, got {other:?}"),
-    }
-}
-
-#[test]
 fn load_from_path_registers_extension() {
     let path = fixture_path();
     let mut app = headless_app_with_empty_dylib_loader();
@@ -109,8 +103,8 @@ fn load_from_path_registers_extension() {
 
     assert_eq!(app.world().resource::<LoadedDylibs>().len(), 0);
 
-    let kind = load_from_path(app.world_mut(), &path).expect("load should succeed");
-    assert!(matches!(kind, LoadedKind::Extension(ref n) if n == "test_fixture"));
+    let id = load_from_path(app.world_mut(), &path).expect("load should succeed");
+    assert_eq!(id, "test_fixture");
 
     let catalog = app.world().resource::<ExtensionCatalog>();
     assert!(

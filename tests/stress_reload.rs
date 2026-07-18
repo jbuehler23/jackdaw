@@ -1,0 +1,126 @@
+//! Stress test: measure the resident-memory cost of reloading a
+//! project dylib repeatedly (the edit-mode live-reload leak).
+//!
+//! A loaded dylib is never unloaded, so each reload leaves its mapped
+//! pages resident. This builds one representative project dylib
+//! (bevy + avian, like a real game), then dlopens fresh copies in a
+//! loop and reports the RSS growth per load, so we know whether
+//! auto-reload-per-save is viable and how aggressively reloads must
+//! be bounded.
+//!
+//! ```text
+//! cargo test --features dylib --target <host-triple> \
+//!     --test stress_reload -- --nocapture
+//! ```
+#![cfg(feature = "dylib")]
+
+use std::path::PathBuf;
+
+use bevy::reflect::TypeRegistry;
+use jackdaw::project_build::plan::{SdkManifest, write_plan};
+use jackdaw::project_build::shim::ShimSpec;
+use jackdaw::sdk_paths::SdkPaths;
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Current resident set size in MB, from `/proc/self/status`.
+fn rss_mb() -> f64 {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            let kb: f64 = rest
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0);
+            return kb / 1024.0;
+        }
+    }
+    0.0
+}
+
+#[test]
+fn measure_reload_memory_growth() {
+    let sdk = SdkPaths::for_workspace(&workspace_root());
+    let triple = sdk.triple.clone();
+    assert!(sdk.dylib_exists(), "SDK dylib missing; build --features dylib --target {triple}");
+
+    // Build the representative project dylib through the production
+    // pipeline (bevy + avian).
+    let spike_dir = workspace_root().join(".scratch/project-onboarding/spike2/spike_game2");
+    std::fs::copy(&sdk.lockfile, spike_dir.join("Cargo.lock")).expect("seed lock");
+    let manifest = SdkManifest::generate_dev(&workspace_root(), &sdk).expect("manifest");
+    let map_path = spike_dir.join("extern_map.txt");
+    write_plan(&spike_dir, &manifest, &map_path).expect("plan");
+
+    let spike_target = spike_dir.join("target-spike");
+    let _ = std::fs::remove_dir_all(&spike_target);
+    let status = std::process::Command::new("cargo")
+        .args(["rustc", "--crate-type", "dylib", "--target", &triple])
+        .current_dir(&spike_dir)
+        .env("CARGO_INCREMENTAL", "0")
+        .env("CARGO_TARGET_DIR", &spike_target)
+        .env("RUSTC_WRAPPER", &sdk.wrapper)
+        .env("JACKDAW_SDK_DYLIB", &sdk.dylib)
+        .env("JACKDAW_SDK_DEPS", &sdk.deps)
+        .env("JACKDAW_SDK_HOST_DEPS", &sdk.host_deps)
+        .env("JACKDAW_SDK_EXTERN_MAP", &map_path)
+        .status()
+        .expect("spawn cargo");
+    assert!(status.success(), "build failed");
+    let dylib = spike_target.join(format!(
+        "{triple}/debug/{}spike_game2{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    ));
+    assert!(dylib.exists(), "dylib missing");
+
+    let size_mb = std::fs::metadata(&dylib).unwrap().len() as f64 / 1024.0 / 1024.0;
+    let _ = ShimSpec {
+        package_name: "spike_game2".into(),
+        crate_name: "spike_game2".into(),
+        project_root: spike_dir.clone(),
+        game_plugin: None,
+        extension_type: None,
+    };
+
+    const RELOADS: usize = 20;
+    let load_dir = std::env::temp_dir().join("jackdaw-stress-reload");
+    let _ = std::fs::remove_dir_all(&load_dir);
+    std::fs::create_dir_all(&load_dir).unwrap();
+
+    let baseline = rss_mb();
+    println!("\nshim dylib on disk: {size_mb:.1} MB");
+    println!("baseline RSS: {baseline:.1} MB");
+    println!("simulating {RELOADS} edit-mode reloads (dlopen + drain, never unload):\n");
+
+    let mut last = baseline;
+    for i in 0..RELOADS {
+        let copy = load_dir.join(format!("shim-{i}{}", std::env::consts::DLL_SUFFIX));
+        std::fs::copy(&dylib, &copy).unwrap();
+        let lib = unsafe { libloading::Library::new(&copy) }.expect("dlopen");
+        std::mem::forget(lib);
+        let mut reg = TypeRegistry::default();
+        reg.register_derived_types();
+        let now = rss_mb();
+        println!(
+            "  reload {:>2}: RSS {:>7.1} MB  (+{:.1} MB this load)",
+            i + 1,
+            now,
+            now - last
+        );
+        last = now;
+    }
+
+    let total = last - baseline;
+    let per = total / RELOADS as f64;
+    println!(
+        "\ntotal RSS growth over {RELOADS} reloads: {total:.1} MB  ({per:.1} MB per reload)"
+    );
+    println!(
+        "at {per:.1} MB/reload, a session hits 2 GB of leaked dylibs after ~{} reloads",
+        (2048.0 / per.max(0.1)) as u64
+    );
+}

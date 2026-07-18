@@ -62,12 +62,21 @@ cargo install --git https://github.com/jbuehler23/jackdaw
 
 The launcher will open. From there:
 
-1. Click `+ New Game`.
-2. Pick a name and a folder. The default template is
-   `Game (static)`, which is the recommended path.
-3. The launcher scaffolds the project, builds a per-project
-   editor binary, and opens it. The first build pulls all of
-   bevy and takes a few minutes. Subsequent opens are fast.
+1. Click **New Project** and pick **Game** (or **Extension** for
+   an editor extension).
+2. Pick a name and a folder.
+3. The launcher instantiates the project from a template embedded
+   in the editor (no network involved) and opens it. The editor
+   starts building the project's library in the background; your
+   project's components appear in the inspector and pickers when
+   that build finishes.
+
+The same scaffold is available from the terminal as
+`jackdaw new <name>` (add `--extension` for an extension).
+
+The result is a normal Bevy crate. Jackdaw keeps its own build
+artifacts in a gitignored `.jackdaw/` directory and never touches
+your `Cargo.toml`, `Cargo.lock`, or toolchain.
 
 ## Sanity check
 
@@ -75,7 +84,7 @@ Once the editor is open:
 
 1. Right-click in the outliner. `Add > Cube`. A brush appears
    in the viewport.
-2. `File > Save`. A file shows up at `assets/scene.jsn`.
+2. `File > Save`. A file shows up at `assets/scene.bsn`.
 3. `cargo run` from the project folder. The standalone binary
    loads the same scene, no editor.
 

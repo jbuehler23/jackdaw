@@ -1,107 +1,111 @@
 # Extending the editor
 
 Jackdaw extensions are plain Rust crates that you write using
-bevy-native APIs. Scaffolding, building, and installing are all
-driven from inside the editor. No custom build scripts, no cargo
-gymnastics, no hash-matching games.
-
-## Prerequisite: install Bevy CLI
-
-Templates are distributed via [Bevy CLI](https://github.com/TheBevyFlock/bevy_cli),
-so install that once:
-
-```sh
-cargo install --locked --git https://github.com/TheBevyFlock/bevy_cli bevy_cli
-```
-
-Jackdaw shells out to `bevy new` when you create a new project, so
-this needs to be on your `PATH`.
+bevy-native APIs. An extension is a normal Bevy library that also
+depends on `jackdaw_api` and implements the `JackdawExtension`
+trait. No export macro, no custom build scripts, no cargo
+gymnastics.
 
 ## Author workflow
 
-### 1. Launch the editor
+### 1. Create an extension
 
-```sh
-cargo run --features dylib
-```
-
-The launcher (project picker) opens. On first run, the Recent
-Projects list is empty.
-
-### 2. Create an extension
-
-Click **+ New Extension** on the launcher. Fill in:
+Click **New Project** on the launcher and pick **Extension** (or
+run `jackdaw new my_tool --extension`). Fill in:
 
 - **Name**: the crate name for your extension (e.g. `my_tool`).
 - **Location**: parent directory the project will be created
   under. The `Browse` button opens a folder picker.
 
-Click **Create**. Jackdaw invokes
-`bevy new -t https://github.com/jbuehler23/jackdaw_template_extension --yes <name>`
-in the chosen location, then opens the newly-scaffolded project.
-
-### 3. Edit and build
-
-Edit `my_tool/src/lib.rs` in your preferred editor. Then, inside
-jackdaw: **File > Extensions > Build from project folder**, and
-pick `my_tool/`. Jackdaw runs `cargo rustc` with the right
-`--extern` flags and live-loads the resulting dylib. Windows,
-operators, and menu entries activate immediately.
-
-Iterate: edit code, click **Build from project folder** again,
-see the changes.
-
-### Creating a game
-
-Click **+ New Game** on the launcher instead. Same scaffold flow
-with the
-[`jackdaw_template_game`](https://github.com/jbuehler23/jackdaw_template_game)
-template. Until Play-in-Editor (PIE) lands, games load as
-extensions so you can start prototyping against the editor.
-
-## How it works
-
-Jackdaw ships a tiny proxy crate (`jackdaw_sdk`) whose dylib
-carries the one compiled copy of bevy + jackdaw types that both
-the editor and every extension link against. When jackdaw builds
-an extension it invokes `cargo rustc` with explicit
-`--extern bevy=libjackdaw_sdk.so` and
-`--extern jackdaw_api=libjackdaw_sdk.so` flags. Your extension's
-code writes plain `use bevy::prelude::*;` and
-`use jackdaw_api::prelude::*;`, and those names resolve at compile
-time through the SDK.
-
-Scaffolded projects therefore have an *empty* `[dependencies]`
-table:
+The template is embedded in the editor, so scaffolding is offline
+and instant. The result is an ordinary crate:
 
 ```toml
 [package]
 name = "my_tool"
 edition = "2024"
 
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]  # intentionally empty
+[dependencies]
+bevy = "0.19"
+jackdaw_api = "0.5"
 ```
+
+`src/lib.rs` implements the trait:
+
+```rust
+use bevy::prelude::*;
+use jackdaw_api::prelude::*;
+
+#[derive(Default)]
+pub struct MyTool;
+
+impl JackdawExtension for MyTool {
+    fn id(&self) -> String {
+        "my_tool".to_string()
+    }
+
+    fn label(&self) -> String {
+        "My Tool".to_string()
+    }
+
+    fn description(&self) -> String {
+        "What this extension adds to the editor.".to_string()
+    }
+
+    fn register(&self, ctx: &mut ExtensionContext) {
+        // operators, menu entries, panels, windows, keybinds
+    }
+}
+```
+
+### 2. Open it in jackdaw
+
+Open the extension project from the launcher like any other
+project. The editor builds it in the background (into the
+project's gitignored `.jackdaw/` directory, against the editor's
+SDK) and loads it into the running editor. Windows, operators,
+and menu entries activate as soon as the build finishes.
+
+Iterate: edit `src/lib.rs` in your preferred editor, rebuild from
+jackdaw, see the changes. Your own `cargo check` and `cargo build`
+in the project folder work standalone against plain crates.io
+Bevy; the editor's build is separate and never touches your
+manifest.
+
+## How it works
+
+Jackdaw ships an SDK: a proxy dylib carrying the one compiled
+copy of bevy + jackdaw types that the editor and everything it
+loads share. When the editor builds a project or extension, it
+generates a shim crate into `.jackdaw/` and compiles your library
+against that SDK, so `use bevy::prelude::*;` and
+`use jackdaw_api::prelude::*;` in your code resolve to the
+editor's own types. One shared ABI, no hash-matching games, and
+nothing jackdaw-specific in your `Cargo.toml`.
 
 ### BEI keybind caveat
 
-Live-load activates windows, menu entries, operators, and panel
-sections immediately. BEI input contexts are the exception:
-`add_input_context::<C>()` needs `&mut App`, which only exists at
-startup. Keybinds declared via BEI don't bind until the editor
-restarts. Extensions that don't use BEI keybinds don't need a
-restart.
+Loading an extension activates windows, menu entries, operators,
+and panel sections immediately. BEI input contexts are the
+exception: `add_input_context::<C>()` needs `&mut App`, which only
+exists at startup. Keybinds declared via BEI don't bind until the
+editor restarts. Extensions that don't use BEI keybinds don't need
+a restart.
+
+### Crash quarantine
+
+If the editor crashed while an extension was loading, the next
+start refuses to load that extension and surfaces an "Extension X
+crashed" notice. You can re-enable it from the Extensions dialog.
 
 ## Escape hatches
 
 ### Install a prebuilt dylib
 
 If you already have a compatible `.so` / `.dylib` / `.dll`
-(a teammate's build, a CI artefact), use **File > Extensions >
-Install prebuilt dylib** and pick the file. The editor copies it
-into the extension directory and live-loads.
+(a teammate's build, a CI artefact), install it through the
+editor's Extensions dialog. The editor copies it into the
+extension directory and loads it.
 
 ### Statically link an extension
 
@@ -114,7 +118,8 @@ fn main() {
     App::new()
         .add_plugins(
             jackdaw::EditorPlugins::default()
-                .set(ExtensionPlugin::new().with_extension::<MyExtension>())
+                .with_extension("my_tool", || Box::new(MyTool))
+                .build(),
         )
         .run();
 }
@@ -126,17 +131,14 @@ editor.
 
 ## Troubleshooting
 
-- *bevy CLI not found*: install it (`cargo install --locked
-  --git https://github.com/TheBevyFlock/bevy_cli bevy_cli`) and
-  make sure `bevy` is on your `PATH`.
-- *SDK dylib not found*: rebuild the editor with
-  `cargo run --features dylib`. Without that feature, jackdaw
-  doesn't produce `libjackdaw_sdk.so`.
-- *cargo exited with non-zero status* during Build: your
-  extension has a compile error. The status line shows cargo's
-  stderr.
-- *picked path has no Cargo.toml*: point at the project root,
-  not the `src/` directory.
+- *Build failed* after opening the project: your extension has a
+  compile error. The status line shows the compiler output.
+- *Extension doesn't load*: check the Extensions dialog for its
+  state; a crash on a previous start quarantines it until you
+  re-enable.
+- *Bevy version mismatch on import*: each editor release supports
+  one Bevy minor (currently 0.19); the error tells you which
+  version the project declares.
 
 ## In-tree examples
 
@@ -151,4 +153,4 @@ build against:
 
 They build like any other workspace crate. They're there to
 exercise the API surface; day-to-day authoring should use the
-`+ New Extension` / `+ New Game` workflow described above.
+scaffold-and-open workflow described above.
