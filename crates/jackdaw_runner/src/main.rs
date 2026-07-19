@@ -1,32 +1,28 @@
-//! The game runner: a prebuilt binary that turns a project dylib into a
-//! running game with zero play-time compilation, and the editor's
-//! out-of-process schema extractor.
+//! The game runner: a bevy-free thin launcher.
+//!
+//! It `dlopen`s a project dylib and drives it entirely over FFI. Both Play
+//! and schema extraction run *inside* the dylib (which shares the SDK's
+//! bevy through `libjackdaw_sdk`), so this binary links no bevy at all.
+//! That is what lets it link on every platform, including Windows, where a
+//! secondary binary cannot resolve a dylib's private bevy statics.
 //!
 //! Two modes:
 //!
-//! * `jackdaw-runner <project-dylib>` assembles the engine app,
-//!   dlopens the dylib, and hands the app to the shim's
-//!   `jackdaw_runner_entry` so the game's plugin installs itself.
-//!   Assets resolve relative to the working directory the launcher
-//!   set. This is Play.
-//!
-//! * `jackdaw-runner --extract-schema <project-dylib>` dlopens the
-//!   dylib, drains its reflected types, prints the project schema (see
-//!   [`jackdaw_project_build::schema`]) as JSON to stdout, and exits.
-//!   The editor runs this per build so it learns the project's
-//!   component types WITHOUT mapping project code into its own process
-//!   (a loaded dylib can never be unmapped, so an in-editor load would
-//!   leak on every refresh). This process's mapping dies when it exits.
+//! * `jackdaw-runner <project-dylib>` - Play: call the dylib's
+//!   `jackdaw_run_game`, which builds and runs the engine app.
+//! * `jackdaw-runner --extract-schema <project-dylib>` - call the dylib's
+//!   `jackdaw_extract_schema`, print the schema JSON, and exit.
 //!
 //! The dylib is never unloaded: unloading live Rust code is undefined
 //! behavior, and the process exits to reclaim it.
-//!
-//! Kept out of the editor package so it links only the bevy-light build
-//! pipeline plus the headless runtime, not the whole editor. That keeps
-//! it a small, standalone artifact the SDK bootstrap can build on its
-//! own.
 
-use bevy::prelude::*;
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "the runner prints the extracted schema JSON to stdout as its output"
+)]
+
+use std::os::raw::c_char;
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -45,51 +41,32 @@ fn main() {
     run_game(&first);
 }
 
-/// Dlopen the dylib, drain its reflected types, and print the project
-/// schema as JSON. No engine, no window: just reflection.
+/// Dlopen the dylib and print the schema its `jackdaw_extract_schema`
+/// export produces. The reflection runs inside the dylib; this process
+/// exits immediately after printing, so teardown reclaims the string.
 fn extract_schema(dylib: &str) {
     let lib = unsafe { libloading::Library::new(dylib) }
         .unwrap_or_else(|err| panic!("failed to load {dylib}: {err}"));
-    // dlopen ran the dylib's constructors, submitting its
-    // `#[derive(Reflect)]` types into the shared auto-register
-    // inventory. Draining picks them up alongside bevy's own; the
-    // editor filters to the types it does not already know.
-    let mut registry = bevy::reflect::TypeRegistry::default();
-    registry.register_derived_types();
-    std::mem::forget(lib);
-
-    let schema = jackdaw_project_build::schema::extract_from_registry(&registry);
-    match serde_json::to_string(&schema) {
-        Ok(json) => println!("{json}"),
-        Err(err) => {
-            eprintln!("schema serialization failed: {err}");
-            std::process::exit(1);
-        }
+    let extract: libloading::Symbol<extern "C" fn() -> *mut c_char> =
+        unsafe { lib.get(b"jackdaw_extract_schema") }
+            .unwrap_or_else(|err| panic!("no jackdaw_extract_schema in {dylib}: {err}"));
+    let ptr = extract();
+    if ptr.is_null() {
+        eprintln!("schema extraction failed");
+        std::process::exit(1);
     }
+    let json = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_string_lossy();
+    println!("{json}");
+    std::mem::forget(lib);
 }
 
-/// Assemble the engine, load the project's plugin, and run.
+/// Dlopen the dylib and call its `jackdaw_run_game` export, which builds
+/// and runs the engine app inside the dylib. Blocks until the app exits.
 fn run_game(dylib: &str) {
-    let mut app = App::new();
-    app.add_plugins(jackdaw_runtime::maybe_windowless(DefaultPlugins));
-    app.add_plugins(jackdaw_runtime::JackdawPlugin);
-    // Spike-only camera so the frame stream has something to render;
-    // real projects spawn their own cameras and this system goes away
-    // once scene documents ride along.
-    app.add_systems(Startup, spawn_probe_camera);
-
     let lib = unsafe { libloading::Library::new(dylib) }
         .unwrap_or_else(|err| panic!("failed to load {dylib}: {err}"));
-    {
-        let entry: libloading::Symbol<fn(&mut App)> = unsafe { lib.get(b"jackdaw_runner_entry") }
-            .unwrap_or_else(|err| panic!("no jackdaw_runner_entry in {dylib}: {err}"));
-        entry(&mut app);
-    }
+    let run: libloading::Symbol<extern "C" fn()> = unsafe { lib.get(b"jackdaw_run_game") }
+        .unwrap_or_else(|err| panic!("no jackdaw_run_game in {dylib}: {err}"));
+    run();
     std::mem::forget(lib);
-
-    app.run();
-}
-
-fn spawn_probe_camera(mut commands: Commands) {
-    commands.spawn(Camera3d::default());
 }

@@ -74,6 +74,12 @@ jobs:
       - name: Extension loading
         run: cargo test -j 4 --features dylib --target "$TRIPLE" --test dylib_loading -- --nocapture
 
+      - name: Scaffold end-to-end (scaffold -> build -> schema)
+        # The user's first-run loop headlessly: scaffold a game, build its
+        # dylib against the SDK, and confirm the template component reaches
+        # the schema. No GPU needed, so it runs on all three platforms.
+        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test scaffold_e2e -- --nocapture
+
       - name: Spike 4 - game runner over PIE IPC
         # Headless runners have no GPU on every platform; the runner
         # spike needs a working wgpu adapter for the Frames lane, so it

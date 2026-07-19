@@ -1,27 +1,28 @@
 [package]
 name = "jackdaw_api"
-version = "0.5.0"
+version.workspace = true
 edition = "2024"
 description = "Public API for Jackdaw editor extensions"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [features]
-# Link jackdaw's shared types as a single dynamic library so the
-# editor and every loaded extension agree on `TypeId` for types
-# they both touch. Required for `export_extension!`-style dylib
-# loading.
+# The bevy feature set the editor, the SDK, and every project/extension
+# share so they agree on `TypeId` for the types they both touch.
 #
-# The bevy feature list below must mirror what the jackdaw
-# workspace activates for its own bevy dependency. Feature
-# unification means cargo computes a different
-# `libbevy_dylib-<hash>.so` filename when feature sets differ, so
-# an extension building outside the workspace has to end up with
-# the same union of bevy features for its linked dylib to match
-# the editor's.
+# NOTE: despite the name, this no longer enables `bevy/dynamic_linking` or
+# the `jackdaw_dylib` proxy. jackdaw links bevy STATICALLY now: the rmeta
+# trick redirects every consumer to the SAME prebuilt bevy rlibs, so one
+# compilation is embedded rather than shared through a dll. That is the
+# only model that links on Windows (a dll cannot export bevy's reflect
+# statics). The name is kept because extension authors still write
+# `features = ["dynamic_linking"]`.
+#
+# The bevy feature list must mirror what the jackdaw workspace activates
+# for its own bevy dependency: feature unification means a different set
+# produces a different bevy SVH, and the redirect only fires when the
+# consumer's bevy is byte-identical to the SDK's.
 dynamic_linking = [
-    "dep:jackdaw_dylib",
-    "bevy/dynamic_linking",
     "bevy/bevy_feathers",
     "bevy/serialize",
     "bevy/debug",
@@ -35,12 +36,20 @@ bevy_enhanced_input.workspace = true
 jackdaw_api_internal.workspace = true
 jackdaw_api_macros.workspace = true
 jackdaw_commands.workspace = true
-jackdaw_dylib = { workspace = true, optional = true }
 jackdaw_feathers.workspace = true
 jackdaw_jsn.workspace = true
 jackdaw_scene_types.workspace = true
 jackdaw_panels.workspace = true
 jackdaw_widgets.workspace = true
+# Schema extraction and the Play app-runner live here so they compile into
+# the SDK dylib: the generated project shim calls them through the injected
+# `jackdaw_api`, keeping bevy (its reflect generics, the engine app) inside
+# the dll and project dylib rather than in the runner binary. A secondary
+# binary cannot resolve those symbols when linked on Windows, so the runner
+# must stay bevy-free and drive everything over FFI.
+jackdaw_project_build = { workspace = true, features = ["reflect"] }
+jackdaw_runtime = { workspace = true, features = ["pie"] }
+serde_json.workspace = true
 
 [lints]
 workspace = true

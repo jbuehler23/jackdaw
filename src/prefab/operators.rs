@@ -203,6 +203,47 @@ fn synthetic_root_patches(display_name: &str) -> Vec<BsnPatch> {
     ]
 }
 
+/// Make a cached source document instanceable as a prefab. The resolver
+/// only materializes an `IsA` reference whose target has a single root
+/// carrying the `Prefab` marker, so a plain scene (no marker, possibly
+/// several roots) is wrapped into that shape here: a lone root is marked
+/// in place, multiple roots are reparented under a synthetic `Prefab` root,
+/// and every entity gets a sequential `PrefabEntityId`. A file that is
+/// already a prefab passes through untouched, so real prefab sources are
+/// unaffected. `display_name` names the synthetic root when one is made.
+pub(crate) fn normalize_as_prefab_source(ast: &mut SceneBsnAst, display_name: &str) {
+    let roots = ast.roots.clone();
+    if roots.is_empty()
+        || roots
+            .iter()
+            .any(|&root| ast.find_patch_by_type_path(root, PREFAB_TYPE).is_some())
+    {
+        return;
+    }
+
+    if roots.len() == 1 {
+        let root = roots[0];
+        set_whole_component(ast, root, PREFAB_TYPE, BsnValue::Type(PREFAB_TYPE.to_string()));
+        set_whole_component(ast, root, PREFAB_ENTITY_ID_TYPE, peid_value(0));
+        for (i, desc) in ast.descendants_of(root).into_iter().enumerate() {
+            set_whole_component(ast, desc, PREFAB_ENTITY_ID_TYPE, peid_value((i + 1) as u32));
+        }
+    } else {
+        let synth = ast.create_entity_node(synthetic_root_patches(display_name));
+        let mut next_id: u32 = 1;
+        for root in roots {
+            ast.move_to_parent(root, None, Some(synth));
+            set_whole_component(ast, root, PREFAB_ENTITY_ID_TYPE, peid_value(next_id));
+            next_id += 1;
+            for desc in ast.descendants_of(root) {
+                set_whole_component(ast, desc, PREFAB_ENTITY_ID_TYPE, peid_value(next_id));
+                next_id += 1;
+            }
+        }
+        ast.add_to_roots(synth);
+    }
+}
+
 /// Shift the `translation` field of a Transform `BsnValue` by `offset`. No-op
 /// when the value is not a Transform struct with a Vec3 translation.
 fn shift_bsn_translation(value: &mut BsnValue, offset: Vec3) {

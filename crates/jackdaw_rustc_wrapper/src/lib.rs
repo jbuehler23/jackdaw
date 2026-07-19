@@ -73,6 +73,15 @@ const ENV_SDK_HOST_DEPS: &str = "JACKDAW_SDK_HOST_DEPS";
 const ENV_PRIMARY_PACKAGE: &str = "CARGO_PRIMARY_PACKAGE";
 const ENV_LOG: &str = "JACKDAW_WRAPPER_LOG";
 const ENV_EXTERN_MAP: &str = "JACKDAW_SDK_EXTERN_MAP";
+// Static-SDK model: when set to "1", bevy and jackdaw_api are redirected
+// to their prebuilt rlibs and `-C prefer-dynamic` is not added, so the
+// project dylib embeds one shared bevy compilation (matching TypeIds via
+// the rmeta trick) rather than linking a `libjackdaw_sdk` dll. This is the
+// only model that links on Windows, where a dll cannot export bevy's
+// reflect statics.
+const ENV_STATIC: &str = "JACKDAW_SDK_STATIC";
+const ENV_SDK_BEVY_RLIB: &str = "JACKDAW_SDK_BEVY_RLIB";
+const ENV_SDK_API_RLIB: &str = "JACKDAW_SDK_API_RLIB";
 
 /// Crate aliases we redirect to `libjackdaw_sdk.so` whenever cargo
 /// emits an `--extern` flag for them. User code writes
@@ -147,10 +156,25 @@ pub fn run() -> ExitCode {
 /// coherence requires the SDK-preferred resolution to apply everywhere
 /// or nowhere.
 fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result<(), String> {
-    let dylib = env::var_os(ENV_SDK_DYLIB)
-        .ok_or_else(|| format!("{ENV_SDK_DYLIB} not set; cannot redirect --extern"))?;
     let deps = env::var_os(ENV_SDK_DEPS)
         .ok_or_else(|| format!("{ENV_SDK_DEPS} not set; cannot point -L at deps/"))?;
+    let static_mode = env::var_os(ENV_STATIC).is_some_and(|v| v == "1");
+    // Redirect targets for the bevy facade and the injected jackdaw_api. In
+    // the shared-dylib model both point at libjackdaw_sdk; in the static
+    // model each points at its own prebuilt rlib, so rustc embeds one
+    // shared bevy compilation instead of linking a dll.
+    let (bevy_target, api_target) = if static_mode {
+        (
+            env::var_os(ENV_SDK_BEVY_RLIB)
+                .ok_or_else(|| format!("{ENV_SDK_BEVY_RLIB} not set in static mode"))?,
+            env::var_os(ENV_SDK_API_RLIB)
+                .ok_or_else(|| format!("{ENV_SDK_API_RLIB} not set in static mode"))?,
+        )
+    } else {
+        let dylib = env::var_os(ENV_SDK_DYLIB)
+            .ok_or_else(|| format!("{ENV_SDK_DYLIB} not set; cannot redirect --extern"))?;
+        (dylib.clone(), dylib)
+    };
     let extern_map = load_extern_map();
 
     // Host-side units (no --target: build scripts, proc-macro crates
@@ -174,7 +198,9 @@ fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result
     let mut i = 0;
     while i < argv.len() {
         if argv[i] == "--extern" && i + 1 < argv.len() {
-            if let Some(new_value) = rewrite_extern(&argv[i + 1], &dylib, &extern_map, &consumer) {
+            if let Some(new_value) =
+                rewrite_extern(&argv[i + 1], &bevy_target, &extern_map, &consumer)
+            {
                 if log {
                     error!(
                         "jackdaw-rustc-wrapper: rewrite --extern {:?} -> {:?}",
@@ -195,14 +221,14 @@ fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result
         for alias in INJECTED_CRATES {
             let mut flag = OsString::from(alias);
             flag.push("=");
-            flag.push(&dylib);
+            flag.push(&api_target);
             argv.push(OsString::from("--extern"));
             argv.push(flag);
             if log {
                 error!(
                     "jackdaw-rustc-wrapper: injected --extern {}={}",
                     alias,
-                    dylib.to_string_lossy()
+                    api_target.to_string_lossy()
                 );
             }
         }
@@ -227,7 +253,10 @@ fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result
         argv.push(host_flag);
     }
 
-    if redirected || is_primary {
+    // `-C prefer-dynamic` links through the SDK dll. In the static model
+    // there is no dll: the redirected rlibs are embedded, so it is omitted
+    // (and would otherwise pull the toolchain's dynamic std/test crates).
+    if !static_mode && (redirected || is_primary) {
         argv.push(OsString::from("-C"));
         argv.push(OsString::from("prefer-dynamic"));
         if log {
@@ -260,14 +289,14 @@ fn load_extern_map() -> ExternMap {
         return map;
     };
     for line in contents.lines() {
-        if let Some((edge, artifact)) = line.split_once('=') {
-            if let Some((consumer, alias)) = edge.split_once(':') {
-                map.edges.push((
-                    consumer.to_string(),
-                    alias.to_string(),
-                    OsString::from(artifact),
-                ));
-            }
+        if let Some((edge, artifact)) = line.split_once('=')
+            && let Some((consumer, alias)) = edge.split_once(':')
+        {
+            map.edges.push((
+                consumer.to_string(),
+                alias.to_string(),
+                OsString::from(artifact),
+            ));
         }
     }
     map
@@ -288,12 +317,13 @@ impl ExternMap {
 }
 
 /// If `value` is `<alias>=<path>` with a redirect target, return the
-/// redirected form. The `bevy` facade goes to the SDK dylib; an edge
-/// listed in the plan for this consumer goes to its recorded artifact.
-/// Otherwise `None`, and the caller leaves the flag alone.
+/// redirected form. The `bevy` facade goes to `bevy_target` (the SDK dll
+/// in the shared model, the prebuilt bevy rlib in the static model); an
+/// edge listed in the plan for this consumer goes to its recorded
+/// artifact. Otherwise `None`, and the caller leaves the flag alone.
 fn rewrite_extern(
     value: &OsString,
-    sdk_dylib: &OsString,
+    bevy_target: &OsString,
     extern_map: &ExternMap,
     consumer: &str,
 ) -> Option<OsString> {
@@ -302,7 +332,7 @@ fn rewrite_extern(
     if REDIRECTED_CRATES.contains(&alias) {
         let mut out = OsString::from(alias);
         out.push("=");
-        out.push(sdk_dylib);
+        out.push(bevy_target);
         return Some(out);
     }
     let artifact = extern_map.edge_artifact(consumer, alias)?;

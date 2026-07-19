@@ -39,6 +39,13 @@ impl BsnAssetContext<'_> {
     }
 }
 
+/// Whether a reflect type path denotes a `bevy_asset` `Handle<T>`. Used to
+/// short-circuit handles whose asset type is not registered with
+/// `ReflectHandle`, so the reflect walk never descends into their `AssetId`.
+fn is_handle_type_path(type_path: &str) -> bool {
+    type_path.starts_with("bevy_asset::handle::Handle<")
+}
+
 impl BsnValue {
     /// Create a [`BsnValue`] from a reflected value and its type info.
     pub fn from_reflect(value: &dyn PartialReflect, type_registry: &TypeRegistry) -> Self {
@@ -132,6 +139,21 @@ impl BsnValue {
                 // empty string.
                 return BsnValue::String(String::new());
             }
+        }
+
+        // A `Handle<T>` whose asset type is not registered with
+        // `ReflectHandle` (no `register_asset_reflect`) misses the branch
+        // above, and the reflect walk would then descend into the handle
+        // enum's `AssetId`, whose `Uuid` / `Index` have no BSN form and only
+        // produce "no BSN representation" noise on every world->BSN sync.
+        // Recognise any handle by its type path and drop it to an empty
+        // string, the same graceful degradation the registered-but-
+        // unresolvable case above uses.
+        if value
+            .get_represented_type_info()
+            .is_some_and(|info| is_handle_type_path(info.type_path()))
+        {
+            return BsnValue::String(String::new());
         }
 
         // Option<Handle<T>> fields: emit the inner asset path (Some) or an

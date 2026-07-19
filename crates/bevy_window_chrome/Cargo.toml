@@ -1,6 +1,6 @@
 [package]
 name = "bevy_window_chrome"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Native-looking custom window chrome (borderless title bars, caption buttons, resize handles) for Bevy apps"
 repository = "https://github.com/jbuehler23/jackdaw"

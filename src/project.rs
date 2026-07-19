@@ -16,8 +16,12 @@ pub struct ProjectRoot {
 }
 
 impl ProjectRoot {
-    pub fn jsn_dir(&self) -> PathBuf {
-        self.root.join(".jsn")
+    /// The `.jackdaw/` directory: gitignored, regenerated build artifacts
+    /// (schema, plan, shim, target) plus local editor state
+    /// (`project.json`) and caches (`registry.json`). Committed project data
+    /// (the manifest, scenes, the asset catalog) lives outside it.
+    pub fn jackdaw_dir(&self) -> PathBuf {
+        self.root.join(".jackdaw")
     }
     pub fn assets_dir(&self) -> PathBuf {
         self.root.join("assets")
@@ -97,25 +101,38 @@ pub fn read_last_project() -> Option<PathBuf> {
 }
 
 pub fn save_project_config(root: &Path, project: &JsnProject) -> std::io::Result<()> {
-    let jsn_dir = root.join(".jsn");
-    std::fs::create_dir_all(&jsn_dir)?;
-    let path = jsn_dir.join("project.jsn");
+    let dir = root.join(".jackdaw");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("project.json");
     let data = serde_json::to_string_pretty(project)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     std::fs::write(&path, data)
 }
 
 pub fn load_project_config(root: &Path) -> Option<JsnProject> {
-    // Prefer .jsn/ directory, fall back to legacy root location
-    let new_path = root.join(".jsn/project.jsn");
-    let legacy_path = root.join("project.jsn");
-    let path = if new_path.is_file() {
-        new_path
-    } else {
-        legacy_path
-    };
-    let data = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&data).ok()
+    // Current location: local editor state under the gitignored `.jackdaw/`.
+    let new_path = root.join(".jackdaw").join("project.json");
+    if new_path.is_file() {
+        return std::fs::read_to_string(&new_path)
+            .ok()
+            .and_then(|data| serde_json::from_str(&data).ok());
+    }
+    // Legacy locations (newest first). Migrate on read so the next save
+    // writes to `.jackdaw/project.json` and the old file falls out of use.
+    for legacy in [root.join(".jsn").join("project.jsn"), root.join("project.jsn")] {
+        if legacy.is_file()
+            && let Ok(data) = std::fs::read_to_string(&legacy)
+            && let Ok(project) = serde_json::from_str::<JsnProject>(&data)
+        {
+            warn!(
+                "Migrating project config {} -> .jackdaw/project.json",
+                legacy.display()
+            );
+            let _ = save_project_config(root, &project);
+            return Some(project);
+        }
+    }
+    None
 }
 
 pub fn create_default_project(root: &Path) -> JsnProject {
@@ -135,10 +152,10 @@ pub fn create_default_project(root: &Path) -> JsnProject {
         },
     };
 
-    // Write to .jsn/ directory
-    let jsn_dir = root.join(".jsn");
-    let _ = std::fs::create_dir_all(&jsn_dir);
-    let path = jsn_dir.join("project.jsn");
+    // Write local editor state under the gitignored `.jackdaw/`.
+    let dir = root.join(".jackdaw");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("project.json");
     if let Ok(data) = serde_json::to_string_pretty(&project) {
         let _ = std::fs::write(&path, data);
     }

@@ -44,7 +44,12 @@ fn main() {
     println!("cargo:rustc-env=RECIPE_HASH={hash}");
 
     if assembled && let Some(ws) = workspace {
-        println!("cargo:rerun-if-changed={}", ws.join("crates").display());
+        // Deep-watch every recipe source. `rerun-if-changed` on a
+        // directory tracks only that directory entry, not nested file
+        // contents, so an edit inside a crate would leave the embedded
+        // recipe (and its hash) stale until a clean build. Emit one line
+        // per file so any source change re-runs assembly and re-hashes.
+        emit_rerun_for_tree(&ws.join("crates"));
         println!("cargo:rerun-if-changed={}", ws.join("Cargo.toml").display());
         println!("cargo:rerun-if-changed={}", ws.join("Cargo.lock").display());
     }
@@ -81,6 +86,28 @@ fn assemble_recipe(ws: &Path, recipe: &Path) -> bool {
     true
 }
 
+/// Emit `cargo:rerun-if-changed` for every file under `dir`, recursively,
+/// skipping build output and VCS metadata, so a change to any recipe
+/// source re-runs the build script and refreshes the embedded hash.
+fn emit_rerun_for_tree(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name == "target" || name == ".git" {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            emit_rerun_for_tree(&path);
+        } else {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+}
+
 /// Copy a directory tree, skipping build output and VCS metadata.
 fn copy_dir_filtered(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).unwrap();
@@ -115,6 +142,15 @@ fn generate_root_manifest(ws: &Path) -> Option<String> {
     workspace.insert(
         "members".to_string(),
         toml::Value::Array(vec![toml::Value::String("crates/*".to_string())]),
+    );
+    // A virtual workspace has no root package edition to imply a resolver,
+    // so it would default to resolver 1 and unify features differently than
+    // the editor (edition 2024 => resolver 3). Pin it to match, or the SDK
+    // dylib is built with a different feature set and every build that
+    // touches a different package subset re-resolves and re-links.
+    workspace.insert(
+        "resolver".to_string(),
+        toml::Value::String("3".to_string()),
     );
     // These reference paths outside the embedded crates.
     workspace.remove("exclude");
