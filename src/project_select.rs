@@ -1141,12 +1141,21 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
     }
 
     // If we ended up with zero tabs (no persisted list, or every
-    // persisted entry was missing on disk), fall back to either the
-    // legacy `assets/scene.jsn` or an empty untitled scene so the user
-    // never lands in the editor with no scene.
+    // persisted entry was missing on disk), fall back to `assets/scene.bsn`
+    // (the legacy `.jsn` sibling if that is all that exists) or an empty
+    // untitled scene, so the user never lands in the editor with no scene.
     if world.resource::<crate::scenes::Scenes>().tabs.is_empty() {
-        let scene_path = root.join("assets").join("scene.jsn");
-        if scene_path.is_file() {
+        let assets = root.join("assets");
+        let bsn = assets.join("scene.bsn");
+        let jsn = assets.join("scene.jsn");
+        let scene_path = if bsn.is_file() {
+            Some(bsn)
+        } else if jsn.is_file() {
+            Some(jsn)
+        } else {
+            None
+        };
+        if let Some(scene_path) = scene_path {
             crate::scene_io::load_scene_from_file(world, &scene_path);
         } else {
             crate::scenes::operators::scene_new_system(world);

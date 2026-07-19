@@ -1013,14 +1013,32 @@ fn editor_status_bar() -> impl Bundle {
                     ..Default::default()
                 },
                 children![
+                    // Fixed-width, right-aligned, clipped box: the build
+                    // status text changes length as crates compile, and a
+                    // bare text node would reflow the rest of the footer on
+                    // every frame. A stable box keeps the count visible at
+                    // the right edge and clips an over-long crate name.
                     (
-                        status_bar::StatusBarRight,
-                        Text::default(),
-                        TextFont {
-                            font_size: tokens::TEXT_SIZE_SM,
+                        Node {
+                            width: Val::Px(210.0),
+                            overflow: Overflow::clip(),
+                            justify_content: JustifyContent::FlexEnd,
+                            align_items: AlignItems::Center,
                             ..Default::default()
                         },
-                        TextColor(tokens::TEXT_SECONDARY),
+                        children![(
+                            status_bar::StatusBarRight,
+                            Text::default(),
+                            TextLayout {
+                                linebreak: bevy::text::LineBreak::NoWrap,
+                                ..Default::default()
+                            },
+                            TextFont {
+                                font_size: tokens::TEXT_SIZE_SM,
+                                ..Default::default()
+                            },
+                            TextColor(tokens::TEXT_SECONDARY),
+                        )],
                     ),
                     // Connection indicator
                     crate::remote::panel::connection_indicator()

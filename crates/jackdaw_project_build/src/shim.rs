@@ -102,10 +102,10 @@ pub fn jackdaw_extension_ctor() -> Box<dyn jackdaw_api::JackdawExtension> {{
 }
 
 fn write_if_changed(path: &Path, contents: &str) -> std::io::Result<()> {
-    if let Ok(existing) = std::fs::read_to_string(path) {
-        if existing == contents {
-            return Ok(());
-        }
+    if let Ok(existing) = std::fs::read_to_string(path)
+        && existing == contents
+    {
+        return Ok(());
     }
     std::fs::write(path, contents)
 }

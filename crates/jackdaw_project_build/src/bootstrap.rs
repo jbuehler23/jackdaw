@@ -108,10 +108,8 @@ pub fn cache_resolves(cache: &Path, triple: &str) -> bool {
             && s.triple == triple
     });
     stamp_ok
-        && cache
-            .join("sdk")
-            .join(triple)
-            .join(crate::sdk_paths::dylib_name())
+        && crate::sdk_paths::SdkPaths::for_workspace_profile(&cache.join("build"), "release")
+            .dylib
             .is_file()
 }
 
@@ -123,10 +121,141 @@ pub fn recipe_is_embedded() -> bool {
     !crate::RECIPE_FILES.is_empty()
 }
 
-/// Extract the embedded recipe into `dst`, ready for `cargo build`.
+/// Whether a first-use SDK build is still owed: this binary carries a
+/// recipe but no matching, resolvable cache exists yet. False in a dev
+/// checkout (no embedded recipe; the dev SDK is used) and once setup has
+/// run. Drives the editor's first-run setup screen and the CLI's
+/// auto-`ensure_sdk`.
+pub fn needs_setup() -> bool {
+    if !recipe_is_embedded() {
+        return false;
+    }
+    let triple = crate::sdk_paths::host_triple();
+    let Some(cache) = cache_dir() else {
+        return false;
+    };
+    !(read_stamp(&cache).is_some_and(|s| s.matches(triple, crate::RECIPE_HASH))
+        && cache_resolves(&cache, triple))
+}
+
+/// One prerequisite [`ensure_sdk`] needs, for `doctor`-style reporting.
+pub struct Prereq {
+    pub name: &'static str,
+    pub ok: bool,
+    pub detail: String,
+    pub fix: Option<String>,
+}
+
+/// Check the tools an SDK build needs before committing to a long
+/// compile: cargo and rustup (hard requirements) plus the pinned
+/// toolchain (informational; setup installs it). Fast and side-effect
+/// free. Used by `jackdaw-cli doctor` and as an early gate in
+/// [`ensure_sdk`].
+pub fn check_prerequisites() -> Vec<Prereq> {
+    let mut out = Vec::new();
+
+    out.push(match tool_version("cargo", "--version") {
+        Some(version) => Prereq {
+            name: "cargo",
+            ok: true,
+            detail: version,
+            fix: None,
+        },
+        None => Prereq {
+            name: "cargo",
+            ok: false,
+            detail: "not found on PATH".to_string(),
+            fix: Some("install Rust from https://rustup.rs".to_string()),
+        },
+    });
+
+    let rustup = tool_version("rustup", "--version");
+    out.push(match &rustup {
+        Some(version) => Prereq {
+            name: "rustup",
+            ok: true,
+            detail: version.clone(),
+            fix: None,
+        },
+        None => Prereq {
+            name: "rustup",
+            ok: false,
+            detail: "not found on PATH".to_string(),
+            fix: Some(
+                "install rustup from https://rustup.rs (jackdaw manages the SDK toolchain with it)"
+                    .to_string(),
+            ),
+        },
+    });
+
+    // The pinned toolchain is not a hard failure: setup installs it on
+    // demand. Report its state so `doctor` can preview whether the first
+    // build pays for a toolchain download.
+    if rustup.is_some() {
+        let installed = Command::new("rustup")
+            .args(["toolchain", "list"])
+            .output()
+            .ok()
+            .is_some_and(|o| String::from_utf8_lossy(&o.stdout).contains(SDK_TOOLCHAIN_CHANNEL));
+        out.push(Prereq {
+            name: "SDK toolchain",
+            ok: true,
+            detail: if installed {
+                format!("{SDK_TOOLCHAIN_CHANNEL} installed")
+            } else {
+                format!("{SDK_TOOLCHAIN_CHANNEL} will be installed on first setup")
+            },
+            fix: None,
+        });
+    }
+
+    out
+}
+
+/// First line of `<cmd> <arg>` stdout, or `None` if the tool is absent or
+/// exits non-zero.
+fn tool_version(cmd: &str, arg: &str) -> Option<String> {
+    let output = Command::new(cmd).arg(arg).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+    )
+}
+
+/// Structured progress from [`ensure_sdk`], consumed by the CLI (which
+/// prints phase lines and lets cargo's inherited stderr show its own
+/// progress) and the editor's first-run screen (which drives a progress
+/// bar from the per-crate counts). Phase strings are static literals.
+pub enum SetupProgress {
+    /// A high-level step began (toolchain, unpack, build, manifest).
+    Phase(&'static str),
+    /// The estimated number of compile units for the build phase, emitted
+    /// once before compilation starts. The bar's denominator.
+    Total(u32),
+    /// One more compile unit finished. `done` is cumulative across the
+    /// SDK, runner, and wrapper cargo invocations.
+    Compiled { crate_name: String, done: u32 },
+    /// A line of rendered cargo diagnostics, for a log tail.
+    Log(String),
+}
+
+/// Extract the embedded recipe into `dst`, ready for `cargo build`. Files
+/// already present with identical bytes are left untouched so their mtimes
+/// (and cargo's build fingerprints) survive a re-run: only the first setup
+/// pays the full compile.
 pub fn write_recipe(dst: &Path) -> std::io::Result<()> {
     for (rel, bytes) in crate::RECIPE_FILES {
         let path = dst.join(rel);
+        if std::fs::read(&path).is_ok_and(|existing| existing == *bytes) {
+            continue;
+        }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -159,12 +288,11 @@ pub fn gc_other_versions() {
 /// calls with a matching stamp return at once. `progress` receives phase
 /// strings for the setup UI.
 ///
-/// The artifact arrangement mirrors the dev/CI layout (SDK dylib, runner,
-/// and their deps built with `--target`; the wrapper built for the host),
-/// so `for_workspace_profile` locates the build outputs and
-/// `for_installed_root` names their cache destinations. These paths are
-/// validated against the first real bootstrap build.
-pub fn ensure_sdk(mut progress: impl FnMut(&str)) -> Result<PathBuf, String> {
+/// The cache is treated like a dev checkout: the recipe is built in place
+/// under `<cache>/build/` and `SdkPaths` points at that build's `target/`
+/// (via `for_workspace_profile`), so nothing is copied and the manifest's
+/// artifact paths stay valid.
+pub fn ensure_sdk(mut report: impl FnMut(SetupProgress)) -> Result<PathBuf, String> {
     if !recipe_is_embedded() {
         return Err("this jackdaw was built without an embedded SDK recipe \
                     (the `embed-recipe` feature); it cannot bootstrap an SDK"
@@ -179,24 +307,62 @@ pub fn ensure_sdk(mut progress: impl FnMut(&str)) -> Result<PathBuf, String> {
         return Ok(cache);
     }
 
-    progress("Installing the pinned Rust toolchain");
+    // Fail before the long build if a hard prerequisite is missing, with
+    // an actionable message instead of a cryptic mid-compile error.
+    let missing: Vec<String> = check_prerequisites()
+        .into_iter()
+        .filter(|p| !p.ok)
+        .map(|p| match p.fix {
+            Some(fix) => format!("{} ({}) - {fix}", p.name, p.detail),
+            None => format!("{} ({})", p.name, p.detail),
+        })
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!("missing prerequisites: {}", missing.join("; ")));
+    }
+
+    report(SetupProgress::Phase("Installing the pinned Rust toolchain"));
     install_toolchain()?;
 
     let build_dir = cache.join("build");
-    let _ = std::fs::remove_dir_all(&build_dir);
-    progress("Unpacking SDK sources");
+    report(SetupProgress::Phase("Unpacking SDK sources"));
+    // Overwrite the sources in place (no wipe) so a re-run reuses the
+    // build cache rather than recompiling from scratch.
     write_recipe(&build_dir).map_err(|e| format!("unpack recipe: {e}"))?;
+    // Pin the toolchain for every cargo invocation in this recipe: the
+    // build, the manifest enumeration, and the project builds that later
+    // resolve this cache all use one rustc, as the rmeta trick requires.
+    std::fs::write(
+        build_dir.join("rust-toolchain.toml"),
+        format!("[toolchain]\nchannel = \"{SDK_TOOLCHAIN_CHANNEL}\"\n"),
+    )
+    .map_err(|e| format!("write rust-toolchain.toml: {e}"))?;
 
-    progress("Building the SDK (one-time; this can take several minutes)");
-    build_recipe(&build_dir, &triple)?;
+    report(SetupProgress::Phase(
+        "Building the SDK (one-time; this can take several minutes)",
+    ));
+    build_recipe(&build_dir, &triple, &mut report)?;
 
-    progress("Installing the SDK");
-    arrange(&build_dir, &cache, &triple)?;
+    report(SetupProgress::Phase("Writing the SDK manifest"));
+    let built = crate::sdk_paths::SdkPaths::for_workspace_profile(&build_dir, "release");
+    // Enumerate artifacts by re-invoking the SAME package set the build
+    // phase used (`-p jackdaw_sdk -p jackdaw_runner`). A narrower set (e.g.
+    // `-p jackdaw_sdk` alone) resolves different features for shared deps
+    // like bevy and forces a full second rebuild; matching it makes this a
+    // pure cache hit that only re-reports the artifact filenames. The
+    // manifest still filters to jackdaw_sdk's runtime closure, so the extra
+    // runner artifacts drop out.
+    crate::plan::SdkManifest::generate(
+        &build_dir,
+        &built,
+        &["-p", "jackdaw_sdk", "-p", "jackdaw_runner", "--release"],
+    )
+    .map_err(|e| format!("generate SDK manifest: {e}"))?;
 
     write_stamp(&cache, &Stamp::current(&triple, crate::RECIPE_HASH))
         .map_err(|e| format!("write stamp: {e}"))?;
     gc_other_versions();
-    progress("SDK ready");
+    report(SetupProgress::Phase("SDK ready"));
     Ok(cache)
 }
 
@@ -217,7 +383,20 @@ fn install_toolchain() -> Result<(), String> {
     Ok(())
 }
 
-fn build_recipe(build_dir: &Path, triple: &str) -> Result<(), String> {
+fn build_recipe(
+    build_dir: &Path,
+    triple: &str,
+    report: &mut impl FnMut(SetupProgress),
+) -> Result<(), String> {
+    // A denominator for the bar, best-effort: the union build closure of
+    // the three artifacts. Undershoots slightly (a crate can compile to
+    // several units); the UI clamps overshoot.
+    if let Some(total) = estimate_units(build_dir, triple) {
+        report(SetupProgress::Total(total));
+    }
+    // `done` is cumulative so the bar advances continuously across both
+    // cargo invocations rather than resetting for the wrapper.
+    let mut done = 0u32;
     // SDK dylib + runner are cross-target artifacts (`--target`); their
     // deps land in `target/<triple>/release` and proc-macro host deps in
     // `target/release`.
@@ -233,84 +412,127 @@ fn build_recipe(build_dir: &Path, triple: &str) -> Result<(), String> {
             "-p",
             "jackdaw_runner",
         ],
+        &mut done,
+        report,
     )?;
     // The rustc wrapper is a host tool; build it without `--target` so it
     // lands in `target/release`, where `for_workspace_profile` looks.
-    run_cargo(build_dir, &["build", "--release", "-p", "jackdaw_rustc_wrapper"])
+    run_cargo(
+        build_dir,
+        &["build", "--release", "-p", "jackdaw_rustc_wrapper"],
+        &mut done,
+        report,
+    )
 }
 
-fn run_cargo(build_dir: &Path, args: &[&str]) -> Result<(), String> {
-    let output = Command::new("cargo")
+/// Run one cargo build, streaming progress. cargo's status lines and its
+/// TTY progress bar go to inherited stderr, so a CLI user keeps the
+/// familiar live output; the machine-readable artifact stream on stdout is
+/// parsed into [`SetupProgress`] events so the editor (which has no
+/// terminal) can drive its own bar. `done` accumulates across calls.
+fn run_cargo(
+    build_dir: &Path,
+    args: &[&str],
+    done: &mut u32,
+    report: &mut impl FnMut(SetupProgress),
+) -> Result<(), String> {
+    use std::io::BufRead;
+
+    let mut child = Command::new("cargo")
         .arg(format!("+{SDK_TOOLCHAIN_CHANNEL}"))
         .args(args)
+        .arg("--message-format=json-render-diagnostics")
         .env("CARGO_INCREMENTAL", "0")
         .current_dir(build_dir)
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
         .map_err(|e| format!("cargo build: {e}"))?;
-    if !output.status.success() {
-        let log = String::from_utf8_lossy(&output.stderr);
-        let tail: Vec<&str> = log.lines().rev().take(30).collect();
-        let tail: String = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
-        return Err(format!("SDK build failed:\n{tail}"));
+
+    let stdout = child.stdout.take().expect("piped stdout");
+    for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+        report_cargo_line(&line, done, report);
+    }
+
+    let status = child.wait().map_err(|e| format!("cargo build: {e}"))?;
+    if !status.success() {
+        return Err("SDK build failed (see the cargo output above)".to_string());
     }
     Ok(())
 }
 
-fn arrange(build_dir: &Path, cache: &Path, triple: &str) -> Result<(), String> {
-    let built = crate::sdk_paths::SdkPaths::for_workspace_profile(build_dir, "release");
-    let out = crate::sdk_paths::SdkPaths::for_installed_root(cache);
-
-    // Fresh install layout under the cache.
-    let _ = std::fs::remove_dir_all(cache.join("sdk"));
-    mkdirs(&cache.join("sdk").join(triple))?;
-    mkdirs(&cache.join("sdk").join("host-deps"))?;
-
-    copy_file(&built.dylib, &out.dylib)?;
-    copy_dir(&built.deps, &out.deps)?;
-    copy_dir(&built.host_deps, &out.host_deps)?;
-    copy_file(&built.runner, &out.runner)?;
-    copy_file(&built.wrapper, &out.wrapper)?;
-    copy_file(&build_dir.join("Cargo.lock"), &out.lockfile)?;
-    std::fs::write(cache.join("toolchain.txt"), SDK_TOOLCHAIN_CHANNEL).map_err(io)?;
-
-    // The extern-redirect manifest project builds consult.
-    let manifest = crate::plan::SdkManifest::generate_dev(build_dir, &built)
-        .map_err(|e| format!("generate SDK manifest: {e}"))?;
-    manifest
-        .write(&out.manifest)
-        .map_err(|e| format!("write SDK manifest: {e}"))
-}
-
-fn io(e: std::io::Error) -> String {
-    e.to_string()
-}
-
-fn mkdirs(p: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(p).map_err(io)
-}
-
-fn copy_file(from: &Path, to: &Path) -> Result<(), String> {
-    if let Some(parent) = to.parent() {
-        mkdirs(parent)?;
+/// Turn one line of `cargo --message-format=json-render-diagnostics` into
+/// setup events: a finished compile unit bumps `done`; a rendered
+/// diagnostic becomes log lines. Non-JSON or other records are ignored.
+fn report_cargo_line(line: &str, done: &mut u32, report: &mut impl FnMut(SetupProgress)) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return;
+    };
+    match value.get("reason").and_then(serde_json::Value::as_str) {
+        Some("compiler-artifact") => {
+            *done += 1;
+            let crate_name = value
+                .get("target")
+                .and_then(|t| t.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            report(SetupProgress::Compiled {
+                crate_name,
+                done: *done,
+            });
+        }
+        Some("compiler-message") => {
+            if let Some(rendered) = value
+                .get("message")
+                .and_then(|m| m.get("rendered"))
+                .and_then(serde_json::Value::as_str)
+            {
+                for l in rendered.lines() {
+                    report(SetupProgress::Log(l.to_string()));
+                }
+            }
+        }
+        _ => {}
     }
-    std::fs::copy(from, to)
-        .map(|_| ())
-        .map_err(|e| format!("copy {} -> {}: {e}", from.display(), to.display()))
 }
 
-fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
-    mkdirs(to)?;
-    let entries = std::fs::read_dir(from).map_err(|e| format!("read {}: {e}", from.display()))?;
-    for entry in entries.flatten() {
-        let f = entry.path();
-        let t = to.join(entry.file_name());
-        if f.is_dir() {
-            copy_dir(&f, &t)?;
-        } else {
-            std::fs::copy(&f, &t).map_err(io)?;
+/// Estimate the build phase's compile-unit count from the union normal +
+/// build dependency closure of the three artifacts (`cargo tree`). A
+/// denominator for the progress bar; `None` on any failure, and the UI
+/// then shows a running count instead of a filled bar.
+fn estimate_units(build_dir: &Path, triple: &str) -> Option<u32> {
+    let output = Command::new("cargo")
+        .arg(format!("+{SDK_TOOLCHAIN_CHANNEL}"))
+        .args([
+            "tree",
+            "-p",
+            "jackdaw_sdk",
+            "-p",
+            "jackdaw_runner",
+            "-p",
+            "jackdaw_rustc_wrapper",
+            "--target",
+            triple,
+            "-e",
+            "normal,build",
+            "--prefix",
+            "none",
+        ])
+        .current_dir(build_dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut units = std::collections::BTreeSet::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut parts = line.split_whitespace();
+        if let (Some(name), Some(version)) = (parts.next(), parts.next()) {
+            units.insert(format!("{name} {version}"));
         }
     }
-    Ok(())
+    (!units.is_empty()).then_some(units.len() as u32)
 }
 
 #[cfg(test)]

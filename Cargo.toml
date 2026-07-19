@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw"
-version = "0.5.0"
+version.workspace = true
 edition = "2024"
 description = "A 3D level editor built with Bevy"
 license = "MIT OR Apache-2.0"
@@ -65,6 +65,12 @@ camera_rig = ["dep:jackdaw_camera_rig"]
 # codegen leaves undefined hidden anon constants across the dylib
 # boundary at link time.
 dylib = ["dep:jackdaw_sdk", "jackdaw_api/dynamic_linking", "jackdaw_project_build/reflect"]
+# Bake the SDK-builder recipe into the editor binary so a packaged,
+# source-free jackdaw can build its SDK on first launch (the first-run
+# setup screen). Off by default: dev builds use the workspace's own SDK
+# and assembling the recipe would slow ordinary compiles. Packaged
+# release builds enable it.
+embed-recipe = ["jackdaw_project_build/embed-recipe"]
 # The prebuilt game runner: dlopens a project dylib built through the
 # SDK pipeline and runs it over the PIE link with zero play-time
 # compilation.
@@ -184,13 +190,20 @@ prettyplease = "0.2"
 winit.workspace = true
 image.workspace = true
 time.workspace = true
-jackdaw_localization = { version = "0.5.0", path = "crates/jackdaw_localization" }
+jackdaw_localization = { version = "0.19.0", path = "crates/jackdaw_localization" }
 webbrowser.workspace = true
 
 # Powers the Linux `PR_SET_PDEATHSIG` hook that takes PIE game processes down
 # with the editor when it is killed (`src/pie.rs`).
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+
+# Every workspace crate inherits this version (`version.workspace = true`).
+# It is anchored to Bevy's minor: 0.19.x targets Bevy 0.19, and bumps to
+# 0.20.0 when the workspace moves to Bevy 0.20. Jackdaw's own patch number
+# advances independently within a Bevy minor.
+[workspace.package]
+version = "0.19.0"
 
 [workspace.dependencies]
 bevy = { version = "0.19", features = [
@@ -203,31 +216,31 @@ bevy = { version = "0.19", features = [
     "file_watcher",
     "reflect_documentation",
 ] }
-jackdaw_jsn = { version = "0.5.0", path = "crates/jackdaw_jsn" }
-jackdaw_geometry = { version = "0.5.0", path = "crates/jackdaw_geometry" }
-jackdaw_scene_types = { version = "0.5.0", path = "crates/jackdaw_scene_types" }
-jackdaw_project_build = { version = "0.5.0", path = "crates/jackdaw_project_build" }
-jackdaw_bsn = { version = "0.5.0", path = "crates/jackdaw_bsn" }
-jackdaw_csg = { version = "0.5.0", path = "crates/jackdaw_csg" }
+jackdaw_jsn = { version = "0.19.0", path = "crates/jackdaw_jsn" }
+jackdaw_geometry = { version = "0.19.0", path = "crates/jackdaw_geometry" }
+jackdaw_scene_types = { version = "0.19.0", path = "crates/jackdaw_scene_types" }
+jackdaw_project_build = { version = "0.19.0", path = "crates/jackdaw_project_build" }
+jackdaw_bsn = { version = "0.19.0", path = "crates/jackdaw_bsn" }
+jackdaw_csg = { version = "0.19.0", path = "crates/jackdaw_csg" }
 bevy_monitors = "0.3"
-bevy_window_chrome = { version = "0.1.0", path = "crates/bevy_window_chrome" }
-jackdaw_camera = { version = "0.5.0", path = "crates/jackdaw_camera" }
-jackdaw_camera_rig = { version = "0.5.0", path = "crates/jackdaw_camera_rig" }
-jackdaw_feathers = { version = "0.5.0", path = "crates/jackdaw_feathers" }
-jackdaw_widgets = { version = "0.5.0", path = "crates/jackdaw_widgets" }
-jackdaw_commands = { version = "0.5.0", path = "crates/jackdaw_commands" }
-jackdaw_terrain = { version = "0.5.0", path = "crates/jackdaw_terrain" }
-jackdaw_remote = { version = "0.5.0", path = "crates/jackdaw_remote" }
-jackdaw_snap = { version = "0.5.0", path = "crates/jackdaw_snap" }
-jackdaw_select = { version = "0.5.0", path = "crates/jackdaw_select" }
-jackdaw_uv = { version = "0.5.0", path = "crates/jackdaw_uv" }
-jackdaw_pick = { version = "0.5.0", path = "crates/jackdaw_pick" }
-jackdaw_hull = { version = "0.5.0", path = "crates/jackdaw_hull" }
-jackdaw_material = { version = "0.5.0", path = "crates/jackdaw_material" }
-jackdaw_node_graph = { version = "0.5.0", path = "crates/jackdaw_node_graph" }
-jackdaw_animation = { version = "0.5.0", path = "crates/jackdaw_animation" }
-jackdaw_fuzzy = { version = "0.5.0", path = "crates/jackdaw_fuzzy" }
-jackdaw_localization = { version = "0.5.0", path = "crates/jackdaw_localization" }
+bevy_window_chrome = { version = "0.19.0", path = "crates/bevy_window_chrome" }
+jackdaw_camera = { version = "0.19.0", path = "crates/jackdaw_camera" }
+jackdaw_camera_rig = { version = "0.19.0", path = "crates/jackdaw_camera_rig" }
+jackdaw_feathers = { version = "0.19.0", path = "crates/jackdaw_feathers" }
+jackdaw_widgets = { version = "0.19.0", path = "crates/jackdaw_widgets" }
+jackdaw_commands = { version = "0.19.0", path = "crates/jackdaw_commands" }
+jackdaw_terrain = { version = "0.19.0", path = "crates/jackdaw_terrain" }
+jackdaw_remote = { version = "0.19.0", path = "crates/jackdaw_remote" }
+jackdaw_snap = { version = "0.19.0", path = "crates/jackdaw_snap" }
+jackdaw_select = { version = "0.19.0", path = "crates/jackdaw_select" }
+jackdaw_uv = { version = "0.19.0", path = "crates/jackdaw_uv" }
+jackdaw_pick = { version = "0.19.0", path = "crates/jackdaw_pick" }
+jackdaw_hull = { version = "0.19.0", path = "crates/jackdaw_hull" }
+jackdaw_material = { version = "0.19.0", path = "crates/jackdaw_material" }
+jackdaw_node_graph = { version = "0.19.0", path = "crates/jackdaw_node_graph" }
+jackdaw_animation = { version = "0.19.0", path = "crates/jackdaw_animation" }
+jackdaw_fuzzy = { version = "0.19.0", path = "crates/jackdaw_fuzzy" }
+jackdaw_localization = { version = "0.19.0", path = "crates/jackdaw_localization" }
 glam = { version = "0.32", features = ["serde"] }
 noise = "0.9"
 rand = "0.9"
@@ -239,18 +252,18 @@ avian3d = { version = "0.7", default-features = false, features = [
     "parry-f32",
     "collider-from-mesh",
 ] }
-jackdaw_avian_integration = { version = "0.5.0", path = "crates/jackdaw_avian_integration" }
-jackdaw_multiplayer = { version = "0.5.0", path = "crates/jackdaw_multiplayer" }
-jackdaw_multiplayer_editor = { version = "0.5.0", path = "crates/jackdaw_multiplayer_editor" }
-jackdaw_runtime = { version = "0.5.0", path = "crates/jackdaw_runtime" }
-jackdaw_panels = { version = "0.5.0", path = "crates/jackdaw_panels" }
-jackdaw_api = { version = "0.5.0", path = "crates/jackdaw_api" }
-jackdaw_api_internal = { version = "0.5.0", path = "crates/jackdaw_api_internal" }
-jackdaw_api_macros = { version = "0.5.0", path = "crates/jackdaw_api_macros" }
-jackdaw_dylib = { version = "0.5.0", path = "crates/jackdaw_dylib" }
-jackdaw_loader = { version = "0.5.0", path = "crates/jackdaw_loader" }
-jackdaw_sdk = { version = "0.5.0", path = "crates/jackdaw_sdk" }
-jackdaw_rustc_wrapper = { version = "0.5.0", path = "crates/jackdaw_rustc_wrapper" }
+jackdaw_avian_integration = { version = "0.19.0", path = "crates/jackdaw_avian_integration" }
+jackdaw_multiplayer = { version = "0.19.0", path = "crates/jackdaw_multiplayer" }
+jackdaw_multiplayer_editor = { version = "0.19.0", path = "crates/jackdaw_multiplayer_editor" }
+jackdaw_runtime = { version = "0.19.0", path = "crates/jackdaw_runtime" }
+jackdaw_panels = { version = "0.19.0", path = "crates/jackdaw_panels" }
+jackdaw_api = { version = "0.19.0", path = "crates/jackdaw_api" }
+jackdaw_api_internal = { version = "0.19.0", path = "crates/jackdaw_api_internal" }
+jackdaw_api_macros = { version = "0.19.0", path = "crates/jackdaw_api_macros" }
+jackdaw_dylib = { version = "0.19.0", path = "crates/jackdaw_dylib" }
+jackdaw_loader = { version = "0.19.0", path = "crates/jackdaw_loader" }
+jackdaw_sdk = { version = "0.19.0", path = "crates/jackdaw_sdk" }
+jackdaw_rustc_wrapper = { version = "0.19.0", path = "crates/jackdaw_rustc_wrapper" }
 bevy_enhanced_input = "0.26"
 rfd = "0.15"
 bevy_rerecast = { git = "https://github.com/HeyPlayGames/rerecast", branch = "bevy-0-19", default-features = true }

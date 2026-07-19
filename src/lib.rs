@@ -14,6 +14,7 @@ pub mod asset_ingest;
 pub mod brush;
 pub mod brush_drag_ops;
 pub mod brush_element_ops;
+pub mod build_panel;
 pub mod build_status;
 pub mod builtin_extensions;
 pub mod clip_ops;
@@ -97,6 +98,7 @@ pub mod scene_ops;
 pub mod scenes;
 pub mod scrolling_log;
 pub mod sdk_paths;
+pub mod sdk_setup;
 pub mod selection;
 pub mod snapping;
 pub mod status_bar;
@@ -295,6 +297,7 @@ impl Plugin for EditorCorePlugin {
             jackdaw_bsn::JackdawBsnPlugin,
             (
                 project_select::ProjectSelectPlugin,
+                sdk_setup::SdkSetupPlugin,
                 scrolling_log::ScrollingLogPlugin,
                 inspector::InspectorPlugin,
                 hierarchy::HierarchyPlugin,
@@ -323,6 +326,7 @@ impl Plugin for EditorCorePlugin {
             viewport_overlays::ViewportOverlaysPlugin,
             view_modes::ViewModesPlugin,
             status_bar::StatusBarPlugin,
+            build_panel::BuildPanelPlugin,
             project_files::ProjectFilesPlugin,
             modal_transform::ModalTransformPlugin,
             numeric_transform::NumericTransformPlugin,
@@ -523,6 +527,7 @@ impl Plugin for ExtensionPlugin {
                 .register_extension::<builtin_extensions::GamePanelExtension>()
                 .register_extension::<builtin_extensions::TimelineExtension>()
                 .register_extension::<builtin_extensions::TerminalExtension>()
+                .register_extension::<build_panel::BuildPanelExtension>()
                 .register_extension::<builtin_extensions::InspectorExtension>();
         }
 
@@ -2700,6 +2705,7 @@ fn build_level_design_tree() -> jackdaw_panels::tree::DockTree {
         DockLeaf::new("bottom_dock", DockAreaStyle::IconSidebar)
             .with_windows(vec![
                 "jackdaw.assets".into(),
+                "jackdaw.build".into(),
                 "jackdaw.timeline".into(),
                 "jackdaw.terminal".into(),
             ])

@@ -60,7 +60,7 @@ pub fn poll_registry_task(
 
             // Cache to disk if project is open
             if let Some(project) = project {
-                cache_registry_to_disk(&project.jsn_dir(), &registry);
+                cache_registry_to_disk(&project.jackdaw_dir(), &registry);
             }
 
             manager.registry = Some(registry);
@@ -71,10 +71,10 @@ pub fn poll_registry_task(
     }
 }
 
-/// Write registry to `.jsn/registry.jsn` for offline caching.
-fn cache_registry_to_disk(jsn_dir: &std::path::Path, registry: &JsnRegistry) {
-    let _ = std::fs::create_dir_all(jsn_dir);
-    let path = jsn_dir.join("registry.jsn");
+/// Write registry to `.jackdaw/registry.json` for offline caching.
+fn cache_registry_to_disk(jackdaw_dir: &std::path::Path, registry: &JsnRegistry) {
+    let _ = std::fs::create_dir_all(jackdaw_dir);
+    let path = jackdaw_dir.join("registry.json");
     match serde_json::to_string_pretty(registry) {
         Ok(data) => {
             if let Err(e) = std::fs::write(&path, &data) {

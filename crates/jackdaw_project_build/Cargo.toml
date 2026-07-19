@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_project_build"
-version = "0.5.0"
+version.workspace = true
 edition = "2024"
 description = "Editor-independent project build pipeline for the Jackdaw 3D level editor: from an open Bevy project to a loadable dylib plus its extracted type schema"
 license = "MIT OR Apache-2.0"
