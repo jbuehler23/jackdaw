@@ -45,7 +45,7 @@ pub fn load_catalog(world: &mut World) {
     };
 
     if !catalog_path.exists() {
-        info!("No catalog.jsn found, starting with empty catalog");
+        info!("No asset catalog found, starting with empty catalog");
         return;
     }
 
@@ -79,7 +79,7 @@ pub fn load_catalog(world: &mut World) {
     let jsn_catalog: JsnCatalog = match serde_json::from_str(&json) {
         Ok(c) => c,
         Err(err) => {
-            warn!("Failed to parse catalog.jsn: {err}");
+            warn!("Failed to parse asset catalog: {err}");
             return;
         }
     };
@@ -164,15 +164,17 @@ pub fn add_to_catalog_assets(
 
 /// Resolve the catalog file path for loading.
 ///
-/// Prefers the `.bsn` catalog (what conversion and saves write), then the
-/// `.jsn` one, in the config directory first and the legacy assets-dir
-/// location second.
+/// Prefers `assets/catalog.bsn` (what saves write), then legacy `.jsn/`
+/// and assets-dir `.jsn` catalogs for migration.
 fn catalog_file_path(world: &World) -> Option<std::path::PathBuf> {
     let project = world.get_resource::<crate::project::ProjectRoot>()?;
+    let legacy_dir = project.root.join(".jsn");
     let candidates = [
-        project.jsn_dir().join("catalog.bsn"),
-        project.jsn_dir().join("catalog.jsn"),
         project.assets_dir().join("catalog.bsn"),
+        // Legacy locations, read for migration; the next save moves the
+        // catalog to `assets/catalog.bsn`.
+        legacy_dir.join("catalog.bsn"),
+        legacy_dir.join("catalog.jsn"),
         project.assets_dir().join("catalog.jsn"),
     ];
     for candidate in candidates {
@@ -181,11 +183,13 @@ fn catalog_file_path(world: &World) -> Option<std::path::PathBuf> {
         }
     }
     // No catalog exists yet
-    Some(project.jsn_dir().join("catalog.bsn"))
+    Some(project.assets_dir().join("catalog.bsn"))
 }
 
-/// Always returns `.jsn/catalog.bsn`. Saves always go to the new location.
+/// Always returns `assets/catalog.bsn`. The catalog is committed project
+/// data (scenes reference its `@Name` entries), so it lives with the assets,
+/// not in the gitignored `.jackdaw/`.
 fn catalog_save_path(world: &World) -> Option<std::path::PathBuf> {
     let project = world.get_resource::<crate::project::ProjectRoot>()?;
-    Some(project.jsn_dir().join("catalog.bsn"))
+    Some(project.assets_dir().join("catalog.bsn"))
 }

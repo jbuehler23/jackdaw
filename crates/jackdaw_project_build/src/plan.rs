@@ -81,21 +81,52 @@ impl SdkManifest {
     /// from host-side units of the same crate. The result is written to
     /// `sdk.manifest` so later opens skip the cargo runs.
     pub fn generate_dev(workspace_root: &Path, sdk: &SdkPaths) -> Result<Self, PlanError> {
+        // Enumerate artifacts from the same profile the SDK was built at, so a
+        // release SDK's manifest points at release rlibs (what projects redirect
+        // against) rather than debug ones from a stray earlier build.
+        let mut args = vec!["-p", "jackdaw", "--features", "dylib"];
+        let is_release = sdk
+            .dylib
+            .parent()
+            .and_then(|p| p.file_name())
+            .is_some_and(|name| name == "release");
+        if is_release {
+            args.push("--release");
+        }
+        Self::generate(workspace_root, sdk, &args)
+    }
+
+    /// Enumerate the SDK's runtime-closure artifacts by building
+    /// `build_args` and reading cargo's JSON. The dev workspace builds the
+    /// editor (`-p jackdaw --features dylib`); the bootstrap recipe, which
+    /// has no editor package, builds the SDK crates directly
+    /// (`-p jackdaw_sdk -p jackdaw_runner --release`). The SDK is already
+    /// compiled, so this re-invocation just reports the (fresh) artifact
+    /// filenames.
+    ///
+    /// `build_args` MUST name the same package set the SDK was built with.
+    /// A narrower set resolves different features for shared dependencies
+    /// (bevy) and turns this enumeration into a full second rebuild instead
+    /// of a cache hit.
+    pub fn generate(
+        workspace_root: &Path,
+        sdk: &SdkPaths,
+        build_args: &[&str],
+    ) -> Result<Self, PlanError> {
         let closure = sdk_runtime_closure(workspace_root)?;
 
-        let output = Command::new("cargo")
-            .args([
-                "build",
-                "-p",
-                "jackdaw",
-                "--features",
-                "dylib",
-                "--target",
-                &sdk.triple,
-                "--message-format=json",
-            ])
+        // Capture stdout (the JSON artifact stream) but let cargo's own
+        // progress reach the terminal, so this step never looks hung on a
+        // cold cache.
+        let child = Command::new("cargo")
+            .arg("build")
+            .args(build_args)
+            .args(["--target", &sdk.triple, "--message-format=json"])
             .current_dir(workspace_root)
-            .output()?;
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()?;
+        let output = child.wait_with_output()?;
         if !output.status.success() {
             return Err(PlanError::Cargo(
                 "SDK build for manifest generation failed".into(),
@@ -182,14 +213,32 @@ impl SdkManifest {
 
 }
 
+/// Resolve a manifest artifact reference to an absolute path the rustc
+/// wrapper can hand to `--extern`. Dev and bootstrap manifests store
+/// absolute paths (used verbatim); a shipped SDK's manifest stores bare
+/// basenames, which the loader has no fixed root for, so they are joined
+/// with the install's `deps/` dir here. Keeping the shipped form
+/// location-independent is what lets a downloaded SDK build projects
+/// wherever it is unpacked, without rewriting the manifest on install.
+fn resolve_artifact(artifact: &str, deps_dir: &Path) -> String {
+    let path = Path::new(artifact);
+    if path.is_absolute() {
+        artifact.to_string()
+    } else {
+        deps_dir.join(artifact).to_string_lossy().into_owned()
+    }
+}
+
 /// Write the per-edge redirect plan for the build root's resolve
 /// graph: `consumer:alias=artifact` lines, one per dependency edge
 /// whose resolved version is byte-identical to the SDK's. Consumed by
-/// the rustc wrapper via `JACKDAW_SDK_EXTERN_MAP`. Returns the number
-/// of edges written.
+/// the rustc wrapper via `JACKDAW_SDK_EXTERN_MAP`. `deps_dir` is the
+/// SDK's `deps/` directory, used to resolve basename-only artifacts in a
+/// shipped manifest. Returns the number of edges written.
 pub fn write_plan(
     build_root: &Path,
     manifest: &SdkManifest,
+    deps_dir: &Path,
     out_path: &Path,
 ) -> Result<usize, PlanError> {
     let metadata = cargo_metadata(build_root)?;
@@ -223,7 +272,8 @@ pub fn write_plan(
                 // can hold two versions of one crate (two `rand`s), each
                 // wanting a different version of the same dependency, so
                 // the name alone cannot pick the right redirect.
-                writeln!(file, "{consumer}@{consumer_version}:{alias}={artifact}")?;
+                let resolved = resolve_artifact(artifact, deps_dir);
+                writeln!(file, "{consumer}@{consumer_version}:{alias}={resolved}")?;
                 edges += 1;
             }
         }
@@ -335,5 +385,20 @@ mod tests {
         manifest.write(&path).unwrap();
         let back = SdkManifest::load(&path).unwrap();
         assert_eq!(back.artifact("glam", "0.32.1"), Some("/sdk/deps/libglam-abc.rlib"));
+    }
+
+    #[test]
+    fn resolve_artifact_absolute_passthrough_basename_rebases() {
+        let deps = Path::new("/opt/jackdaw/sdk/x86_64/deps");
+        // Dev/bootstrap manifests store absolute paths: used verbatim.
+        assert_eq!(
+            resolve_artifact("/ws/target/x86_64/release/deps/libglam-abc.rlib", deps),
+            "/ws/target/x86_64/release/deps/libglam-abc.rlib"
+        );
+        // A shipped manifest stores basenames, rebased onto the install deps.
+        assert_eq!(
+            resolve_artifact("libglam-abc.rlib", deps),
+            "/opt/jackdaw/sdk/x86_64/deps/libglam-abc.rlib"
+        );
     }
 }

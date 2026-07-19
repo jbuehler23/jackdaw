@@ -4,6 +4,6 @@
 //! pipeline moved to its own bevy-light crate.
 
 pub use jackdaw_project_build::{
-    ProjectBuild, ProjectBuildError, build_project_dylib, linkage, plan, schema, shim,
+    BuildEvent, ProjectBuild, ProjectBuildError, build_project_dylib, linkage, plan, schema, shim,
     shim_spec_for_project,
 };

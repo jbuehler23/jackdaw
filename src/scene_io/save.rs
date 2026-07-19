@@ -21,8 +21,8 @@ fn spawn_save_dialog(world: &mut World) {
     let last_dir = world.resource::<SceneFilePath>().last_directory.clone();
 
     let mut dialog = AsyncFileDialog::new()
-        .add_filter("JSN Scene", &["jsn"])
-        .set_file_name("scene.jsn");
+        .add_filter("BSN Scene", &["bsn"])
+        .set_file_name("scene.bsn");
 
     if let Some(dir) = &last_dir {
         dialog = dialog.set_directory(dir);
@@ -182,7 +182,11 @@ pub(super) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_default();
-        emit_bsn_scene_with_inline_assets(world, &parent_path)
+        let body = emit_bsn_scene_with_inline_assets(world, &parent_path);
+        // Record the jackdaw + Bevy version at the disk boundary only, so
+        // the in-memory undo / tab-swap snapshots from the same emitter stay
+        // stamp-free.
+        crate::scene_io::stamp::with_stamp(&body)
     };
 
     // Write to disk on the IO task pool. A redirected save renames the
