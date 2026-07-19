@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_cli"
-version = "0.5.0"
+version.workspace = true
 edition = "2024"
 description = "Command-line tools for Jackdaw projects, independent of the editor GUI binary"
 license = "MIT OR Apache-2.0"

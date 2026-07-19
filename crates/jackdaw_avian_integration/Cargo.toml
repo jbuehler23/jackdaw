@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_avian_integration"
-version = "0.5.0"
+version.workspace = true
 edition = "2024"
 description = "Internal crate for the jackdaw editor"
 license = "MIT OR Apache-2.0"
@@ -9,9 +9,9 @@ repository = "https://github.com/jbuehler23/jackdaw"
 [dependencies]
 bevy.workspace = true
 avian3d = { workspace = true }
-jackdaw_jsn = { version = "0.5.0", path = "../jackdaw_jsn" }
-jackdaw_geometry = { version = "0.5.0", path = "../jackdaw_geometry" }
-jackdaw_scene_types = { version = "0.5.0", path = "../jackdaw_scene_types" }
+jackdaw_jsn = { version = "0.19.0", path = "../jackdaw_jsn" }
+jackdaw_geometry = { version = "0.19.0", path = "../jackdaw_geometry" }
+jackdaw_scene_types = { version = "0.19.0", path = "../jackdaw_scene_types" }
 
 [features]
 default = ["overlays"]

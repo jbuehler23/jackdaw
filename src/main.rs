@@ -18,6 +18,17 @@ fn main() -> AppExit {
         Some("init") => return jackdaw::scaffold::run_init_cli(&args[2..]),
         Some("migrate") => return jackdaw::migrate::run_migrate_cli(&args[2..]),
         Some("doctor") => return jackdaw::preflight::run_doctor_cli(),
+        Some("--version" | "-V") => {
+            #[expect(clippy::print_stdout, reason = "--version reports to stdout")]
+            {
+                println!(
+                    "jackdaw {} (targets bevy {})",
+                    jackdaw_project_build::VERSION,
+                    jackdaw_project_build::BEVY_VERSION
+                );
+            }
+            return AppExit::Success;
+        }
         _ => {}
     }
 

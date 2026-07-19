@@ -159,16 +159,14 @@ fn update_status_right(
 
     match &build_status.state {
         BuildState::Building { progress, .. } => {
-            let (current, done, total) = progress
+            let (current, done) = progress
                 .lock()
-                .map(|g| (g.current_crate.clone(), g.artifacts_done, g.artifacts_total))
-                .unwrap_or((None, 0, None));
-            let crate_label = current.unwrap_or_else(|| "dependencies".to_string());
-            let count = match total {
-                Some(t) => format!(" ({done}/{t})"),
-                None => format!(" ({done})"),
+                .map(|g| (g.current_crate.clone(), g.artifacts_done))
+                .unwrap_or((None, 0));
+            text.0 = match current {
+                Some(name) => format!("Compiling {name} ({done})"),
+                None => "Building project...".to_string(),
             };
-            text.0 = format!("Compiling {crate_label}{count}");
             color.0 = jackdaw_feathers::tokens::TEXT_SECONDARY;
             return;
         }
@@ -291,38 +289,45 @@ pub fn update_scene_stats(
     }
 }
 
-/// Width of the build-progress bar track in the footer.
-const BUILD_BAR_WIDTH: f32 = 180.0;
+/// Height of the footer build-progress bar.
+const BUILD_BAR_HEIGHT: f32 = 3.0;
+/// Width of the sliding segment in the indeterminate animation, in percent.
+const BUILD_BAR_SEGMENT: f32 = 22.0;
+/// Seconds for one back-and-forth of the indeterminate segment.
+const BUILD_BAR_CYCLE: f32 = 1.4;
 
-/// Track (background) of the footer build-progress bar.
+/// Track (background) of the footer build-progress bar. A thin full-width
+/// loading bar flush along the window's bottom edge.
 #[derive(Component)]
 struct BuildBarTrack;
 
-/// Fill of the footer build-progress bar; its width follows the build
-/// fraction.
+/// Fill of the footer build-progress bar. Absolutely positioned so it can
+/// either fill from the left (determinate) or slide (indeterminate).
 #[derive(Component)]
 struct BuildBarFill;
 
 /// Spawn the build-progress bar once on entering the editor, hidden.
-/// `update_build_bar` shows it and sizes the fill while a build runs.
-/// It sits flush in the footer's bottom-right edge.
+/// `update_build_bar` shows and drives it while a build runs.
 fn spawn_build_bar(mut commands: Commands) {
     commands.spawn((
         BuildBarTrack,
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(0.0),
-            right: Val::Px(0.0),
-            width: Val::Px(BUILD_BAR_WIDTH),
-            height: Val::Px(2.0),
+            left: Val::Px(0.0),
+            width: Val::Percent(100.0),
+            height: Val::Px(BUILD_BAR_HEIGHT),
+            overflow: Overflow::clip(),
             ..default()
         },
-        BackgroundColor(jackdaw_feathers::tokens::BORDER_SUBTLE),
+        BackgroundColor(jackdaw_feathers::tokens::PANEL_HEADER_BG),
         Visibility::Hidden,
         ZIndex(1000),
         children![(
             BuildBarFill,
             Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(0.0),
                 width: Val::Percent(0.0),
                 height: Val::Percent(100.0),
                 ..default()
@@ -332,9 +337,11 @@ fn spawn_build_bar(mut commands: Commands) {
     ));
 }
 
-/// Show the build bar while a build is active and size its fill to the
-/// build fraction; hide it otherwise.
+/// Show the build bar while a build runs: fill from the left when a total
+/// is known, or slide a segment back and forth otherwise (the redirected
+/// project build has no reliable unit total). Hide it when idle.
 fn update_build_bar(
+    time: Res<Time>,
     build_status: Res<BuildStatus>,
     mut track: Query<&mut Visibility, With<BuildBarTrack>>,
     mut fill: Query<&mut Node, With<BuildBarFill>>,
@@ -342,17 +349,30 @@ fn update_build_bar(
     let Ok(mut visibility) = track.single_mut() else {
         return;
     };
-    if let BuildState::Building { progress, .. } = &build_status.state {
-        *visibility = Visibility::Visible;
-        let fraction = progress
-            .lock()
-            .ok()
-            .and_then(|g| g.fraction())
-            .unwrap_or(0.0);
-        if let Ok(mut node) = fill.single_mut() {
-            node.width = Val::Percent((fraction * 100.0).clamp(0.0, 100.0));
+    let BuildState::Building { progress, .. } = &build_status.state else {
+        if *visibility != Visibility::Hidden {
+            *visibility = Visibility::Hidden;
         }
-    } else {
-        *visibility = Visibility::Hidden;
+        return;
+    };
+    *visibility = Visibility::Visible;
+
+    let fraction = progress.lock().ok().and_then(|g| g.fraction());
+    let Ok(mut node) = fill.single_mut() else {
+        return;
+    };
+    match fraction {
+        Some(f) => {
+            node.left = Val::Percent(0.0);
+            node.width = Val::Percent((f * 100.0).clamp(0.0, 100.0));
+        }
+        None => {
+            // Triangle wave in [0, 1]: 0 at the ends, 1 at the midpoint, so
+            // the segment eases to the right edge and back.
+            let phase = (time.elapsed_secs() % BUILD_BAR_CYCLE) / BUILD_BAR_CYCLE;
+            let sweep = 1.0 - (2.0 * phase - 1.0).abs();
+            node.left = Val::Percent(sweep * (100.0 - BUILD_BAR_SEGMENT));
+            node.width = Val::Percent(BUILD_BAR_SEGMENT);
+        }
     }
 }

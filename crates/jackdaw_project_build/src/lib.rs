@@ -18,7 +18,9 @@ pub mod shim;
 
 mod build;
 
-pub use build::{ProjectBuild, ProjectBuildError, build_project_dylib, shim_spec_for_project};
+pub use build::{
+    BuildEvent, ProjectBuild, ProjectBuildError, build_project_dylib, shim_spec_for_project,
+};
 
 // The embedded SDK-builder recipe (relative path + bytes), assembled by
 // `build.rs`. Empty when this crate was compiled outside the workspace.
@@ -27,3 +29,18 @@ include!(concat!(env!("OUT_DIR"), "/recipe_data.rs"));
 /// A stable content hash of the embedded recipe. Part of the cache stamp
 /// so a jackdaw upgrade that changes the recipe rebuilds the SDK.
 pub const RECIPE_HASH: &str = env!("RECIPE_HASH");
+
+/// This jackdaw build's version (the workspace version), e.g. `0.19.0`.
+/// The single source for `--version` output and the scene version stamp.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The Bevy minor this build targets. The workspace version is anchored
+/// to Bevy's minor (`0.19.x` targets Bevy `0.19`), so it derives from the
+/// crate version rather than a separate source. Shown in `--version` and
+/// stamped into saved scenes: a future jackdaw reads it to migrate type
+/// paths across a Bevy rename (renames land on minor bumps).
+pub const BEVY_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION_MAJOR"),
+    ".",
+    env!("CARGO_PKG_VERSION_MINOR")
+);

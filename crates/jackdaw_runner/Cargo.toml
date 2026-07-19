@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_runner"
-version = "0.5.0"
+version.workspace = true
 edition = "2024"
 description = "Prebuilt game runner and out-of-process schema extractor for the Jackdaw editor: turns a project dylib into a running game, or dumps its reflected type schema without mapping project code into the editor"
 license = "MIT OR Apache-2.0"
@@ -11,10 +11,12 @@ name = "jackdaw-runner"
 path = "src/main.rs"
 
 [dependencies]
+# Schema extraction is now an FFI call into the project dylib's
+# `jackdaw_extract_schema` export, so this binary links no bevy_reflect
+# (which cannot resolve the dylib's private statics on Windows). bevy here
+# is only for the Play path's engine app.
 bevy = { workspace = true }
 libloading = "0.8"
-serde_json = { workspace = true }
-jackdaw_project_build = { workspace = true, features = ["reflect"] }
 jackdaw_runtime = { workspace = true, features = ["pie"] }
 
 [lints]

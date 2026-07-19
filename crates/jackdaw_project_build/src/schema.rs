@@ -184,7 +184,7 @@ mod extract {
         // resolve; `None` when the type is not default-constructible.
         let default = registration
             .data::<bevy::reflect::prelude::ReflectDefault>()
-            .map(|reflect_default| reflect_default.default())
+            .map(bevy::reflect::prelude::ReflectDefault::default)
             .and_then(|value| {
                 serde_json::to_value(ReflectSerializer::new(value.as_partial_reflect(), registry))
                     .ok()

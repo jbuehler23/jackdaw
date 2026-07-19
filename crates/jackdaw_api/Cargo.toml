@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_api"
-version = "0.5.0"
+version.workspace = true
 edition = "2024"
 description = "Public API for Jackdaw editor extensions"
 license = "MIT OR Apache-2.0"
@@ -41,6 +41,12 @@ jackdaw_jsn.workspace = true
 jackdaw_scene_types.workspace = true
 jackdaw_panels.workspace = true
 jackdaw_widgets.workspace = true
+# Schema extraction lives here so it compiles into the SDK dylib: the
+# generated project shim calls it through the injected `jackdaw_api`,
+# keeping bevy_reflect's generic statics inside the dll rather than in the
+# runner binary (which cannot resolve them when linked on Windows).
+jackdaw_project_build = { workspace = true, features = ["reflect"] }
+serde_json.workspace = true
 
 [lints]
 workspace = true

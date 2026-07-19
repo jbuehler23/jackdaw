@@ -15,6 +15,7 @@ mod legacy;
 mod load;
 mod registration;
 mod save;
+pub mod stamp;
 
 pub use legacy::{load_inline_assets, load_scene_from_jsn, serialize_asset_into};
 pub(crate) use load::{clear_scene_entities, despawn_scene_entities};

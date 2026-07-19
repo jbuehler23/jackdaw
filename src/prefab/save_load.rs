@@ -57,8 +57,14 @@ fn resolve_source_path(source: &str, scene_dir: &Path) -> PathBuf {
 pub(crate) fn read_prefab_ast(path: &Path) -> Result<SceneBsnAst, std::io::Error> {
     let text = std::fs::read_to_string(path)?;
     if path.extension().is_some_and(|e| e == "bsn") {
-        return jackdaw_bsn::parse_bsn_text(&text)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()));
+        let mut ast = jackdaw_bsn::parse_bsn_text(&text)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        // A plain hand-authored scene has no `Prefab` marker (and may have
+        // several roots); wrap it so the resolver can instance it. Real
+        // prefab files are left untouched.
+        let display_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("scene");
+        crate::prefab::operators::normalize_as_prefab_source(&mut ast, display_name);
+        return Ok(ast);
     }
     // TODO: legacy `.jsn` prefabs with no `.bsn` sibling cannot be cached
     // here. A faithful `.jsn` -> BSN document conversion needs a `World` and

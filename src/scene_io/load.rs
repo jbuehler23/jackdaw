@@ -31,7 +31,8 @@ fn spawn_open_dialog(world: &mut World) {
     let last_dir = world.resource::<SceneFilePath>().last_directory.clone();
 
     let mut dialog = AsyncFileDialog::new()
-        .add_filter("JSN Scene", &["jsn"])
+        .add_filter("BSN Scene", &["bsn"])
+        .add_filter("Legacy JSN Scene", &["jsn"])
         .add_filter("Legacy Scene", &["scene.json"]);
 
     if let Some(dir) = &last_dir {
@@ -158,6 +159,17 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
             );
             path = bsn_path.to_string_lossy().into_owned();
             (bsn_text, Some(jsn))
+        };
+
+        // Migrate reflect type-paths for scenes written under an older Bevy,
+        // keyed by the version the save stamped in. A no-op at the current
+        // baseline and for unstamped (hand-authored) scenes; the stamp is a
+        // BSN comment, so it does not affect parsing either way.
+        let bsn_text = match crate::scene_io::stamp::read_stamp(&bsn_text) {
+            Some(stamp) => {
+                crate::scene_io::stamp::migrate_type_paths(&bsn_text, &stamp.bevy).into_owned()
+            }
+            None => bsn_text,
         };
 
         clear_scene_entities(world);

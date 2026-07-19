@@ -40,6 +40,27 @@ pub use jackdaw_api_internal::{
 
 pub use jackdaw_api_internal::lifecycle::ExtensionKind;
 
+/// Drain the process's reflected types into a project schema and return
+/// it as JSON. Called by the generated project shim's
+/// `jackdaw_extract_schema` export, which the game runner invokes over
+/// FFI after `dlopen`.
+///
+/// It lives in `jackdaw_api` so it compiles into the SDK dylib: the
+/// bevy_reflect machinery it instantiates (per-type `type_info` cells and
+/// the auto-registration inventory) then resides in the one dylib the
+/// shim and the editor already share, instead of in the runner binary,
+/// which cannot resolve those symbols when statically linked on Windows.
+/// The shim submitted its `#[derive(Reflect)]` types into that same
+/// inventory when it was dlopened, so draining here sees them.
+#[doc(hidden)]
+pub fn __extract_project_schema_json() -> String {
+    let mut registry = bevy::reflect::TypeRegistry::default();
+    registry.register_derived_types();
+    let schema = jackdaw_project_build::schema::extract_from_registry(&registry);
+    serde_json::to_string(&schema)
+        .unwrap_or_else(|_| String::from(r#"{"components":[],"resources":[]}"#))
+}
+
 /// Maps component type paths to the icon the outliner shows for entities
 /// carrying them. Extensions seed it through
 /// [`ExtensionContext::register_entity_icon`].

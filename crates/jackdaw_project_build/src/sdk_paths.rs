@@ -31,7 +31,7 @@ pub struct SdkPaths {
     /// rlib/rmeta artifacts (`-L dependency=`, redirect plan targets).
     pub deps: PathBuf,
     /// The host-side deps directory holding proc-macro dylibs that SDK
-    /// rlibs reference as MacrosOnly dependencies.
+    /// rlibs reference as `MacrosOnly` dependencies.
     pub host_deps: PathBuf,
     /// Absolute path to `jackdaw-rustc-wrapper(.exe)`.
     pub wrapper: PathBuf,
@@ -64,20 +64,44 @@ impl SdkPaths {
         if let Ok(from_env) = std::env::var("JACKDAW_SDK_DIR") {
             return Self::for_installed_root(std::path::Path::new(&from_env));
         }
-        // 2. The bootstrap cache: an SDK this binary built for itself on
-        //    first use. Auto-discovered with no env var so a downloaded
-        //    jackdaw "just works" once setup has run.
+
+        // 2. Dev checkout, when its SDK is actually built. A contributor
+        //    running from `target/` must link project code against the SDK
+        //    co-built with this editor, at the same profile: a debug editor
+        //    and a release bootstrap cache are not link-compatible, because
+        //    cargo bakes the profile into each crate's `-C metadata`, which
+        //    changes the mangled symbol names. So an in-tree SDK wins over
+        //    any cache a `embed-recipe` build left behind while testing the
+        //    packaged flow.
+        let dev = Self::dev_checkout(&triple);
+        if dev.dylib_exists() {
+            return dev;
+        }
+
+        // 3. The bootstrap cache: an SDK this binary built for itself on
+        //    first use, kept as a dev-style build under `<cache>/build/`.
+        //    Auto-discovered with no env var so a downloaded jackdaw "just
+        //    works" once setup has run. Reached only when there is no
+        //    in-tree SDK (a real install), so editor and cache profiles
+        //    match.
         if let Some(cache) = crate::bootstrap::cache_dir()
             && crate::bootstrap::cache_resolves(&cache, &triple)
         {
-            return Self::for_installed_root(&cache);
+            return Self::for_workspace_profile(&cache.join("build"), "release");
         }
 
-        // Dev checkout. The editor runs either from
-        // <workspace>/target/debug/ (a plain build) or from
-        // <workspace>/target/<triple>/debug/ (a --target build); both
-        // resolve to the same layout: SDK artifacts in the triple dir,
-        // host-side tools and proc-macro deps in target/debug.
+        // Neither resolved: return the dev layout so a missing-SDK error
+        // points at where a contributor builds it.
+        dev
+    }
+
+    /// The dev-checkout layout, derived from the running executable's
+    /// location. The editor runs either from `<workspace>/target/debug/`
+    /// (a plain build) or `<workspace>/target/<triple>/debug/` (a
+    /// `--target` build); both resolve to the same layout: SDK artifacts in
+    /// the triple dir, host-side tools and proc-macro deps in
+    /// `target/debug`.
+    fn dev_checkout(triple: &str) -> Self {
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(ToOwned::to_owned))
@@ -99,7 +123,7 @@ impl SdkPaths {
                 .unwrap_or_else(|| PathBuf::from("."))
         };
         let host_dir = target_dir.join("debug");
-        let triple_dir = target_dir.join(&triple).join("debug");
+        let triple_dir = target_dir.join(triple).join("debug");
         Self {
             dylib: triple_dir.join(dylib_name()),
             deps: triple_dir.join("deps"),
@@ -107,7 +131,7 @@ impl SdkPaths {
             wrapper: host_dir.join(wrapper_name()),
             runner: triple_dir.join(runner_name()),
             manifest: triple_dir.join("jackdaw_sdk_manifest.txt"),
-            triple,
+            triple: triple.to_string(),
             toolchain: read_toolchain_channel(&target_dir.join("../rust-toolchain.toml")),
             lockfile: target_dir.join("../Cargo.lock"),
         }

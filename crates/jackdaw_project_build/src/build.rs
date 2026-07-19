@@ -20,8 +20,9 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::linkage;
 use crate::plan::{self, PlanError, SdkManifest};
@@ -64,6 +65,22 @@ impl From<PlanError> for ProjectBuildError {
     }
 }
 
+/// Live progress from a project build. Bevy-light so the pipeline crate
+/// stays independent of the editor; the editor maps these onto its
+/// `BuildProgress` sink for the footer bar and the build log.
+pub enum BuildEvent {
+    /// cargo finished one compile unit; `crate_name` is the unit it just
+    /// produced, `done` the running count, and `fresh` whether it was a
+    /// cache hit (so the UI can skip logging cached crates as compiling).
+    Compiled {
+        crate_name: String,
+        done: u32,
+        fresh: bool,
+    },
+    /// A line of rendered build output (a diagnostic or status note).
+    Log(String),
+}
+
 /// A completed project build.
 pub struct ProjectBuild {
     /// The verified project dylib.
@@ -85,6 +102,7 @@ pub fn build_project_dylib(
     jackdaw_dir: &Path,
     sdk: &SdkPaths,
     dev_workspace: Option<&Path>,
+    report: &mut dyn FnMut(BuildEvent),
 ) -> Result<ProjectBuild, ProjectBuildError> {
     let shim_dir = shim::ensure_shim(spec, jackdaw_dir)?;
 
@@ -127,7 +145,7 @@ pub fn build_project_dylib(
     };
 
     let plan_path = jackdaw_dir.join("plan.txt");
-    let edges = plan::write_plan(&shim_dir, &manifest, &plan_path)?;
+    let edges = plan::write_plan(&shim_dir, &manifest, &sdk.deps, &plan_path)?;
 
     // Salt the target dir with everything cargo cannot fingerprint:
     // the plan content and the wrapper binary. A stale salt dir is
@@ -143,8 +161,11 @@ pub fn build_project_dylib(
         }
     }
 
-    let output = Command::new("cargo")
+    let mut child = Command::new("cargo")
         .args(["rustc", "--crate-type", "dylib", "--target", &sdk.triple])
+        // Machine-readable stream so the editor can show live per-crate
+        // progress; rustc diagnostics arrive rendered in the same stream.
+        .arg("--message-format=json-render-diagnostics")
         // Strip the shim: the editor loads it for its types and entry,
         // never debugs it, so the embedded debuginfo (the bulk of the
         // artifact, since the shim statically links the project's own
@@ -164,11 +185,25 @@ pub fn build_project_dylib(
         .env("JACKDAW_SDK_DEPS", &sdk.deps)
         .env("JACKDAW_SDK_HOST_DEPS", &sdk.host_deps)
         .env("JACKDAW_SDK_EXTERN_MAP", &plan_path)
-        .output()?;
-    if !output.status.success() {
-        return Err(ProjectBuildError::Compile {
-            log: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+
+    // Drain the JSON stream: bump the compile counter per artifact and
+    // forward rendered diagnostics, both to the live `report` sink and
+    // into `log`, which becomes the compile error on failure.
+    let stdout = child.stdout.take().expect("piped stdout");
+    let mut done = 0u32;
+    let mut log = String::new();
+    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        parse_build_line(&line, &mut done, &mut log, report);
+    }
+    let status = child.wait()?;
+    if !status.success() {
+        if log.trim().is_empty() {
+            log.push_str("project failed to compile (no diagnostics captured)");
+        }
+        return Err(ProjectBuildError::Compile { log });
     }
 
     let dylib = target_dir
@@ -204,6 +239,55 @@ pub fn build_project_dylib(
         edges,
         schema,
     })
+}
+
+/// Turn one line of `cargo --message-format=json-render-diagnostics` into a
+/// [`BuildEvent`]: a finished compile unit bumps `done`; a rendered
+/// diagnostic becomes log lines (also accumulated into `log` for the
+/// compile error). Non-JSON or other records are ignored.
+fn parse_build_line(
+    line: &str,
+    done: &mut u32,
+    log: &mut String,
+    report: &mut dyn FnMut(BuildEvent),
+) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return;
+    };
+    match value.get("reason").and_then(serde_json::Value::as_str) {
+        Some("compiler-artifact") => {
+            *done += 1;
+            let crate_name = value
+                .get("target")
+                .and_then(|t| t.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let fresh = value
+                .get("fresh")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            report(BuildEvent::Compiled {
+                crate_name,
+                done: *done,
+                fresh,
+            });
+        }
+        Some("compiler-message") => {
+            if let Some(rendered) = value
+                .get("message")
+                .and_then(|m| m.get("rendered"))
+                .and_then(serde_json::Value::as_str)
+            {
+                for l in rendered.lines() {
+                    log.push_str(l);
+                    log.push('\n');
+                    report(BuildEvent::Log(l.to_string()));
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Build a [`ShimSpec`] for a project from the filesystem alone, no

@@ -114,6 +114,10 @@ pub struct BuildProgress {
     pub artifacts_done: u32,
     pub artifacts_total: Option<u32>,
     pub recent_log_lines: VecDeque<String>,
+    /// The complete build output, unbounded, for the Build panel's
+    /// IDE-style scrollback. The launcher renders `recent_log_lines`
+    /// instead, a compact tail.
+    pub full_log: String,
     /// Set to `true` by the helper once cargo exits (success or
     /// failure). The UI can use this to flip the bar to 100%.
     pub finished: bool,
@@ -121,6 +125,10 @@ pub struct BuildProgress {
 
 impl BuildProgress {
     pub fn push_log(&mut self, line: String) {
+        if !self.full_log.is_empty() {
+            self.full_log.push('\n');
+        }
+        self.full_log.push_str(&line);
         if self.recent_log_lines.len() >= LOG_TAIL_CAPACITY {
             self.recent_log_lines.pop_front();
         }

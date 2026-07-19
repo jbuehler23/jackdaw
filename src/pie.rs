@@ -638,11 +638,35 @@ fn spawn_dylib_build(
         let sdk = SdkPaths::compute();
         let dev_workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let dev_workspace = dev_workspace.exists().then_some(dev_workspace);
+        // Stream live progress into the sink the footer bar and build log
+        // read: per-crate counts drive the bar, diagnostics fill the log.
+        let report_sink = Arc::clone(&sink);
+        let mut report = move |event: crate::project_build::BuildEvent| {
+            if let Ok(mut p) = report_sink.lock() {
+                match event {
+                    crate::project_build::BuildEvent::Compiled {
+                        crate_name,
+                        done,
+                        fresh,
+                    } => {
+                        p.artifacts_done = done;
+                        // Cached units still count toward progress but should
+                        // not read as compiling in the header or the log.
+                        if !fresh {
+                            p.current_crate = Some(crate_name.clone());
+                            p.push_log(format!("Compiling {crate_name}"));
+                        }
+                    }
+                    crate::project_build::BuildEvent::Log(line) => p.push_log(line),
+                }
+            }
+        };
         let result = crate::project_build::build_project_dylib(
             &spec,
             &jackdaw_dir,
             &sdk,
             dev_workspace.as_deref(),
+            &mut report,
         );
         match result {
             Ok(build) => {
@@ -660,12 +684,10 @@ fn spawn_dylib_build(
                 Ok(DylibBuildResult { dylib: build.dylib })
             }
             Err(err) => {
-                if let (crate::project_build::ProjectBuildError::Compile { log }, Ok(mut p)) =
-                    (&err, sink.lock())
-                {
-                    for line in log.lines().rev().take(30).collect::<Vec<_>>().iter().rev() {
-                        p.push_log((*line).to_string());
-                    }
+                // Diagnostics already streamed into the log via the build
+                // reporter, so just note the failure and surface the error.
+                if let Ok(mut p) = sink.lock() {
+                    p.push_log("build failed".to_string());
                 }
                 Err(io::Error::other(err.to_string()))
             }

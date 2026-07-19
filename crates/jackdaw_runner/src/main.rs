@@ -45,27 +45,28 @@ fn main() {
     run_game(&first);
 }
 
-/// Dlopen the dylib, drain its reflected types, and print the project
-/// schema as JSON. No engine, no window: just reflection.
+/// Dlopen the dylib and print the schema its `jackdaw_extract_schema`
+/// export produces. The reflection runs inside the dylib, which shares
+/// the SDK's bevy, so this process links no bevy_reflect - it just calls
+/// the export over FFI and prints the JSON. Keeping reflection out of this
+/// binary is what lets it link on Windows, where a binary cannot resolve
+/// the dylib's private reflect statics. The mapping dies on exit.
 fn extract_schema(dylib: &str) {
     let lib = unsafe { libloading::Library::new(dylib) }
         .unwrap_or_else(|err| panic!("failed to load {dylib}: {err}"));
-    // dlopen ran the dylib's constructors, submitting its
-    // `#[derive(Reflect)]` types into the shared auto-register
-    // inventory. Draining picks them up alongside bevy's own; the
-    // editor filters to the types it does not already know.
-    let mut registry = bevy::reflect::TypeRegistry::default();
-    registry.register_derived_types();
-    std::mem::forget(lib);
-
-    let schema = jackdaw_project_build::schema::extract_from_registry(&registry);
-    match serde_json::to_string(&schema) {
-        Ok(json) => println!("{json}"),
-        Err(err) => {
-            eprintln!("schema serialization failed: {err}");
-            std::process::exit(1);
-        }
+    let extract: libloading::Symbol<extern "C" fn() -> *mut std::os::raw::c_char> =
+        unsafe { lib.get(b"jackdaw_extract_schema") }
+            .unwrap_or_else(|err| panic!("no jackdaw_extract_schema in {dylib}: {err}"));
+    let ptr = extract();
+    if ptr.is_null() {
+        eprintln!("schema extraction failed");
+        std::process::exit(1);
     }
+    // The dylib owns the string; this process exits immediately after
+    // printing, so teardown reclaims it and no explicit free is needed.
+    let json = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_string_lossy();
+    println!("{json}");
+    std::mem::forget(lib);
 }
 
 /// Assemble the engine, load the project's plugin, and run.
