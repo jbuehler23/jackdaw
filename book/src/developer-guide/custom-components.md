@@ -15,9 +15,14 @@ pub struct PlayerSpawn;
 ```
 
 That's it. The editor builds your project's library in the
-background (it starts a build when the project opens); once the
-build finishes, open the inspector on an entity, click
-`+ Add Component`, type `PlayerSpawn`. It shows up.
+background when the project opens; once the build finishes, open
+the inspector on an entity, click `+ Add Component`, type
+`PlayerSpawn`. It shows up.
+
+If you add a component while the editor is already running, run
+**Rebuild Project** (or `jackdaw-cli build` in a terminal) to pick
+it up. Rebuilds are on request rather than automatic; **Toggle
+Auto Build** switches to rebuild-on-source-change.
 
 A few things make this work without ceremony:
 
@@ -28,9 +33,9 @@ A few things make this work without ceremony:
   dependency crate that your library never references can be
   stripped by the linker before registration runs; register it
   explicitly if it never shows up.
-- The `reflect_documentation` cargo feature is on
-  workspace-wide, so doc comments on the type become picker
-  tooltips.
+- The SDK your project compiles against enables bevy's
+  `reflect_documentation` feature, so doc comments on the type
+  become picker tooltips.
 - Jackdaw can construct a default-valued instance from
   primitive field defaults, so you don't strictly need
   `Default`. Adding it is just nicer.
@@ -166,14 +171,13 @@ of:
 - Missing `#[reflect(Component)]`.
 - Has `@EditorHidden` somewhere (intentional or pasted from a
   template).
-- The editor's background build of your project hasn't
-  finished yet. Components appear once it does.
+- The project hasn't been rebuilt since you added the type. Run
+  Rebuild Project or `jackdaw-cli build`.
 
-**Doc comment doesn't show as tooltip.** The
-`reflect_documentation` feature has to be on for the type's
-own crate. The workspace `Cargo.toml` enables it by default.
-If you have your own bevy override, make sure
-`reflect_documentation` is in the feature list.
+**Doc comment doesn't show as tooltip.** Tooltips need bevy's
+`reflect_documentation` feature. The SDK the editor builds your
+project against turns it on; if you patch or vendor your own bevy,
+make sure `reflect_documentation` is in its feature list.
 
 **`On<Insert, T>` runs but the entity has the wrong
 GlobalTransform.** Shouldn't happen in current jackdaw. If it

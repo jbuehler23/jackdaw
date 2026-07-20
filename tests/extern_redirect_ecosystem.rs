@@ -1,7 +1,7 @@
-//! Spike 2 probe, now the pipeline's regression test: whole-graph
-//! extern redirect with an ecosystem dependency.
+#![expect(clippy::print_stdout, reason = "test prints progress diagnostics")]
+//! Whole-graph extern redirect with an ecosystem dependency.
 //!
-//! Builds `.scratch/project-onboarding/spike2/spike_game2` (bevy +
+//! Builds `tests/fixtures/ecosystem_game` (bevy +
 //! avian3d, one Reflect-derived component, zero registration code)
 //! through the production plan pipeline
 //! ([`jackdaw::project_build::plan`]), dlopens the result, and checks
@@ -9,12 +9,12 @@
 //! cross the boundary.
 //!
 //! The test must run with an explicit `--target` (the host triple) so
-//! the test binary links the same triple-dir SDK dylib the spike dylib
+//! the test binary links the same triple-dir SDK dylib the fixture dylib
 //! is built against:
 //!
 //! ```text
 //! cargo test --features dylib --target <host-triple> \
-//!     --test spike_ecosystem_redirect -- --nocapture
+//!     --test extern_redirect_ecosystem -- --nocapture
 //! ```
 #![cfg(feature = "dylib")]
 
@@ -25,7 +25,9 @@ use bevy::reflect::TypeRegistry;
 use jackdaw::project_build::plan::{SdkManifest, write_plan};
 use jackdaw::sdk_paths::SdkPaths;
 
-const SPIKE_TYPE_PATH: &str = "spike_game2::SpikePhysicsBody";
+mod util;
+
+const COMPONENT_TYPE_PATH: &str = "ecosystem_game::PhysicsBody";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -42,14 +44,14 @@ fn ecosystem_dependency_compiles_and_registers_across_the_boundary() {
     );
     assert!(sdk.wrapper_exists(), "wrapper missing");
 
-    let spike_dir = workspace_root().join(".scratch/project-onboarding/spike2/spike_game2");
-    let spike_target = spike_dir.join("target-spike");
-    let map_path = spike_dir.join("extern_map.txt");
+    let fixture_dir = util::stage_fixture("ecosystem_game");
+    let fixture_target = fixture_dir.join("target-fixture");
+    let map_path = fixture_dir.join("extern_map.txt");
 
     // The production pipeline: SDK lock seeds the shared closure at
     // the SDK's exact versions, then the SDK manifest and per-edge
     // plan are generated against the resolved graph.
-    std::fs::copy(&sdk.lockfile, spike_dir.join("Cargo.lock")).expect("seed the spike lock");
+    std::fs::copy(&sdk.lockfile, fixture_dir.join("Cargo.lock")).expect("seed the fixture lock");
     let manifest =
         SdkManifest::generate_dev(&workspace_root(), &sdk).expect("generate the SDK manifest");
     assert!(
@@ -57,7 +59,8 @@ fn ecosystem_dependency_compiles_and_registers_across_the_boundary() {
         "manifest looks empty or truncated ({} entries)",
         manifest.len()
     );
-    let edges = write_plan(&spike_dir, &manifest, &map_path).expect("write the redirect plan");
+    let edges =
+        write_plan(&fixture_dir, &manifest, &sdk.deps, &map_path).expect("write the redirect plan");
     println!("redirect plan: {edges} edges");
     let plan_text = std::fs::read_to_string(&map_path).unwrap();
     assert!(
@@ -69,16 +72,16 @@ fn ecosystem_dependency_compiles_and_registers_across_the_boundary() {
     // under an older wrapper or plan stay "fresh" and poison the run.
     // Always build from clean. (The production pipeline salts its
     // target dir instead.)
-    let _ = std::fs::remove_dir_all(&spike_target);
+    let _ = std::fs::remove_dir_all(&fixture_target);
 
-    // Build the spike project: whole-graph redirect, plan supplied.
+    // Build the fixture project: whole-graph redirect, plan supplied.
     // The crate type is a build flag, never a manifest entry: the Rust
     // dylib keeps the .rustc metadata section (linkage identity) that
     // a cdylib would strip.
     let status = Command::new("cargo")
         .args(["rustc", "--crate-type", "dylib", "--target", &triple])
-        .current_dir(&spike_dir)
-        .env("CARGO_TARGET_DIR", &spike_target)
+        .current_dir(&fixture_dir)
+        .env("CARGO_TARGET_DIR", &fixture_target)
         .env("RUSTC_WRAPPER", &sdk.wrapper)
         .env("JACKDAW_SDK_DYLIB", &sdk.dylib)
         .env("JACKDAW_SDK_DEPS", &sdk.deps)
@@ -86,28 +89,29 @@ fn ecosystem_dependency_compiles_and_registers_across_the_boundary() {
         .env("JACKDAW_SDK_EXTERN_MAP", &map_path)
         .env("JACKDAW_WRAPPER_LOG", "1")
         .status()
-        .expect("spawn cargo for the spike project");
+        .expect("spawn cargo for the fixture project");
     assert!(
         status.success(),
-        "spike project failed to build: the whole-graph redirect is incoherent"
+        "fixture project failed to build: the whole-graph redirect is incoherent"
     );
 
-    let spike_dylib = spike_target.join(format!(
-        "{triple}/debug/{}spike_game2{}",
+    let fixture_dylib = fixture_target.join(format!(
+        "{triple}/debug/{}ecosystem_game{}",
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
     ));
-    assert!(spike_dylib.exists(), "spike dylib missing");
+    assert!(fixture_dylib.exists(), "fixture dylib missing");
 
     // Negative control.
     let mut before = TypeRegistry::default();
     before.register_derived_types();
     assert!(
-        before.get_with_type_path(SPIKE_TYPE_PATH).is_none(),
-        "spike type visible before dlopen"
+        before.get_with_type_path(COMPONENT_TYPE_PATH).is_none(),
+        "fixture type visible before dlopen"
     );
 
-    let lib = unsafe { libloading::Library::new(&spike_dylib) }.expect("dlopen the spike dylib");
+    let lib =
+        unsafe { libloading::Library::new(&fixture_dylib) }.expect("dlopen the fixture dylib");
     std::mem::forget(lib);
 
     let mut after = TypeRegistry::default();
@@ -115,8 +119,8 @@ fn ecosystem_dependency_compiles_and_registers_across_the_boundary() {
 
     // The user's component crossed the boundary.
     let registration = after
-        .get_with_type_path(SPIKE_TYPE_PATH)
-        .expect("SPIKE FAILED: user component not registered after dlopen");
+        .get_with_type_path(COMPONENT_TYPE_PATH)
+        .expect("user component not registered after dlopen");
     assert!(
         registration
             .data::<bevy::ecs::reflect::ReflectComponent>()
@@ -136,7 +140,5 @@ fn ecosystem_dependency_compiles_and_registers_across_the_boundary() {
         "no avian3d types registered; ecosystem reflection did not cross"
     );
 
-    println!(
-        "SPIKE PASSED: {SPIKE_TYPE_PATH} + {avian_types} avian3d types registered across dlopen"
-    );
+    println!("{COMPONENT_TYPE_PATH} + {avian_types} avian3d types registered across dlopen");
 }

@@ -39,7 +39,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustc-codegen-cranelift-preview
+          components: rustc-codegen-cranelift-preview, rustfmt, clippy
           toolchain: ${{ env.toolchain }}
       - name: Set LD_LIBRARY_PATH
         run: |
@@ -64,11 +64,14 @@ jobs:
       - name: Install Wild
         run: cargo binstall wild-linker --locked --force
 
-      - name: Install nextest
-        run: cargo binstall cargo-nextest --locked --force
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
 
-      - name: Run tests
-        run: cargo nextest run --locked --workspace --lib --bins --tests --no-fail-fast --no-tests warn --features bevy/dynamic_linking
+      - name: Fast tier (fmt, clippy, lib tests)
+        run: cargo xtask fast
+
+      - name: Integration tier
+        run: cargo xtask integration
 
       - name: Run doctests
         run: cargo test --locked --workspace --doc --features bevy/dynamic_linking

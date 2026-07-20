@@ -1,8 +1,6 @@
 // ViewportPage.tsx: canvas 3D viewport (orbit camera, picking, translate gizmo,
-// Add menu). Ported from the PoC's viewport section
-// (.scratch/web-explorer/jackdaw-explorer-poc.html); all camera/projection math
-// lives in lib/viewport-math, this component only wires it to the canvas and
-// pointer events.
+// Add menu). All camera/projection math lives in lib/viewport-math; this
+// component only wires it to the canvas and pointer events.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Diamond, Lightbulb, Plus, Sun, Zap } from 'lucide-preact';
 import { Icon } from './Icon';

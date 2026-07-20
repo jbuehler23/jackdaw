@@ -3,8 +3,8 @@
 A "scene" in jackdaw is one `.bsn` file. A "project" is a
 normal Bevy crate: a folder with a `Cargo.toml`, a
 `jackdaw.toml`, an `assets/` directory, and a
-`.jsn/project.jsn` editor-settings file (legacy projects keep
-it at the root). Scenes live under `assets/`.
+`.jackdaw/project.json` editor-settings file (legacy
+`.jsn/project.jsn` migrates on open). Scenes live under `assets/`.
 
 ## Save and load
 
@@ -19,7 +19,7 @@ it at the root). Scenes live under `assets/`.
 Scene files are human-readable, line-diffable, and designed to
 read in `git diff` without making you cry. Legacy `.jsn` scenes
 still open (import-only); see
-[JSN Format](../developer-guide/jsn-format.md).
+[BSN Format](../developer-guide/bsn-format.md).
 
 ## Project select screen
 
@@ -32,22 +32,23 @@ you see when you run `jackdaw` with no arguments. It shows:
 - An **Import** action for opening an existing Bevy project;
   see [Migrating an Existing Project](../getting-started/migrating-an-existing-project.md).
 
-Recent projects with missing folders are filtered out (we
-fixed this in #222). Click a project to open it; the editor
-transitions into `AppState::Editor` and reads the project's
-default scene.
+Recent projects with missing folders are filtered out. Click
+a project to open it; the editor transitions into
+`AppState::Editor` and restores the scenes that were open last
+time.
 
-## Default scene per project
+## What opens when you open a project
 
-`.jsn/project.jsn` carries a `default_scene` field. When set,
-the editor opens that scene automatically when you load the
-project. If unset, the launcher tries `assets/scene.bsn` as
-the convention; if that's missing too, you start in an empty
-viewport and `Ctrl+O` from there.
+The editor restores the tabs you had open last time. Those
+live in `.jackdaw/project.json` as `last_open_tabs`, with
+`last_active_tab` picking which one is focused; entries whose
+files have gone missing are skipped.
 
-You can change the default from the file menu or by editing
-the file directly. The editor watches the file, so external
-edits show up without a restart.
+If that leaves no tabs (a fresh project, or every remembered
+path is gone), the editor falls back to `assets/scene.bsn`,
+then to a legacy `assets/scene.jsn` if that is all there is,
+and finally to a new untitled scene. So you never land in the
+editor with nothing open.
 
 ## Multi-scene projects
 

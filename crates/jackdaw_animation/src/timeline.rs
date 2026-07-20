@@ -7,7 +7,7 @@
 //! (ruler + strips) that receives scrub clicks.
 //!
 //! The widget only reads and displays. All mutations go through the
-//! main editor's existing `SpawnEntity` / `SetJsnField` / `DespawnEntity`
+//! main editor's existing `SpawnEntity` / `SetBsnField` / `DespawnEntity`
 //! command primitives; see [`crate::commands`] for the rationale.
 
 use bevy::prelude::*;
@@ -93,7 +93,7 @@ pub struct TimelineHeaderNewBlendGraphButton;
 
 /// Marker on the inline clip-name `text_edit` in the header. Carries
 /// the clip entity so the commit handler can route the rename through
-/// `SetJsnField`.
+/// `SetBsnField`.
 #[derive(Component, Clone, Copy)]
 pub struct TimelineClipNameInput {
     pub clip: Entity,
@@ -115,9 +115,8 @@ pub struct TimelineKeyframeHandle {
     pub keyframe: Entity,
 }
 
-/// **Deprecated alias kept temporarily for consumers migrating to the
-/// path-addressed track model.** Will be removed once no code outside
-/// the animation crate references it.
+/// Deprecated alias for consumers still on the pre-path-addressed track
+/// model. Removable once nothing outside the animation crate references it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackField {
     Translation,
@@ -405,7 +404,7 @@ fn spawn_placeholder(commands: &mut Commands, parent: Entity) {
 
 /// Header bar row: transport buttons on the left, clip name centered,
 /// cursor readout and editable duration on the right. The duration
-/// field routes through `SetJsnField` via the main editor's
+/// field routes through `SetBsnField` via the main editor's
 /// `on_duration_input_commit` observer, so edits here flow through
 /// the AST and participate in undo/redo + save/load.
 fn spawn_header(

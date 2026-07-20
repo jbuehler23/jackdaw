@@ -78,6 +78,20 @@ impl SdkPaths {
             return dev;
         }
 
+        // 2b. An installed distribution launched directly: the relocatable
+        //     SDK is staged in `sdk/` next to the editor executable (the
+        //     `jackdaw-cli bundle` layout). Auto-detected with no env var so a
+        //     downloaded jackdaw "just works" when run from its extracted
+        //     folder, not only when a launcher sets `JACKDAW_SDK_DIR`.
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            let installed = Self::for_installed_root(dir);
+            if installed.dylib_exists() {
+                return installed;
+            }
+        }
+
         // 3. The bootstrap cache: an SDK this binary built for itself on
         //    first use, kept as a dev-style build under `<cache>/build/`.
         //    Auto-discovered with no env var so a downloaded jackdaw "just
@@ -93,6 +107,32 @@ impl SdkPaths {
         // Neither resolved: return the dev layout so a missing-SDK error
         // points at where a contributor builds it.
         dev
+    }
+
+    /// Assemble the dev / workspace layout from a resolved `host_dir`
+    /// (host-side tools and proc-macro deps) and `triple_dir` (target-side
+    /// SDK artifacts) pair, plus the toolchain and lockfile the caller
+    /// derived. Both [`dev_checkout`](Self::dev_checkout) and
+    /// [`for_workspace_profile`](Self::for_workspace_profile) produce this
+    /// identical field layout.
+    fn from_dev_dirs(
+        host_dir: &std::path::Path,
+        triple_dir: &std::path::Path,
+        triple: String,
+        toolchain: Option<String>,
+        lockfile: PathBuf,
+    ) -> Self {
+        Self {
+            dylib: triple_dir.join(dylib_name()),
+            deps: triple_dir.join("deps"),
+            host_deps: host_dir.join("deps"),
+            wrapper: host_dir.join(wrapper_name()),
+            runner: triple_dir.join(runner_name()),
+            manifest: triple_dir.join("jackdaw_sdk_manifest.txt"),
+            triple,
+            toolchain,
+            lockfile,
+        }
     }
 
     /// The dev-checkout layout, derived from the running executable's
@@ -124,17 +164,13 @@ impl SdkPaths {
         };
         let host_dir = target_dir.join("debug");
         let triple_dir = target_dir.join(triple).join("debug");
-        Self {
-            dylib: triple_dir.join(dylib_name()),
-            deps: triple_dir.join("deps"),
-            host_deps: host_dir.join("deps"),
-            wrapper: host_dir.join(wrapper_name()),
-            runner: triple_dir.join(runner_name()),
-            manifest: triple_dir.join("jackdaw_sdk_manifest.txt"),
-            triple: triple.to_string(),
-            toolchain: read_toolchain_channel(&target_dir.join("../rust-toolchain.toml")),
-            lockfile: target_dir.join("../Cargo.lock"),
-        }
+        Self::from_dev_dirs(
+            &host_dir,
+            &triple_dir,
+            triple.to_string(),
+            read_toolchain_channel(&target_dir.join("../rust-toolchain.toml")),
+            target_dir.join("../Cargo.lock"),
+        )
     }
 
     /// Build the paths for a packaged / bootstrapped "installed layout"
@@ -158,7 +194,7 @@ impl SdkPaths {
         }
     }
 
-    /// Dev-checkout constructor used by the spike probes and tests:
+    /// Dev-checkout constructor used by the SDK pipeline tests:
     /// everything under an explicit workspace root instead of the
     /// running executable's location. Resolves the `debug` profile.
     pub fn for_workspace(workspace_root: &std::path::Path) -> Self {
@@ -171,17 +207,13 @@ impl SdkPaths {
         let triple = host_triple().to_string();
         let host_dir = workspace_root.join("target").join(profile);
         let triple_dir = workspace_root.join("target").join(&triple).join(profile);
-        Self {
-            dylib: triple_dir.join(dylib_name()),
-            deps: triple_dir.join("deps"),
-            host_deps: host_dir.join("deps"),
-            wrapper: host_dir.join(wrapper_name()),
-            runner: triple_dir.join(runner_name()),
-            manifest: triple_dir.join("jackdaw_sdk_manifest.txt"),
+        Self::from_dev_dirs(
+            &host_dir,
+            &triple_dir,
             triple,
-            toolchain: read_toolchain_channel(&workspace_root.join("rust-toolchain.toml")),
-            lockfile: workspace_root.join("Cargo.lock"),
-        }
+            read_toolchain_channel(&workspace_root.join("rust-toolchain.toml")),
+            workspace_root.join("Cargo.lock"),
+        )
     }
 
     /// Find a usable SDK under a workspace's `target/` dir, preferring

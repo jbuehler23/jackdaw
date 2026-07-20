@@ -93,7 +93,7 @@ pub(crate) fn revert_component_to_baseline(
     use serde::de::DeserializeSeed;
 
     let Some(baseline) = world
-        .get::<jackdaw_scene_types::JsnPrefabBaseline>(entity)
+        .get::<jackdaw_scene_types::PrefabBaseline>(entity)
         .cloned()
     else {
         return;

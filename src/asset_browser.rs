@@ -150,7 +150,10 @@ fn manage_asset_drag_ghost(
     mut ghost_nodes: Query<&mut Node, With<AssetDragGhost>>,
 ) {
     let active = drag.path.as_ref().or(drag.image.as_ref()).cloned();
-    let cursor_pos = windows.single().ok().and_then(|w| w.cursor_position());
+    let cursor_pos = windows
+        .single()
+        .ok()
+        .and_then(bevy::prelude::Window::cursor_position);
 
     // Grab cursor: set while dragging (without clobbering another tool's
     // override); clear our own when the drag ends.
@@ -171,8 +174,14 @@ fn manage_asset_drag_ghost(
                 .unwrap_or_default();
             let icon = file_browser::file_icon(&name);
             let pos = cursor_pos.unwrap_or(Vec2::ZERO);
-            let ghost =
-                spawn_asset_drag_ghost(&mut commands, &editor_font.0, &icon_font.0, icon, &name, pos);
+            let ghost = spawn_asset_drag_ghost(
+                &mut commands,
+                &editor_font.0,
+                &icon_font.0,
+                icon,
+                &name,
+                pos,
+            );
             drag.ghost = Some(ghost);
         }
         (Some(_), Some(ghost)) => {
@@ -501,7 +510,6 @@ fn refresh_browser_on_change(
                 let path = entry.path();
                 let is_directory = entry.file_type().ok()?.is_dir();
 
-                // Build texture info for image files
                 let texture_info = if !is_directory && is_image_file_path(&path) {
                     let ext = path
                         .extension()
@@ -883,7 +891,6 @@ fn refresh_browser_on_change(
         }
     }
 
-    // Build breadcrumb from the full current directory path.
     // Each path component is a clickable button that navigates to that directory.
     let current_dir = state.current_directory.to_string_lossy().to_string();
 
@@ -1554,7 +1561,6 @@ fn poll_asset_browser_folder(world: &mut World) {
         state.current_directory = path.clone();
         state.needs_refresh = true;
 
-        // Set up filesystem watcher for the new root.
         let mut commands = world.commands();
         setup_directory_watcher(&path, &mut commands);
 

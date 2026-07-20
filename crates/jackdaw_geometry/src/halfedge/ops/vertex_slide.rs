@@ -1,9 +1,8 @@
 //! Slide selected vertices along their first incident edge by parameter `t in [0, 1]`.
 //! Pure transform: no topology change.
 //!
-//! MVP: each vert slides toward the FIRST edge in its disk cycle. A modal
-//! UX where the user picks the slide target by hovering an incident edge is
-//! deferred to a future preview-aware operator.
+//! Each vert slides toward the FIRST edge in its disk cycle; there is no
+//! modal UX for picking the slide target by hovering an incident edge.
 
 use crate::halfedge::types::*;
 

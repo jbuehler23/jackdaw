@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bevy::asset::UntypedAssetId;
 use bevy::prelude::*;
-use jackdaw_jsn::format::{JsnAssets, JsnCatalog};
+use jackdaw_jsn::format::JsnCatalog;
 
 /// Project-level asset catalog for cross-scene deduplication.
 ///
@@ -13,8 +13,6 @@ use jackdaw_jsn::format::{JsnAssets, JsnCatalog};
 pub struct AssetCatalog {
     /// `@Name` -> loaded `UntypedHandle` (populated at project open).
     pub handles: HashMap<String, UntypedHandle>,
-    /// The raw `JsnAssets` data (for re-serialization / UI browsing).
-    pub assets: JsnAssets,
     /// Reverse lookup: asset ID -> `@Name` (used during save to emit catalog refs).
     pub id_to_name: HashMap<UntypedAssetId, String>,
     /// Whether the catalog has unsaved changes.
@@ -22,8 +20,8 @@ pub struct AssetCatalog {
 }
 
 impl AssetCatalog {
-    /// Insert a runtime handle into the catalog. Does not mark dirty; use
-    /// [`add_to_catalog_assets`] to persist new serializable data.
+    /// Insert a runtime handle into the catalog. Does not mark dirty; the
+    /// caller sets `dirty` when the change should persist.
     pub fn insert(&mut self, name: String, handle: UntypedHandle) {
         self.id_to_name.insert(handle.id(), name.clone());
         self.handles.insert(name, handle);
@@ -92,7 +90,6 @@ pub fn load_catalog(world: &mut World) {
 
     // Populate the catalog resource
     let mut catalog = world.resource_mut::<AssetCatalog>();
-    catalog.assets = jsn_catalog.assets;
     for (name, handle) in loaded {
         catalog.id_to_name.insert(handle.id(), name.clone());
         catalog.handles.insert(name, handle);
@@ -141,25 +138,6 @@ pub fn save_catalog(world: &mut World) {
         }
         Err(err) => warn!("Failed to write catalog: {err}"),
     }
-}
-
-/// Add a named entry to the catalog's `JsnAssets` data (for persistence).
-pub fn add_to_catalog_assets(
-    catalog: &mut AssetCatalog,
-    type_path: &str,
-    name: &str,
-    value: serde_json::Value,
-    handle: UntypedHandle,
-) {
-    catalog
-        .assets
-        .0
-        .entry(type_path.to_string())
-        .or_default()
-        .insert(name.to_string(), value);
-    catalog.id_to_name.insert(handle.id(), name.to_string());
-    catalog.handles.insert(name.to_string(), handle);
-    catalog.dirty = true;
 }
 
 /// Resolve the catalog file path for loading.

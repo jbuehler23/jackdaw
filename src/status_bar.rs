@@ -45,10 +45,7 @@ impl Plugin for StatusBarPlugin {
         // status bar is rebuilt across project re-opens, so this
         // catches each fresh entity. The build-progress bar is
         // spawned alongside it, hidden until a build runs.
-        app.add_systems(
-            OnEnter(crate::AppState::Editor),
-            spawn_build_bar,
-        );
+        app.add_systems(OnEnter(crate::AppState::Editor), spawn_build_bar);
     }
 }
 

@@ -148,10 +148,7 @@ fn generate_root_manifest(ws: &Path) -> Option<String> {
     // the editor (edition 2024 => resolver 3). Pin it to match, or the SDK
     // dylib is built with a different feature set and every build that
     // touches a different package subset re-resolves and re-links.
-    workspace.insert(
-        "resolver".to_string(),
-        toml::Value::String("3".to_string()),
-    );
+    workspace.insert("resolver".to_string(), toml::Value::String("3".to_string()));
     // These reference paths outside the embedded crates.
     workspace.remove("exclude");
     workspace.remove("default-members");

@@ -162,6 +162,44 @@ fn lex_map_keyword(input: &str) -> IResult<&str, Token> {
     Ok((rest, Token::Map))
 }
 
+/// Lex a special float literal: `inf`, `-inf`, `NaN`, `-NaN` (and the
+/// `Infinity` / lowercase `nan` spellings the reflect serializer also emits).
+///
+/// These match only as standalone words so an identifier that merely begins
+/// with these letters (`information`, `nan_map`) stays a single [`Token::Ident`]
+/// via [`lex_ident`]. Must run before `lex_ident` (which would otherwise claim
+/// `inf` / `NaN`) and before the number lexers (which cannot parse them).
+fn lex_special_float(input: &str) -> IResult<&str, Token> {
+    const WORDS: &[(&str, f64)] = &[
+        ("Infinity", f64::INFINITY),
+        ("inf", f64::INFINITY),
+        ("NaN", f64::NAN),
+        ("nan", f64::NAN),
+    ];
+
+    let (body, negative) = match input.strip_prefix('-') {
+        Some(rest) => (rest, true),
+        None => (input, false),
+    };
+
+    for &(word, value) in WORDS {
+        if let Some(rest) = body.strip_prefix(word)
+            && !rest
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            let value = if negative { -value } else { value };
+            return Ok((rest, Token::FloatLit(value)));
+        }
+    }
+
+    Err(nom::Err::Error(nom::error::Error::new(
+        input,
+        nom::error::ErrorKind::Tag,
+    )))
+}
+
 fn lex_ident(ident: &str) -> IResult<&str, Token> {
     let (rest, s) = nom::combinator::recognize(nom::sequence::pair(
         nom::bytes::complete::take_while1(|c: char| c.is_ascii_alphabetic() || c == '_'),
@@ -305,9 +343,10 @@ fn lex_float(input: &str) -> IResult<&str, Token> {
 
 fn lex_token(input: &str) -> IResult<&str, Token> {
     nom::branch::alt((
-        lex_true,        // Must come before `lex_ident`.
-        lex_false,       // Must come before `lex_ident`.
-        lex_map_keyword, // Must come before `lex_ident`.
+        lex_true,          // Must come before `lex_ident`.
+        lex_false,         // Must come before `lex_ident`.
+        lex_map_keyword,   // Must come before `lex_ident`.
+        lex_special_float, // Must come before `lex_ident` and the number lexers.
         lex_ident,
         lex_string,
         lex_float, // Must come before `lex_int`.
@@ -350,5 +389,50 @@ impl<'a> Iterator for Lexer<'a> {
                 self.input.chars().next().unwrap(),
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tokens(input: &str) -> Vec<Token> {
+        Lexer::new(input).map(|r| r.unwrap().1).collect()
+    }
+
+    #[test]
+    fn lexes_special_floats() {
+        assert!(
+            matches!(tokens("inf").as_slice(), [Token::FloatLit(f)] if f.is_infinite() && *f > 0.0)
+        );
+        assert!(
+            matches!(tokens("-inf").as_slice(), [Token::FloatLit(f)] if f.is_infinite() && *f < 0.0)
+        );
+        assert!(
+            matches!(tokens("Infinity").as_slice(), [Token::FloatLit(f)] if f.is_infinite() && *f > 0.0)
+        );
+        assert!(matches!(tokens("NaN").as_slice(), [Token::FloatLit(f)] if f.is_nan()));
+        assert!(matches!(tokens("nan").as_slice(), [Token::FloatLit(f)] if f.is_nan()));
+        assert!(matches!(tokens("-NaN").as_slice(), [Token::FloatLit(f)] if f.is_nan()));
+    }
+
+    #[test]
+    fn identifiers_starting_with_special_words_stay_identifiers() {
+        // The guard keeps longer identifiers whole rather than splitting off a
+        // leading `inf` / `nan` float token.
+        for word in ["information", "infinite_health", "nanometers", "NaNny"] {
+            assert!(
+                matches!(tokens(word).as_slice(), [Token::Ident(s)] if s == word),
+                "{word} must lex as a single identifier",
+            );
+        }
+    }
+
+    #[test]
+    fn negative_numbers_still_lex() {
+        assert!(matches!(tokens("-5").as_slice(), [Token::IntLit(-5)]));
+        assert!(
+            matches!(tokens("-5.0").as_slice(), [Token::FloatLit(f)] if (*f + 5.0).abs() < f64::EPSILON)
+        );
     }
 }

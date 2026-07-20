@@ -1,5 +1,6 @@
-//! Spike 5 probe: can the editor adopt a CHANGED component shape by
-//! swapping registry entries, with no restart and no ECS involvement?
+#![expect(clippy::print_stdout, reason = "test prints progress diagnostics")]
+//! Can the editor adopt a CHANGED component shape by swapping registry
+//! entries, with no restart and no ECS involvement?
 //!
 //! The dynamic-representation design keeps dylib-provided types out of
 //! the editor's ECS entirely (they live as reflection data backed by
@@ -18,7 +19,7 @@
 //!
 //! ```text
 //! cargo test --features dylib --target <host-triple> \
-//!     --test spike_shape_refresh -- --nocapture
+//!     --test component_shape_refresh -- --nocapture
 //! ```
 #![cfg(feature = "dylib")]
 
@@ -29,13 +30,15 @@ use bevy::reflect::TypeRegistry;
 use bevy::reflect::structs::DynamicStruct;
 use jackdaw::sdk_paths::SdkPaths;
 
-const TYPE_PATH: &str = "spike_game5::ShapeShifter";
+mod util;
+
+const TYPE_PATH: &str = "shape_game::ShapeShifter";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-const LIB_V1: &str = r#"//! Spike 5 v1: the original shape.
+const LIB_V1: &str = r#"//! The original shape.
 use bevy::prelude::*;
 
 #[derive(Component, Reflect, Default)]
@@ -45,7 +48,7 @@ pub struct ShapeShifter {
 }
 "#;
 
-const LIB_V2: &str = r#"//! Spike 5 v2: a field added to the same type.
+const LIB_V2: &str = r#"//! A field added to the same type.
 use bevy::prelude::*;
 
 #[derive(Component, Reflect, Default)]
@@ -56,12 +59,12 @@ pub struct ShapeShifter {
 }
 "#;
 
-/// Build the spike project through the SDK pipeline and copy the
+/// Build the fixture project through the SDK pipeline and copy the
 /// artifact to a unique path (dlopen caches by path).
 fn build_variant(sdk: &SdkPaths, source: &str, tag: &str) -> PathBuf {
-    let dir = workspace_root().join(".scratch/project-onboarding/spike5/spike_game5");
+    let dir = util::stage_fixture("shape_game");
     std::fs::write(dir.join("src/lib.rs"), source).expect("write variant source");
-    let target = dir.join("target-spike");
+    let target = dir.join("target-fixture");
     let status = Command::new("cargo")
         .args(["rustc", "--crate-type", "dylib", "--target", &sdk.triple])
         .current_dir(&dir)
@@ -76,12 +79,12 @@ fn build_variant(sdk: &SdkPaths, source: &str, tag: &str) -> PathBuf {
     assert!(status.success(), "variant {tag} failed to build");
 
     let built = target.join(format!(
-        "{}/debug/{}spike_game5{}",
+        "{}/debug/{}shape_game{}",
         sdk.triple,
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
     ));
-    let load_dir = std::env::temp_dir().join(format!("jackdaw-spike5-{}", std::process::id()));
+    let load_dir = std::env::temp_dir().join(format!("jackdaw-shape-{}", std::process::id()));
     std::fs::create_dir_all(&load_dir).unwrap();
     let unique = load_dir.join(format!("shape-{tag}{}", std::env::consts::DLL_SUFFIX));
     std::fs::copy(&built, &unique).expect("copy artifact");
@@ -93,10 +96,9 @@ fn field_names(registry: &TypeRegistry) -> Vec<String> {
         .get_with_type_path(TYPE_PATH)
         .unwrap_or_else(|| panic!("{TYPE_PATH} not registered"));
     match registration.type_info() {
-        bevy::reflect::TypeInfo::Struct(info) => info
-            .iter()
-            .map(|field| field.name().to_string())
-            .collect(),
+        bevy::reflect::TypeInfo::Struct(info) => {
+            info.iter().map(|field| field.name().to_string()).collect()
+        }
         other => panic!("unexpected type info: {other:?}"),
     }
 }
@@ -134,14 +136,11 @@ fn changed_shape_is_adoptable_without_restart() {
     // pointer-set diff over the raw inventory: snapshot the submission
     // fn pointers before the dlopen, then everything new afterwards
     // belongs to the new dylib, regardless of iteration order.
-    use bevy::reflect::__macro_exports::auto_register::{
-        AutomaticReflectRegistrations, inventory,
-    };
-    let before: std::collections::HashSet<usize> =
-        inventory::iter::<AutomaticReflectRegistrations>
-            .into_iter()
-            .map(|s| s.0 as usize)
-            .collect();
+    use bevy::reflect::__macro_exports::auto_register::{AutomaticReflectRegistrations, inventory};
+    let before: std::collections::HashSet<usize> = inventory::iter::<AutomaticReflectRegistrations>
+        .into_iter()
+        .map(|s| s.0 as usize)
+        .collect();
 
     // v2: same type path, a field added; rebuilt and loaded alongside.
     let v2 = build_variant(&sdk, LIB_V2, "v2");
@@ -157,7 +156,10 @@ fn changed_shape_is_adoptable_without_restart() {
         }
     }
     println!("inventory diff found {new_submissions} submissions from the new dylib");
-    assert!(new_submissions > 0, "the new dylib's submissions must be discoverable");
+    assert!(
+        new_submissions > 0,
+        "the new dylib's submissions must be discoverable"
+    );
     let new_shape = field_names(&new_only);
     println!("new dylib's registration: shape = {new_shape:?}");
     assert_eq!(
@@ -177,7 +179,10 @@ fn changed_shape_is_adoptable_without_restart() {
         vec!["strength", "label"],
         "overwrite_registration must swap the shape in a live registry"
     );
-    println!("long-lived registry after overwrite: shape = {:?}", field_names(&app_registry));
+    println!(
+        "long-lived registry after overwrite: shape = {:?}",
+        field_names(&app_registry)
+    );
 
     // Question 3: migrate an old-shape value onto the new shape.
     // The old value is what the editor holds: pure data, no dylib code.
@@ -207,8 +212,6 @@ fn changed_shape_is_adoptable_without_restart() {
     assert_eq!(strength, 42.5, "matching field must carry over");
     assert_eq!(label, String::new(), "new field must take its default");
 
-    println!(
-        "migration: strength carried ({strength}), label defaulted ({label:?})"
-    );
-    println!("SPIKE PASSED: changed shape adopted with no restart, no ECS, no round-trip");
+    println!("migration: strength carried ({strength}), label defaulted ({label:?})");
+    println!("changed shape adopted with no restart, no ECS, no round-trip");
 }

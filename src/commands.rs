@@ -1291,7 +1291,7 @@ pub(crate) fn sync_component_to_bsn_doc(
 /// This captures components added implicitly by Bevy's `#[require]`
 /// attributes (e.g., `RigidBody` requiring `Position`, `Rotation`,
 /// `LinearVelocity`, etc.). After this call, those components are editable
-/// in the inspector via the normal `SetJsnField` path and persist with
+/// in the inspector via the normal `SetBsnField` path and persist with
 /// scene save/load.
 ///
 /// Designed to be upstream-compatible with BSN  -- the AST becomes the full

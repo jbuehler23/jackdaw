@@ -1,0 +1,31 @@
+// Starter scene (from templates/game/assets/scene.bsn) plus one extra
+// authored entity carrying SceneNodeId(999) so the runtime marker can prove
+// that specific authored node spawned.
+
+#Root
+bevy_transform::components::transform::Transform
+bevy_camera::visibility::Visibility::Visible
+bevy_ecs::hierarchy::Children [
+    #Main Camera
+    bevy_camera::components::Camera3d
+    bevy_transform::components::transform::Transform {
+        translation: glam::Vec3 { x: 0.0, y: 6.0, z: 12.0 },
+        rotation: glam::Quat { x: -0.2164396, y: 0.0, z: 0.0, w: 0.9762960 },
+    }
+    bevy_camera::visibility::Visibility::Visible
+
+    #Sun
+    bevy_light::directional_light::DirectionalLight
+    bevy_transform::components::transform::Transform {
+        translation: glam::Vec3 { x: 0.0, y: 8.0, z: 0.0 },
+        rotation: glam::Quat { x: -0.4226183, y: 0.0, z: 0.0, w: 0.9063078 },
+    }
+    bevy_camera::visibility::Visibility::Visible
+
+    #Marker Probe
+    jackdaw_scene_types::node_id::SceneNodeId(999)
+    bevy_transform::components::transform::Transform {
+        translation: glam::Vec3 { x: 1.0, y: 2.0, z: 3.0 },
+    }
+    bevy_camera::visibility::Visibility::Visible
+]

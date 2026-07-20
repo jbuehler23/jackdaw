@@ -1,3 +1,4 @@
+#![expect(clippy::print_stdout, reason = "test prints progress diagnostics")]
 //! Stress test: measure the resident-memory cost of reloading a
 //! project dylib repeatedly (the edit-mode live-reload leak).
 //!
@@ -20,6 +21,8 @@ use bevy::reflect::TypeRegistry;
 use jackdaw::project_build::plan::{SdkManifest, write_plan};
 use jackdaw::project_build::shim::ShimSpec;
 use jackdaw::sdk_paths::SdkPaths;
+
+mod util;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -45,23 +48,26 @@ fn rss_mb() -> f64 {
 fn measure_reload_memory_growth() {
     let sdk = SdkPaths::for_workspace(&workspace_root());
     let triple = sdk.triple.clone();
-    assert!(sdk.dylib_exists(), "SDK dylib missing; build --features dylib --target {triple}");
+    assert!(
+        sdk.dylib_exists(),
+        "SDK dylib missing; build --features dylib --target {triple}"
+    );
 
     // Build the representative project dylib through the production
     // pipeline (bevy + avian).
-    let spike_dir = workspace_root().join(".scratch/project-onboarding/spike2/spike_game2");
-    std::fs::copy(&sdk.lockfile, spike_dir.join("Cargo.lock")).expect("seed lock");
+    let fixture_dir = util::stage_fixture("ecosystem_game");
+    std::fs::copy(&sdk.lockfile, fixture_dir.join("Cargo.lock")).expect("seed lock");
     let manifest = SdkManifest::generate_dev(&workspace_root(), &sdk).expect("manifest");
-    let map_path = spike_dir.join("extern_map.txt");
-    write_plan(&spike_dir, &manifest, &map_path).expect("plan");
+    let map_path = fixture_dir.join("extern_map.txt");
+    write_plan(&fixture_dir, &manifest, &sdk.deps, &map_path).expect("plan");
 
-    let spike_target = spike_dir.join("target-spike");
-    let _ = std::fs::remove_dir_all(&spike_target);
+    let fixture_target = fixture_dir.join("target-fixture");
+    let _ = std::fs::remove_dir_all(&fixture_target);
     let status = std::process::Command::new("cargo")
         .args(["rustc", "--crate-type", "dylib", "--target", &triple])
-        .current_dir(&spike_dir)
+        .current_dir(&fixture_dir)
         .env("CARGO_INCREMENTAL", "0")
-        .env("CARGO_TARGET_DIR", &spike_target)
+        .env("CARGO_TARGET_DIR", &fixture_target)
         .env("RUSTC_WRAPPER", &sdk.wrapper)
         .env("JACKDAW_SDK_DYLIB", &sdk.dylib)
         .env("JACKDAW_SDK_DEPS", &sdk.deps)
@@ -70,8 +76,8 @@ fn measure_reload_memory_growth() {
         .status()
         .expect("spawn cargo");
     assert!(status.success(), "build failed");
-    let dylib = spike_target.join(format!(
-        "{triple}/debug/{}spike_game2{}",
+    let dylib = fixture_target.join(format!(
+        "{triple}/debug/{}ecosystem_game{}",
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
     ));
@@ -79,9 +85,9 @@ fn measure_reload_memory_growth() {
 
     let size_mb = std::fs::metadata(&dylib).unwrap().len() as f64 / 1024.0 / 1024.0;
     let _ = ShimSpec {
-        package_name: "spike_game2".into(),
-        crate_name: "spike_game2".into(),
-        project_root: spike_dir.clone(),
+        package_name: "ecosystem_game".into(),
+        crate_name: "ecosystem_game".into(),
+        project_root: fixture_dir.clone(),
         game_plugin: None,
         extension_type: None,
     };
@@ -116,9 +122,7 @@ fn measure_reload_memory_growth() {
 
     let total = last - baseline;
     let per = total / RELOADS as f64;
-    println!(
-        "\ntotal RSS growth over {RELOADS} reloads: {total:.1} MB  ({per:.1} MB per reload)"
-    );
+    println!("\ntotal RSS growth over {RELOADS} reloads: {total:.1} MB  ({per:.1} MB per reload)");
     println!(
         "at {per:.1} MB/reload, a session hits 2 GB of leaked dylibs after ~{} reloads",
         (2048.0 / per.max(0.1)) as u64

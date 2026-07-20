@@ -10,4 +10,4 @@ authors = ["{{authors}}"]
 
 [dependencies]
 bevy = "0.19"
-jackdaw_api = "0.5"
+jackdaw_api = "0.19"

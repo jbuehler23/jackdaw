@@ -12,9 +12,9 @@ mod material_display;
 mod modifier_display;
 pub(crate) mod ops;
 pub(crate) mod physics_display;
-pub(crate) mod project_component_display;
 mod prefab_field_dots;
 pub(crate) mod prefab_menu;
+pub(crate) mod project_component_display;
 pub(crate) mod reflect_fields;
 
 use crate::EditorEntity;
@@ -42,7 +42,6 @@ fn extract_module_group(module_path: Option<&str>) -> String {
     let Some(path) = module_path else {
         return "Other".to_string();
     };
-    // Get first path segment
     let first = path.split("::").next().unwrap_or(path);
     // Group jackdaw's avian wrapper alongside avian3d's own types
     // so AvianCollider sits in the same inspector section as
@@ -81,7 +80,7 @@ fn extract_module_group(module_path: Option<&str>) -> String {
 }
 
 // Editor display metadata as Bevy reflect custom attributes.
-// Newtypes live in `jackdaw_jsn`, re-exported here.
+// Newtypes live in `jackdaw_scene_types`, re-exported here via `jackdaw_runtime`.
 pub use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 
 #[reflect_trait]

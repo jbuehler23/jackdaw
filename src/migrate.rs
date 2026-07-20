@@ -942,11 +942,14 @@ mod tests {
     use super::*;
 
     fn project(main_rs: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // A per-call counter guarantees each parallel test gets its own dir
+        // (content length collided for same-length fixtures).
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
             "jackdaw_migrate_{}_{}",
             std::process::id(),
-            // Vary by content length so parallel tests don't collide.
-            main_rs.len()
+            COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();

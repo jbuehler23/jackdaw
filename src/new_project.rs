@@ -164,7 +164,8 @@ mod tests {
 
     #[test]
     fn rewrite_dep_lines_preserves_features_and_optional() {
-        let template = "jackdaw_runtime = { version = \"0.5\", features = [\"physics\"], optional = true }\n";
+        let template =
+            "jackdaw_runtime = { version = \"0.5\", features = [\"physics\"], optional = true }\n";
         let out = rewrite_dep_lines(template, Path::new("/dev/checkout")).unwrap();
         assert!(out.contains("path = '/dev/checkout/crates/jackdaw_runtime'"));
         assert!(out.contains("features = [\"physics\"]"));

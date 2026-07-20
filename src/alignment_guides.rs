@@ -141,7 +141,6 @@ fn cache_reference_coords(
         return;
     }
 
-    // Build cache
     for coords in &mut state.reference_coords {
         coords.clear();
     }

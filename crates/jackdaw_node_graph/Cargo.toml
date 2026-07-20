@@ -14,7 +14,6 @@ bevy_enhanced_input.workspace = true
 jackdaw_widgets.workspace = true
 jackdaw_feathers.workspace = true
 jackdaw_commands.workspace = true
-jackdaw_jsn.workspace = true
 jackdaw_scene_types.workspace = true
 jackdaw_localization.workspace = true
 serde = { workspace = true, features = ["derive"] }

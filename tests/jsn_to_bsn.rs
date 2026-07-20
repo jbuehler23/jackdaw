@@ -131,7 +131,7 @@ fn headless_app() -> App {
     // absent (its component sync hooks require a live render world).
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, AssetPlugin::default()));
-    app.add_plugins(jackdaw_jsn::JsnPlugin {
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin {
         runtime_mesh_rebuild: false,
     });
     app.add_plugins(jackdaw_bsn::JackdawBsnPlugin);
@@ -642,7 +642,18 @@ fn editor_opens_and_saves_bsn_scenes() {
         after.contains("#Hero"),
         "saved text is BSN, not JSON:\n{after}"
     );
-    assert_eq!(before.trim(), after.trim(), "load then save round-trips");
+    // Saving prepends a `// jackdaw <ver> | bevy <ver>` provenance stamp at the
+    // disk boundary; strip it before comparing the round-tripped content.
+    let after_body: String = after
+        .lines()
+        .skip_while(|l| l.starts_with("// jackdaw"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        before.trim(),
+        after_body.trim(),
+        "load then save round-trips"
+    );
 
     // Reload the saved file into a fresh editor world.
     let mut app2 = editor_app();
@@ -663,10 +674,7 @@ fn catalog_round_trips_as_bsn() {
         app.init_resource::<AssetCatalog>();
         app.world_mut().insert_resource(ProjectRoot {
             root: root.to_path_buf(),
-            config: jackdaw_jsn::JsnProject {
-                jsn: jackdaw_jsn::format::JsnHeader::default(),
-                project: jackdaw_jsn::JsnProjectConfig::default(),
-            },
+            config: jackdaw::project::ProjectConfig::default(),
         });
         app
     }
@@ -688,7 +696,7 @@ fn catalog_round_trips_as_bsn() {
     }
     save_catalog(app.world_mut());
 
-    let catalog_path = dir.path().join(".jsn/catalog.bsn");
+    let catalog_path = dir.path().join("assets/catalog.bsn");
     let text = std::fs::read_to_string(&catalog_path).expect("catalog.bsn written");
     assert!(text.contains("#Steel"), "{text}");
     assert!(text.contains("metallic"), "{text}");
@@ -704,87 +712,6 @@ fn catalog_round_trips_as_bsn() {
         .get(&loaded.clone().typed::<StandardMaterial>())
         .expect("material in store");
     assert!((material.metallic - 0.75).abs() < 1e-6);
-}
-
-#[test]
-fn worldless_bridge_matches_reflect_deserialization() {
-    use jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn;
-
-    // Author a scene covering the reflect-JSON conventions the bridge maps:
-    // struct (Transform), unit enum variant (Visibility), newtype tuple
-    // struct (SceneNodeId as the id field), map values (CustomProperties),
-    // and hierarchy.
-    let mut app_a = headless_app();
-    let parent_id = SceneNodeId::next();
-    let child_id = SceneNodeId::next();
-    let mut props = BTreeMap::new();
-    props.insert("hp".to_string(), PropertyValue::Int(7));
-    let parent = app_a
-        .world_mut()
-        .spawn((
-            Name::new("Parent"),
-            Transform::from_xyz(1.5, 2.5, 3.5),
-            Visibility::Hidden,
-            parent_id,
-            CustomProperties { properties: props },
-            jackdaw_scene_types::SceneRootTag,
-        ))
-        .id();
-    app_a.world_mut().spawn((
-        Name::new("Child"),
-        Transform::from_xyz(6.0, 0.0, 0.0),
-        child_id,
-        ChildOf(parent),
-    ));
-    let scene = world_to_jsn_scene(app_a.world_mut());
-    let mut app_c = headless_app();
-    let bsn = convert_jsn_scene_to_bsn(app_c.world_mut(), &scene)
-        .expect("converts")
-        .scene_bsn;
-
-    // Bridge back to a JsnScene and load it through the REAL reflect
-    // deserializer; values must match the authored world.
-    let bridged = bsn_scene_to_jsn(&bsn).expect("bridge succeeds");
-    let mut app_b = headless_app();
-    let local = std::collections::HashMap::new();
-    let spawned = load_scene_from_jsn(app_b.world_mut(), &bridged.scene, Path::new(""), &local);
-    assert_eq!(spawned.len(), 2);
-
-    let parent_b = find_by_node_id(app_b.world_mut(), parent_id).expect("parent id bridged");
-    let child_b = find_by_node_id(app_b.world_mut(), child_id).expect("child id bridged");
-    let t = app_b
-        .world()
-        .get::<Transform>(parent_b)
-        .unwrap()
-        .translation;
-    assert!((t - Vec3::new(1.5, 2.5, 3.5)).length() < 1e-5, "{t}");
-    assert_eq!(
-        app_b.world().get::<Visibility>(parent_b),
-        Some(&Visibility::Hidden),
-        "unit enum variant bridges"
-    );
-    assert_eq!(
-        app_b
-            .world()
-            .get::<CustomProperties>(parent_b)
-            .unwrap()
-            .properties
-            .get("hp"),
-        Some(&PropertyValue::Int(7)),
-        "map of enum values bridges"
-    );
-    assert_eq!(
-        app_b
-            .world()
-            .get::<ChildOf>(child_b)
-            .map(bevy::prelude::ChildOf::parent),
-        Some(parent_b),
-        "hierarchy bridges"
-    );
-    assert_eq!(
-        app_b.world().get::<Name>(parent_b).map(Name::as_str),
-        Some("Parent")
-    );
 }
 
 #[test]
@@ -836,87 +763,6 @@ fn prefab_cache_reads_bsn_prefabs_with_stale_extension_references() {
 }
 
 #[test]
-fn clipboard_payload_round_trips_through_bsn_text() {
-    use jackdaw_jsn::bsn_bridge::bsn_scene_to_jsn_with_registry;
-    use jackdaw_jsn::format::{JsnHeader, JsnMetadata};
-
-    // A copy payload: one entity with a face material reference, plus the
-    // inline material it references.
-    let mut app = headless_app();
-    let material_json = {
-        let registry = app
-            .world()
-            .resource::<bevy::ecs::reflect::AppTypeRegistry>()
-            .clone();
-        let reg = registry.read();
-        let material = StandardMaterial {
-            base_color: Color::srgb(0.1, 0.2, 0.9),
-            ..Default::default()
-        };
-        let serializer =
-            bevy::reflect::serde::TypedReflectSerializer::new(material.as_partial_reflect(), &reg);
-        serde_json::to_value(serializer).unwrap()
-    };
-    let mut assets = jackdaw_jsn::format::JsnAssets::default();
-    assets.0.insert(
-        "bevy_pbr::pbr_material::StandardMaterial".to_string(),
-        std::collections::HashMap::from([("#BlueMat".to_string(), material_json)]),
-    );
-    let payload_entities = vec![jackdaw_jsn::format::JsnEntity {
-        id: None,
-        parent: None,
-        components: std::collections::HashMap::from([
-            (
-                "bevy_ecs::name::Name".to_string(),
-                serde_json::json!("Copied"),
-            ),
-            (
-                "bevy_transform::components::transform::Transform".to_string(),
-                serde_json::json!({
-                    "translation": [7.0, 8.0, 9.0],
-                    "rotation": [0.0, 0.0, 0.0, 1.0],
-                    "scale": [1.0, 1.0, 1.0],
-                }),
-            ),
-        ]),
-    }];
-
-    // Copy side: payload -> BSN text (the exact conversion copy performs).
-    let payload_scene = jackdaw_jsn::JsnScene {
-        jsn: JsnHeader::default(),
-        metadata: JsnMetadata::default(),
-        assets,
-        editor: None,
-        scene: payload_entities,
-    };
-    let text = convert_jsn_scene_to_bsn(app.world_mut(), &payload_scene)
-        .expect("copy conversion")
-        .scene_bsn;
-    assert!(text.contains("#Copied"), "{text}");
-    assert!(text.contains("#BlueMat"), "{text}");
-
-    // Paste side: BSN text -> payload via the registry-aware bridge.
-    let registry = app
-        .world()
-        .resource::<bevy::ecs::reflect::AppTypeRegistry>()
-        .clone();
-    let reg = registry.read();
-    let bridged = bsn_scene_to_jsn_with_registry(&text, Some(&reg)).expect("paste bridge");
-    assert_eq!(bridged.scene.len(), 1, "asset entry is not an entity");
-    assert!(
-        bridged.scene[0]
-            .components
-            .contains_key("bevy_transform::components::transform::Transform")
-    );
-    let materials = bridged
-        .assets
-        .0
-        .get("bevy_pbr::pbr_material::StandardMaterial")
-        .expect("asset table populated");
-    assert!(materials.contains_key("#BlueMat"));
-}
-
-#[test]
 fn migration_prompt_detects_converts_and_respects_decline() {
     use jackdaw::migrate_dialog::{PendingMigration, count_legacy_files, resolve_migration};
     use jackdaw::project::ProjectRoot;
@@ -944,10 +790,7 @@ fn migration_prompt_detects_converts_and_respects_decline() {
     editor.init_resource::<PendingMigration>();
     editor.world_mut().insert_resource(ProjectRoot {
         root: dir.path().to_path_buf(),
-        config: jackdaw_jsn::JsnProject {
-            jsn: jackdaw_jsn::format::JsnHeader::default(),
-            project: jackdaw_jsn::JsnProjectConfig::default(),
-        },
+        config: jackdaw::project::ProjectConfig::default(),
     });
 
     // Decline: files stay, prompt state clears, detection still fires.
@@ -1013,10 +856,7 @@ fn migration_prompt_detects_and_converts_legacy_projects() {
 
     app.world_mut().insert_resource(ProjectRoot {
         root: dir.path().to_path_buf(),
-        config: jackdaw_jsn::JsnProject {
-            jsn: jackdaw_jsn::format::JsnHeader::default(),
-            project: jackdaw_jsn::JsnProjectConfig::default(),
-        },
+        config: jackdaw::project::ProjectConfig::default(),
     });
 
     // Declining leaves the project untouched and clears the pending state.

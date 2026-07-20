@@ -1,5 +1,5 @@
-//! Spike 3 probe, now the pipeline's regression test: compat
-//! verification with no user-authored tags, via
+#![expect(clippy::print_stdout, reason = "test prints progress diagnostics")]
+//! Compat verification with no user-authored tags, via
 //! [`jackdaw::project_build::linkage`].
 //!
 //! A project dylib built as a Rust dylib keeps its `.rustc` metadata
@@ -9,11 +9,12 @@
 //! the identity discriminates builds: verification against a DIFFERENT
 //! build of the same SDK crate must fail.
 //!
-//! Requires the spike 1 dylib; run after (or alongside):
+//! Requires the dylib built by `reflect_auto_register`; run after (or
+//! alongside):
 //!
 //! ```text
 //! cargo test --features dylib --target <host-triple> \
-//!     --test spike_compat_identity -- --nocapture
+//!     --test dylib_linkage_identity -- --nocapture
 //! ```
 #![cfg(feature = "dylib")]
 
@@ -22,6 +23,8 @@ use std::path::PathBuf;
 use jackdaw::project_build::linkage::{LinkageError, verify_linkage};
 use jackdaw::sdk_paths::SdkPaths;
 
+mod util;
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -29,8 +32,9 @@ fn workspace_root() -> PathBuf {
 #[test]
 fn dylib_linkage_identity_matches_the_running_sdk() {
     let sdk = SdkPaths::for_workspace(&workspace_root());
-    let spike_dylib = workspace_root().join(format!(
-        ".scratch/project-onboarding/spike1/spike_game/target-spike/{}/debug/{}spike_game{}",
+    // The dylib `reflect_auto_register` builds, in the same staging dir.
+    let fixture_dylib = util::stage_fixture("reflect_game").join(format!(
+        "target-fixture/{}/debug/{}reflect_game{}",
         sdk.triple,
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
@@ -41,12 +45,12 @@ fn dylib_linkage_identity_matches_the_running_sdk() {
         sdk.triple
     );
     assert!(
-        spike_dylib.exists(),
-        "spike dylib missing; run the spike_auto_register test first"
+        fixture_dylib.exists(),
+        "fixture dylib missing; run the reflect_auto_register test first"
     );
 
-    verify_linkage(&spike_dylib, &sdk.dylib)
-        .expect("SPIKE FAILED: the spike dylib does not verify against the running SDK");
+    verify_linkage(&fixture_dylib, &sdk.dylib)
+        .expect("the fixture dylib does not verify against the running SDK");
 
     // Negative control: a different build of the same SDK crate (the
     // workspace's own no-target build) must be rejected, proving the
@@ -57,7 +61,7 @@ fn dylib_linkage_identity_matches_the_running_sdk() {
         std::env::consts::DLL_SUFFIX
     ));
     if stale_sdk.exists() {
-        match verify_linkage(&spike_dylib, &stale_sdk) {
+        match verify_linkage(&fixture_dylib, &stale_sdk) {
             Err(LinkageError::Mismatch { .. }) => {}
             other => panic!(
                 "negative control failed: expected a mismatch against a \
@@ -66,5 +70,5 @@ fn dylib_linkage_identity_matches_the_running_sdk() {
         }
     }
 
-    println!("SPIKE PASSED: linkage identity verified against the running SDK");
+    println!("linkage identity verified against the running SDK");
 }

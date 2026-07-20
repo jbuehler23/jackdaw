@@ -38,7 +38,7 @@ https://github.com/user-attachments/assets/56834720-599e-4461-b712-fff7b85fb128
 - **Brush-based geometry** draw, edit, and CSG-combine convex brushes with vertex/edge/face/clip editing modes
 - **Material system** VERY wip - texture browser, material definitions with ORM auto-detection, per-face application
 - **Terrain** heightmap sculpting and texture painting, very WIP :)
-- **Scene serialization** save/load scenes in the `.jsn` format with full asset references. Ideally to be replaced with BSN once ready.
+- **Scene serialization** save/load scenes in the `.bsn` format with full asset references. Older `.jsn` scenes are migrated on open.
 - **Transform tools** translate, rotate, scale with grid snapping and axis constraints
 - **Undo/redo** full command history - some bugs atm with this
 - **Extensible** register custom components, add inspector panels, integrate with your game
@@ -62,17 +62,33 @@ Add `jackdaw` to your project:
 cargo add jackdaw
 ```
 
-Then add the `EditorPlugin` to your app:
+Then add `EditorPlugins` to your app:
 
 ```rust
 use bevy::prelude::*;
-use jackdaw::EditorPlugin;
+use jackdaw::prelude::*;
 
 fn main() -> AppExit {
     App::new()
-        .add_plugins((DefaultPlugins, EditorPlugin))
-        ...
+        .add_plugins((
+            DefaultPlugins.set(editor_window_plugin()),
+            EnhancedInputPlugin,
+            PhysicsPlugins::default(),
+            EditorPlugins::default(),
+        ))
         .run()
+}
+```
+
+To load a scene you authored into your own game, depend on `jackdaw_runtime`
+and spawn a `JackdawSceneRoot`:
+
+```rust
+use bevy::prelude::*;
+use jackdaw_runtime::prelude::*;
+
+fn spawn_scene(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn(JackdawSceneRoot(asset_server.load("scene.bsn")));
 }
 ```
 

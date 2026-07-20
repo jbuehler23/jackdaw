@@ -48,22 +48,22 @@ fn prefab_cache_stores_and_retrieves() {
 fn cycle_detector_accepts_simple_chain() {
     use std::path::PathBuf;
     let chain = vec![
-        PathBuf::from("scene.jsn"),
-        PathBuf::from("a.jsn"),
-        PathBuf::from("b.jsn"),
+        PathBuf::from("scene.bsn"),
+        PathBuf::from("a.bsn"),
+        PathBuf::from("b.bsn"),
     ];
-    let next = PathBuf::from("c.jsn");
+    let next = PathBuf::from("c.bsn");
     assert!(jackdaw::prefab::resolver_bsn::would_cycle(&chain, &next).is_none());
 }
 
 #[test]
 fn cycle_detector_rejects_revisit() {
     use std::path::PathBuf;
-    let chain = vec![PathBuf::from("a.jsn"), PathBuf::from("b.jsn")];
-    let next = PathBuf::from("a.jsn");
+    let chain = vec![PathBuf::from("a.bsn"), PathBuf::from("b.bsn")];
+    let next = PathBuf::from("a.bsn");
     let err = jackdaw::prefab::resolver_bsn::would_cycle(&chain, &next)
         .expect("cycle should be reported");
-    assert!(err.to_string().contains("a.jsn"));
+    assert!(err.to_string().contains("a.bsn"));
 }
 
 /// Prefab and scene documents for these tests are built directly as BSN
@@ -773,7 +773,7 @@ fn spawn_instance_reuses_cached_prefab() {
 fn field_is_overridden_detects_changed_field() {
     let mut cache = jackdaw::prefab::PrefabAstCache::default();
     cache.insert(
-        std::path::PathBuf::from("p.jsn"),
+        std::path::PathBuf::from("p.bsn"),
         bsn_ast(
             "jackdaw::prefab::components::Prefab\n\
              jackdaw::prefab::components::PrefabEntityId(0)\n\
@@ -788,7 +788,7 @@ fn field_is_overridden_detects_changed_field() {
 
     // Instance node overriding translation.x only.
     let scene = bsn_ast(
-        "jackdaw::prefab::components::IsA { source: \"p.jsn\" }\n\
+        "jackdaw::prefab::components::IsA { source: \"p.bsn\" }\n\
          jackdaw::prefab::components::PrefabEntityId(0)\n\
          bevy_transform::components::transform::Transform {\n\
              translation: glam::Vec3 { x: 10.0, y: 0.0, z: 0.0 },\n\
@@ -1512,13 +1512,13 @@ fn save_round_trip_preserves_prefab_markers() {
 #[test]
 fn cache_canonicalizes_path_inputs() {
     let tmp = tempfile::tempdir().unwrap();
-    let abs = tmp.path().join("p.jsn");
+    let abs = tmp.path().join("p.bsn");
     std::fs::write(&abs, "{}").unwrap();
 
     let mut cache = jackdaw::prefab::PrefabAstCache::default();
     cache.insert(&abs, jackdaw_bsn::SceneBsnAst::default());
 
-    let weird = abs.parent().unwrap().join(".").join("p.jsn");
+    let weird = abs.parent().unwrap().join(".").join("p.bsn");
     assert!(
         cache.get(&weird).is_some(),
         "lookup tolerates non-canonical inputs"
@@ -1530,12 +1530,12 @@ fn cache_bumps_epoch_on_every_mutation() {
     let mut cache = jackdaw::prefab::PrefabAstCache::default();
     let start = cache.epoch();
     cache.insert(
-        std::path::PathBuf::from("/tmp/jackdaw_cache_test_a.jsn"),
+        std::path::PathBuf::from("/tmp/jackdaw_cache_test_a.bsn"),
         jackdaw_bsn::SceneBsnAst::default(),
     );
     let after_insert = cache.epoch();
     assert!(after_insert > start, "insert bumps epoch");
-    cache.invalidate(&std::path::PathBuf::from("/tmp/jackdaw_cache_test_a.jsn"));
+    cache.invalidate(&std::path::PathBuf::from("/tmp/jackdaw_cache_test_a.bsn"));
     assert!(cache.epoch() > after_insert, "invalidate bumps epoch");
 }
 
@@ -1583,7 +1583,7 @@ fn editor_save_records_fingerprint() {
 #[test]
 fn external_edit_changes_fingerprint() {
     let tmp = tempfile::tempdir().unwrap();
-    let prefab_path = tmp.path().join("p.jsn");
+    let prefab_path = tmp.path().join("p.bsn");
     std::fs::write(&prefab_path, "{}").unwrap();
     let fp_a = jackdaw::prefab::cache::compute_file_fingerprint(&prefab_path).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1795,14 +1795,14 @@ fn repair_self_cycles_strips_self_isa_from_cached_prefab() {
 
 #[test]
 fn prefab_edit_propagates_to_instance_in_other_tab_on_swap() {
-    // Simulates: user has tab A with an instance of box.jsn + tab B
-    // editing box.jsn directly. Edit the prefab via the cache (as
+    // Simulates: user has tab A with an instance of box.bsn + tab B
+    // editing box.bsn directly. Edit the prefab via the cache (as
     // `scene.save`'s prefab branch does), then swap back to tab A and
     // assert the instance's spawned entity reflects the updated prefab.
     use bevy::prelude::*;
 
     let tmp = tempfile::tempdir().unwrap();
-    let prefab_path = tmp.path().join("box.jsn");
+    let prefab_path = tmp.path().join("box.bsn");
 
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
@@ -1944,7 +1944,7 @@ fn scene_save_on_prefab_tab_clears_dirty_state() {
     use bevy::prelude::*;
 
     let tmp = tempfile::tempdir().unwrap();
-    let prefab_path = tmp.path().join("p.jsn");
+    let prefab_path = tmp.path().join("p.bsn");
 
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
@@ -2795,15 +2795,14 @@ fn save_then_drag_spawn_twice_keeps_distinct_positions() {
     );
     app.update();
 
-    // Step 1: save selection as prefab. Source despawn + spawn_instance
-    // at centroid (5, 0, 0).
+    // Saving the selection despawns the source and spawns an instance at the
+    // centroid (5, 0, 0).
     jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[source], &target);
 
-    // Step 2: drag-spawn at (20, 0, 0).
     jackdaw::prefab::operators::spawn_instance(app.world_mut(), &target, Vec3::new(20.0, 0.0, 0.0));
 
-    // Step 3: drag-spawn at (30, 0, 0). This is the move that the
-    // user reports resetting the earlier two instances' positions.
+    // The third drag-spawn is the one reported as resetting the earlier two
+    // instances' positions.
     jackdaw::prefab::operators::spawn_instance(app.world_mut(), &target, Vec3::new(30.0, 0.0, 0.0));
 
     let world = app.world_mut();

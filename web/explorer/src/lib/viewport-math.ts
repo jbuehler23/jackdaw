@@ -1,6 +1,5 @@
 // viewport-math.ts: pure vector/camera/projection math for the canvas viewport.
 // No canvas or DOM access here; components own drawing, this module owns the numbers.
-// Ported from the PoC's orbit camera (.scratch/web-explorer/jackdaw-explorer-poc.html).
 
 export interface Vec3 {
   x: number;

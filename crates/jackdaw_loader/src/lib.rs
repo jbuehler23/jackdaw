@@ -352,7 +352,8 @@ fn open_and_construct(
         reason = "the ctor runs third-party code; catch_unwind is \
                   best-effort isolation under panic=unwind"
     )]
-    let ext = std::panic::catch_unwind(AssertUnwindSafe(ctor)).map_err(|_| LoadError::EntryPanicked)?;
+    let ext =
+        std::panic::catch_unwind(AssertUnwindSafe(ctor)).map_err(|_| LoadError::EntryPanicked)?;
     Ok((ctor, ext))
 }
 

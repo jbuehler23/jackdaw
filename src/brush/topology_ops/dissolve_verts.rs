@@ -8,7 +8,7 @@ use jackdaw_scene_types::Brush;
 
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
-/// Remove the selected verts and merge incident faces. MVP: only valence-2 verts are
+/// Remove the selected verts and merge incident faces. Only valence-2 verts are
 /// dissolved; higher-valence verts skipped silently. Available in Vertex mode.
 #[operator(
     id = "brush.mesh.dissolve_verts",
@@ -98,5 +98,5 @@ pub(crate) fn can_run_dissolve_verts(
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushDissolveVertsOp>();
-    // No keybind; operator is available via menu / command palette only for MVP.
+    // No keybind; operator is available via menu / command palette only.
 }

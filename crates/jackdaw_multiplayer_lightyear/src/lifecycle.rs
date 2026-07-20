@@ -40,7 +40,7 @@ pub enum SpawnPolicy {
 
 /// Links a server-spawned player entity back to the connection (`ClientOf`) link
 /// that owns it. `move_player_to_zone` reads it to re-route the player's sender
-/// between rooms on a zone transition; Phase 6 input routing reuses it.
+/// between rooms on a zone transition.
 #[derive(Component, Clone, Copy)]
 pub(crate) struct PlayerConnection(pub Entity);
 

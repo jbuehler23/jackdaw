@@ -199,7 +199,7 @@ pub fn enumerate_pickable_components(
 
         // Single mechanism for picker hiding: types opt out via the
         // `@EditorHidden` reflect attribute (defined alongside
-        // `EditorCategory` / `EditorDescription` in `jackdaw_jsn`).
+        // `EditorCategory` / `EditorDescription` in `jackdaw_scene_types`).
         // Used by jackdaw's own scene types and available to
         // extension/game authors for their own helper Components.
         if custom_attrs.is_some_and(|a| a.get::<EditorHidden>().is_some()) {

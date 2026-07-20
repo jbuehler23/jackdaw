@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use jackdaw_bsn::SceneBsnAst;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::prefab::canonical_path::{CanonicalPrefabPath, canonical_prefab_path};
@@ -24,7 +24,6 @@ pub struct SavedFingerprint {
 pub struct PrefabAstCache {
     entries: HashMap<CanonicalPrefabPath, SceneBsnAst>,
     epoch: u64,
-    dirty_paths: HashSet<CanonicalPrefabPath>,
     last_saved_fingerprints: HashMap<CanonicalPrefabPath, SavedFingerprint>,
 }
 
@@ -39,14 +38,12 @@ impl PrefabAstCache {
 
     pub fn insert(&mut self, path: impl AsRef<Path>, ast: SceneBsnAst) {
         let key = canonical_prefab_path(path);
-        self.entries.insert(key.clone(), ast);
+        self.entries.insert(key, ast);
         self.epoch = self.epoch.wrapping_add(1);
-        self.dirty_paths.insert(key);
     }
 
-    /// In-place mutation. Bumps the epoch and marks the path dirty.
-    /// Returns `false` if no entry existed at this path (and does not
-    /// invoke `mutator`).
+    /// In-place mutation. Bumps the epoch. Returns `false` if no entry
+    /// existed at this path (and does not invoke `mutator`).
     pub fn mutate<F: FnOnce(&mut SceneBsnAst)>(&mut self, path: &Path, mutator: F) -> bool {
         let key = canonical_prefab_path(path);
         let Some(entry) = self.entries.get_mut(&key) else {
@@ -54,7 +51,6 @@ impl PrefabAstCache {
         };
         mutator(entry);
         self.epoch = self.epoch.wrapping_add(1);
-        self.dirty_paths.insert(key);
         true
     }
 
@@ -62,7 +58,6 @@ impl PrefabAstCache {
         let key = canonical_prefab_path(path);
         if self.entries.remove(&key).is_some() {
             self.epoch = self.epoch.wrapping_add(1);
-            self.dirty_paths.insert(key);
         }
     }
 
@@ -75,16 +70,6 @@ impl PrefabAstCache {
     /// epoch to decide whether to react.
     pub fn epoch(&self) -> u64 {
         self.epoch
-    }
-
-    /// Paths that have changed since `dirty_paths` was last cleared.
-    /// Read-only view; clear with `clear_dirty`.
-    pub fn dirty_paths(&self) -> impl Iterator<Item = &CanonicalPrefabPath> {
-        self.dirty_paths.iter()
-    }
-
-    pub fn clear_dirty(&mut self) {
-        self.dirty_paths.clear();
     }
 
     /// Stash the post-write fingerprint of a prefab file. The watcher

@@ -7,7 +7,6 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 bevy = { workspace = true }
-jackdaw_jsn = { workspace = true }
 jackdaw_scene_types = { workspace = true }
 
 [lints]

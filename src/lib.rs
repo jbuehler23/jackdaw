@@ -72,8 +72,6 @@ pub mod modal_transform;
 pub mod modifier_ops;
 pub mod navmesh;
 pub mod new_project;
-pub mod project_build;
-pub mod project_types;
 pub mod numeric_transform;
 pub mod operator_tooltip;
 pub mod physics_brush_bridge;
@@ -85,8 +83,10 @@ pub mod pie_projection;
 pub mod prefab;
 pub mod preflight;
 pub mod project;
+pub mod project_build;
 pub mod project_files;
 pub mod project_select;
+pub mod project_types;
 pub mod reference_image;
 pub mod reflect_default;
 pub mod remote;
@@ -190,7 +190,7 @@ pub struct EditorEntity;
 #[derive(Component, Default)]
 pub struct BlocksCameraInput;
 
-// `EditorHidden` is now defined in `crates/jackdaw_jsn/src/editor_meta.rs`
+// `EditorHidden` is now defined in `jackdaw_scene_types`
 // alongside `EditorCategory` / `EditorDescription`. It serves both
 // roles: as a Bevy `Component` for hiding entities from the hierarchy
 // (the original use), and as a `#[reflect(@EditorHidden)]` reflect
@@ -203,11 +203,10 @@ pub struct BlocksCameraInput;
 #[derive(Component, Default)]
 pub struct NonSerializable;
 
-// `SkipSerialization` is defined in `crates/jackdaw_jsn/src/editor_meta.rs`
+// `SkipSerialization` is defined in `jackdaw_scene_types`
 // alongside `EditorHidden` so user game crates that only depend on
-// `jackdaw_runtime` (the static-template default) can reach it
-// without pulling in the full editor crate. Re-exported via
-// `inspector` module + `prelude` below.
+// `jackdaw_runtime` can reach it without pulling in the full editor
+// crate. Re-exported via `inspector` module + `prelude` below.
 
 /// The editor plugin group. Construct with [`EditorPlugins::default`] for the
 /// builder, or add the default instance directly with
@@ -275,7 +274,6 @@ impl PluginGroup for EditorPlugins {
             .add(ExtensionPlugin::default())
     }
 }
-
 
 /// Plugin required for the Jackdaw's core functionality.
 #[derive(Default)]
@@ -2876,7 +2874,7 @@ fn auto_save_layout_on_change(
 fn init_layout(world: &mut World) {
     let layout_json = world
         .get_resource::<crate::project::ProjectRoot>()
-        .and_then(|p| p.config.project.layout.clone());
+        .and_then(|p| p.config.layout.clone());
 
     let mut loaded_tree = false;
     if let Some(json) = layout_json {

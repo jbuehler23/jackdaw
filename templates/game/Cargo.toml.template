@@ -13,5 +13,5 @@ bevy = "0.19"
 # Loads the scenes you author in the editor (assets/*.bsn) and builds
 # physics colliders from them. An ordinary dependency; remove it if you
 # stop using authored scenes.
-jackdaw_runtime = { version = "0.5", features = ["physics"] }
+jackdaw_runtime = { version = "0.19", features = ["physics"] }
 avian3d = "0.7"

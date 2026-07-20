@@ -291,7 +291,7 @@ impl SceneBsnAst {
 /// The integer a whole-component [`BsnValue`] represents, when it is either a
 /// bare integer scalar or a tuple struct wrapping exactly one integer scalar.
 /// `None` for every other shape.
-fn bsn_value_as_int(value: &BsnValue) -> Option<i128> {
+pub fn bsn_value_as_int(value: &BsnValue) -> Option<i128> {
     match value {
         BsnValue::Int(v) => Some(*v),
         BsnValue::TupleStruct(data) => match data.values.as_slice() {

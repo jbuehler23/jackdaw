@@ -576,4 +576,3 @@ fn cleanup_prior_installs(
         }
     }
 }
-

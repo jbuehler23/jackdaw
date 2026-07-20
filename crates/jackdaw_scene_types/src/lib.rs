@@ -29,7 +29,7 @@ pub use mesh_rebuild::evaluate_brush_geometry;
 pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
 pub use types::{
     Brush, BrushFaceData, BrushGroup, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
-    GltfSource, JsnPrefab, JsnPrefabBaseline, NavmeshRegion, PropertyValue, SceneRootTag, Terrain,
+    GltfSource, NavmeshRegion, PrefabBaseline, PropertyValue, SceneRootTag, Terrain,
 };
 
 use bevy::prelude::*;
@@ -75,7 +75,6 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<PropertyValue>()
             .register_type::<SceneNodeId>()
             .register_type::<GltfSource>()
-            .register_type::<JsnPrefab>()
             .register_type::<NavmeshRegion>()
             .register_type::<Terrain>()
             .register_type::<MeshMirror>()

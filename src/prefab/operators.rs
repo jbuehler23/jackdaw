@@ -3,7 +3,7 @@
 
 use crate::prefab::cache::PrefabAstCache;
 use crate::prefab::resolver_bsn::{
-    read_isa_deleted, read_isa_source, read_prefab_entity_id, set_whole_component,
+    read_isa_deleted, read_isa_source, read_prefab_entity_id, set_whole_component, value_to_patch,
 };
 use bevy::ecs::hierarchy::{ChildOf, Children};
 use bevy::ecs::reflect::AppTypeRegistry;
@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_bsn::{
     BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnTupleStructData, BsnValue, SceneBsnAst,
-    bsn_value_eq, emit_scene, get_bsn_field, set_bsn_field,
+    emit_scene, get_bsn_field, set_bsn_field,
 };
 use std::path::{Path, PathBuf};
 
@@ -71,10 +71,7 @@ fn prefab_marker_patch() -> BsnPatch {
 
 /// A `PrefabEntityId(id)` tuple-struct patch.
 fn peid_patch(id: u32) -> BsnPatch {
-    BsnPatch::TupleStruct(BsnTupleStructData {
-        type_path: PREFAB_ENTITY_ID_TYPE.to_string(),
-        values: vec![BsnValue::Int(i128::from(id))],
-    })
+    value_to_patch(peid_value(id)).expect("PrefabEntityId is a tuple struct")
 }
 
 /// The `PrefabEntityId(id)` whole-component value.
@@ -95,21 +92,7 @@ fn field(name: &str, value: BsnValue) -> BsnField {
 /// An `IsA { source, deleted }` struct patch. Paths serialize as a plain
 /// string; the deleted list is a list of integer ids.
 fn isa_patch(source: &str, deleted: &[u32]) -> BsnPatch {
-    BsnPatch::Struct(BsnStructData {
-        type_path: ISA_TYPE.to_string(),
-        fields: BsnStructFields(vec![
-            field("source", BsnValue::String(source.to_string())),
-            field(
-                "deleted",
-                BsnValue::List(
-                    deleted
-                        .iter()
-                        .map(|&d| BsnValue::Int(i128::from(d)))
-                        .collect(),
-                ),
-            ),
-        ]),
-    })
+    value_to_patch(isa_value(source, deleted)).expect("IsA is a struct")
 }
 
 fn vec3_value(x: f32, y: f32, z: f32) -> BsnValue {
@@ -160,26 +143,15 @@ fn patch_type_path(patch: &BsnPatch) -> Option<&str> {
 /// dropped too. `Name` and every other component patch pass through so a prefab
 /// file keeps them.
 fn copy_component_patches(live: &SceneBsnAst, node: Entity, drop_markers: bool) -> Vec<BsnPatch> {
-    let mut out = Vec::new();
-    let Some(patches) = live.get_patches(node) else {
-        return out;
-    };
-    for &pe in &patches.0 {
-        let Some(patch) = live.get_patch(pe) else {
-            continue;
-        };
-        if matches!(patch, BsnPatch::Children(_)) {
-            continue;
-        }
-        if drop_markers
-            && let Some(tp) = patch_type_path(patch)
-            && (tp == PREFAB_TYPE || tp == ISA_TYPE || tp == PREFAB_ENTITY_ID_TYPE)
-        {
-            continue;
-        }
-        out.push(patch.clone());
+    let mut patches = live.cloned_component_patches(node);
+    if drop_markers {
+        patches.retain(|patch| {
+            patch_type_path(patch)
+                .map(|tp| tp != PREFAB_TYPE && tp != ISA_TYPE && tp != PREFAB_ENTITY_ID_TYPE)
+                .unwrap_or(true)
+        });
     }
-    out
+    patches
 }
 
 /// Components for the synthetic prefab root: `Prefab` marker, `PrefabEntityId(0)`,
@@ -223,7 +195,12 @@ pub(crate) fn normalize_as_prefab_source(ast: &mut SceneBsnAst, display_name: &s
 
     if roots.len() == 1 {
         let root = roots[0];
-        set_whole_component(ast, root, PREFAB_TYPE, BsnValue::Type(PREFAB_TYPE.to_string()));
+        set_whole_component(
+            ast,
+            root,
+            PREFAB_TYPE,
+            BsnValue::Type(PREFAB_TYPE.to_string()),
+        );
         set_whole_component(ast, root, PREFAB_ENTITY_ID_TYPE, peid_value(0));
         for (i, desc) in ast.descendants_of(root).into_iter().enumerate() {
             set_whole_component(ast, desc, PREFAB_ENTITY_ID_TYPE, peid_value((i + 1) as u32));
@@ -1239,54 +1216,6 @@ pub fn unpack_child(world: &mut World, child_node: Entity, drop_target_node: Ent
     }
 }
 
-/// Report `(dot_path, leaf)` pairs for every scalar leaf in `scene` that
-/// differs from `prefab`'s value at the same path. Struct branches recurse so a
-/// single Vec3 axis difference produces `translation.x` rather than a whole
-/// Vec3. When `prefab` is `None`, every leaf is reported.
-fn collect_overridden_bsn_paths(
-    scene: &BsnValue,
-    prefab: Option<&BsnValue>,
-) -> Vec<(String, BsnValue)> {
-    let mut out = Vec::new();
-    walk_bsn_leaves(scene, prefab, String::new(), &mut out);
-    out
-}
-
-fn walk_bsn_leaves(
-    scene: &BsnValue,
-    prefab: Option<&BsnValue>,
-    path: String,
-    out: &mut Vec<(String, BsnValue)>,
-) {
-    match scene {
-        BsnValue::Struct(data) => {
-            let prefab_fields = match prefab {
-                Some(BsnValue::Struct(p)) => Some(&p.fields.0),
-                _ => None,
-            };
-            for field in &data.fields.0 {
-                let next_path = if path.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{path}.{}", field.name)
-                };
-                let prefab_child = prefab_fields
-                    .and_then(|fs| fs.iter().find(|f| f.name == field.name).map(|f| &f.value));
-                walk_bsn_leaves(&field.value, prefab_child, next_path, out);
-            }
-        }
-        leaf => {
-            let differs = match prefab {
-                Some(p) => !bsn_value_eq(p, leaf),
-                None => true,
-            };
-            if differs && !path.is_empty() {
-                out.push((path, leaf.clone()));
-            }
-        }
-    }
-}
-
 /// Walk every entity in the prefab-instance subtree rooted at
 /// `instance_root_node`. For each that carries a `PrefabEntityId`, diff its
 /// non-marker components against the cached prefab's matching entity and call
@@ -1334,9 +1263,10 @@ pub fn apply_all_overrides_to_source(world: &mut World, instance_root_node: Enti
                     continue;
                 };
                 let prefab_value = get_bsn_field(prefab, prefab_node, &tp, "");
-                for (field_path, value) in
-                    collect_overridden_bsn_paths(&scene_value, prefab_value.as_ref())
-                {
+                for (field_path, value) in crate::prefab::overrides_bsn::collect_overridden_paths(
+                    &scene_value,
+                    prefab_value.as_ref(),
+                ) {
                     work.push((peid, tp.clone(), field_path, value));
                 }
             }

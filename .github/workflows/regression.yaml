@@ -1,0 +1,55 @@
+name: Regression
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: regression-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  toolchain: nightly-2026-03-05
+
+jobs:
+  heavy:
+    uses: ./.github/workflows/heavy-tier.yaml
+
+  # The tiers that do not need the SDK, on the platforms we ship bundles for.
+  # This is where platform-specific path handling gets covered. Nightly and
+  # tag-only, so tuning it never blocks a pull request.
+  cross-platform:
+    name: Fast + integration (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          components: rustfmt, clippy
+          toolchain: ${{ env.toolchain }}
+
+      - name: Populate target directory from cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: cross-${{ matrix.os }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Fast tier (fmt, clippy, lib tests)
+        run: cargo xtask fast
+
+      - name: Integration tier
+        run: cargo xtask integration

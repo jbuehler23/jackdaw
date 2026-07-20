@@ -113,7 +113,7 @@ pub(crate) fn install_windowless_world(world: &mut World) {
 }
 
 /// Point every window-targeting camera at the capture image. Because no
-/// camera renders to a window anymore, bevy_ui has no default UI camera, so
+/// camera renders to a window anymore, `bevy_ui` has no default UI camera, so
 /// exactly one retargeted camera is marked as the default; the marker is a
 /// singleton, so the rest are left unmarked. A game that already set its own
 /// default UI camera keeps it. Runs every frame: cameras spawned later (zone

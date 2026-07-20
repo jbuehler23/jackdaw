@@ -8,7 +8,7 @@ gymnastics.
 
 ## Author workflow
 
-### 1. Create an extension
+### Create an extension
 
 Click **New Project** on the launcher and pick **Extension** (or
 run `jackdaw new my_tool --extension`). Fill in:
@@ -27,8 +27,12 @@ edition = "2024"
 
 [dependencies]
 bevy = "0.19"
-jackdaw_api = "0.5"
+jackdaw_api = "0.19"
 ```
+
+Jackdaw's crate versions track the Bevy minor they target, so an
+extension for a Bevy 0.19 editor uses the `0.19.x` line of
+`jackdaw_api`.
 
 `src/lib.rs` implements the trait:
 
@@ -58,7 +62,7 @@ impl JackdawExtension for MyTool {
 }
 ```
 
-### 2. Open it in jackdaw
+### Open it in jackdaw
 
 Open the extension project from the launcher like any other
 project. The editor builds it in the background (into the

@@ -5,14 +5,15 @@ use rand::Rng;
 
 use bevy::prelude::*;
 
-/// Stable per-node identifier that persists in the `.jsn` and is attached to
-/// the spawned ECS entity. Lets a running game map a live entity back to the
-/// authored scene node it came from (PIE "save runtime values" needs this).
+/// Stable per-node identifier that persists in the scene document and is
+/// attached to the spawned ECS entity. Lets a running game map a live entity
+/// back to the authored scene node it came from (PIE "save runtime values"
+/// needs this).
 ///
 /// Like `BrushStableId`, it survives the snapshot respawn cycle and the
 /// save/load round-trip; unlike `BrushStableId`, it is carried as a structural
-/// field on the node (see `JsnEntityNode::id` in `jackdaw_jsn`) so it is the
-/// canonical on-disk form rather than just another reflected component.
+/// field on the scene node so it is the canonical on-disk form rather than
+/// just another reflected component.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug, Reflect)]
 #[reflect(Component, @crate::EditorHidden)]
 pub struct SceneNodeId(pub u64);

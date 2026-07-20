@@ -1,7 +1,6 @@
-// ArchetypesTab.tsx: live archetype table, ported from the PoC's
-// arch-scroll/#arch-table markup (.scratch/web-explorer/jackdaw-explorer-poc.html).
-// Fed by `jackdaw/archetypes` (already sorted by entity_count desc); the
-// "query" button per row seeds the Queries page's chip builder.
+// ArchetypesTab.tsx: live archetype table. Fed by `jackdaw/archetypes`
+// (already sorted by entity_count desc); the "query" button per row seeds the
+// Queries page's chip builder.
 import { useEffect, useState } from 'preact/hooks';
 import { Layers, Search, Zap } from 'lucide-preact';
 import { Icon } from './Icon';

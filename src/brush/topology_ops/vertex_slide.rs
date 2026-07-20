@@ -77,5 +77,5 @@ pub(crate) fn can_run_vertex_slide(
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushVertexSlideOp>();
-    // No keybind; operator is available via menu / command palette only for MVP.
+    // No keybind; operator is available via menu / command palette only.
 }

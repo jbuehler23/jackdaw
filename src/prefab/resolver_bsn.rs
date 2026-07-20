@@ -14,8 +14,8 @@ use bevy::ecs::entity::Entity;
 use bevy::platform::collections::{HashMap, HashSet};
 
 use jackdaw_bsn::{
-    BsnPatch, BsnValue, SceneBsnAst, apply_deltas, bsn_value_eq, clone_node_into, get_bsn_field,
-    shallow_diff,
+    BsnPatch, BsnValue, SceneBsnAst, apply_deltas, bsn_value_as_int, bsn_value_eq, clone_node_into,
+    get_bsn_field, shallow_diff,
 };
 
 use std::fmt;
@@ -81,8 +81,6 @@ pub type PrefabLookup<'a> = dyn Fn(&Path) -> Option<&'a SceneBsnAst> + 'a;
 /// Resolve all `IsA` instances in `scene` against `get_prefab`. Returns a
 /// new document where every instance has its inherited subtree
 /// materialized, with sparse overrides applied.
-///
-/// Mirrors [`crate::prefab::resolver::resolve_scene`].
 pub fn resolve_scene(
     scene: &SceneBsnAst,
     get_prefab: &PrefabLookup,
@@ -96,8 +94,6 @@ pub fn resolve_scene(
 /// Expand every `IsA` node in `ast` in place. For each instance the prefab
 /// is looked up, deep-cloned, recursively expanded (so nested prefabs
 /// materialize first), then merged under the instance node.
-///
-/// Mirrors [`crate::prefab::resolver`]'s `expand_instances`.
 fn expand_instances(
     ast: &mut SceneBsnAst,
     get_prefab: &PrefabLookup,
@@ -132,8 +128,6 @@ fn expand_instances(
 /// components onto the instance, materialize prefab descendants that the
 /// instance does not already carry (skipping `deleted` ids), then merge
 /// the instance's sparse overrides onto the inherited baselines.
-///
-/// Mirrors [`crate::prefab::resolver`]'s `merge_prefab_under_instance`.
 fn merge_prefab_under_instance(
     ast: &mut SceneBsnAst,
     instance_root: Entity,
@@ -475,7 +469,7 @@ fn remove_name_patch(ast: &mut SceneBsnAst, node: Entity) {
 /// also accepted.
 pub(crate) fn read_prefab_entity_id(ast: &SceneBsnAst, node: Entity) -> Option<u32> {
     let whole = get_bsn_field(ast, node, PREFAB_ENTITY_ID_TYPE, "")?;
-    bsn_value_int(&whole).and_then(|i| u32::try_from(i).ok())
+    bsn_value_as_int(&whole).and_then(|i| u32::try_from(i).ok())
 }
 
 /// The `IsA.source` path on `isa_node`, read as a string subfield.
@@ -492,22 +486,9 @@ pub(crate) fn read_isa_deleted(ast: &SceneBsnAst, isa_node: Entity) -> Vec<u32> 
     match get_bsn_field(ast, isa_node, ISA_TYPE, "deleted") {
         Some(BsnValue::List(items)) => items
             .iter()
-            .filter_map(|item| bsn_value_int(item).and_then(|i| u32::try_from(i).ok()))
+            .filter_map(|item| bsn_value_as_int(item).and_then(|i| u32::try_from(i).ok()))
             .collect(),
         _ => Vec::new(),
-    }
-}
-
-/// The integer a `BsnValue` represents, when it is either a bare integer or
-/// a tuple struct wrapping exactly one integer.
-fn bsn_value_int(value: &BsnValue) -> Option<i128> {
-    match value {
-        BsnValue::Int(v) => Some(*v),
-        BsnValue::TupleStruct(data) => match data.values.as_slice() {
-            [BsnValue::Int(v)] => Some(*v),
-            _ => None,
-        },
-        _ => None,
     }
 }
 

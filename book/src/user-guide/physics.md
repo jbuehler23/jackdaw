@@ -3,8 +3,8 @@
 Jackdaw uses [avian3d](https://github.com/Jondolf/avian) for
 physics. There's no global "enable physics" toggle: you opt an
 entity in by adding the components it needs, and the editor's
-Physics Tool lets you drop dynamic bodies into the scene
-hammer-style.
+Physics Tool lets you drop dynamic bodies into the scene and
+let them settle.
 
 ## Adding physics to a brush or entity
 
@@ -114,8 +114,7 @@ place that one without disturbing the first.
   Add `AvianCollider` to the floor and set its `RigidBody`
   to `Static`.
 - **Collider wireframe is the wrong shape after rescaling.**
-  Should track scale gizmo edits since the avian-integration
-  fix in this branch. If you still see drift, file an issue
+  The wireframe tracks scale gizmo edits. If you still see drift, file an issue
   with the collider type and the resize gesture.
 - **`ColliderConstructor` panic when added directly.**
   Picking the raw `ColliderConstructor` (not `AvianCollider`)

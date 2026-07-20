@@ -378,7 +378,9 @@ fn install_toolchain() -> Result<(), String> {
         .status()
         .map_err(|e| format!("rustup is required to build the SDK but could not run: {e}"))?;
     if !status.success() {
-        return Err(format!("failed to install the {SDK_TOOLCHAIN_CHANNEL} toolchain"));
+        return Err(format!(
+            "failed to install the {SDK_TOOLCHAIN_CHANNEL} toolchain"
+        ));
     }
     Ok(())
 }
@@ -450,7 +452,10 @@ fn run_cargo(
         .map_err(|e| format!("cargo build: {e}"))?;
 
     let stdout = child.stdout.take().expect("piped stdout");
-    for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+    for line in std::io::BufReader::new(stdout)
+        .lines()
+        .map_while(Result::ok)
+    {
         report_cargo_line(&line, done, report);
     }
 

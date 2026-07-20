@@ -36,6 +36,12 @@ impl SkipOp {
     const fn new<O: Operator>(reason: &'static str) -> Self {
         Self { id: O::ID, reason }
     }
+
+    /// For operators whose type is not exported. The id is checked against the
+    /// live registry below, so it cannot go stale unnoticed.
+    const fn by_id(id: &'static str, reason: &'static str) -> Self {
+        Self { id, reason }
+    }
 }
 
 /// Operators that genuinely cannot run from a clean headless app
@@ -59,6 +65,26 @@ const SMOKE_SKIP_LIST: &[SkipOp] = &[
     SkipOp::new::<NavmeshSaveOp>("spawns native file-save dialog"),
     SkipOp::new::<NavmeshLoadOp>("spawns native file-open dialog"),
     SkipOp::new::<EntityAddImageOp>("spawns native image-file picker"),
+    SkipOp::by_id(
+        "operators.document",
+        "writes operators.md into the process working directory",
+    ),
+    SkipOp::by_id(
+        "scene.save_selection_as_prefab",
+        "without a ProjectRoot it writes <name>.bsn into the working directory",
+    ),
+    SkipOp::by_id(
+        "prefab.save_as_prefab",
+        "without a ProjectRoot it writes <name>.bsn into the working directory",
+    ),
+    SkipOp::by_id(
+        "prefab.save_scene_as_prefab",
+        "without a ProjectRoot it writes <name>.bsn into the working directory",
+    ),
+    SkipOp::by_id(
+        "prefab.save_as_variant",
+        "without a ProjectRoot it writes <name>.bsn into the working directory",
+    ),
 ];
 
 #[test]
@@ -73,6 +99,16 @@ fn smoke_dispatch_every_operator() {
         "expected at least 60 registered operators after editor_test_app() startup, got {}",
         ids.len()
     );
+
+    // A skip entry naming an operator that no longer exists would silently stop
+    // covering anything. The typed entries cannot drift; the by-id ones can.
+    for skip in SMOKE_SKIP_LIST {
+        assert!(
+            ids.iter().any(|id| id.as_ref() == skip.id),
+            "skip list names `{}`, which is not a registered operator",
+            skip.id
+        );
+    }
 
     let mut failures: Vec<String> = Vec::new();
     for id in ids {

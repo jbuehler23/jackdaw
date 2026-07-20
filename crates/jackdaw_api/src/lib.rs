@@ -134,31 +134,16 @@ pub mod runtime {
     };
 }
 
-/// JSN primitives re-exported for operator parameter marshalling. Includes
-/// the format-independent scene types (`PropertyValue`, `Brush`, etc.),
-/// which live in `jackdaw_scene_types` and are re-exported here alongside
-/// `jackdaw_jsn`'s own file-format types so extension authors have one
-/// import path.
-pub mod jsn {
-    pub use jackdaw_jsn::*;
+/// Format-independent scene primitives re-exported for operator parameter
+/// marshalling: `PropertyValue`, `Brush`, and the other `jackdaw_scene_types`
+/// types, exposed here so extension authors have one import path.
+pub mod scene {
     pub use jackdaw_scene_types::*;
 }
 
-/// Minimal UI primitives an extension needs to spawn editor-style
-/// widgets. Today this is just `button(ButtonProps)`; `label()` and
-/// other primitives will land here as they become first-class.
-///
-/// Designed to dovetail with the (future) UI prefab system: every
-/// type exposed here is data, every spawn fn returns a `Bundle`. A
-/// JSN-serialised `ButtonProps` should round-trip through the same
-/// constructor an extension calls at runtime, so extensions and
-/// scene-authored UI share one code path.
-///
-/// Surface stays deliberately small. If you find yourself wanting
-/// `ButtonVariant`, `ButtonSize`, or other feathers internals,
-/// either the missing primitive should be designed into the prefab
-/// schema first or `jackdaw_feathers` should grow a builder method
-/// that hides the choice.
+/// UI primitives an extension needs to spawn editor-style widgets:
+/// `button(ButtonProps)` plus the radial quick-menu below. Kept
+/// deliberately small.
 pub mod ui {
     pub use jackdaw_feathers::button::{
         ButtonProps, button, operator_button, operator_button_variant,

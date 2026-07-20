@@ -37,7 +37,9 @@ pub enum ProjectBuildError {
     Linkage(linkage::LinkageError),
     /// The project compile itself failed; the log carries rustc's
     /// diagnostics for the problems panel.
-    Compile { log: String },
+    Compile {
+        log: String,
+    },
 }
 
 impl std::fmt::Display for ProjectBuildError {

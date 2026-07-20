@@ -6,7 +6,7 @@
 //! assets at runtime. No custom curve evaluator; everything flows
 //! through Bevy's own playback path.
 //!
-//! All mutations go through `SpawnEntity` / `SetJsnField` /
+//! All mutations go through `SpawnEntity` / `SetBsnField` /
 //! `DespawnEntity`. No custom `EditorCommand` types.
 
 use bevy::prelude::*;

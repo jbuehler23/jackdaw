@@ -3,10 +3,6 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-fn is_zero(n: &usize) -> bool {
-    *n == 0
-}
-
 /// Top-level `.jsn` file structure.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JsnScene {
@@ -259,40 +255,6 @@ pub struct JsnCatalog {
     pub jsn: JsnHeader,
     /// Project-wide named assets.
     pub assets: JsnAssets,
-}
-
-/// Top-level `project.jsn` file structure.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsnProject {
-    /// Format header (same as scene files).
-    pub jsn: JsnHeader,
-    /// Project configuration.
-    pub project: JsnProjectConfig,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct JsnProjectConfig {
-    /// Human-readable project name.
-    pub name: String,
-    /// Optional description.
-    #[serde(default)]
-    pub description: String,
-    /// Default scene to open (relative to project root, e.g. "assets/scenes/level1.jsn").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_scene: Option<String>,
-    /// Persisted editor layout state (which windows in which areas, active tabs, area sizes).
-    /// Format is opaque to the JSN crate; consumers parse it as `jackdaw_panels::LayoutState`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub layout: Option<serde_json::Value>,
-    /// Scene paths (relative to project root) that were open in the
-    /// editor's tab strip when the project was last closed. Restored
-    /// in order on the next launch. Skipped if empty.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub last_open_tabs: Vec<String>,
-    /// Index into `last_open_tabs` of the tab that was active.
-    /// Clamped to range on load. Defaults to 0.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub last_active_tab: usize,
 }
 
 /// Return the current type path for a component key found in a `.jsn` file,

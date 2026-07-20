@@ -34,7 +34,6 @@ pub(crate) fn spawn_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
     // We need to map: local X -> axis_u, local Y -> normal, local Z -> axis_v
     let brush = Brush::cuboid(half_u, half_depth, half_v);
 
-    // Build rotation that maps local (X,Y,Z) -> (axis_u, normal, axis_v)
     let rotation = if plane.normal == Vec3::Y {
         Quat::IDENTITY
     } else if plane.normal == Vec3::NEG_Y {
@@ -127,7 +126,6 @@ pub(crate) fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
         let (_, rotation, translation) = global_tf.to_scale_rotation_translation();
         let inv_rotation = rotation.inverse();
 
-        // Get existing brush vertices in local space, then convert drawn verts to local space
         let existing_verts = compute_brush_geometry_from_planes(&old_brush.faces).0;
         let existing_count = existing_verts.len();
 
@@ -186,7 +184,6 @@ pub(crate) fn spawn_polygon_brush(active: &ActiveDraw, commands: &mut Commands) 
         let centroid: Vec3 = polygon.iter().sum::<Vec3>() / polygon.len() as f32;
         let center = centroid + normal * depth / 2.0;
 
-        // Build rotation: local Y = plane normal
         let rotation = if normal == Vec3::Y {
             Quat::IDENTITY
         } else if normal == Vec3::NEG_Y {
@@ -198,7 +195,6 @@ pub(crate) fn spawn_polygon_brush(active: &ActiveDraw, commands: &mut Commands) 
         };
         let inv_rotation = rotation.inverse();
 
-        // Convert polygon vertices to local space
         let local_verts: Vec<Vec3> = polygon
             .iter()
             .map(|&v| inv_rotation * (v - center))

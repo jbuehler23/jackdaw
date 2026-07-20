@@ -17,8 +17,14 @@ env:
   toolchain: nightly-2026-03-05
 
 jobs:
+  # Nothing ships unless the end-to-end tier is green: the SDK builds, a game
+  # builds against it, and the runner loads an authored scene.
+  heavy:
+    uses: ./.github/workflows/heavy-tier.yaml
+
   publish:
     name: Publish to crates.io
+    needs: [heavy]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # Final releases only. A pre-release tag (v0.19.0-test.1, v0.19.0-rc.1 -
@@ -55,6 +61,7 @@ jobs:
   # compile, no source checkout. Independent of the crates.io publish.
   binaries:
     name: Bundle - ${{ matrix.triple }}
+    needs: [heavy]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     permissions:
@@ -133,6 +140,25 @@ jobs:
 
       - name: Stage the bundle
         run: ./target/${{ matrix.triple }}/release/jackdaw-cli bundle --out "dist/jackdaw-${{ matrix.triple }}" --workspace .
+
+      # An archive that is missing a piece installs and then fails at the first
+      # project build, which is how a missing sdk/manifest.txt reached a user.
+      - name: Verify the staged bundle
+        run: |
+          set -euo pipefail
+          root="dist/jackdaw-${{ matrix.triple }}"
+          exe=""
+          if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
+          missing=0
+          for f in sdk/manifest.txt Cargo.lock toolchain.txt \
+                   "jackdaw$exe" "jackdaw-cli$exe" "jackdaw-runner$exe" "jackdaw-rustc-wrapper$exe"; do
+            if [ ! -f "$root/$f" ]; then echo "bundle is missing $f"; missing=1; fi
+          done
+          if [ ! -d "$root/sdk/${{ matrix.triple }}" ]; then
+            echo "bundle is missing sdk/${{ matrix.triple }}"; missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then echo "staged bundle is incomplete"; exit 1; fi
+          echo "bundle layout verified"
 
       - name: Archive (tar.zst)
         if: matrix.archive == 'tar.zst'

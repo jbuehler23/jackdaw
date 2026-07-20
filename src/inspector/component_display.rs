@@ -92,7 +92,6 @@ pub(crate) fn add_component_displays(
         &isa_query,
     );
 
-    // Build the same component panel into every Inspector instance.
     // Multi-instance dock layouts can host more than one inspector
     // tab; each gets its own UI subtree but mirrors the same data.
     for inspector in &inspectors {
@@ -117,7 +116,6 @@ pub(crate) fn add_component_displays(
             Some(&asts.project_types),
         );
 
-        // Set up monitoring: watch the selected entity for InspectorDirty
         commands.entity(inspector).insert((
             InspectorTarget(primary),
             Monitor(primary),
@@ -179,7 +177,7 @@ pub(crate) fn build_inspector_displays(
 
     // Check for prefab baseline (override tracking)
     let baseline = entity_ref
-        .get::<jackdaw_scene_types::JsnPrefabBaseline>()
+        .get::<jackdaw_scene_types::PrefabBaseline>()
         .cloned();
 
     // Prefab-instance context: if this entity sits inside an IsA
@@ -367,7 +365,7 @@ pub(crate) fn build_inspector_displays(
         // prefab instance so the right-click menu can offer Revert /
         // Apply on every component. The revert ICON's routing still
         // checks `is_overridden_prefab` below so the legacy
-        // `JsnPrefabBaseline` path keeps using its existing operator
+        // `PrefabBaseline` path keeps using its existing operator
         // when both systems coexist.
         let spec_prefab_ctx = prefab_ctx.clone();
         let revert_through_prefab = is_overridden_prefab;
@@ -970,7 +968,7 @@ pub(crate) fn spawn_component_display(
 
         // Revert button (only shown for overridden prefab components).
         // Two code paths share the visual: the legacy
-        // `JsnPrefabBaseline` system dispatches through
+        // `PrefabBaseline` system dispatches through
         // `ComponentRevertBaselineOp` (and uses `ButtonOperatorCall`
         // for the rich tooltip popover); the new prefab system calls
         // `prefab::operators::revert_component` directly with the

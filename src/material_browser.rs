@@ -437,20 +437,7 @@ fn scan_material_definitions(world: &mut World) {
                     .add(name, h.typed::<StandardMaterial>());
             }
         } else {
-            // Serialize the material + nested textures into catalog assets
-            let mut catalog_assets = world
-                .resource::<crate::asset_catalog::AssetCatalog>()
-                .assets
-                .clone();
-            crate::scene_io::serialize_asset_into(
-                world,
-                handle.clone().untyped(),
-                &catalog_name,
-                &assets_dir,
-                &mut catalog_assets,
-            );
             let mut catalog = world.resource_mut::<crate::asset_catalog::AssetCatalog>();
-            catalog.assets = catalog_assets;
             catalog.insert(catalog_name, handle.clone().untyped());
             catalog.dirty = true;
 
@@ -518,19 +505,7 @@ fn rescan_material_definitions(world: &mut World) {
                     .add(name, h.typed::<StandardMaterial>());
             }
         } else {
-            let mut catalog_assets = world
-                .resource::<crate::asset_catalog::AssetCatalog>()
-                .assets
-                .clone();
-            crate::scene_io::serialize_asset_into(
-                world,
-                handle.clone().untyped(),
-                &catalog_name,
-                &assets_dir,
-                &mut catalog_assets,
-            );
             let mut catalog = world.resource_mut::<crate::asset_catalog::AssetCatalog>();
-            catalog.assets = catalog_assets;
             catalog.insert(catalog_name, handle.clone().untyped());
             catalog.dirty = true;
 
@@ -548,36 +523,6 @@ fn save_catalog_if_dirty(world: &mut World) {
     if !is_dirty {
         return;
     }
-
-    // Re-serialize all registry materials so in-memory edits persist.
-    let assets_dir = world
-        .get_resource::<crate::project::ProjectRoot>()
-        .map(super::project::ProjectRoot::assets_dir)
-        .unwrap_or_default();
-    let entries: Vec<(String, UntypedHandle)> = world
-        .resource::<MaterialRegistry>()
-        .entries
-        .iter()
-        .filter(|e| e.handle != Handle::default())
-        .map(|e| (format!("@{}", e.name), e.handle.clone().untyped()))
-        .collect();
-
-    let mut catalog_assets = world
-        .resource::<crate::asset_catalog::AssetCatalog>()
-        .assets
-        .clone();
-    for (catalog_name, handle) in &entries {
-        crate::scene_io::serialize_asset_into(
-            world,
-            handle.clone(),
-            catalog_name,
-            &assets_dir,
-            &mut catalog_assets,
-        );
-    }
-    world
-        .resource_mut::<crate::asset_catalog::AssetCatalog>()
-        .assets = catalog_assets;
 
     crate::asset_catalog::save_catalog(world);
 }

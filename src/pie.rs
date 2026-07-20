@@ -627,7 +627,10 @@ fn project_shim_spec(world: &World, root: &Path) -> Option<ShimSpec> {
 fn spawn_dylib_build(
     root: &Path,
     spec: ShimSpec,
-) -> (Task<io::Result<DylibBuildResult>>, Arc<Mutex<BuildProgress>>) {
+) -> (
+    Task<io::Result<DylibBuildResult>>,
+    Arc<Mutex<BuildProgress>>,
+) {
     let progress = Arc::new(Mutex::new(BuildProgress::default()));
     let sink = Arc::clone(&progress);
     let jackdaw_dir = root.join(".jackdaw");
@@ -1258,15 +1261,19 @@ fn watch_project_schema(world: &mut World) {
 
     // Surface the outcome in the footer so the user knows the build
     // finished and how many of their components loaded.
-    world.resource_mut::<crate::build_status::BuildStatus>().state =
-        crate::build_status::BuildState::Ready {
-            at: Instant::now(),
-            components: component_count,
-        };
+    world
+        .resource_mut::<crate::build_status::BuildStatus>()
+        .state = crate::build_status::BuildState::Ready {
+        at: Instant::now(),
+        components: component_count,
+    };
 
     // Repaint the open inspector: a shape change (a field added, removed,
     // or retyped in game code) must show without a reselect.
-    let selected: Vec<Entity> = world.resource::<crate::selection::Selection>().entities.clone();
+    let selected: Vec<Entity> = world
+        .resource::<crate::selection::Selection>()
+        .entities
+        .clone();
     for entity in selected {
         if let Ok(mut ec) = world.get_entity_mut(entity) {
             ec.insert(crate::inspector::InspectorDirty);
@@ -1356,10 +1363,9 @@ fn poll_builds(world: &mut World) {
                 let keys: Vec<String> = pending.iter().map(|p| p.key.to_string()).collect();
                 error!("PIE: game build failed for {}: {err}", keys.join(", "));
                 *state = BuildState::Failed;
-                world.resource_mut::<crate::build_status::BuildStatus>().state =
-                    crate::build_status::BuildState::Failed {
-                        at: Instant::now(),
-                    };
+                world
+                    .resource_mut::<crate::build_status::BuildStatus>()
+                    .state = crate::build_status::BuildState::Failed { at: Instant::now() };
             }
         }
     }

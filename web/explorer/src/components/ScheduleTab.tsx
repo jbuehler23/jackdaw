@@ -1,7 +1,6 @@
-// ScheduleTab.tsx: run-order lanes for each app schedule, ported from the
-// PoC's sched-lanes/sys-box markup (.scratch/web-explorer/jackdaw-explorer-poc.html).
-// Fed by `jackdaw/schedules`; the server never reports per-system timings, so
-// unlike the PoC this shows structure (order, sets, "after" deps) only.
+// ScheduleTab.tsx: run-order lanes for each app schedule. Fed by
+// `jackdaw/schedules`; the server never reports per-system timings, so this
+// shows structure (order, sets, "after" deps) only.
 import { useEffect } from 'preact/hooks';
 import { Workflow, Zap } from 'lucide-preact';
 import { Icon } from './Icon';

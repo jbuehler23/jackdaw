@@ -1,7 +1,8 @@
-//! Spike 4 probe: the prebuilt game runner boots a project dylib over
-//! the existing PIE IPC with zero play-time compilation.
+#![expect(clippy::print_stdout, reason = "test prints progress diagnostics")]
+//! The prebuilt game runner boots a project dylib over the existing PIE
+//! IPC with zero play-time compilation.
 //!
-//! Builds the runner shim for `spike_game` (the spike stand-in for the
+//! Builds the runner shim for `reflect_game` (the fixture stand-in for the
 //! crate the editor generates into `.jackdaw/`) into a Rust dylib
 //! through the SDK pipeline, opens a PIE rendezvous the way the editor
 //! does, launches the prebuilt `jackdaw-runner` binary against the
@@ -12,7 +13,7 @@
 //!
 //! ```text
 //! cargo test --features "dylib runner" --target <host-triple> \
-//!     --test spike_runner_pie -- --nocapture
+//!     --test runner_boots_project_dylib -- --nocapture
 //! ```
 #![cfg(feature = "dylib")]
 
@@ -23,6 +24,8 @@ use std::time::{Duration, Instant};
 
 use jackdaw_pie_protocol::event::to_bytes;
 use jackdaw_pie_protocol::{ControlEvent, PieChannel, decode_frame};
+
+mod util;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -50,8 +53,11 @@ fn runner_boots_a_project_dylib_over_pie_ipc() {
 
     // Build the shim dylib through the SDK pipeline. The shim's graph
     // is bevy-only, so the facade redirect suffices (no extern map).
-    let shim_dir = workspace_root().join(".scratch/project-onboarding/spike4/shim_spike_game");
-    let shim_target = shim_dir.join("target-spike");
+    // Stage the sibling it path-depends on as well, so `../reflect_game`
+    // resolves inside the staging dir.
+    let _dep = util::stage_fixture("reflect_game");
+    let shim_dir = util::stage_fixture("shim_game");
+    let shim_target = shim_dir.join("target-fixture");
     let _ = std::fs::remove_dir_all(&shim_target);
     let status = Command::new("cargo")
         .args(["rustc", "--crate-type", "dylib", "--target", &triple])
@@ -65,7 +71,7 @@ fn runner_boots_a_project_dylib_over_pie_ipc() {
         .expect("build the shim dylib");
     assert!(status.success(), "shim dylib failed to build");
     let shim_dylib = shim_target.join(format!(
-        "{triple}/debug/{}shim_spike_game{}",
+        "{triple}/debug/{}shim_game{}",
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
     ));
@@ -73,8 +79,7 @@ fn runner_boots_a_project_dylib_over_pie_ipc() {
 
     // Open the PIE rendezvous the way the editor does, then launch the
     // runner as the editor would launch a game process.
-    let (handle, server_name) =
-        jackdaw_pie_protocol::serve().expect("open the ipc rendezvous");
+    let (handle, server_name) = jackdaw_pie_protocol::serve().expect("open the ipc rendezvous");
     let mut child = Command::new(&runner)
         .arg(&shim_dylib)
         .current_dir(&shim_dir)
@@ -134,8 +139,8 @@ fn runner_boots_a_project_dylib_over_pie_ipc() {
         }
         {
             let buf = stderr_buf.lock().unwrap();
-            started_seen = buf.contains("JACKDAW_SPIKE_GAME_STARTED");
-            ticked_seen = buf.contains("JACKDAW_SPIKE_GAME_TICKED count=1");
+            started_seen = buf.contains("JACKDAW_TEST_GAME_STARTED");
+            ticked_seen = buf.contains("JACKDAW_TEST_GAME_TICKED count=1");
         }
         if frame_seen && started_seen && ticked_seen {
             break;
@@ -144,6 +149,7 @@ fn runner_boots_a_project_dylib_over_pie_ipc() {
     }
 
     let _ = child.kill();
+    let _ = child.wait();
     let stderr = stderr_buf.lock().unwrap().clone();
 
     assert!(
@@ -154,7 +160,10 @@ fn runner_boots_a_project_dylib_over_pie_ipc() {
         ticked_seen,
         "GamePlugin update systems never ticked; runner stderr:\n{stderr}"
     );
-    assert!(frame_seen, "no frame arrived on the Frames lane; runner stderr:\n{stderr}");
+    assert!(
+        frame_seen,
+        "no frame arrived on the Frames lane; runner stderr:\n{stderr}"
+    );
 
-    println!("SPIKE PASSED: runner booted the project dylib, gameplay ran, frames streamed");
+    println!("runner booted the project dylib, gameplay ran, frames streamed");
 }

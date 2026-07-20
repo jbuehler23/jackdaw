@@ -4831,7 +4831,6 @@ dependencies = [
  "bevy",
  "jackdaw_commands",
  "jackdaw_feathers",
- "jackdaw_jsn",
  "jackdaw_localization",
  "jackdaw_node_graph",
  "jackdaw_scene_types",
@@ -4849,7 +4848,6 @@ dependencies = [
  "jackdaw_api_macros",
  "jackdaw_commands",
  "jackdaw_feathers",
- "jackdaw_jsn",
  "jackdaw_panels",
  "jackdaw_project_build",
  "jackdaw_runtime",
@@ -4867,7 +4865,6 @@ dependencies = [
  "dirs",
  "jackdaw_api_macros",
  "jackdaw_commands",
- "jackdaw_jsn",
  "jackdaw_panels",
  "jackdaw_scene_types",
  "lucide-icons",
@@ -4891,7 +4888,6 @@ dependencies = [
  "avian3d",
  "bevy",
  "jackdaw_geometry",
- "jackdaw_jsn",
  "jackdaw_scene_types",
 ]
 
@@ -4920,7 +4916,6 @@ name = "jackdaw_camera_rig"
 version = "0.19.0"
 dependencies = [
  "bevy",
- "jackdaw_jsn",
  "jackdaw_scene_types",
 ]
 
@@ -4945,7 +4940,6 @@ version = "0.19.0"
 dependencies = [
  "glam 0.32.1",
  "jackdaw_geometry",
- "jackdaw_jsn",
  "jackdaw_scene_types",
  "manifold-csg",
  "manifold-csg-sys",
@@ -4968,7 +4962,6 @@ dependencies = [
  "bevy_enhanced_input",
  "bevy_monitors",
  "jackdaw_fuzzy",
- "jackdaw_jsn",
  "jackdaw_localization",
  "jackdaw_scene_types",
  "jackdaw_widgets",
@@ -4991,7 +4984,6 @@ dependencies = [
  "cdt",
  "earcutr",
  "glam 0.32.1",
- "jackdaw_jsn",
  "jackdaw_scene_types",
  "serde",
  "serde_json",
@@ -5055,7 +5047,6 @@ name = "jackdaw_multiplayer"
 version = "0.19.0"
 dependencies = [
  "bevy",
- "jackdaw_jsn",
  "jackdaw_scene_types",
  "serde",
  "serde_json",
@@ -5090,7 +5081,6 @@ dependencies = [
  "bevy_monitors",
  "jackdaw_commands",
  "jackdaw_feathers",
- "jackdaw_jsn",
  "jackdaw_localization",
  "jackdaw_scene_types",
  "jackdaw_widgets",
@@ -5165,9 +5155,9 @@ version = "0.19.0"
 dependencies = [
  "bevy",
  "jackdaw_avian_integration",
+ "jackdaw_bsn",
  "jackdaw_camera_rig",
  "jackdaw_geometry",
- "jackdaw_jsn",
  "jackdaw_pie_protocol",
  "jackdaw_scene_types",
  "serde",

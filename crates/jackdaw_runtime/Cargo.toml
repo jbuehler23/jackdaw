@@ -16,7 +16,7 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_world_serialization",
     "bevy_log",
 ] }
-jackdaw_jsn = { version = "0.19.0", path = "../jackdaw_jsn", default-features = false }
+jackdaw_bsn = { version = "0.19.0", path = "../jackdaw_bsn" }
 jackdaw_geometry = { version = "0.19.0", path = "../jackdaw_geometry", default-features = false }
 jackdaw_scene_types = { version = "0.19.0", path = "../jackdaw_scene_types", default-features = false }
 jackdaw_pie_protocol = { path = "../jackdaw_pie_protocol", optional = true }
@@ -37,7 +37,6 @@ render = [
     "bevy/bevy_pbr",
     "bevy/bevy_render",
     "bevy/bevy_image",
-    "jackdaw_jsn/render",
     "jackdaw_geometry/render",
     "jackdaw_scene_types/render",
 ]

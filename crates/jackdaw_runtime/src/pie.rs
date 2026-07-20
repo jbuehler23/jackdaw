@@ -869,10 +869,10 @@ mod tests {
 
         let find_spawned = |bits: u64| -> Option<&jackdaw_pie_protocol::RemoteEntity> {
             for event in &received {
-                if let StateEvent::EntitySpawned { entity: re } = event {
-                    if re.entity == bits {
-                        return Some(re);
-                    }
+                if let StateEvent::EntitySpawned { entity: re } = event
+                    && re.entity == bits
+                {
+                    return Some(re);
                 }
             }
             None

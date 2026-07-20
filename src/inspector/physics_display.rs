@@ -143,11 +143,9 @@ pub(crate) fn enable_physics(world: &mut World, entity: Entity) {
     let reg = registry.read();
     let components_res = world.components();
 
-    // Build AddComponent for RigidBody
     let rb_type_id = std::any::TypeId::of::<RigidBody>();
     let rb_component_id = components_res.get_id(rb_type_id);
 
-    // Build AddComponent for AvianCollider
     let ac_type_id = std::any::TypeId::of::<AvianCollider>();
     let ac_component_id = components_res.get_id(ac_type_id);
 

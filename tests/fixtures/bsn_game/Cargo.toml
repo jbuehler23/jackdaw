@@ -1,0 +1,24 @@
+[package]
+name = "bsn_scene_game"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Detach from the jackdaw workspace this directory sits inside.
+[workspace]
+
+[dependencies]
+# Minimal bevy feature set (no render/wgpu locally). The wrapper redirects
+# every bevy/jackdaw extern to the SDK's compiled rlibs, so the render-enabled
+# jackdaw_runtime is what actually links; this local compile is discarded.
+bevy = { version = "0.19", default-features = false, features = [
+    "reflect_auto_register",
+    "std",
+    "serialize",
+    "bevy_asset",
+    "bevy_camera",
+    "bevy_world_serialization",
+    "bevy_log",
+] }
+jackdaw_runtime = { path = "../../../crates/jackdaw_runtime", default-features = false }
+jackdaw_scene_types = { path = "../../../crates/jackdaw_scene_types", default-features = false }

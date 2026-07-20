@@ -1,18 +1,18 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Top-level `.jsn/components.jsn` file.
+/// Top-level `.jackdaw/components.json` file.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsnComponentsFile {
-    pub jsn: JsnComponentsHeader,
+pub struct ComponentsFile {
+    pub header: ComponentsHeader,
     /// All component definitions, keyed by full type path.
-    pub components: HashMap<String, JsnComponentDef>,
+    pub components: HashMap<String, ComponentDef>,
 }
 
-impl Default for JsnComponentsFile {
+impl Default for ComponentsFile {
     fn default() -> Self {
         Self {
-            jsn: JsnComponentsHeader {
+            header: ComponentsHeader {
                 format_version: [1, 0, 0],
             },
             components: HashMap::new(),
@@ -21,13 +21,13 @@ impl Default for JsnComponentsFile {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsnComponentsHeader {
+pub struct ComponentsHeader {
     pub format_version: [u32; 3],
 }
 
 /// A single component's editor definition.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct JsnComponentDef {
+pub struct ComponentDef {
     /// Editor category ("Combat", "Physics", "Audio").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
@@ -39,12 +39,12 @@ pub struct JsnComponentDef {
     pub icon: Option<String>,
     /// Field definitions, keyed by field name.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub fields: HashMap<String, JsnFieldDef>,
+    pub fields: HashMap<String, FieldDef>,
 }
 
 /// A single field's editor definition.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct JsnFieldDef {
+pub struct FieldDef {
     /// Reflect type path (e.g., "f32", "`bevy_math::Vec3`").
     #[serde(rename = "type")]
     pub type_path: String,
@@ -82,27 +82,27 @@ fn is_false(b: &bool) -> bool {
 /// Extended registry response combining Bevy's type schema with Jackdaw's
 /// component definitions. Returned by the `jackdaw/registry` BRP method.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsnRegistry {
-    pub jsn: JsnRegistryHeader,
+pub struct ComponentRegistry {
+    pub header: RegistryHeader,
     /// ISO timestamp of when this registry was extracted.
     pub extracted_at: String,
     /// Source connection info.
-    pub source: JsnRegistrySource,
+    pub source: RegistrySource,
     /// Raw `registry.schema` types from Bevy, keyed by type path.
     #[serde(default)]
     pub types: HashMap<String, serde_json::Value>,
-    /// JSN component definitions (from `.jsn/components.jsn`), keyed by type path.
+    /// Component definitions (from `.jackdaw/components.json`), keyed by type path.
     #[serde(default)]
-    pub components: HashMap<String, JsnComponentDef>,
+    pub components: HashMap<String, ComponentDef>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsnRegistryHeader {
+pub struct RegistryHeader {
     pub format_version: [u32; 3],
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsnRegistrySource {
+pub struct RegistrySource {
     pub app_name: Option<String>,
     pub endpoint: String,
     pub bevy_version: String,

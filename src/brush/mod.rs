@@ -459,16 +459,12 @@ fn sync_changed_modifier_stacks_to_ast(
     });
 }
 
-// `impl EditorMeta for Brush` lives in `jackdaw_jsn` so the orphan
-// rule is satisfied (trait and type share a crate); the category
-// is "Brush", same as before.
-
 pub struct BrushPlugin;
 
 impl Plugin for BrushPlugin {
     fn build(&self, app: &mut App) {
         // `Brush`/`BrushFaceData`/`BrushPlane` register through
-        // `JsnPlugin`. Picker category lives on `Brush` via
+        // `SceneTypesPlugin`. Picker category lives on `Brush` via
         // `#[reflect(@EditorCategory("Brush"))]`.
         app.register_type::<EditMode>()
             .register_type::<BrushEditMode>()

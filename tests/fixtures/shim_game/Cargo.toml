@@ -1,0 +1,12 @@
+[package]
+name = "shim_game"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Standalone: detach from the jackdaw workspace this directory sits inside.
+[workspace]
+
+[dependencies]
+reflect_game = { path = "../reflect_game" }
+bevy = { version = "0.19", default-features = false }

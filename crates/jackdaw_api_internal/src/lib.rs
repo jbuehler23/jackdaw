@@ -77,7 +77,6 @@ use snapshot::{ActiveSnapshotter, SceneSnapshot};
 pub use entity_icons::EntityIconRegistry;
 pub use jackdaw_api_macros as macros;
 pub use jackdaw_api_macros::operator;
-pub use jackdaw_jsn as jsn;
 pub use lucide_icons;
 
 use crate::lifecycle::{ExtensionResourceOf, OperatorAction, ResourceId};

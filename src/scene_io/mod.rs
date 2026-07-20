@@ -9,7 +9,6 @@ use bevy::{
     prelude::*,
     window::{PrimaryWindow, RawHandleWrapper},
 };
-use jackdaw_jsn::format::JsnMetadata;
 
 mod legacy;
 mod load;
@@ -17,7 +16,7 @@ mod registration;
 mod save;
 pub mod stamp;
 
-pub use legacy::{load_inline_assets, load_scene_from_jsn, serialize_asset_into};
+pub use legacy::{load_inline_assets, load_scene_from_jsn};
 pub(crate) use load::{clear_scene_entities, despawn_scene_entities};
 pub use load::{load_scene, load_scene_from_file, new_scene, spawn_default_lighting};
 pub use registration::{register_entities_in_ast, register_entity_in_ast};
@@ -182,8 +181,33 @@ pub fn is_scene_dirty(world: &World) -> bool {
 #[derive(Resource, Default)]
 pub struct SceneFilePath {
     pub path: Option<String>,
-    pub metadata: JsnMetadata,
+    pub metadata: SceneMetadata,
     pub last_directory: Option<PathBuf>,
+}
+
+/// Human-readable metadata for the active scene, tracked live on
+/// [`SceneFilePath`]. Mirrors the fields the legacy JSN scene metadata
+/// carried, decoupled from `jackdaw_jsn` so only the import boundary
+/// (the `From` conversion below) touches that crate.
+#[derive(Clone, Debug, Default)]
+pub struct SceneMetadata {
+    pub name: String,
+    pub description: String,
+    pub author: String,
+    pub created: String,
+    pub modified: String,
+}
+
+impl From<jackdaw_jsn::format::JsnMetadata> for SceneMetadata {
+    fn from(metadata: jackdaw_jsn::format::JsnMetadata) -> Self {
+        Self {
+            name: metadata.name,
+            description: metadata.description,
+            author: metadata.author,
+            created: metadata.created,
+            modified: metadata.modified,
+        }
+    }
 }
 
 fn get_window_handle(world: &mut World) -> Option<RawHandleWrapper> {

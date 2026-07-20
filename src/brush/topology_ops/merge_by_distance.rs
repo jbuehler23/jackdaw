@@ -31,10 +31,8 @@ pub(crate) fn brush_merge_by_distance(
         return OperatorResult::Cancelled;
     }
 
-    // Get the currently edited brush entity.
     let brush_entity = selection.active_brush?;
 
-    // Get mutable HalfedgeMesh and run remove_doubles.
     let mut halfedge = halfedge_q.get_mut(brush_entity)?;
 
     // Weld coincident verts across the whole mesh and reconcile the brush's

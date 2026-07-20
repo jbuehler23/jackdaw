@@ -4,7 +4,6 @@ use std::{
 };
 
 use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
 
 // Re-export geometry types so consumers see them from jackdaw_jsn
 pub use jackdaw_geometry::{
@@ -837,17 +836,10 @@ pub struct GltfSource {
     pub scene_index: usize,
 }
 
-/// Tracks the source `.jsn` file for a prefab instance.
-#[derive(Component, Reflect, Clone, Debug, Default, Serialize, Deserialize)]
-#[reflect(Component, Default, @crate::EditorHidden)]
-pub struct JsnPrefab {
-    pub path: String,
-}
-
 /// Stores the original serialized component values from a prefab at instantiation time.
 /// Used to detect overrides and support per-component revert.
 #[derive(Component, Clone, Debug, Default)]
-pub struct JsnPrefabBaseline {
+pub struct PrefabBaseline {
     pub components: HashMap<String, serde_json::Value>,
 }
 

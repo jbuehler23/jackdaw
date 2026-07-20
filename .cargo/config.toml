@@ -19,3 +19,6 @@ rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 # the link fails with undefined hidden symbols. Off for every build so
 # the default `dylib` feature links without a per-command env var.
 incremental = false
+
+[alias]
+xtask = "run --quiet --package xtask --manifest-path xtask/Cargo.toml --"

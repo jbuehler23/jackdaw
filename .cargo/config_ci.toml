@@ -1,6 +1,9 @@
 # This config is used for the CI workflow.
 # Feel free to also use it locally for fast builds if you have the required setup!
 
+[alias]
+xtask = "run --quiet --package xtask --manifest-path xtask/Cargo.toml --"
+
 [unstable]
 codegen-backend = true
 
@@ -15,6 +18,13 @@ codegen-backend = "llvm"
 
 [profile.test.package."*"]
 opt-level = 1
+
+# Mirrors the workspace config. The MSVC linker has a hard 65,535 PE export
+# cap that jackdaw_sdk exceeds, so a Windows job adopting this file without
+# the override fails to link.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"

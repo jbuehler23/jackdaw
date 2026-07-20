@@ -1,4 +1,4 @@
-//! Edge bevel: chamfer each selected edge into a quad. Single-segment MVP.
+//! Edge bevel: chamfer each selected edge into a quad. Single segment only.
 //!
 //! For each selected edge `e` with endpoints `v0`, `v1` and two adjacent quad
 //! (`loop_count` >= 4) faces `fA`, `fB`:

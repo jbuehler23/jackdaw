@@ -1,13 +1,13 @@
 use bevy::prelude::*;
 
-// Re-export types from jackdaw_jsn
+// Re-export types from jackdaw_scene_types.
 pub use jackdaw_scene_types::{CustomProperties, PropertyValue};
 
 pub struct CustomPropertiesPlugin;
 
 impl Plugin for CustomPropertiesPlugin {
     fn build(&self, _app: &mut App) {
-        // Note: Type registration is handled by JsnPlugin
+        // Note: Type registration is handled by SceneTypesPlugin
     }
 }
 

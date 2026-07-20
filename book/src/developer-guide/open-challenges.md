@@ -80,14 +80,17 @@ you want to pre-process textures or bake meshes for a CI
 build, you have to start the editor headlessly, which is not
 great.
 
-andriyDev raised this in editor-dev. The natural shapes are:
+Half of the second shape below now exists: `jackdaw-cli` drives
+the editor's build machinery from a terminal with `build` and
+`run`. What is missing is a `process` step and the
+asset-processing pipeline behind it.
+The remaining shapes:
 
 - Split the user's game into a library plus multiple binaries
   (run, process), with processing driven from the project's own
   binaries. Invasive for the project template.
-- Add a `jackdaw` CLI subcommand with `process`, `build`, etc.,
-  driven by the editor's own build machinery. Less invasive but
-  more code in jackdaw.
+- Extend `jackdaw-cli` with a `process` subcommand alongside
+  `build`. Less invasive but more code in jackdaw.
 
 Where to dig in: pick one shape and prototype it against a
 small game. We'd like to see the workflow before locking in
@@ -100,8 +103,8 @@ have a `PlayerSpawn` marker that ships and a visual indicator
 that doesn't, you author a parent (with `PlayerSpawn`) and a
 child (with `EditorOnly` + a mesh).
 
-Jan asked whether the same entity could carry both. It can't
-today, because the save filter is at entity granularity. A
+A single entity cannot carry both today, because the save
+filter is at entity granularity. A
 future `EditorOnlyVisuals` marker that strips visual components
 (`Mesh3d`, `MeshMaterial3d`, etc) at save time but keeps the
 entity and its non-visual components would enable single-

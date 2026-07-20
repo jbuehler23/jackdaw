@@ -12,7 +12,6 @@ bevy_enhanced_input.workspace = true
 jackdaw_panels.workspace = true
 jackdaw_commands.workspace = true
 jackdaw_api_macros.workspace = true
-jackdaw_jsn.workspace = true
 jackdaw_scene_types.workspace = true
 lucide-icons.workspace = true
 dirs.workspace = true

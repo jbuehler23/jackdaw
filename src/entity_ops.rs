@@ -46,7 +46,7 @@ pub struct EntityOpsPlugin;
 
 impl Plugin for EntityOpsPlugin {
     fn build(&self, app: &mut App) {
-        // Note: GltfSource type registration is handled by JsnPlugin
+        // Note: GltfSource type registration is handled by SceneTypesPlugin
         match arboard::Clipboard::new() {
             Ok(clipboard) => {
                 app.insert_resource(SystemClipboard {
@@ -446,7 +446,6 @@ pub fn delete_selected(world: &mut World) {
         return;
     }
 
-    // Build commands for each entity
     let mut cmds: Vec<Box<dyn EditorCommand>> = Vec::new();
     for &entity in &entities {
         if world.get_entity(entity).is_err() {

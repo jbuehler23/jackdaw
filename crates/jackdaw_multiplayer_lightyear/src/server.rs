@@ -8,8 +8,8 @@ use lightyear::prelude::{
 };
 use std::net::SocketAddr;
 
-/// Which zones this server process hosts. The MVP only uses `All`; the field is
-/// the seam a future sharded deployment uses to host a subset of zones.
+/// Which zones this server process hosts. Only `All` is used today; the field
+/// is the seam a sharded deployment uses to host a subset of zones.
 #[derive(Clone, Debug, Default)]
 pub enum HostedZones {
     /// Host every zone in the loaded world (single-process / one-shard).
@@ -26,7 +26,7 @@ pub struct JackdawMultiplayerServerPlugin {
     pub bind: SocketAddr,
     /// Network tick duration.
     pub tick: std::time::Duration,
-    /// Which zones this process hosts (MVP: `All`).
+    /// Which zones this process hosts (always `All` today).
     pub hosted_zones: HostedZones,
     /// Per-connection inbound-RPC cap (messages/second). `None` = unlimited.
     pub max_msgs_per_sec: Option<u32>,
@@ -47,13 +47,13 @@ impl Default for JackdawMultiplayerServerPlugin {
     }
 }
 
-/// Runtime config for the server layer. Holds the zones this process hosts (read
-/// by Phase 4 room/zone wiring) and the bind address (read by the startup system).
+/// Runtime config for the server layer. Holds the zones this process hosts and
+/// the bind address (read by the startup system).
 #[derive(Resource)]
 pub(crate) struct ServerConfig {
     #[expect(
         dead_code,
-        reason = "read by Phase 4 zone/room wiring to decide which zones this process hosts; captured now so the sharding seam exists"
+        reason = "carries the zone-sharding seam; nothing reads it while every process hosts all zones"
     )]
     pub hosted_zones: HostedZones,
     pub bind: SocketAddr,

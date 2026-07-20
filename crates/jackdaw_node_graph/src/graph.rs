@@ -87,8 +87,8 @@ pub enum TerminalDirection {
 /// An edge between two terminals in a graph.
 ///
 /// Stored as a sibling entity under the owning `NodeGraph` so it serializes
-/// with the scene. The JSN serializer rewrites `Entity` fields to scene-local
-/// indices (see `src/scene_io.rs` `JsnSerializerProcessor`).
+/// with the scene. The scene serializer rewrites `Entity` fields to
+/// scene-local indices so the references survive save/load.
 #[derive(Component, Reflect, Clone, Debug, Serialize, Deserialize)]
 #[reflect(Component, @jackdaw_scene_types::EditorHidden)]
 pub struct Connection {

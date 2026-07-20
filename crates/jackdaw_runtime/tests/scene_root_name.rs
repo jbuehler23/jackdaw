@@ -6,17 +6,10 @@
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use jackdaw_jsn::format::{JsnAssets, JsnHeader, JsnMetadata, JsnScene};
 use jackdaw_runtime::{JackdawPlugin, JackdawScene, JackdawSceneRoot};
 
-fn empty_scene() -> JsnScene {
-    JsnScene {
-        jsn: JsnHeader::default(),
-        metadata: JsnMetadata::default(),
-        editor: None,
-        assets: JsnAssets::default(),
-        scene: Vec::new(),
-    }
+fn empty_scene() -> String {
+    String::new()
 }
 
 fn headless_app() -> App {

@@ -6,7 +6,6 @@ use bevy::{
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
 };
-use jackdaw_jsn::format::JsnMetadata;
 use rfd::{AsyncFileDialog, FileHandle};
 use serde::de::DeserializeSeed;
 
@@ -14,7 +13,7 @@ use crate::EditorEntity;
 
 use super::registration::{register_entities_in_ast, register_entity_in_ast};
 use super::save::{save_scene, save_scene_inner};
-use super::{SceneDirtyState, SceneFilePath, get_window_handle, is_scene_dirty};
+use super::{SceneDirtyState, SceneFilePath, SceneMetadata, get_window_handle, is_scene_dirty};
 
 /// Marker resource: a "save before new scene?" dialog is currently open.
 #[derive(Resource)]
@@ -240,7 +239,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
 
             // Restore metadata
             let mut scene_path = world.resource_mut::<SceneFilePath>();
-            scene_path.metadata = jsn.metadata;
+            scene_path.metadata = jsn.metadata.into();
         }
     }
 
@@ -268,7 +267,7 @@ fn do_new_scene(world: &mut World) {
     clear_scene_entities(world);
     let mut scene_path = world.resource_mut::<SceneFilePath>();
     scene_path.path = None;
-    scene_path.metadata = JsnMetadata::default();
+    scene_path.metadata = SceneMetadata::default();
     world.resource_mut::<SceneDirtyState>().undo_len_at_save = 0;
     spawn_default_lighting(world);
     info!("New scene created");
@@ -347,6 +346,23 @@ pub(super) fn cleanup_pending_new_scene(
     }
 }
 
+/// Collect `roots` and their full descendant subtrees into a set,
+/// walking the `Children` relation. Each root is included; the returned
+/// set dedups the walk so a shared descendant is visited only once.
+fn collect_subtree(world: &World, roots: impl IntoIterator<Item = Entity>) -> HashSet<Entity> {
+    let mut set = HashSet::new();
+    let mut stack: Vec<Entity> = roots.into_iter().collect();
+    while let Some(entity) = stack.pop() {
+        if !set.insert(entity) {
+            continue;
+        }
+        if let Some(children) = world.get::<Children>(entity) {
+            stack.extend(children.iter());
+        }
+    }
+    set
+}
+
 /// Collect every editor entity: each `EditorEntity` root and its
 /// full descendant subtree. Used to exclude editor-internal trees
 /// (panels, gizmos, picker overlays) when despawning scene entities.
@@ -355,18 +371,7 @@ fn collect_editor_entities(
     roots_query: &mut QueryState<Entity, With<EditorEntity>>,
 ) -> HashSet<Entity> {
     let roots: Vec<Entity> = roots_query.iter(world).collect();
-
-    let mut editor_set = HashSet::new();
-    let mut stack = roots;
-    while let Some(entity) = stack.pop() {
-        if !editor_set.insert(entity) {
-            continue;
-        }
-        if let Some(children) = world.get::<Children>(entity) {
-            stack.extend(children.iter());
-        }
-    }
-    editor_set
+    collect_subtree(world, roots)
 }
 
 /// Remove scene entities from the world (named non-editor entities + their descendants).
@@ -421,16 +426,7 @@ pub(crate) fn despawn_scene_entities(world: &mut World) -> Result<(), BevyError>
         .filter(|e| !editor_set.contains(e))
         .collect();
 
-    let mut scene_set = HashSet::new();
-    let mut stack = roots;
-    while let Some(entity) = stack.pop() {
-        if !scene_set.insert(entity) {
-            continue;
-        }
-        if let Some(children) = world.get::<Children>(entity) {
-            stack.extend(children.iter());
-        }
-    }
+    let scene_set = collect_subtree(world, roots);
 
     for entity in scene_set {
         if let Ok(entity_mut) = world.get_entity_mut(entity) {

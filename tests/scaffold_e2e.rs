@@ -1,3 +1,4 @@
+#![expect(clippy::print_stderr, reason = "e2e test prints skip diagnostics")]
 //! End-to-end scaffolding regression: scaffold a game project, build its
 //! dylib against the SDK, and assert the template's component reaches the
 //! extracted schema. This is the user's first-run loop (New Game -> build
@@ -39,8 +40,14 @@ fn scaffold_game_builds_and_exposes_component() {
     let spec = shim_spec_for_project(&dest, None).expect("scaffolded project is a jackdaw project");
     let jackdaw_dir = dest.join(".jackdaw");
     let mut ignore_progress = |_: BuildEvent| {};
-    let build = build_project_dylib(&spec, &jackdaw_dir, &sdk, Some(&workspace), &mut ignore_progress)
-        .expect("build the scaffolded project dylib");
+    let build = build_project_dylib(
+        &spec,
+        &jackdaw_dir,
+        &sdk,
+        Some(&workspace),
+        &mut ignore_progress,
+    )
+    .expect("build the scaffolded project dylib");
 
     let schema = build.schema.expect("schema extracted from the built dylib");
     let has_spinning_cube = schema

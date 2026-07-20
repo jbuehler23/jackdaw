@@ -58,9 +58,12 @@ edition = "2024"
 bevy = "0.19"
 # Optional: loads the scenes you author in the editor
 # (assets/*.bsn) and builds physics colliders from them.
-jackdaw_runtime = { version = "0.5", features = ["physics"] }
+jackdaw_runtime = { version = "0.19", features = ["physics"] }
 avian3d = "0.7"
 ```
+
+Jackdaw's crate versions track the Bevy minor they target, so a
+project on Bevy 0.19 uses the `0.19.x` line of `jackdaw_runtime`.
 
 - `src/lib.rs` exposes your game's plugin. The editor looks for a
   type named `GamePlugin` by default; the top-level `plugin` key
@@ -102,7 +105,9 @@ added" panic.
 ## Load authored scenes in the game
 
 `jackdaw_runtime` is an ordinary dependency that loads the `.bsn`
-scenes you author in the editor. In `main.rs`:
+scenes you author in the editor. Bevy has no built-in loader for
+`.bsn`; `JackdawPlugin` registers one for that extension. In
+`main.rs`:
 
 ```rust
 use bevy::prelude::*;
@@ -152,6 +157,14 @@ background build of your project library; when it finishes, your
 reflected components and resources appear in the inspector and
 pickers.
 
+After that first build, rebuilds are on request rather than
+automatic, so an editor session never competes with a `cargo
+build` you started yourself. Use the **Rebuild Project** action in
+the editor, or run `jackdaw-cli build` from the project root; a
+running editor watches `.jackdaw/schema.json` and picks up the new
+types either way. **Toggle Auto Build** turns on rebuild-on-source-
+change if you prefer it.
+
 The Play button launches a prebuilt `jackdaw-runner` process with
 the already-built project library. Nothing compiles at play time,
 and the game runs out of process, so a crash takes down the game,
@@ -166,8 +179,8 @@ import again.
 
 **Component doesn't show in the picker.** Check that
 `#[derive(Reflect)]` and `#[reflect(Component)]` are both present,
-and that the background project build has finished (components
-appear once it does).
+and that the project has been rebuilt since you added the type
+(Rebuild Project, or `jackdaw-cli build`).
 
 **"plugin already added" panic during Play.** Your `GamePlugin`
 adds `DefaultPlugins`, `PhysicsPlugins`, or another ambient plugin

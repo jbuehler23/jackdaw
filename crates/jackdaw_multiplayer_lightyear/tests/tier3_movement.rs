@@ -3,10 +3,10 @@
 //! movement system advances that player's position; the moved player replicates
 //! to the OTHER client, which smooths it via interpolation.
 //!
-//! This exercises the whole Phase 5 surface end-to-end (`register_input` for the
-//! input plugin + client marker placement, `replicate_interpolated` for
-//! replication + linear interpolation, `add_movement_system` for authoritative
-//! movement in `FixedUpdate`) with prediction OFF, so movement is purely
+//! Covers `register_input` (input plugin + client marker placement),
+//! `replicate_interpolated` (replication + linear interpolation) and
+//! `add_movement_system` (authoritative movement in `FixedUpdate`), with
+//! prediction OFF, so movement is purely
 //! server-side and remote clients see the result interpolated, never predicted.
 //!
 //! Run: `cargo test -p jackdaw_multiplayer_lightyear --test tier3_movement`

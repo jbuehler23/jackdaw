@@ -39,7 +39,10 @@ pub(crate) struct FrameSlot {
 impl FrameSlot {
     /// Deposit a frame, replacing any undelivered one, and wake the sender.
     pub(crate) fn deposit(&self, frame: Vec<u8>) {
-        let mut guard = self.slot.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self
+            .slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = Some(frame);
         self.ready.notify_one();
     }
@@ -47,17 +50,26 @@ impl FrameSlot {
     /// Non-blocking take, for tests.
     #[cfg(test)]
     pub(crate) fn try_take(&self) -> Option<Vec<u8>> {
-        self.slot.lock().unwrap_or_else(|e| e.into_inner()).take()
+        self.slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 
     /// Block until a frame is available, then take it.
     fn take_blocking(&self) -> Vec<u8> {
-        let mut guard = self.slot.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self
+            .slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if let Some(frame) = guard.take() {
                 return frame;
             }
-            guard = self.ready.wait(guard).unwrap_or_else(|e| e.into_inner());
+            guard = self
+                .ready
+                .wait(guard)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 }
@@ -91,7 +103,7 @@ const FRAME_INTERVAL: f32 = 1.0 / 30.0;
 const MAX_DIM: u32 = 1920;
 // round_stream_size relies on the cap itself being row-aligned, so clamping
 // to MAX_DIM cannot break the multiple-of-64 width invariant.
-const _: () = assert!(MAX_DIM % 64 == 0);
+const _: () = assert!(MAX_DIM.is_multiple_of(64));
 
 /// Marker for the offscreen capture camera.
 #[derive(Component)]

@@ -41,13 +41,16 @@ do that.
 
 ## Save the scene
 
-`File > Save` (or `Ctrl+S`). The first save asks where to put
-the file; pick `assets/scene.bsn` to match what the template's
-standalone binary expects.
+`File > Save` (or `Ctrl+S`). A project from the Game template
+already has `assets/scene.bsn` open, so this writes straight
+back to it. A scene created with `File > New Scene` asks where
+to put the file the first time; pick `assets/scene.bsn` to
+match what the template loads.
 
 Open that `.bsn` in your text editor if you want to peek. It
 is plain text, with one entry per entity and reflected
-component data inline.
+component data inline. See
+[BSN Format](../developer-guide/bsn-format.md) for the syntax.
 
 ## See it run outside the editor
 
@@ -57,11 +60,17 @@ From the project folder:
 cargo run
 ```
 
-This launches the standalone binary. It loads
-`assets/scene.bsn` from disk and runs your `GamePlugin`. No
-editor in the loop. The cube sits where you placed it, and
-any components you attached in the inspector are alive on
-the entity.
+This launches the standalone binary. `main.rs` adds
+`jackdaw_runtime::JackdawPlugin`, which registers the asset
+loader for `.bsn` files, and the template's `GamePlugin`
+spawns a `JackdawSceneRoot` pointing at `scene.bsn`. No editor
+in the loop. The cube sits where you placed it, and any
+components you attached in the inspector are alive on the
+entity.
+
+Bevy cannot load `.bsn` on its own; the loader ships in
+`jackdaw_runtime`, which is an ordinary dependency of your
+crate.
 
 ## What you have now
 

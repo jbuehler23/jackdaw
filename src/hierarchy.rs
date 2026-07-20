@@ -1130,7 +1130,6 @@ fn on_tree_row_clicked(
         selection.select_single(&mut commands, event.source_entity);
     }
 
-    // Set keyboard focus to the tree row containing this content
     let content_entity = event.entity;
     if let Ok(&ChildOf(tree_row)) = parent_query.get(content_entity)
         && tree_nodes.contains(tree_row)

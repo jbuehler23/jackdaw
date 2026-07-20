@@ -173,7 +173,11 @@ mod extract {
         let description = attrs
             .and_then(|a| a.get::<EditorDescription>())
             .map(|d| d.0.to_string())
-            .or_else(|| info.docs().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
+            .or_else(|| {
+                info.docs()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            })
             .unwrap_or_default();
         let hidden = attrs.is_some_and(|a| a.get::<EditorHidden>().is_some());
 
@@ -230,9 +234,7 @@ mod extract {
         }
     }
 
-    fn custom_attributes(
-        info: &TypeInfo,
-    ) -> Option<&bevy::reflect::attributes::CustomAttributes> {
+    fn custom_attributes(info: &TypeInfo) -> Option<&bevy::reflect::attributes::CustomAttributes> {
         match info {
             TypeInfo::Struct(s) => Some(s.custom_attributes()),
             TypeInfo::TupleStruct(s) => Some(s.custom_attributes()),

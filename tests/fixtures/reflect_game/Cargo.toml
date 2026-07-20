@@ -1,0 +1,15 @@
+[package]
+name = "reflect_game"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Standalone: detach from the jackdaw workspace this directory sits inside.
+[workspace]
+
+
+[dependencies]
+# reflect_auto_register makes the Reflect derive emit inventory
+# submissions; the submission target resolves into the SDK's shared
+# bevy_reflect at link time.
+bevy = { version = "0.19", default-features = false, features = ["reflect_auto_register"] }

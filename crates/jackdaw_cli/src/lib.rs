@@ -1,9 +1,7 @@
 //! `jackdaw-cli`: terminal commands for Jackdaw projects.
 //!
-//! Shipped both as its own `jackdaw-cli` binary and, via [`run`], as a
-//! `jackdaw-cli` binary inside the editor `jackdaw` package, so one
-//! `cargo install jackdaw` (or one downloaded release) carries both the
-//! editor and these commands. The logic links only the bevy-light
+//! Shipped as its own `jackdaw-cli` binary and staged beside the editor in a
+//! downloaded release bundle. The logic links only the bevy-light
 //! [`jackdaw_project_build`] pipeline, so it stays small.
 //!
 //! Commands:
@@ -12,6 +10,8 @@
 //!   run   [--project <path>]   Build, then launch the game standalone.
 //!   setup                      Build the SDK into the cache (one-time).
 //!   doctor                     Report SDK build prerequisites.
+//!   package-sdk                Stage a relocatable SDK.
+//!   bundle --out <dir>         Stage editor, tools, dylibs and SDK.
 
 #![expect(
     clippy::print_stdout,
@@ -228,9 +228,19 @@ fn build_project(root: &Path) -> ExitCode {
             eprintln!("{line}");
         }
     };
-    match build_project_dylib(&spec, &jackdaw_dir, &sdk, dev_workspace.as_deref(), &mut report) {
+    match build_project_dylib(
+        &spec,
+        &jackdaw_dir,
+        &sdk,
+        dev_workspace.as_deref(),
+        &mut report,
+    ) {
         Ok(build) => {
-            let components = build.schema.as_ref().map(|s| s.components.len()).unwrap_or(0);
+            let components = build
+                .schema
+                .as_ref()
+                .map(|s| s.components.len())
+                .unwrap_or(0);
             println!(
                 "jackdaw build: ok ({} redirect edges, {components} components); schema at {}",
                 build.edges,

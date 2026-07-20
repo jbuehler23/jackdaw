@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::{
     prelude::*,
@@ -40,7 +40,11 @@ impl Plugin for ProjectSelectPlugin {
             )
             .add_systems(
                 Update,
-                (poll_folder_dialog, refresh_build_progress_ui, poll_preflight)
+                (
+                    poll_folder_dialog,
+                    refresh_build_progress_ui,
+                    poll_preflight,
+                )
                     .run_if(in_state(AppState::ProjectSelect)),
             )
             .add_systems(
@@ -1089,7 +1093,7 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
     let config = project::load_project_config(&root)
         .unwrap_or_else(|| project::create_default_project(&root));
 
-    project::touch_recent(&root, &config.project.name);
+    project::touch_recent(&root, &config.name);
 
     world.insert_resource(ProjectRoot {
         root: root.clone(),
@@ -1114,13 +1118,11 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
     let last_open_tabs = world
         .resource::<crate::project::ProjectRoot>()
         .config
-        .project
         .last_open_tabs
         .clone();
     let last_active = world
         .resource::<crate::project::ProjectRoot>()
         .config
-        .project
         .last_active_tab;
 
     if !last_open_tabs.is_empty() {
@@ -2742,4 +2744,3 @@ fn apply_pending_install(world: &mut World) {
         }
     }
 }
-

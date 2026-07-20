@@ -12,17 +12,14 @@ use crate::{AstNodeRef, SceneBsnAst, component_to_bsn_patch};
 
 /// After modifying an ECS component, sync its current value to the BSN AST.
 ///
-/// This reads the component via reflection, converts it to a BSN patch, and
-/// updates the AST node. Should be called after every ECS component mutation
-/// that needs to persist to the scene file.
+/// Should be called after every ECS component mutation that needs to persist
+/// to the scene file.
 pub fn sync_to_ast(world: &mut World, entity: Entity, component_type_id: TypeId) {
-    // Get the AST node reference
     let Some(ast_ref) = world.get::<AstNodeRef>(entity) else {
         return;
     };
     let patches_entity = ast_ref.patches_entity;
 
-    // Read the component via reflection
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
 
@@ -36,7 +33,6 @@ pub fn sync_to_ast(world: &mut World, entity: Entity, component_type_id: TypeId)
         return;
     };
 
-    // Convert to BSN patch
     let patch = component_to_bsn_patch(reflected, &registry);
 
     let type_path = reflected
@@ -46,7 +42,6 @@ pub fn sync_to_ast(world: &mut World, entity: Entity, component_type_id: TypeId)
 
     drop(registry);
 
-    // Update the AST
     let mut ast = world.resource_mut::<SceneBsnAst>();
 
     if let Some(existing) = ast.find_patch_by_type_path(patches_entity, &type_path) {

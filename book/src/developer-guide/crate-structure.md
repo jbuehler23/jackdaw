@@ -10,25 +10,30 @@ what it needs.
 
 One direct dependency, no editor in the dependency graph:
 
-- `jackdaw_runtime`: the standalone scene loader (authored
-  `.bsn` scenes, plus legacy `.jsn`), the optional `physics`
-  feature that builds avian colliders from authored data, and
-  the `EditorMeta` / `ReflectEditorMeta` reflect attributes
-  (`EditorCategory`, `EditorDescription`, `EditorHidden`)
-  that user game crates use on their components.
+- `jackdaw_runtime`: the standalone scene loader for authored
+  `.bsn` scenes, the optional `physics` feature that builds
+  avian colliders from authored data, and the `EditorMeta` /
+  `ReflectEditorMeta` reflect attributes (`EditorCategory`,
+  `EditorDescription`, `EditorHidden`) that user game crates
+  use on their components.
+
+`JackdawPlugin` registers a Bevy `AssetLoader` for the `bsn`
+extension. Bevy ships no loader for that format, so a game
+without `jackdaw_runtime` cannot open an authored scene.
 
 It pulls in the scene and geometry crates:
 
-- `jackdaw_bsn`: the `.bsn` scene format and the scene
-  document.
+- `jackdaw_bsn`: the `.bsn` scene format, its parser, and the
+  scene document.
 - `jackdaw_scene_types`: the shared components (`Brush`,
   scene node ids, custom properties).
-- `jackdaw_jsn`: survives as a read-only importer for legacy
-  `.jsn` scenes.
 - `jackdaw_geometry`: brush data structures (`BrushFaceData`,
   CSG, triangulation). Needed at runtime because the
   standalone game has to rebuild brush meshes from the
   serialized planes.
+
+`jackdaw_jsn` is not in this graph. It is a read-only importer
+for the legacy `.jsn` format and only the editor depends on it.
 
 The game template's `Cargo.toml` shows the canonical shape: a
 normal Bevy crate with `bevy`, `jackdaw_runtime`, and a physics
@@ -37,8 +42,8 @@ crate, and nothing editor-related.
 ## What the editor adds on top
 
 The `jackdaw` crate (top-level) is the editor binary plus the
-plugin group `EditorPlugins`. It depends on every other crate
-in the workspace. The interesting layers:
+plugin group `EditorPlugins`. It depends on nearly everything
+else in the workspace. The interesting layers:
 
 - `jackdaw_feathers` / `jackdaw_widgets` / `jackdaw_panels`:
   the UI layer. Feathers is the styled-widget primitives,
@@ -59,7 +64,40 @@ in the workspace. The interesting layers:
 - `jackdaw_remote`: the Bevy Remote Protocol (BRP) client
   used by the remote inspector when talking to a running
   game.
+- `jackdaw_camera_rig`: authorable first/third-person camera
+  rig components plus the runtime driver that moves them.
+  Optional, behind the default-on `camera_rig` feature.
+- `jackdaw_csg`: the glue between brushes and the manifold3d
+  mesh-boolean kernel.
+- `jackdaw_snap`, `jackdaw_select`, `jackdaw_uv`,
+  `jackdaw_pick`, `jackdaw_hull`, `jackdaw_material`:
+  engine-agnostic editing math (snapping, half-edge selection
+  traversal, UV projection, ray and point queries, convex
+  hulls, PBR texture-set detection). No bevy dependency; the
+  editor is a thin adapter over them.
+- `jackdaw_multiplayer`, `jackdaw_multiplayer_editor`,
+  `jackdaw_multiplayer_lightyear`: networking authoring. The
+  editor writes replication metadata only; the lightyear
+  backend lives game-side.
+- `jackdaw_localization`: editor string catalogue.
 - `bevy_window_chrome`: custom title bar window chrome for Bevy.
+
+## Play and the command line
+
+- `jackdaw_project_build`: the build pipeline. Generates the
+  shim crate, drives cargo through the rustc wrapper, extracts
+  the component schema, and owns SDK path resolution and the
+  first-run SDK bootstrap. Deliberately bevy-light so the CLI
+  can link it without dragging in a renderer.
+- `jackdaw_cli`: the `jackdaw-cli` binary (`build`, `run`,
+  `setup`, `doctor`, plus the release-tooling `package-sdk` and
+  `bundle`).
+- `jackdaw_runner`: the prebuilt game runner. Play dlopens the
+  already-built project dylib through it, so nothing compiles
+  at play time.
+- `jackdaw_pie_protocol`: the IPC message types and the
+  `jackdaw.toml` run-configuration manifest shared by the
+  editor and the runner.
 
 ## Project and extension dylib plumbing
 
@@ -94,9 +132,9 @@ extension dylibs:
 
 - `jackdaw_fuzzy`: fuzzy-match scoring for the picker /
   command palette. Tiny.
-- `jackdaw_widgets`: project-specific widgets that don't
-  belong in `jackdaw_feathers` (history view, color picker,
-  etc.).
+- `jackdaw_jsn`: read-only importer for the legacy `.jsn`
+  format. Nothing writes `.jsn`; opening one converts it to
+  `.bsn`.
 
 ## How to find things
 

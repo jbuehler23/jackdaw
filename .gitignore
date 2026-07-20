@@ -1,10 +1,14 @@
 # Rust builds
 /target
+# xtask is a detached workspace with its own build output
+xtask/target
 # mdBook build output
 /book/book
 # Large media files
 *.mp4
 # jsn
 .jsn/project.jsn
+# editor config / generated caches
+.jackdaw/
 # web explorer app
 web/explorer/node_modules

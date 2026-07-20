@@ -33,7 +33,7 @@ struct PopulatedComponents(Vec<ComponentId>);
 #[derive(Component, Clone, Copy)]
 struct PreviousRemoteSelection(Option<u64>);
 
-/// Flag that triggers phase-2 display building in a normal system context.
+/// Flag that triggers display building in a normal system context.
 #[derive(Component)]
 pub struct RemoteInspectorNeedsRebuild {
     proxy_entity: Entity,
@@ -142,12 +142,10 @@ pub fn populate_remote_proxy(world: &mut World) {
     let (populated_ids, fallback_components) =
         populate_proxy_from_components(world, proxy_entity, &remote_components);
 
-    // Store populated component IDs for cleanup
     world
         .entity_mut(inspector_entity)
         .insert(PopulatedComponents(populated_ids));
 
-    // Set flag for phase 2
     world
         .entity_mut(inspector_entity)
         .insert(RemoteInspectorNeedsRebuild {
@@ -229,8 +227,8 @@ pub fn build_remote_inspector_displays(
         .entity(inspector_entity)
         .remove::<RemoteInspectorNeedsRebuild>();
 
-    // The proxy entity now has real components populated by phase 1.
-    // Use the shared build function.
+    // `populate_remote_proxy` has already filled the proxy entity with real
+    // components.
     let Ok((archetype, entity_ref)) = entity_query.get(proxy_entity) else {
         return;
     };

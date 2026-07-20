@@ -33,13 +33,9 @@
 //!
 //! # Why the wrapper exists as a library plus a binary
 //!
-//! Two binaries call this logic: the standalone
-//! `jackdaw-rustc-wrapper` produced by this crate's own `[[bin]]`
-//! (used by dev contributors via `cargo build -p jackdaw_rustc_wrapper`),
-//! and the `jackdaw-rustc-wrapper` produced by the top-level
-//! `jackdaw` package's `[[bin]]` (so `cargo install jackdaw` ships
-//! the wrapper alongside the editor binary). Both binaries are one-line
-//! shims around [`run`].
+//! The logic lives in a library so the build driver can call [`run`]
+//! in-process, and ships as a binary so rustc can exec it as
+//! `RUSTC_WRAPPER`.
 //!
 //! # Why
 //!

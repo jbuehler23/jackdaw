@@ -35,7 +35,7 @@ const SKIP_PREFIXES: &[&str] = &[
     "bevy_remote::",
 ];
 
-/// Startup system that auto-generates `.jsn/components.jsn` from the type registry.
+/// Startup system that auto-generates `.jackdaw/components.json` from the type registry.
 ///
 /// Reads existing definitions from disk, merges new types from the registry,
 /// preserves hand-edits, and writes the updated file.
@@ -43,25 +43,25 @@ pub fn generate_component_definitions(type_registry: Res<AppTypeRegistry>) {
     let registry = type_registry.read();
 
     // Determine output directory. Use current working directory.
-    let jsn_dir = Path::new(".jsn");
-    if std::fs::create_dir_all(jsn_dir).is_err() {
-        warn!("JackdawRemote: Could not create .jsn directory");
+    let config_dir = Path::new(".jackdaw");
+    if std::fs::create_dir_all(config_dir).is_err() {
+        warn!("JackdawRemote: Could not create .jackdaw directory");
         return;
     }
 
-    let components_path = jsn_dir.join("components.jsn");
+    let components_path = config_dir.join("components.json");
 
     // Load existing definitions if present
     let mut existing = if components_path.is_file() {
         match std::fs::read_to_string(&components_path) {
-            Ok(data) => serde_json::from_str::<JsnComponentsFile>(&data).unwrap_or_else(|e| {
-                warn!("JackdawRemote: Failed to parse existing components.jsn: {e}");
-                JsnComponentsFile::default()
+            Ok(data) => serde_json::from_str::<ComponentsFile>(&data).unwrap_or_else(|e| {
+                warn!("JackdawRemote: Failed to parse existing components.json: {e}");
+                ComponentsFile::default()
             }),
-            Err(_) => JsnComponentsFile::default(),
+            Err(_) => ComponentsFile::default(),
         }
     } else {
-        JsnComponentsFile::default()
+        ComponentsFile::default()
     };
 
     // Iterate registered types and build definitions for game components
@@ -104,24 +104,24 @@ pub fn generate_component_definitions(type_registry: Res<AppTypeRegistry>) {
     match serde_json::to_string_pretty(&existing) {
         Ok(data) => {
             if let Err(e) = std::fs::write(&components_path, data) {
-                warn!("JackdawRemote: Failed to write components.jsn: {e}");
+                warn!("JackdawRemote: Failed to write components.json: {e}");
             } else if added > 0 {
                 info!(
-                    "JackdawRemote: Generated {added} new component definitions in .jsn/components.jsn"
+                    "JackdawRemote: Generated {added} new component definitions in .jackdaw/components.json"
                 );
             }
         }
         Err(e) => {
-            warn!("JackdawRemote: Failed to serialize components.jsn: {e}");
+            warn!("JackdawRemote: Failed to serialize components.json: {e}");
         }
     }
 }
 
-/// Build a `JsnComponentDef` from a Bevy `TypeInfo`.
+/// Build a `ComponentDef` from a Bevy `TypeInfo`.
 fn build_component_def(
     registry: &TypeRegistry,
     type_info: &bevy::reflect::TypeInfo,
-) -> JsnComponentDef {
+) -> ComponentDef {
     let mut fields = std::collections::HashMap::new();
 
     if let bevy::reflect::TypeInfo::Struct(struct_info) = type_info {
@@ -134,7 +134,7 @@ fn build_component_def(
             );
             fields.insert(
                 field_name,
-                JsnFieldDef {
+                FieldDef {
                     type_path: field_type_path,
                     ..Default::default()
                 },
@@ -142,7 +142,7 @@ fn build_component_def(
         }
     }
 
-    JsnComponentDef {
+    ComponentDef {
         fields,
         ..Default::default()
     }
@@ -153,7 +153,7 @@ fn build_component_def(
 fn merge_fields_from_registry(
     registry: &TypeRegistry,
     type_info: &bevy::reflect::TypeInfo,
-    existing: &mut JsnComponentDef,
+    existing: &mut ComponentDef,
 ) {
     if let bevy::reflect::TypeInfo::Struct(struct_info) = type_info {
         for i in 0..struct_info.field_len() {
@@ -170,7 +170,7 @@ fn merge_fields_from_registry(
             );
             existing.fields.insert(
                 field_name.to_string(),
-                JsnFieldDef {
+                FieldDef {
                     type_path: field_type_path,
                     ..Default::default()
                 },

@@ -239,16 +239,7 @@ impl SceneBsnAst {
             let new_node = match dst_parent {
                 Some(parent) => clone_node_into(dst, src, src_node, parent),
                 None => {
-                    let patches: Vec<BsnPatch> = match src.get_patches(src_node) {
-                        Some(patches) => patches
-                            .0
-                            .iter()
-                            .filter_map(|&pe| src.get_patch(pe))
-                            .filter(|patch| !matches!(patch, BsnPatch::Children(_)))
-                            .cloned()
-                            .collect(),
-                        None => Vec::new(),
-                    };
+                    let patches = src.cloned_component_patches(src_node);
                     let node = dst.create_entity_node(patches);
                     dst.add_to_roots(node);
                     node
@@ -269,6 +260,23 @@ impl SceneBsnAst {
         }
         dst
     }
+
+    /// Clone `node`'s component patches into a fresh vector, dropping the
+    /// [`BsnPatch::Children`] relation (callers rebuild the hierarchy
+    /// separately). Name, base, and every component patch pass through.
+    /// Returns an empty vector when `node` has no patches.
+    pub fn cloned_component_patches(&self, node: Entity) -> Vec<BsnPatch> {
+        match self.get_patches(node) {
+            Some(patches) => patches
+                .0
+                .iter()
+                .filter_map(|&pe| self.get_patch(pe))
+                .filter(|patch| !matches!(patch, BsnPatch::Children(_)))
+                .cloned()
+                .collect(),
+            None => Vec::new(),
+        }
+    }
 }
 
 pub fn clone_node_into(
@@ -277,16 +285,7 @@ pub fn clone_node_into(
     src_node: Entity,
     dst_parent: Entity,
 ) -> Entity {
-    let cloned_patches: Vec<BsnPatch> = match src.get_patches(src_node) {
-        Some(patches) => patches
-            .0
-            .iter()
-            .filter_map(|&pe| src.get_patch(pe))
-            .filter(|patch| !matches!(patch, BsnPatch::Children(_)))
-            .cloned()
-            .collect(),
-        None => Vec::new(),
-    };
+    let cloned_patches = src.cloned_component_patches(src_node);
     let new_node = dst.create_entity_node(cloned_patches);
     dst.add_child_to_ast(dst_parent, new_node);
     new_node

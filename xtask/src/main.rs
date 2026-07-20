@@ -1,0 +1,147 @@
+//! Test-harness orchestrator. `cargo xtask <tier>` runs a tier through nextest.
+use std::process::{Command, ExitCode};
+
+/// Target triple for the heavy tier's SDK build. Reads the host from
+/// `rustc -vV` so the tier runs on any host; `JACKDAW_TRIPLE` overrides it.
+fn triple() -> String {
+    if let Ok(explicit) = std::env::var("JACKDAW_TRIPLE") {
+        return explicit;
+    }
+    let output = Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .expect("run `rustc -vV` to resolve the host triple");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .expect("`rustc -vV` reports a host triple")
+        .to_string()
+}
+
+fn sh(program: &str, args: &[&str]) -> bool {
+    eprintln!("+ {program} {}", args.join(" "));
+    Command::new(program)
+        .args(args)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn fast() -> bool {
+    sh("cargo", &["fmt", "--all", "--check"])
+        && sh(
+            "cargo",
+            &[
+                "clippy",
+                "--workspace",
+                "--all-targets",
+                "--features",
+                "bevy/dynamic_linking",
+                "--",
+                "--deny",
+                "warnings",
+            ],
+        )
+        && sh(
+            "cargo",
+            &[
+                "nextest",
+                "run",
+                "--profile",
+                "ci",
+                "--workspace",
+                "--lib",
+                "--features",
+                "bevy/dynamic_linking",
+            ],
+        )
+}
+
+fn integration() -> bool {
+    // The non-SDK integration tests: everything under tests/ that is not dylib-gated.
+    // The excluded binaries need a built SDK and belong to `heavy()`.
+    sh(
+        "cargo",
+        &[
+            "nextest",
+            "run",
+            "--profile",
+            "ci",
+            "-p",
+            "jackdaw",
+            "--features",
+            "bevy/dynamic_linking",
+            "--tests",
+            "-E",
+            "not (binary(bsn_game_run) | binary(editor_journey) | binary(bundle_smoke) \
+               | binary(stress_reload) | binary(scaffold_e2e) \
+               | binary(runner_boots_project_dylib) | binary(schema_extract) | binary(reflect_auto_register) \
+               | binary(component_shape_refresh) | binary(dylib_linkage_identity) | binary(extern_redirect_ecosystem))",
+        ],
+    )
+}
+
+fn heavy() -> bool {
+    let triple = triple();
+    let triple = triple.as_str();
+    // Same feature set as the test step below; a different one recompiles the
+    // whole editor between the two.
+    sh(
+        "cargo",
+        &[
+            "build",
+            "-p",
+            "jackdaw",
+            "--features",
+            "dylib runner",
+            "--target",
+            triple,
+        ],
+    ) && sh("cargo", &["build", "-p", "jackdaw_rustc_wrapper"])
+        && sh(
+            "cargo",
+            &["build", "-p", "jackdaw_runner", "--target", triple],
+        )
+        && sh(
+            "cargo",
+            &[
+                "nextest",
+                "run",
+                "--profile",
+                "heavy",
+                "-p",
+                "jackdaw",
+                "--features",
+                "dylib runner",
+                "--target",
+                triple,
+                // `--test` rather than an `-E` filter: `-E` selects what runs but
+                // cargo still builds every test target in the package.
+                "--test",
+                "bsn_game_run",
+                "--test",
+                "editor_journey",
+                "--test",
+                "bundle_smoke",
+            ],
+        )
+}
+
+fn main() -> ExitCode {
+    let tier = std::env::args().nth(1).unwrap_or_default();
+    let ok = match tier.as_str() {
+        "fast" => fast(),
+        "integration" => integration(),
+        "heavy" => heavy(),
+        "release-gate" => fast() && integration() && heavy(),
+        other => {
+            eprintln!("usage: cargo xtask <fast|integration|heavy|release-gate> (got {other:?})");
+            false
+        }
+    };
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}

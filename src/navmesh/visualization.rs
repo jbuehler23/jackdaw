@@ -93,7 +93,6 @@ fn rebuild_navmesh_visuals(
 ) {
     let handle_id = navmesh_handle.id();
 
-    // Check if we need to rebuild
     let handle_changed = visuals.current_id != Some(handle_id);
     let asset_modified = asset_events.read().any(|ev| match ev {
         AssetEvent::Added { id } | AssetEvent::Modified { id } => *id == handle_id,

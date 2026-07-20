@@ -67,7 +67,10 @@ impl SdkManifest {
             else {
                 return Err(PlanError::Parse(format!("bad manifest line: {line}")));
             };
-            artifacts.insert((name.to_string(), version.to_string()), artifact.to_string());
+            artifacts.insert(
+                (name.to_string(), version.to_string()),
+                artifact.to_string(),
+            );
         }
         Ok(Self { artifacts })
     }
@@ -146,8 +149,7 @@ impl SdkManifest {
                 continue;
             };
             let name = name.replace('-', "_");
-            let Some(version) = msg["package_id"].as_str().and_then(package_id_version)
-            else {
+            let Some(version) = msg["package_id"].as_str().and_then(package_id_version) else {
                 continue;
             };
             if !closure.contains(&(name.clone(), version.to_string())) {
@@ -221,7 +223,6 @@ impl SdkManifest {
             .find(|((n, _), _)| n == name)
             .map(|(_, artifact)| artifact.as_str())
     }
-
 }
 
 /// Resolve a manifest artifact reference to an absolute path the rustc
@@ -395,7 +396,10 @@ mod tests {
         let manifest = SdkManifest { artifacts };
         manifest.write(&path).unwrap();
         let back = SdkManifest::load(&path).unwrap();
-        assert_eq!(back.artifact("glam", "0.32.1"), Some("/sdk/deps/libglam-abc.rlib"));
+        assert_eq!(
+            back.artifact("glam", "0.32.1"),
+            Some("/sdk/deps/libglam-abc.rlib")
+        );
     }
 
     #[test]

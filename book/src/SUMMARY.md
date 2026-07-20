@@ -1,7 +1,6 @@
 # Summary
 
 [Introduction](introduction.md)
-[Giving Feedback](giving-feedback.md)
 
 # Getting Started
 
@@ -25,7 +24,7 @@
 - [Architecture](developer-guide/architecture.md)
 - [Crate Structure](developer-guide/crate-structure.md)
 - [Custom Components](developer-guide/custom-components.md)
-- [JSN Format](developer-guide/jsn-format.md)
+- [BSN Format](developer-guide/bsn-format.md)
 - [Extending the Editor](developer-guide/extending-the-editor.md)
 - [Open Challenges](developer-guide/open-challenges.md)
 

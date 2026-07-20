@@ -155,7 +155,13 @@ fn sync_build_panel(
         BuildState::Building { progress, .. } => {
             let (current, done, log) = progress
                 .lock()
-                .map(|g| (g.current_crate.clone(), g.artifacts_done, g.full_log.clone()))
+                .map(|g| {
+                    (
+                        g.current_crate.clone(),
+                        g.artifacts_done,
+                        g.full_log.clone(),
+                    )
+                })
                 .unwrap_or((None, 0, String::new()));
             let label = match current {
                 Some(name) => format!("Compiling {name} ({done})"),
@@ -175,7 +181,12 @@ fn sync_build_panel(
             None,
             false,
         ),
-        BuildState::Idle => ("No build running".to_string(), tokens::TEXT_SECONDARY, None, false),
+        BuildState::Idle => (
+            "No build running".to_string(),
+            tokens::TEXT_SECONDARY,
+            None,
+            false,
+        ),
     };
 
     if let Ok((mut text, mut text_color)) = status.single_mut() {

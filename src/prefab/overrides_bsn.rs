@@ -21,8 +21,6 @@ use crate::prefab::resolver_bsn::{
 /// ancestor (so it inherits from a prefab file). The ancestry check is
 /// inclusive of `node`, so an instance root that carries both components
 /// counts.
-///
-/// Mirrors [`crate::prefab::overrides::is_inside_prefab_instance`].
 pub fn is_inside_prefab_instance(ast: &SceneBsnAst, node: Entity) -> bool {
     ast.find_patch_by_type_path(node, PREFAB_ENTITY_ID_TYPE)
         .is_some()
@@ -33,8 +31,6 @@ pub fn is_inside_prefab_instance(ast: &SceneBsnAst, node: Entity) -> bool {
 /// of its nearest `IsA` ancestor (inclusive of the node), paired with the
 /// node's own `PrefabEntityId`. `None` when the node has no id or no `IsA`
 /// ancestor.
-///
-/// Mirrors [`crate::prefab::overrides::resolve_inheritance`].
 pub fn resolve_inheritance(ast: &SceneBsnAst, node: Entity) -> Option<(PathBuf, u32)> {
     let prefab_entity_id = read_prefab_entity_id(ast, node)?;
     let isa_node = ast.ancestor_with_component(node, ISA_TYPE)?;
@@ -48,8 +44,6 @@ pub fn resolve_inheritance(ast: &SceneBsnAst, node: Entity) -> Option<(PathBuf, 
 /// such component, is not inside a prefab instance, or the prefab is not
 /// cached. True when the component exists on the node but not on the prefab
 /// (an addition).
-///
-/// Mirrors [`crate::prefab::overrides::field_is_overridden`].
 pub fn field_is_overridden(
     ast: &SceneBsnAst,
     get_prefab: &PrefabLookup,
@@ -94,8 +88,6 @@ pub fn field_is_overridden(
 /// Vec3 blob; every other shape (tuple struct, list, map, scalar) is a leaf.
 /// When `prefab` is `None` (the component itself was added on the instance),
 /// every leaf is reported.
-///
-/// Mirrors [`crate::prefab::overrides::collect_overridden_paths`].
 pub fn collect_overridden_paths(
     scene: &BsnValue,
     prefab: Option<&BsnValue>,

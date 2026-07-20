@@ -19,7 +19,7 @@
 //!   +-- Clip "Door Close" (...)
 //! ```
 //!
-//! All mutations go through `SpawnEntity` / `SetJsnField` /
+//! All mutations go through `SpawnEntity` / `SetBsnField` /
 //! `DespawnEntity`. The animation crate exports no custom commands.
 //!
 //! [`compile_clips`]: crate::compile_clips
@@ -60,7 +60,7 @@ pub enum Interpolation {
 
 /// A single track on a clip. Addresses the animated property via
 /// `(component_type_path, field_path)`, the same convention the
-/// inspector and `SetJsnField` use. Target entity is implicit: the
+/// inspector and `SetBsnField` use. Target entity is implicit: the
 /// clip's parent via `ChildOf`.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Default)]
 #[reflect(Component, Serialize, Deserialize, @jackdaw_scene_types::EditorHidden)]

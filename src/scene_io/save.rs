@@ -305,7 +305,7 @@ pub fn save_layout_to_project(world: &mut World) {
         .resource_mut::<crate::project::ProjectRoot>()
         .config
         .clone();
-    project.project.layout = Some(layout_json);
+    project.layout = Some(layout_json);
 
     if let Err(e) = crate::project::save_project_config(&root, &project) {
         warn!("Failed to save project config: {e}");

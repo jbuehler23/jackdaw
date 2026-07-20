@@ -1479,11 +1479,10 @@ mod tests {
     }
 }
 
-/// Field-navigation matrix for `set_bsn_field`/`get_bsn_field`, mirroring the
-/// case list the JSN-path layer (`jackdaw_jsn::ast`) covers with
-/// `set_field_in_component_json`/`get_field_in_component_json`. Each case
-/// proves BSN field editing at parity with JSON-path editing, or (where the
-/// primitives don't yet cover a case) documents the gap with an ignored test.
+/// Field-navigation matrix for `set_bsn_field`/`get_bsn_field`. Each case
+/// covers one of the reflect-JSON shapes field editing must handle (struct,
+/// unit enum variant, tuple, map), or (where the primitives don't yet cover a
+/// case) documents the gap with an ignored test.
 #[cfg(test)]
 mod field_navigation_matrix {
     use super::*;

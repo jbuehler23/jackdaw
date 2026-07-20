@@ -4,7 +4,7 @@
 //! bottom-right of the status bar to connect.
 //!
 //! The game registers several custom components (Health, Speed, Inventory) so
-//! the editor can fetch the type registry and verify `.jsn/components.jsn`
+//! the editor can fetch the type registry and verify `.jackdaw/components.json`
 //! auto-generation.
 //!
 //! Run with: `cargo run --example remote_game`

@@ -1,6 +1,4 @@
-// RelationshipsTab.tsx: canvas force graph of the entity hierarchy, ported
-// from the PoC's ECS internals "Relationships" section
-// (.scratch/web-explorer/jackdaw-explorer-poc.html, the `rel` object). Only
+// RelationshipsTab.tsx: canvas force graph of the entity hierarchy. Only
 // ChildOf edges are drawn: custom relationship components aren't discoverable
 // over stock BRP metadata, so the legend says so rather than pretending
 // otherwise.

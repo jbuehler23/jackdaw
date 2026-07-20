@@ -222,17 +222,8 @@ fn refresh_sdk_setup_ui(
     )>,
     bar_slots: Query<&Children, With<SetupBarSlot>>,
     children_q: Query<&Children>,
-    mut fill_q: Query<
-        &mut Node,
-        (
-            With<progress::ProgressBarFill>,
-            Without<SetupErrorRow>,
-        ),
-    >,
-    mut error_rows: Query<
-        &mut Node,
-        (With<SetupErrorRow>, Without<progress::ProgressBarFill>),
-    >,
+    mut fill_q: Query<&mut Node, (With<progress::ProgressBarFill>, Without<SetupErrorRow>)>,
+    mut error_rows: Query<&mut Node, (With<SetupErrorRow>, Without<progress::ProgressBarFill>)>,
 ) {
     let Some(snap) = setup.snapshot.as_ref() else {
         return;
@@ -255,12 +246,7 @@ fn refresh_sdk_setup_ui(
         (None, Some(total)) => format!("0 / {total}"),
         (None, None) => String::new(),
     };
-    let log_line = snap
-        .log
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n");
+    let log_line = snap.log.iter().cloned().collect::<Vec<_>>().join("\n");
     let error_line = error.clone().unwrap_or_default();
 
     for (mut text, is_phase, is_crate, is_log, is_error) in texts.iter_mut() {

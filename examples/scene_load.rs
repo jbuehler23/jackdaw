@@ -1,11 +1,11 @@
-//! Load a `.jsn` scene exported from the Jackdaw editor.
+//! Load a `.bsn` scene authored in the Jackdaw editor.
 //!
 //! 1. Add `jackdaw_runtime` to your `Cargo.toml`
 //! 2. Add `JackdawPlugin` to your app
 //! 3. Spawn a `JackdawSceneRoot` with an asset server load
 //!
-//! The scene includes lights, brushes, and any other entities
-//! saved from the editor. You only need to provide a camera.
+//! The scene includes the camera, lights, brushes, and any other
+//! entities saved from the editor.
 
 use bevy::prelude::*;
 use jackdaw_runtime::prelude::*;
@@ -21,11 +21,6 @@ fn main() -> AppExit {
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(JackdawSceneRoot(
-        asset_server.load("examples/scenes/scene.jsn"),
-    ));
-
-    commands.spawn((
-        Camera3d::default(),
-        Transform::from_xyz(5.0, 5.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+        asset_server.load("examples/scenes/scene.bsn"),
     ));
 }

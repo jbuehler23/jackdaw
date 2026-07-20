@@ -2,7 +2,7 @@
 //! connect old ring -> new ring with N side quads. The original face's ring is rewritten to
 //! the new (top) ring; N new side-quad faces are added below.
 //!
-//! Single-face MVP -- multi-face region merging deferred.
+//! Handles a single face; multi-face regions are not merged.
 
 use glam::Vec3;
 

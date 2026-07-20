@@ -70,17 +70,22 @@ time, and a game crash cannot take down the editor.
 ## Scene format
 
 Scenes are stored as `.bsn` files under `assets/`. Each entity
-lists its reflected components inline. The serializer skips types
-tagged with `@EditorHidden`, the entity-level `EditorHidden`
-marker, `NonSerializable`, and `EditorOnly`. Legacy `.jsn` scenes
-can still be imported; see [JSN Format](jsn-format.md).
+lists its reflected components inline. The live in-editor document
+is the BSN AST (`SceneBsnAst`); saving writes it back out as
+`.bsn` text, and that is the only format anything writes. The
+serializer skips types tagged with `@EditorHidden`, the
+entity-level `EditorHidden` marker, `NonSerializable`, and
+`EditorOnly`. Legacy `.jsn` scenes can still be imported; see
+[BSN Format](bsn-format.md).
 
-The runtime loader processes scene entities in topological order
-(parents before children) and bundles `Transform`, `Visibility`,
-`GlobalTransform`, `InheritedVisibility`, and `ChildOf` into a
-single `world.spawn` per entity. User components go in
-afterwards, so `On<Insert, T>` observers see correct
-hierarchy-derived state.
+Outside the editor, `jackdaw_runtime` registers a Bevy
+`AssetLoader` for the `bsn` extension, since Bevy has no built-in
+loader for the format. The loader processes scene entities in
+topological order (parents before children) and bundles
+`Transform`, `Visibility`, `GlobalTransform`,
+`InheritedVisibility`, and `ChildOf` into a single `world.spawn`
+per entity. User components go in afterwards, so `On<Insert, T>`
+observers see correct hierarchy-derived state.
 
 ## Brushes
 

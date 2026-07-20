@@ -418,11 +418,11 @@ fn param_type_variant(ty: &Ident) -> syn::Result<TokenStream2> {
 /// in a `const` slice; numeric and bool literals are trivial.
 fn param_default_variant(ty: &Ident, expr: &Expr) -> syn::Result<TokenStream2> {
     Ok(match ty.to_string().as_str() {
-        "bool" => quote! { ::jackdaw_api::jsn::PropertyValue::Bool(#expr) },
-        "i64" => quote! { ::jackdaw_api::jsn::PropertyValue::Int(#expr) },
-        "f64" => quote! { ::jackdaw_api::jsn::PropertyValue::Float(#expr) },
+        "bool" => quote! { ::jackdaw_api::scene::PropertyValue::Bool(#expr) },
+        "i64" => quote! { ::jackdaw_api::scene::PropertyValue::Int(#expr) },
+        "f64" => quote! { ::jackdaw_api::scene::PropertyValue::Float(#expr) },
         "String" => quote! {
-            ::jackdaw_api::jsn::PropertyValue::String(::std::borrow::Cow::Borrowed(#expr))
+            ::jackdaw_api::scene::PropertyValue::String(::std::borrow::Cow::Borrowed(#expr))
         },
         "Vec2" | "Vec3" | "Color" | "Entity" => {
             return Err(syn::Error::new(

@@ -3,10 +3,9 @@
 //! dialogs can be opened from any operator and resolved by any of three
 //! buttons.
 //!
-//! Deviation: if the tab being saved has no path (untitled), the Save
-//! action falls back to Discard with a warning log. Implementing the
-//! full `rfd::FileDialog` sub-flow for that case is deferred to a
-//! follow-up task.
+//! If the tab being saved has no path (untitled), the Save action falls
+//! back to Discard with a warning log; there is no `rfd::FileDialog`
+//! sub-flow to pick a path for an untitled tab.
 
 use bevy::picking::events::{Click, Pointer};
 use bevy::prelude::*;

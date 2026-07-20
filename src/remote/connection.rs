@@ -1,5 +1,5 @@
 use bevy::{prelude::*, tasks::Task, tasks::futures_lite::future};
-use jackdaw_remote::{JackdawAppInfo, schema::JsnRegistry};
+use jackdaw_remote::{JackdawAppInfo, schema::ComponentRegistry};
 
 use super::brp;
 
@@ -19,7 +19,7 @@ pub struct ConnectionManager {
     /// BRP endpoint URL (default: `http://127.0.0.1:15702`).
     pub endpoint: String,
     /// Cached type registry from the connected game.
-    pub registry: Option<JsnRegistry>,
+    pub registry: Option<ComponentRegistry>,
     /// Seconds since last successful heartbeat.
     heartbeat_timer: f32,
 }

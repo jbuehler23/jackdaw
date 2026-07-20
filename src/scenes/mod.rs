@@ -171,7 +171,7 @@ pub fn persist_tabs_to_project_config(
         .collect();
     let last_active_tab = scenes.active;
 
-    let cfg = &mut project_root.config.project;
+    let cfg = &mut project_root.config;
     if cfg.last_open_tabs == last_open_tabs && cfg.last_active_tab == last_active_tab {
         return;
     }

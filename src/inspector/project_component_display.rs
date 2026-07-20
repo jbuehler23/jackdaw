@@ -27,7 +27,10 @@ use super::reflect_fields;
 /// edits round-trip back to the document through the shared `ValueChange`
 /// observers. Fields whose type is not a supported inspector scalar are shown
 /// as a read-only row so the component's shape stays visible.
-#[expect(clippy::too_many_arguments, reason = "mirrors reflect_fields spawner arity")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors reflect_fields spawner arity"
+)]
 pub(crate) fn spawn_project_component_fields(
     commands: &mut Commands,
     body_entity: Entity,
@@ -82,7 +85,10 @@ pub(crate) fn spawn_project_component_fields(
 /// The default JSON value for one field, pulled from the schema's whole-type
 /// default. The extractor stores the default in `ReflectSerializer` form,
 /// `{ "full::Type": { field: value, .. } }`, so unwrap the single type key.
-fn component_default_field_json(schema: &TypeSchema, field_name: &str) -> Option<serde_json::Value> {
+fn component_default_field_json(
+    schema: &TypeSchema,
+    field_name: &str,
+) -> Option<serde_json::Value> {
     let default = schema.default.as_ref()?;
     let obj = default.as_object()?;
     let fields = obj
@@ -113,7 +119,10 @@ fn json_to_scalar_reflect(
     field_type_path: &str,
     json: &serde_json::Value,
 ) -> Option<Box<dyn PartialReflect>> {
-    let short = field_type_path.rsplit("::").next().unwrap_or(field_type_path);
+    let short = field_type_path
+        .rsplit("::")
+        .next()
+        .unwrap_or(field_type_path);
     let boxed: Box<dyn PartialReflect> = match short {
         "f32" => Box::new(json.as_f64()? as f32),
         "f64" => Box::new(json.as_f64()?),
@@ -139,7 +148,10 @@ fn json_to_scalar_reflect(
 /// registration-free counterpart to [`crate::commands::json_field_edit_to_bsn_value`]
 /// for project components.
 pub(crate) fn json_to_bsn_value_typed(field_type_path: &str, json: &serde_json::Value) -> BsnValue {
-    let short = field_type_path.rsplit("::").next().unwrap_or(field_type_path);
+    let short = field_type_path
+        .rsplit("::")
+        .next()
+        .unwrap_or(field_type_path);
     match short {
         "f32" | "f64" => BsnValue::Float(json.as_f64().unwrap_or(0.0)),
         "bool" => BsnValue::Bool(json.as_bool().unwrap_or(false)),

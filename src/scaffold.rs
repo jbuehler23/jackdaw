@@ -56,7 +56,9 @@ pub enum ScaffoldError {
     ManifestParse(String),
     NoPackageName,
     /// The project's Bevy dependency does not match the supported minor.
-    BevyVersion { found: String },
+    BevyVersion {
+        found: String,
+    },
     Io(String),
 }
 
@@ -265,8 +267,8 @@ pub fn import_project(
     if !manifest_path.is_file() {
         return Err(ScaffoldError::NoManifest(manifest_path));
     }
-    let manifest_text = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| ScaffoldError::Io(format!("{e}")))?;
+    let manifest_text =
+        std::fs::read_to_string(&manifest_path).map_err(|e| ScaffoldError::Io(format!("{e}")))?;
     let mut doc: DocumentMut = manifest_text
         .parse()
         .map_err(|e| ScaffoldError::ManifestParse(format!("{e}")))?;
@@ -359,10 +361,7 @@ fn check_bevy_version(doc: &DocumentMut) -> Result<(), ScaffoldError> {
 /// Whether the manifest carries the retired static-link scaffold's
 /// wiring (editor feature, editor bin, optional jackdaw dep).
 fn detect_legacy_scaffold(doc: &DocumentMut) -> bool {
-    let has_editor_feature = doc
-        .get("features")
-        .and_then(|f| f.get("editor"))
-        .is_some();
+    let has_editor_feature = doc.get("features").and_then(|f| f.get("editor")).is_some();
     let has_editor_bin = doc
         .get("bin")
         .and_then(|b| b.as_array_of_tables())
@@ -382,10 +381,10 @@ fn clean_legacy_scaffold(
     doc: &mut DocumentMut,
     actions: &mut Vec<String>,
 ) -> Result<(), ScaffoldError> {
-    if let Some(features) = doc.get_mut("features").and_then(|f| f.as_table_mut()) {
-        if features.remove("editor").is_some() | features.remove("pie").is_some() {
-            actions.push("removed the editor/pie cargo features".to_string());
-        }
+    if let Some(features) = doc.get_mut("features").and_then(|f| f.as_table_mut())
+        && features.remove("editor").is_some() | features.remove("pie").is_some()
+    {
+        actions.push("removed the editor/pie cargo features".to_string());
     }
     if let Some(bins) = doc.get_mut("bin").and_then(|b| b.as_array_of_tables_mut()) {
         let before = bins.len();
@@ -401,15 +400,15 @@ fn clean_legacy_scaffold(
     {
         doc.remove("bin");
     }
-    if let Some(deps) = doc.get_mut("dependencies").and_then(|d| d.as_table_mut()) {
-        if deps.remove("jackdaw").is_some() {
-            actions.push("removed the optional jackdaw dependency".to_string());
-        }
+    if let Some(deps) = doc.get_mut("dependencies").and_then(|d| d.as_table_mut())
+        && deps.remove("jackdaw").is_some()
+    {
+        actions.push("removed the optional jackdaw dependency".to_string());
     }
-    if let Some(package) = doc.get_mut("package").and_then(|p| p.as_table_mut()) {
-        if package.remove("default-run").is_some() {
-            actions.push("removed package.default-run".to_string());
-        }
+    if let Some(package) = doc.get_mut("package").and_then(|p| p.as_table_mut())
+        && package.remove("default-run").is_some()
+    {
+        actions.push("removed package.default-run".to_string());
     }
     let removed_profile = remove_nested(doc, &["profile", "dev", "package", "jackdaw"]);
     if removed_profile {
@@ -425,25 +424,25 @@ fn clean_legacy_scaffold(
     }
 
     let cargo_config = root.join(".cargo/config.toml");
-    if let Ok(text) = std::fs::read_to_string(&cargo_config) {
-        if let Ok(mut config) = text.parse::<DocumentMut>() {
-            let mut changed = false;
-            if let Some(alias) = config.get_mut("alias").and_then(|a| a.as_table_mut()) {
-                changed |= alias.remove("editor").is_some();
-                changed |= alias.remove("play").is_some();
-            }
-            if config
-                .get("alias")
-                .and_then(|a| a.as_table())
-                .is_some_and(toml_edit::Table::is_empty)
-            {
-                config.remove("alias");
-            }
-            if changed {
-                std::fs::write(&cargo_config, config.to_string())
-                    .map_err(|e| ScaffoldError::Io(format!("{e}")))?;
-                actions.push("removed the cargo editor/play aliases".to_string());
-            }
+    if let Ok(text) = std::fs::read_to_string(&cargo_config)
+        && let Ok(mut config) = text.parse::<DocumentMut>()
+    {
+        let mut changed = false;
+        if let Some(alias) = config.get_mut("alias").and_then(|a| a.as_table_mut()) {
+            changed |= alias.remove("editor").is_some();
+            changed |= alias.remove("play").is_some();
+        }
+        if config
+            .get("alias")
+            .and_then(|a| a.as_table())
+            .is_some_and(toml_edit::Table::is_empty)
+        {
+            config.remove("alias");
+        }
+        if changed {
+            std::fs::write(&cargo_config, config.to_string())
+                .map_err(|e| ScaffoldError::Io(format!("{e}")))?;
+            actions.push("removed the cargo editor/play aliases".to_string());
         }
     }
 
@@ -451,7 +450,7 @@ fn clean_legacy_scaffold(
 }
 
 /// Remove a nested table by path, returning whether anything was
-/// removed. Empty parents are left in place; toml_edit drops empty
+/// removed. Empty parents are left in place; `toml_edit` drops empty
 /// implicit tables on serialization.
 fn remove_nested(doc: &mut DocumentMut, path: &[&str]) -> bool {
     fn walk(item: &mut Item, path: &[&str]) -> bool {
@@ -620,7 +619,8 @@ mod tests {
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("jackdaw_scaffold_{name}_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("jackdaw_scaffold_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -669,7 +669,10 @@ mod tests {
 
         let report = import_project(&root, None).unwrap();
         assert!(!report.created_lib_stub);
-        assert_eq!(before, std::fs::read_to_string(root.join("Cargo.toml")).unwrap());
+        assert_eq!(
+            before,
+            std::fs::read_to_string(root.join("Cargo.toml")).unwrap()
+        );
         let toml = std::fs::read_to_string(root.join("jackdaw.toml")).unwrap();
         assert!(toml.contains("plugin = \"TheirPlugin\""));
         assert!(root.join(".jackdaw").is_dir());

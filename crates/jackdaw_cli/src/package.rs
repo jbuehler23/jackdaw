@@ -49,10 +49,7 @@ pub fn cmd_package_sdk(args: &[String]) -> ExitCode {
 
     match package(&workspace, &out) {
         Ok(summary) => {
-            println!(
-                "jackdaw package-sdk: staged {summary} at {}",
-                out.display()
-            );
+            println!("jackdaw package-sdk: staged {summary} at {}", out.display());
             ExitCode::SUCCESS
         }
         Err(err) => {
@@ -126,10 +123,14 @@ fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
     let mut dylibs = copy_matching(&sdk.deps, out, &[bevy.as_str(), jackdaw.as_str()])?;
     match target_libdir(&sdk) {
         Some(libdir) => dylibs += copy_matching(&libdir, out, &[std_lib.as_str()])?,
-        None => eprintln!("jackdaw bundle: warning: could not resolve the toolchain lib dir; std not bundled (the editor will need it on the library path)"),
+        None => eprintln!(
+            "jackdaw bundle: warning: could not resolve the toolchain lib dir; std not bundled (the editor will need it on the library path)"
+        ),
     }
 
-    Ok(format!("{sdk_summary}; + editor, cli, {dylibs} runtime dylibs"))
+    Ok(format!(
+        "{sdk_summary}; + editor, cli, {dylibs} runtime dylibs"
+    ))
 }
 
 /// The pinned toolchain's target lib dir, where the dynamic `libstd`
@@ -199,8 +200,7 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     let mut rlibs = 0usize;
     for line in manifest_text.lines() {
         let mut parts = line.splitn(3, ' ');
-        let (Some(name), Some(version), Some(abspath)) =
-            (parts.next(), parts.next(), parts.next())
+        let (Some(name), Some(version), Some(abspath)) = (parts.next(), parts.next(), parts.next())
         else {
             return Err(format!("malformed SDK manifest line: {line}"));
         };

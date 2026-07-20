@@ -37,9 +37,7 @@ pub(crate) fn brush_select_invert(
             OperatorResult::Finished
         }
         EditMode::BrushEdit(BrushEditMode::Edge) => {
-            // Build the canonical-pair representation for ALL HalfedgeMesh edges, then invert.
             let mut all_edges: Vec<(usize, usize)> = Vec::with_capacity(halfedge.mesh.edges.len());
-            // Build VertKey -> idx lookup.
             let mut key_to_idx: std::collections::HashMap<
                 jackdaw_geometry::halfedge::VertKey,
                 usize,

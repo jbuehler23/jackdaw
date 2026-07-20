@@ -481,7 +481,7 @@ fn pushing_to_history_marks_active_tab_dirty() {
 
 #[test]
 fn project_config_persists_tab_paths_and_active_index() {
-    use jackdaw_jsn::format::{JsnHeader, JsnProject, JsnProjectConfig};
+    use jackdaw::project::ProjectConfig;
 
     let mut app = make_app_with_n_tabs(0);
 
@@ -498,12 +498,9 @@ fn project_config_persists_tab_paths_and_active_index() {
     app.world_mut()
         .insert_resource(jackdaw::project::ProjectRoot {
             root: tmp_root.clone(),
-            config: JsnProject {
-                jsn: JsnHeader::default(),
-                project: JsnProjectConfig {
-                    name: "test".into(),
-                    ..Default::default()
-                },
+            config: ProjectConfig {
+                name: "test".into(),
+                ..Default::default()
             },
         });
 
@@ -517,7 +514,7 @@ fn project_config_persists_tab_paths_and_active_index() {
     // The on-disk project config lists the converted path: opening the
     // legacy file converted it to .bsn.
     let saved = jackdaw::project::load_project_config(&tmp_root).unwrap();
-    assert_eq!(saved.project.last_open_tabs, vec!["level1.bsn".to_string()]);
+    assert_eq!(saved.last_open_tabs, vec!["level1.bsn".to_string()]);
 
     // Cleanup.
     let _ = std::fs::remove_file(&scene_path);

@@ -3,7 +3,7 @@
 //! the two new verts. Validates the post-cut counts and that the `HalfedgeMesh`
 //! still passes its half-edge invariants.
 //!
-//! Also exercises the polish features added on top of MVP knife:
+//! Also exercises:
 //!  * Face-interior cut via `face_poke` then a chord across the fan.
 //!  * Cross-face cut where the segment crosses a shared edge.
 //!  * Path-point reuse where the third click snaps to the first.
