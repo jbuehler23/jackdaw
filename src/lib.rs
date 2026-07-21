@@ -348,6 +348,7 @@ impl Plugin for EditorCorePlugin {
             jackdaw_widgets::RadialMenuPlugin,
             mesh_quick_menu::MeshQuickMenuPlugin,
             remote::RemoteConnectionPlugin,
+            remote::debug::RemoteDebugPlugin,
         ))
         .add_plugins(jackdaw_avian_integration::PhysicsOverlaysPlugin::<
             selection::Selected,
@@ -2643,7 +2644,10 @@ fn build_debug_tree() -> jackdaw_panels::tree::DockTree {
 
     let entities = tree.insert(DockNode::Leaf(
         DockLeaf::new("left", DockAreaStyle::TabBar)
-            .with_windows(vec!["jackdaw.remote.entities".into()])
+            .with_windows(vec![
+                "jackdaw.remote.entities".into(),
+                "jackdaw.debug.diagnostics".into(),
+            ])
             .persistent(),
     ));
     let inspector = tree.insert(DockNode::Leaf(
