@@ -2101,7 +2101,9 @@ fn populate_menu(
     let mut by_area: std::collections::BTreeMap<String, Vec<(String, String)>> =
         std::collections::BTreeMap::new();
     for descriptor in window_registry.iter() {
-        let area_key = if descriptor.default_area.is_empty() {
+        let area_key = if is_remote_window(&descriptor.id) {
+            "zy_remote".to_string()
+        } else if descriptor.default_area.is_empty() {
             "zz_extensions".to_string()
         } else {
             descriptor.default_area.clone()
@@ -2119,6 +2121,7 @@ fn populate_menu(
         DefaultArea::Center.anchor_id(),
         DefaultArea::BottomDock.anchor_id(),
         DefaultArea::RightSidebar.anchor_id(),
+        "zy_remote".to_string(),
         "zz_extensions".to_string(),
     ];
     let mut first = true;
@@ -3119,16 +3122,25 @@ fn sync_active_workspace_from_live_tree(world: &mut World) {
 /// runtime split API so the resulting bottom-left leaf gets a
 /// non-persistent synthetic id and collapses naturally back into the
 /// rest of the left sidebar if the user closes it.
+/// True for the debugger's dock windows (remote panels and debug views), which
+/// group together in the Window menu and stay out of the default scene layout.
+fn is_remote_window(id: &str) -> bool {
+    id.starts_with("jackdaw.remote.") || id.starts_with("jackdaw.debug.")
+}
+
 fn build_default_tree(world: &mut World) {
     use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, Edge, SplitAxis};
     use jackdaw_panels::{DockAreaStyle, WindowRegistry};
 
+    // Remote/debug windows live in the Remote Debug workspace, not the default
+    // scene layout, so keep them out of the canonical tree.
     let windows_for = |area: &str, world: &World| -> Vec<String> {
         world
             .resource::<WindowRegistry>()
             .by_area(area)
             .iter()
             .map(|d| d.id.clone())
+            .filter(|id| !is_remote_window(id))
             .collect()
     };
 

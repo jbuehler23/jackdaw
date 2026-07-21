@@ -9,7 +9,7 @@ use bevy::{
 };
 use jackdaw_feathers::{
     icons::{EditorFont, Icon, IconFont},
-    panel_header, tokens,
+    tokens,
 };
 use jackdaw_widgets::collapsible::{
     CollapsibleBody, CollapsibleHeader, CollapsibleSection, ToggleCollapsible,
@@ -49,23 +49,20 @@ pub fn remote_inspector() -> impl Bundle {
             ..Default::default()
         },
         BackgroundColor(tokens::PANEL_BG),
-        children![
-            panel_header::panel_header("Remote Inspector"),
-            (
-                RemoteInspector,
-                PopulatedComponents::default(),
-                PreviousRemoteSelection(None),
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(tokens::SPACING_SM),
-                    overflow: Overflow::scroll_y(),
-                    flex_grow: 1.0,
-                    min_height: Val::Px(0.0),
-                    padding: UiRect::all(Val::Px(tokens::SPACING_SM)),
-                    ..Default::default()
-                },
-            ),
-        ],
+        children![(
+            RemoteInspector,
+            PopulatedComponents::default(),
+            PreviousRemoteSelection(None),
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(tokens::SPACING_SM),
+                overflow: Overflow::scroll_y(),
+                flex_grow: 1.0,
+                min_height: Val::Px(0.0),
+                padding: UiRect::all(Val::Px(tokens::SPACING_SM)),
+                ..Default::default()
+            },
+        ),],
     )
 }
 

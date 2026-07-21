@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 use serde::Deserialize;
 
-use jackdaw_feathers::{panel_header, tokens};
+use jackdaw_feathers::tokens;
 
 use super::super::ConnectionManager;
 use super::sparkline::{RingBuffer, SPARKLINE_WINDOW, SparklineMaterial};
@@ -92,23 +92,20 @@ fn diagnostics_panel(
             ..default()
         },
         BackgroundColor(tokens::PANEL_BG),
-        children![
-            panel_header::panel_header("Diagnostics"),
-            (
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    width: Val::Percent(100.0),
-                    row_gap: Val::Px(tokens::SPACING_MD),
-                    padding: UiRect::all(Val::Px(tokens::SPACING_MD)),
-                    ..default()
-                },
-                children![
-                    stat_card("FPS", Metric::Fps, fps),
-                    stat_card("Frame Time", Metric::FrameTime, frame_time),
-                    stat_card("Entities", Metric::EntityCount, entities),
-                ],
-            ),
-        ],
+        children![(
+            Node {
+                flex_direction: FlexDirection::Column,
+                width: Val::Percent(100.0),
+                row_gap: Val::Px(tokens::SPACING_MD),
+                padding: UiRect::all(Val::Px(tokens::SPACING_MD)),
+                ..default()
+            },
+            children![
+                stat_card("FPS", Metric::Fps, fps),
+                stat_card("Frame Time", Metric::FrameTime, frame_time),
+                stat_card("Entities", Metric::EntityCount, entities),
+            ],
+        ),],
     )
 }
 

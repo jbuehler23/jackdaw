@@ -120,7 +120,7 @@ impl JackdawExtension for CoreWindowsExtension {
 
         ctx.register_window(
             WindowDescriptor::new("jackdaw.debug.diagnostics")
-                .with_name("Diagnostics")
+                .with_name("Remote Diagnostics")
                 .with_default_area(DefaultArea::Left)
                 .with_priority(21)
                 .with_build(|window| {

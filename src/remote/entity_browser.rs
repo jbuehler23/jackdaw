@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use bevy::{prelude::*, tasks::Task, tasks::futures_lite::future};
 use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_feathers::{
-    panel_header, tokens,
+    tokens,
     tree_view::{TreeRowStyle, tree_row},
 };
 use jackdaw_remote::scene_snapshot::RemoteEntity;
@@ -120,7 +120,6 @@ pub fn remote_debug_workspace_content() -> impl Bundle {
         },
         BackgroundColor(tokens::PANEL_BG),
         children![
-            panel_header::panel_header("Remote Entities"),
             // Status row
             (
                 RemoteEntityStatusText,
