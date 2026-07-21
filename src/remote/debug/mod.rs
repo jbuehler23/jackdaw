@@ -4,5 +4,6 @@
 //! Phase 1 foundation. Later phases add the remaining views onto the pieces
 //! established here (the sample buffer, the poll helper, the panel conventions).
 
+pub mod poll;
 pub mod queries;
 pub mod sparkline;
