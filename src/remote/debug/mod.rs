@@ -30,5 +30,20 @@ impl Plugin for RemoteDebugPlugin {
             Update,
             diagnostics::update_diagnostics_panel.run_if(diagnostics::connected),
         );
+
+        app.init_resource::<queries::QuerySpec>();
+        app.init_resource::<queries::QueryResults>();
+        app.init_resource::<queries::QueryPollTimer>();
+        app.add_systems(
+            Update,
+            (
+                queries::query_poll,
+                queries::poll_query_task,
+                queries::rebuild_query_chips,
+                queries::rebuild_query_results,
+            ),
+        );
+        app.add_observer(queries::on_add_filter_clicked);
+        app.add_observer(queries::on_filter_chip_clicked);
     }
 }

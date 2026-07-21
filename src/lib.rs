@@ -2637,8 +2637,8 @@ fn register_workspaces(mut registry: ResMut<jackdaw_panels::WorkspaceRegistry>) 
     });
 }
 
-/// Remote debug workspace: the streamed entity browser on the left,
-/// the remote inspector on the right, split horizontally.
+/// Remote debug workspace: the streamed entity browser on the left, the live
+/// queries panel in the centre, and the remote inspector on the right.
 fn build_debug_tree() -> jackdaw_panels::tree::DockTree {
     use jackdaw_panels::DockAreaStyle;
     use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
@@ -2653,16 +2653,27 @@ fn build_debug_tree() -> jackdaw_panels::tree::DockTree {
             ])
             .persistent(),
     ));
+    let queries = tree.insert(DockNode::Leaf(
+        DockLeaf::new("center", DockAreaStyle::TabBar)
+            .with_windows(vec!["jackdaw.debug.queries".into()])
+            .persistent(),
+    ));
     let inspector = tree.insert(DockNode::Leaf(
         DockLeaf::new("right_sidebar", DockAreaStyle::TabBar)
             .with_windows(vec!["jackdaw.remote.inspector".into()])
             .persistent(),
     ));
+    let center_right = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Horizontal,
+        fraction: 0.6,
+        a: queries,
+        b: inspector,
+    }));
     let root = tree.insert(DockNode::Split(DockSplit {
         axis: SplitAxis::Horizontal,
-        fraction: 0.5,
+        fraction: 0.3,
         a: entities,
-        b: inspector,
+        b: center_right,
     }));
     tree.root = Some(root);
     tree

@@ -129,6 +129,16 @@ impl JackdawExtension for CoreWindowsExtension {
         );
 
         ctx.register_window(
+            WindowDescriptor::new("jackdaw.debug.queries")
+                .with_name("Remote Queries")
+                .with_default_area(DefaultArea::Center)
+                .with_priority(22)
+                .with_build(|window| {
+                    window.spawn(crate::remote::debug::queries::queries_panel_content());
+                }),
+        );
+
+        ctx.register_window(
             WindowDescriptor::new("jackdaw.remote.inspector")
                 .with_name("Remote Inspector")
                 .with_default_area(DefaultArea::RightSidebar)
