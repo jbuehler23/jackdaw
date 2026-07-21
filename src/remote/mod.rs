@@ -1,5 +1,6 @@
 mod brp;
 mod connection;
+pub mod debug;
 pub mod entity_browser;
 pub mod panel;
 mod registry_fetch;
