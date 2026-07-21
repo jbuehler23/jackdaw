@@ -139,6 +139,16 @@ impl JackdawExtension for CoreWindowsExtension {
         );
 
         ctx.register_window(
+            WindowDescriptor::new("jackdaw.debug.archetypes")
+                .with_name("Remote Archetypes")
+                .with_default_area(DefaultArea::Center)
+                .with_priority(23)
+                .with_build(|window| {
+                    window.spawn(crate::remote::debug::archetypes::archetypes_panel_content());
+                }),
+        );
+
+        ctx.register_window(
             WindowDescriptor::new("jackdaw.remote.inspector")
                 .with_name("Remote Inspector")
                 .with_default_area(DefaultArea::RightSidebar)

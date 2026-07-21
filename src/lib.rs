@@ -2655,7 +2655,10 @@ fn build_debug_tree() -> jackdaw_panels::tree::DockTree {
     ));
     let queries = tree.insert(DockNode::Leaf(
         DockLeaf::new("center", DockAreaStyle::TabBar)
-            .with_windows(vec!["jackdaw.debug.queries".into()])
+            .with_windows(vec![
+                "jackdaw.debug.queries".into(),
+                "jackdaw.debug.archetypes".into(),
+            ])
             .persistent(),
     ));
     let inspector = tree.insert(DockNode::Leaf(

@@ -4,6 +4,7 @@
 //! `RemoteDebugPlugin` wires the shared pieces (the sparkline material and the
 //! poll helper) plus the Diagnostics view. Later views hang off the same plugin.
 
+pub mod archetypes;
 pub mod diagnostics;
 pub mod poll;
 pub mod queries;
@@ -45,5 +46,13 @@ impl Plugin for RemoteDebugPlugin {
         );
         app.add_observer(queries::on_add_filter_clicked);
         app.add_observer(queries::on_filter_chip_clicked);
+
+        app.add_plugins(poll::BrpPollPlugin::<archetypes::ArchetypesReply>::new(
+            "jackdaw/archetypes",
+            0.5,
+        ));
+        app.init_resource::<archetypes::ArchetypeSort>();
+        app.add_systems(Update, archetypes::rebuild_archetypes);
+        app.add_observer(archetypes::on_sort_header_clicked);
     }
 }
