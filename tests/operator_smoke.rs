@@ -36,12 +36,6 @@ impl SkipOp {
     const fn new<O: Operator>(reason: &'static str) -> Self {
         Self { id: O::ID, reason }
     }
-
-    /// For operators whose type is not exported. The id is checked against the
-    /// live registry below, so it cannot go stale unnoticed.
-    const fn by_id(id: &'static str, reason: &'static str) -> Self {
-        Self { id, reason }
-    }
 }
 
 /// Operators that genuinely cannot run from a clean headless app
@@ -65,31 +59,23 @@ const SMOKE_SKIP_LIST: &[SkipOp] = &[
     SkipOp::new::<NavmeshSaveOp>("spawns native file-save dialog"),
     SkipOp::new::<NavmeshLoadOp>("spawns native file-open dialog"),
     SkipOp::new::<EntityAddImageOp>("spawns native image-file picker"),
-    SkipOp::by_id(
-        "operators.document",
-        "writes operators.md into the process working directory",
-    ),
-    SkipOp::by_id(
-        "scene.save_selection_as_prefab",
-        "without a ProjectRoot it writes <name>.bsn into the working directory",
-    ),
-    SkipOp::by_id(
-        "prefab.save_as_prefab",
-        "without a ProjectRoot it writes <name>.bsn into the working directory",
-    ),
-    SkipOp::by_id(
-        "prefab.save_scene_as_prefab",
-        "without a ProjectRoot it writes <name>.bsn into the working directory",
-    ),
-    SkipOp::by_id(
-        "prefab.save_as_variant",
-        "without a ProjectRoot it writes <name>.bsn into the working directory",
-    ),
 ];
 
 #[test]
 fn smoke_dispatch_every_operator() {
     let mut app = util::editor_test_app();
+
+    // The prefab-save and document operators write files under the project
+    // root; without one they fall back to the process working directory (the
+    // repo). Point them at a temp dir so the smoke run exercises them without
+    // leaving artifacts behind.
+    let project_dir = tempfile::tempdir().expect("tempdir");
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot {
+            root: project_dir.path().to_path_buf(),
+            config: jackdaw::project::ProjectConfig::default(),
+        });
+
     let ids = util::iter_operator_ids(&mut app);
     // Floor catches "we forgot to register a whole module" regressions.
     // The exact count grows over time as new operators land; bump this
@@ -101,7 +87,7 @@ fn smoke_dispatch_every_operator() {
     );
 
     // A skip entry naming an operator that no longer exists would silently stop
-    // covering anything. The typed entries cannot drift; the by-id ones can.
+    // covering anything.
     for skip in SMOKE_SKIP_LIST {
         assert!(
             ids.iter().any(|id| id.as_ref() == skip.id),

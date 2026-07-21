@@ -9,9 +9,7 @@
 //! the editor minted out of the saved file and points the fixture at it.
 
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::process::Command;
 
 use bevy::prelude::*;
 use jackdaw::project_build::build_project_dylib;
@@ -107,6 +105,7 @@ fn author_save_build_play() {
         "JOURNEY: authored and saved {} bytes of .bsn, minted node id {minted}",
         saved.len()
     );
+    let minted_env = minted.to_string();
 
     // Build a game around the saved scene, the way Play builds it.
     let build_dir = root.join("target/editor_journey");
@@ -130,59 +129,15 @@ fn author_save_build_play() {
 
     // The asset root is the staged dir, so the game loads the scene just
     // authored rather than the fixture's committed one.
-    let (handle, server_name) = jackdaw_pie_protocol::serve().expect("open the ipc rendezvous");
-    let mut child = Command::new(&sdk.runner)
-        .arg(&build.dylib)
-        .current_dir(stage.path())
-        .env("BEVY_ASSET_ROOT", stage.path())
-        .env("JACKDAW_E2E_NODE_ID", minted.to_string())
-        .env("JACKDAW_PIE", &server_name)
-        .env("JACKDAW_PIE_WINDOWLESS", "1")
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn the runner");
-
-    let child_stderr = child.stderr.take().expect("piped stderr");
-    let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-    {
-        let stderr_buf = std::sync::Arc::clone(&stderr_buf);
-        std::thread::spawn(move || {
-            use std::io::BufRead;
-            let reader = std::io::BufReader::new(child_stderr);
-            for line in reader.lines() {
-                let Ok(line) = line else { break };
-                let mut buf = stderr_buf.lock().unwrap();
-                buf.push_str(&line);
-                buf.push('\n');
-            }
-        });
-    }
-
-    let (accept_tx, accept_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = accept_tx.send(handle.accept());
-    });
-    let _transport = accept_rx
-        .recv_timeout(Duration::from_secs(90))
-        .expect("the runner never connected to the PIE link")
-        .expect("ipc accept failed");
-
-    let deadline = Instant::now() + Duration::from_secs(90);
-    let mut loaded = false;
-    while Instant::now() < deadline {
-        {
-            let buf = stderr_buf.lock().unwrap();
-            if buf.contains("BSN_SCENE_LOADED") && buf.contains("has_target=true") {
-                loaded = true;
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-
-    let _ = child.kill();
-    let _ = child.wait();
-    let stderr = stderr_buf.lock().unwrap().clone();
+    let (loaded, stderr) = util::run_windowless_game(
+        &sdk.runner,
+        &build.dylib,
+        stage.path(),
+        &[
+            ("BEVY_ASSET_ROOT", stage.path().as_os_str()),
+            ("JACKDAW_E2E_NODE_ID", std::ffi::OsStr::new(&minted_env)),
+        ],
+    );
 
     assert!(
         loaded,

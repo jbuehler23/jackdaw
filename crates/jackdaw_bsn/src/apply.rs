@@ -580,7 +580,10 @@ pub fn bsn_value_to_reflect(
                     let typed = reflect_handle.typed(handle.clone());
                     return Some(typed.into_partial_reflect());
                 }
-                // Unresolvable reference: fall through to the default handle.
+                log::warn!(
+                    "asset reference '{path}' did not resolve in the project catalog or \
+                     embedded assets; using the default handle"
+                );
             } else {
                 let asset_type_id = reflect_handle.asset_type_id();
                 let untyped = assets

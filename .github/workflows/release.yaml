@@ -160,6 +160,14 @@ jobs:
           if [ "$missing" -ne 0 ]; then echo "staged bundle is incomplete"; exit 1; fi
           echo "bundle layout verified"
 
+      # Build a game against the just-built release SDK, the way an installed
+      # user does. JACKDAW_BUNDLE_SMOKE_REQUIRED turns the test's local-only
+      # skip into a hard failure so a broken bundle cannot pass silently.
+      - name: Bundle smoke (game builds against the release SDK)
+        env:
+          JACKDAW_BUNDLE_SMOKE_REQUIRED: "1"
+        run: cargo test --features dylib --target ${{ matrix.triple }} --test bundle_smoke -- --nocapture
+
       - name: Archive (tar.zst)
         if: matrix.archive == 'tar.zst'
         run: tar --zstd -cf "jackdaw-${{ matrix.triple }}.tar.zst" -C dist "jackdaw-${{ matrix.triple }}"

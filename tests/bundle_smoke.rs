@@ -22,12 +22,20 @@ fn game_builds_against_a_staged_bundle_sdk() {
     let root = workspace_root();
     let release_sdk = SdkPaths::for_workspace_profile(&root, "release");
     if !release_sdk.dylib_exists() {
-        println!(
-            "SKIP bundle_smoke: no release SDK at {}. Build one with \
+        let msg = format!(
+            "no release SDK at {}. Build one with \
              `cargo build -p jackdaw --features dylib --release --target {}`.",
             release_sdk.dylib.display(),
             release_sdk.triple
         );
+        // In a release/CI context this test must actually run; a silent skip
+        // would let a broken bundle ship. Locally, without a release build, it
+        // skips so a plain `cargo test` stays cheap.
+        assert!(
+            std::env::var_os("JACKDAW_BUNDLE_SMOKE_REQUIRED").is_none(),
+            "bundle_smoke was required but {msg}"
+        );
+        println!("SKIP bundle_smoke: {msg}");
         return;
     }
 

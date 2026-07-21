@@ -23,6 +23,12 @@ pub fn emit_scene(ast: &SceneBsnAst) -> String {
 
     if ast.roots.len() <= 1 {
         for &root in &ast.roots {
+            // A single root whose only patch is Children re-parses identically
+            // to the multi-root wrapper below and would be unwrapped, dropping
+            // this grouping entity. Tag it so the loader keeps it.
+            if root_has_only_children(ast, root) {
+                writeln!(out, "{}", crate::loader::SCENE_ROOT_GROUP_MARKER).unwrap();
+            }
             emit_patches(ast, root, 0, &mut out);
         }
     } else {
@@ -38,6 +44,17 @@ pub fn emit_scene(ast: &SceneBsnAst) -> String {
     }
 
     out
+}
+
+/// True when `root`'s sole patch is a `Children` relation, the shape that
+/// collides with the synthetic multi-root wrapper on re-parse.
+fn root_has_only_children(ast: &SceneBsnAst, root: Entity) -> bool {
+    ast.get_patches(root).is_some_and(|p| {
+        p.0.len() == 1
+            && ast
+                .get_patch(p.0[0])
+                .is_some_and(|patch| matches!(patch, BsnPatch::Children(_)))
+    })
 }
 
 /// Emits BSN text for a single entity (and its children) from the AST. Used

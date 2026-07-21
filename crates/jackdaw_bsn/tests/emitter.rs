@@ -520,3 +520,51 @@ fn unicode_and_control_characters_round_trip() {
         "string survives the round trip; emitted:\n{text}"
     );
 }
+
+#[test]
+fn single_grouping_root_with_only_children_survives_roundtrip() {
+    // A scene that is one anonymous grouping entity holding only children must
+    // not be mistaken for the synthetic multi-root wrapper and unwrapped.
+    let mut ast = SceneBsnAst::default();
+
+    let child_a = {
+        let name = ast.world.spawn(BsnPatch::Name("A".into())).id();
+        ast.world.spawn(BsnPatches(vec![name])).id()
+    };
+    let child_b = {
+        let name = ast.world.spawn(BsnPatch::Name("B".into())).id();
+        ast.world.spawn(BsnPatches(vec![name])).id()
+    };
+    let children = ast
+        .world
+        .spawn(BsnPatch::Children(vec![child_a, child_b]))
+        .id();
+    let root = ast.world.spawn(BsnPatches(vec![children])).id();
+    ast.roots.push(root);
+
+    let text = emit_scene(&ast);
+    let reparsed = parse_bsn_text(&text).expect("should re-parse");
+
+    assert_eq!(
+        reparsed.roots.len(),
+        1,
+        "the grouping entity must survive as the single root:\n{text}"
+    );
+    assert_eq!(
+        reparsed.get_children_ast(reparsed.roots[0]).len(),
+        2,
+        "the group keeps its two children"
+    );
+    // The internal marker must be stripped: the root's only patch is Children.
+    let root_patches = reparsed
+        .get_patches(reparsed.roots[0])
+        .expect("root patches");
+    assert_eq!(root_patches.0.len(), 1, "marker must be stripped");
+    assert!(
+        matches!(
+            reparsed.get_patch(root_patches.0[0]),
+            Some(BsnPatch::Children(_))
+        ),
+        "the surviving patch is Children"
+    );
+}

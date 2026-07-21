@@ -58,8 +58,9 @@ fn fast() -> bool {
 }
 
 fn integration() -> bool {
-    // The non-SDK integration tests: everything under tests/ that is not dylib-gated.
-    // The excluded binaries need a built SDK and belong to `heavy()`.
+    // Every crate's integration tests that are not SDK/dylib-gated. Matches the
+    // pre-harness `--workspace ... --tests` coverage; the excluded binaries need
+    // a built SDK and run in `heavy()` or the onboarding workflow instead.
     sh(
         "cargo",
         &[
@@ -67,8 +68,7 @@ fn integration() -> bool {
             "run",
             "--profile",
             "ci",
-            "-p",
-            "jackdaw",
+            "--workspace",
             "--features",
             "bevy/dynamic_linking",
             "--tests",
@@ -117,12 +117,14 @@ fn heavy() -> bool {
                 triple,
                 // `--test` rather than an `-E` filter: `-E` selects what runs but
                 // cargo still builds every test target in the package.
+                //
+                // bundle_smoke is deliberately absent: it needs a release SDK,
+                // which this tier does not build, so it would only self-skip
+                // here. It runs on the real release artifacts in release.yaml.
                 "--test",
                 "bsn_game_run",
                 "--test",
                 "editor_journey",
-                "--test",
-                "bundle_smoke",
             ],
         )
 }

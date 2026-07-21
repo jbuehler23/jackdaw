@@ -72,6 +72,15 @@ jobs:
       - name: Ecosystem extern redirect
         run: cargo test -j 4 --features dylib --target "$TRIPLE" --test extern_redirect_ecosystem -- --nocapture
 
+      - name: Schema extraction
+        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test schema_extract -- --nocapture
+
+      - name: Component shape refresh
+        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test component_shape_refresh -- --nocapture
+
+      - name: Dylib reload memory
+        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test stress_reload -- --nocapture
+
       - name: Extension loading
         run: cargo test -j 4 --features dylib --target "$TRIPLE" --test dylib_loading -- --nocapture
 

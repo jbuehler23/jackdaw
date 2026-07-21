@@ -393,6 +393,11 @@ fn spawn_scene_entities(
 /// already-final values, so the entity reaches its structural state in one
 /// archetype move. `On<Insert, T>` observers for the remaining components then
 /// see correct globals. Children are spawned parent-first via recursion.
+///
+/// Limitation: component fields of type `Entity` that reference another node
+/// in the same scene are not remapped to the spawned entity. No built-in
+/// component uses such a field today; a cross-entity reference feature must add
+/// a post-spawn pass mapping document node order to spawned entities.
 fn spawn_node(
     world: &mut World,
     ast: &SceneBsnAst,
@@ -582,6 +587,10 @@ fn load_embedded_assets(
             continue;
         };
         let Some(registration) = reg.get_with_type_path(&type_path) else {
+            warn!(
+                "embedded asset type '{type_path}' is not registered in this app; \
+                 entities referencing it will fall back to a default handle"
+            );
             continue;
         };
         let Some(reflect_asset) = registration.data::<ReflectAsset>() else {
@@ -634,7 +643,20 @@ fn collect_linear_texture_paths(ast: &SceneBsnAst) -> Vec<String> {
                             && let BsnValue::String(path) = &field.value
                             && !path.is_empty()
                         {
-                            paths.push(path.clone());
+                            if path.starts_with('@') || path.starts_with('#') {
+                                // A catalog / embedded reference, not a file path.
+                                // Its underlying image is loaded elsewhere without
+                                // `is_srgb = false`, so the linear-slot decode is
+                                // still wrong; loading the ref string as a file
+                                // would only add a bogus asset. Skip and flag it.
+                                warn!(
+                                    "linear-space texture '{path}' in field '{}' is a \
+                                     catalog/embedded reference; it will decode as sRGB",
+                                    field.name
+                                );
+                            } else {
+                                paths.push(path.clone());
+                            }
                         }
                     }
                 }

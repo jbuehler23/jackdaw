@@ -173,6 +173,79 @@ pub fn operator_labels(app: &mut App, id: &str) -> Vec<&'static str> {
         .collect()
 }
 
+/// Launch `jackdaw-runner` windowless against a built project dylib, wait for
+/// the game to report `BSN_SCENE_LOADED ... has_target=true` on stderr, and
+/// return whether it did along with the captured stderr. Shared by the
+/// end-to-end runner tests.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "only the dylib/runner e2e tests use this")]
+pub fn run_windowless_game(
+    runner: &std::path::Path,
+    dylib: &std::path::Path,
+    cwd: &std::path::Path,
+    extra_env: &[(&str, &std::ffi::OsStr)],
+) -> (bool, String) {
+    use std::io::BufRead as _;
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::{Duration, Instant};
+
+    let (handle, server_name) = jackdaw_pie_protocol::serve().expect("open the ipc rendezvous");
+    let mut command = std::process::Command::new(runner);
+    command
+        .arg(dylib)
+        .current_dir(cwd)
+        .env("JACKDAW_PIE", &server_name)
+        .env("JACKDAW_PIE_WINDOWLESS", "1")
+        .stderr(std::process::Stdio::piped());
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().expect("spawn the runner");
+
+    let child_stderr = child.stderr.take().expect("piped stderr");
+    let stderr_buf = Arc::new(Mutex::new(String::new()));
+    {
+        let stderr_buf = Arc::clone(&stderr_buf);
+        std::thread::spawn(move || {
+            let reader = std::io::BufReader::new(child_stderr);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                let mut buf = stderr_buf.lock().unwrap();
+                buf.push_str(&line);
+                buf.push('\n');
+            }
+        });
+    }
+
+    // The game's JackdawPlugin connects on boot; accept so it does not block.
+    let (accept_tx, accept_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = accept_tx.send(handle.accept());
+    });
+    let _transport = accept_rx
+        .recv_timeout(Duration::from_secs(90))
+        .expect("the runner never connected to the PIE link")
+        .expect("ipc accept failed");
+
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut loaded = false;
+    while Instant::now() < deadline {
+        {
+            let buf = stderr_buf.lock().unwrap();
+            if buf.contains("BSN_SCENE_LOADED") && buf.contains("has_target=true") {
+                loaded = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let stderr = stderr_buf.lock().unwrap().clone();
+    (loaded, stderr)
+}
+
 /// Capture a scene snapshot via the `ActiveSnapshotter`. Wrapper around
 /// the standard `resource_scope` dance used by the dispatcher.
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
