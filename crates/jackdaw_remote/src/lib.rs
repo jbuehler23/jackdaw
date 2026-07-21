@@ -1,7 +1,6 @@
 pub mod bsn_methods;
 pub mod diagnostics;
 pub mod ecs_methods;
-pub mod explorer;
 mod methods;
 pub mod playback;
 pub mod scene_snapshot;
@@ -32,13 +31,11 @@ pub const DEFAULT_PORT: u16 = 15702;
 /// ```
 ///
 /// When the host app adds `RemoteHttpPlugin` itself, it must configure CORS
-/// headers itself for the browser explorer to reach BRP; see
+/// headers itself for the editor to reach BRP; see
 /// `RemoteHttpPlugin::with_headers`.
 pub struct JackdawRemotePlugin {
     /// BRP HTTP port (default: 15702).
     pub port: u16,
-    /// Explorer static server port (default: 15703).
-    pub explorer_port: u16,
     /// App name for identification in the editor.
     pub app_name: Option<String>,
 }
@@ -47,7 +44,6 @@ impl Default for JackdawRemotePlugin {
     fn default() -> Self {
         Self {
             port: DEFAULT_PORT,
-            explorer_port: explorer::DEFAULT_EXPLORER_PORT,
             app_name: None,
         }
     }
@@ -57,12 +53,6 @@ impl JackdawRemotePlugin {
     /// Set the HTTP port for BRP.
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = port;
-        self
-    }
-
-    /// Set the port for the explorer static server.
-    pub fn with_explorer_port(mut self, port: u16) -> Self {
-        self.explorer_port = port;
         self
     }
 
@@ -132,11 +122,6 @@ impl Plugin for JackdawRemotePlugin {
 
         if !app.is_plugin_added::<bevy::diagnostic::FrameTimeDiagnosticsPlugin>() {
             app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default());
-        }
-
-        match explorer::start_explorer_server(self.explorer_port) {
-            Ok(port) => info!("Jackdaw explorer available at http://localhost:{port}"),
-            Err(err) => warn!("Jackdaw explorer server failed to start: {err}"),
         }
 
         app.add_systems(Startup, methods::generate_component_definitions);

@@ -299,38 +299,6 @@ jobs:
       - name: Check documentation
         run: cargo doc --locked --workspace --document-private-items --no-deps
 
-  # Build and test the web explorer, and fail if the committed dist bundle
-  # drifts from a fresh build (source changed without re-running `npm run
-  # build`).
-  explorer:
-    name: Explorer
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: web/explorer
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 26
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run tests
-        run: npm test
-
-      - name: Build
-        run: npm run build
-
-      - name: Check committed dist matches a fresh build
-        working-directory: .
-        run: git diff --exit-code crates/jackdaw_remote/explorer_dist
-
   # Run Bevy lints.
   bevy-lint:
     name: Bevy linter
