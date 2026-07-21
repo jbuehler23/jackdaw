@@ -8,6 +8,7 @@ pub mod archetypes;
 pub mod diagnostics;
 pub mod poll;
 pub mod queries;
+pub mod schedules;
 pub mod sparkline;
 
 use bevy::asset::embedded_asset;
@@ -54,5 +55,11 @@ impl Plugin for RemoteDebugPlugin {
         app.init_resource::<archetypes::ArchetypeSort>();
         app.add_systems(Update, archetypes::rebuild_archetypes);
         app.add_observer(archetypes::on_sort_header_clicked);
+
+        app.add_plugins(poll::BrpPollPlugin::<schedules::SchedulesReply>::new(
+            "jackdaw/schedules",
+            1.0,
+        ));
+        app.add_systems(Update, schedules::rebuild_schedules);
     }
 }

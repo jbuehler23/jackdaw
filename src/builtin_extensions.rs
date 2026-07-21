@@ -149,6 +149,16 @@ impl JackdawExtension for CoreWindowsExtension {
         );
 
         ctx.register_window(
+            WindowDescriptor::new("jackdaw.debug.schedules")
+                .with_name("Remote Schedules")
+                .with_default_area(DefaultArea::Center)
+                .with_priority(24)
+                .with_build(|window| {
+                    window.spawn(crate::remote::debug::schedules::schedules_panel_content());
+                }),
+        );
+
+        ctx.register_window(
             WindowDescriptor::new("jackdaw.remote.inspector")
                 .with_name("Remote Inspector")
                 .with_default_area(DefaultArea::RightSidebar)

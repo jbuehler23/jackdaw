@@ -2658,6 +2658,7 @@ fn build_debug_tree() -> jackdaw_panels::tree::DockTree {
             .with_windows(vec![
                 "jackdaw.debug.queries".into(),
                 "jackdaw.debug.archetypes".into(),
+                "jackdaw.debug.schedules".into(),
             ])
             .persistent(),
     ));
