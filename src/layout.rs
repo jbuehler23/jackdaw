@@ -4,7 +4,7 @@ use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::ButtonOperatorCall,
     icons::{EditorFont, IconFont, icon_scene},
-    menu_bar, split_panel, status_bar,
+    menu_bar, status_bar,
     text_edit::{self, TextEditProps},
     tokens,
     tree_view::tree_container_drop_observers,
@@ -30,7 +30,6 @@ use crate::{
     physics_tool::PhysicsActivateOp,
     pie::PieWindowModeToggleOp,
     pie_mirror::{PieViewHeader, PieViewMode, PieViewSegment},
-    remote::ConnectionManager,
     snapping::SnapSettings,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
@@ -46,10 +45,6 @@ pub enum TabKind {
     /// The live scene being edited. There's exactly one Scene tab.
     #[default]
     Scene,
-    /// The Schedule Explorer / remote debug view (replaces the old
-    /// "Remote Debug" workspace). There's exactly one Schedule Explorer
-    /// tab.
-    ScheduleExplorer,
 }
 
 impl TabKind {
@@ -57,7 +52,6 @@ impl TabKind {
     pub fn label(self) -> &'static str {
         match self {
             TabKind::Scene => "Main scene",
-            TabKind::ScheduleExplorer => "Schedule Explorer",
         }
     }
 
@@ -65,7 +59,6 @@ impl TabKind {
     pub fn accent(self) -> Color {
         match self {
             TabKind::Scene => tokens::DOC_TAB_SCENE_ACCENT,
-            TabKind::ScheduleExplorer => tokens::DOC_TAB_TOOL_ACCENT,
         }
     }
 
@@ -73,7 +66,6 @@ impl TabKind {
     pub fn icon(self) -> Icon {
         match self {
             TabKind::Scene => Icon::File,
-            TabKind::ScheduleExplorer => Icon::CalendarSearch,
         }
     }
 }
@@ -150,33 +142,6 @@ fn spawn_editor_main_area(parent: &mut ChildSpawnerCommands) {
                 ..Default::default()
             },
         )],
-    ));
-    // Schedule Explorer document (hidden by default).
-    parent.spawn((
-        DocumentRoot(TabKind::ScheduleExplorer),
-        EditorEntity,
-        Node {
-            width: percent(100),
-            flex_grow: 1.0,
-            min_height: px(0.0),
-            flex_direction: FlexDirection::Column,
-            display: Display::None,
-            ..Default::default()
-        },
-        split_panel::panel_group(
-            0.2,
-            (
-                Spawn((
-                    split_panel::panel(1),
-                    crate::remote::entity_browser::remote_debug_workspace_content(),
-                )),
-                Spawn(split_panel::panel_handle()),
-                Spawn((
-                    split_panel::panel(1),
-                    crate::remote::remote_inspector::remote_inspector(),
-                )),
-            ),
-        ),
     ));
     parent.spawn(editor_status_bar());
 }
@@ -918,11 +883,9 @@ pub fn update_active_document_display(
 }
 
 /// Refresh tab-strip styling. Active tab gets its bg + border; inactive
-/// tabs go transparent. Schedule Explorer dims when Remote is
-/// disconnected.
+/// tabs go transparent.
 pub fn update_tab_strip_highlights(
     active: Res<ActiveDocument>,
-    manager: Res<ConnectionManager>,
     mut tabs: Query<(
         &DocumentTabButton,
         &mut BackgroundColor,
@@ -931,13 +894,11 @@ pub fn update_tab_strip_highlights(
     )>,
     mut texts: Query<&mut TextColor>,
 ) {
-    if !active.is_changed() && !manager.is_changed() {
+    if !active.is_changed() {
         return;
     }
-    let connected = manager.is_connected();
     for (tab, mut tab_bg, mut tab_border, children) in &mut tabs {
         let is_active = tab.0 == active.kind;
-        let is_disabled = tab.0 == TabKind::ScheduleExplorer && !connected;
 
         tab_bg.0 = if is_active {
             tokens::DOC_TAB_ACTIVE_BG
@@ -950,9 +911,7 @@ pub fn update_tab_strip_highlights(
             Color::NONE
         });
 
-        let label_color = if is_disabled {
-            Color::srgba(0.4, 0.4, 0.4, 0.5)
-        } else if is_active {
+        let label_color = if is_active {
             tokens::DOC_TAB_ACTIVE_LABEL
         } else {
             tokens::DOC_TAB_INACTIVE_LABEL

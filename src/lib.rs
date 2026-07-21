@@ -2625,12 +2625,40 @@ fn register_workspaces(mut registry: ResMut<jackdaw_panels::WorkspaceRegistry>) 
 
     registry.register(jackdaw_panels::WorkspaceDescriptor {
         id: "debug".into(),
-        name: "Schedule Explorer".into(),
+        name: "Remote Debug".into(),
         icon: Some(String::from(Icon::CalendarSearch.unicode())),
         accent_color: Color::srgba(0.8, 0.55, 0.35, 0.8),
         layout: jackdaw_panels::LayoutState::default(),
-        tree: jackdaw_panels::tree::DockTree::default(),
+        tree: build_debug_tree(),
     });
+}
+
+/// Remote debug workspace: the streamed entity browser on the left,
+/// the remote inspector on the right, split horizontally.
+fn build_debug_tree() -> jackdaw_panels::tree::DockTree {
+    use jackdaw_panels::DockAreaStyle;
+    use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
+
+    let mut tree = DockTree::default();
+
+    let entities = tree.insert(DockNode::Leaf(
+        DockLeaf::new("left", DockAreaStyle::TabBar)
+            .with_windows(vec!["jackdaw.remote.entities".into()])
+            .persistent(),
+    ));
+    let inspector = tree.insert(DockNode::Leaf(
+        DockLeaf::new("right_sidebar", DockAreaStyle::TabBar)
+            .with_windows(vec!["jackdaw.remote.inspector".into()])
+            .persistent(),
+    ));
+    let root = tree.insert(DockNode::Split(DockSplit {
+        axis: SplitAxis::Horizontal,
+        fraction: 0.5,
+        a: entities,
+        b: inspector,
+    }));
+    tree.root = Some(root);
+    tree
 }
 
 /// Quad-view workspace: one perspective viewport + three orthographic
@@ -2808,16 +2836,12 @@ fn build_animation_tree() -> jackdaw_panels::tree::DockTree {
 }
 
 fn on_workspace_changed(
-    trigger: On<jackdaw_panels::WorkspaceChanged>,
+    _trigger: On<jackdaw_panels::WorkspaceChanged>,
     mut active: ResMut<layout::ActiveDocument>,
 ) {
-    let event = trigger.event();
-    active.kind = match event.new.as_str() {
-        "debug" => layout::TabKind::ScheduleExplorer,
-        // "layout", "level_design", "animation", and any future
-        // user-created workspace default to the Scene document.
-        _ => layout::TabKind::Scene,
-    };
+    // Every workspace hosts the single Scene document; panels differ only
+    // by their dock tree.
+    active.kind = layout::TabKind::Scene;
 }
 
 #[derive(Resource, Default)]

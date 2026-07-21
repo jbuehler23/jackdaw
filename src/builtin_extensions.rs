@@ -107,6 +107,26 @@ impl JackdawExtension for CoreWindowsExtension {
                         .needs_refresh = true;
                 }),
         );
+
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.remote.entities")
+                .with_name("Remote Entities")
+                .with_default_area(DefaultArea::Left)
+                .with_priority(20)
+                .with_build(|window| {
+                    window.spawn(crate::remote::entity_browser::remote_debug_workspace_content());
+                }),
+        );
+
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.remote.inspector")
+                .with_name("Remote Inspector")
+                .with_default_area(DefaultArea::RightSidebar)
+                .with_priority(20)
+                .with_build(|window| {
+                    window.spawn(crate::remote::remote_inspector::remote_inspector());
+                }),
+        );
     }
 }
 
