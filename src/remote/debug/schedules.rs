@@ -1,11 +1,13 @@
 //! Schedules view: every app schedule and the systems it runs, in run order.
 //!
 //! The generic poll helper writes each `jackdaw/schedules` reply (a fixed
-//! no-params method) into `SchedulesReply`. `systems` arrives already in run
-//! order and each carries the system sets it belongs to; `edges` (dependency
-//! ordering, for the later system graph) is ignored here. The panel rebuilds
-//! its sections reactively when the reply changes: one bordered card per
-//! schedule, each listing its systems as boxes wrapped in run order.
+//! no-params method) into `SchedulesReply`, shared with the System Graph
+//! panel (`depgraph.rs`). `systems` arrives already in run order and each
+//! carries the system sets it belongs to; `edges` (dependency ordering) and
+//! `ambiguities` (scheduler conflicts) are carried through but only rendered
+//! by the graph panel. This panel rebuilds its sections reactively when the
+//! reply changes: one bordered card per schedule, each listing its systems
+//! as boxes wrapped in run order.
 
 use bevy::prelude::*;
 use serde::Deserialize;
@@ -23,17 +25,34 @@ pub struct SystemInfo {
     pub sets: Vec<String>,
 }
 
-/// One schedule from a `jackdaw/schedules` reply: its label and the systems it
-/// runs, already ordered as they execute.
+/// One scheduler-detected ambiguity: two systems the scheduler found no
+/// ordering between despite conflicting data access. `a`/`b` index into the
+/// same schedule's `systems` array as `edges`. An empty `components` list
+/// means the conflict is on `World` access in general (e.g. an exclusive
+/// system) rather than a specific component.
+#[derive(Deserialize, Clone)]
+pub struct Ambiguity {
+    pub a: usize,
+    pub b: usize,
+    pub components: Vec<String>,
+}
+
+/// One schedule from a `jackdaw/schedules` reply: its label, the systems it
+/// runs (already ordered as they execute), the dependency-ordering edges
+/// between them, and the scheduler ambiguities found among them. `edges` and
+/// `ambiguities` share the same index space as `systems`.
 #[derive(Deserialize, Clone)]
 pub struct ScheduleInfo {
     pub schedule: String,
     pub systems: Vec<SystemInfo>,
+    #[serde(default)]
+    pub edges: Vec<(usize, usize)>,
+    #[serde(default)]
+    pub ambiguities: Vec<Ambiguity>,
 }
 
 /// The last parsed `jackdaw/schedules` reply, written by the poll helper. The
-/// server's `initialized` and `edges` fields are not declared, so serde drops
-/// them.
+/// server's `initialized` field is not declared, so serde drops it.
 #[derive(Resource, Deserialize, Default)]
 pub struct SchedulesReply {
     pub schedules: Vec<ScheduleInfo>,
@@ -222,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn reply_deserializes_from_brp_shape_ignoring_edges() {
+    fn reply_deserializes_edges_and_ambiguities() {
         let value = serde_json::json!({
             "schedules": [
                 {
@@ -231,7 +250,10 @@ mod tests {
                     "systems": [
                         { "name": "skybound::movement::step", "sets": ["Movement"] }
                     ],
-                    "edges": [[0, 1]]
+                    "edges": [[0, 1]],
+                    "ambiguities": [
+                        { "a": 0, "b": 1, "components": ["skybound::Health"] }
+                    ]
                 }
             ]
         });
@@ -247,5 +269,29 @@ mod tests {
             reply.schedules[0].systems[0].sets,
             vec!["Movement".to_string()]
         );
+        assert_eq!(reply.schedules[0].edges, vec![(0, 1)]);
+        assert_eq!(reply.schedules[0].ambiguities.len(), 1);
+        assert_eq!(reply.schedules[0].ambiguities[0].a, 0);
+        assert_eq!(reply.schedules[0].ambiguities[0].b, 1);
+        assert_eq!(
+            reply.schedules[0].ambiguities[0].components,
+            vec!["skybound::Health".to_string()]
+        );
+    }
+
+    #[test]
+    fn reply_defaults_edges_and_ambiguities_when_absent() {
+        let value = serde_json::json!({
+            "schedules": [
+                {
+                    "schedule": "Update",
+                    "initialized": true,
+                    "systems": []
+                }
+            ]
+        });
+        let reply: SchedulesReply = serde_json::from_value(value).unwrap();
+        assert!(reply.schedules[0].edges.is_empty());
+        assert!(reply.schedules[0].ambiguities.is_empty());
     }
 }

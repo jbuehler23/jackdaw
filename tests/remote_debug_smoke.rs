@@ -15,6 +15,7 @@ const DEBUG_WINDOWS: &[&str] = &[
     "jackdaw.debug.queries",
     "jackdaw.debug.archetypes",
     "jackdaw.debug.schedules",
+    "jackdaw.debug.graph",
 ];
 
 #[test]

@@ -159,6 +159,16 @@ impl JackdawExtension for CoreWindowsExtension {
         );
 
         ctx.register_window(
+            WindowDescriptor::new("jackdaw.debug.graph")
+                .with_name("Remote System Graph")
+                .with_default_area(DefaultArea::Center)
+                .with_priority(25)
+                .with_build(|window| {
+                    window.spawn(crate::remote::debug::depgraph::depgraph_panel_content());
+                }),
+        );
+
+        ctx.register_window(
             WindowDescriptor::new("jackdaw.remote.inspector")
                 .with_name("Remote Inspector")
                 .with_default_area(DefaultArea::RightSidebar)

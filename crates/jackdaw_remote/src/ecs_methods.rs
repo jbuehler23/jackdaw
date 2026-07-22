@@ -32,6 +32,51 @@ fn resolve_edge_endpoint_to_system(graph: &ScheduleGraph, node: NodeId) -> Optio
     }
 }
 
+/// One scheduler-detected ambiguity: two systems the scheduler found no
+/// ordering between despite conflicting data access. `a`/`b` index into the
+/// same schedule's `systems` array as `edges`. An empty `components` list
+/// means the conflict is on `World` access in general (e.g. an exclusive
+/// system) rather than a specific component.
+struct Ambiguity {
+    a: usize,
+    b: usize,
+    components: Vec<String>,
+}
+
+/// Extract `graph.conflicting_systems()` into the reply's index space.
+///
+/// Maps each `SystemKey` through `key_to_index` (built the same way as for
+/// `edges`); pairs where either system does not resolve to an index in this
+/// schedule are skipped. Resolves each conflicting `ComponentId` to a name
+/// via `world`, falling back to the numeric id when the component isn't
+/// registered, the same fallback pattern used elsewhere in this file.
+fn ambiguities_for(
+    graph: &ScheduleGraph,
+    key_to_index: &HashMap<SystemKey, usize>,
+    world: &World,
+) -> Vec<Ambiguity> {
+    graph
+        .conflicting_systems()
+        .iter()
+        .filter_map(|(a, b, components)| {
+            let a_index = *key_to_index.get(a)?;
+            let b_index = *key_to_index.get(b)?;
+            let components = components
+                .iter()
+                .map(|&id| match world.components().get_info(id) {
+                    Some(info) => info.name().to_string(),
+                    None => id.index().to_string(),
+                })
+                .collect();
+            Some(Ambiguity {
+                a: a_index,
+                b: b_index,
+                components,
+            })
+        })
+        .collect()
+}
+
 /// Names of the non-anonymous sets a system directly belongs to, using each
 /// set's `Debug` name. Excludes the implicit per-function `SystemTypeSet`
 /// that every function system is automatically placed in.
@@ -130,11 +175,23 @@ pub fn jackdaw_schedules_handler(In(_params): In<Option<Value>>, world: &mut Wor
                     })
                     .collect();
 
+                let ambiguities: Vec<Value> = ambiguities_for(graph, &key_to_index, world)
+                    .into_iter()
+                    .map(|a| {
+                        json!({
+                            "a": a.a,
+                            "b": a.b,
+                            "components": a.components,
+                        })
+                    })
+                    .collect();
+
                 out.push(json!({
                     "schedule": format!("{label:?}"),
                     "initialized": true,
                     "systems": systems,
                     "edges": edges,
+                    "ambiguities": ambiguities,
                 }));
             }
             Err(_) => {
@@ -143,10 +200,78 @@ pub fn jackdaw_schedules_handler(In(_params): In<Option<Value>>, world: &mut Wor
                     "initialized": false,
                     "systems": [],
                     "edges": [],
+                    "ambiguities": [],
                 }));
             }
         }
     }
 
     Ok(json!({ "schedules": out }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::schedule::{Schedule, ScheduleLabel};
+
+    #[derive(Resource, Default)]
+    struct Counter(i32);
+
+    fn write_a(mut counter: ResMut<Counter>) {
+        counter.0 += 1;
+    }
+
+    fn write_b(mut counter: ResMut<Counter>) {
+        counter.0 += 1;
+    }
+
+    #[derive(ScheduleLabel, Debug, Clone, Copy, Hash, PartialEq, Eq)]
+    struct TestSchedule;
+
+    #[test]
+    fn ambiguities_for_reports_unordered_conflicting_systems() {
+        let mut world = World::new();
+        world.insert_resource(Counter::default());
+
+        let mut schedule = Schedule::new(TestSchedule);
+        schedule.add_systems((write_a, write_b));
+        schedule.initialize(&mut world).unwrap();
+
+        let ordered: Vec<(SystemKey, String)> = schedule
+            .systems()
+            .unwrap()
+            .map(|(key, system)| (key, system.name().to_string()))
+            .collect();
+        let key_to_index: HashMap<SystemKey, usize> = ordered
+            .iter()
+            .enumerate()
+            .map(|(index, (key, _))| (*key, index))
+            .collect();
+
+        let ambiguities = ambiguities_for(schedule.graph(), &key_to_index, &world);
+
+        assert_eq!(ambiguities.len(), 1);
+        let ambiguity = &ambiguities[0];
+        let pair: std::collections::HashSet<usize> =
+            [ambiguity.a, ambiguity.b].into_iter().collect();
+        assert_eq!(pair, std::collections::HashSet::from([0, 1]));
+        assert!(
+            ambiguity.components.iter().any(|c| c.ends_with("Counter")),
+            "expected a component name ending in Counter, got {:?}",
+            ambiguity.components
+        );
+    }
+
+    #[test]
+    fn ambiguities_for_skips_pairs_missing_from_the_index() {
+        let mut world = World::new();
+        world.insert_resource(Counter::default());
+
+        let mut schedule = Schedule::new(TestSchedule);
+        schedule.add_systems((write_a, write_b));
+        schedule.initialize(&mut world).unwrap();
+
+        let ambiguities = ambiguities_for(schedule.graph(), &HashMap::new(), &world);
+        assert!(ambiguities.is_empty());
+    }
 }

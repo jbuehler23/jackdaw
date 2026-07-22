@@ -1,11 +1,14 @@
 //! Native remote-game debugger: read-only introspection panels that inspect a
 //! running Bevy game over BRP, built on the existing `super` connection client.
 //!
-//! `RemoteDebugPlugin` wires the shared pieces (the sparkline material and the
-//! poll helper) plus the Diagnostics view. Later views hang off the same plugin.
+//! `RemoteDebugPlugin` wires the shared pieces (the sparkline material, the
+//! graph edge material, and the poll helper) plus the Diagnostics view. Later
+//! views hang off the same plugin.
 
 pub mod archetypes;
+pub mod depgraph;
 pub mod diagnostics;
+pub mod graph;
 pub mod poll;
 pub mod queries;
 pub mod schedules;
@@ -21,8 +24,10 @@ pub struct RemoteDebugPlugin;
 impl Plugin for RemoteDebugPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/sparkline.wgsl");
+        embedded_asset!(app, "shaders/graph_edge.wgsl");
 
         app.add_plugins(UiMaterialPlugin::<sparkline::SparklineMaterial>::default());
+        app.add_plugins(UiMaterialPlugin::<graph::GraphEdgeMaterial>::default());
         app.add_plugins(poll::BrpPollPlugin::<diagnostics::DiagnosticsSample>::new(
             "jackdaw/diagnostics",
             0.25,
@@ -62,5 +67,13 @@ impl Plugin for RemoteDebugPlugin {
             1.0,
         ));
         app.add_systems(Update, schedules::rebuild_schedules);
+
+        app.init_resource::<depgraph::SelectedSchedule>();
+        app.add_systems(Update, depgraph::rebuild_depgraph);
+        app.add_systems(
+            PostUpdate,
+            graph::sync_graph_edges.after(bevy::ui::UiSystems::Layout),
+        );
+        app.add_observer(depgraph::on_schedule_button_clicked);
     }
 }
