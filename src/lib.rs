@@ -2660,6 +2660,7 @@ fn build_debug_tree() -> jackdaw_panels::tree::DockTree {
                 "jackdaw.debug.archetypes".into(),
                 "jackdaw.debug.schedules".into(),
                 "jackdaw.debug.graph".into(),
+                "jackdaw.debug.relationships".into(),
             ])
             .persistent(),
     ));

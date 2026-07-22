@@ -11,6 +11,7 @@ pub mod diagnostics;
 pub mod graph;
 pub mod poll;
 pub mod queries;
+pub mod relationships;
 pub mod schedules;
 pub mod sparkline;
 pub mod style;
@@ -75,5 +76,13 @@ impl Plugin for RemoteDebugPlugin {
             graph::sync_graph_edges.after(bevy::ui::UiSystems::Layout),
         );
         app.add_observer(depgraph::on_schedule_button_clicked);
+
+        app.add_plugins(
+            poll::BrpPollPlugin::<relationships::RelationshipsReply>::new(
+                "jackdaw/scene_snapshot",
+                1.5,
+            ),
+        );
+        app.add_systems(Update, relationships::rebuild_relationships);
     }
 }

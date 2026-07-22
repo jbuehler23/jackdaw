@@ -169,6 +169,17 @@ impl JackdawExtension for CoreWindowsExtension {
         );
 
         ctx.register_window(
+            WindowDescriptor::new("jackdaw.debug.relationships")
+                .with_name("Remote Relationships")
+                .with_default_area(DefaultArea::Center)
+                .with_priority(26)
+                .with_build(|window| {
+                    window
+                        .spawn(crate::remote::debug::relationships::relationships_panel_content());
+                }),
+        );
+
+        ctx.register_window(
             WindowDescriptor::new("jackdaw.remote.inspector")
                 .with_name("Remote Inspector")
                 .with_default_area(DefaultArea::RightSidebar)

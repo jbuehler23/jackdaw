@@ -1,12 +1,15 @@
-//! Shared layered graph renderer for the debugger's graph-shaped panels
-//! (System Graph first, Relationships later): a pure layout function plus
-//! the UI-node + `UiMaterial` wire renderer that draws it.
+//! Shared graph renderer for the debugger's graph-shaped panels (System
+//! Graph, Relationships): two pure layout functions plus the UI-node +
+//! `UiMaterial` wire renderer that draws them.
 //!
 //! `layered_layout` assigns each node a `(layer, row)` slot from a longest
-//! dependency path; `spawn_graph` turns that into absolutely-positioned node
-//! boxes and `GraphEdgeMaterial` wires. `sync_graph_edges` keeps each wire's
-//! endpoints glued to its two node boxes every frame, adapted from
-//! `jackdaw_node_graph::connection::update_connection_endpoints`.
+//! dependency path; `force_layout` instead settles nodes by simulated
+//! repulsion/spring forces. `spawn_graph_positioned` is the shared spawn
+//! core: it places one box per node at an arbitrary pixel position and wires
+//! up edges, and both layouts feed it. `spawn_graph` is `layered_layout` +
+//! `spawn_graph_positioned` for the System Graph. `sync_graph_edges` keeps
+//! each wire's endpoints glued to its two node boxes every frame, adapted
+//! from `jackdaw_node_graph::connection::update_connection_endpoints`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -67,6 +70,85 @@ pub fn layered_layout(node_count: usize, edges: &[(usize, usize)]) -> Vec<NodeSl
             slot
         })
         .collect()
+}
+
+// --------------------------- Force layout ---------------------------
+
+/// Base seed radius so even a two-node graph starts with room to separate.
+const FORCE_SEED_RADIUS_BASE: f32 = 60.0;
+/// Seed radius added per node so denser graphs start more spread out.
+const FORCE_SEED_RADIUS_PER_NODE: f32 = 18.0;
+/// Minimum distance used by both forces, avoiding divide-by-zero blowups
+/// when two nodes land on (near) the same point.
+const FORCE_MIN_DISTANCE: f32 = 1.0;
+/// Repulsion strength (inverse-square) applied between every node pair.
+const FORCE_REPULSION: f32 = 6000.0;
+/// Spring strength pulling each edge's endpoints toward `FORCE_EDGE_LENGTH`.
+const FORCE_SPRING: f32 = 0.02;
+/// Target rest length for an edge's spring.
+const FORCE_EDGE_LENGTH: f32 = 140.0;
+/// Per-step displacement cap, keeping the simulation stable even under a
+/// dense repulsion field.
+const FORCE_MAX_STEP: f32 = 30.0;
+
+/// Force-directed layout: repulsion between every node pair plus a spring
+/// along each edge (edges are treated undirected), run for `iterations`
+/// steps. Deterministic - initial positions are seeded evenly on a circle by
+/// index rather than randomly, so the same input always yields the same
+/// output. Out-of-range and self-loop edges are ignored. Pure, no Bevy
+/// beyond `Vec2`.
+pub fn force_layout(node_count: usize, edges: &[(usize, usize)], iterations: usize) -> Vec<Vec2> {
+    if node_count == 0 {
+        return Vec::new();
+    }
+
+    let radius = FORCE_SEED_RADIUS_BASE + node_count as f32 * FORCE_SEED_RADIUS_PER_NODE;
+    let mut positions: Vec<Vec2> = (0..node_count)
+        .map(|i| {
+            let angle = i as f32 / node_count as f32 * std::f32::consts::TAU;
+            Vec2::new(angle.cos(), angle.sin()) * radius
+        })
+        .collect();
+
+    let edges: Vec<(usize, usize)> = edges
+        .iter()
+        .copied()
+        .filter(|&(a, b)| a < node_count && b < node_count && a != b)
+        .collect();
+
+    for _ in 0..iterations {
+        let mut displacement = vec![Vec2::ZERO; node_count];
+
+        for i in 0..node_count {
+            for j in (i + 1)..node_count {
+                let delta = positions[i] - positions[j];
+                let dist = delta.length().max(FORCE_MIN_DISTANCE);
+                let push = delta / dist * (FORCE_REPULSION / (dist * dist));
+                displacement[i] += push;
+                displacement[j] -= push;
+            }
+        }
+
+        for &(a, b) in &edges {
+            let delta = positions[b] - positions[a];
+            let dist = delta.length().max(FORCE_MIN_DISTANCE);
+            let pull = delta / dist * ((dist - FORCE_EDGE_LENGTH) * FORCE_SPRING);
+            displacement[a] += pull;
+            displacement[b] -= pull;
+        }
+
+        for (position, step) in positions.iter_mut().zip(displacement) {
+            let step_len = step.length();
+            let step = if step_len > FORCE_MAX_STEP {
+                step * (FORCE_MAX_STEP / step_len)
+            } else {
+                step
+            };
+            *position += step;
+        }
+    }
+
+    positions
 }
 
 // --------------------------- Edge material ---------------------------
@@ -177,16 +259,65 @@ pub fn spawn_graph(
     ambiguities: &[(usize, usize)],
 ) -> Entity {
     let slots = layered_layout(nodes.len(), edges);
-    let max_layer = slots.iter().map(|s| s.layer).max().unwrap_or(0);
-    let mut rows_in_layer: HashMap<usize, usize> = HashMap::new();
-    for slot in &slots {
-        let count = rows_in_layer.entry(slot.layer).or_insert(0);
-        *count = (*count).max(slot.row + 1);
-    }
-    let max_rows = rows_in_layer.values().copied().max().unwrap_or(0).max(1);
+    let positions: Vec<Vec2> = slots
+        .iter()
+        .map(|slot| {
+            Vec2::new(
+                ROW_H * 0.5 + slot.layer as f32 * COL_W,
+                ROW_H * 0.5 + slot.row as f32 * ROW_H,
+            )
+        })
+        .collect();
+    let node_colors = vec![tokens::COMPONENT_CARD_BG; nodes.len()];
+    spawn_graph_positioned(
+        commands,
+        materials,
+        parent,
+        nodes,
+        &positions,
+        edges,
+        ambiguities,
+        &node_colors,
+    )
+}
 
-    let content_width = (max_layer as f32 + 1.0) * COL_W + NODE_W;
-    let content_height = (max_rows as f32 + 1.0) * ROW_H;
+/// Shared spawn/positioning core behind [`spawn_graph`] (layered positions)
+/// and the Relationships panel (force-directed positions): one box per
+/// `nodes` entry placed at `positions[i]`, shifted so the bounding box's
+/// minimum corner sits at a fixed margin (nothing renders off the top/left
+/// of the scroll content), plus one wire per ordering edge and per
+/// ambiguity, ordering edges first, capped at [`MAX_EDGES`] total.
+/// `node_colors[i]` is that box's background, falling back to
+/// [`tokens::COMPONENT_CARD_BG`] if `node_colors` is shorter than `nodes`.
+/// Returns the scroll container entity.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the shared spawn core for two layouts; every argument is a distinct piece of graph data the caller already has"
+)]
+pub fn spawn_graph_positioned(
+    commands: &mut Commands,
+    materials: &mut Assets<GraphEdgeMaterial>,
+    parent: Entity,
+    nodes: &[GraphNodeSpec],
+    positions: &[Vec2],
+    edges: &[(usize, usize)],
+    ambiguities: &[(usize, usize)],
+    node_colors: &[Color],
+) -> Entity {
+    let margin = ROW_H * 0.5;
+    let min_corner = positions
+        .iter()
+        .fold(Vec2::splat(f32::INFINITY), |acc, &p| acc.min(p));
+    let shift = if positions.is_empty() {
+        Vec2::ZERO
+    } else {
+        Vec2::splat(margin) - min_corner
+    };
+    let placed: Vec<Vec2> = positions.iter().map(|&p| p + shift).collect();
+    let max_corner = placed.iter().fold(Vec2::ZERO, |acc, &p| acc.max(p));
+
+    let content_width = max_corner.x + NODE_W + margin;
+    let content_height = max_corner.y + ROW_H + margin;
 
     let scroll_container = commands
         .spawn((
@@ -215,27 +346,29 @@ pub fn spawn_graph(
     let ambiguous_nodes: HashSet<usize> = ambiguities.iter().flat_map(|&(a, b)| [a, b]).collect();
 
     for (index, spec) in nodes.iter().enumerate() {
-        let slot = slots[index];
-        let left = ROW_H * 0.5 + slot.layer as f32 * COL_W;
-        let top = ROW_H * 0.5 + slot.row as f32 * ROW_H;
+        let pos = placed.get(index).copied().unwrap_or(Vec2::splat(margin));
         let border = if ambiguous_nodes.contains(&index) {
             Color::Srgba(tokens::DESTRUCTIVE_RED)
         } else {
             tokens::BORDER_SUBTLE
         };
+        let background = node_colors
+            .get(index)
+            .copied()
+            .unwrap_or(tokens::COMPONENT_CARD_BG);
         commands.spawn((
             GraphNodeBox { index },
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Px(left),
-                top: Val::Px(top),
+                left: Val::Px(pos.x),
+                top: Val::Px(pos.y),
                 width: Val::Px(NODE_W),
                 padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(tokens::SPACING_XS)),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(tokens::CORNER_RADIUS),
                 ..default()
             },
-            BackgroundColor(tokens::COMPONENT_CARD_BG),
+            BackgroundColor(background),
             BorderColor::all(border),
             children![(
                 Text::new(spec.label.clone()),
@@ -414,5 +547,46 @@ mod tests {
         let slots = layered_layout(2, &[(0, 1), (0, 5), (5, 1)]);
         let layers: Vec<usize> = slots.iter().map(|s| s.layer).collect();
         assert_eq!(layers, vec![0, 1]);
+    }
+
+    #[test]
+    fn force_layout_returns_nothing_for_zero_nodes() {
+        assert!(force_layout(0, &[(0, 1)], 10).is_empty());
+    }
+
+    #[test]
+    fn force_layout_is_deterministic() {
+        let edges = [(0, 1), (1, 2), (2, 3)];
+        let a = force_layout(4, &edges, 40);
+        let b = force_layout(4, &edges, 40);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn force_layout_pulls_connected_nodes_closer() {
+        // 0-1 connected, 2 isolated; both start equidistant from 0 (an
+        // equilateral triangle from the circular seed), so only the spring
+        // on the 0-1 edge should pull them closer than 0 and 2 end up.
+        let positions = force_layout(3, &[(0, 1)], 200);
+        let dist_connected = positions[0].distance(positions[1]);
+        let dist_unconnected = positions[0].distance(positions[2]);
+        assert!(
+            dist_connected < dist_unconnected,
+            "expected connected pair closer: {dist_connected} vs {dist_unconnected}"
+        );
+    }
+
+    #[test]
+    fn force_layout_never_produces_nan_or_inf() {
+        // Includes a self-loop and an out-of-range edge, both of which
+        // must be filtered rather than dividing by zero.
+        let edges = [(0, 1), (1, 2), (2, 0), (0, 0), (9, 1)];
+        let positions = force_layout(5, &edges, 50);
+        for p in positions {
+            assert!(
+                p.x.is_finite() && p.y.is_finite(),
+                "non-finite output: {p:?}"
+            );
+        }
     }
 }
