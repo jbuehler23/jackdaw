@@ -2,22 +2,31 @@
 //!
 //! The generic poll helper writes each `jackdaw/archetypes` reply (a fixed
 //! no-params method) into `ArchetypesReply`. `ArchetypeSort` holds the active
-//! column and direction the header buttons edit; the panel rebuilds its rows
-//! reactively when either resource changes, sorting a clone of the reply with
-//! the pure `sort_rows` before spawning the table.
+//! column and direction the header cells edit; the panel rebuilds its rows
+//! reactively when either resource changes. Each row is stamped with its
+//! original position in the reply (`ArchetypeRow::index`) before the pure
+//! `sort_rows` reorders a clone of it, so the `#<index>` label a row shows
+//! stays put no matter which column the table is sorted by.
 
 use bevy::prelude::*;
+use bevy::ui_widgets::observe;
 use serde::Deserialize;
 
-use jackdaw_feathers::button::{ButtonClickEvent, ButtonProps, ButtonVariant, button};
+use jackdaw_feathers::button::ButtonClickEvent;
 use jackdaw_feathers::list_view::list_view;
 use jackdaw_feathers::tokens;
 
+use super::style;
+
 /// One archetype from a `jackdaw/archetypes` reply: the reflect type paths of
-/// its component set, how many entities share it, and the summed component size
-/// of a single entity in it.
+/// its component set, how many entities share it, and the summed component
+/// size of a single entity in it. `index` is not part of the wire shape; it
+/// is stamped in by `rebuild_archetypes` from the row's position in the reply
+/// before sorting, so the table's `#<index>` label is stable across re-sorts.
 #[derive(Deserialize, Clone)]
 pub struct ArchetypeRow {
+    #[serde(skip)]
+    pub index: usize,
     pub components: Vec<String>,
     pub entity_count: u64,
     pub bytes_per_entity: u64,
@@ -79,6 +88,9 @@ pub fn sort_rows(rows: &mut Vec<ArchetypeRow>, key: SortKey, ascending: bool) {
 struct ArchetypesPanel;
 
 #[derive(Component)]
+pub(crate) struct ArchMeta;
+
+#[derive(Component)]
 pub(crate) struct ArchHeader;
 
 #[derive(Component)]
@@ -88,14 +100,17 @@ pub(crate) struct ArchRows;
 #[derive(Component)]
 pub(crate) struct SortHeader(SortKey);
 
-/// Fixed pixel width of each numeric column, shared by the header buttons and
+/// Marks a table row so its hover observer can find its own `BackgroundColor`
+/// even when the pointer event bubbles up from a child (a chip or a text
+/// label) rather than landing on the row directly.
+#[derive(Component)]
+struct ArchRowMarker;
+
+/// Fixed pixel width of each numeric column, shared by the header cells and
 /// the row cells so the table reads as aligned columns.
 const NUMERIC_COL_WIDTH: f32 = 96.0;
-
-/// Short component name: the final `::` segment of a reflect type path.
-fn short_name(type_path: &str) -> &str {
-    type_path.rsplit("::").next().unwrap_or(type_path)
-}
+/// Fixed pixel width of the leading `#<index>` column.
+const ID_COL_WIDTH: f32 = 52.0;
 
 /// Build the archetypes panel content (no header: the dock tab is the title).
 pub fn archetypes_panel_content() -> impl Bundle {
@@ -110,6 +125,13 @@ pub fn archetypes_panel_content() -> impl Bundle {
         BackgroundColor(tokens::PANEL_BG),
         children![
             (
+                ArchMeta,
+                Node {
+                    width: Val::Percent(100.0),
+                    ..default()
+                },
+            ),
+            (
                 ArchHeader,
                 Node {
                     flex_direction: FlexDirection::Row,
@@ -117,8 +139,10 @@ pub fn archetypes_panel_content() -> impl Bundle {
                     width: Val::Percent(100.0),
                     column_gap: Val::Px(tokens::SPACING_SM),
                     padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_XS)),
+                    border: UiRect::bottom(Val::Px(1.0)),
                     ..default()
                 },
+                BorderColor::all(tokens::BORDER_SUBTLE),
             ),
             (
                 Node {
@@ -136,22 +160,42 @@ pub fn archetypes_panel_content() -> impl Bundle {
     )
 }
 
-/// A clickable column header. The active column shows a plain direction caret
-/// and the `Active` variant so the current sort is visible at a glance.
+/// A plain, non-sortable column-header label at a fixed width.
+fn plain_header(label: &str, width: f32) -> impl Bundle {
+    (
+        Node {
+            width: Val::Px(width),
+            flex_shrink: 0.0,
+            padding: UiRect::axes(Val::Px(tokens::SPACING_XS), Val::Px(tokens::SPACING_XS)),
+            ..default()
+        },
+        children![(
+            Text::new(label.to_uppercase()),
+            TextFont {
+                font_size: tokens::TEXT_SIZE_XS,
+                ..default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+        )],
+    )
+}
+
+/// A clickable column header: uppercase label, `TEXT_SIZE_XS`/`TEXT_SECONDARY`
+/// like the rest of the row, and a plain ASCII caret on the active column.
+/// Built from raw pickable primitives rather than the `button` widget so the
+/// header text can share the row's own small, muted styling; a click still
+/// fires the same `ButtonClickEvent` `on_sort_header_clicked` already
+/// listens for.
 fn sort_header(label: &str, key: SortKey, sort: &ArchetypeSort, grow: bool) -> impl Bundle {
     let active = sort.key == key;
     let content = if active {
-        let caret = if sort.ascending { "^" } else { "v" };
-        format!("{label} {caret}")
+        let caret = if sort.ascending { " ^" } else { " v" };
+        format!("{}{caret}", label.to_uppercase())
     } else {
-        label.to_string()
-    };
-    let variant = if active {
-        ButtonVariant::Active
-    } else {
-        ButtonVariant::Default
+        label.to_uppercase()
     };
     (
+        SortHeader(key),
         Node {
             width: if grow {
                 Val::Auto
@@ -160,29 +204,76 @@ fn sort_header(label: &str, key: SortKey, sort: &ArchetypeSort, grow: bool) -> i
             },
             flex_grow: if grow { 1.0 } else { 0.0 },
             flex_shrink: 0.0,
+            justify_content: if grow {
+                JustifyContent::Start
+            } else {
+                JustifyContent::FlexEnd
+            },
+            padding: UiRect::axes(Val::Px(tokens::SPACING_XS), Val::Px(tokens::SPACING_XS)),
             ..default()
         },
+        BackgroundColor(Color::NONE),
         children![(
-            button(ButtonProps::new(content).with_variant(variant).align_left(),),
-            SortHeader(key),
+            Text::new(content),
+            TextFont {
+                font_size: tokens::TEXT_SIZE_XS,
+                ..default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
         )],
+        observe(on_header_over),
+        observe(on_header_out),
+        observe(on_header_pressed),
     )
 }
 
-/// One table row: the component set as chips followed by the entity count and
-/// per-entity byte size in fixed-width, right-aligned numeric cells.
-fn arch_row(row: &ArchetypeRow) -> impl Bundle {
-    let chips: Vec<_> = row.components.iter().map(|c| comp_chip(c)).collect();
+fn on_header_over(hover: On<Pointer<Over>>, mut q: Query<&mut BackgroundColor, With<SortHeader>>) {
+    if let Ok(mut bg) = q.get_mut(hover.event_target()) {
+        bg.0 = tokens::HOVER_BG;
+    }
+}
+
+fn on_header_out(out: On<Pointer<Out>>, mut q: Query<&mut BackgroundColor, With<SortHeader>>) {
+    if let Ok(mut bg) = q.get_mut(out.event_target()) {
+        bg.0 = Color::NONE;
+    }
+}
+
+fn on_header_pressed(click: On<Pointer<Click>>, mut commands: Commands) {
+    commands.trigger(ButtonClickEvent {
+        entity: click.event_target(),
+    });
+}
+
+/// One table row: `#<index>`, the entities bar cell, the row-size cell, then
+/// the component set as chips. A subtle bottom border separates rows; hover
+/// tints the whole row.
+fn arch_row(row: &ArchetypeRow, max_count: u64) -> impl Bundle {
+    let chips: Vec<_> = row
+        .components
+        .iter()
+        .map(|c| style::component_chip(c))
+        .collect();
     (
+        ArchRowMarker,
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             width: Val::Percent(100.0),
             column_gap: Val::Px(tokens::SPACING_SM),
             padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_XS)),
+            border: UiRect::bottom(Val::Px(1.0)),
             ..default()
         },
+        BackgroundColor(Color::NONE),
+        BorderColor::all(tokens::BORDER_SUBTLE),
         children![
+            id_cell(row.index),
+            entities_cell(row.entity_count, max_count),
+            numeric_cell(
+                format!("{} B", row.bytes_per_entity),
+                tokens::TEXT_SECONDARY
+            ),
             (
                 Node {
                     flex_direction: FlexDirection::Row,
@@ -195,10 +286,68 @@ fn arch_row(row: &ArchetypeRow) -> impl Bundle {
                 },
                 Children::spawn(SpawnIter(chips.into_iter())),
             ),
-            numeric_cell(row.entity_count.to_string(), tokens::TEXT_PRIMARY),
-            numeric_cell(
-                format!("{} B", row.bytes_per_entity),
-                tokens::TEXT_SECONDARY
+        ],
+        observe(on_row_over),
+        observe(on_row_out),
+    )
+}
+
+fn on_row_over(hover: On<Pointer<Over>>, mut q: Query<&mut BackgroundColor, With<ArchRowMarker>>) {
+    if let Ok(mut bg) = q.get_mut(hover.event_target()) {
+        bg.0 = tokens::HOVER_BG;
+    }
+}
+
+fn on_row_out(out: On<Pointer<Out>>, mut q: Query<&mut BackgroundColor, With<ArchRowMarker>>) {
+    if let Ok(mut bg) = q.get_mut(out.event_target()) {
+        bg.0 = Color::NONE;
+    }
+}
+
+/// The leading `#<index>` cell.
+fn id_cell(index: usize) -> impl Bundle {
+    (
+        Node {
+            width: Val::Px(ID_COL_WIDTH),
+            flex_shrink: 0.0,
+            ..default()
+        },
+        children![(
+            Text::new(format!("#{index}")),
+            TextFont {
+                font_size: tokens::TEXT_SIZE_SM,
+                ..default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+        )],
+    )
+}
+
+/// A fixed-width cell showing `count` right-aligned in front of a
+/// `style::count_bar` fill sized by `count`'s share of `max_count`.
+fn entities_cell(count: u64, max_count: u64) -> impl Bundle {
+    let fraction = if max_count == 0 {
+        0.0
+    } else {
+        count as f32 / max_count as f32
+    };
+    (
+        Node {
+            width: Val::Px(NUMERIC_COL_WIDTH),
+            flex_shrink: 0.0,
+            justify_content: JustifyContent::FlexEnd,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        children![
+            style::count_bar(fraction),
+            (
+                Text::new(count.to_string()),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..default()
+                },
+                TextColor(tokens::TEXT_PRIMARY),
             ),
         ],
     )
@@ -224,67 +373,74 @@ fn numeric_cell(value: String, color: Color) -> impl Bundle {
     )
 }
 
-/// A read-only chip for one component on the archetype.
-fn comp_chip(type_path: &str) -> impl Bundle {
-    (
-        Node {
-            padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(Val::Px(tokens::COMPONENT_CARD_RADIUS)),
-            ..default()
-        },
-        BackgroundColor(tokens::COMPONENT_CARD_BG),
-        children![(
-            Text::new(short_name(type_path)),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
-    )
-}
-
-/// Rebuild the column headers and sorted rows when a new reply arrives, the
-/// sort changes, or the panel opens.
+/// Rebuild the meta line, column headers, and sorted rows when a new reply
+/// arrives, the sort changes, or the panel opens.
 pub(crate) fn rebuild_archetypes(
     reply: Option<Res<ArchetypesReply>>,
     sort: Res<ArchetypeSort>,
     mut commands: Commands,
+    meta_containers: Query<Entity, With<ArchMeta>>,
     headers: Query<Entity, With<ArchHeader>>,
     rows_containers: Query<Entity, With<ArchRows>>,
-    new_ui: Query<(), Or<(Added<ArchHeader>, Added<ArchRows>)>>,
+    new_ui: Query<(), Or<(Added<ArchMeta>, Added<ArchHeader>, Added<ArchRows>)>>,
 ) {
     let reply_changed = matches!(reply.as_ref(), Some(r) if r.is_changed());
     if !reply_changed && !sort.is_changed() && new_ui.is_empty() {
         return;
     }
 
-    for container in &headers {
+    let archetypes: &[ArchetypeRow] = reply
+        .as_ref()
+        .map(|r| r.archetypes.as_slice())
+        .unwrap_or(&[]);
+    let total_entities: u64 = archetypes.iter().map(|a| a.entity_count).sum();
+    let meta_right = format!(
+        "{} archetypes,  {} entities",
+        archetypes.len(),
+        total_entities
+    );
+
+    for container in &meta_containers {
         commands.entity(container).despawn_children();
         commands.spawn((
-            sort_header("Components", SortKey::Components, &sort, true),
+            style::panel_meta("Every unique component set in the world", &meta_right),
             ChildOf(container),
         ));
+    }
+
+    for container in &headers {
+        commands.entity(container).despawn_children();
+        commands.spawn((plain_header("Archetype", ID_COL_WIDTH), ChildOf(container)));
         commands.spawn((
             sort_header("Entities", SortKey::Entities, &sort, false),
             ChildOf(container),
         ));
         commands.spawn((
-            sort_header("Size", SortKey::Size, &sort, false),
+            sort_header("Row Size", SortKey::Size, &sort, false),
+            ChildOf(container),
+        ));
+        commands.spawn((
+            sort_header("Components", SortKey::Components, &sort, true),
             ChildOf(container),
         ));
     }
 
-    let mut rows = reply
-        .as_ref()
-        .map(|r| r.archetypes.clone())
-        .unwrap_or_default();
+    let mut rows: Vec<ArchetypeRow> = archetypes
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, mut row)| {
+            row.index = index;
+            row
+        })
+        .collect();
     sort_rows(&mut rows, sort.key, sort.ascending);
+    let max_count = rows.iter().map(|r| r.entity_count).max().unwrap_or(0);
 
     for container in &rows_containers {
         commands.entity(container).despawn_children();
         for row in &rows {
-            commands.spawn((arch_row(row), ChildOf(container)));
+            commands.spawn((arch_row(row, max_count), ChildOf(container)));
         }
     }
 }
@@ -311,8 +467,14 @@ pub(crate) fn on_sort_header_clicked(
 mod tests {
     use super::*;
 
-    fn row(components: usize, entity_count: u64, bytes_per_entity: u64) -> ArchetypeRow {
+    fn row(
+        index: usize,
+        components: usize,
+        entity_count: u64,
+        bytes_per_entity: u64,
+    ) -> ArchetypeRow {
         ArchetypeRow {
+            index,
             components: vec!["c".to_string(); components],
             entity_count,
             bytes_per_entity,
@@ -321,7 +483,7 @@ mod tests {
 
     #[test]
     fn sort_by_entities_descending_puts_largest_first() {
-        let mut rows = vec![row(1, 10, 8), row(1, 512, 8), row(1, 64, 8)];
+        let mut rows = vec![row(0, 1, 10, 8), row(1, 1, 512, 8), row(2, 1, 64, 8)];
         sort_rows(&mut rows, SortKey::Entities, false);
         let counts: Vec<u64> = rows.iter().map(|r| r.entity_count).collect();
         assert_eq!(counts, vec![512, 64, 10]);
@@ -329,7 +491,7 @@ mod tests {
 
     #[test]
     fn sort_by_entities_ascending_reverses() {
-        let mut rows = vec![row(1, 10, 8), row(1, 512, 8), row(1, 64, 8)];
+        let mut rows = vec![row(0, 1, 10, 8), row(1, 1, 512, 8), row(2, 1, 64, 8)];
         sort_rows(&mut rows, SortKey::Entities, true);
         let counts: Vec<u64> = rows.iter().map(|r| r.entity_count).collect();
         assert_eq!(counts, vec![10, 64, 512]);
@@ -337,7 +499,7 @@ mod tests {
 
     #[test]
     fn sort_by_size_orders_by_bytes_per_entity() {
-        let mut rows = vec![row(1, 1, 96), row(1, 1, 16), row(1, 1, 48)];
+        let mut rows = vec![row(0, 1, 1, 96), row(1, 1, 1, 16), row(2, 1, 1, 48)];
         sort_rows(&mut rows, SortKey::Size, false);
         let bytes: Vec<u64> = rows.iter().map(|r| r.bytes_per_entity).collect();
         assert_eq!(bytes, vec![96, 48, 16]);
@@ -345,19 +507,18 @@ mod tests {
 
     #[test]
     fn sort_by_components_orders_by_set_length() {
-        let mut rows = vec![row(2, 1, 8), row(5, 1, 8), row(1, 1, 8)];
+        let mut rows = vec![row(0, 2, 1, 8), row(1, 5, 1, 8), row(2, 1, 1, 8)];
         sort_rows(&mut rows, SortKey::Components, false);
         let lengths: Vec<usize> = rows.iter().map(|r| r.components.len()).collect();
         assert_eq!(lengths, vec![5, 2, 1]);
     }
 
     #[test]
-    fn short_name_takes_final_segment() {
-        assert_eq!(
-            short_name("bevy_transform::components::Transform"),
-            "Transform"
-        );
-        assert_eq!(short_name("Bare"), "Bare");
+    fn sort_preserves_each_rows_original_index() {
+        let mut rows = vec![row(0, 1, 10, 8), row(1, 1, 512, 8), row(2, 1, 64, 8)];
+        sort_rows(&mut rows, SortKey::Entities, false);
+        let indices: Vec<usize> = rows.iter().map(|r| r.index).collect();
+        assert_eq!(indices, vec![1, 2, 0]);
     }
 
     #[test]
@@ -371,6 +532,7 @@ mod tests {
         assert_eq!(reply.archetypes.len(), 1);
         assert_eq!(reply.archetypes[0].entity_count, 512);
         assert_eq!(reply.archetypes[0].bytes_per_entity, 96);
+        assert_eq!(reply.archetypes[0].index, 0);
         assert_eq!(
             reply.archetypes[0].components,
             vec!["skybound::Enemy".to_string()]

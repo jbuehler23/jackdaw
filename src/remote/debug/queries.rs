@@ -18,6 +18,7 @@ use jackdaw_feathers::picker::{
 use jackdaw_feathers::tokens;
 
 use super::super::{ConnectionManager, brp};
+use super::style;
 
 /// A `With`/`Without` component filter over the running world's entities.
 /// Component names are full reflect type paths (for example
@@ -162,11 +163,6 @@ fn extract_name_value(value: &Value) -> Option<String> {
     value.get("name").and_then(Value::as_str).map(String::from)
 }
 
-/// Short component name: the final `::` segment of a type path.
-fn short_name(type_path: &str) -> &str {
-    type_path.rsplit("::").next().unwrap_or(type_path)
-}
-
 /// Component type paths offered by the picker, gathered from the connected
 /// game's registry. Prefers types the registry flags as components; if the
 /// registry shape hides that flag, falls back to every registered type so the
@@ -275,8 +271,11 @@ pub fn queries_panel_content() -> impl Bundle {
             (
                 Node {
                     flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    align_items: AlignItems::Center,
                     width: Val::Percent(100.0),
                     column_gap: Val::Px(tokens::SPACING_MD),
+                    row_gap: Val::Px(tokens::SPACING_SM),
                     padding: UiRect::all(Val::Px(tokens::SPACING_MD)),
                     ..default()
                 },
@@ -314,21 +313,28 @@ pub fn queries_panel_content() -> impl Bundle {
     )
 }
 
-/// One filter side: a label, a chip container (filled reactively), and the
-/// "Add" button that opens the component picker.
+/// One filter side: a compact bordered group sized to its own content, not
+/// the panel width, holding a muted label, a chip container (filled
+/// reactively), and the "Add" button that opens the component picker.
 fn filter_group<M: Component>(title: &str, chips_marker: M, slot: FilterSlot) -> impl Bundle {
     (
         Node {
-            flex_direction: FlexDirection::Column,
-            flex_grow: 1.0,
-            row_gap: Val::Px(tokens::SPACING_SM),
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            flex_shrink: 0.0,
+            column_gap: Val::Px(tokens::SPACING_SM),
+            padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(tokens::SPACING_XS)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(tokens::CORNER_RADIUS),
             ..default()
         },
+        BackgroundColor(tokens::ELEVATED_BG),
+        BorderColor::all(tokens::BORDER_SUBTLE),
         children![
             (
                 Text::new(title),
                 TextFont {
-                    font_size: tokens::TEXT_SIZE_SM,
+                    font_size: tokens::TEXT_SIZE_XS,
                     ..default()
                 },
                 TextColor(tokens::TEXT_SECONDARY),
@@ -355,33 +361,13 @@ fn filter_group<M: Component>(title: &str, chips_marker: M, slot: FilterSlot) ->
 fn filter_chip(slot: FilterSlot, type_path: &str) -> impl Bundle {
     (
         button(
-            ButtonProps::new(format!("{}  x", short_name(type_path)))
+            ButtonProps::new(format!("{}  x", style::short_type_name(type_path)))
                 .with_variant(ButtonVariant::Default),
         ),
         FilterChip {
             slot,
             type_path: type_path.to_string(),
         },
-    )
-}
-
-/// A read-only chip for one component on a matched entity.
-fn result_chip(type_path: &str) -> impl Bundle {
-    (
-        Node {
-            padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(Val::Px(tokens::COMPONENT_CARD_RADIUS)),
-            ..default()
-        },
-        BackgroundColor(tokens::COMPONENT_CARD_BG),
-        children![(
-            Text::new(short_name(type_path)),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
     )
 }
 
@@ -470,7 +456,7 @@ pub(crate) fn rebuild_query_results(
         for row in &results.rows {
             let row_entity = commands.spawn((result_row(row), ChildOf(container))).id();
             for type_path in &row.components {
-                commands.spawn((result_chip(type_path), ChildOf(row_entity)));
+                commands.spawn((style::component_chip(type_path), ChildOf(row_entity)));
             }
         }
     }

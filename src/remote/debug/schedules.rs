@@ -4,14 +4,16 @@
 //! no-params method) into `SchedulesReply`. `systems` arrives already in run
 //! order and each carries the system sets it belongs to; `edges` (dependency
 //! ordering, for the later system graph) is ignored here. The panel rebuilds
-//! its sections reactively when the reply changes: one section per schedule,
-//! each listing its systems as boxes with their set names shown as chips.
+//! its sections reactively when the reply changes: one bordered card per
+//! schedule, each listing its systems as boxes wrapped in run order.
 
 use bevy::prelude::*;
 use serde::Deserialize;
 
 use jackdaw_feathers::list_view::list_view;
 use jackdaw_feathers::tokens;
+
+use super::style;
 
 /// One system in a schedule: its full reflect type path and the names of the
 /// system sets it belongs to.
@@ -37,14 +39,18 @@ pub struct SchedulesReply {
     pub schedules: Vec<ScheduleInfo>,
 }
 
-/// Short system name: the final `::` segment of a reflect type path. A bare
-/// name with no separator returns itself.
-pub fn short_system_name(name: &str) -> &str {
-    name.rsplit("::").next().unwrap_or(name)
+/// Short system name: the final `::` segment of a reflect type path, with any
+/// generic argument list stripped first. A bare name with no separator
+/// returns itself.
+pub fn short_system_name(name: &str) -> String {
+    style::short_type_name(name)
 }
 
 #[derive(Component)]
 struct SchedulesPanel;
+
+#[derive(Component)]
+pub(crate) struct SchedMeta;
 
 #[derive(Component)]
 pub(crate) struct SchedRows;
@@ -60,47 +66,56 @@ pub fn schedules_panel_content() -> impl Bundle {
             ..default()
         },
         BackgroundColor(tokens::PANEL_BG),
-        children![(
-            Node {
-                flex_direction: FlexDirection::Column,
-                width: Val::Percent(100.0),
-                flex_grow: 1.0,
-                min_height: Val::Px(0.0),
-                overflow: Overflow::scroll_y(),
-                padding: UiRect::all(Val::Px(tokens::SPACING_SM)),
-                ..default()
-            },
-            children![(SchedRows, list_view())],
-        )],
+        children![
+            (
+                SchedMeta,
+                Node {
+                    width: Val::Percent(100.0),
+                    ..default()
+                },
+            ),
+            (
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    width: Val::Percent(100.0),
+                    flex_grow: 1.0,
+                    min_height: Val::Px(0.0),
+                    overflow: Overflow::scroll_y(),
+                    padding: UiRect::all(Val::Px(tokens::SPACING_SM)),
+                    ..default()
+                },
+                children![(SchedRows, list_view())],
+            ),
+        ],
     )
 }
 
-/// One schedule section: a plain name label above its systems, each rendered in
-/// run order as a box.
-fn schedule_section(info: &ScheduleInfo) -> impl Bundle {
+/// One schedule card: a bordered panel with a muted name/hint header row
+/// above its systems, each rendered in run order as a wrapping row of boxes.
+fn schedule_card(info: &ScheduleInfo) -> impl Bundle {
     let boxes: Vec<_> = info.systems.iter().map(system_box).collect();
     (
         Node {
             flex_direction: FlexDirection::Column,
             width: Val::Percent(100.0),
             row_gap: Val::Px(tokens::SPACING_SM),
-            padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(tokens::SPACING_MD)),
+            padding: UiRect::all(Val::Px(tokens::SPACING_MD)),
+            margin: UiRect::bottom(Val::Px(tokens::SPACING_MD)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(tokens::CORNER_RADIUS),
             ..default()
         },
+        BackgroundColor(tokens::COMPONENT_CARD_BG),
+        BorderColor::all(tokens::BORDER_SUBTLE),
         children![
-            (
-                Text::new(format!("{} ({})", info.schedule, info.systems.len())),
-                TextFont {
-                    font_size: tokens::TEXT_SIZE,
-                    ..default()
-                },
-                TextColor(tokens::TEXT_PRIMARY),
-            ),
+            style::panel_meta(&info.schedule.to_uppercase(), "left to right = run order"),
             (
                 Node {
-                    flex_direction: FlexDirection::Column,
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
                     width: Val::Percent(100.0),
-                    row_gap: Val::Px(tokens::SPACING_XS),
+                    column_gap: Val::Px(tokens::SPACING_SM),
+                    row_gap: Val::Px(tokens::SPACING_SM),
                     ..default()
                 },
                 Children::spawn(SpawnIter(boxes.into_iter())),
@@ -111,40 +126,38 @@ fn schedule_section(info: &ScheduleInfo) -> impl Bundle {
 
 /// One system box: the short system name followed by its set names as chips.
 fn system_box(system: &SystemInfo) -> impl Bundle {
-    let chips: Vec<_> = system.sets.iter().map(|s| set_chip(s)).collect();
+    let chips: Vec<_> = system
+        .sets
+        .iter()
+        .map(|s| style::component_chip(s))
+        .collect();
     (
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
-            width: Val::Percent(100.0),
+            flex_shrink: 0.0,
             column_gap: Val::Px(tokens::SPACING_SM),
-            padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(Val::Px(tokens::COMPONENT_CARD_RADIUS)),
+            padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(tokens::SPACING_XS)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(tokens::CORNER_RADIUS),
             ..default()
         },
-        BackgroundColor(tokens::COMPONENT_CARD_BG),
+        BackgroundColor(tokens::INPUT_BG),
+        BorderColor::all(tokens::BORDER_SUBTLE),
         children![
             (
-                Node {
-                    flex_grow: 1.0,
-                    min_width: Val::Px(0.0),
+                Text::new(short_system_name(&system.name)),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE_SM,
                     ..default()
                 },
-                children![(
-                    Text::new(short_system_name(&system.name).to_string()),
-                    TextFont {
-                        font_size: tokens::TEXT_SIZE_SM,
-                        ..default()
-                    },
-                    TextColor(tokens::TEXT_PRIMARY),
-                )],
+                TextColor(tokens::TEXT_PRIMARY),
             ),
             (
                 Node {
                     flex_direction: FlexDirection::Row,
                     flex_wrap: FlexWrap::Wrap,
-                    flex_shrink: 0.0,
-                    column_gap: Val::Px(tokens::SPACING_SM),
+                    column_gap: Val::Px(tokens::SPACING_XS),
                     row_gap: Val::Px(tokens::SPACING_XS),
                     ..default()
                 },
@@ -154,32 +167,14 @@ fn system_box(system: &SystemInfo) -> impl Bundle {
     )
 }
 
-/// A read-only chip for one system set the box belongs to.
-fn set_chip(name: &str) -> impl Bundle {
-    (
-        Node {
-            padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(Val::Px(tokens::COMPONENT_CARD_RADIUS)),
-            ..default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        children![(
-            Text::new(short_system_name(name).to_string()),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
-    )
-}
-
-/// Rebuild the schedule sections when a new reply arrives or the panel opens.
+/// Rebuild the meta line and schedule cards when a new reply arrives or the
+/// panel opens.
 pub(crate) fn rebuild_schedules(
     reply: Option<Res<SchedulesReply>>,
     mut commands: Commands,
+    meta_containers: Query<Entity, With<SchedMeta>>,
     rows_containers: Query<Entity, With<SchedRows>>,
-    new_ui: Query<(), Added<SchedRows>>,
+    new_ui: Query<(), Or<(Added<SchedMeta>, Added<SchedRows>)>>,
 ) {
     let reply_changed = matches!(reply.as_ref(), Some(r) if r.is_changed());
     if !reply_changed && new_ui.is_empty() {
@@ -190,11 +185,21 @@ pub(crate) fn rebuild_schedules(
         .as_ref()
         .map(|r| r.schedules.clone())
         .unwrap_or_default();
+    let total_systems: usize = schedules.iter().map(|s| s.systems.len()).sum();
+    let meta_right = format!("{} schedules,  {} systems", schedules.len(), total_systems);
+
+    for container in &meta_containers {
+        commands.entity(container).despawn_children();
+        commands.spawn((
+            style::panel_meta("System run order per schedule", &meta_right),
+            ChildOf(container),
+        ));
+    }
 
     for container in &rows_containers {
         commands.entity(container).despawn_children();
         for info in &schedules {
-            commands.spawn((schedule_section(info), ChildOf(container)));
+            commands.spawn((schedule_card(info), ChildOf(container)));
         }
     }
 }

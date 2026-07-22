@@ -10,6 +10,7 @@ pub mod poll;
 pub mod queries;
 pub mod schedules;
 pub mod sparkline;
+pub mod style;
 
 use bevy::asset::embedded_asset;
 use bevy::prelude::*;
