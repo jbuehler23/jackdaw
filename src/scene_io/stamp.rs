@@ -56,7 +56,7 @@ pub fn read_stamp(text: &str) -> Option<SceneStamp> {
 /// that minor, so opening an old scene rewrites every rename between its
 /// version and the current one. Currently a no-op: 0.19 is the baseline,
 /// nothing has been renamed yet. When a later Bevy renames a reflected
-/// type, add its old -> new path to [`RENAMES`] under that minor.
+/// type, add its old -> new path to `RENAMES` under that minor.
 pub fn migrate_type_paths<'a>(text: &'a str, from_bevy: &str) -> Cow<'a, str> {
     let mut out = Cow::Borrowed(text);
     for (introduced_in, renames) in RENAMES {
