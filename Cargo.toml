@@ -289,7 +289,7 @@ time = { version = "0.3.47", default-features = false, features = [
 fluent = "0.16"
 webbrowser = "1"
 fluent_content = "0.0.5"
-bevy_fluent = { git = "https://github.com/mnmaita/bevy_fluent.git", branch = "mnmaita/bevy-0.19" }
+bevy_fluent = "0.15"
 unic-langid = { version = "0.9", features = ["macros"] }
 sys-locale = "0.2"
 
