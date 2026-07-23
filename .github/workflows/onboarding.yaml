@@ -3,12 +3,17 @@ name: Onboarding pipeline
 # These probes are the regression suite for the SDK build pipeline
 # (extern redirect plan, linkage identity, auto-registration across
 # dlopen, and the game runner over PIE IPC). They build the whole
-# editor with the dylib feature per platform, so they run only on
-# pull requests, not on every push.
+# editor with the dylib feature per platform, so they are kept off the
+# per-PR path: they run on pushes to main (which also warms the per-OS
+# cache), on release tags, nightly, and on demand.
 
 on:
-  pull_request:
+  push:
     branches: [main]
+    tags: ["v*"]
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
