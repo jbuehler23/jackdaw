@@ -1,7 +1,6 @@
 //! Locate the SDK dylib, its deps dirs, and the rustc wrapper.
 //!
-//! Both [`ext_build`](crate::ext_build) and
-//! [`project_build`](crate::project_build) need these paths; the
+//! Both `ext_build` and `project_build` need these paths; the
 //! computation lives here so call sites can't drift. Paths are
 //! computed, not verified; callers perform their own existence checks.
 //!
@@ -16,7 +15,7 @@
 //!    `<workspace>/target/<triple>/debug/` (built with an explicit
 //!    `--target`; host-side proc-macro dylibs stay in
 //!    `target/debug/deps/`), and the manifest is generated on demand
-//!    by [`project_build::plan`](crate::project_build).
+//!    by `project_build::plan`.
 
 use std::path::PathBuf;
 use std::process::Command;

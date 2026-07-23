@@ -419,7 +419,7 @@ fn named_probe_system() {}
 fn named_probe_after() {}
 
 #[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-struct ProbeSet;
+struct ProbeSystems;
 
 #[test]
 fn schedules_lists_systems_in_run_order() {
@@ -428,7 +428,7 @@ fn schedules_lists_systems_in_run_order() {
     app.add_systems(
         Update,
         (
-            named_probe_system.in_set(ProbeSet),
+            named_probe_system.in_set(ProbeSystems),
             named_probe_after.after(named_probe_system),
         ),
     );
@@ -476,7 +476,7 @@ fn schedules_lists_systems_in_run_order() {
         .map(|s| s.as_str().unwrap())
         .collect();
     assert!(
-        probe_sets.iter().any(|s| s.contains("ProbeSet")),
+        probe_sets.iter().any(|s| s.contains("ProbeSystems")),
         "got: {probe_sets:?}"
     );
 

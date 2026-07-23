@@ -38,7 +38,7 @@
 //! - `serialize_assets_to_bsn` is the evolved implementation in
 //!   [`crate::catalog`], re-exported here. It takes [`crate::CatalogAssetRef`]
 //!   values instead of the PR's `(String, TypeId, UntypedAssetId)` tuples.
-//! - [`serialize_world_scene`] and [`append_world_to_ast`] are extra
+//! - `serialize_world_scene` and [`append_world_to_ast`] are extra
 //!   lower-level entry points for callers that serialize an explicit entity
 //!   set (the editor's `.jsn` converter) rather than every named world entity.
 

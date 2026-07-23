@@ -5,13 +5,16 @@
 //! [`jackdaw_project_build`] pipeline, so it stays small.
 //!
 //! Commands:
-//!   build [--project <path>]   Build the project so a running editor
-//!                              picks up new or changed components.
-//!   run   [--project <path>]   Build, then launch the game standalone.
-//!   setup                      Build the SDK into the cache (one-time).
-//!   doctor                     Report SDK build prerequisites.
-//!   package-sdk                Stage a relocatable SDK.
-//!   bundle --out <dir>         Stage editor, tools, dylibs and SDK.
+//!
+//! ```text
+//! build [--project <path>]   Build the project so a running editor
+//!                            picks up new or changed components.
+//! run   [--project <path>]   Build, then launch the game standalone.
+//! setup                      Build the SDK into the cache (one-time).
+//! doctor                     Report SDK build prerequisites.
+//! package-sdk                Stage a relocatable SDK.
+//! bundle --out <dir>         Stage editor, tools, dylibs and SDK.
+//! ```
 
 #![expect(
     clippy::print_stdout,
