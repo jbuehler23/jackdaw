@@ -27,10 +27,13 @@ jobs:
     needs: [heavy]
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # Final releases only. A pre-release tag (v0.19.0-test.1, v0.19.0-rc.1 -
-    # anything with a `-`) is for exercising the binaries pipeline and must
-    # not push crates to crates.io. The `binaries` job still runs on those.
-    if: ${{ !contains(github.ref_name, '-') }}
+    # DEFERRED: crates.io publishing is off until the publishable set is
+    # scoped. The editor and rerecast-coupled crates must be marked
+    # `publish = false` first (they pull a git-only bevy_rerecast fork that
+    # crates.io rejects). The `binaries` bundle job is independent and still
+    # runs. Re-enable with `!contains(github.ref_name, '-')` once
+    # `cargo publish --dry-run --workspace` is clean.
+    if: ${{ false }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -81,10 +84,9 @@ jobs:
             triple: aarch64-apple-darwin
             rpath: "-C link-arg=-Wl,-rpath,@loader_path"
             archive: tar.zst
-          - os: macos-13
-            triple: x86_64-apple-darwin
-            rpath: "-C link-arg=-Wl,-rpath,@loader_path"
-            archive: tar.zst
+          # macOS Intel (x86_64-apple-darwin) is dropped: the macos-13
+          # runner hangs this bundle build for hours. Apple Silicon
+          # (aarch64) is covered above; re-add Intel if the hang is fixed.
           - os: windows-latest
             triple: x86_64-pc-windows-msvc
             # Windows loads DLLs from the executable's directory, so no
