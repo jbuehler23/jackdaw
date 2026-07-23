@@ -5,7 +5,7 @@
 //! dylib would leak on every refresh, so the editor keeps only the schema
 //! extracted out-of-process ([`crate::project_types::ProjectTypes`]) and
 //! stores authored values in the scene document. The inspector renders a
-//! project component by assembling a [`DynamicStruct`] from the schema field
+//! project component by assembling a `DynamicStruct` from the schema field
 //! defaults with any authored document overrides applied on top, then feeding
 //! it to the generic reflected-field renderer. Field edits round-trip back to
 //! the document through the same widgets, converted here without a concrete

@@ -52,7 +52,7 @@ fn record_virtual_delta(time: Res<Time<Virtual>>, mut saw: ResMut<SawVirtualDelt
 fn playback_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
-    app.add_plugins(jackdaw_remote::playback::PlaybackTestSupport);
+    app.add_plugins(jackdaw_remote::playback::PlaybackTestPlugin);
     app.init_resource::<SawVirtualDelta>();
     app.add_systems(Update, record_virtual_delta);
     app.update();

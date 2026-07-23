@@ -67,9 +67,9 @@ pub fn playback_step_system(mut state: ResMut<PlaybackStepState>, mut time: ResM
 
 /// Test-only plugin wiring the step state and system exactly like
 /// `JackdawRemotePlugin` does, without BRP or HTTP.
-pub struct PlaybackTestSupport;
+pub struct PlaybackTestPlugin;
 
-impl Plugin for PlaybackTestSupport {
+impl Plugin for PlaybackTestPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlaybackStepState>();
         app.add_systems(First, playback_step_system.before(bevy::time::TimeSystems));
