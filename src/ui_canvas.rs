@@ -110,6 +110,11 @@ struct CanvasModeLabel {
     host: Entity,
 }
 
+#[derive(Component)]
+struct CanvasEmptyState {
+    host: Entity,
+}
+
 #[derive(Component, Clone, Copy)]
 struct EditingProjection {
     host: Entity,
@@ -124,7 +129,10 @@ impl Plugin for UiCanvasPlugin {
             .add_observer(on_canvas_mode_click)
             .add_observer(on_projected_ui_click)
             .add_systems(Update, sync_canvas_panels)
-            .add_systems(Update, update_canvas_toolbar_labels);
+            .add_systems(
+                Update,
+                (update_canvas_toolbar_labels, update_canvas_empty_states),
+            );
     }
 }
 
@@ -191,21 +199,81 @@ pub fn build_ui_canvas_panel(world: &mut World, host: Entity) {
         "Mode: UI",
     );
 
+    let body = world
+        .spawn((
+            EditorEntity,
+            Node {
+                width: percent(100),
+                flex_grow: 1.0,
+                min_height: px(0),
+                flex_direction: FlexDirection::Row,
+                ..default()
+            },
+            ChildOf(column),
+        ))
+        .id();
+    let palette_host = world
+        .spawn((
+            EditorEntity,
+            Node {
+                width: px(220),
+                height: percent(100),
+                min_height: px(0),
+                flex_shrink: 0.0,
+                ..default()
+            },
+            ChildOf(body),
+        ))
+        .id();
+    crate::ui_widgets_panel::build_ui_widgets_panel(world, palette_host);
+    let canvas_area = world
+        .spawn((
+            EditorEntity,
+            Node {
+                flex_grow: 1.0,
+                min_width: px(0),
+                min_height: px(0),
+                ..default()
+            },
+            ChildOf(body),
+        ))
+        .id();
     let viewport = world
         .spawn((
             UiCanvasViewport,
             EditorEntity,
             Node {
                 width: percent(100),
-                flex_grow: 1.0,
+                height: percent(100),
                 min_height: px(0),
                 ..default()
             },
             BackgroundColor(Color::srgb(0.035, 0.038, 0.045)),
             ViewportNode::new(camera),
-            ChildOf(column),
+            Visibility::Hidden,
+            ChildOf(canvas_area),
         ))
         .id();
+    world.spawn((
+        CanvasEmptyState { host },
+        EditorEntity,
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            height: percent(100),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        Text::new("Choose Canvas, or add a widget to create one"),
+        TextFont {
+            font_size: FontSize::Px(14.0),
+            ..default()
+        },
+        TextColor(Color::srgb(0.62, 0.64, 0.69)),
+        Pickable::IGNORE,
+        ChildOf(canvas_area),
+    ));
 
     world.entity_mut(host).insert(UiCanvasPanelHost {
         camera,
@@ -540,5 +608,32 @@ fn update_canvas_toolbar_labels(
             continue;
         };
         **text = format!("Mode: {}", host.mode.label());
+    }
+}
+
+fn update_canvas_empty_states(
+    hosts: Query<&UiCanvasPanelHost>,
+    empty_states: Query<(Entity, &CanvasEmptyState)>,
+    mut visibility: Query<&mut Visibility>,
+) {
+    for (empty_entity, empty) in &empty_states {
+        let Ok(host) = hosts.get(empty.host) else {
+            continue;
+        };
+        let has_canvas = host.canvas.is_some();
+        if let Ok(mut viewport_visibility) = visibility.get_mut(host.viewport) {
+            *viewport_visibility = if has_canvas {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+        }
+        if let Ok(mut empty_visibility) = visibility.get_mut(empty_entity) {
+            *empty_visibility = if has_canvas {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            };
+        }
     }
 }

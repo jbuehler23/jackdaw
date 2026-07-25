@@ -179,27 +179,33 @@ fn on_palette_item_click(
     };
     let definition_id = item.definition_id.clone();
     commands.queue(move |world: &mut World| {
-        let parent = if definition_id == "layout.canvas" {
-            None
-        } else {
-            selected_ui_parent(world).or_else(|| first_canvas(world))
-        };
-        let parent = match parent {
-            Some(parent) => Some(parent),
-            None if definition_id != "layout.canvas" => UiAuthoring::instantiate(
-                world,
-                "layout.canvas",
-                WidgetInstantiateContext::default(),
-            )
-            .ok(),
-            None => None,
-        };
-        if let Err(error) =
-            UiAuthoring::instantiate(world, &definition_id, WidgetInstantiateContext { parent })
-        {
+        if let Err(error) = instantiate_widget(world, &definition_id) {
             warn!("could not create `{definition_id}` from UI palette: {error}");
         }
     });
+}
+
+/// Create a widget using the same parent/canvas fallback from every editor
+/// entry point (Canvas palette, menu bar, and Add Entity picker).
+pub fn instantiate_widget(
+    world: &mut World,
+    definition_id: &str,
+) -> Result<Entity, crate::ui_authoring::UiAuthoringError> {
+    let parent = if definition_id == "layout.canvas" {
+        None
+    } else {
+        selected_ui_parent(world).or_else(|| first_canvas(world))
+    };
+    let parent = match parent {
+        Some(parent) => Some(parent),
+        None if definition_id != "layout.canvas" => Some(UiAuthoring::instantiate(
+            world,
+            "layout.canvas",
+            WidgetInstantiateContext::default(),
+        )?),
+        None => None,
+    };
+    UiAuthoring::instantiate(world, definition_id, WidgetInstantiateContext { parent })
 }
 
 fn selected_ui_parent(world: &World) -> Option<Entity> {

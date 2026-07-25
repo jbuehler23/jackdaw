@@ -2327,6 +2327,15 @@ fn separator() -> (String, String) {
 /// free-standing `op:` events. Always plain `op:OP_ID` form ;
 /// parametrised dispatch goes through `ButtonOperatorCall.params`.
 fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
+    if let Some(widget_id) = event.action.strip_prefix("widget:") {
+        let widget_id = widget_id.to_string();
+        commands.queue(move |world: &mut World| {
+            if let Err(error) = crate::ui_widgets_panel::instantiate_widget(world, &widget_id) {
+                error!("widget creation failed for `{widget_id}`: {error}");
+            }
+        });
+        return;
+    }
     let Some(op_id) = event.action.strip_prefix(OP_PREFIX) else {
         return;
     };

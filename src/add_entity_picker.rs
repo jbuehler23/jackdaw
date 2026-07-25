@@ -242,6 +242,31 @@ pub struct AddMenuItem {
 pub fn collect_add_menu_items(world: &mut World) -> Vec<AddMenuItem> {
     let mut items: Vec<AddMenuItem> = builtin_groups();
 
+    let mut widgets = world
+        .resource::<WidgetRegistry>()
+        .iter()
+        .map(|definition| {
+            (
+                definition.category.to_string(),
+                definition.name.to_string(),
+                definition.id.to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    widgets.sort();
+    items.extend(
+        widgets
+            .into_iter()
+            .map(|(category, label, id)| AddMenuItem {
+                action: format!("widget:{id}"),
+                label,
+                category: Category {
+                    name: Some(format!("UI / {category}")),
+                    order: -8,
+                },
+            }),
+    );
+
     // Extension items grouped by owning extension so entries cluster by
     // author in the picker.
     let mut q = world.query::<(
