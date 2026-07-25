@@ -523,6 +523,9 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
         grid,
         axis_indicator,
     });
+    crate::viewport_ui::attach_viewport_ui(world, parent, camera);
+    let ui_toolbar = crate::viewport_ui::spawn_viewport_ui_toolbar(world, column, parent);
+    world.entity_mut(column).insert_children(3, &[ui_toolbar]);
 }
 
 /// Walk the descendants of `root` looking for the first entity that

@@ -8,7 +8,8 @@ use std::{borrow::Cow, collections::HashMap};
 use bevy::prelude::*;
 
 pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<WindowExtensionRegistry>();
+    app.init_resource::<WindowExtensionRegistry>()
+        .init_resource::<crate::widgets::WidgetRegistry>();
 }
 
 #[derive(Resource, Default)]

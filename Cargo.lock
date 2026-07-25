@@ -4801,6 +4801,7 @@ dependencies = [
  "jackdaw_select",
  "jackdaw_snap",
  "jackdaw_terrain",
+ "jackdaw_ui",
  "jackdaw_uv",
  "jackdaw_widgets",
  "libc",
@@ -5159,6 +5160,7 @@ dependencies = [
  "jackdaw_geometry",
  "jackdaw_pie_protocol",
  "jackdaw_scene_types",
+ "jackdaw_ui",
  "serde",
  "serde_json",
  "tempfile",
@@ -5216,6 +5218,14 @@ dependencies = [
  "bevy_math",
  "noise",
  "rand 0.9.4",
+]
+
+[[package]]
+name = "jackdaw_ui"
+version = "0.19.0"
+dependencies = [
+ "bevy",
+ "bevy_scene",
 ]
 
 [[package]]

@@ -14,6 +14,7 @@ use jackdaw_bsn::{
     BsnApplyAssets, BsnPatch, BsnSceneAssets, BsnValue, SceneBsnAst, apply_component_patch,
     bsn_value_to_reflect, load_bsn_assets, parse_bsn_text,
 };
+use jackdaw_ui::UiCanvas;
 
 pub use jackdaw_scene_types::{
     Brush, BrushFaceData, CustomProperties, EditorCategory, EditorDescription, EditorHidden,
@@ -32,7 +33,7 @@ pub use pie_windowless::{maybe_windowless, windowless_requested};
 pub mod prelude {
     pub use crate::{
         EditorCategory, EditorDescription, EditorHidden, JackdawCatalog, JackdawCatalogPath,
-        JackdawPlugin, JackdawSceneRoot, SkipSerialization,
+        JackdawPlugin, JackdawSceneMember, JackdawSceneRoot, SkipSerialization,
     };
 }
 
@@ -46,6 +47,7 @@ impl Plugin for JackdawPlugin {
         app.add_plugins(jackdaw_scene_types::SceneTypesPlugin {
             runtime_mesh_rebuild: true,
         });
+        app.add_plugins(jackdaw_ui::JackdawUiPlugin);
 
         app.init_asset::<JackdawScene>()
             .init_asset_loader::<JackdawSceneLoader>()
@@ -54,7 +56,12 @@ impl Plugin for JackdawPlugin {
         app.add_systems(Startup, load_project_catalog);
         app.add_systems(
             Update,
-            (clear_modified_scene_roots, spawn_loaded_scenes).chain(),
+            (
+                clear_modified_scene_roots,
+                spawn_loaded_scenes,
+                cleanup_orphaned_scene_members,
+            )
+                .chain(),
         );
 
         // Build avian colliders from authored `AvianCollider` components so
@@ -158,8 +165,22 @@ impl JackdawScene {
 /// rendering). Callers can spawn `JackdawSceneRoot(handle)` by
 /// itself; Bevy fills in the requires.
 #[derive(Component, Deref)]
-#[require(Transform, Visibility)]
+#[require(Transform, Visibility, SceneInstanceMembers)]
 pub struct JackdawSceneRoot(pub Handle<JackdawScene>);
+
+/// Associates a top-level spawned entity with its scene instance independently
+/// from the ECS hierarchy.
+///
+/// UI canvases must remain ECS roots for Bevy layout, so [`ChildOf`] cannot be
+/// used as their ownership relation.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JackdawSceneMember {
+    /// The [`JackdawSceneRoot`] that owns this entity.
+    pub root: Entity,
+}
+
+#[derive(Component, Default)]
+struct SceneInstanceMembers(Vec<Entity>);
 
 #[derive(Component)]
 struct SceneSpawned;
@@ -226,7 +247,7 @@ pub enum JackdawLoadError {
 /// hot reload of `assets/scene.bsn` in the standalone runner.
 fn clear_modified_scene_roots(
     mut events: bevy::ecs::message::MessageReader<bevy::asset::AssetEvent<JackdawScene>>,
-    roots: Query<(Entity, &JackdawSceneRoot, Option<&Children>), With<SceneSpawned>>,
+    roots: Query<(Entity, &JackdawSceneRoot, &SceneInstanceMembers), With<SceneSpawned>>,
     mut commands: Commands,
 ) {
     use bevy::asset::AssetEvent;
@@ -242,16 +263,29 @@ fn clear_modified_scene_roots(
         return;
     }
 
-    for (root_entity, root, kids) in &roots {
+    for (root_entity, root, members) in &roots {
         if !modified.contains(&root.0.id()) {
             continue;
         }
-        if let Some(kids) = kids {
-            for child in kids.iter() {
-                commands.entity(child).despawn();
-            }
+        for &member in &members.0 {
+            commands.entity(member).despawn();
         }
-        commands.entity(root_entity).remove::<SceneSpawned>();
+        commands
+            .entity(root_entity)
+            .remove::<SceneSpawned>()
+            .insert(SceneInstanceMembers::default());
+    }
+}
+
+fn cleanup_orphaned_scene_members(
+    members: Query<(Entity, &JackdawSceneMember)>,
+    roots: Query<(), With<JackdawSceneRoot>>,
+    mut commands: Commands,
+) {
+    for (entity, member) in &members {
+        if roots.get(member.root).is_err() {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -286,7 +320,10 @@ fn spawn_loaded_scenes(
             }
         };
 
-        spawn_scene_entities(world, root_entity, &ast, &parent_path);
+        let members = spawn_scene_entities(world, root_entity, &ast, &parent_path);
+        world
+            .entity_mut(root_entity)
+            .insert(SceneInstanceMembers(members));
 
         // Give the container root a readable name from the scene's file
         // stem so the editor's Live tree shows the scene name instead of an
@@ -323,7 +360,7 @@ fn spawn_scene_entities(
     root_entity: Entity,
     ast: &SceneBsnAst,
     parent_path: &Path,
-) {
+) -> Vec<Entity> {
     let registry = world.resource::<AppTypeRegistry>().clone();
 
     // Load the linear-space textures a `StandardMaterial` references with
@@ -347,6 +384,7 @@ fn spawn_scene_entities(
     world.insert_resource(BsnSceneAssets(scene_assets));
 
     let mut spawned: Vec<Entity> = Vec::new();
+    let mut members: Vec<Entity> = Vec::new();
     for root in ast.roots.clone() {
         let is_asset = {
             let reg = registry.read();
@@ -355,7 +393,18 @@ fn spawn_scene_entities(
         if is_asset {
             continue;
         }
-        spawn_node(world, ast, root, root_entity, &registry, &mut spawned);
+        if let Some(member) = spawn_node(
+            world,
+            ast,
+            root,
+            root_entity,
+            root_entity,
+            true,
+            &registry,
+            &mut spawned,
+        ) {
+            members.push(member);
+        }
     }
 
     #[cfg(feature = "render")]
@@ -384,6 +433,8 @@ fn spawn_scene_entities(
     }
     #[cfg(not(feature = "render"))]
     let _ = parent_path;
+
+    members
 }
 
 /// Spawn one document node and its subtree.
@@ -403,16 +454,16 @@ fn spawn_node(
     ast: &SceneBsnAst,
     node: Entity,
     parent_entity: Entity,
+    scene_root: Entity,
+    is_document_root: bool,
     registry: &AppTypeRegistry,
     spawned: &mut Vec<Entity>,
-) {
-    let Some(patches) = ast.get_patches(node).map(|p| p.0.clone()) else {
-        return;
-    };
+) -> Option<Entity> {
+    let patches = ast.get_patches(node).map(|p| p.0.clone())?;
     if patches.is_empty() {
         // A document with no content parses to a single empty root; skip it
         // rather than spawn a phantom entity.
-        return;
+        return None;
     }
 
     let mut name: Option<String> = None;
@@ -420,6 +471,7 @@ fn spawn_node(
     let mut transform = Transform::default();
     let mut visibility = Visibility::default();
     let mut deferred: Vec<BsnPatch> = Vec::new();
+    let mut is_ui_canvas = false;
 
     {
         let reg = registry.read();
@@ -446,6 +498,10 @@ fn spawn_node(
                                 visibility = v;
                             }
                         }
+                        Some(id) if id == TypeId::of::<UiCanvas>() => {
+                            is_ui_canvas = true;
+                            deferred.push(patch.clone());
+                        }
                         _ => deferred.push(patch.clone()),
                     }
                 }
@@ -454,16 +510,25 @@ fn spawn_node(
     }
 
     // GT / IV from the parent's already-final values + local overrides.
-    let parent_gt = world
-        .get::<GlobalTransform>(parent_entity)
-        .copied()
-        .unwrap_or(GlobalTransform::IDENTITY);
+    let unparented_canvas = is_document_root && is_ui_canvas;
+    let parent_gt = if unparented_canvas {
+        GlobalTransform::IDENTITY
+    } else {
+        world
+            .get::<GlobalTransform>(parent_entity)
+            .copied()
+            .unwrap_or(GlobalTransform::IDENTITY)
+    };
     let computed_gt = parent_gt.mul_transform(transform);
 
-    let parent_iv = world
-        .get::<InheritedVisibility>(parent_entity)
-        .copied()
-        .unwrap_or(InheritedVisibility::VISIBLE);
+    let parent_iv = if unparented_canvas {
+        InheritedVisibility::VISIBLE
+    } else {
+        world
+            .get::<InheritedVisibility>(parent_entity)
+            .copied()
+            .unwrap_or(InheritedVisibility::VISIBLE)
+    };
     let computed_iv = match visibility {
         Visibility::Hidden => InheritedVisibility::HIDDEN,
         Visibility::Visible => InheritedVisibility::VISIBLE,
@@ -472,14 +537,16 @@ fn spawn_node(
 
     // One archetype move for all structural state.
     let entity = world
-        .spawn((
-            transform,
-            visibility,
-            computed_gt,
-            computed_iv,
-            ChildOf(parent_entity),
-        ))
+        .spawn((transform, visibility, computed_gt, computed_iv))
         .id();
+    if !unparented_canvas {
+        world.entity_mut(entity).insert(ChildOf(parent_entity));
+    }
+    if is_document_root {
+        world
+            .entity_mut(entity)
+            .insert(JackdawSceneMember { root: scene_root });
+    }
     spawned.push(entity);
 
     if let Some(name) = name {
@@ -494,8 +561,12 @@ fn spawn_node(
     }
 
     for child in children {
-        spawn_node(world, ast, child, entity, registry, spawned);
+        spawn_node(
+            world, ast, child, entity, scene_root, false, registry, spawned,
+        );
     }
+
+    Some(entity)
 }
 
 /// The `BsnValue` form of a component patch (`Type`/`Struct`/`TupleStruct`),

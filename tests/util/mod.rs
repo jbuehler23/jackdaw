@@ -23,6 +23,10 @@ pub fn headless_app() -> App {
                 })),
                 ..default()
             })
+            // Headless integration tests never exercise sound. Disabling the
+            // backend avoids attempts to connect to host ALSA/JACK services,
+            // which can otherwise block an otherwise-complete test process.
+            .disable::<bevy::audio::AudioPlugin>()
             .disable::<WinitPlugin>(),
     )
     // Ambient plugins moved to the binary entry point (matches

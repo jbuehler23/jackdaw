@@ -28,7 +28,8 @@
 pub use jackdaw_api_internal::{
     DefaultArea, ExtensionContext, ExtensionPoint, HierarchyWindow, InspectorWindow,
     JackdawExtension, MenuEntryDescriptor, PanelContext, ToAnchorId as _, TopLevelMenu,
-    WindowDescriptor,
+    WidgetDefinition, WidgetInstantiateContext, WidgetPreviewState, WidgetProperty,
+    WidgetPropertyKind, WidgetRegistry, WidgetSlot, WindowDescriptor,
 };
 
 pub use jackdaw_api_internal::lifecycle::ExtensionKind;
@@ -209,7 +210,8 @@ pub mod prelude {
     pub use crate::{
         DefaultArea, ExtensionContext, ExtensionKind, ExtensionPoint, HierarchyWindow,
         InspectorWindow, JackdawExtension, MenuEntryDescriptor, PanelContext, TopLevelMenu,
-        WindowDescriptor, operator,
+        WidgetDefinition, WidgetInstantiateContext, WidgetPreviewState, WidgetProperty,
+        WidgetPropertyKind, WidgetRegistry, WidgetSlot, WindowDescriptor, operator,
     };
 
     /// Helper [`SystemParam`](bevy::ecs::system::SystemParam) for

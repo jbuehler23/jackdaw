@@ -39,7 +39,10 @@ pub use apply::{
     spawn_from_ast,
 };
 
-pub use sync::{create_entity_in_ast, delete_entity_from_ast, sync_hierarchy_to_ast, sync_to_ast};
+pub use sync::{
+    create_entity_in_ast, delete_entity_from_ast, sync_hierarchy_to_ast, sync_hierarchy_to_ast_at,
+    sync_to_ast,
+};
 
 pub use writer::{
     BsnWriterConfig, append_world_to_ast, serialize_to_bsn, serialize_to_bsn_with_config,

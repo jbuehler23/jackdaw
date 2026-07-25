@@ -28,6 +28,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_observer(cleanup_window_on_remove)
         .add_observer(cleanup_workspace_on_remove)
         .add_observer(cleanup_window_extension_on_remove)
+        .add_observer(cleanup_widget_on_remove)
         .add_observer(cleanup_resource_on_remove);
     app.world_mut().register_component::<ActiveModalOperator>();
 }
@@ -220,6 +221,13 @@ pub(crate) struct RegisteredWorkspace {
 pub(crate) struct RegisteredWindowExtension {
     pub(crate) window_id: Cow<'static, str>,
     pub(crate) section_index: usize,
+}
+
+/// Tracks a widget-definition registration owned by an extension.
+#[derive(Component, Clone, Debug)]
+pub(crate) struct RegisteredWidgetDefinition {
+    pub(crate) id: String,
+    pub(crate) registration: crate::widgets::WidgetRegistrationId,
 }
 
 /// An extension-contributed entry in the editor menu bar.
@@ -548,6 +556,16 @@ pub(crate) fn cleanup_window_extension_on_remove(
 ) {
     if let Ok(r) = registrations.get(trigger.event_target()) {
         registry.remove(&r.window_id, r.section_index);
+    }
+}
+
+pub(crate) fn cleanup_widget_on_remove(
+    trigger: On<Remove, RegisteredWidgetDefinition>,
+    registrations: Query<&RegisteredWidgetDefinition>,
+    mut registry: ResMut<crate::widgets::WidgetRegistry>,
+) {
+    if let Ok(registration) = registrations.get(trigger.event_target()) {
+        registry.unregister_scoped(&registration.id, registration.registration);
     }
 }
 

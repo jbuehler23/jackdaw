@@ -146,15 +146,108 @@ pub struct ReparentEntity {
 
 impl EditorCommand for ReparentEntity {
     fn execute(&mut self, world: &mut World) {
-        set_parent(world, self.entity, self.new_parent);
+        let slot = world
+            .get::<jackdaw_ui::UiSlot>(self.entity)
+            .map(|slot| slot.0.clone());
+        set_hierarchy_location(
+            world,
+            self.entity,
+            HierarchyLocation {
+                parent: self.new_parent,
+                index: usize::MAX,
+                slot,
+            },
+        );
     }
 
     fn undo(&mut self, world: &mut World) {
-        set_parent(world, self.entity, self.old_parent);
+        let slot = world
+            .get::<jackdaw_ui::UiSlot>(self.entity)
+            .map(|slot| slot.0.clone());
+        set_hierarchy_location(
+            world,
+            self.entity,
+            HierarchyLocation {
+                parent: self.old_parent,
+                index: usize::MAX,
+                slot,
+            },
+        );
     }
 
     fn description(&self) -> &str {
         "Reparent entity"
+    }
+}
+
+/// Exact authored position of an entity in Jackdaw's ordered hierarchy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HierarchyLocation {
+    pub parent: Option<Entity>,
+    pub index: usize,
+    /// Optional semantic widget slot. Containment and ordering still come
+    /// from the ECS hierarchy.
+    pub slot: Option<String>,
+}
+
+impl HierarchyLocation {
+    /// Read an entity's current parent, sibling index, and UI slot.
+    pub fn from_world(world: &World, entity: Entity) -> Self {
+        let parent = world.get::<ChildOf>(entity).map(ChildOf::parent);
+        let index = parent
+            .and_then(|parent| world.get::<Children>(parent))
+            .and_then(|children| children.iter().position(|child| child == entity))
+            .unwrap_or_else(|| {
+                let Some(ast) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
+                    return 0;
+                };
+                let Some(node) = ast.ast_for(entity) else {
+                    return 0;
+                };
+                ast.roots
+                    .iter()
+                    .position(|candidate| *candidate == node)
+                    .unwrap_or(0)
+            });
+        let slot = world
+            .get::<jackdaw_ui::UiSlot>(entity)
+            .map(|slot| slot.0.clone());
+        Self {
+            parent,
+            index,
+            slot,
+        }
+    }
+}
+
+/// Undoable reparent/reorder operation used by the outliner and UI canvas.
+pub struct MoveEntity {
+    pub entity: Entity,
+    pub old: HierarchyLocation,
+    pub new: HierarchyLocation,
+}
+
+impl MoveEntity {
+    pub fn new(world: &World, entity: Entity, new: HierarchyLocation) -> Self {
+        Self {
+            entity,
+            old: HierarchyLocation::from_world(world, entity),
+            new,
+        }
+    }
+}
+
+impl EditorCommand for MoveEntity {
+    fn execute(&mut self, world: &mut World) {
+        set_hierarchy_location(world, self.entity, self.new.clone());
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        set_hierarchy_location(world, self.entity, self.old.clone());
+    }
+
+    fn description(&self) -> &str {
+        "Move entity"
     }
 }
 
@@ -171,17 +264,59 @@ impl EditorCommand for ReparentEntity {
 /// (prefab save, scene serialization, tab swap) read the document and
 /// silently disagree with the visible hierarchy.
 pub(crate) fn set_parent(world: &mut World, entity: Entity, parent: Option<Entity>) {
+    let slot = world
+        .get::<jackdaw_ui::UiSlot>(entity)
+        .map(|slot| slot.0.clone());
+    set_hierarchy_location(
+        world,
+        entity,
+        HierarchyLocation {
+            parent,
+            index: usize::MAX,
+            slot,
+        },
+    );
+}
+
+/// Apply an exact ordered hierarchy location to both the live ECS and BSN
+/// document while preserving an entity's world-space transform.
+pub fn set_hierarchy_location(world: &mut World, entity: Entity, location: HierarchyLocation) {
     let current_world = world.get::<GlobalTransform>(entity).copied();
-    let new_parent_world = parent.and_then(|p| world.get::<GlobalTransform>(p).copied());
+    let new_parent_world = location
+        .parent
+        .and_then(|parent| world.get::<GlobalTransform>(parent).copied());
 
-    jackdaw_bsn::sync_hierarchy_to_ast(world, entity, parent);
+    jackdaw_bsn::sync_hierarchy_to_ast_at(world, entity, location.parent, location.index);
 
-    match parent {
-        Some(p) => {
-            world.entity_mut(entity).insert(ChildOf(p));
+    match location.parent {
+        Some(parent) => {
+            let index = world
+                .get::<Children>(parent)
+                .map(|children| location.index.min(children.len()))
+                .unwrap_or(0);
+            world.entity_mut(parent).insert_children(index, &[entity]);
         }
         None => {
             world.entity_mut(entity).remove::<ChildOf>();
+        }
+    }
+
+    match location.slot {
+        Some(slot) => {
+            let slot = jackdaw_ui::UiSlot(slot);
+            world.entity_mut(entity).insert(slot.clone());
+            sync_component_to_ast(world, entity, "jackdaw_ui::UiSlot", &slot);
+        }
+        None => {
+            world.entity_mut(entity).remove::<jackdaw_ui::UiSlot>();
+            let node = world
+                .get_resource::<jackdaw_bsn::SceneBsnAst>()
+                .and_then(|ast| ast.ast_for(entity));
+            if let Some(node) = node {
+                world
+                    .resource_mut::<jackdaw_bsn::SceneBsnAst>()
+                    .remove_component_patch(node, "jackdaw_ui::UiSlot");
+            }
         }
     }
 
@@ -190,7 +325,7 @@ pub(crate) fn set_parent(world: &mut World, entity: Entity, parent: Option<Entit
             Some(Transform::from_matrix(
                 (parent_world.affine().inverse() * world_tf.affine()).into(),
             ))
-        } else if parent.is_none() {
+        } else if location.parent.is_none() {
             current_world.map(|w| Transform::from_matrix(w.affine().into()))
         } else {
             None

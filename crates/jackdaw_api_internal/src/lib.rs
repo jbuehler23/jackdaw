@@ -57,6 +57,7 @@ pub mod pie;
 mod registries;
 pub mod runtime;
 pub mod snapshot;
+pub mod widgets;
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -101,6 +102,10 @@ pub use lifecycle::{ActiveModalOperator, Extension, ExtensionCatalog};
 pub use operator::{CallOperatorError, OperatorResult, OperatorWorldExt};
 pub use pie::PlayState;
 pub use snapshot::SceneSnapshotter;
+pub use widgets::{
+    WidgetDefinition, WidgetInstantiateContext, WidgetPreviewState, WidgetProperty,
+    WidgetPropertyKind, WidgetRegistry, WidgetSlot,
+};
 
 /// Re-exports plugin authors will want in one import.
 pub mod prelude {
@@ -120,6 +125,10 @@ pub mod prelude {
         pie::PlayState,
         runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems},
         snapshot::{ActiveSnapshotter, SceneSnapshot, SceneSnapshotter},
+        widgets::{
+            WidgetDefinition, WidgetInstantiateContext, WidgetPreviewState, WidgetProperty,
+            WidgetPropertyKind, WidgetRegistry, WidgetSlot,
+        },
     };
     // BEI types extension authors need for `actions!` / `bindings!` / observers.
     pub use bevy_enhanced_input::prelude::*;
@@ -260,6 +269,23 @@ impl<'a> ExtensionContext<'a> {
             .register(dock_descriptor);
         self.world
             .spawn((RegisteredWindow { id: descriptor.id }, ChildOf(ext)));
+        self
+    }
+
+    /// Register a selectable UI widget for the editor palette.
+    ///
+    /// The registration is owned by this extension entity and is removed
+    /// automatically when the extension unloads.
+    pub fn register_widget(&mut self, definition: WidgetDefinition) -> &mut Self {
+        let id = definition.id.to_string();
+        let registration = self
+            .world
+            .resource_mut::<WidgetRegistry>()
+            .register_scoped(definition);
+        self.world.spawn((
+            lifecycle::RegisteredWidgetDefinition { id, registration },
+            ChildOf(self.extension_entity),
+        ));
         self
     }
 

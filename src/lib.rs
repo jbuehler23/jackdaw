@@ -106,12 +106,17 @@ pub mod terrain;
 pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod transform_ops;
+pub mod ui_authoring;
+pub mod ui_canvas;
+pub mod ui_projection;
+pub mod ui_widgets_panel;
 pub mod undo_snapshot;
 pub mod view_modes;
 pub mod view_ops;
 pub mod viewport;
 pub mod viewport_overlays;
 pub mod viewport_select;
+pub mod viewport_ui;
 pub mod viewport_util;
 pub mod windowing;
 pub mod workspace_dropdown;
@@ -289,6 +294,11 @@ impl Plugin for EditorCorePlugin {
         app.init_state::<AppState>()
             .add_plugins((FeathersPlugins, EditorFeathersPlugin));
         app.add_plugins((
+            jackdaw_ui::JackdawUiPlugin,
+            ui_projection::UiProjectionPlugin,
+            ui_canvas::UiCanvasPlugin,
+            ui_widgets_panel::UiWidgetsPanelPlugin,
+            viewport_ui::ViewportUiPlugin,
             jackdaw_scene_types::SceneTypesPlugin {
                 runtime_mesh_rebuild: false,
             },
@@ -522,6 +532,7 @@ impl Plugin for ExtensionPlugin {
             app.add_plugins(core_extension::plugin)
                 .register_extension::<builtin_extensions::CoreWindowsExtension>()
                 .register_extension::<builtin_extensions::ViewportExtension>()
+                .register_extension::<builtin_extensions::UiEditorExtension>()
                 .register_extension::<builtin_extensions::AssetBrowserExtension>()
                 .register_extension::<builtin_extensions::GamePanelExtension>()
                 .register_extension::<builtin_extensions::TimelineExtension>()

@@ -224,6 +224,69 @@ impl JackdawExtension for ViewportExtension {
     }
 }
 
+/// Generic ECS-native UI authoring windows.
+#[derive(Default)]
+pub struct UiEditorExtension;
+
+impl JackdawExtension for UiEditorExtension {
+    fn id(&self) -> String {
+        "jackdaw.ui_editor".to_string()
+    }
+
+    fn label(&self) -> String {
+        "UI Editor".to_string()
+    }
+
+    fn kind(&self) -> ExtensionKind {
+        ExtensionKind::Builtin
+    }
+
+    fn register(&self, ctx: &mut ExtensionContext) {
+        ctx.register_entity_icon("jackdaw_ui::UiCanvas", Icon::LayoutTemplate);
+        ctx.register_entity_icon("jackdaw_ui::UiButton", Icon::MousePointer);
+        ctx.register_entity_icon("jackdaw_ui::UiCheckbox", Icon::Check);
+        ctx.register_entity_icon("jackdaw_ui::UiToggle", Icon::ToggleLeft);
+        ctx.register_entity_icon("jackdaw_ui::UiSlider", Icon::SlidersHorizontal);
+        ctx.register_entity_icon("jackdaw_ui::UiTextInput", Icon::TextCursorInput);
+        for definition in [
+            crate::ui_authoring::canvas_definition(),
+            crate::ui_authoring::panel_definition(),
+            crate::ui_authoring::row_definition(),
+            crate::ui_authoring::column_definition(),
+            crate::ui_authoring::label_definition(),
+            crate::ui_authoring::button_definition(),
+            crate::ui_authoring::checkbox_definition(),
+            crate::ui_authoring::toggle_definition(),
+            crate::ui_authoring::slider_definition(),
+            crate::ui_authoring::text_input_definition(),
+        ] {
+            ctx.register_widget(definition);
+        }
+        ctx.register_window(
+            WindowDescriptor::new(crate::ui_canvas::UI_CANVAS_WINDOW_ID)
+                .with_name("UI Canvas")
+                .with_icon(Icon::LayoutTemplate.unicode())
+                .with_default_area(DefaultArea::Center)
+                .with_priority(1)
+                .with_build(|window| {
+                    let parent = window.target_entity();
+                    crate::ui_canvas::build_ui_canvas_panel(window.world_mut(), parent);
+                }),
+        );
+        ctx.register_window(
+            WindowDescriptor::new(crate::ui_widgets_panel::UI_WIDGETS_WINDOW_ID)
+                .with_name("UI Widgets")
+                .with_icon(Icon::PanelsTopLeft.unicode())
+                .with_default_area(DefaultArea::Left)
+                .with_priority(2)
+                .with_build(|window| {
+                    let parent = window.target_entity();
+                    crate::ui_widgets_panel::build_ui_widgets_panel(window.world_mut(), parent);
+                }),
+        );
+    }
+}
+
 /// Assets window in the bottom dock.
 #[derive(Default)]
 pub struct AssetBrowserExtension;

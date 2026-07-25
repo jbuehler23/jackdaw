@@ -103,6 +103,20 @@ impl SceneBsnAst {
         old_parent: Option<Entity>,
         new_parent: Option<Entity>,
     ) {
+        self.move_to_parent_at(node, old_parent, new_parent, usize::MAX);
+    }
+
+    /// Move an AST node to an exact position in a parent's ordered child list.
+    ///
+    /// `index` is clamped to the destination length. [`usize::MAX`] therefore
+    /// means "append" and preserves the behavior of [`Self::move_to_parent`].
+    pub fn move_to_parent_at(
+        &mut self,
+        node: Entity,
+        old_parent: Option<Entity>,
+        new_parent: Option<Entity>,
+        index: usize,
+    ) {
         if let Some(old_parent_ast) = old_parent {
             self.remove_child_from_ast(old_parent_ast, node);
         } else {
@@ -110,9 +124,10 @@ impl SceneBsnAst {
         }
 
         if let Some(new_parent_ast) = new_parent {
-            self.add_child_to_ast(new_parent_ast, node);
+            self.insert_child_in_ast(new_parent_ast, node, index);
         } else {
-            self.add_to_roots(node);
+            let index = index.min(self.roots.len());
+            self.roots.insert(index, node);
         }
     }
 
@@ -196,6 +211,11 @@ impl SceneBsnAst {
 
     /// Add a child to a parent's Children patch (creating one if needed).
     pub fn add_child_to_ast(&mut self, parent_ast: Entity, child_ast: Entity) {
+        self.insert_child_in_ast(parent_ast, child_ast, usize::MAX);
+    }
+
+    /// Insert a child into a parent's ordered Children patch.
+    pub fn insert_child_in_ast(&mut self, parent_ast: Entity, child_ast: Entity, index: usize) {
         let Some(patches) = self.get_patches(parent_ast) else {
             return;
         };
@@ -205,7 +225,8 @@ impl SceneBsnAst {
             if let Some(patch) = self.world.get_mut::<BsnPatch>(patch_entity)
                 && let BsnPatch::Children(children) = patch.into_inner()
             {
-                children.push(child_ast);
+                let index = index.min(children.len());
+                children.insert(index, child_ast);
                 return;
             }
         }

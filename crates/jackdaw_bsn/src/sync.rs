@@ -99,6 +99,16 @@ pub fn delete_entity_from_ast(world: &mut World, entity: Entity) {
 /// After reparenting an ECS entity, move its AST node to the new parent's
 /// Children block.
 pub fn sync_hierarchy_to_ast(world: &mut World, entity: Entity, new_parent: Option<Entity>) {
+    sync_hierarchy_to_ast_at(world, entity, new_parent, usize::MAX);
+}
+
+/// Move an ECS entity's AST node to an exact ordered sibling position.
+pub fn sync_hierarchy_to_ast_at(
+    world: &mut World,
+    entity: Entity,
+    new_parent: Option<Entity>,
+    index: usize,
+) {
     let Some(ast_ref) = world.get::<AstNodeRef>(entity) else {
         return;
     };
@@ -108,7 +118,7 @@ pub fn sync_hierarchy_to_ast(world: &mut World, entity: Entity, new_parent: Opti
 
     let mut ast = world.resource_mut::<SceneBsnAst>();
     let old_parent_ast = ast.ast_parent_of(node_ast);
-    ast.move_to_parent(node_ast, old_parent_ast, parent_ast);
+    ast.move_to_parent_at(node_ast, old_parent_ast, parent_ast, index);
 }
 
 #[cfg(test)]

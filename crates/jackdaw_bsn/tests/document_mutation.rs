@@ -159,6 +159,31 @@ fn move_to_parent_from_a_child_slot_to_roots() {
     );
 }
 
+#[test]
+fn move_to_parent_at_reorders_siblings_exactly() {
+    let mut ast = reparent_fixture();
+    let root = root_named(&ast, "Root");
+    let a = child_named(&ast, root, "A");
+    let b = child_named(&ast, root, "B");
+
+    ast.move_to_parent_at(b, Some(root), Some(root), 0);
+
+    assert_eq!(ast.get_children_ast(root), vec![b, a]);
+}
+
+#[test]
+fn move_to_parent_at_inserts_at_requested_root_position() {
+    let mut ast = reparent_fixture();
+    let root = root_named(&ast, "Root");
+    let a = child_named(&ast, root, "A");
+
+    ast.move_to_parent_at(a, Some(root), None, 0);
+
+    assert_eq!(ast.roots[0], a);
+    assert_eq!(ast.roots[1], root);
+    assert_eq!(ast.ast_parent_of(a), None);
+}
+
 // ---------------------------------------------------------------------------
 // deep_clone
 // ---------------------------------------------------------------------------
