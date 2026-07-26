@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use bevy::{
     camera::RenderTarget,
+    camera::visibility::VisibilitySystems,
     ecs::{
         component::Component,
         hierarchy::ChildOf,
@@ -17,7 +18,7 @@ use bevy::{
     picking::events::{Click, Pointer},
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
-    ui::{UiRect, widget::ViewportNode},
+    ui::{UiRect, UiSystems, widget::ViewportNode},
     ui_widgets::Button,
 };
 use jackdaw_scene_types::SceneNodeId;
@@ -63,7 +64,7 @@ impl UiCanvasMode {
     fn label(self) -> &'static str {
         match self {
             Self::Scene => "Scene",
-            Self::Ui => "UI",
+            Self::Ui => "Select",
             Self::Interact => "Interact",
         }
     }
@@ -129,6 +130,12 @@ impl Plugin for UiCanvasPlugin {
             .add_observer(on_canvas_mode_click)
             .add_observer(on_projected_ui_click)
             .add_systems(Update, sync_canvas_panels)
+            .add_systems(
+                PostUpdate,
+                hide_authored_ui_sources
+                    .after(VisibilitySystems::VisibilityPropagate)
+                    .before(UiSystems::Stack),
+            )
             .add_systems(
                 Update,
                 (update_canvas_toolbar_labels, update_canvas_empty_states),
@@ -196,7 +203,7 @@ pub fn build_ui_canvas_panel(world: &mut World, host: Entity) {
         toolbar,
         CanvasModeButton { host },
         CanvasModeLabel { host },
-        "Mode: UI",
+        "Mode: Select",
     );
 
     let body = world
@@ -584,6 +591,28 @@ fn authored_canvas_ancestor(world: &World, entity: Entity) -> Option<Entity> {
         current = world.get::<ChildOf>(candidate).map(ChildOf::parent);
     }
     None
+}
+
+/// Keep the ECS-authored UI tree as scene data while rendering only its
+/// per-view projections in the editor.
+///
+/// Mutating the authored [`Visibility`] would leak editor state into BSN and
+/// would also be cloned into projections. [`InheritedVisibility`] is computed
+/// state, so overriding it after hierarchy propagation suppresses the source
+/// tree without changing the scene document.
+fn hide_authored_ui_sources(world: &mut World) {
+    let canvases = authored_canvases(world);
+    let mut stack = canvases;
+    while let Some(entity) = stack.pop() {
+        let children = world
+            .get::<Children>(entity)
+            .map(|children| children.iter().collect::<Vec<_>>())
+            .unwrap_or_default();
+        if let Some(mut visibility) = world.get_mut::<InheritedVisibility>(entity) {
+            *visibility = InheritedVisibility::HIDDEN;
+        }
+        stack.extend(children);
+    }
 }
 
 fn update_canvas_toolbar_labels(

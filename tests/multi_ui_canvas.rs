@@ -1,6 +1,18 @@
-use bevy::prelude::*;
+use std::time::Duration;
+
+use bevy::{
+    camera::NormalizedRenderTarget,
+    picking::{
+        backend::HitData,
+        events::{Click, Pointer},
+        pointer::{Location, PointerButton, PointerId},
+    },
+    prelude::*,
+    window::WindowRef,
+};
 use jackdaw::{
     add_entity_picker::collect_add_menu_items,
+    selection::Selection,
     ui_canvas::{UI_CANVAS_WINDOW_ID, UiCanvasPanelHost},
     ui_projection::{ProjectedFrom, UiProjection},
 };
@@ -133,22 +145,74 @@ fn fresh_ui_canvas_exposes_widget_creation_from_every_add_surface() {
     });
     app.update();
 
+    let canvas = app
+        .world_mut()
+        .query_filtered::<Entity, (With<UiCanvas>, Without<ProjectedFrom>)>()
+        .single(app.world())
+        .expect("one authored canvas");
+    let button = app
+        .world_mut()
+        .query_filtered::<Entity, (With<UiButton>, Without<ProjectedFrom>)>()
+        .single(app.world())
+        .expect("one authored button");
+    let panel = *app
+        .world()
+        .get::<UiCanvasPanelHost>(host)
+        .expect("Canvas panel host");
+    let button_node = *app
+        .world()
+        .get::<SceneNodeId>(button)
+        .expect("authored button node id");
+    let projected_button =
+        UiProjection::projected_entity(app.world(), panel.projection.unwrap(), button_node)
+            .expect("projected button");
+    assert_ne!(
+        app.world().get::<Visibility>(projected_button),
+        Some(&Visibility::Hidden),
+        "the Canvas projection must remain visible"
+    );
+
+    let pointer_window = app.world_mut().spawn_empty().id();
+    app.world_mut().trigger(Pointer::new(
+        PointerId::Mouse,
+        Location {
+            target: NormalizedRenderTarget::Window(
+                WindowRef::Entity(pointer_window).normalize(None).unwrap(),
+            ),
+            position: Vec2::ZERO,
+        },
+        Click {
+            button: PointerButton::Primary,
+            hit: HitData {
+                camera: panel.camera,
+                depth: 0.0,
+                position: None,
+                normal: None,
+                extra: None,
+            },
+            duration: Duration::ZERO,
+            count: 1,
+        },
+        projected_button,
+    ));
+    app.update();
     assert_eq!(
-        app.world_mut()
-            .query_filtered::<&UiCanvas, Without<ProjectedFrom>>()
-            .iter(app.world())
-            .count(),
-        1,
-        "adding a widget with no canvas should create its canvas root"
+        app.world().resource::<Selection>().primary(),
+        Some(button),
+        "clicking projected UI in Mode: Select must select the authored widget"
     );
     assert_eq!(
-        app.world_mut()
-            .query_filtered::<&UiButton, Without<ProjectedFrom>>()
-            .iter(app.world())
-            .count(),
-        1,
-        "the shared Add action should create the requested widget"
+        app.world().get::<Visibility>(canvas),
+        Some(&Visibility::Inherited),
+        "editor suppression must not change the authored scene visibility"
     );
+    for authored in [canvas, button] {
+        assert_eq!(
+            app.world().get::<InheritedVisibility>(authored),
+            Some(&InheritedVisibility::HIDDEN),
+            "authored UI source {authored} must not leak into the editor's default UI camera"
+        );
+    }
 }
 
 fn is_descendant_of(world: &World, entity: Entity, ancestor: Entity) -> bool {
