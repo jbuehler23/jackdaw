@@ -368,7 +368,9 @@ fn refresh_changed_checkboxes(
                 let scene =
                     <FeathersCheckbox as SceneComponent>::scene(FeathersCheckboxProps::default());
                 {
-                    let mut entity_mut = world.entity_mut(entity);
+                    let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+                        return;
+                    };
                     let _ = entity_mut.apply_scene(scene);
                     entity_mut.insert(node);
                 }
@@ -398,7 +400,9 @@ fn refresh_changed_toggles(
                 let before = direct_children(world, entity);
                 let scene = <FeathersToggleSwitch as SceneComponent>::scene(());
                 {
-                    let mut entity_mut = world.entity_mut(entity);
+                    let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+                        return;
+                    };
                     let _ = entity_mut.apply_scene(scene);
                     entity_mut.insert(node);
                 }
@@ -427,7 +431,9 @@ fn refresh_changed_sliders(
                 let before = direct_children(world, entity);
                 let scene = <FeathersSlider as SceneComponent>::scene(props);
                 {
-                    let mut entity_mut = world.entity_mut(entity);
+                    let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+                        return;
+                    };
                     let _ = entity_mut.apply_scene(scene);
                     entity_mut.insert(node);
                 }
@@ -435,7 +441,7 @@ fn refresh_changed_sliders(
             });
         }
         let mut root = commands.entity(entity);
-        root.insert((
+        root.try_insert((
             Slider::default(),
             SliderValue(value),
             SliderRange::new(authored.min, authored.max),
@@ -462,7 +468,9 @@ fn refresh_changed_text_inputs(
                 let before = direct_children(world, entity);
                 let scene = <FeathersTextInput as SceneComponent>::scene(props);
                 {
-                    let mut entity_mut = world.entity_mut(entity);
+                    let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+                        return;
+                    };
                     let _ = entity_mut.apply_scene(scene);
                     entity_mut.insert(node);
                 }
@@ -472,7 +480,7 @@ fn refresh_changed_text_inputs(
         let mut editable = EditableText::new(&authored.value);
         editable.max_characters = authored.max_characters;
         let mut root = commands.entity(entity);
-        root.insert((
+        root.try_insert((
             editable,
             TextLayout::no_wrap(),
             TextFont::default(),
@@ -489,18 +497,18 @@ fn set_checked_disabled(
     disabled: bool,
 ) {
     if checked {
-        entity.insert(Checked);
+        entity.try_insert(Checked);
     } else {
-        entity.remove::<Checked>();
+        entity.try_remove::<Checked>();
     }
     set_disabled(entity, disabled);
 }
 
 fn set_disabled(entity: &mut bevy::ecs::system::EntityCommands<'_>, disabled: bool) {
     if disabled {
-        entity.insert(InteractionDisabled);
+        entity.try_insert(InteractionDisabled);
     } else {
-        entity.remove::<InteractionDisabled>();
+        entity.try_remove::<InteractionDisabled>();
     }
 }
 
@@ -515,17 +523,25 @@ fn upsert_generated_text(
         .iter()
         .find(|(_, parent, candidate)| parent.parent() == owner && **candidate == part)
     {
-        commands.entity(entity).insert(Text::new(text.to_string()));
+        commands
+            .entity(entity)
+            .try_insert(Text::new(text.to_string()));
     } else {
-        commands.spawn((
-            Name::new("__jackdaw_ui_generated_text"),
-            part,
-            Text::new(text.to_string()),
-            TextFont::default(),
-            TextColor(Color::WHITE),
-            Pickable::IGNORE,
-            ChildOf(owner),
-        ));
+        let text = text.to_string();
+        commands.queue(move |world: &mut bevy::prelude::World| {
+            if world.get_entity(owner).is_err() {
+                return;
+            }
+            world.spawn((
+                Name::new("__jackdaw_ui_generated_text"),
+                part,
+                Text::new(text),
+                TextFont::default(),
+                TextColor(Color::WHITE),
+                Pickable::IGNORE,
+                ChildOf(owner),
+            ));
+        });
     }
 }
 
@@ -542,9 +558,9 @@ fn update_authored_toggle_value(
         toggle.checked = event.value;
     }
     if event.value {
-        commands.entity(event.source).insert(Checked);
+        commands.entity(event.source).try_insert(Checked);
     } else {
-        commands.entity(event.source).remove::<Checked>();
+        commands.entity(event.source).try_remove::<Checked>();
     }
 }
 
@@ -557,7 +573,7 @@ fn update_authored_slider_value(
         slider.value = event.value;
         commands
             .entity(event.source)
-            .insert(SliderValue(event.value));
+            .try_insert(SliderValue(event.value));
     }
 }
 
@@ -596,7 +612,9 @@ fn materialize_button(
             let before = direct_children(world, entity);
             let scene = <FeathersButton as SceneComponent>::scene(props);
             {
-                let mut entity_mut = world.entity_mut(entity);
+                let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+                    return;
+                };
                 let _ = entity_mut.apply_scene(scene);
                 entity_mut.insert(node);
             }
@@ -604,7 +622,7 @@ fn materialize_button(
         });
     }
     let mut root = commands.entity(entity);
-    root.insert((
+    root.try_insert((
         Button,
         authored.variant.clone(),
         Hovered::default(),
@@ -612,9 +630,9 @@ fn materialize_button(
     ));
 
     if authored.disabled {
-        root.insert(InteractionDisabled);
+        root.try_insert(InteractionDisabled);
     } else {
-        root.remove::<InteractionDisabled>();
+        root.try_remove::<InteractionDisabled>();
     }
 
     let label = generated
@@ -627,17 +645,23 @@ fn materialize_button(
     if let Some(label) = label {
         commands
             .entity(label)
-            .insert((Text::new(authored.label.clone()), TextColor(Color::WHITE)));
+            .try_insert((Text::new(authored.label.clone()), TextColor(Color::WHITE)));
     } else {
-        commands.spawn((
-            Name::new("__jackdaw_ui_generated_button_label"),
-            UiGeneratedPart::ButtonLabel,
-            Text::new(authored.label.clone()),
-            TextFont::default(),
-            TextColor(Color::WHITE),
-            bevy::picking::Pickable::IGNORE,
-            ChildOf(entity),
-        ));
+        let label = authored.label.clone();
+        commands.queue(move |world: &mut bevy::prelude::World| {
+            if world.get_entity(entity).is_err() {
+                return;
+            }
+            world.spawn((
+                Name::new("__jackdaw_ui_generated_button_label"),
+                UiGeneratedPart::ButtonLabel,
+                Text::new(label),
+                TextFont::default(),
+                TextColor(Color::WHITE),
+                bevy::picking::Pickable::IGNORE,
+                ChildOf(entity),
+            ));
+        });
     }
 }
 
@@ -730,7 +754,9 @@ fn apply_button_styles(
         let background = style_override
             .and_then(|overrides| overrides.background)
             .unwrap_or(themed_background);
-        commands.entity(entity).insert(BackgroundColor(background));
+        commands
+            .entity(entity)
+            .try_insert(BackgroundColor(background));
 
         let themed_text_color = if disabled {
             palette.disabled_text
@@ -742,7 +768,7 @@ fn apply_button_styles(
             .unwrap_or(themed_text_color);
         for (label, parent, part) in &generated {
             if parent.parent() == entity && *part == UiGeneratedPart::ButtonLabel {
-                commands.entity(label).insert(TextColor(text_color));
+                commands.entity(label).try_insert(TextColor(text_color));
             }
         }
     }
@@ -790,7 +816,9 @@ fn apply_control_styles(
         let background = style_override
             .and_then(|overrides| overrides.background)
             .unwrap_or(themed_background);
-        commands.entity(entity).insert(BackgroundColor(background));
+        commands
+            .entity(entity)
+            .try_insert(BackgroundColor(background));
 
         let themed_text = if disabled {
             palette.disabled_text
@@ -801,12 +829,12 @@ fn apply_control_styles(
             .and_then(|overrides| overrides.text)
             .unwrap_or(themed_text);
         if is_input {
-            commands.entity(entity).insert(TextColor(text));
+            commands.entity(entity).try_insert(TextColor(text));
         }
         for (label, parent, _) in &generated {
             if text_nodes.contains(label) && generated_owner(parent.parent(), &generated) == entity
             {
-                commands.entity(label).insert(TextColor(text));
+                commands.entity(label).try_insert(TextColor(text));
             }
         }
     }
@@ -845,5 +873,33 @@ fn default_button_color(variant: &ButtonVariant) -> Color {
         ButtonVariant::Normal => Color::srgb(0.20, 0.22, 0.26),
         ButtonVariant::Primary => Color::srgb(0.18, 0.42, 0.78),
         ButtonVariant::Plain => Color::NONE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::{
+        ecs::{hierarchy::ChildOf, system::SystemState},
+        prelude::*,
+    };
+
+    use super::*;
+
+    #[test]
+    fn queued_button_materialization_ignores_an_entity_despawned_before_apply() {
+        let mut world = World::new();
+        let button = world.spawn((UiButton::default(), Node::default())).id();
+        let authored = world.get::<UiButton>(button).unwrap().clone();
+        let node = world.get::<Node>(button).unwrap().clone();
+        let mut state =
+            SystemState::<(Query<(Entity, &ChildOf, &UiGeneratedPart)>, Commands)>::new(&mut world);
+
+        {
+            let (generated, mut commands) = state.get_mut(&mut world).unwrap();
+            materialize_button(button, &authored, &node, false, &generated, &mut commands);
+        }
+        world.entity_mut(button).despawn();
+
+        state.apply(&mut world);
     }
 }
