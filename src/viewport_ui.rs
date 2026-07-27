@@ -282,6 +282,7 @@ fn sync_viewport_ui(world: &mut World) {
         .filter_map(|entity| authored_canvas_ancestor(world, entity))
         .collect::<HashSet<_>>();
 
+    let gesture_active = crate::ui_stage::manipulating(world);
     let canvases = authored_canvases(world);
     let mut query = world.query::<(Entity, &ViewportUiHost)>();
     let hosts = query
@@ -311,7 +312,8 @@ fn sync_viewport_ui(world: &mut World) {
                 .iter_mut()
                 .find(|projection| projection.canvas == *canvas)
             {
-                if changed_canvases.contains(canvas)
+                if !gesture_active
+                    && changed_canvases.contains(canvas)
                     && UiProjection::refresh(world, projection.handle).is_err()
                 {
                     continue;

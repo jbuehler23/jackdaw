@@ -47,7 +47,7 @@ impl Plugin for JackdawPlugin {
         app.add_plugins(jackdaw_scene_types::SceneTypesPlugin {
             runtime_mesh_rebuild: true,
         });
-        app.add_plugins(jackdaw_ui::JackdawUiPlugin);
+        app.add_plugins(jackdaw_ui::JackdawUiPlugin::default());
 
         app.init_asset::<JackdawScene>()
             .init_asset_loader::<JackdawSceneLoader>()

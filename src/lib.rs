@@ -109,6 +109,7 @@ pub mod transform_ops;
 pub mod ui_authoring;
 pub mod ui_canvas;
 pub mod ui_projection;
+pub mod ui_stage;
 pub mod ui_widgets_panel;
 pub mod undo_snapshot;
 pub mod view_modes;
@@ -294,9 +295,10 @@ impl Plugin for EditorCorePlugin {
         app.init_state::<AppState>()
             .add_plugins((FeathersPlugins, EditorFeathersPlugin));
         app.add_plugins((
-            jackdaw_ui::JackdawUiPlugin,
+            jackdaw_ui::JackdawUiPlugin::marked_only(),
             ui_projection::UiProjectionPlugin,
             ui_canvas::UiCanvasPlugin,
+            ui_stage::UiStagePlugin,
             ui_widgets_panel::UiWidgetsPanelPlugin,
             viewport_ui::ViewportUiPlugin,
             jackdaw_scene_types::SceneTypesPlugin {

@@ -19,7 +19,12 @@ use bevy::{
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
     ui::{UiRect, UiSystems, widget::ViewportNode},
-    ui_widgets::Button,
+};
+use jackdaw_feathers::{
+    combobox::{
+        ComboBoxChangeEvent, ComboBoxOptionData, ComboBoxSelectedIndex, combobox_with_selected,
+    },
+    tokens,
 };
 use jackdaw_scene_types::SceneNodeId;
 use jackdaw_ui::{
@@ -52,18 +57,17 @@ pub enum UiCanvasMode {
     Interact,
 }
 
-impl UiCanvasMode {
-    fn next(self) -> Self {
-        match self {
-            Self::Scene => Self::Ui,
-            Self::Ui => Self::Interact,
-            Self::Interact => Self::Scene,
-        }
-    }
+/// Selector order for [`UiCanvasMode`].
+const MODE_ORDER: [UiCanvasMode; 3] = [
+    UiCanvasMode::Ui,
+    UiCanvasMode::Interact,
+    UiCanvasMode::Scene,
+];
 
-    fn label(self) -> &'static str {
+impl UiCanvasMode {
+    pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Scene => "Scene",
+            Self::Scene => "Context",
             Self::Ui => "Select",
             Self::Interact => "Interact",
         }
@@ -77,6 +81,12 @@ pub struct UiCanvasPanelHost {
     pub camera: Entity,
     /// UI node containing the camera's [`ViewportNode`].
     pub viewport: Entity,
+    /// Letterboxed frame holding the viewport and the editing overlays.
+    pub stage: Entity,
+    /// Area the stage is centered in.
+    pub stage_area: Entity,
+    /// Toolbar row holding this panel's controls.
+    pub toolbar: Entity,
     /// Currently authored canvas, if the document contains one.
     pub canvas: Option<Entity>,
     /// View-local projection of `canvas`.
@@ -91,29 +101,30 @@ pub struct UiCanvasCamera;
 #[derive(Component)]
 pub struct UiCanvasViewport;
 
+/// The canvas selector rebuilt whenever the document's canvas set changes.
 #[derive(Component)]
 struct CanvasSelector {
     host: Entity,
+    /// Canvases the current options refer to, in option order.
+    canvases: Vec<Entity>,
+    /// Fixed-width toolbar slot owning this control.
+    slot: Entity,
 }
 
 #[derive(Component)]
-struct CanvasSelectorLabel {
-    host: Entity,
-}
-
-#[derive(Component)]
-struct CanvasModeButton {
-    host: Entity,
-}
-
-#[derive(Component)]
-struct CanvasModeLabel {
+struct CanvasModeSelector {
     host: Entity,
 }
 
 #[derive(Component)]
 struct CanvasEmptyState {
     host: Entity,
+}
+
+/// The letterboxed frame a panel renders its canvas into.
+#[derive(Component, Clone, Copy)]
+pub struct UiCanvasStage {
+    pub host: Entity,
 }
 
 #[derive(Component, Clone, Copy)]
@@ -126,20 +137,15 @@ pub struct UiCanvasPlugin;
 impl Plugin for UiCanvasPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_canvas_panel_despawn)
-            .add_observer(on_canvas_selector_click)
-            .add_observer(on_canvas_mode_click)
             .add_observer(on_projected_ui_click)
-            .add_systems(Update, sync_canvas_panels)
+            .add_systems(Update, (sync_canvas_panels, sync_canvas_selectors).chain())
             .add_systems(
                 PostUpdate,
                 hide_authored_ui_sources
                     .after(VisibilitySystems::VisibilityPropagate)
                     .before(UiSystems::Stack),
             )
-            .add_systems(
-                Update,
-                (update_canvas_toolbar_labels, update_canvas_empty_states),
-            );
+            .add_systems(Update, (update_stage_aspect, update_canvas_empty_states));
     }
 }
 
@@ -170,7 +176,7 @@ pub fn build_ui_canvas_panel(world: &mut World, host: Entity) {
                 overflow: Overflow::clip(),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.075, 0.08, 0.095)),
+            BackgroundColor(tokens::PANEL_BG),
             ChildOf(host),
         ))
         .id();
@@ -179,32 +185,20 @@ pub fn build_ui_canvas_panel(world: &mut World, host: Entity) {
             EditorEntity,
             Node {
                 width: percent(100),
-                height: px(30),
+                height: px(tokens::TOOLBAR_HEIGHT),
                 flex_shrink: 0.0,
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                column_gap: px(6),
-                padding: UiRect::horizontal(px(6)),
+                column_gap: px(tokens::TOOLBAR_GAP),
+                padding: UiRect::horizontal(px(tokens::TOOLBAR_PADDING_LEFT)),
+                border: UiRect::bottom(px(1)),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.11, 0.12, 0.14)),
+            BackgroundColor(tokens::TOOLBAR_BG),
+            BorderColor::all(tokens::TOOLBAR_BORDER),
             ChildOf(column),
         ))
         .id();
-    spawn_toolbar_button(
-        world,
-        toolbar,
-        CanvasSelector { host },
-        CanvasSelectorLabel { host },
-        "Canvas: None",
-    );
-    spawn_toolbar_button(
-        world,
-        toolbar,
-        CanvasModeButton { host },
-        CanvasModeLabel { host },
-        "Mode: Select",
-    );
 
     let body = world
         .spawn((
@@ -223,26 +217,55 @@ pub fn build_ui_canvas_panel(world: &mut World, host: Entity) {
         .spawn((
             EditorEntity,
             Node {
-                width: px(220),
+                width: px(160),
                 height: percent(100),
                 min_height: px(0),
                 flex_shrink: 0.0,
+                border: UiRect::right(px(1)),
                 ..default()
             },
+            BorderColor::all(tokens::PANEL_BORDER),
             ChildOf(body),
         ))
         .id();
     crate::ui_widgets_panel::build_ui_widgets_panel(world, palette_host);
-    let canvas_area = world
+
+    // The stage is letterboxed inside its area so the canvas reads as a device
+    // frame rather than as whatever shape the dock happens to be.
+    let stage_area = world
         .spawn((
             EditorEntity,
             Node {
                 flex_grow: 1.0,
                 min_width: px(0),
                 min_height: px(0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                padding: UiRect::all(px(12)),
                 ..default()
             },
+            BackgroundColor(tokens::WINDOW_BG),
             ChildOf(body),
+        ))
+        .id();
+    let stage = world
+        .spawn((
+            UiCanvasStage { host },
+            EditorEntity,
+            Node {
+                width: percent(100),
+                height: percent(100),
+                max_width: percent(100),
+                max_height: percent(100),
+                min_height: px(0),
+                flex_shrink: 0.0,
+                border: UiRect::all(px(1)),
+                ..default()
+            },
+            BorderColor::all(tokens::BORDER_SUBTLE),
+            BackgroundColor(Color::srgb(0.035, 0.038, 0.045)),
+            Visibility::Hidden,
+            ChildOf(stage_area),
         ))
         .id();
     let viewport = world
@@ -255,10 +278,8 @@ pub fn build_ui_canvas_panel(world: &mut World, host: Entity) {
                 min_height: px(0),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.035, 0.038, 0.045)),
             ViewportNode::new(camera),
-            Visibility::Hidden,
-            ChildOf(canvas_area),
+            ChildOf(stage),
         ))
         .id();
     world.spawn((
@@ -272,23 +293,27 @@ pub fn build_ui_canvas_panel(world: &mut World, host: Entity) {
             justify_content: JustifyContent::Center,
             ..default()
         },
-        Text::new("Choose Canvas, or add a widget to create one"),
+        Text::new("Add a widget to start a canvas"),
         TextFont {
-            font_size: FontSize::Px(14.0),
+            font_size: FontSize::Px(13.0),
             ..default()
         },
-        TextColor(Color::srgb(0.62, 0.64, 0.69)),
+        TextColor(tokens::TAB_INACTIVE_TEXT),
         Pickable::IGNORE,
-        ChildOf(canvas_area),
+        ChildOf(stage_area),
     ));
 
     world.entity_mut(host).insert(UiCanvasPanelHost {
         camera,
         viewport,
+        stage,
+        stage_area,
+        toolbar,
         canvas: None,
         projection: None,
         mode: UiCanvasMode::Ui,
     });
+    spawn_mode_selector(world, toolbar, host);
 
     if let Some(canvas) = authored_canvases(world).first().copied()
         && let Err(error) = select_canvas(world, host, canvas)
@@ -382,48 +407,199 @@ fn create_render_target(world: &mut World) -> Handle<Image> {
     world.resource_mut::<Assets<Image>>().add(image)
 }
 
-fn spawn_toolbar_button<M: Component, L: Component>(
-    world: &mut World,
-    toolbar: Entity,
-    marker: M,
-    label_marker: L,
-    label: &'static str,
-) {
-    let button = world
+/// A fixed-width toolbar cell. Comboboxes size to their parent, so the parent
+/// is what sets a control's width.
+fn spawn_control_slot(world: &mut World, toolbar: Entity, width: f32) -> Entity {
+    world
         .spawn((
-            marker,
             EditorEntity,
-            Button,
             Node {
-                min_height: px(22),
-                padding: UiRect::horizontal(px(7)),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
+                width: px(width),
+                flex_shrink: 0.0,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.18, 0.19, 0.22)),
             ChildOf(toolbar),
         ))
-        .id();
-    world.spawn((
-        label_marker,
-        EditorEntity,
-        Text::new(label),
-        TextFont {
-            font_size: FontSize::Px(12.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.86, 0.87, 0.90)),
-        Pickable::IGNORE,
-        ChildOf(button),
-    ));
+        .id()
 }
 
-fn authored_canvases(world: &mut World) -> Vec<Entity> {
-    let mut query = world.query_filtered::<Entity, (With<UiCanvas>, Without<ProjectedFrom>)>();
-    let mut canvases = query.iter(world).collect::<Vec<_>>();
-    canvases.sort_by_key(|entity| entity.to_bits());
-    canvases
+/// Spawn the mode selector. Modes are fixed, so this is built once.
+fn spawn_mode_selector(world: &mut World, toolbar: Entity, host: Entity) {
+    let options = MODE_ORDER
+        .iter()
+        .map(|mode| ComboBoxOptionData::new(mode.label()))
+        .collect::<Vec<_>>();
+    let selected = MODE_ORDER
+        .iter()
+        .position(|mode| *mode == UiCanvasMode::Ui)
+        .unwrap_or(0);
+    let slot = spawn_control_slot(world, toolbar, 112.0);
+    world
+        .spawn((
+            combobox_with_selected(options, selected),
+            CanvasModeSelector { host },
+            EditorEntity,
+            ChildOf(slot),
+        ))
+        .observe(on_mode_selected);
+}
+
+fn on_mode_selected(
+    event: On<ComboBoxChangeEvent>,
+    selectors: Query<&CanvasModeSelector>,
+    mut hosts: Query<&mut UiCanvasPanelHost>,
+) {
+    let Ok(selector) = selectors.get(event.entity) else {
+        return;
+    };
+    let Some(mode) = MODE_ORDER.get(event.selected).copied() else {
+        return;
+    };
+    if let Ok(mut host) = hosts.get_mut(selector.host) {
+        host.mode = mode;
+    }
+}
+
+/// Rebuild a panel's canvas selector when the document's canvas set or the
+/// panel's choice changes. Comboboxes take their options at spawn, so the
+/// control is reconciled rather than mutated.
+fn sync_canvas_selectors(world: &mut World) {
+    let canvases = authored_canvases(world);
+    let labels = canvases
+        .iter()
+        .map(|canvas| {
+            world
+                .get::<Name>(*canvas)
+                .map(|name| name.as_str().to_string())
+                .unwrap_or_else(|| format!("Canvas {canvas}"))
+        })
+        .collect::<Vec<_>>();
+
+    let mut host_query = world.query::<(Entity, &UiCanvasPanelHost)>();
+    let panels = host_query
+        .iter(world)
+        .map(|(entity, host)| (entity, *host))
+        .collect::<Vec<_>>();
+    let mut selector_query = world.query::<(Entity, &CanvasSelector)>();
+    let selectors = selector_query
+        .iter(world)
+        .map(|(entity, selector)| {
+            (
+                entity,
+                selector.host,
+                selector.canvases.clone(),
+                selector.slot,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    for (host_entity, panel) in panels {
+        // A panel being torn down can still hold its host component for a tick
+        // after its chrome is gone. Never parent onto a dead toolbar.
+        if world.get_entity(panel.toolbar).is_err() {
+            continue;
+        }
+        let existing = selectors
+            .iter()
+            .find(|(_, host, _, _)| *host == host_entity)
+            .map(|(entity, _, current, slot)| (*entity, current.clone(), *slot));
+        let selected = panel
+            .canvas
+            .and_then(|canvas| canvases.iter().position(|candidate| *candidate == canvas));
+        if let Some((entity, current, slot)) = &existing {
+            let index_matches = world
+                .get::<ComboBoxSelectedIndex>(*entity)
+                .map(|index| index.0)
+                == selected;
+            if *current == canvases && index_matches {
+                continue;
+            }
+            if let Ok(slot) = world.get_entity_mut(*slot) {
+                slot.despawn();
+            }
+        }
+
+        let options = if labels.is_empty() {
+            vec![ComboBoxOptionData::new("No canvas")]
+        } else {
+            labels
+                .iter()
+                .cloned()
+                .map(ComboBoxOptionData::new)
+                .collect()
+        };
+        let slot = spawn_control_slot(world, panel.toolbar, 150.0);
+        world
+            .spawn((
+                combobox_with_selected(options, selected.unwrap_or(0)),
+                CanvasSelector {
+                    host: host_entity,
+                    canvases: canvases.clone(),
+                    slot,
+                },
+                EditorEntity,
+                ChildOf(slot),
+            ))
+            .observe(on_canvas_selected);
+    }
+}
+
+fn on_canvas_selected(
+    event: On<ComboBoxChangeEvent>,
+    selectors: Query<&CanvasSelector>,
+    mut commands: Commands,
+) {
+    let Ok(selector) = selectors.get(event.entity) else {
+        return;
+    };
+    let Some(canvas) = selector.canvases.get(event.selected).copied() else {
+        return;
+    };
+    let host = selector.host;
+    commands.queue(move |world: &mut World| {
+        if let Err(error) = select_canvas(world, host, canvas) {
+            warn!("failed to switch UI Canvas: {error}");
+        }
+    });
+}
+
+/// Letterbox each stage to its canvas reference aspect so authored layout is
+/// previewed at the shape it ships in.
+fn update_stage_aspect(
+    hosts: Query<&UiCanvasPanelHost>,
+    canvases: Query<&UiCanvas>,
+    mut nodes: Query<&mut Node, With<UiCanvasStage>>,
+) {
+    for host in &hosts {
+        let Ok(mut node) = nodes.get_mut(host.stage) else {
+            continue;
+        };
+        let aspect = host
+            .canvas
+            .and_then(|canvas| canvases.get(canvas).ok())
+            .map(|canvas| {
+                let size = canvas.reference_size.as_vec2().max(Vec2::ONE);
+                size.x / size.y
+            });
+        let desired = aspect.unwrap_or(16.0 / 9.0);
+        if node.aspect_ratio != Some(desired) {
+            node.aspect_ratio = Some(desired);
+        }
+    }
+}
+
+/// Authored canvases in stable document order. Raw `Entity` bits are recycled
+/// across a reload, so they cannot order a user-visible list.
+pub(crate) fn authored_canvases(world: &mut World) -> Vec<Entity> {
+    let mut query = world
+        .query_filtered::<(Entity, Option<&SceneNodeId>), (With<UiCanvas>, Without<ProjectedFrom>)>(
+        );
+    let mut canvases = query
+        .iter(world)
+        .map(|(entity, node)| (node.map(|node| node.0).unwrap_or(u64::MAX), entity))
+        .collect::<Vec<_>>();
+    canvases.sort();
+    canvases.into_iter().map(|(_, entity)| entity).collect()
 }
 
 fn on_canvas_panel_despawn(
@@ -442,47 +618,6 @@ fn on_canvas_panel_despawn(
             world.entity_mut(host.camera).despawn();
         }
     });
-}
-
-fn on_canvas_selector_click(
-    event: On<Pointer<Click>>,
-    selectors: Query<&CanvasSelector>,
-    mut commands: Commands,
-) {
-    let Ok(selector) = selectors.get(event.event_target()) else {
-        return;
-    };
-    let host = selector.host;
-    commands.queue(move |world: &mut World| {
-        let canvases = authored_canvases(world);
-        if canvases.is_empty() {
-            clear_canvas(world, host);
-            return;
-        }
-        let current = world
-            .get::<UiCanvasPanelHost>(host)
-            .and_then(|panel| panel.canvas);
-        let next = current
-            .and_then(|current| canvases.iter().position(|canvas| *canvas == current))
-            .map(|index| canvases[(index + 1) % canvases.len()])
-            .unwrap_or(canvases[0]);
-        if let Err(error) = select_canvas(world, host, next) {
-            warn!("failed to switch UI Canvas: {error}");
-        }
-    });
-}
-
-fn on_canvas_mode_click(
-    event: On<Pointer<Click>>,
-    buttons: Query<&CanvasModeButton>,
-    mut hosts: Query<&mut UiCanvasPanelHost>,
-) {
-    let Ok(button) = buttons.get(event.event_target()) else {
-        return;
-    };
-    if let Ok(mut host) = hosts.get_mut(button.host) {
-        host.mode = host.mode.next();
-    }
 }
 
 fn on_projected_ui_click(
@@ -544,6 +679,7 @@ fn sync_canvas_panels(world: &mut World) {
         .into_iter()
         .filter_map(|entity| authored_canvas_ancestor(world, entity))
         .collect::<HashSet<_>>();
+    let gesture_active = crate::ui_stage::manipulating(world);
     let mut host_query = world.query::<(Entity, &UiCanvasPanelHost)>();
     let hosts = host_query
         .iter(world)
@@ -570,9 +706,10 @@ fn sync_canvas_panels(world: &mut World) {
             {
                 warn!("failed to restore UI Canvas projection: {error}");
             }
-        } else if host
-            .canvas
-            .is_some_and(|canvas| changed_canvases.contains(&canvas))
+        } else if !gesture_active
+            && host
+                .canvas
+                .is_some_and(|canvas| changed_canvases.contains(&canvas))
         {
             refresh_panel_projection(world, host_entity);
         }
@@ -612,31 +749,6 @@ fn hide_authored_ui_sources(world: &mut World) {
             *visibility = InheritedVisibility::HIDDEN;
         }
         stack.extend(children);
-    }
-}
-
-fn update_canvas_toolbar_labels(
-    hosts: Query<&UiCanvasPanelHost>,
-    names: Query<&Name>,
-    mut selector_labels: Query<(&CanvasSelectorLabel, &mut Text), Without<CanvasModeLabel>>,
-    mut mode_labels: Query<(&CanvasModeLabel, &mut Text), Without<CanvasSelectorLabel>>,
-) {
-    for (label, mut text) in &mut selector_labels {
-        let Ok(host) = hosts.get(label.host) else {
-            continue;
-        };
-        let canvas_name = host
-            .canvas
-            .and_then(|canvas| names.get(canvas).ok())
-            .map(Name::as_str)
-            .unwrap_or("None");
-        **text = format!("Canvas: {canvas_name}");
-    }
-    for (label, mut text) in &mut mode_labels {
-        let Ok(host) = hosts.get(label.host) else {
-            continue;
-        };
-        **text = format!("Mode: {}", host.mode.label());
     }
 }
 

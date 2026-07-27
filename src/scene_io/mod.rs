@@ -41,6 +41,15 @@ const SKIP_COMPONENT_PREFIXES: &[&str] = &[
     // serialized; otherwise load would restore stale player state and
     // dangling asset handles.
     "bevy_animation::",
+    // Propagated/inherited values are recomputed from their source every frame
+    // (`Inherited<TextColor>`, `Propagate<TextFont>`, ...).
+    "bevy_app::propagate::",
+    // Widget implementation detail. Feathers styling, cursors, and focus
+    // treatment are re-derived by `jackdaw_ui`'s materializer from the
+    // authored `Ui*` component, never authored directly.
+    "bevy_feathers::",
+    // Accessibility nodes are built by the widget implementation.
+    "bevy_a11y::",
 ];
 
 /// Specific component type paths that should never be saved.
@@ -57,6 +66,22 @@ const SKIP_COMPONENT_PATHS: &[&str] = &[
     // runtime mesh/material assets into the scene.
     "bevy_mesh::components::Mesh3d",
     "bevy_pbr::mesh_material::MeshMaterial3d<bevy_pbr::pbr_material::StandardMaterial>",
+    // UI layout output. Bevy recomputes all of it every frame from `Node`, and
+    // `ComputedUiTargetCamera` additionally holds a view-local camera entity
+    // that means nothing in a saved document.
+    "bevy_ui::ui_node::ComputedNode",
+    "bevy_ui::ui_node::ComputedUiTargetCamera",
+    "bevy_ui::ui_node::ComputedUiRenderTargetInfo",
+    "bevy_ui::stack::ComputedStackIndex",
+    "bevy_ui::ui_transform::UiGlobalTransform",
+    "bevy_ui::measurement::ContentSize",
+    "bevy_text::text::ComputedTextBlock",
+    "bevy_text::text::TextLayoutInfo",
+    "bevy_ui::widget::text::TextNodeFlags",
+    // Marks an implementation-owned widget part; such an entity is never
+    // registered in the document at all, so this is a backstop.
+    "jackdaw_ui::UiGeneratedPart",
+    "jackdaw_ui::UiMaterialize",
 ];
 
 /// Paths that override the skip prefixes  -- these are always saved even if

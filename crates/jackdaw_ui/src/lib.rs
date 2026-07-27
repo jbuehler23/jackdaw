@@ -27,8 +27,8 @@ use bevy::{
     input::InputPlugin,
     picking::hover::Hovered,
     prelude::{
-        BackgroundColor, Color, Entity, Name, Node, Pickable, Reflect, ReflectDefault, TextColor,
-        TextFont, UVec2, Visibility,
+        BackgroundColor, Color, Entity, Node, Pickable, PositionType, Reflect, ReflectDefault,
+        TextColor, TextFont, UVec2, Val, Visibility,
     },
     text::{EditableText, TextLayout, TextPlugin},
     ui::{Checked, InteractionDisabled, Pressed, widget::Text},
@@ -39,6 +39,22 @@ use bevy::{
 };
 use bevy_scene::{EntityWorldMutSceneExt, SceneComponent, ScenePlugin};
 
+/// Default [`Node`] for a [`UiCanvas`].
+///
+/// A canvas is the screen-space coordinate system its children lay out in, so
+/// it fills its target and positions absolutely: several canvases can target
+/// one camera without stacking each other in a flex row.
+fn canvas_node() -> Node {
+    Node {
+        position_type: PositionType::Absolute,
+        left: Val::Px(0.0),
+        top: Val::Px(0.0),
+        width: Val::Percent(100.0),
+        height: Val::Percent(100.0),
+        ..Default::default()
+    }
+}
+
 /// A root that establishes a screen-space UI coordinate system.
 ///
 /// A canvas intentionally remains an ECS root at runtime. Scene membership is
@@ -46,7 +62,7 @@ use bevy_scene::{EntityWorldMutSceneExt, SceneComponent, ScenePlugin};
 /// a root.
 #[derive(Component, Reflect, Clone, Debug, PartialEq)]
 #[reflect(Component, Clone, Default)]
-#[require(Node, Visibility)]
+#[require(Node = canvas_node(), Visibility)]
 pub struct UiCanvas {
     /// Reference resolution used by editor projections and runtime scaling.
     pub reference_size: UVec2,
@@ -164,6 +180,28 @@ impl Default for UiButton {
 #[derive(Component, Reflect, Clone, Debug, Default, PartialEq, Eq)]
 #[reflect(Component, Clone, Default)]
 pub struct UiSlot(pub String);
+
+/// Opts one entity into widget materialization under
+/// [`UiMaterializePolicy::Marked`].
+///
+/// The editor authors UI as inert reflected data and marks only its per-view
+/// projections, so no Feathers or `bevy_ui_widgets` implementation component
+/// is ever written onto an authored entity.
+#[derive(Component, Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[reflect(Component, Clone, Default)]
+pub struct UiMaterialize;
+
+/// Which entities [`JackdawUiPlugin`] materializes widgets on.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UiMaterializePolicy {
+    /// Every authored widget becomes a live widget. Used by the game runtime.
+    #[default]
+    All,
+    /// Only entities carrying [`UiMaterialize`] become live widgets. Used by
+    /// the editor, where the authored tree is a document and the live widgets
+    /// live in view-local projections.
+    Marked,
+}
 
 /// Identifies an implementation-owned child of an authored UI entity.
 ///
@@ -299,6 +337,7 @@ impl Plugin for JackdawUiTypesPlugin {
             .register_type::<UiSlider>()
             .register_type::<UiTextInput>()
             .register_type::<UiGeneratedPart>()
+            .register_type::<UiMaterialize>()
             .register_type::<UiCanvas>()
             .register_type::<UiScaleMode>()
             .register_type::<UiButtonPalette>()
@@ -311,7 +350,25 @@ impl Plugin for JackdawUiTypesPlugin {
 }
 
 /// Materializes authored UI components into interactive Bevy widgets.
-pub struct JackdawUiPlugin;
+#[derive(Default)]
+pub struct JackdawUiPlugin {
+    /// Which entities this app materializes widgets on.
+    pub policy: UiMaterializePolicy,
+}
+
+impl JackdawUiPlugin {
+    /// Materialize only entities carrying [`UiMaterialize`]. The editor uses
+    /// this so authored UI stays inert document data.
+    pub fn marked_only() -> Self {
+        Self {
+            policy: UiMaterializePolicy::Marked,
+        }
+    }
+}
+
+fn materializes(policy: UiMaterializePolicy, marked: bool) -> bool {
+    policy == UiMaterializePolicy::All || marked
+}
 
 impl Plugin for JackdawUiPlugin {
     fn build(&self, app: &mut App) {
@@ -337,6 +394,7 @@ impl Plugin for JackdawUiPlugin {
         }
         app.init_asset::<JackdawUiTheme>()
             .init_resource::<FallbackUiTheme>()
+            .insert_resource(self.policy)
             .add_observer(update_authored_toggle_value)
             .add_observer(update_authored_slider_value)
             .add_systems(
@@ -356,11 +414,24 @@ impl Plugin for JackdawUiPlugin {
 }
 
 fn refresh_changed_checkboxes(
-    widgets: Query<(Entity, &UiCheckbox, &Node, Has<FeathersCheckbox>), Changed<UiCheckbox>>,
+    widgets: Query<
+        (
+            Entity,
+            &UiCheckbox,
+            &Node,
+            Has<FeathersCheckbox>,
+            Has<UiMaterialize>,
+        ),
+        Changed<UiCheckbox>,
+    >,
+    policy: Res<UiMaterializePolicy>,
     generated: Query<(Entity, &ChildOf, &UiGeneratedPart)>,
     mut commands: Commands,
 ) {
-    for (entity, authored, node, materialized) in &widgets {
+    for (entity, authored, node, materialized, marked) in &widgets {
+        if !materializes(*policy, marked) {
+            continue;
+        }
         if !materialized {
             let node = node.clone();
             commands.queue(move |world: &mut bevy::prelude::World| {
@@ -390,10 +461,23 @@ fn refresh_changed_checkboxes(
 }
 
 fn refresh_changed_toggles(
-    widgets: Query<(Entity, &UiToggle, &Node, Has<FeathersToggleSwitch>), Changed<UiToggle>>,
+    widgets: Query<
+        (
+            Entity,
+            &UiToggle,
+            &Node,
+            Has<FeathersToggleSwitch>,
+            Has<UiMaterialize>,
+        ),
+        Changed<UiToggle>,
+    >,
+    policy: Res<UiMaterializePolicy>,
     mut commands: Commands,
 ) {
-    for (entity, authored, node, materialized) in &widgets {
+    for (entity, authored, node, materialized, marked) in &widgets {
+        if !materializes(*policy, marked) {
+            continue;
+        }
         if !materialized {
             let node = node.clone();
             commands.queue(move |world: &mut bevy::prelude::World| {
@@ -415,10 +499,23 @@ fn refresh_changed_toggles(
 }
 
 fn refresh_changed_sliders(
-    widgets: Query<(Entity, &UiSlider, &Node, Has<FeathersSlider>), Changed<UiSlider>>,
+    widgets: Query<
+        (
+            Entity,
+            &UiSlider,
+            &Node,
+            Has<FeathersSlider>,
+            Has<UiMaterialize>,
+        ),
+        Changed<UiSlider>,
+    >,
+    policy: Res<UiMaterializePolicy>,
     mut commands: Commands,
 ) {
-    for (entity, authored, node, materialized) in &widgets {
+    for (entity, authored, node, materialized, marked) in &widgets {
+        if !materializes(*policy, marked) {
+            continue;
+        }
         let value = authored.value.clamp(authored.min, authored.max);
         if !materialized {
             let node = node.clone();
@@ -454,10 +551,23 @@ fn refresh_changed_sliders(
 }
 
 fn refresh_changed_text_inputs(
-    widgets: Query<(Entity, &UiTextInput, &Node, Has<FeathersTextInput>), Changed<UiTextInput>>,
+    widgets: Query<
+        (
+            Entity,
+            &UiTextInput,
+            &Node,
+            Has<FeathersTextInput>,
+            Has<UiMaterialize>,
+        ),
+        Changed<UiTextInput>,
+    >,
+    policy: Res<UiMaterializePolicy>,
     mut commands: Commands,
 ) {
-    for (entity, authored, node, materialized) in &widgets {
+    for (entity, authored, node, materialized, marked) in &widgets {
+        if !materializes(*policy, marked) {
+            continue;
+        }
         if !materialized {
             let node = node.clone();
             let props = FeathersTextInputProps {
@@ -533,7 +643,6 @@ fn upsert_generated_text(
                 return;
             }
             world.spawn((
-                Name::new("__jackdaw_ui_generated_text"),
                 part,
                 Text::new(text),
                 TextFont::default(),
@@ -578,11 +687,24 @@ fn update_authored_slider_value(
 }
 
 fn refresh_changed_buttons(
-    buttons: Query<(Entity, &UiButton, &Node, Has<FeathersButton>), Changed<UiButton>>,
+    buttons: Query<
+        (
+            Entity,
+            &UiButton,
+            &Node,
+            Has<FeathersButton>,
+            Has<UiMaterialize>,
+        ),
+        Changed<UiButton>,
+    >,
+    policy: Res<UiMaterializePolicy>,
     generated: Query<(Entity, &ChildOf, &UiGeneratedPart)>,
     mut commands: Commands,
 ) {
-    for (entity, button, node, materialized) in &buttons {
+    for (entity, button, node, materialized, marked) in &buttons {
+        if !materializes(*policy, marked) {
+            continue;
+        }
         materialize_button(
             entity,
             button,
@@ -653,7 +775,6 @@ fn materialize_button(
                 return;
             }
             world.spawn((
-                Name::new("__jackdaw_ui_generated_button_label"),
                 UiGeneratedPart::ButtonLabel,
                 Text::new(label),
                 TextFont::default(),
@@ -727,7 +848,9 @@ fn apply_button_styles(
         Has<Pressed>,
         Has<InteractionDisabled>,
         Option<&UiStyleOverride>,
+        Has<UiMaterialize>,
     )>,
+    policy: Res<UiMaterializePolicy>,
     parents: Query<&ChildOf>,
     scopes: Query<&UiThemeScope>,
     themes: Res<Assets<JackdawUiTheme>>,
@@ -735,7 +858,10 @@ fn apply_button_styles(
     generated: Query<(Entity, &ChildOf, &UiGeneratedPart)>,
     mut commands: Commands,
 ) {
-    for (entity, button, hovered, pressed, disabled, style_override) in &buttons {
+    for (entity, button, hovered, pressed, disabled, style_override, marked) in &buttons {
+        if !materializes(*policy, marked) {
+            continue;
+        }
         let theme = scoped_theme(entity, &parents, &scopes, &themes).unwrap_or(&fallback.0);
         let palette = match button.variant {
             ButtonVariant::Normal => &theme.normal,
@@ -785,6 +911,7 @@ fn apply_control_styles(
             Has<Checked>,
             Has<InteractionDisabled>,
             Option<&UiStyleOverride>,
+            Has<UiMaterialize>,
         ),
         Or<(
             With<UiCheckbox>,
@@ -793,6 +920,7 @@ fn apply_control_styles(
             With<UiTextInput>,
         )>,
     >,
+    policy: Res<UiMaterializePolicy>,
     parents: Query<&ChildOf>,
     scopes: Query<&UiThemeScope>,
     themes: Res<Assets<JackdawUiTheme>>,
@@ -801,9 +929,21 @@ fn apply_control_styles(
     text_nodes: Query<(), With<Text>>,
     mut commands: Commands,
 ) {
-    for (entity, is_checkbox, is_toggle, is_slider, is_input, checked, disabled, style_override) in
-        &controls
+    for (
+        entity,
+        is_checkbox,
+        is_toggle,
+        is_slider,
+        is_input,
+        checked,
+        disabled,
+        style_override,
+        marked,
+    ) in &controls
     {
+        if !materializes(*policy, marked) {
+            continue;
+        }
         let theme = scoped_theme(entity, &parents, &scopes, &themes).unwrap_or(&fallback.0);
         let palette = &theme.controls;
         let themed_background = if disabled {

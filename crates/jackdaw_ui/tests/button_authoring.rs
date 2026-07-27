@@ -17,7 +17,11 @@ use jackdaw_ui::{
 #[test]
 fn authored_button_materializes_and_refreshes_without_duplicate_children() {
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default(), JackdawUiPlugin));
+    app.add_plugins((
+        MinimalPlugins,
+        AssetPlugin::default(),
+        JackdawUiPlugin::default(),
+    ));
 
     let button = app
         .world_mut()
@@ -58,7 +62,11 @@ fn authored_button_materializes_and_refreshes_without_duplicate_children() {
 #[test]
 fn canvas_themes_are_scoped_and_react_to_widget_state() {
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default(), JackdawUiPlugin));
+    app.add_plugins((
+        MinimalPlugins,
+        AssetPlugin::default(),
+        JackdawUiPlugin::default(),
+    ));
 
     let blue = app
         .world_mut()
@@ -128,7 +136,11 @@ fn canvas_themes_are_scoped_and_react_to_widget_state() {
 #[test]
 fn authored_feathers_controls_materialize_from_reflected_facades() {
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default(), JackdawUiPlugin));
+    app.add_plugins((
+        MinimalPlugins,
+        AssetPlugin::default(),
+        JackdawUiPlugin::default(),
+    ));
 
     let checkbox = app
         .world_mut()

@@ -187,25 +187,48 @@ fn on_palette_item_click(
 
 /// Create a widget using the same parent/canvas fallback from every editor
 /// entry point (Canvas palette, menu bar, and Add Entity picker).
+///
+/// Creating a widget that needs a canvas creates both in one history entry: one
+/// palette click is one undo.
 pub fn instantiate_widget(
     world: &mut World,
     definition_id: &str,
 ) -> Result<Entity, crate::ui_authoring::UiAuthoringError> {
-    let parent = if definition_id == "layout.canvas" {
-        None
-    } else {
-        selected_ui_parent(world).or_else(|| first_canvas(world))
-    };
-    let parent = match parent {
-        Some(parent) => Some(parent),
-        None if definition_id != "layout.canvas" => Some(UiAuthoring::instantiate(
+    if definition_id == "layout.canvas" {
+        return UiAuthoring::instantiate(world, definition_id, WidgetInstantiateContext::default());
+    }
+
+    let existing = selected_ui_parent(world)
+        .or_else(|| edited_canvas(world))
+        .or_else(|| first_canvas(world));
+    if let Some(parent) = existing {
+        return UiAuthoring::instantiate(
             world,
-            "layout.canvas",
-            WidgetInstantiateContext::default(),
-        )?),
-        None => None,
-    };
-    UiAuthoring::instantiate(world, definition_id, WidgetInstantiateContext { parent })
+            definition_id,
+            WidgetInstantiateContext {
+                parent: Some(parent),
+            },
+        );
+    }
+
+    let (canvas, create_canvas) = UiAuthoring::execute_instantiate(
+        world,
+        "layout.canvas",
+        WidgetInstantiateContext::default(),
+    )?;
+    let (widget, create_widget) = UiAuthoring::execute_instantiate(world, definition_id, {
+        WidgetInstantiateContext {
+            parent: Some(canvas),
+        }
+    })?;
+    let label = create_widget.description().to_string();
+    world
+        .resource_mut::<jackdaw_commands::CommandHistory>()
+        .push_executed(Box::new(jackdaw_commands::CommandGroup {
+            commands: vec![create_canvas, create_widget],
+            label,
+        }));
+    Ok(widget)
 }
 
 fn selected_ui_parent(world: &World) -> Option<Entity> {
@@ -226,7 +249,16 @@ fn selected_ui_parent(world: &World) -> Option<Entity> {
     None
 }
 
+/// The canvas an open UI Canvas panel is editing. New widgets belong to the
+/// canvas the user is looking at, not to whichever one happens to sort first.
+fn edited_canvas(world: &mut World) -> Option<Entity> {
+    let mut query = world.query::<&crate::ui_canvas::UiCanvasPanelHost>();
+    query
+        .iter(world)
+        .find_map(|host| host.canvas)
+        .filter(|canvas| world.get_entity(*canvas).is_ok())
+}
+
 fn first_canvas(world: &mut World) -> Option<Entity> {
-    let mut query = world.query_filtered::<Entity, (With<UiCanvas>, Without<ProjectedFrom>)>();
-    query.iter(world).min_by_key(|entity| entity.to_bits())
+    crate::ui_canvas::authored_canvases(world).first().copied()
 }

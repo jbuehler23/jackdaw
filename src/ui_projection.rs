@@ -213,9 +213,6 @@ fn build_projection(
     world.entity_mut(root).insert((
         UiTargetCamera(spec.target_camera),
         UiProjectionRoot { handle },
-        EditorEntity,
-        EditorHidden,
-        NonSerializable,
     ));
     ProjectionEntry {
         spec,
@@ -235,7 +232,20 @@ fn clone_authored_subtree(
         .map(|children| children.iter().copied().collect::<Vec<_>>())
         .unwrap_or_default();
     let node_id = world.get::<SceneNodeId>(source).copied();
-    let target = world.spawn_empty().id();
+    // Spawn already marked and already parented. Editor surfaces that react to
+    // `Add<Name>` or `Add<Transform>` see the first component the cloner writes,
+    // so a projected entity that becomes editor-visible for even one frame
+    // leaves a stale Outliner row behind.
+    let mut target = world.spawn((
+        EditorEntity,
+        EditorHidden,
+        NonSerializable,
+        jackdaw_ui::UiMaterialize,
+    ));
+    if let Some(parent) = projected_parent {
+        target.insert(ChildOf(parent));
+    }
+    let target = target.id();
 
     let mut cloner = {
         let mut builder = EntityCloner::build_opt_out(world);
@@ -265,9 +275,6 @@ fn clone_authored_subtree(
         .entity_mut(target)
         .insert((InheritedVisibility::default(), ViewVisibility::default()));
 
-    if let Some(parent) = projected_parent {
-        world.entity_mut(target).insert(ChildOf(parent));
-    }
     if let Some(node_id) = node_id {
         world.entity_mut(target).insert(ProjectedFrom(node_id));
         by_node.insert(node_id, target);

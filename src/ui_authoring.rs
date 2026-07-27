@@ -44,12 +44,28 @@ impl std::error::Error for UiAuthoringError {}
 pub struct UiAuthoring;
 
 impl UiAuthoring {
-    /// Instantiate a widget definition into the authored scene.
+    /// Instantiate a widget definition into the authored scene as one
+    /// undoable step.
     pub fn instantiate(
         world: &mut World,
         id: &str,
         context: WidgetInstantiateContext,
     ) -> Result<Entity, UiAuthoringError> {
+        let (entity, command) = Self::execute_instantiate(world, id, context)?;
+        world
+            .resource_mut::<CommandHistory>()
+            .push_executed(command);
+        Ok(entity)
+    }
+
+    /// Run a widget definition and return its executed command without
+    /// recording it, so a caller can group several creations (a widget plus
+    /// the canvas it needed) into one history entry.
+    pub fn execute_instantiate(
+        world: &mut World,
+        id: &str,
+        context: WidgetInstantiateContext,
+    ) -> Result<(Entity, Box<dyn EditorCommand>), UiAuthoringError> {
         if let Some(parent) = context.parent
             && world.get_entity(parent).is_err()
         {
@@ -73,10 +89,72 @@ impl UiAuthoring {
         let entity = command
             .spawned
             .expect("a successful widget callback must return a live entity");
+        Ok((entity, Box::new(command)))
+    }
+
+    /// Record an authored layout edit that a live drag already applied to the
+    /// ECS. One drag is one history entry, and the document learns the final
+    /// value only once.
+    pub fn push_layout_edit(world: &mut World, entity: Entity, before: Node, after: Node) {
+        if before == after {
+            return;
+        }
+        let command = SetUiNode {
+            entity,
+            before,
+            after,
+        };
+        command.sync_after_external_execute(world);
         world
             .resource_mut::<CommandHistory>()
             .push_executed(Box::new(command));
-        Ok(entity)
+    }
+}
+
+/// Undoable edit of one authored UI [`Node`].
+pub struct SetUiNode {
+    pub entity: Entity,
+    pub before: Node,
+    pub after: Node,
+}
+
+impl SetUiNode {
+    fn apply(&self, world: &mut World, value: &Node) {
+        if let Some(mut node) = world.get_mut::<Node>(self.entity) {
+            *node = value.clone();
+        }
+        crate::commands::sync_component_to_ast::<Node>(
+            world,
+            self.entity,
+            "bevy_ui::ui_node::Node",
+            value,
+        );
+    }
+}
+
+impl EditorCommand for SetUiNode {
+    fn execute(&mut self, world: &mut World) {
+        let after = self.after.clone();
+        self.apply(world, &after);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        let before = self.before.clone();
+        self.apply(world, &before);
+    }
+
+    fn description(&self) -> &str {
+        "Edit UI layout"
+    }
+
+    fn sync_after_external_execute(&self, world: &mut World) {
+        let after = self.after.clone();
+        crate::commands::sync_component_to_ast::<Node>(
+            world,
+            self.entity,
+            "bevy_ui::ui_node::Node",
+            &after,
+        );
     }
 }
 
@@ -146,16 +224,10 @@ fn register_authored_subtree(world: &mut World, root: Entity) {
 /// Built-in root Canvas definition.
 pub fn canvas_definition() -> WidgetDefinition {
     WidgetDefinition::new("layout.canvas", "Canvas", "Layout", |world, _context| {
+        // `UiCanvas` requires a full-target absolute `Node`; authoring an
+        // explicit one here would freeze that policy into every document.
         Ok(world
-            .spawn((
-                Name::new("UI Canvas"),
-                UiCanvas::default(),
-                Node {
-                    width: percent(100),
-                    height: percent(100),
-                    ..default()
-                },
-            ))
+            .spawn((Name::new("UI Canvas"), UiCanvas::default()))
             .id())
     })
     .with_icon(Icon::LayoutTemplate)

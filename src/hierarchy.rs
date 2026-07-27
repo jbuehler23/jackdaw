@@ -636,11 +636,15 @@ fn on_root_entity_added(
     mut commands: Commands,
     tree_index: Res<TreeIndex>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
+    generated_ui_check: Query<(), With<jackdaw_ui::UiGeneratedPart>>,
     child_of_check: Query<(), With<ChildOf>>,
 ) {
     let entity = trigger.event_target();
 
-    if editor_check.contains(entity) || child_of_check.contains(entity) {
+    if editor_check.contains(entity)
+        || generated_ui_check.contains(entity)
+        || child_of_check.contains(entity)
+    {
         return;
     }
     if tree_index.contains_anywhere(entity) {
@@ -655,6 +659,9 @@ fn on_root_entity_added(
         if world.get::<EditorEntity>(entity).is_some()
             || world.get::<EditorHidden>(entity).is_some()
         {
+            return;
+        }
+        if world.get::<jackdaw_ui::UiGeneratedPart>(entity).is_some() {
             return;
         }
         // In named-only mode, skip entities without a Name
@@ -685,6 +692,7 @@ fn on_name_changed(
     content_query: Query<&Children, With<TreeRowContent>>,
     mut label_query: Query<&mut Text, With<TreeRowLabel>>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
+    generated_ui_check: Query<(), With<jackdaw_ui::UiGeneratedPart>>,
     child_of_check: Query<(), With<ChildOf>>,
 ) {
     let entity = trigger.event_target();
@@ -723,7 +731,10 @@ fn on_name_changed(
     } else {
         // No row exists anywhere yet. Spawn one per container if this
         // is a visible root.
-        if editor_check.contains(entity) || child_of_check.contains(entity) {
+        if editor_check.contains(entity)
+            || generated_ui_check.contains(entity)
+            || child_of_check.contains(entity)
+        {
             return;
         }
 
@@ -734,6 +745,7 @@ fn on_name_changed(
             }
             if world.get::<EditorEntity>(entity).is_some()
                 || world.get::<EditorHidden>(entity).is_some()
+                || world.get::<jackdaw_ui::UiGeneratedPart>(entity).is_some()
             {
                 return;
             }

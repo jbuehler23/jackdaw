@@ -215,14 +215,34 @@ fn ui_canvas_and_authored_children_appear_but_generated_parts_do_not() {
         assert!(index.contains(container, canvas));
         assert!(index.contains(container, button));
     }
+    assert!(
+        world
+            .get::<Children>(button)
+            .is_none_or(|children| children.is_empty()),
+        "the editor authors UI as inert data: nothing materializes onto the authored button"
+    );
+
+    // A view-local copy opts into materialization. Its generated label is
+    // implementation-owned and must stay out of every Outliner.
+    let materialized = world
+        .spawn((
+            Name::new("Projected Button"),
+            UiButton::default(),
+            jackdaw_ui::UiMaterialize,
+        ))
+        .id();
+    app.update();
+    app.update();
+
+    let world = app.world_mut();
     let generated = world
-        .get::<Children>(button)
-        .unwrap()
+        .get::<Children>(materialized)
+        .expect("a marked button materializes its label")
         .iter()
         .find(|child| world.get::<UiGeneratedPart>(*child).is_some())
         .expect("button label should be materialized");
     assert!(
-        !index.contains_anywhere(generated),
+        !world.resource::<TreeIndex>().contains_anywhere(generated),
         "implementation-owned widget parts must not leak into the authored outliner"
     );
 }

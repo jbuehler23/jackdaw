@@ -6,7 +6,11 @@ use jackdaw_ui::{JackdawUiPlugin, UiButton, UiCanvas};
 #[test]
 fn one_canvas_projects_into_two_independent_targets() {
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default(), JackdawUiPlugin));
+    app.add_plugins((
+        MinimalPlugins,
+        AssetPlugin::default(),
+        JackdawUiPlugin::marked_only(),
+    ));
 
     let canvas = app
         .world_mut()

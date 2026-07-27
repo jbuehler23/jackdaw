@@ -225,3 +225,103 @@ fn is_descendant_of(world: &World, entity: Entity, ancestor: Entity) -> bool {
     }
     false
 }
+
+/// A widget's implementation-owned parts and every per-view projection are
+/// derived state. Neither may reach the Outliner, and the authored entity must
+/// stay inert reflected data: the Components tab and the saved document both
+/// show exactly what the user authored.
+#[test]
+fn authored_ui_stays_pure_data_and_derived_entities_stay_out_of_the_outliner() {
+    let mut app = util::editor_test_app();
+    let _ = enable_extension(app.world_mut(), "jackdaw.ui_editor");
+    app.update();
+
+    let canvas_build = app
+        .world()
+        .resource::<WindowRegistry>()
+        .get(UI_CANVAS_WINDOW_ID)
+        .expect("UI Canvas window registered")
+        .build
+        .clone();
+
+    app.world_mut().spawn((
+        jackdaw::hierarchy::HierarchyTreeContainer,
+        Node::default(),
+        Visibility::Inherited,
+    ));
+    let canvas_host = app.world_mut().spawn(Node::default()).id();
+    canvas_build(&mut ChildSpawner::new(app.world_mut(), canvas_host));
+    app.update();
+
+    app.world_mut().trigger(MenuAction {
+        action: "widget:feathers.button".to_string(),
+    });
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let world = app.world_mut();
+    let rowed: Vec<Entity> = world
+        .query::<&jackdaw_widgets::tree_view::TreeNode>()
+        .iter(world)
+        .map(|node| node.0)
+        .collect();
+    for source in rowed {
+        assert!(
+            world.get::<jackdaw_ui::UiGeneratedPart>(source).is_none(),
+            "generated widget part {source} must not have an Outliner row"
+        );
+        assert!(
+            world.get::<ProjectedFrom>(source).is_none(),
+            "projected entity {source} must not have an Outliner row"
+        );
+    }
+
+    let button = world
+        .query_filtered::<Entity, (With<UiButton>, Without<ProjectedFrom>)>()
+        .single(world)
+        .expect("one authored button");
+    for implementation in [
+        "bevy_feathers::controls::button::FeathersButton",
+        "bevy_feathers::theme::ThemeBackgroundColor",
+        "bevy_ui_widgets::button::Button",
+    ] {
+        let present = world
+            .entity(button)
+            .archetype()
+            .components()
+            .iter()
+            .any(|id| world.components().get_name(*id).as_deref() == Some(implementation));
+        assert!(
+            !present,
+            "authored button must not carry the implementation component {implementation}"
+        );
+    }
+    assert!(
+        world
+            .get::<Children>(button)
+            .is_none_or(|children| children.is_empty()),
+        "authored button must have no generated children"
+    );
+
+    let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+    let node = ast
+        .ast_for(button)
+        .expect("authored button is in the document");
+    let paths = ast.component_type_paths(node);
+    assert!(
+        paths.iter().any(|path| path == "jackdaw_ui::UiButton"),
+        "the authored widget component must persist: {paths:?}"
+    );
+    for computed in [
+        "bevy_ui::ui_node::ComputedNode",
+        "bevy_ui::ui_node::ComputedUiTargetCamera",
+        "bevy_ui::ui_transform::UiGlobalTransform",
+        "bevy_ui::stack::ComputedStackIndex",
+    ] {
+        assert!(
+            !paths.iter().any(|path| path == computed),
+            "computed UI state {computed} must not enter the document: {paths:?}"
+        );
+    }
+}
