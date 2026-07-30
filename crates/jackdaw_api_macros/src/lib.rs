@@ -52,6 +52,34 @@ use syn::{
 /// `register_availability_check` is emitted too.
 #[proc_macro_attribute]
 pub fn operator(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_operator(
+        attr,
+        item,
+        quote!(::jackdaw_api),
+        quote!(::bevy_enhanced_input::prelude),
+    )
+}
+
+/// The focused `jackdaw_extension` facade's operator macro.
+///
+/// This expands through facade-owned paths so an extension does not need
+/// implementation-crate dependencies just to use `#[operator]`.
+#[proc_macro_attribute]
+pub fn extension_operator(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_operator(
+        attr,
+        item,
+        quote!(::jackdaw_extension),
+        quote!(::jackdaw_extension::__private),
+    )
+}
+
+fn expand_operator(
+    attr: TokenStream,
+    item: TokenStream,
+    api_crate: TokenStream2,
+    enhanced_input: TokenStream2,
+) -> TokenStream {
     let args = parse_macro_input!(
         attr with Punctuated::<Meta, Token![,]>::parse_terminated
     );
@@ -138,10 +166,12 @@ pub fn operator(attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 }
             }
-            Meta::List(list) if list.path.is_ident("params") => match build_params_const(list) {
-                Ok(tokens) => params = Some(tokens),
-                Err(err) => return err.into_compile_error().into(),
-            },
+            Meta::List(list) if list.path.is_ident("params") => {
+                match build_params_const(list, &api_crate) {
+                    Ok(tokens) => params = Some(tokens),
+                    Err(err) => return err.into_compile_error().into(),
+                }
+            }
             Meta::Path(path) if path.is_ident("modal") => {
                 modal = true;
             }
@@ -202,16 +232,19 @@ pub fn operator(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let parameters_const = params.map(|tokens| {
         quote! {
-            const PARAMETERS: &'static [::jackdaw_api::prelude::ParamSpec] = #tokens;
+            const PARAMETERS: &'static [#api_crate::prelude::ParamSpec] = #tokens;
         }
     });
 
     let expanded = quote! {
-        #[derive(::core::default::Default, ::bevy_enhanced_input::prelude::InputAction)]
-        #[action_output(bool)]
+        #[derive(::core::default::Default)]
         #vis struct #struct_name;
 
-        impl ::jackdaw_api::prelude::Operator for #struct_name {
+        impl #enhanced_input::InputAction for #struct_name {
+            type Output = bool;
+        }
+
+        impl #api_crate::prelude::Operator for #struct_name {
             const ID: &'static str = #id;
             const LABEL: &'static str = #label;
             const DESCRIPTION: &'static str = #description;
@@ -222,7 +255,7 @@ pub fn operator(attr: TokenStream, item: TokenStream) -> TokenStream {
 
             fn register_execute(
                 commands: &mut ::bevy::ecs::system::Commands,
-            ) -> ::jackdaw_api::prelude::OperatorSystemId {
+            ) -> #api_crate::prelude::OperatorSystemId {
                 commands.register_system(#fn_name)
             }
 
@@ -292,17 +325,17 @@ fn to_pascal_case(snake: &str) -> String {
 
 /// Lower a `params(name(Type, default = ..., doc = "..."), ...)` block into
 /// the const slice expression that goes after `PARAMETERS: &'static [ParamSpec] =`.
-fn build_params_const(list: &syn::MetaList) -> syn::Result<TokenStream2> {
+fn build_params_const(list: &syn::MetaList, api_crate: &TokenStream2) -> syn::Result<TokenStream2> {
     let entries: Punctuated<Meta, Token![,]> =
         list.parse_args_with(Punctuated::parse_terminated)?;
     let mut items = Vec::with_capacity(entries.len());
     for entry in &entries {
-        items.push(build_param_spec(entry)?);
+        items.push(build_param_spec(entry, api_crate)?);
     }
     Ok(quote! { &[ #( #items ),* ] })
 }
 
-fn build_param_spec(meta: &Meta) -> syn::Result<TokenStream2> {
+fn build_param_spec(meta: &Meta, api_crate: &TokenStream2) -> syn::Result<TokenStream2> {
     let Meta::List(list) = meta else {
         return Err(syn::Error::new(
             meta.span(),
@@ -367,7 +400,7 @@ fn build_param_spec(meta: &Meta) -> syn::Result<TokenStream2> {
 
     let default_tokens = match &default_expr {
         Some(expr) => {
-            let variant = param_default_variant(&ty_ident, expr)?;
+            let variant = param_default_variant(&ty_ident, expr, api_crate)?;
             quote! { ::core::option::Option::Some(#variant) }
         }
         None => quote! { ::core::option::Option::None },
@@ -378,7 +411,7 @@ fn build_param_spec(meta: &Meta) -> syn::Result<TokenStream2> {
     };
 
     Ok(quote! {
-        ::jackdaw_api::prelude::ParamSpec {
+        #api_crate::prelude::ParamSpec {
             name: #name_lit,
             ty: #ty_variant,
             default: #default_tokens,
@@ -416,13 +449,17 @@ fn param_type_variant(ty: &Ident) -> syn::Result<TokenStream2> {
 /// Lower a `default = ...` macro arg into a `PropertyValue` constructor.
 /// Strings go through `Cow::Borrowed` so the whole `ParamSpec` can sit
 /// in a `const` slice; numeric and bool literals are trivial.
-fn param_default_variant(ty: &Ident, expr: &Expr) -> syn::Result<TokenStream2> {
+fn param_default_variant(
+    ty: &Ident,
+    expr: &Expr,
+    api_crate: &TokenStream2,
+) -> syn::Result<TokenStream2> {
     Ok(match ty.to_string().as_str() {
-        "bool" => quote! { ::jackdaw_api::scene::PropertyValue::Bool(#expr) },
-        "i64" => quote! { ::jackdaw_api::scene::PropertyValue::Int(#expr) },
-        "f64" => quote! { ::jackdaw_api::scene::PropertyValue::Float(#expr) },
+        "bool" => quote! { #api_crate::scene::PropertyValue::Bool(#expr) },
+        "i64" => quote! { #api_crate::scene::PropertyValue::Int(#expr) },
+        "f64" => quote! { #api_crate::scene::PropertyValue::Float(#expr) },
         "String" => quote! {
-            ::jackdaw_api::scene::PropertyValue::String(::std::borrow::Cow::Borrowed(#expr))
+            #api_crate::scene::PropertyValue::String(::std::borrow::Cow::Borrowed(#expr))
         },
         "Vec2" | "Vec3" | "Color" | "Entity" => {
             return Err(syn::Error::new(

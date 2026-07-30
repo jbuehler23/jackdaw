@@ -12,6 +12,7 @@ pub mod cargo_meta;
 pub mod detect;
 pub mod linkage;
 pub mod plan;
+pub mod project_manifest;
 pub mod schema;
 pub mod sdk_paths;
 pub mod shim;
@@ -19,7 +20,8 @@ pub mod shim;
 mod build;
 
 pub use build::{
-    BuildEvent, ProjectBuild, ProjectBuildError, build_project_dylib, shim_spec_for_project,
+    BuildEvent, ProjectBuild, ProjectBuildError, build_project_dylib, last_built_dylib, sdk_remedy,
+    shim_spec_for_project,
 };
 
 // The embedded SDK-builder recipe (relative path + bytes), assembled by

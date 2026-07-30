@@ -3,7 +3,7 @@
 //! Public API for Jackdaw editor extensions.
 //!
 //! Extensions are entities. An extension entity holds an [`lifecycle::Extension`]
-//! component, and every registration (operators, windows, BEI contexts,
+//! component, and every registration (operators, windows, input bindings,
 //! panel extensions) spawns child entities under it. Unloading an
 //! extension is `world.entity_mut(ext).despawn()`; Bevy cascades through
 //! the children and a few observers handle the non-ECS cleanup.
@@ -12,8 +12,7 @@
 //!
 //! ```ignore
 //! use bevy::prelude::*;
-//! use bevy_enhanced_input::prelude::*;
-//! use jackdaw_api::prelude::*;
+//! use jackdaw_extension::prelude::*;
 //!
 //! #[operator(id = "sample.place_cube")]
 //! fn place_cube(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
@@ -21,26 +20,14 @@
 //!     OperatorResult::Finished
 //! }
 //!
-//! #[derive(Component, Default)]
-//! struct SamplePluginContext;
-//!
 //! #[derive(Default)]
 //! struct MyCoolExtension;
 //!
 //! impl JackdawExtension for MyCoolExtension {
-//!     fn name() -> String { "The coolest extension".into() }
-//!     fn register(&self, ctx: &mut ExtensionContext) {
+//!     fn id(&self) -> String { "sample.cool".into() }
+//!     fn register(&self, ctx: &mut ExtensionRegistrar<'_>) {
 //!         ctx.register_operator::<PlaceCubeOp>();
-//!         ctx.spawn((
-//!             SamplePluginContext,
-//!             actions!(SamplePluginContext[
-//!                 Action::<PlaceCubeOp>::new(),
-//!                 bindings![KeyCode::KeyC],
-//!             ]),
-//!         ));
-//!     }
-//!     fn register_input_context(&self, app: &mut App) {
-//!         app.add_input_context::<SamplePluginContext>();
+//!         ctx.bind_operator_host::<PlaceCubeOp>([PresetInput::key("KeyC")]);
 //!     }
 //! }
 //! ```
@@ -65,7 +52,7 @@ use std::sync::Arc;
 use bevy::ecs::{system::IntoObserverSystem, world::EntityWorldMut};
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{
-    Action, ActionOf, ActionSettings, Fire, InputConditionAppExt as _,
+    Action, ActionOf, ActionSettings, Fire, InputConditionAppExt as _, InputContextAppExt as _,
 };
 use jackdaw_panels::{
     DockWindowDescriptor, WindowRegistry, WorkspaceDescriptor, WorkspaceRegistry,
@@ -110,8 +97,8 @@ pub use widgets::{
 /// Re-exports plugin authors will want in one import.
 pub mod prelude {
     pub use crate::{
-        ExtensionContext, ExtensionPoint, JackdawExtension, MenuEntryDescriptor, PanelContext,
-        WindowDescriptor,
+        ExtensionContext, ExtensionPoint, ExtensionRegistrar, JackdawExtension,
+        MenuEntryDescriptor, PanelContext, WindowDescriptor,
         lifecycle::{
             ActiveModalQuery, Extension, ExtensionAppExt as _, ExtensionCatalog, ExtensionKind,
             RegisteredMenuEntry, RegisteredWindow,
@@ -162,23 +149,10 @@ pub trait JackdawExtension: Send + Sync + 'static {
         ExtensionKind::Regular
     }
 
-    /// Hook for one-time BEI input-context registration.
-    ///
-    /// Called once per catalog entry at app startup, before any
-    /// `register()` call. BEI's `add_input_context::<C>()` must run
-    /// exactly once per context type per app lifetime, so it cannot live
-    /// inside `register` which runs on every enable.
-    ///
-    /// Defaults to no-op; override only if the extension adds BEI
-    /// contexts.
-    // FIXME: this leaks memory when the extension is disabled
-    #[expect(unused_variables, reason = "The default implementation does nothing")]
-    fn register_input_context(&self, app: &mut App) {}
-
     /// Main registration logic. Called each time the extension is
     /// enabled. Spawn operators, windows, BEI action entities, and any
     /// other owned state here.
-    fn register(&self, ctx: &mut ExtensionContext);
+    fn register(&self, registrar: &mut ExtensionRegistrar<'_>);
 
     /// Optional hook called before the extension entity despawns.
     ///
@@ -194,14 +168,25 @@ pub trait JackdawExtension: Send + Sync + 'static {
 ///
 /// Wraps `&mut World` rather than `&mut App` because extensions may be
 /// loaded from world-only contexts such as the Extensions dialog's
-/// enable/disable observer. One-time setup that genuinely requires App
-/// access (BEI input-context registration) runs through
-/// [`JackdawExtension::register_input_context`] at catalog-registration
-/// time.
+/// enable/disable observer.
 pub struct ExtensionContext<'a> {
     world: &'a mut World,
     extension_entity: Entity,
 }
+
+/// Host-owned registration interface presented to extension authors.
+///
+/// The registrar records ownership for everything installed through it so
+/// disabling or replacing an extension can remove those registrations live.
+pub type ExtensionRegistrar<'a> = ExtensionContext<'a>;
+
+/// Host-owned BEI context for dynamically installed extensions.
+///
+/// Marketplace authors bind operators through
+/// [`ExtensionContext::bind_operator_host`] so activation never needs startup
+/// `App` access and disabling removes the action entities immediately.
+#[derive(Component, Default)]
+pub struct ExtensionInputContext;
 
 impl<'a> ExtensionContext<'a> {
     pub fn new(world: &'a mut World, extension_entity: Entity) -> Self {
@@ -430,6 +415,16 @@ impl<'a> ExtensionContext<'a> {
             });
         }
         self
+    }
+
+    /// Bind an operator through Jackdaw's host-owned extension input context.
+    /// This is the runtime-safe marketplace equivalent of
+    /// [`Self::bind_operator`].
+    pub fn bind_operator_host<O: crate::Operator>(
+        &mut self,
+        defaults: impl IntoIterator<Item = crate::keymap::PresetInput>,
+    ) -> &mut Self {
+        self.bind_operator::<ExtensionInputContext, O>(defaults)
     }
 
     /// Spawn an operator's action entity with no default binding. The
@@ -732,6 +727,7 @@ pub struct ExtensionLoaderPlugin;
 impl Plugin for ExtensionLoaderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((lifecycle::plugin, operator::plugin, registries::plugin));
+        app.add_input_context::<ExtensionInputContext>();
         app.add_input_condition::<DoubleClick>();
         app.add_input_condition::<ScrollTick>();
     }

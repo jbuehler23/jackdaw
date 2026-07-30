@@ -207,10 +207,42 @@ impl SdkManifest {
         self.artifacts.is_empty()
     }
 
+    /// Manifest entries whose artifact is no longer on disk, as
+    /// `name version` pairs, capped at `limit`.
+    ///
+    /// A manifest is a cache of one build's filenames. Cargo replaces
+    /// those on every rebuild and prunes what it no longer needs, so
+    /// entries rot without anything noticing until rustc is handed a
+    /// path that does not resolve. Checking costs one stat per entry.
+    /// Only meaningful for absolute paths: a shipped manifest stores
+    /// basenames that are rebased onto the install at use time.
+    pub fn missing_artifacts(&self, limit: usize) -> Vec<String> {
+        self.artifacts
+            .iter()
+            .filter(|(_, artifact)| {
+                let path = Path::new(artifact.as_str());
+                path.is_absolute() && !path.exists()
+            })
+            .take(limit)
+            .map(|((name, version), _)| format!("{name} {version}"))
+            .collect()
+    }
+
     pub fn artifact(&self, name: &str, version: &str) -> Option<&str> {
         self.artifacts
             .get(&(name.to_string(), version.to_string()))
             .map(String::as_str)
+    }
+
+    /// How many versions of a crate the SDK closure holds. A graph
+    /// legitimately carries several majors of one crate (two `rand`s),
+    /// each compiling to its own artifact, so this is what separates an
+    /// expected pair of artifacts from a crate built twice over.
+    pub fn version_count(&self, name: &str) -> usize {
+        self.artifacts
+            .keys()
+            .filter(|(crate_name, _)| crate_name == name)
+            .count()
     }
 
     /// The artifact for a crate by name, ignoring version. The SDK closure
@@ -254,7 +286,7 @@ pub fn write_plan(
     out_path: &Path,
 ) -> Result<usize, PlanError> {
     let metadata = cargo_metadata(build_root)?;
-    let mut file = std::fs::File::create(out_path)?;
+    let mut contents = Vec::new();
     let mut edges = 0;
     let empty = Vec::new();
     for node in metadata["resolve"]["nodes"].as_array().unwrap_or(&empty) {
@@ -285,10 +317,13 @@ pub fn write_plan(
                 // wanting a different version of the same dependency, so
                 // the name alone cannot pick the right redirect.
                 let resolved = resolve_artifact(artifact, deps_dir);
-                writeln!(file, "{consumer}@{consumer_version}:{alias}={resolved}")?;
+                writeln!(contents, "{consumer}@{consumer_version}:{alias}={resolved}")?;
                 edges += 1;
             }
         }
+    }
+    if std::fs::read(out_path).ok().as_deref() != Some(contents.as_slice()) {
+        std::fs::write(out_path, contents)?;
     }
     Ok(edges)
 }

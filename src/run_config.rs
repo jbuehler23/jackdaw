@@ -60,16 +60,19 @@ fn synthesize_default(_root: &Path) -> Manifest {
     }
 }
 
-/// Produce a starter `jackdaw.toml` body: the plugin override slot and
-/// one default run.
+/// Produce a starter `jackdaw.toml` body: the plugin override slot, the
+/// version pins the open check compares against, and one default run.
 pub fn scaffold_manifest(_meta: &CargoMeta) -> String {
-    "# The game plugin type inside your lib crate. Uncomment to\n\
-     # override source detection.\n\
-     # plugin = \"GamePlugin\"\n\
-     \n\
-     [[run]]\n\
-     name = \"Play\"\n"
-        .to_string()
+    format!(
+        "# The game plugin type inside your lib crate. Uncomment to\n\
+         # override source detection.\n\
+         # plugin = \"GamePlugin\"\n\
+         \n\
+         {pins}\n\
+         [[run]]\n\
+         name = \"Play\"\n",
+        pins = jackdaw_project_build::project_manifest::pins_toml()
+    )
 }
 
 #[cfg(test)]

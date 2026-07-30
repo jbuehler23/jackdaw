@@ -18,7 +18,7 @@
 //! Write a component anywhere in this library (any module, not
 //! `main.rs`), deriving `Component, Reflect, Default` with
 //! `#[reflect(Component, Default)]`, like `SpinningCube` below. After you
-//! save, click Rebuild in jackdaw (or run `jackdaw-cli build`) and it
+//! save, click Rebuild in jackdaw (or run `jd build`) and it
 //! appears in `Add Component`. No registration code is needed.
 
 use bevy::prelude::*;

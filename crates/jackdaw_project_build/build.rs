@@ -75,7 +75,18 @@ fn assemble_recipe(ws: &Path, recipe: &Path) -> bool {
     // Every workspace library crate. `cargo build -p <sdk targets>` only
     // compiles the three targets' closure; the rest ride along so all
     // `.workspace = true` path deps (including optional ones) resolve.
-    copy_dir_filtered(&ws.join("crates"), &recipe.join("crates"));
+    //
+    // Except any crate that depends on the editor package itself. The
+    // recipe's root is a pure virtual workspace with no `jackdaw`
+    // package in it, so such a crate's path dependency cannot resolve
+    // and cargo rejects the whole workspace before compiling anything:
+    //   found a virtual manifest at .../build/Cargo.toml
+    //   instead of a package manifest
+    // That aborts SDK setup entirely, which leaves the editor unable to
+    // build any project.
+    copy_dir_filtered(&ws.join("crates"), &recipe.join("crates"), &|crate_dir| {
+        !depends_on_editor(crate_dir)
+    });
     let Some(manifest) = generate_root_manifest(ws) else {
         return false;
     };
@@ -109,7 +120,28 @@ fn emit_rerun_for_tree(dir: &Path) {
 }
 
 /// Copy a directory tree, skipping build output and VCS metadata.
-fn copy_dir_filtered(src: &Path, dst: &Path) {
+/// Whether a crate directory's manifest depends on the editor package,
+/// which the recipe does not ship.
+fn depends_on_editor(crate_dir: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(crate_dir.join("Cargo.toml")) else {
+        return false;
+    };
+    let Ok(doc) = toml::from_str::<toml::Value>(&text) else {
+        return false;
+    };
+    ["dependencies", "dev-dependencies", "build-dependencies"]
+        .iter()
+        .any(|table| {
+            doc.get(table)
+                .and_then(toml::Value::as_table)
+                .is_some_and(|deps| deps.contains_key("jackdaw"))
+        })
+}
+
+/// Copy `src` into `dst`, skipping `target`/`.git` and any top-level
+/// entry `keep` rejects. `keep` is consulted only for the immediate
+/// children, which are the crate directories.
+fn copy_dir_filtered(src: &Path, dst: &Path, keep: &dyn Fn(&Path) -> bool) {
     fs::create_dir_all(dst).unwrap();
     let Ok(entries) = fs::read_dir(src) else {
         return;
@@ -121,9 +153,12 @@ fn copy_dir_filtered(src: &Path, dst: &Path) {
             continue;
         }
         let from = entry.path();
+        if from.is_dir() && !keep(&from) {
+            continue;
+        }
         let to = dst.join(&*name);
         if from.is_dir() {
-            copy_dir_filtered(&from, &to);
+            copy_dir_filtered(&from, &to, &|_| true);
         } else {
             fs::copy(&from, &to).unwrap();
         }

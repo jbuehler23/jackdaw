@@ -80,7 +80,7 @@ you want to pre-process textures or bake meshes for a CI
 build, you have to start the editor headlessly, which is not
 great.
 
-Half of the second shape below now exists: `jackdaw-cli` drives
+Half of the second shape below now exists: `jd` drives
 the editor's build machinery from a terminal with `build` and
 `run`. What is missing is a `process` step and the
 asset-processing pipeline behind it.
@@ -89,7 +89,7 @@ The remaining shapes:
 - Split the user's game into a library plus multiple binaries
   (run, process), with processing driven from the project's own
   binaries. Invasive for the project template.
-- Extend `jackdaw-cli` with a `process` subcommand alongside
+- Extend `jd` with a `process` subcommand alongside
   `build`. Less invasive but more code in jackdaw.
 
 Where to dig in: pick one shape and prototype it against a

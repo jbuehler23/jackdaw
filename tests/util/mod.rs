@@ -38,7 +38,7 @@ pub fn headless_app() -> App {
         avian3d::prelude::PhysicsPlugins::default(),
         bevy_enhanced_input::prelude::EnhancedInputPlugin,
     ))
-    .add_plugins(EditorPlugins::default());
+    .add_plugins(JackdawEditorPlugins::default());
     // Bevy 0.19's component-sync hooks (`On<Remove, SyncToRenderWorld>`) read the
     // main-world `PendingSyncEntity` resource that `SyncWorldPlugin` installs.
     // The headless `RenderPlugin` (no backend) never spins up the render world,

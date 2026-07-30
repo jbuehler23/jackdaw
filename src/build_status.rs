@@ -42,4 +42,10 @@ pub enum BuildState {
     /// The last build failed. Shown until it reverts to `Idle`; the
     /// status bar makes it clickable to surface the build log.
     Failed { at: Instant },
+    /// No build could even be started for the open project, and why.
+    /// Distinct from `Failed`, which has compiler output to show: this
+    /// is a setup problem (an unresolvable package, an unreadable
+    /// manifest) whose only diagnostic is `reason`. Sticky, because
+    /// nothing else will replace it until the user fixes the project.
+    Blocked { reason: String },
 }

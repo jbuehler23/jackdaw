@@ -3,11 +3,23 @@ name = "{{project-name}}"
 version = "0.1.0"
 edition = "2024"
 authors = ["{{authors}}"]
+# `jd extension pack` reads the publisher, license, and homepage from
+# here when it builds a signed bundle to distribute.
+license = "MIT OR Apache-2.0"
 
 # An editor extension is a normal Bevy library that also uses the
-# jackdaw_api surface. jackdaw builds it in .jackdaw/ against the
+# jackdaw_extension surface. jackdaw builds it in .jackdaw/ against the
 # editor's SDK; `cargo check` works standalone.
 
+# Stand this project on its own even when it is created inside another
+# cargo workspace, which would otherwise adopt it and refuse to build.
+# Delete this to make it a member of the surrounding workspace instead.
+[workspace]
+
+[package.metadata.jackdaw]
+# Display name in the editor's extension list. Defaults to the package name.
+label = "{{project-name | title_case}}"
+
 [dependencies]
-bevy = "0.19"
-jackdaw_api = "0.19"
+bevy = "{{bevy_version}}"
+jackdaw_extension = "{{jackdaw_version}}"

@@ -11,8 +11,7 @@
 //! kills both keybinds, and drops any registered menu entries.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Press, *};
-use jackdaw_api::prelude::*;
+use jackdaw_extension::{keymap::PresetInput, prelude::*};
 
 #[derive(Default)]
 pub struct SampleExtension;
@@ -30,11 +29,7 @@ impl JackdawExtension for SampleExtension {
         "Just a tiny example extension :)".to_string()
     }
 
-    fn register_input_context(&self, app: &mut App) {
-        app.add_input_context::<SampleContext>();
-    }
-
-    fn register(&self, ctx: &mut ExtensionContext) {
+    fn register(&self, ctx: &mut ExtensionRegistrar<'_>) {
         ctx.register_window(
             WindowDescriptor::new("sample.hello")
                 .with_name("Hello Extension")
@@ -45,20 +40,10 @@ impl JackdawExtension for SampleExtension {
 
         ctx.register_operator::<HelloOp>();
         ctx.register_operator::<HelloTimeOp>();
-
-        ctx.spawn((
-            SampleContext,
-            actions!(SampleContext[
-                // the `hello` operator function generates a struct called `HelloOp`
-                (Action::<HelloOp>::new(), bindings![(KeyCode::F9, Press::default())]),
-                (Action::<HelloTimeOp>::new(), bindings![(KeyCode::F10, Press::default())]),
-            ]),
-        ));
+        ctx.bind_operator_host::<HelloOp>([PresetInput::key("F9")]);
+        ctx.bind_operator_host::<HelloTimeOp>([PresetInput::key("F10")]);
     }
 }
-
-#[derive(Component, Default)]
-pub struct SampleContext;
 
 #[operator(
     id = "sample.hello",

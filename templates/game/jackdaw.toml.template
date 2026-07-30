@@ -5,6 +5,11 @@
 # source detection.
 # plugin = "GamePlugin"
 
+# In a cargo workspace, the member jackdaw builds as the game.
+# package = "my-game"
+
+{{jackdaw_pins}}
+
 [[run]]
 name = "Play"
 # instances = 2

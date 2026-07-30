@@ -1,11 +1,10 @@
-//! Runtime discovery and loading of Jackdaw extension dylibs.
+//! Runtime loading of signed, installed Jackdaw extensions.
 //!
 //! # Overview
 //!
 //! Add [`DylibLoaderPlugin`] to the editor `App`. During `build` it
-//! walks every configured search path, opens each dynamic library
-//! with `libloading`, drains the reflect types the dylib queued
-//! during dlopen, looks up the plain-Rust `jackdaw_extension_ctor`
+//! reads the versioned `.jdext` installation index, opens each verified
+//! dynamic library with `libloading`, and looks up `jackdaw_extension_ctor`
 //! symbol (see [`EXTENSION_CTOR_SYMBOL`]), and registers the
 //! extension through
 //! [`jackdaw_api_internal::lifecycle::register_dylib_extension`].
@@ -14,13 +13,6 @@
 //! lives. Unloading a library while systems still reference code
 //! inside it is UB, so libraries are only dropped when the `App` is
 //! destroyed.
-//!
-//! # Search paths
-//!
-//! By default the loader searches the per-user config directory
-//! (`~/.config/jackdaw/extensions/` and platform equivalents). The
-//! `JACKDAW_EXTENSIONS_DIR` environment variable adds another path.
-//! Callers can add their own via [`DylibLoaderPlugin::extra_paths`].
 //!
 //! # Compatibility
 //!
@@ -33,44 +25,14 @@
 //! `catch_unwind`, but a segfault in extension code takes the
 //! process down.
 
+pub mod package;
 pub mod quarantine;
 
 use std::panic::AssertUnwindSafe;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use bevy::prelude::*;
 use jackdaw_api_internal::JackdawExtension;
-
-/// Sub-directory inside the platform config directory where the
-/// loader looks for per-user extensions (editor tools, panels,
-/// operators).
-pub const DEFAULT_EXTENSIONS_SUBDIR: &str = "jackdaw/extensions";
-
-/// Sub-directory for per-user game dylibs. Games run out of process
-/// via the runner, so the loader never scans this directory; the
-/// constant remains for the install watcher and legacy cleanup.
-pub const DEFAULT_GAMES_SUBDIR: &str = "jackdaw/games";
-
-/// Prefix used by the install flow's atomic-rename tempfile. The
-/// extension watcher skips paths starting with this prefix so
-/// our own in-flight renames don't trip "Dylib changed on disk"
-/// warnings. Shared here rather than duplicated in
-/// `extensions_dialog::install_picked_file` and `extension_watcher`
-/// so the two can't drift.
-pub const INSTALL_TEMPFILE_PREFIX: &str = ".jackdaw-install-";
-
-/// Environment variable whose value, if set to a directory path,
-/// is added to the loader's search paths at startup for extensions.
-pub const ENV_EXTENSIONS_PATH: &str = "JACKDAW_EXTENSIONS_DIR";
-
-/// Environment variable naming a per-user games directory. Only the
-/// install watcher observes it; the loader does not scan it.
-pub const ENV_GAMES_PATH: &str = "JACKDAW_GAMES_DIR";
-
-/// Back-compat alias for `ENV_EXTENSIONS_PATH`. Older docs and
-/// scripts reference this name; prefer the split env vars above.
-#[deprecated(note = "use ENV_EXTENSIONS_PATH or ENV_GAMES_PATH")]
-pub const ENV_SEARCH_PATH: &str = ENV_EXTENSIONS_PATH;
 
 /// Symbol every extension dylib exports: a plain-Rust
 /// `fn() -> Box<dyn JackdawExtension>`. Editor-generated shims emit
@@ -92,6 +54,9 @@ pub struct LoadedDylibs {
     libs: Vec<libloading::Library>,
 }
 
+#[derive(Resource, Default)]
+struct PendingActivationGuards(Vec<quarantine::QuarantineGuard>);
+
 impl LoadedDylibs {
     pub fn len(&self) -> usize {
         self.libs.len()
@@ -102,14 +67,7 @@ impl LoadedDylibs {
     }
 }
 
-/// Enable discovery and loading of dynamic-library extensions.
-///
-/// With the defaults, the loader scans the per-user config
-/// directory (`~/.config/jackdaw/extensions/` and platform
-/// equivalents) plus `$JACKDAW_EXTENSIONS_DIR` if set. Call
-/// [`Self::with_extension_search_path`] to add more locations
-/// or [`Self::with_user_extension_dir`] /
-/// [`Self::with_extension_env_var`] to opt out of the defaults.
+/// Load active extensions from the signed, versioned installation index.
 ///
 /// Dynamic-library extensions require the host binary to be
 /// built with `bevy/dynamic_linking` so the editor and every
@@ -117,71 +75,99 @@ impl LoadedDylibs {
 /// that, trait-object calls across the dylib boundary are
 /// unsound.
 ///
-/// Configuration lives on the plugin itself because loading happens
-/// during `build()`, so the loader can reach `&mut App` to register
-/// each discovered dylib into the extension catalog.
-pub struct DylibLoaderPlugin {
-    /// Extra search paths added on top of the defaults.
-    pub extra_paths: Vec<PathBuf>,
-    /// If `true` (default), also search the per-user config dir.
-    pub include_user_dir: bool,
-    /// If `true` (default), also search
-    /// `$JACKDAW_EXTENSIONS_DIR` when that env var is set.
-    pub include_env_dir: bool,
-}
-
-impl Default for DylibLoaderPlugin {
-    fn default() -> Self {
-        Self {
-            extra_paths: Vec::new(),
-            include_user_dir: true,
-            include_env_dir: true,
-        }
-    }
-}
-
-impl DylibLoaderPlugin {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Add an explicit search path for the dylib loader. Implicitly
-    /// enables the loader if it wasn't already.
-    pub fn with_extension_search_path(mut self, path: impl Into<std::path::PathBuf>) -> Self {
-        self.extra_paths.push(path.into());
-        self
-    }
-
-    /// Opt in or out of honouring `$JACKDAW_EXTENSIONS_DIR`.
-    /// Defaults to `true` when the loader is enabled.
-    pub fn with_extension_env_var(mut self, enable: bool) -> Self {
-        self.include_env_dir = enable;
-        self
-    }
-    /// Opt in or out of searching the per-user config directory.
-    /// Defaults to `true` when the loader is enabled.
-    pub fn with_user_extension_dir(mut self, enable: bool) -> Self {
-        self.include_user_dir = enable;
-        self
-    }
-}
+#[derive(Default)]
+pub struct DylibLoaderPlugin;
 
 impl Plugin for DylibLoaderPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<LoadedDylibs>();
+        app.init_resource::<LoadedDylibs>()
+            .init_resource::<PendingActivationGuards>()
+            .add_systems(Last, disarm_survived_activations);
+        let quarantine = dirs::state_dir()
+            .map(|path| path.join("jackdaw/extension-quarantine"))
+            .and_then(|path| quarantine::Quarantine::open(path).ok());
 
-        let paths = self.collect_search_paths();
-        if paths.is_empty() {
-            info!("Dylib loader: no search paths configured");
-            return;
+        // A sentinel left by a dead process identifies the active version that
+        // crashed during its first frame. Restore the retired version before
+        // garbage collection can delete it.
+        let mut recovery_failed = false;
+        if let Some(quarantine) = &quarantine
+            && let Ok(installed) = package::list_installed()
+        {
+            for extension in installed {
+                if !quarantine.is_quarantined(&extension.library_path) {
+                    continue;
+                }
+                let id = &extension.manifest.id;
+                match package::rollback(id) {
+                    Ok(Some(previous)) => {
+                        warn!(
+                            "Extension `{id}` crashed during activation; restored {}",
+                            previous.manifest.version
+                        );
+                        quarantine.clear(&extension.library_path);
+                    }
+                    Ok(None) => match package::uninstall(id) {
+                        Ok(_) => {
+                            warn!(
+                                "Extension `{id}` crashed during first activation and was disabled"
+                            );
+                            jackdaw_api_internal::extensions_config::set_extension_enabled(
+                                id, false,
+                            );
+                            quarantine.clear(&extension.library_path);
+                        }
+                        Err(error) => {
+                            warn!("Could not disable crashed extension `{id}`: {error}");
+                            recovery_failed = true;
+                        }
+                    },
+                    Err(error) => {
+                        warn!("Could not roll back crashed extension `{id}`: {error}");
+                        recovery_failed = true;
+                    }
+                }
+            }
+        }
+        if !recovery_failed && let Err(error) = package::garbage_collect() {
+            warn!("Extension garbage collection failed: {error}");
         }
 
         let mut loaded = 0u32;
         let mut failed = 0u32;
-        for file in walk_dylibs(&paths) {
+        let installed = match package::list_installed() {
+            Ok(installed) => installed,
+            Err(error) => {
+                warn!("Could not read installed extensions: {error}");
+                return;
+            }
+        };
+        for extension in installed {
+            let file = extension.library_path;
+            if quarantine
+                .as_ref()
+                .is_some_and(|quarantine| quarantine.is_quarantined(&file))
+            {
+                warn!(
+                    "Skipped quarantined extension `{}` at {}",
+                    extension.manifest.id,
+                    file.display()
+                );
+                failed += 1;
+                continue;
+            }
+            let guard = quarantine
+                .as_ref()
+                .and_then(|quarantine| quarantine.arm(&file).ok());
             match try_load(app, &file) {
                 Ok(id) => {
                     info!("Loaded extension `{id}` from {}", file.display());
+                    if let Some(guard) = guard {
+                        app.world_mut()
+                            .resource_mut::<PendingActivationGuards>()
+                            .0
+                            .push(guard);
+                    }
                     loaded += 1;
                 }
                 Err(err) => {
@@ -192,27 +178,15 @@ impl Plugin for DylibLoaderPlugin {
         }
 
         match (loaded, failed) {
-            (0, 0) => info!("Dylib loader: no dylibs found"),
+            (0, 0) => info!("Dylib loader: no installed extensions"),
             _ => info!("Dylib loader: {loaded} loaded, {failed} failed"),
         }
     }
 }
 
-impl DylibLoaderPlugin {
-    fn collect_search_paths(&self) -> Vec<PathBuf> {
-        let mut paths = Vec::new();
-        if self.include_user_dir
-            && let Some(config) = dirs::config_dir()
-        {
-            paths.push(config.join(DEFAULT_EXTENSIONS_SUBDIR));
-        }
-        if self.include_env_dir
-            && let Ok(env_path) = std::env::var(ENV_EXTENSIONS_PATH)
-        {
-            paths.push(PathBuf::from(env_path));
-        }
-        paths.extend(self.extra_paths.iter().cloned());
-        paths
+fn disarm_survived_activations(mut pending: ResMut<PendingActivationGuards>) {
+    for guard in pending.0.drain(..) {
+        guard.disarm();
     }
 }
 
@@ -293,36 +267,12 @@ impl From<BevyError> for LoadError {
     }
 }
 
-fn walk_dylibs(paths: &[PathBuf]) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for dir in paths {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if is_dylib(&path) {
-                out.push(path);
-            }
-        }
-    }
-    out
-}
-
-fn is_dylib(path: &Path) -> bool {
-    path.extension()
-        .and_then(|s| s.to_str())
-        .is_some_and(|ext| matches!(ext, "so" | "dylib" | "dll"))
-}
-
-/// dlopen `path`, keep the handle alive in [`LoadedDylibs`], drain
-/// the reflect registrations its constructors queued, resolve the
+/// dlopen `path`, keep the handle alive in [`LoadedDylibs`], resolve the
 /// extension ctor symbol, and construct one instance.
 ///
 /// The library handle is moved into `LoadedDylibs` on every path
-/// past a successful dlopen, including the error paths: dlopen has
-/// already run the dylib's constructors and the drained type
-/// registrations point into its code, so unloading is never safe.
+/// past a successful dlopen, including error paths. Superseded mappings
+/// remain inert until process exit; unloading native Rust code is unsafe.
 fn open_and_construct(
     world: &mut World,
     path: &Path,
@@ -331,8 +281,6 @@ fn open_and_construct(
     // native code; the caller verified linkage identity against the
     // running SDK before handing us the path.
     let lib = unsafe { libloading::Library::new(path)? };
-
-    drain_reflect_registrations(world);
 
     // SAFETY: the symbol's signature is fixed by the shim contract,
     // and both sides compile it against the one `JackdawExtension`
@@ -357,29 +305,11 @@ fn open_and_construct(
     Ok((ctor, ext))
 }
 
-/// Drain type registrations queued by dlopen into the world's
-/// `AppTypeRegistry`, then assign `ComponentId`s so pickers and the
-/// inspector see the new components immediately. dlopen runs the
-/// dylib's static constructors, which submit its
-/// `#[derive(Reflect)]` types to the shared SDK's
-/// `reflect_auto_register` queue.
-fn drain_reflect_registrations(world: &mut World) {
-    if let Some(registry) = world.get_resource::<bevy::ecs::reflect::AppTypeRegistry>() {
-        registry.write().register_derived_types();
-    } else {
-        debug!("drain_reflect_registrations: AppTypeRegistry missing, skipping");
-        return;
-    }
-    register_derived_component_ids(world);
-}
-
-/// Startup-scan load: construct once to harvest the extension id and
-/// run its one-time BEI input-context registration (needs `&mut
-/// App`), then store the ctor in the catalog so enable/disable
-/// cycles rebuild the extension fresh each time.
+/// Startup load: construct once to harvest the extension id, then store the
+/// constructor in the catalog. Marketplace extensions use host-owned keymap
+/// registrations and do not mutate startup-only Bevy type registries.
 fn try_load(app: &mut App, path: &Path) -> Result<String, LoadError> {
     let (ctor, ext) = open_and_construct(app.world_mut(), path)?;
-    ext.register_input_context(app);
     let id = ext.id();
     drop(ext);
 
@@ -396,15 +326,6 @@ fn try_load(app: &mut App, path: &Path) -> Result<String, LoadError> {
 /// calls panic because the host keyed resources under different
 /// `TypeId`s than the dylib sees.
 ///
-/// Same shape as the startup loader path but skips the BEI
-/// input-context registration that requires `&mut App`. In practice:
-///
-/// * Windows, operators, menu entries, and panel-extension sections
-///   activate immediately.
-/// * BEI keybinds declared via `add_input_context::<C>()` do **not**
-///   activate until the editor restarts and picks the dylib up
-///   through the normal [`DylibLoaderPlugin`] startup path.
-///
 /// The constructor is inserted into [`jackdaw_api_internal::ExtensionCatalog`]
 /// so the Extensions dialog's enable/disable toggle can reuse it, and
 /// the `Library` handle is moved into [`LoadedDylibs`] so the entry
@@ -415,50 +336,59 @@ pub fn load_from_path(world: &mut World, path: &Path) -> Result<String, LoadErro
     let (ctor, ext) = open_and_construct(world, path)?;
     let id = ext.id();
 
-    // Already-registered extensions come through this path when the
-    // user re-installs a rebuild. Don't double-register; registering
-    // the same extension twice produces duplicate windows/operators
-    // and a phantom second catalog entry.
+    // Logical unload is immediate. Every host-owned registration is removed,
+    // while LoadedDylibs deliberately retains the superseded mapping.
     if world
         .resource::<jackdaw_api_internal::ExtensionCatalog>()
         .contains(&id)
     {
-        info!(
-            "Extension `{id}` already registered; keeping the new library handle \
-             alive but skipping re-registration."
-        );
-        return Ok(id);
+        jackdaw_api_internal::lifecycle::disable_extension(world, &id);
     }
 
     jackdaw_api_internal::lifecycle::register_dylib_extension(world, ctor);
-    jackdaw_api_internal::lifecycle::load_static_extension(world, ext);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "extension registration is third-party native code; unwind is \
+                  converted into an activation failure so the caller can roll back"
+    )]
+    let activated = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        jackdaw_api_internal::lifecycle::load_static_extension(world, ext);
+    }));
+    if activated.is_err() {
+        jackdaw_api_internal::lifecycle::disable_extension(world, &id);
+        jackdaw_api_internal::lifecycle::unregister_dylib_extension(world, &id);
+        return Err(LoadError::EntryPanicked);
+    }
 
     Ok(id)
 }
 
-/// Ensure every `Component`-reflecting type in `AppTypeRegistry` has a
-/// bevy `ComponentId` assigned. Without this sweep, a newly-loaded
-/// dylib's components stay invisible to the Add Component picker
-/// (`src/inspector/component_picker.rs:108`) until something spawns or
-/// queries them.
-///
-/// [`ReflectComponent::register_component`] is idempotent, so this sweep
-/// is safe to run on every dlopen.
-fn register_derived_component_ids(world: &mut World) {
-    let reflect_components: Vec<bevy::ecs::reflect::ReflectComponent> = {
-        let registry = world
-            .resource::<bevy::ecs::reflect::AppTypeRegistry>()
-            .read();
-        registry
-            .iter()
-            .filter_map(|r| r.data::<bevy::ecs::reflect::ReflectComponent>().cloned())
-            .collect()
-    };
-    for rc in &reflect_components {
-        rc.register_component(world);
+/// Load an installed bundle's library with a crash sentinel held through the
+/// end of the current frame. A hard process crash leaves the sentinel for
+/// startup rollback; ordinary errors clear it immediately.
+pub fn load_installed_from_path(world: &mut World, path: &Path) -> Result<String, LoadError> {
+    let quarantine = dirs::state_dir()
+        .map(|state| state.join("jackdaw/extension-quarantine"))
+        .and_then(|dir| quarantine::Quarantine::open(dir).ok());
+    let guard = quarantine
+        .as_ref()
+        .and_then(|quarantine| quarantine.arm(path).ok());
+    let result = load_from_path(world, path);
+    match result {
+        Ok(id) => {
+            if let Some(guard) = guard {
+                world
+                    .get_resource_or_init::<PendingActivationGuards>()
+                    .0
+                    .push(guard);
+            }
+            Ok(id)
+        }
+        Err(error) => {
+            if let Some(quarantine) = quarantine {
+                quarantine.clear(path);
+            }
+            Err(error)
+        }
     }
-    debug!(
-        "register_derived_component_ids: ensured {} ComponentIds registered",
-        reflect_components.len()
-    );
 }

@@ -1,31 +1,32 @@
 # Architecture
 
-Jackdaw is a Bevy 0.19 plugin set. The editor and the standalone
+Jackdaw is a standalone editor built from Bevy 0.19 plugin sets. The editor and the standalone
 runtime share the same scene format and the same component
 reflection. There's no separate engine; if you can write a Bevy
 plugin, you can write a jackdaw extension.
 
 ## Plugin structure
 
-The editor is delivered as `EditorPlugins`, a Bevy `PluginGroup`.
+The composable editor is delivered by `jackdaw_editor` as
+`JackdawEditorPlugins`, a Bevy `PluginGroup`.
 The editor binary looks like:
 
 ```rust
 App::new()
     .add_plugins(DefaultPlugins.set(editor_window_plugin()))
     .add_plugins((PhysicsPlugins::default(), EnhancedInputPlugin))
-    .add_plugins(EditorPlugins::default())
+    .add_plugins(JackdawEditorPlugins::default())
     .run()
 ```
 
-`EditorPlugins` pulls in everything jackdaw needs: the launcher,
+`JackdawEditorPlugins` pulls in everything jackdaw needs: the launcher,
 viewport, hierarchy, inspector, brush tools, asset browser,
 scene IO, and the extension loader. Project code is not compiled
 into this binary; it arrives as a dynamic library the editor
 builds and loads per project (see below).
 
-The user's `GamePlugin` is used by the standalone game. The
-standalone binary doesn't add `EditorPlugins`; it adds
+The user's `GamePlugin` is used by the standalone game. The game
+doesn't add `JackdawEditorPlugins`; it adds
 `JackdawPlugin` from `jackdaw_runtime`, which is a much smaller
 plugin that knows how to load authored scenes but doesn't include
 any UI.
@@ -53,9 +54,9 @@ editor generates a shim crate into the project's gitignored
 dynamic library against the editor's SDK (a proxy dylib carrying
 the one compiled copy of bevy + jackdaw types the editor and
 everything it loads share). The build runs in the background;
-when it finishes, the editor loads the resulting dylib and the
-project's reflected components and resources appear in the
-inspector and pickers.
+when it finishes, an out-of-process extractor reports the project's reflected
+schema. The editor represents those types as data rather than mapping game
+code into its process.
 
 The editor owns this build completely: it lives in
 `.jackdaw/target/`, and the user's own `Cargo.toml`,

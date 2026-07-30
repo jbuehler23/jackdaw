@@ -10,14 +10,14 @@ keywords = ["bevy", "editor", "3d", "level-editor"]
 categories = ["game-development", "graphics"]
 # Ship only what the published crate needs: library source, the
 # assets referenced by `embedded_asset!` (env maps + grid texture),
-# the `[[example]]` source files declared below, manifest, license,
-# README, and small logos. Everything else in the repo (book/, docs/, templates/,
+# manifest, license, README, templates, and small logos. Everything else
+# in the repo (book/, docs/,
 # demo assets in `assets/jan/`, `assets/models/`, etc.) is for
 # source-checkout development and stays out of the .crate so it fits
 # under crates.io's 10 MiB upload limit.
 include = [
     "src/**/*.rs",
-    "examples/extension/*.rs",
+    "templates/**/*",
     "assets/environment_maps/**/*",
     "assets/logo/jackdaw_icon_small.png",
     "assets/logo/jackdaw_icon_pride_small.png",
@@ -36,14 +36,12 @@ include = [
 default-run = "jackdaw"
 
 [features]
-# `dylib` is on by default because the editor loads project code
-# in-process to show its components, which requires sharing the SDK's
-# type graph. Run the editor with `cargo run --target <host-triple>`
-# so it links the same SDK the build pipeline compiles project dylibs
-# against (the SDK lives in `target/<triple>/debug`, kept apart from
-# host-side build artifacts). A fast UI-only editor that skips all of
-# this is `cargo run --no-default-features`.
-default = ["multiplayer", "camera_rig", "dylib"]
+# Source and `cargo install` builds are self-contained by default.
+# Cargo only installs executables, so enabling Bevy's dynamic-linking
+# feature here would leave the installed editor without its required
+# SDK dylib. Release builds explicitly enable `dylib` after staging the
+# matching SDK beside the editor.
+default = ["multiplayer", "camera_rig", "embed-recipe"]
 # Bundles the editor-only networking authoring extension into the
 # editor: registers the proxy reflection types (`Replication`,
 # `NetworkRoom`) plus the user-toggleable networking extension. The
@@ -65,11 +63,9 @@ camera_rig = ["dep:jackdaw_camera_rig"]
 # codegen leaves undefined hidden anon constants across the dylib
 # boundary at link time.
 dylib = ["dep:jackdaw_sdk", "jackdaw_api/dynamic_linking", "jackdaw_project_build/reflect"]
-# Bake the SDK-builder recipe into the editor binary so a packaged,
-# source-free jackdaw can build its SDK on first launch (the first-run
-# setup screen). Off by default: dev builds use the workspace's own SDK
-# and assembling the recipe would slow ordinary compiles. Packaged
-# release builds enable it.
+# Bake the SDK-builder recipe into the editor binary so a self-contained
+# Cargo install can build its SDK on first launch (the first-run setup
+# screen). Enabled by default; release bundles already carry a built SDK.
 embed-recipe = ["jackdaw_project_build/embed-recipe"]
 # The prebuilt game runner: dlopens a project dylib built through the
 # SDK pipeline and runs it over the PIE link with zero play-time
@@ -158,6 +154,8 @@ jackdaw_sdk = { workspace = true, optional = true }
 # wrapper crate's `[[bin]]` is also available; either path works at
 # runtime.
 jackdaw_rustc_wrapper.workspace = true
+jackdaw_runner.workspace = true
+jackdaw_cli_internal.workspace = true
 bevy_enhanced_input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -175,9 +173,13 @@ pathdiff.workspace = true
 notify = "8"
 ctrlc = "3"
 toml = "0.8"
-# Format-preserving TOML edits for `jackdaw init` (existing-project scaffold).
+# Format-preserving TOML edits for `jd import` (existing-project integration).
 toml_edit = "0.22"
-# Embed the project templates into the binary so `jackdaw new` scaffolds
+# Compare a project's declared bevy requirement against the supported
+# minor properly: a textual prefix test both accepts `0.190` and rejects
+# a compatible range like `>=0.19, <0.21`.
+semver = "1"
+# Embed the project templates into the binary so `jd new` scaffolds
 # offline with no cargo-generate dependency.
 include_dir = "0.7"
 # Parse + rewrite a project's `main.rs` when migrating a bin-only project into a
@@ -249,7 +251,12 @@ rand = "0.9"
 serde = "1"
 lucide-icons = "0.563"
 serde_json = "1"
-avian3d = { version = "0.7", default-features = false, features = [
+# Default features stay on so the SDK resolves at least what a project
+# does: the game template adds a plain `avian3d = "0.7"`, and against an
+# SDK built leaner, any use of an item behind one of the dropped
+# features fails to compile against the redirected rlib.
+# `tests/sdk_feature_superset.rs` guards that ordering.
+avian3d = { version = "0.7", features = [
     "3d",
     "parry-f32",
     "collider-from-mesh",
@@ -260,15 +267,18 @@ jackdaw_multiplayer_editor = { version = "0.19.0", path = "crates/jackdaw_multip
 jackdaw_runtime = { version = "0.19.0", path = "crates/jackdaw_runtime" }
 jackdaw_panels = { version = "0.19.0", path = "crates/jackdaw_panels" }
 jackdaw_api = { version = "0.19.0", path = "crates/jackdaw_api" }
+jackdaw_extension = { version = "0.19.0", path = "crates/jackdaw_extension" }
 jackdaw_api_internal = { version = "0.19.0", path = "crates/jackdaw_api_internal" }
 jackdaw_api_macros = { version = "0.19.0", path = "crates/jackdaw_api_macros" }
 jackdaw_dylib = { version = "0.19.0", path = "crates/jackdaw_dylib" }
 jackdaw_loader = { version = "0.19.0", path = "crates/jackdaw_loader" }
 jackdaw_sdk = { version = "0.19.0", path = "crates/jackdaw_sdk" }
 jackdaw_rustc_wrapper = { version = "0.19.0", path = "crates/jackdaw_rustc_wrapper" }
+jackdaw_runner = { version = "0.19.0", path = "crates/jackdaw_runner" }
+jackdaw_cli_internal = { version = "0.19.0", path = "crates/jackdaw_cli" }
 bevy_enhanced_input = "0.26"
 rfd = "0.15"
-bevy_rerecast = { git = "https://github.com/HeyPlayGames/rerecast", branch = "bevy-0-19", default-features = true }
+bevy_rerecast = { git = "https://github.com/HeyPlayGames/rerecast", rev = "493074cd8c1e8c97bc8fc6b51da01e5295696860", default-features = true }
 ehttp = { version = "0.5", default-features = false, features = [
     "native-async",
     "json",
@@ -287,6 +297,9 @@ time = { version = "0.3.47", default-features = false, features = [
     "std",
     "local-offset",
     "formatting",
+    # Read back the RFC 3339 stamps we write, so the launcher can show
+    # how long ago a project was last opened.
+    "parsing",
 ] }
 fluent = "0.16"
 webbrowser = "1"
@@ -379,48 +392,12 @@ name = "jackdaw-rustc-wrapper"
 path = "src/bin/jackdaw-rustc-wrapper.rs"
 doc = false
 
+[[bin]]
+name = "jd"
+path = "src/bin/jd.rs"
+doc = false
 
-[[example]]
-name = "minimal_extension"
-path = "examples/extension/minimal_extension.rs"
-doc-scrape-examples = true
-
-[[example]]
-name = "add_operator"
-path = "examples/extension/add_operator.rs"
-doc-scrape-examples = true
-
-[[example]]
-name = "call_operator"
-path = "examples/extension/call_operator.rs"
-doc-scrape-examples = true
-
-[[example]]
-name = "keybinding"
-path = "examples/extension/keybinding.rs"
-doc-scrape-examples = true
-
-[[example]]
-name = "extend_window"
-path = "examples/extension/extend_window.rs"
-doc-scrape-examples = true
-
-[[example]]
-name = "add_window"
-path = "examples/extension/add_window.rs"
-doc-scrape-examples = true
-
-[[example]]
-name = "menu_entry"
-path = "examples/extension/menu_entry.rs"
-doc-scrape-examples = true
-
-[[example]]
-name = "widgets"
-path = "examples/extension/widgets.rs"
-doc-scrape-examples = true
-
-[[example]]
-name = "modal"
-path = "examples/extension/modal.rs"
-doc-scrape-examples = true
+[[bin]]
+name = "jackdaw-runner"
+path = "src/bin/jackdaw-runner.rs"
+doc = false

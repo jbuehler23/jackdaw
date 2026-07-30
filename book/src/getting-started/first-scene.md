@@ -7,7 +7,7 @@ with one cube in it. Five minutes, give or take.
 
 Two starting paths:
 
-- **New Project > Game** on the launcher (or `jackdaw new
+- **New Project > Game** on the launcher (or `jd new
   my-game` from the terminal). You get a normal Bevy crate: a
   `lib.rs` with a `GamePlugin`, a `main.rs` that runs the
   standalone game, a starter scene, and a `jackdaw.toml`. Pick
@@ -16,10 +16,15 @@ Two starting paths:
   just want to author a scene next to ones you have.
 
 A new project opens immediately. The editor builds the project's
-library in the background (into the gitignored `.jackdaw/`
-directory); your own components show up in the inspector once
+library in the background, into the gitignored `.jackdaw/`
+directory, and your own components show up in the inspector once
 that build finishes. Placing brushes and saving scenes works
-right away.
+right away, so you do not have to wait for it.
+
+Expect that first build to take around nine minutes: it compiles
+Bevy from source, the same as `cargo build` in any Bevy project.
+Every project pays it once. Rebuilds after that are 1 to 4
+seconds, so this is the only time you will sit through it.
 
 ## Place a cube
 

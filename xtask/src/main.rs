@@ -36,7 +36,7 @@ fn fast() -> bool {
                 "--workspace",
                 "--all-targets",
                 "--features",
-                "bevy/dynamic_linking",
+                "dylib",
                 "--",
                 "--deny",
                 "warnings",
@@ -52,7 +52,7 @@ fn fast() -> bool {
                 "--workspace",
                 "--lib",
                 "--features",
-                "bevy/dynamic_linking",
+                "dylib",
             ],
         )
 }
@@ -70,7 +70,7 @@ fn integration() -> bool {
             "ci",
             "--workspace",
             "--features",
-            "bevy/dynamic_linking",
+            "dylib",
             "--tests",
             "-E",
             "not (binary(bsn_game_run) | binary(editor_journey) | binary(bundle_smoke) \
@@ -130,14 +130,24 @@ fn heavy() -> bool {
 }
 
 fn main() -> ExitCode {
-    let tier = std::env::args().nth(1).unwrap_or_default();
-    let ok = match tier.as_str() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let tier = args.first().map(String::as_str).unwrap_or_default();
+    let ok = match tier {
         "fast" => fast(),
         "integration" => integration(),
         "heavy" => heavy(),
         "release-gate" => fast() && integration() && heavy(),
+        "package-sdk" => {
+            return jackdaw_cli_internal::package::cmd_package_sdk(&args[1..]);
+        }
+        "bundle" => {
+            return jackdaw_cli_internal::package::cmd_bundle(&args[1..]);
+        }
         other => {
-            eprintln!("usage: cargo xtask <fast|integration|heavy|release-gate> (got {other:?})");
+            eprintln!(
+                "usage: cargo xtask <fast|integration|heavy|release-gate|package-sdk|bundle> \
+                 (got {other:?})"
+            );
             false
         }
     };

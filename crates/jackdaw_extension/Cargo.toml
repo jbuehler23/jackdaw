@@ -1,0 +1,15 @@
+[package]
+name = "jackdaw_extension"
+version.workspace = true
+edition = "2024"
+description = "Focused authoring interface for Jackdaw editor extensions"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+jackdaw_api.workspace = true
+jackdaw_api_macros.workspace = true
+bevy_enhanced_input.workspace = true
+
+[lints]
+workspace = true

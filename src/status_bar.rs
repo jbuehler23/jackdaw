@@ -139,7 +139,10 @@ fn update_status_right(
     // launcher's modal renders them); this footer rendering covers
     // any build that fires while the user is already in the editor
     // (e.g., a future file-watch / user-triggered rebuild).
-    let build_active = !matches!(build_status.state, BuildState::Idle);
+    let build_active = !matches!(
+        build_status.state,
+        BuildState::Idle | BuildState::Blocked { .. }
+    );
     if !build_active
         && !mode.is_changed()
         && !space.is_changed()
@@ -181,7 +184,10 @@ fn update_status_right(
             color.0 = jackdaw_feathers::tokens::TEXT_ERROR;
             return;
         }
-        BuildState::Idle => {
+        // Sticky, so it must not take the footer over permanently: the
+        // Build panel auto-focuses with the reason, and the footer goes
+        // back to reporting the active tool.
+        BuildState::Blocked { .. } | BuildState::Idle => {
             color.0 = jackdaw_feathers::tokens::TEXT_SECONDARY;
             // Fall through to the existing gizmo / edit-mode
             // rendering below.

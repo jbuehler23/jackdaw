@@ -20,6 +20,11 @@ embed-recipe = []
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+# Plugin detection parses the project's sources. Scanning them as text
+# cannot be made correct: comments, string literals, and nested modules
+# all defeat it, and a wrong answer here is pasted into generated code.
+syn = { version = "2", features = ["full", "parsing"] }
+toml = "0.8"
 tracing = { workspace = true }
 bevy = { workspace = true, optional = true }
 jackdaw_scene_types = { workspace = true, optional = true }

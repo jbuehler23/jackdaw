@@ -1,0 +1,13 @@
+[package]
+name = "jackdaw_editor"
+version.workspace = true
+edition = "2024"
+description = "Composable standalone editor library for Jackdaw"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+jackdaw = { version = "0.19.0", path = "../.." }
+
+[lints]
+workspace = true

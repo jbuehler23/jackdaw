@@ -7,7 +7,7 @@
 //! coherence and lives in a separate harness.
 
 use bevy::prelude::*;
-use jackdaw_api::prelude::*;
+use jackdaw_extension::prelude::*;
 
 pub struct TestFixtureExtension;
 
@@ -16,7 +16,7 @@ impl JackdawExtension for TestFixtureExtension {
         "test_fixture".to_string()
     }
 
-    fn register(&self, ctx: &mut ExtensionContext) {
+    fn register(&self, ctx: &mut ExtensionRegistrar<'_>) {
         ctx.register_operator::<SpawnMarkerOp>();
     }
 }

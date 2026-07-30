@@ -1,6 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::{
     prelude::*,
@@ -14,13 +12,14 @@ use jackdaw_feathers::{
     tokens,
 };
 use jackdaw_localization::LocalizedText;
+use jackdaw_project_build::project_manifest;
 use rfd::{AsyncFileDialog, FileHandle};
 
 use crate::{
     AppState,
     new_project::scaffold_project,
     project::{self, ProjectRoot},
-    scaffold::{ScaffoldError, TemplateKind},
+    scaffold::{ImportChange, ScaffoldError, TemplateKind},
     windowing::{JackdawIcon, title_bar_repo_link},
 };
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
@@ -40,12 +39,15 @@ impl Plugin for ProjectSelectPlugin {
             )
             .add_systems(
                 Update,
-                (
-                    poll_folder_dialog,
-                    refresh_build_progress_ui,
-                    poll_preflight,
-                )
-                    .run_if(in_state(AppState::ProjectSelect)),
+                (poll_folder_dialog, poll_preflight).run_if(in_state(AppState::ProjectSelect)),
+            )
+            // Not state-guarded: the New Project modal also opens from
+            // the editor's File menu, and a scaffold started there has
+            // to be polled to completion and validated as it is typed.
+            // Both are cheap no-ops when the modal is closed.
+            .add_systems(
+                Update,
+                (poll_new_project_tasks, refresh_new_project_validation),
             )
             .add_systems(
                 Update,
@@ -56,25 +58,6 @@ impl Plugin for ProjectSelectPlugin {
                 update_preflight_banner
                     .run_if(in_state(AppState::ProjectSelect))
                     .run_if(resource_changed::<PreflightState>),
-            )
-            // Build-progress polling and task draining run in BOTH
-            // states: a background build task can outlive the
-            // launcher, and the status_bar's progress region depends
-            // on `refresh_build_progress_snapshot` to keep updating.
-            // They're cheap no-ops when nothing is in flight.
-            .add_systems(
-                Update,
-                (poll_new_project_tasks, refresh_build_progress_snapshot),
-            )
-            // The dylib-install step MUST run outside of `Update`'s
-            // `schedule_scope`. The game's `GameApp::add_systems(Update, ...)`
-            // inserts into `Schedules`; doing that while bevy has
-            // `Update` checked out via `schedule_scope` causes the
-            // modification to be overwritten when the scope re-inserts
-            // at exit. `Last` has its own scope and doesn't clash.
-            .add_systems(
-                Last,
-                apply_pending_install.run_if(in_state(AppState::ProjectSelect)),
             );
     }
 }
@@ -82,6 +65,11 @@ impl Plugin for ProjectSelectPlugin {
 /// Marker for the project selector root UI node.
 #[derive(Component, Copy, Clone)]
 struct ProjectSelectorRoot;
+
+/// The project a launcher row points at, so an action taken elsewhere
+/// (dropping a folder that no longer exists) can find and remove it.
+#[derive(Component)]
+struct RecentRow(PathBuf);
 
 /// When set, the project selector will skip UI and auto-open the given project.
 #[derive(Resource)]
@@ -94,9 +82,22 @@ pub struct PendingAutoOpen {
     pub skip_build: bool,
 }
 
-/// Resource holding the async folder picker task.
+/// Resource holding the async folder picker task and what the picked
+/// folder is for.
 #[derive(Resource)]
-struct FolderDialogTask(Task<Option<rfd::FileHandle>>);
+struct FolderDialogTask {
+    task: Task<Option<rfd::FileHandle>>,
+    purpose: FolderPurpose,
+}
+
+/// Which launcher action opened the folder picker.
+#[derive(Clone, Copy)]
+enum FolderPurpose {
+    /// Open an existing jackdaw project.
+    Open,
+    /// Set up a Bevy project that is not a jackdaw project yet.
+    Import,
+}
 
 /// Root marker for the New Project modal overlay. Spawned when the
 /// user clicks **+ New Extension** / **+ New Game**; despawned on
@@ -144,6 +145,11 @@ struct NewProjectCancelButtonLabel;
 #[derive(Component)]
 struct NewProjectCreateButton;
 
+/// Live feedback under the name field: the directory the entered name
+/// resolves to, or why it cannot be used.
+#[derive(Component)]
+struct NewProjectNameHint;
+
 #[derive(Component)]
 struct NewProjectBrowseButton;
 
@@ -168,31 +174,6 @@ struct NewProjectState {
     folder_task: Option<Task<Option<FileHandle>>>,
     /// In-flight scaffold from the embedded templates.
     scaffold_task: Option<Task<Result<PathBuf, ScaffoldError>>>,
-    /// In-flight cdylib build for a project being opened.
-    build_task: Option<Task<Result<PathBuf, crate::ext_build::BuildError>>>,
-    /// Cancel flag for the in-flight `build_task`. Flipped by
-    /// `on_cancel_new_project` when a build is running; the worker
-    /// polls it and surfaces `BuildError::Cancelled` on exit.
-    build_cancel: Option<Arc<AtomicBool>>,
-    /// Artifact waiting to be installed by `apply_pending_install`
-    /// (runs in `Last`, not `Update`, so modifications to the
-    /// `Update` schedule by the game's `GameApp::add_systems` don't
-    /// collide with `Update`'s active `schedule_scope`).
-    pending_install: Option<PathBuf>,
-    /// Shared progress sink the build task writes to. The
-    /// `refresh_build_progress_ui` system reads a snapshot from
-    /// here each frame and copies it into `build_progress_snapshot`
-    /// so the modal's bar/log nodes can update without locking on
-    /// the hot path.
-    build_progress: Option<std::sync::Arc<std::sync::Mutex<crate::ext_build::BuildProgress>>>,
-    /// Latest snapshot of `build_progress`, copied each frame.
-    /// Used by `refresh_build_progress_ui` to render the dylib
-    /// install modal's progress bar.
-    build_progress_snapshot: Option<crate::ext_build::BuildProgress>,
-    /// Path to the freshly-scaffolded project, kept around so the
-    /// build-completion handler can transition into the editor
-    /// pointing at the right root.
-    pending_project: Option<PathBuf>,
     /// Last user-visible message (used for both progress and errors).
     status: Option<String>,
 }
@@ -502,9 +483,11 @@ fn spawn_project_selector(
 
     // Detect CWD project candidate
     let cwd = std::env::current_dir().unwrap_or_default();
-    let cwd_has_project = cwd.join(".jsn/project.jsn").is_file()
-        || cwd.join("project.jsn").is_file()
-        || cwd.join("assets").is_dir();
+    // What actually marks a project now. The old markers predate
+    // `jackdaw.toml`: `assets/` in particular promoted any folder that
+    // happened to have one to the top of the launcher, where clicking it
+    // landed on the not-a-project card.
+    let cwd_has_project = cwd.join("jackdaw.toml").is_file() || cwd.join("Cargo.toml").is_file();
 
     let slots = spawn_window_shell(
         &mut commands,
@@ -649,6 +632,20 @@ fn fill_project_selector(
                             false,
                         );
 
+                        let import_entity = spawn_launcher_action_button(
+                            sidebar,
+                            "Import Bevy Project",
+                            Icon::Import,
+                            font.clone(),
+                            icon_font_handle.clone(),
+                            tokens::TOOLBAR_BG,
+                            tokens::HOVER_BG,
+                        );
+                        sidebar
+                            .commands()
+                            .entity(import_entity)
+                            .observe(spawn_import_dialog);
+
                         let browse_entity = spawn_launcher_action_button(
                             sidebar,
                             "Open Folder",
@@ -764,6 +761,7 @@ fn fill_project_selector(
                                         font.clone(),
                                         icon_font_handle.clone(),
                                         cwd.clone(),
+                                        None,
                                         true,
                                     );
                                 }
@@ -781,6 +779,7 @@ fn fill_project_selector(
                                         font.clone(),
                                         icon_font_handle.clone(),
                                         entry.path.clone(),
+                                        Some(entry.last_opened.as_str()),
                                         false,
                                     );
                                     shown_recent += 1;
@@ -806,6 +805,7 @@ fn spawn_project_row(
     font: Handle<Font>,
     icon_font: Handle<Font>,
     project_path: PathBuf,
+    last_opened: Option<&str>,
     is_cwd: bool,
 ) {
     // Rows use the same dense panel styling as editor lists: icon, primary
@@ -825,6 +825,7 @@ fn spawn_project_row(
             },
             BackgroundColor(tokens::INPUT_BG),
             BorderColor::all(tokens::BORDER_SUBTLE),
+            RecentRow(project_path.clone()),
         ))
         .id();
 
@@ -883,10 +884,19 @@ fn spawn_project_row(
                             TextColor(tokens::TEXT_PRIMARY),
                         ),
                         if_cwd_badge(is_cwd, font.clone()),
+                        // A folder that has been moved or deleted is
+                        // still listed, and used to look perfectly
+                        // healthy until the click that failed. One stat
+                        // per row says so up front.
+                        missing_badge(&project_path, font.clone()),
+                        // The engine a project targets decides whether
+                        // this editor can build it at all, so it belongs
+                        // next to the name rather than one click away.
+                        bevy_badge(&project_path, font.clone()),
                     ],
                 ),
                 (
-                    Text::new(path_display.to_string()),
+                    Text::new(row_subtitle(path_display, last_opened)),
                     TextFont {
                         font: font.clone().into(),
                         font_size: tokens::TEXT_SIZE_SM,
@@ -953,6 +963,69 @@ fn spawn_project_row(
     );
 }
 
+/// The row's second line: the path, plus when the project was last
+/// opened when that is known.
+fn row_subtitle(path_display: &str, last_opened: Option<&str>) -> String {
+    match last_opened.and_then(crate::timestamps::relative_to_now) {
+        Some(when) => format!("{path_display}  .  {when}"),
+        None => path_display.to_string(),
+    }
+}
+
+/// A `missing` chip for a recent whose folder is no longer there.
+/// Clicking still explains it and offers to forget the entry; this only
+/// stops the list from claiming the project is fine.
+fn missing_badge(project_path: &Path, font: Handle<Font>) -> impl Bundle {
+    let missing = !project_path.is_dir();
+    (
+        Text::new(if missing { "missing" } else { "" }.to_string()),
+        TextFont {
+            font: font.into(),
+            font_size: tokens::TEXT_SIZE_XS,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_ERROR),
+        Node {
+            display: if missing {
+                Display::Flex
+            } else {
+                Display::None
+            },
+            ..Default::default()
+        },
+        Pickable::IGNORE,
+    )
+}
+
+/// A `bevy 0.16` chip, coloured by whether this editor can build it.
+/// Absent when the project states no Bevy version, since an empty chip
+/// would read as a claim.
+fn bevy_badge(project_path: &Path, font: Handle<Font>) -> impl Bundle {
+    let targeted = project_manifest::targeted_bevy(project_path);
+    let supported = targeted
+        .as_deref()
+        .is_some_and(|minor| minor == jackdaw_project_build::BEVY_VERSION);
+    let (display, color) = match &targeted {
+        Some(minor) if supported => (Display::Flex, tokens::TEXT_SECONDARY),
+        Some(_) => (Display::Flex, tokens::TEXT_ERROR),
+        None => (Display::None, tokens::TEXT_SECONDARY),
+    };
+    (
+        Text::new(format!("bevy {}", targeted.unwrap_or_default())),
+        TextFont {
+            font: font.into(),
+            font_size: tokens::TEXT_SIZE_XS,
+            ..Default::default()
+        },
+        TextColor(color),
+        Node {
+            display,
+            ..Default::default()
+        },
+        Pickable::IGNORE,
+    )
+}
+
 fn if_cwd_badge(is_cwd: bool, font: Handle<Font>) -> impl Bundle {
     let text = if is_cwd { "current dir" } else { "" };
     (
@@ -968,10 +1041,30 @@ fn if_cwd_badge(is_cwd: bool, font: Handle<Font>) -> impl Bundle {
 
 fn spawn_browse_dialog(
     _: On<Pointer<Click>>,
-    mut commands: Commands,
+    commands: Commands,
     raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
 ) {
-    let mut dialog = AsyncFileDialog::new().set_title("Select project folder");
+    pick_project_folder(commands, raw_handle, FolderPurpose::Open);
+}
+
+fn spawn_import_dialog(
+    _: On<Pointer<Click>>,
+    commands: Commands,
+    raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
+) {
+    pick_project_folder(commands, raw_handle, FolderPurpose::Import);
+}
+
+fn pick_project_folder(
+    mut commands: Commands,
+    raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
+    purpose: FolderPurpose,
+) {
+    let title = match purpose {
+        FolderPurpose::Open => "Select project folder",
+        FolderPurpose::Import => "Select the Bevy project to import",
+    };
+    let mut dialog = AsyncFileDialog::new().set_title(title);
 
     if let Ok(rh) = raw_handle.single() {
         // SAFETY: called on the main thread during an observer
@@ -980,31 +1073,37 @@ fn spawn_browse_dialog(
     }
 
     let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_folder().await });
-    commands.insert_resource(FolderDialogTask(task));
+    commands.insert_resource(FolderDialogTask { task, purpose });
 }
 
 fn poll_folder_dialog(world: &mut World) {
     let Some(mut task_res) = world.get_resource_mut::<FolderDialogTask>() else {
         return;
     };
-    let Some(result) = future::block_on(future::poll_once(&mut task_res.0)) else {
+    let Some(result) = future::block_on(future::poll_once(&mut task_res.task)) else {
         return;
     };
+    let purpose = task_res.purpose;
     world.remove_resource::<FolderDialogTask>();
 
-    if let Some(handle) = result {
-        let path = handle.path().to_path_buf();
-        enter_project(world, path);
+    let Some(handle) = result else {
+        return;
+    };
+    let path = handle.path().to_path_buf();
+    match purpose {
+        // Opening an unset-up project falls through to the import
+        // offer anyway; going straight to the preview just skips one
+        // click for a user who already knows they are importing.
+        FolderPurpose::Open => enter_project(world, path),
+        FolderPurpose::Import => on_setup_jackdaw_clicked(world, path),
     }
 }
 
 /// Entry point for **every** "open a project" action from the
 /// launcher (new-scaffold completion, recent-project click, manual
-/// folder browse). Projects open in-process: anything without a
-/// `Cargo.toml`, and any Cargo project with a `jackdaw.toml`,
-/// transitions straight to the editor. A cdylib extension project
-/// gets its build-and-install pass first, and an unrecognized Cargo
-/// project gets the import offer.
+/// folder browse). Anything without a `Cargo.toml`, and any Cargo
+/// project with a `jackdaw.toml`, transitions straight to the editor;
+/// an unrecognized Cargo project gets the import offer.
 pub fn enter_project(world: &mut World, root: PathBuf) {
     enter_project_with(world, root, false);
 }
@@ -1015,19 +1114,24 @@ pub fn enter_project(world: &mut World, root: PathBuf) {
 /// startup, so a second build-and-install would either be a no-op
 /// or (for games) trigger another restart loop.
 pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
-    if skip_build || !root.join("Cargo.toml").is_file() {
+    if skip_build {
         transition_to_editor(world, root);
         return;
     }
-    // If the Cargo.toml is a plain (non-cdylib) crate there's no
-    // dylib for the loader to pick up at open time. A project with a
-    // `jackdaw.toml` is already set up and opens in-process; anything
-    // else gets the import offer.
-    if !crate::ext_build::manifest_declares_cdylib(&root) {
-        if root.join("jackdaw.toml").is_file() {
-            transition_to_editor(world, root);
-            return;
-        }
+    // A folder that is gone (a stale recent entry) or that was never a
+    // cargo project used to open the editor rooted at it, with an
+    // untitled scene and no indication anything was wrong.
+    if !root.is_dir() {
+        show_not_a_project_card(world, root, NotAProject::Missing);
+        return;
+    }
+    if !root.join("Cargo.toml").is_file() {
+        show_not_a_project_card(world, root, NotAProject::NoManifest);
+        return;
+    }
+    // A project without a `jackdaw.toml` has not been set up yet; the
+    // import flow proposes exactly what setting it up would write.
+    if !project_manifest::ProjectManifest::exists(&root) {
         info!(
             "Project at {} has a Cargo.toml but no jackdaw.toml; offering setup.",
             root.display()
@@ -1036,49 +1140,34 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
         return;
     }
 
-    let project_name = root
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("project")
-        .to_owned();
-
-    // Show the "Opening project" modal so the user sees the build
-    // + any auto-recovery retry rather than staring at a frozen
-    // launcher. The scaffold flow already has its own modal; when
-    // called from there we skip spawning a second one.
-    let scaffold_modal_already_open = {
-        let mut q = world.query_filtered::<Entity, With<NewProjectModalRoot>>();
-        q.iter(world).next().is_some()
-    };
-    if !scaffold_modal_already_open {
-        open_project_progress_modal(world, &project_name);
+    // A project set up against a different Bevy minor cannot share a
+    // type graph with this editor's SDK, so say so before the user
+    // watches a doomed build.
+    let manifest = project_manifest::ProjectManifest::read(&root);
+    let pins = project_manifest::compare_project(&root, &manifest);
+    if pins.is_blocking() {
+        show_version_mismatch_card(world, root, pins);
+        return;
+    }
+    // A same-Bevy jackdaw change is safe to open, but the project still
+    // claims the old version and still requests the old crate line, and
+    // only an offer to fix it makes that actionable. Skipped when the
+    // upgrade would be a no-op or cannot be planned.
+    if let project_manifest::PinStatus::JackdawDiffers { pinned, running } = &pins {
+        info!("Project was set up with jackdaw {pinned}; running {running}");
+        if let Ok(plan) = crate::scaffold::plan_upgrade_project(&root)
+            && !plan.is_empty()
+        {
+            show_upgrade_card(world, root, pinned.clone(), running.clone(), plan);
+            return;
+        }
     }
 
-    let progress = std::sync::Arc::new(std::sync::Mutex::new(
-        crate::ext_build::BuildProgress::default(),
-    ));
-    {
-        let mut state = world.resource_mut::<NewProjectState>();
-        state.pending_project = Some(root.clone());
-        state.status = Some(format!("Building `{project_name}`..."));
-        state.build_progress = Some(std::sync::Arc::clone(&progress));
-        state.build_progress_snapshot = Some(crate::ext_build::BuildProgress::default());
-    }
-
-    let root_for_task = root;
-    let progress_for_task = std::sync::Arc::clone(&progress);
-    let build_cancel = Arc::new(AtomicBool::new(false));
-    let cancel_for_task = Arc::clone(&build_cancel);
-    let task = AsyncComputeTaskPool::get().spawn(async move {
-        crate::ext_build::build_extension_project_with_progress(
-            &root_for_task,
-            Some(progress_for_task),
-            Some(cancel_for_task),
-        )
-    });
-    let mut state = world.resource_mut::<NewProjectState>();
-    state.build_task = Some(task);
-    state.build_cancel = Some(build_cancel);
+    // Project code is compiled by the editor's own pipeline once the
+    // project is open (`pie::prebuild_play_target`), which streams into
+    // the Build panel. The launcher's job ends at the handoff.
+    close_new_project_modal(world);
+    transition_to_editor(world, root);
 }
 
 /// Apply the project-root state change and flip `AppState` to
@@ -1352,9 +1441,121 @@ pub fn close_new_project_modal(world: &mut World) {
 /// init`) or open it without setup. `error` re-renders the card with
 /// a failure message (e.g. a Bevy version mismatch).
 fn show_setup_jackdaw_card(world: &mut World, root: PathBuf, error: Option<String>) {
+    show_setup_jackdaw_card_with_recovery(world, root, error, false);
+}
+
+/// The setup offer. When `recoverable`, the failure is one the user can
+/// choose to proceed past (a Bevy minor mismatch), so a third button
+/// offers that instead of leaving only a retry that cannot succeed.
+fn show_setup_jackdaw_card_with_recovery(
+    world: &mut World,
+    root: PathBuf,
+    error: Option<String>,
+    recoverable: bool,
+) {
+    let (_, card, font) = spawn_modal_card(world, 520.0, 700.0);
+    spawn_card_title(world, card, "Set up jackdaw for this project", &font);
+    spawn_card_body(
+        world,
+        card,
+        format!(
+            "`{}` is a Cargo project but is not set up for the editor yet.",
+            root.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("This folder")
+        ),
+        &font,
+    );
+    // The three facts a user needs before consenting, as separate
+    // claims rather than a paragraph they have to parse: what is added,
+    // what is guaranteed untouched, and what happens next.
+    spawn_fact_list(
+        world,
+        card,
+        &[
+            (
+                Icon::FilePlus,
+                "Adds a `jackdaw.toml` and a gitignored `.jackdaw/` directory.",
+            ),
+            (
+                Icon::Check,
+                "Leaves your Cargo manifest, lockfile, toolchain, and `target/` alone. \
+                 `cargo run` keeps working exactly as it does now.",
+            ),
+            (
+                Icon::CircleAlert,
+                "The editor only sees components in a library. If this project has none, \
+                 setup moves your `main.rs` setup into a `GamePlugin` (keeping the \
+                 original as `main.rs.bak`) or leaves you an empty one to fill in.",
+            ),
+            (
+                Icon::Eye,
+                "Nothing is written yet: the next screen lists every file first.",
+            ),
+        ],
+        &font,
+    );
+
+    if let Some(error) = error {
+        world.spawn((
+            Text::new(format!("Could not set up: {error}")),
+            TextFont {
+                font: font.clone().into(),
+                font_size: tokens::TEXT_SIZE_SM,
+                ..Default::default()
+            },
+            TextColor(Color::srgb(0.92, 0.45, 0.45)),
+            ChildOf(card),
+        ));
+    }
+
+    let row = spawn_card_button_row(world, card);
+
+    let open_anyway = spawn_card_button(world, row, "Open without setup", &font, false);
+    let root_open = root.clone();
+    world
+        .entity_mut(open_anyway)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = root_open.clone();
+            commands.queue(move |world: &mut World| {
+                close_new_project_modal(world);
+                transition_to_editor(world, root);
+            });
+        });
+
+    if recoverable {
+        // Retrying the identical plan would fail identically, so the
+        // only forward action is the one that changes the outcome.
+        let anyway = spawn_card_button(world, row, "Set up anyway", &font, true);
+        let root_force = root.clone();
+        world
+            .entity_mut(anyway)
+            .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                let root = root_force.clone();
+                commands.queue(move |world: &mut World| plan_and_show_import(world, root, true));
+            });
+    } else {
+        let setup = spawn_card_button(world, row, "Set up jackdaw", &font, true);
+        world
+            .entity_mut(setup)
+            .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                let root = root.clone();
+                commands.queue(move |world: &mut World| on_setup_jackdaw_clicked(world, root));
+            });
+    }
+}
+
+/// Spawn a centred modal card over a scrim, returning
+/// `(scrim, card, font)`. Every launcher card (setup, import preview,
+/// version mismatch, lib-stub warning) is this shape; only the contents
+/// differ.
+fn spawn_modal_card(
+    world: &mut World,
+    min_width: f32,
+    max_width: f32,
+) -> (Entity, Entity, Handle<Font>) {
     close_new_project_modal(world);
     let font = world.resource::<EditorFont>().0.clone();
-
     let scrim = world
         .spawn((
             NewProjectModalRoot,
@@ -1378,8 +1579,8 @@ fn show_setup_jackdaw_card(world: &mut World, root: PathBuf, error: Option<Strin
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(12.0),
                 padding: UiRect::all(Val::Px(24.0)),
-                min_width: Val::Px(480.0),
-                max_width: Val::Px(640.0),
+                min_width: Val::Px(min_width),
+                max_width: Val::Px(max_width),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
                 ..Default::default()
@@ -1389,9 +1590,12 @@ fn show_setup_jackdaw_card(world: &mut World, root: PathBuf, error: Option<Strin
             ChildOf(scrim),
         ))
         .id();
+    (scrim, card, font)
+}
 
+fn spawn_card_title(world: &mut World, card: Entity, title: &str, font: &Handle<Font>) {
     world.spawn((
-        Text::new("Set up jackdaw for this project"),
+        Text::new(title.to_string()),
         TextFont {
             font: font.clone().into(),
             font_size: tokens::TEXT_SIZE_LG,
@@ -1400,14 +1604,11 @@ fn show_setup_jackdaw_card(world: &mut World, root: PathBuf, error: Option<Strin
         TextColor(tokens::TEXT_PRIMARY),
         ChildOf(card),
     ));
+}
+
+fn spawn_card_body(world: &mut World, card: Entity, body: impl Into<String>, font: &Handle<Font>) {
     world.spawn((
-        Text::new(
-            "This project has a Cargo.toml but isn't set up for the jackdaw editor. \
-             Setting it up writes a `jackdaw.toml`, a gitignored `.jackdaw/` directory, \
-             and nothing else; your code and your project's own builds are untouched. \
-             If the project has no library target, a `GamePlugin` stub is created for \
-             you.",
-        ),
+        Text::new(body.into()),
         TextFont {
             font: font.clone().into(),
             font_size: tokens::TEXT_SIZE_SM,
@@ -1416,21 +1617,266 @@ fn show_setup_jackdaw_card(world: &mut World, root: PathBuf, error: Option<Strin
         TextColor(tokens::TEXT_SECONDARY),
         ChildOf(card),
     ));
+}
 
-    if let Some(error) = error {
-        world.spawn((
-            Text::new(format!("Could not set up: {error}")),
-            TextFont {
-                font: font.clone().into(),
-                font_size: tokens::TEXT_SIZE_SM,
+/// An icon-led list of short claims.
+///
+/// A consent screen's job is to let someone check a small number of
+/// specific facts, which a paragraph actively works against: the
+/// reassuring sentence and the consequential one look the same and read
+/// at the same speed. One row per claim makes them separately
+/// checkable.
+fn spawn_fact_list(world: &mut World, card: Entity, facts: &[(Icon, &str)], font: &Handle<Font>) {
+    let icon_font = world
+        .resource::<jackdaw_feathers::icons::IconFont>()
+        .0
+        .clone();
+    let list = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(8.0),
                 ..Default::default()
             },
-            TextColor(Color::srgb(0.92, 0.45, 0.45)),
             ChildOf(card),
+        ))
+        .id();
+    for (icon, text) in facts {
+        world.spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(10.0),
+                align_items: AlignItems::Start,
+                ..Default::default()
+            },
+            ChildOf(list),
+            children![
+                (
+                    Text::new(String::from(icon.unicode())),
+                    TextFont {
+                        font: icon_font.clone().into(),
+                        font_size: tokens::ICON_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                ),
+                (
+                    Text::new((*text).to_string()),
+                    TextFont {
+                        font: font.clone().into(),
+                        font_size: tokens::TEXT_SIZE_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                ),
+            ],
         ));
     }
+}
 
-    let row = world
+/// A numbered list of things the user has to do, in order.
+///
+/// Distinct from [`spawn_fact_list`]: these are instructions to work
+/// through, so they carry their position rather than an icon, and the
+/// numbering comes from the layout instead of being typed into the
+/// strings where it can drift.
+fn spawn_step_list(world: &mut World, card: Entity, steps: &[&str], font: &Handle<Font>) {
+    let list = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(8.0),
+                ..Default::default()
+            },
+            ChildOf(card),
+        ))
+        .id();
+    for (index, step) in steps.iter().enumerate() {
+        world.spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(10.0),
+                align_items: AlignItems::Start,
+                ..Default::default()
+            },
+            ChildOf(list),
+            children![
+                (
+                    Text::new(format!("{}", index + 1)),
+                    TextFont {
+                        font: font.clone().into(),
+                        font_size: tokens::TEXT_SIZE_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_PRIMARY),
+                    Node {
+                        min_width: Val::Px(14.0),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    Text::new((*step).to_string()),
+                    TextFont {
+                        font: font.clone().into(),
+                        font_size: tokens::TEXT_SIZE_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                ),
+            ],
+        ));
+    }
+}
+
+/// Render an import plan's changes as one row per file, rather than as
+/// a paragraph.
+///
+/// The distinction that matters for consent is create-versus-replace: a
+/// replace overwrites something the user already had. As prose bullets
+/// the two read identically, so this gives replaces their own icon and
+/// the warning colour, and puts the verb before the path.
+fn spawn_change_list(
+    world: &mut World,
+    card: Entity,
+    changes: &[ImportChange],
+    font: &Handle<Font>,
+) {
+    let icon_font = world
+        .resource::<jackdaw_feathers::icons::IconFont>()
+        .0
+        .clone();
+    let list = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                padding: UiRect::all(Val::Px(10.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+                ..Default::default()
+            },
+            BackgroundColor(tokens::INPUT_BG),
+            BorderColor::all(tokens::BORDER_SUBTLE),
+            ChildOf(card),
+        ))
+        .id();
+
+    for change in changes {
+        let (icon, verb, color) = match change {
+            ImportChange::CreateDirectory { .. } => {
+                (Icon::FolderPlus, "create", tokens::TEXT_SECONDARY)
+            }
+            // `summary` decides create-vs-replace by looking at the
+            // disk, so ask it rather than re-deriving the answer here.
+            ImportChange::WriteFile { .. } if change.summary().starts_with("replace") => {
+                (Icon::FilePen, "replace", tokens::TEXT_ERROR)
+            }
+            ImportChange::WriteFile { .. } => (Icon::FilePlus, "create", tokens::TEXT_SECONDARY),
+        };
+        let path = match change {
+            ImportChange::CreateDirectory { path } | ImportChange::WriteFile { path, .. } => path,
+        };
+        world.spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                align_items: AlignItems::Center,
+                ..Default::default()
+            },
+            ChildOf(list),
+            children![
+                (
+                    Text::new(String::from(icon.unicode())),
+                    TextFont {
+                        font: icon_font.clone().into(),
+                        font_size: tokens::ICON_SM,
+                        ..Default::default()
+                    },
+                    TextColor(color),
+                ),
+                (
+                    Text::new(verb.to_string()),
+                    TextFont {
+                        font: font.clone().into(),
+                        font_size: tokens::TEXT_SIZE_XS,
+                        ..Default::default()
+                    },
+                    TextColor(color),
+                    Node {
+                        min_width: Val::Px(52.0),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    Text::new(path.display().to_string()),
+                    TextFont {
+                        font: font.clone().into(),
+                        font_size: tokens::TEXT_SIZE_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_PRIMARY),
+                ),
+            ],
+        ));
+    }
+}
+
+/// Render a plan's notes as their own rows, so guidance is not mistaken
+/// for another file the import is about to touch.
+fn spawn_note_list(world: &mut World, card: Entity, notes: &[String], font: &Handle<Font>) {
+    if notes.is_empty() {
+        return;
+    }
+    let icon_font = world
+        .resource::<jackdaw_feathers::icons::IconFont>()
+        .0
+        .clone();
+    let list = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(6.0),
+                ..Default::default()
+            },
+            ChildOf(card),
+        ))
+        .id();
+    for note in notes {
+        world.spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                align_items: AlignItems::Start,
+                ..Default::default()
+            },
+            ChildOf(list),
+            children![
+                (
+                    Text::new(String::from(Icon::Info.unicode())),
+                    TextFont {
+                        font: icon_font.clone().into(),
+                        font_size: tokens::ICON_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                ),
+                (
+                    Text::new(note.clone()),
+                    TextFont {
+                        font: font.clone().into(),
+                        font_size: tokens::TEXT_SIZE_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                ),
+            ],
+        ));
+    }
+}
+
+/// The right-aligned action row at the bottom of a modal card.
+fn spawn_card_button_row(world: &mut World, card: Entity) -> Entity {
+    world
         .spawn((
             Node {
                 flex_direction: FlexDirection::Row,
@@ -1440,27 +1886,7 @@ fn show_setup_jackdaw_card(world: &mut World, root: PathBuf, error: Option<Strin
             },
             ChildOf(card),
         ))
-        .id();
-
-    let open_anyway = spawn_card_button(world, row, "Open without setup", &font, false);
-    let setup = spawn_card_button(world, row, "Set up jackdaw", &font, true);
-
-    let root_open = root.clone();
-    world
-        .entity_mut(open_anyway)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            let root = root_open.clone();
-            commands.queue(move |world: &mut World| {
-                close_new_project_modal(world);
-                transition_to_editor(world, root);
-            });
-        });
-    world
-        .entity_mut(setup)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            let root = root.clone();
-            commands.queue(move |world: &mut World| on_setup_jackdaw_clicked(world, root));
-        });
+        .id()
 }
 
 /// A modal-card button. Primary uses the accent fill; secondary the toolbar fill.
@@ -1503,102 +1929,316 @@ fn spawn_card_button(
         .id()
 }
 
-/// Run the project import for the "Set up jackdaw" card. On success,
-/// re-enter the project (now set up, so it opens in-process); on
-/// failure (including a Bevy version mismatch), re-show the card with
-/// the error instead of opening. If setup had to create a
-/// `src/lib.rs` stub (bin-only project), warn the dev to move their game code
-/// into the new `GamePlugin` before continuing.
-fn on_setup_jackdaw_clicked(world: &mut World, root: PathBuf) {
-    match crate::scaffold::import_project(&root, None) {
-        Ok(report) => {
-            info!(
-                "Set up jackdaw at {}: {}",
-                root.display(),
-                report.actions.join(", ")
-            );
-            if report.created_lib_stub {
-                show_lib_stub_warning_card(world, root);
-            } else {
+/// Offer to move a project onto this jackdaw. Same consent model as
+/// import: the exact edits are listed, and skipping is a normal choice
+/// (the project opens and builds either way).
+fn show_upgrade_card(
+    world: &mut World,
+    root: PathBuf,
+    pinned: String,
+    running: String,
+    plan: crate::scaffold::ImportPlan,
+) {
+    let (_, card, font) = spawn_modal_card(world, 520.0, 720.0);
+    spawn_card_title(world, card, "Update this project for jackdaw", &font);
+    spawn_card_body(
+        world,
+        card,
+        format!(
+            "`{}` was set up with jackdaw {pinned}; you are running {running}. Both target \
+             Bevy {bevy}, so the project still builds either way.\n\n\
+             Updating records the new version and moves the project's jackdaw dependencies \
+             onto the matching release line:",
+            root.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("This project"),
+            bevy = jackdaw_project_build::BEVY_VERSION,
+        ),
+        &font,
+    );
+    spawn_change_list(world, card, &plan.changes, &font);
+    spawn_note_list(world, card, &plan.notes, &font);
+
+    let row = spawn_card_button_row(world, card);
+    let skip = spawn_card_button(world, row, "Not now", &font, false);
+    let update = spawn_card_button(world, row, "Update project", &font, true);
+
+    let skip_root = root.clone();
+    world
+        .entity_mut(skip)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = skip_root.clone();
+            commands.queue(move |world: &mut World| {
                 close_new_project_modal(world);
-                enter_project_with(world, root, false);
-            }
-        }
-        Err(e) => {
-            warn!("Set up jackdaw failed for {}: {e}", root.display());
-            show_setup_jackdaw_card(world, root, Some(e.to_string()));
+                transition_to_editor(world, root);
+            });
+        });
+    world
+        .entity_mut(update)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let plan = plan.clone();
+            commands.queue(move |world: &mut World| {
+                let root = plan.root.clone();
+                if let Err(error) = crate::scaffold::apply_import_plan(&plan) {
+                    warn!("Upgrade failed for {}: {error}", root.display());
+                }
+                close_new_project_modal(world);
+                transition_to_editor(world, root);
+            });
+        });
+}
+
+/// Why a folder cannot be opened as a project.
+#[derive(Clone, Copy)]
+enum NotAProject {
+    /// The folder is gone: a recent entry pointing at a moved or
+    /// deleted directory.
+    Missing,
+    /// The folder exists but holds no `Cargo.toml`.
+    NoManifest,
+}
+
+/// Refuse to open a folder that is not a project, naming what was
+/// expected and offering the actions that would fix it. Opening the
+/// editor rooted at an arbitrary folder looks like success and is not.
+fn show_not_a_project_card(world: &mut World, root: PathBuf, reason: NotAProject) {
+    let (_, card, font) = spawn_modal_card(world, 480.0, 640.0);
+    let (title, body) = match reason {
+        NotAProject::Missing => (
+            "That project folder is gone",
+            format!(
+                "`{}` no longer exists. It was probably moved, renamed, or deleted.\n\n\
+                 Removing it from the list does not touch any files.",
+                root.display()
+            ),
+        ),
+        NotAProject::NoManifest => (
+            "That folder is not a Rust project",
+            format!(
+                "`{}` has no Cargo.toml, so there is no Bevy project here to open.\n\n\
+                 Pick the folder that holds your project's Cargo.toml, or create a new \
+                 project with New Game.",
+                root.display()
+            ),
+        ),
+    };
+    spawn_card_title(world, card, title, &font);
+    spawn_card_body(world, card, body, &font);
+
+    let row = spawn_card_button_row(world, card);
+    let back = spawn_card_button(world, row, "Back", &font, false);
+    world
+        .entity_mut(back)
+        .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.queue(close_new_project_modal);
+        });
+
+    if matches!(reason, NotAProject::Missing) {
+        let forget = spawn_card_button(world, row, "Remove from list", &font, true);
+        world
+            .entity_mut(forget)
+            .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                let root = root.clone();
+                commands.queue(move |world: &mut World| {
+                    project::remove_recent(&root);
+                    let stale: Vec<Entity> = world
+                        .query::<(Entity, &RecentRow)>()
+                        .iter(world)
+                        .filter(|(_, row)| row.0 == root)
+                        .map(|(entity, _)| entity)
+                        .collect();
+                    for entity in stale {
+                        if let Ok(row) = world.get_entity_mut(entity) {
+                            row.despawn();
+                        }
+                    }
+                    close_new_project_modal(world);
+                });
+            });
+    }
+}
+
+/// Shown when a project's recorded pins say it targets a different Bevy
+/// minor than this editor. Opening anyway is allowed (scenes and assets
+/// still load), but project code will not build, so the card says so
+/// rather than letting the user discover it as a wall of compile errors.
+fn show_version_mismatch_card(
+    world: &mut World,
+    root: PathBuf,
+    status: project_manifest::PinStatus,
+) {
+    let project_manifest::PinStatus::BevyDiffers { pinned, running } = status else {
+        transition_to_editor(world, root);
+        return;
+    };
+    let (_, card, font) = spawn_modal_card(world, 480.0, 640.0);
+    spawn_card_title(world, card, "This project targets a different Bevy", &font);
+    spawn_card_body(
+        world,
+        card,
+        format!(
+            "`{}` was set up for Bevy {pinned}; this jackdaw targets Bevy {running}. The editor \
+             and your game code have to share one Bevy version, so project code will not build \
+             until they match.\n\nEither install the jackdaw release for Bevy {pinned}, or \
+             migrate the project to Bevy {running} and update the `bevy` line in jackdaw.toml.\n\n\
+             You can still open the project to look at its scenes.",
+            root.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("this project")
+        ),
+        &font,
+    );
+
+    let row = spawn_card_button_row(world, card);
+    let back = spawn_card_button(world, row, "Back", &font, false);
+    let open_anyway = spawn_card_button(world, row, "Open anyway", &font, true);
+    world
+        .entity_mut(back)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.queue(close_new_project_modal);
+        });
+    world
+        .entity_mut(open_anyway)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = root.clone();
+            commands.queue(move |world: &mut World| {
+                close_new_project_modal(world);
+                transition_to_editor(world, root);
+            });
+        });
+}
+
+/// Build an import preview for the "Set up jackdaw" card. Planning is
+/// side-effect free; a second explicit action applies the exact proposal.
+fn on_setup_jackdaw_clicked(world: &mut World, root: PathBuf) {
+    plan_and_show_import(world, root, false);
+}
+
+/// Plan the import and show the preview, or explain why it could not be
+/// planned. `allow_bevy_mismatch` is the second attempt after the user
+/// chose to proceed past a version mismatch, so the card offers a way
+/// forward instead of a button that fails identically every time.
+fn plan_and_show_import(world: &mut World, root: PathBuf, allow_bevy_mismatch: bool) {
+    match crate::scaffold::plan_import_with(&root, None, None, allow_bevy_mismatch) {
+        Ok(plan) if plan.is_empty() => enter_project_with(world, root, false),
+        Ok(plan) => show_import_preview_card(world, plan),
+        Err(error) => {
+            warn!("Set up jackdaw failed for {}: {error}", root.display());
+            let recoverable = matches!(error, crate::scaffold::ScaffoldError::BevyVersion { .. });
+            show_setup_jackdaw_card_with_recovery(
+                world,
+                root,
+                Some(error.to_string()),
+                recoverable,
+            );
         }
     }
 }
 
-/// Shown after setup creates a `src/lib.rs` stub for a bin-only project. The
-/// editor only sees components that live in the project's library, so the dev
-/// has to move their game code out of `main.rs` into the new `GamePlugin`
-/// before their components appear. Offers an automatic migration, or opening
-/// the editor as-is (it just won't show their components yet).
-fn show_lib_stub_warning_card(world: &mut World, root: PathBuf) {
-    show_lib_stub_warning_card_with_note(world, root, None);
+fn show_import_preview_card(world: &mut World, plan: crate::scaffold::ImportPlan) {
+    let (_, card, font) = spawn_modal_card(world, 560.0, 760.0);
+    spawn_card_title(world, card, "Review project integration", &font);
+    // Lead with the rewrite when there is one. A blanket reassurance
+    // printed above a line reading `replace src/main.rs` is worse than
+    // no reassurance: the user reads the summary, not the bullets.
+    let intro = if plan.migrated_bin_target {
+        format!(
+            "Jackdaw will rewrite `src/main.rs` in `{}`, keeping the original as \
+             `src/main.rs.bak`, and make the changes below. Your Cargo manifest, lockfile, \
+             and `target/` are not touched.",
+            plan.root.display()
+        )
+    } else {
+        format!(
+            "Jackdaw will make these changes to `{}`. Your Cargo manifest, lockfile, and \
+             `target/` are not touched.",
+            plan.root.display()
+        )
+    };
+    spawn_card_body(world, card, intro, &font);
+
+    spawn_change_list(world, card, &plan.changes, &font);
+    spawn_note_list(world, card, &plan.notes, &font);
+    let row = spawn_card_button_row(world, card);
+    let cancel = spawn_card_button(world, row, "Cancel", &font, false);
+    let apply = spawn_card_button(world, row, "Apply changes", &font, true);
+
+    let cancel_root = plan.root.clone();
+    world
+        .entity_mut(cancel)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = cancel_root.clone();
+            commands.queue(move |world: &mut World| show_setup_jackdaw_card(world, root, None));
+        });
+    world
+        .entity_mut(apply)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let plan = plan.clone();
+            commands.queue(move |world: &mut World| {
+                let root = plan.root.clone();
+                match crate::scaffold::apply_import_plan(&plan) {
+                    Ok(report) => {
+                        info!(
+                            "Set up jackdaw at {}: {}",
+                            root.display(),
+                            report.actions.join(", ")
+                        );
+                        if report.created_lib_stub {
+                            // The plan records why the automatic
+                            // migration declined; showing that beats a
+                            // generic "move your code".
+                            let reason = plan
+                                .notes
+                                .iter()
+                                .find_map(|note| {
+                                    note.strip_prefix(
+                                        "automatic bin-to-library conversion was unavailable: ",
+                                    )
+                                })
+                                .map(str::to_string);
+                            show_lib_stub_warning_card(
+                                world,
+                                root,
+                                plan.package_dir.clone(),
+                                reason,
+                            );
+                        } else {
+                            close_new_project_modal(world);
+                            enter_project_with(world, root, false);
+                        }
+                    }
+                    Err(error) => {
+                        show_setup_jackdaw_card(world, root, Some(error.to_string()));
+                    }
+                }
+            });
+        });
 }
 
-/// As [`show_lib_stub_warning_card`], with an extra red note (e.g. why an
-/// automatic migration couldn't run).
-fn show_lib_stub_warning_card_with_note(world: &mut World, root: PathBuf, note: Option<String>) {
-    close_new_project_modal(world);
-    let font = world.resource::<EditorFont>().0.clone();
-
-    let scrim = world
-        .spawn((
-            NewProjectModalRoot,
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                top: Val::Px(0.0),
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..Default::default()
-            },
-            BackgroundColor(tokens::DIALOG_BACKDROP),
-            GlobalZIndex(100),
-        ))
-        .id();
-    let card = world
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(12.0),
-                padding: UiRect::all(Val::Px(24.0)),
-                min_width: Val::Px(480.0),
-                max_width: Val::Px(640.0),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
-                ..Default::default()
-            },
-            BackgroundColor(tokens::PANEL_BG),
-            BorderColor::all(tokens::BORDER_SUBTLE),
-            ChildOf(scrim),
-        ))
-        .id();
-
+/// Shown after setup falls back to an empty `src/lib.rs` stub, which
+/// only happens when the automatic `main.rs` migration could not follow
+/// the project's shape. The editor sees components only in a library, so
+/// the remaining work is a manual move, and this says exactly what it is.
+///
+/// There is deliberately no "migrate for me" button: reaching this card
+/// means the migration already declined on this exact source, so a
+/// button re-running it could only fail the same way.
+fn show_lib_stub_warning_card(
+    world: &mut World,
+    root: PathBuf,
+    package_dir: PathBuf,
+    reason: Option<String>,
+) {
+    let (_, card, font) = spawn_modal_card(world, 480.0, 660.0);
+    spawn_card_title(world, card, "Move your game code into GamePlugin", &font);
     world.spawn((
-        Text::new("Created a library for your game code"),
-        TextFont {
-            font: font.clone().into(),
-            font_size: tokens::TEXT_SIZE_LG,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_PRIMARY),
-        ChildOf(card),
-    ));
-    world.spawn((
-        Text::new(
-            "This project had no library target, so jackdaw created `src/lib.rs` with \
-             an empty `GamePlugin`. The editor only discovers components that live in \
-             your library, so move your gameplay (components, systems, resources) out \
-             of `main.rs` into `GamePlugin`, then have `main.rs` add it. Until you do, \
-             the editor opens but the inspector won't list your components.",
-        ),
+        Text::new(format!(
+            "This project had no library target, so jackdaw created an empty `GamePlugin` \
+             in {}. The editor only discovers components that live in your library, so \
+             until you move your gameplay across, the editor opens but the inspector \
+             lists none of your components.",
+            package_dir.join("src/lib.rs").display()
+        )),
         TextFont {
             font: font.clone().into(),
             font_size: tokens::TEXT_SIZE_SM,
@@ -1607,10 +2247,23 @@ fn show_lib_stub_warning_card_with_note(world: &mut World, root: PathBuf, note: 
         TextColor(Color::srgb(0.95, 0.78, 0.45)),
         ChildOf(card),
     ));
+    spawn_step_list(
+        world,
+        card,
+        &[
+            "Move your components, systems, and resources from `main.rs` into `lib.rs`, \
+             and make them `pub`.",
+            "Move the `App` builder calls that register them (`add_systems`, \
+             `insert_resource`) into `GamePlugin::build`.",
+            "Leave `DefaultPlugins` and `run()` in `main.rs`, and add \
+             `.add_plugins(<your_crate>::GamePlugin)` there.",
+        ],
+        &font,
+    );
 
-    if let Some(note) = note {
+    if let Some(reason) = reason {
         world.spawn((
-            Text::new(note),
+            Text::new(format!("Jackdaw could not do this for you: {reason}")),
             TextFont {
                 font: font.clone().into(),
                 font_size: tokens::TEXT_SIZE_SM,
@@ -1621,361 +2274,20 @@ fn show_lib_stub_warning_card_with_note(world: &mut World, root: PathBuf, note: 
         ));
     }
 
-    let row = world
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                justify_content: JustifyContent::FlexEnd,
-                ..Default::default()
-            },
-            ChildOf(card),
-        ))
-        .id();
-
-    let open_editor =
-        spawn_card_button(world, row, "Open editor (move code yourself)", &font, false);
-    let migrate = spawn_card_button(world, row, "Migrate my code", &font, true);
-
-    let root_open = root.clone();
+    let row = spawn_card_button_row(world, card);
+    let open_editor = spawn_card_button(world, row, "Open the editor", &font, true);
     world
         .entity_mut(open_editor)
         .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            let root = root_open.clone();
+            // The project root, not the package directory: in a
+            // workspace those differ, and `jackdaw.toml` lives at the
+            // root the user opened.
+            let root = root.clone();
             commands.queue(move |world: &mut World| {
                 close_new_project_modal(world);
                 enter_project_with(world, root, false);
             });
         });
-    world
-        .entity_mut(migrate)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            let root = root.clone();
-            commands.queue(move |world: &mut World| on_migrate_clicked(world, root));
-        });
-}
-
-/// Plan an automatic migration of the project's `main.rs` into the new
-/// `GamePlugin`. On success show a preview to confirm; on failure fall back to
-/// the manual warning card with the reason appended.
-fn on_migrate_clicked(world: &mut World, root: PathBuf) {
-    let crate_name = match crate::migrate::crate_name_of(&root) {
-        Ok(n) => n,
-        Err(e) => {
-            warn!("Migrate: {e}");
-            show_lib_stub_warning_card_with_note(
-                world,
-                root,
-                Some(format!("Couldn't read the crate name: {e}")),
-            );
-            return;
-        }
-    };
-    match crate::migrate::plan_migration(&root, &crate_name) {
-        Ok(plan) => show_migration_preview_card(world, root, plan),
-        Err(e) => {
-            warn!("Migrate: {e}");
-            show_lib_stub_warning_card_with_note(
-                world,
-                root,
-                Some(format!(
-                    "Couldn't migrate automatically ({e}). Move your code into `GamePlugin` by hand."
-                )),
-            );
-        }
-    }
-}
-
-/// Preview of a planned migration: what moves into the library, what gets wired
-/// into `GamePlugin`, and the safety note. "Apply migration" writes the files
-/// (original `main.rs` saved as `main.rs.bak`) then builds + opens; "Back"
-/// returns to the warning card.
-fn show_migration_preview_card(
-    world: &mut World,
-    root: PathBuf,
-    plan: crate::migrate::MigrationPlan,
-) {
-    close_new_project_modal(world);
-    let font = world.resource::<EditorFont>().0.clone();
-
-    let scrim = world
-        .spawn((
-            NewProjectModalRoot,
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                top: Val::Px(0.0),
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..Default::default()
-            },
-            BackgroundColor(tokens::DIALOG_BACKDROP),
-            GlobalZIndex(100),
-        ))
-        .id();
-    let card = world
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(10.0),
-                padding: UiRect::all(Val::Px(24.0)),
-                min_width: Val::Px(520.0),
-                max_width: Val::Px(680.0),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
-                ..Default::default()
-            },
-            BackgroundColor(tokens::PANEL_BG),
-            BorderColor::all(tokens::BORDER_SUBTLE),
-            ChildOf(scrim),
-        ))
-        .id();
-
-    world.spawn((
-        Text::new("Migrate your game code"),
-        TextFont {
-            font: font.clone().into(),
-            font_size: tokens::TEXT_SIZE_LG,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_PRIMARY),
-        ChildOf(card),
-    ));
-    world.spawn((
-        Text::new("Nothing is written until you click Apply. Your original main.rs is saved as main.rs.bak."),
-        TextFont {
-            font: font.clone().into(),
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(card),
-    ));
-
-    let mut summary = String::new();
-    if !plan.moved_items.is_empty() {
-        summary.push_str(&format!(
-            "Move into src/lib.rs:\n  {}\n\n",
-            plan.moved_items.join(", ")
-        ));
-    }
-    if !plan.moved_calls.is_empty() {
-        summary.push_str(&format!(
-            "Wire into GamePlugin::build:\n  {}\n\n",
-            plan.moved_calls.join("\n  ")
-        ));
-    }
-    summary.push_str("Slim src/main.rs to DefaultPlugins + add_plugins(GamePlugin).");
-    for note in &plan.notes {
-        summary.push_str(&format!("\n\nNote: {note}"));
-    }
-    world.spawn((
-        Text::new(summary),
-        TextFont {
-            font: font.clone().into(),
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_PRIMARY),
-        ChildOf(card),
-    ));
-
-    let row = world
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                justify_content: JustifyContent::FlexEnd,
-                ..Default::default()
-            },
-            ChildOf(card),
-        ))
-        .id();
-
-    let back = spawn_card_button(world, row, "Back", &font, false);
-    let apply = spawn_card_button(world, row, "Apply migration", &font, true);
-
-    let root_back = root.clone();
-    world
-        .entity_mut(back)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            let root = root_back.clone();
-            commands.queue(move |world: &mut World| show_lib_stub_warning_card(world, root));
-        });
-
-    // The plan is moved into the apply observer; it owns the generated contents.
-    let plan = std::sync::Arc::new(plan);
-    world
-        .entity_mut(apply)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            let root = root.clone();
-            let plan = std::sync::Arc::clone(&plan);
-            commands.queue(move |world: &mut World| {
-                match crate::migrate::apply_migration(&root, &plan) {
-                    Ok(()) => {
-                        info!("Migrated {} into GamePlugin", root.display());
-                        close_new_project_modal(world);
-                        enter_project_with(world, root, false);
-                    }
-                    Err(e) => {
-                        warn!("Migrate apply failed for {}: {e}", root.display());
-                        show_lib_stub_warning_card_with_note(
-                            world,
-                            root,
-                            Some(format!("Couldn't write the migration: {e}")),
-                        );
-                    }
-                }
-            });
-        });
-}
-
-pub fn open_project_progress_modal(world: &mut World, project_name: &str) {
-    close_new_project_modal(world);
-
-    let editor_font = world.resource::<EditorFont>().0.clone();
-
-    let scrim = world
-        .spawn((
-            NewProjectModalRoot,
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                top: Val::Px(0.0),
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..Default::default()
-            },
-            BackgroundColor(tokens::DIALOG_BACKDROP),
-            GlobalZIndex(100),
-        ))
-        .id();
-
-    let card = world
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(12.0),
-                padding: UiRect::all(Val::Px(24.0)),
-                min_width: Val::Px(480.0),
-                max_width: Val::Px(720.0),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
-                ..Default::default()
-            },
-            BackgroundColor(tokens::PANEL_BG),
-            BorderColor::all(tokens::BORDER_SUBTLE),
-            ChildOf(scrim),
-        ))
-        .id();
-
-    world.spawn((
-        Text::new(format!("Opening `{project_name}`")),
-        TextFont {
-            font: editor_font.clone().into(),
-            font_size: tokens::TEXT_SIZE_LG,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_PRIMARY),
-        ChildOf(card),
-    ));
-
-    // Up-front hint about how long the build can take. Without this
-    // users see a blank-looking launcher for several minutes on a
-    // first run and assume jackdaw has hung.
-    world.spawn((
-        Text::new(
-            "Building the project. First run with a fresh cargo cache can \
-             take 5 to 10 minutes (bevy is ~500 crates). Subsequent opens \
-             are incremental and finish in seconds.",
-        ),
-        TextFont {
-            font: editor_font.clone().into(),
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(card),
-    ));
-
-    world.spawn((
-        NewProjectStatusText,
-        Text::new(String::new()),
-        TextFont {
-            font: editor_font.clone().into(),
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(card),
-    ));
-
-    // Progress container + children mirror the scaffold modal so
-    // `refresh_build_progress_ui` walks the same marker chain.
-    // `display: Flex` (not None) so the user sees the placeholder
-    // text + empty progress bar right away, instead of a blank
-    // card while cargo's first artifact event is pending.
-    let progress_container = world
-        .spawn((
-            NewProjectProgressContainer,
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(6.0),
-                margin: UiRect::top(Val::Px(8.0)),
-                display: Display::Flex,
-                ..Default::default()
-            },
-            ChildOf(card),
-        ))
-        .id();
-
-    world.spawn((
-        NewProjectProgressCrateLabel,
-        LocalizedText::new("preparing-build"),
-        TextFont {
-            font: editor_font.clone().into(),
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(progress_container),
-    ));
-
-    let bar_slot = world
-        .spawn((
-            NewProjectProgressBarSlot,
-            Node {
-                width: Val::Percent(100.0),
-                ..Default::default()
-            },
-            ChildOf(progress_container),
-        ))
-        .id();
-    world.spawn((
-        jackdaw_feathers::progress::progress_bar(0.0),
-        ChildOf(bar_slot),
-    ));
-
-    world.spawn((
-        NewProjectLogText,
-        Text::new(String::new()),
-        TextFont {
-            font: editor_font.clone().into(),
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        Node {
-            max_height: Val::Px(220.0),
-            overflow: Overflow::clip(),
-            ..Default::default()
-        },
-        ChildOf(progress_container),
-    ));
 }
 
 /// Show the New Project modal with the given template kind
@@ -2127,6 +2439,21 @@ pub fn open_new_project_modal(world: &mut World, kind: TemplateKind) {
                 .with_default_value(name_placeholder.to_string())
                 .auto_focus(),
         ),
+    ));
+    // What the typed name will actually become, or why it cannot be
+    // used, updated as they type. Discovering "`2d-shooter` is not a
+    // usable crate name" only after committing is the failure mode this
+    // exists to remove.
+    world.spawn((
+        NewProjectNameHint,
+        Text::new(String::new()),
+        TextFont {
+            font: editor_font.clone().into(),
+            font_size: tokens::TEXT_SIZE_XS,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        ChildOf(card),
     ));
 
     // Location field
@@ -2331,15 +2658,7 @@ pub fn open_new_project_modal(world: &mut World, kind: TemplateKind) {
 }
 
 fn on_cancel_new_project(_: On<Pointer<Click>>, mut commands: Commands) {
-    commands.queue(|world: &mut World| {
-        let mut state = world.resource_mut::<NewProjectState>();
-        if let Some(cancel) = state.build_cancel.as_ref() {
-            cancel.store(true, Ordering::Release);
-            state.status = Some("Cancelling build...".into());
-        } else {
-            close_new_project_modal(world);
-        }
-    });
+    commands.queue(close_new_project_modal);
 }
 
 fn on_browse_new_location(
@@ -2398,6 +2717,83 @@ fn on_reset_new_location(_: On<Pointer<Click>>, mut commands: Commands) {
     });
 }
 
+/// Keep the name hint and the Create button in step with what has been
+/// typed, so a bad name is visible before it is committed rather than
+/// after. The button stays clickable and explains itself on click; a
+/// dead control with no reason is worse than a refusal that says why.
+/// What creating at `dest` would do, and whether it can proceed.
+///
+/// A legal name is only half the question. Aiming at a folder that
+/// already holds someone's work is the commonest first-run mistake, and
+/// previewing `creates <path>` for a destination that cannot be created
+/// makes the user press Create to find out.
+fn describe_destination(dest: &Path) -> (String, bool) {
+    let empty = dest
+        .read_dir()
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(false);
+    if dest.is_dir() && !empty {
+        return (
+            format!("{} already exists and is not empty", dest.display()),
+            false,
+        );
+    }
+    if dest.exists() && !dest.is_dir() {
+        return (format!("{} is a file", dest.display()), false);
+    }
+    if dest.is_dir() {
+        return (format!("uses the empty folder {}", dest.display()), true);
+    }
+    (format!("creates {}", dest.display()), true)
+}
+
+fn refresh_new_project_validation(
+    state: Res<NewProjectState>,
+    name_inputs: Query<&TextEditValue, With<NewProjectNameInput>>,
+    mut hints: Query<&mut Text, With<NewProjectNameHint>>,
+    mut hint_colors: Query<&mut TextColor, With<NewProjectNameHint>>,
+    mut create_buttons: Query<&mut BackgroundColor, With<NewProjectCreateButton>>,
+) {
+    let Ok(value) = name_inputs.single() else {
+        return;
+    };
+    let raw = value.0.trim();
+    let (message, valid) = if raw.is_empty() {
+        (String::new(), false)
+    } else {
+        match crate::scaffold::validated_project_name(raw) {
+            Ok(name) => describe_destination(&state.location.join(&name)),
+            Err(error) => (error.to_string(), false),
+        }
+    };
+    let color = if valid {
+        tokens::TEXT_SECONDARY
+    } else {
+        tokens::TEXT_ERROR
+    };
+    for mut text in hints.iter_mut() {
+        if text.0 != message {
+            text.0 = message.clone();
+        }
+    }
+    for mut text_color in hint_colors.iter_mut() {
+        if text_color.0 != color {
+            text_color.0 = color;
+        }
+    }
+    // Dim rather than remove: the button still answers when pressed.
+    let fill = if valid {
+        tokens::SELECTED_BG
+    } else {
+        tokens::TOOLBAR_BG
+    };
+    for mut background in create_buttons.iter_mut() {
+        if background.0 != fill {
+            background.0 = fill;
+        }
+    }
+}
+
 fn on_create_new_project(
     _: On<Pointer<Click>>,
     mut commands: Commands,
@@ -2424,12 +2820,23 @@ fn on_create_new_project(
             (state.location.clone(), kind)
         };
 
-        let name = crate::scaffold::sanitize_project_name(&raw_name);
-        if name.is_empty() {
+        // The same validation the CLI applies. Accepting a name here
+        // that `jd new` would reject produces a project whose crate
+        // name is not a valid Rust identifier, which fails at the
+        // user's first build with nothing pointing back here.
+        let name = if raw_name.trim().is_empty() {
             world.resource_mut::<NewProjectState>().status =
                 Some("Please enter a project name.".into());
             return;
-        }
+        } else {
+            match crate::scaffold::validated_project_name(&raw_name) {
+                Ok(name) => name,
+                Err(error) => {
+                    world.resource_mut::<NewProjectState>().status = Some(error.to_string());
+                    return;
+                }
+            }
+        };
 
         {
             let mut state = world.resource_mut::<NewProjectState>();
@@ -2499,36 +2906,6 @@ fn poll_new_project_tasks(
         }
     }
 
-    // Build task completed: stash the artifact for the
-    // install-in-Last step.
-    if let Some(task) = state.build_task.as_mut()
-        && let Some(result) = future::block_on(future::poll_once(task))
-    {
-        state.build_task = None;
-        state.build_cancel = None;
-        match result {
-            Ok(artifact) => {
-                info!("Build produced {}", artifact.display());
-                state.pending_install = Some(artifact);
-            }
-            Err(crate::ext_build::BuildError::Cancelled { .. }) => {
-                info!("Build cancelled");
-                state.status = Some("Cancelled.".into());
-                state.pending_project = None;
-                state.build_progress = None;
-                state.build_progress_snapshot = None;
-            }
-            Err(err) => {
-                warn!("Build failed: {err}");
-                state.status = Some(format!(
-                    "Build failed: {err}.\n\
-                         Fix the issue and try opening the project again."
-                ));
-                state.pending_project = None;
-            }
-        }
-    }
-
     // Sync UI.
     let desired_location = state.location.to_string_lossy().into_owned();
     for mut text in location_texts.iter_mut() {
@@ -2552,7 +2929,7 @@ fn poll_new_project_tasks(
             text.0 = desired_status.clone();
         }
     }
-    let desired_cancel = if state.scaffold_task.is_some() || state.build_cancel.is_some() {
+    let desired_cancel = if state.scaffold_task.is_some() {
         "Cancel"
     } else {
         "Back"
@@ -2564,183 +2941,322 @@ fn poll_new_project_tasks(
     }
 }
 
-/// Copy the shared `BuildProgress` into the per-frame snapshot so
-/// the UI-refresh system can read from a plain struct without
-/// holding the mutex across rendering.
-fn refresh_build_progress_snapshot(mut state: ResMut<NewProjectState>) {
-    let Some(ref arc) = state.build_progress else {
-        return;
-    };
-    let snap = {
-        let Ok(guard) = arc.lock() else {
-            return;
-        };
-        guard.clone()
-    };
-    state.build_progress_snapshot = Some(snap);
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Reflect the current snapshot into the modal's progress UI:
-/// toggles the container, updates the "compiling `<crate>`" label,
-/// scrubs the progress-bar fill, and sets the log-tail text.
-fn refresh_build_progress_ui(
-    state: Res<NewProjectState>,
-    mut containers: Query<&mut Node, With<NewProjectProgressContainer>>,
-    mut crate_labels: Query<
-        &mut Text,
-        (
-            With<NewProjectProgressCrateLabel>,
-            Without<NewProjectLogText>,
-        ),
-    >,
-    mut log_texts: Query<
-        &mut Text,
-        (
-            With<NewProjectLogText>,
-            Without<NewProjectProgressCrateLabel>,
-        ),
-    >,
-    bar_slots: Query<&Children, With<NewProjectProgressBarSlot>>,
-    children_q: Query<&Children>,
-    mut fill_q: Query<
-        &mut Node,
-        (
-            With<jackdaw_feathers::progress::ProgressBarFill>,
-            Without<NewProjectProgressContainer>,
-        ),
-    >,
-) {
-    let snapshot = state.build_progress_snapshot.as_ref();
+    /// The card builders need only the two font resources and the
+    /// modal state; everything else they touch they spawn themselves.
+    /// Exercising them against a bare world checks the thing the type
+    /// checker cannot: that the hierarchy actually gets built, and that
+    /// nothing panics on the way.
+    fn card_world() -> World {
+        let mut world = World::new();
+        world.insert_resource(NewProjectState::default());
+        world.insert_resource(EditorFont(Handle::default()));
+        world.insert_resource(jackdaw_feathers::icons::IconFont(Handle::default()));
+        world
+    }
 
-    // Toggle container visibility based on whether a build is active.
-    let show = snapshot.is_some();
-    for mut node in containers.iter_mut() {
-        let desired = if show { Display::Flex } else { Display::None };
-        if node.display != desired {
-            node.display = desired;
+    /// Every `Text` in the world, for asserting on what a card says.
+    fn rendered_text(world: &mut World) -> Vec<String> {
+        world
+            .query::<&Text>()
+            .iter(world)
+            .map(|text| text.0.clone())
+            .collect()
+    }
+
+    fn plan_with(changes: Vec<ImportChange>, notes: Vec<String>) -> crate::scaffold::ImportPlan {
+        crate::scaffold::ImportPlan {
+            root: PathBuf::from("/proj"),
+            package_dir: PathBuf::from("/proj"),
+            package_name: "proj".into(),
+            changes,
+            notes,
+            migrated_bin_target: false,
         }
     }
 
-    let Some(progress) = snapshot else {
-        return;
-    };
+    /// The consent-critical distinction: a replace overwrites something
+    /// the user already had, and must not read like a creation.
+    #[test]
+    fn the_preview_marks_replacements_differently_from_creations() {
+        let mut world = card_world();
+        show_import_preview_card(
+            &mut world,
+            plan_with(
+                vec![
+                    ImportChange::WriteFile {
+                        path: PathBuf::from("/proj/jackdaw.toml"),
+                        contents: String::new(),
+                        replace: false,
+                    },
+                    ImportChange::CreateDirectory {
+                        path: PathBuf::from("/proj/.jackdaw"),
+                    },
+                ],
+                vec!["game plugin: GamePlugin".into()],
+            ),
+        );
 
-    // "Compiling <crate>" or "Preparing..." if we don't know yet.
-    let crate_line = match (&progress.current_crate, progress.artifacts_total) {
-        (Some(name), Some(total)) => {
-            // The estimate (package count) undershoots the real artifact count
-            // (proc-macros, build scripts), so clamp to never display past 100%.
-            let total = total.max(progress.artifacts_done);
-            format!("Compiling {name} ({}/{})", progress.artifacts_done, total)
-        }
-        (Some(name), None) => format!("Compiling {name} ({} so far)", progress.artifacts_done),
-        (None, Some(total)) => format!("Preparing build... (0/{total})"),
-        (None, None) => "Preparing build...".to_string(),
-    };
-    for mut t in crate_labels.iter_mut() {
-        if t.0 != crate_line {
-            t.0 = crate_line.clone();
-        }
+        let text = rendered_text(&mut world);
+        assert!(
+            text.iter().any(|t| t == "create"),
+            "each change carries its verb: {text:?}"
+        );
+        assert!(
+            text.iter().any(|t| t.contains("jackdaw.toml")),
+            "and its path: {text:?}"
+        );
+        assert!(
+            text.iter().any(|t| t.contains("game plugin: GamePlugin")),
+            "notes are rendered too: {text:?}"
+        );
     }
 
-    // Progress bar fill; walk slot -> bar -> bar children -> fill.
-    let fraction = progress.fraction().unwrap_or(0.0).clamp(0.0, 1.0);
-    let desired_width = Val::Percent(fraction * 100.0);
-    for bar_children in bar_slots.iter() {
-        for bar_entity in bar_children.iter() {
-            let Ok(inner) = children_q.get(bar_entity) else {
-                continue;
-            };
-            for fill_entity in inner.iter() {
-                if let Ok(mut node) = fill_q.get_mut(fill_entity)
-                    && node.width != desired_width
-                {
-                    node.width = desired_width;
-                }
-            }
-        }
+    /// A card with nothing to say still has to build without panicking.
+    #[test]
+    fn a_preview_with_no_changes_or_notes_still_renders() {
+        let mut world = card_world();
+        show_import_preview_card(&mut world, plan_with(Vec::new(), Vec::new()));
+        assert!(
+            rendered_text(&mut world)
+                .iter()
+                .any(|t| t.contains("Review project integration")),
+            "the title is always present"
+        );
     }
 
-    // Log tail.
-    let mut joined = String::new();
-    for (i, line) in progress.recent_log_lines.iter().enumerate() {
-        if i > 0 {
-            joined.push('\n');
-        }
-        joined.push_str(line);
+    #[test]
+    fn the_setup_card_lists_its_guarantees_separately() {
+        let mut world = card_world();
+        show_setup_jackdaw_card(&mut world, PathBuf::from("/proj/their-game"), None);
+        let text = rendered_text(&mut world);
+        assert!(text.iter().any(|t| t.contains("their-game")));
+        assert!(
+            text.iter().any(|t| t.contains("cargo run")),
+            "the untouched-manifest guarantee is one of the claims: {text:?}"
+        );
+        assert!(
+            text.iter().any(|t| t.contains("lists every file first")),
+            "and so is the promise that nothing is written yet: {text:?}"
+        );
     }
-    for mut t in log_texts.iter_mut() {
-        if t.0 != joined {
-            t.0 = joined.clone();
-        }
-    }
-}
 
-/// Install a freshly-built game/extension dylib, running in the
-/// `Last` schedule so `GameApp::add_systems(Update, ...)` inside the
-/// game's build function mutates `Update` while nobody holds it in
-/// `schedule_scope`. See the plugin-registration block at the top
-/// of this file for context.
-///
-/// On success: closes the modal and transitions to the editor.
-/// On `LoadError::SymbolMismatch`: closes the modal and opens an info
-/// dialog with instructions to run `cargo clean -p <name> && cargo
-/// build` from the project directory.
-/// On any other error: closes the modal and opens an info dialog
-/// with the error message.
-fn apply_pending_install(world: &mut World) {
-    let artifact_opt = world
-        .resource_mut::<NewProjectState>()
-        .pending_install
-        .take();
-    let Some(artifact) = artifact_opt else {
-        return;
-    };
-
-    let result = crate::extensions_dialog::handle_install_from_path(world, artifact);
-
-    match result {
-        Ok(_) => {
-            let project = world
-                .resource_mut::<NewProjectState>()
-                .pending_project
-                .clone();
-            close_new_project_modal(world);
-            if let Some(p) = project {
-                transition_to_editor(world, p);
-            }
-        }
-        Err(ref err) if err.is_symbol_mismatch() => {
-            let project_name = world
-                .resource::<NewProjectState>()
-                .pending_project
-                .as_deref()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str())
-                .unwrap_or("project")
-                .to_owned();
-            warn!("Install failed (SDK mismatch) for `{project_name}`");
-            close_new_project_modal(world);
-            world.trigger(
-                jackdaw_feathers::dialog::OpenDialogEvent::new("SDK mismatch", "OK")
-                    .with_description(format!(
-                        "Project `{project_name}` was built against a different jackdaw \
-                         SDK build. Run this from the project directory to refresh:\n\n\
-                         \tcargo clean -p {project_name}\n\
-                         \tcargo build\n\n\
-                         Then re-open the project."
-                    ))
-                    .without_cancel(),
+    /// The steps are numbered by the layout, so the numbering cannot
+    /// drift from the order.
+    #[test]
+    fn the_lib_stub_card_numbers_its_steps() {
+        let mut world = card_world();
+        show_lib_stub_warning_card(
+            &mut world,
+            PathBuf::from("/proj"),
+            PathBuf::from("/proj"),
+            Some("could not follow the builder".into()),
+        );
+        let text = rendered_text(&mut world);
+        for step in ["1", "2", "3"] {
+            assert!(
+                text.iter().any(|t| t == step),
+                "step {step} should be numbered: {text:?}"
             );
         }
-        Err(err) => {
-            warn!("Install failed: {err}");
-            close_new_project_modal(world);
-            world.trigger(
-                jackdaw_feathers::dialog::OpenDialogEvent::new("Install failed", "OK")
-                    .with_description(format!("{err}"))
-                    .without_cancel(),
+        assert!(
+            text.iter()
+                .any(|t| t.contains("could not follow the builder")),
+            "the real reason is shown: {text:?}"
+        );
+    }
+
+    /// The modal and `jd new` must agree on what a usable name is.
+    /// Accepting one here that the CLI rejects scaffolds a project
+    /// whose crate name is not a valid Rust identifier, and the user
+    /// finds out at their first build with nothing pointing back here.
+    #[test]
+    fn the_modal_and_the_cli_reject_the_same_names() {
+        for bad in ["2d-shooter", "crate", "impl", "***", ""] {
+            assert!(
+                crate::scaffold::validated_project_name(bad).is_err(),
+                "`{bad}` should be rejected"
             );
         }
+        for good in ["my-game", "My Cool Game", "spaced  out"] {
+            assert!(
+                crate::scaffold::validated_project_name(good).is_ok(),
+                "`{good}` should be accepted"
+            );
+        }
+    }
+
+    /// The hint answers "what will this actually create?" before the
+    /// user commits, and names the problem when there is one.
+    #[test]
+    fn the_name_hint_previews_the_directory_or_the_problem() {
+        let location = PathBuf::from("/home/dev/Projects");
+        let ok = crate::scaffold::validated_project_name("My Cool Game").expect("valid");
+        assert_eq!(
+            location.join(&ok).display().to_string(),
+            "/home/dev/Projects/my-cool-game",
+            "the hint shows the sanitized directory, not the raw input"
+        );
+        let error = crate::scaffold::validated_project_name("2d-shooter")
+            .expect_err("a leading digit is not a crate name");
+        assert!(
+            error.to_string().contains("cannot start with a digit"),
+            "the hint says why: {error}"
+        );
+    }
+
+    #[test]
+    fn refusing_a_missing_folder_offers_to_forget_it() {
+        let mut world = card_world();
+        show_not_a_project_card(&mut world, PathBuf::from("/gone"), NotAProject::Missing);
+        let text = rendered_text(&mut world);
+        assert!(text.iter().any(|t| t.contains("no longer exists")));
+        assert!(text.iter().any(|t| t == "Remove from list"));
+    }
+
+    #[test]
+    fn refusing_a_non_project_folder_says_what_was_expected() {
+        let mut world = card_world();
+        show_not_a_project_card(
+            &mut world,
+            PathBuf::from("/downloads"),
+            NotAProject::NoManifest,
+        );
+        let text = rendered_text(&mut world);
+        assert!(text.iter().any(|t| t.contains("no Cargo.toml")));
+        // Nothing to forget: this folder was never in the list.
+        assert!(!text.iter().any(|t| t == "Remove from list"));
+    }
+
+    /// A legal name is only half of what makes a destination usable.
+    /// Previewing `creates <path>` for a folder that already holds
+    /// someone's work made the user press Create to find out.
+    #[test]
+    fn the_destination_is_described_before_create_is_pressed() {
+        let base = std::env::temp_dir().join(format!("jackdaw_dest_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        let fresh = base.join("fresh");
+        let (message, ok) = super::describe_destination(&fresh);
+        assert!(ok, "{message}");
+        assert!(message.starts_with("creates "), "{message}");
+
+        let empty = base.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let (message, ok) = super::describe_destination(&empty);
+        assert!(ok, "an empty folder is usable: {message}");
+        assert!(message.contains("empty folder"), "{message}");
+
+        let occupied = base.join("occupied");
+        std::fs::create_dir_all(&occupied).unwrap();
+        std::fs::write(occupied.join("Cargo.toml"), b"").unwrap();
+        let (message, ok) = super::describe_destination(&occupied);
+        assert!(!ok, "an occupied folder is refused");
+        assert!(
+            message.contains("already exists and is not empty"),
+            "{message}"
+        );
+
+        let file = base.join("afile");
+        std::fs::write(&file, b"").unwrap();
+        let (message, ok) = super::describe_destination(&file);
+        assert!(!ok);
+        assert!(message.contains("is a file"), "{message}");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Walk a real project on disk through the decision the launcher
+    /// makes about it, and check what the resulting card says.
+    ///
+    /// The individual pieces are unit tested; what this covers is the
+    /// join. Detection, planning, and the card that reports them are
+    /// three separate modules, and a project shape that confuses any one
+    /// of them shows up as the wrong card rather than as a failure.
+    #[test]
+    fn each_project_shape_reaches_the_right_card() {
+        let base = std::env::temp_dir().join(format!("jackdaw_shapes_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        // A plain Bevy library: the import preview, naming its plugin.
+        let plain = base.join("plain-lib");
+        std::fs::create_dir_all(plain.join("src")).unwrap();
+        std::fs::write(
+            plain.join("Cargo.toml"),
+            b"[package]\nname = \"plain-lib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n              [dependencies]\nbevy = \"0.19\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            plain.join("src/lib.rs"),
+            b"use bevy::prelude::*;\npub struct MyGamePlugin;\n              impl Plugin for MyGamePlugin { fn build(&self, _a: &mut App) {} }\n",
+        )
+        .unwrap();
+        let plan =
+            crate::scaffold::plan_import_project(&plain, None).expect("a bevy lib is importable");
+        let mut world = card_world();
+        show_import_preview_card(&mut world, plan);
+        let text = rendered_text(&mut world).join("\n");
+        assert!(
+            text.contains("jackdaw.toml"),
+            "lists the file it adds: {text}"
+        );
+        assert!(
+            text.contains("MyGamePlugin"),
+            "names the detected plugin: {text}"
+        );
+
+        // A folder that is not a Rust project at all.
+        let bare = base.join("not-a-project");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::write(bare.join("readme.txt"), b"hi").unwrap();
+        assert!(
+            crate::scaffold::plan_import_project(&bare, None).is_err(),
+            "a folder with no Cargo.toml is not importable"
+        );
+        let mut world = card_world();
+        show_not_a_project_card(&mut world, bare.clone(), NotAProject::NoManifest);
+        let text = rendered_text(&mut world).join("\n");
+        assert!(text.contains("Cargo.toml"), "says what it expected: {text}");
+
+        // A project targeting another Bevy: blocked, but openable.
+        let old = base.join("old-bevy");
+        std::fs::create_dir_all(old.join("src")).unwrap();
+        std::fs::write(
+            old.join("Cargo.toml"),
+            b"[package]\nname = \"old-bevy\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n              [dependencies]\nbevy = \"0.16\"\n",
+        )
+        .unwrap();
+        std::fs::write(old.join("src/lib.rs"), b"pub struct Placeholder;\n").unwrap();
+        std::fs::write(
+            old.join("jackdaw.toml"),
+            b"[jackdaw]\nversion = \"0.19.0\"\nbevy = \"0.16\"\n",
+        )
+        .unwrap();
+        let manifest = project_manifest::ProjectManifest::read(&old);
+        let status = project_manifest::compare_project(&old, &manifest);
+        assert!(
+            matches!(status, project_manifest::PinStatus::BevyDiffers { .. }),
+            "a project on another bevy is recognised as such: {status:?}"
+        );
+        let mut world = card_world();
+        show_version_mismatch_card(&mut world, old.clone(), status);
+        let text = rendered_text(&mut world).join("\n");
+        assert!(text.contains("0.16"), "names the bevy it targets: {text}");
+
+        // A folder with only assets/ is not a project, and must not be
+        // offered as the current directory.
+        let assets_only = base.join("assets-only");
+        std::fs::create_dir_all(assets_only.join("assets")).unwrap();
+        assert!(
+            !assets_only.join("jackdaw.toml").is_file()
+                && !assets_only.join("Cargo.toml").is_file(),
+            "the marker an `assets/` folder does not satisfy"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

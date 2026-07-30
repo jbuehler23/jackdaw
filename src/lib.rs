@@ -2,8 +2,10 @@
     html_logo_url = "https://raw.githubusercontent.com/jbuehler23/jackdaw/main/assets/logo/jackdaw_icon_small.png",
     html_favicon_url = "https://raw.githubusercontent.com/jbuehler23/jackdaw/main/assets/logo/jackdaw_icon_small.png"
 )]
-//! Main crate for the Jackdaw editor.
-//! Usage of this crate is meant for headless operation. If you want to interact with the jackdaw API for extensions, use the `jackdaw_api` crate instead.
+//! Implementation of the official Jackdaw editor.
+//!
+//! Custom standalone editors should use `jackdaw_editor`; extension crates
+//! should use `jackdaw_extension`; games should use `jackdaw_runtime`.
 pub mod active_tool;
 pub mod add_entity_picker;
 pub mod alignment_guides;
@@ -51,7 +53,6 @@ pub mod document_ops;
 pub mod ext_build;
 mod extension_lifecycle;
 pub mod extension_resolution;
-pub mod extension_watcher;
 pub mod extensions_dialog;
 pub mod file_ops;
 pub mod hot_reload;
@@ -146,8 +147,8 @@ use selection::Selection;
 pub mod prelude {
     pub use crate::windowing::{editor_window_plugin, primary_window_attributes};
     pub use crate::{
-        DylibLoaderPlugin, EditorCategory, EditorDescription, EditorHidden, EditorPlugins,
-        ExtensionPlugin, SkipSerialization,
+        AppState, DylibLoaderPlugin, EditorCategory, EditorCorePlugin, EditorDescription,
+        EditorHidden, ExtensionPlugin, JackdawEditorPlugins, SkipSerialization,
     };
     pub use jackdaw_api::prelude::*;
 
@@ -214,7 +215,7 @@ pub struct NonSerializable;
 // `jackdaw_runtime` can reach it without pulling in the full editor
 // crate. Re-exported via `inspector` module + `prelude` below.
 
-/// The editor plugin group. Construct with [`EditorPlugins::default`] for the
+/// The editor plugin group. Construct with [`JackdawEditorPlugins::default`] for the
 /// builder, or add the default instance directly with
 /// `app.add_plugins(EditorPlugin::default())`.
 ///
@@ -223,7 +224,7 @@ pub struct NonSerializable;
 ///
 /// ```ignore
 /// App::new()
-///     .add_plugins(jackdaw::EditorPlugins::default()
+///     .add_plugins(jackdaw_editor::JackdawEditorPlugins::default()
 ///         .with_extension("my_tool", || Box::new(MyTool))
 ///         .build())
 ///     .run();
@@ -234,7 +235,7 @@ pub struct NonSerializable;
 ///
 /// ```ignore
 /// App::new()
-///     .add_plugins(jackdaw::EditorPlugins::default()
+///     .add_plugins(jackdaw_editor::JackdawEditorPlugins::default()
 ///         .with_builtin_extensions(false)
 ///         .with_extension("my_tool", || Box::new(MyTool))
 ///         .build())
@@ -246,35 +247,31 @@ pub struct NonSerializable;
 ///
 /// ```ignore
 /// App::new()
-///     .add_plugins(jackdaw::EditorPlugins::default()
+///     .add_plugins(jackdaw_editor::JackdawEditorPlugins::default()
 ///         .with_dylib_loader()
 ///         .build())
 ///     .run();
 /// ```
-pub struct EditorPlugins {
-    /// We're reserving a private field so users need to use [`EditorPlugins::default`],
+pub struct JackdawEditorPlugins {
+    /// Reserved so callers use [`JackdawEditorPlugins::default`].
     /// ensuring forward compatibility in case we add fields in the future.
     _pd: PhantomData<()>,
 }
 
-impl Default for EditorPlugins {
+impl Default for JackdawEditorPlugins {
     fn default() -> Self {
         Self { _pd: PhantomData }
     }
 }
 
-impl PluginGroup for EditorPlugins {
+impl PluginGroup for JackdawEditorPlugins {
     fn build(self) -> PluginGroupBuilder {
         // DylibLoaderPlugin is intentionally NOT in this group. The
         // launcher binary (`jackdaw`) opts in by adding it directly,
         // because the launcher is the sole consumer of the
         // `~/.config/jackdaw/games/` and `~/.config/jackdaw/extensions/`
         // dylib install dirs. Per-project static editor binaries
-        // built from the static-game template use EditorPlugins +
-        // their own statically-linked plugin; they should NOT scan
-        // those install dirs (the dylibs there were built against
-        // a different bevy compilation and panic at FFI boundary
-        // when loaded).
+        // Custom standalone editors choose whether to add the loader.
         PluginGroupBuilder::start::<Self>()
             .add(EditorCorePlugin)
             .add(ExtensionPlugin::default())
@@ -290,7 +287,7 @@ impl Plugin for EditorCorePlugin {
         debug_assert!(
             app.is_plugin_added::<EnhancedInputPlugin>(),
             "EditorCorePlugin requires EnhancedInputPlugin first; \
-             add `EnhancedInputPlugin` in main.rs before EditorPlugins."
+             add `EnhancedInputPlugin` in main.rs before JackdawEditorPlugins."
         );
         app.init_state::<AppState>()
             .add_plugins((FeathersPlugins, EditorFeathersPlugin));
@@ -375,7 +372,6 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(jackdaw_panels::DockPlugin)
         .add_plugins(input_contexts::InputContextsPlugin)
         .add_plugins(jackdaw_api_internal::ExtensionLoaderPlugin)
-        .add_plugins(extension_watcher::ExtensionWatcherPlugin)
         .add_plugins(extensions_dialog::ExtensionsDialogPlugin)
         .add_plugins(hot_reload::HotReloadPlugin)
         .add_plugins(pie::PiePlugin)

@@ -482,6 +482,14 @@ fn collect_bsn_handles_from_reflect(
     }
 
     let mut found = false;
+    #[expect(
+        clippy::allow_attributes,
+        reason = "this match is exhaustive or not depending on Bevy feature unification"
+    )]
+    #[allow(
+        unreachable_patterns,
+        reason = "ReflectRef gains host-only variants when reflection function support is unified"
+    )]
     match value.reflect_ref() {
         bevy::reflect::ReflectRef::Struct(s) => {
             for i in 0..s.field_len() {
@@ -541,7 +549,9 @@ fn collect_bsn_handles_from_reflect(
                 }
             }
         }
-        bevy::reflect::ReflectRef::Opaque(_) => {}
+        // Opaque values and host-only variants such as reflected functions
+        // cannot contain serializable asset handles.
+        _ => {}
     }
     found
 }

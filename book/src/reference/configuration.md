@@ -63,42 +63,19 @@ rebuilds it. The editor never touches the project's own
 
 ## Command line
 
-Two binaries carry terminal commands.
+`jackdaw` is exclusively the GUI. `jd` is the sole public command:
 
-`jackdaw` is the editor. With no arguments it opens the launcher.
-These subcommands run headless and exit before the GUI:
+- `jd new <name> [--extension]`
+- `jd import [path] [--plugin <Type>] [--apply]`
+- `jd open [path]`
+- `jd build [--project <path>]`
+- `jd run [--project <path>]`
+- `jd setup`
+- `jd doctor`
+- `jd extension <keygen|pack|install|verify|list|enable|disable|uninstall>`
 
-- `jackdaw new <name> [--extension]`: scaffold a project into
-  `<name>/` from the embedded template. Game by default,
-  extension with the flag.
-- `jackdaw init [--plugin <Type>]`: import the project in the
-  current directory (writes `jackdaw.toml`, `.jackdaw/`, and the
-  gitignore entry). Idempotent.
-- `jackdaw migrate [--apply]`: lift a bin-only project's `main.rs`
-  into its `GamePlugin` library. Prints the plan without
-  `--apply`; with it, writes the files and keeps the original as
-  `src/main.rs.bak`.
-- `jackdaw doctor`: preflight report on the host environment
-  (rustc, cmake, and the linker on Windows).
-- `jackdaw --version`: version plus the Bevy minor it targets.
-
-`jackdaw-cli` is the bevy-free tool. It ships in the downloadable
-bundles and installs from the `jackdaw_cli` package.
-
-- `jackdaw-cli build [--project <path>]`: build the project
-  dylib and write `.jackdaw/schema.json`. A running editor
-  watches that file and reloads the types from it.
-- `jackdaw-cli run [--project <path>]`: the same build, then
-  `cargo run` in the project. A build failure aborts before
-  running.
-- `jackdaw-cli setup`: build the SDK into the cache. Needs a
-  binary with the `embed-recipe` feature (packaged releases).
-  `build` and `run` do this on their own when the cache is cold.
-- `jackdaw-cli doctor`: report whether cargo, rustup, and the
-  pinned toolchain are in place.
-
-`package-sdk --out <dir>` and `bundle --out <dir>` stage release
-artifacts and are used by CI, not day to day.
+Import previews by default and performs no writes without `--apply`.
+Release-only `package-sdk` and `bundle` operations live under `cargo xtask`.
 
 ## Where the SDK lives
 
@@ -106,9 +83,11 @@ The SDK is the proxy dylib plus the compiled closure that project
 and extension builds link against. The editor resolves it in this
 order, and the first hit wins:
 
-1. `JACKDAW_SDK_DIR`, if set. Points at an installed layout: an
+1. `JACKDAW_SDK_DIR`, if set. Usually an installed layout: an
    `sdk/manifest.txt` with the rustc wrapper, the runner,
-   `Cargo.lock`, and `toolchain.txt` beside it.
+   `Cargo.lock`, and `toolchain.txt` beside it. A bootstrap cache
+   directory or a jackdaw checkout is accepted too, so pointing it
+   at any of the three works.
 2. A dev checkout's own `target/<triple>/`, when the SDK there is
    built. An in-tree SDK beats any cache, because a debug editor
    and a release cache are not link-compatible.
@@ -120,8 +99,19 @@ order, and the first hit wins:
    and toolchain, so an upgrade lands in a fresh directory and the
    old one is reclaimed.
 
-`jackdaw-cli doctor` reports whether the prerequisites for
-building it are in place; `jackdaw-cli setup` builds it.
+`jd doctor` reports which of these won, whether the prerequisites for
+building it are in place, and whether the resolved SDK is actually
+usable; `jd setup` builds it.
+
+A missing library or rustc wrapper stops a build before it compiles
+anything, rather than minutes in, and names what to do about it:
+
+```
+[fail] SDK: explicit JACKDAW_SDK_DIR at /opt/empty/sdk/.../libjackdaw_sdk.so is not usable
+       no SDK library at /opt/empty/sdk/x86_64-unknown-linux-gnu/libjackdaw_sdk.so
+       no rustc wrapper at /opt/empty/jackdaw-rustc-wrapper
+       fix: unset JACKDAW_SDK_DIR to use the SDK this jackdaw found for itself
+```
 
 ## Cargo features
 
@@ -129,21 +119,20 @@ These are features of the `jackdaw` crate itself, relevant if you
 build the editor from source. Projects have no jackdaw-related
 features.
 
-- `default = ["multiplayer", "camera_rig", "dylib"]`.
+- `default = ["multiplayer", "camera_rig", "embed-recipe"]`.
 - `multiplayer`. Bundles the editor-only networking authoring
   extension. The editor writes replication metadata; no lightyear
   is compiled into it.
 - `camera_rig`. The authorable camera-rig components.
 - `dylib`. The SDK-backed project flow: builds the proxy dylib
   that project and extension builds link against. On by default,
-  because loading project code in-process requires sharing the
-  SDK's type graph. `--no-default-features` gives a fast UI-only
-  editor that skips it.
-- `runner`. Builds the prebuilt game runner used by Play. Implies
-  `dylib`.
+  in precompiled releases because loading native project code and
+  extensions in-process requires sharing the SDK's type graph.
+  Source builds opt in explicitly with `--features dylib`.
+- `runner`. Enables runner integration used by Play. Implies `dylib`.
 - `embed-recipe`. Bakes the SDK-builder recipe into the binary so
   a packaged, source-free jackdaw can build its own SDK on first
-  launch. Off in dev builds, on in packaged releases.
+  launch. On by default for self-contained Cargo installs.
 
 Building with `dylib` needs an explicit `--target <host-triple>`,
 so the editor links the same SDK the build pipeline compiles
@@ -162,20 +151,14 @@ holds:
 - `keymap_preset.json`: the selected keymap preset.
 - `last_new_project_location`: the folder the New Project
   dialog opens in.
-- `extensions.json`: catalog of installed extensions
-  (enabled/disabled, install state).
-- `extensions/`: installed extension dylibs. The editor's
-  Extensions dialog installs into here; a compatible prebuilt
-  `.so` / `.dylib` / `.dll` dropped here loads on the next
-  editor start.
-- `games/`: same idea, for game dylibs.
+- `extensions.json`: desired enabled/disabled state.
+- `trusted_publishers.json`: publisher keys accepted through the native-code
+  trust prompt.
 
-You can edit any of these by hand, but only the `extensions/` and
-`games/` dylib directories are watched for changes. The JSON files
-are read at startup, so edit them with the editor closed.
-
-`JACKDAW_EXTENSIONS_DIR` and `JACKDAW_GAMES_DIR` add one extra
-directory each to the same search and watch.
+Signed `.jdext` payloads live in the platform data directory under
+`jackdaw/extensions/<id>/<version>/`. `active.json` selects one version and
+`garbage.json` queues retired mappings for deletion on the next launch.
+Loose dylib search directories and their environment variables are unsupported.
 
 ## Project file
 
@@ -194,25 +177,23 @@ holds project-scoped editor settings:
   nothing currently opens a scene from it; tab restore plus the
   `assets/scene.bsn` fallback decide what opens.
 
-## EditorPlugins builder
+## Custom editor composition
 
-Programmatic config goes through the `EditorPlugins` plugin
-group. The default form is enough for most embedders:
+Programmatic configuration goes through `jackdaw_editor` and its
+`JackdawEditorPlugins` plugin group:
 
 ```rust
 App::new()
     .add_plugins(EnhancedInputPlugin)
-    .add_plugins(jackdaw::EditorPlugins::default())
+    .add_plugins(jackdaw_editor::JackdawEditorPlugins::default())
     .run();
 ```
 
 Notes:
 
-- `EnhancedInputPlugin` must be added before `EditorPlugins`.
-  We do this rather than adding it ourselves so user game
-  plugins can also add it without a duplicate-plugin panic.
+- `EnhancedInputPlugin` must be added before `JackdawEditorPlugins`.
 - `DylibLoaderPlugin` is intentionally not in the group. The
-  launcher binary opts in by adding it directly.
+  official GUI opts into marketplace loading separately.
 
 The builder API for swapping out built-in extensions or
 adding statically linked ones is documented in

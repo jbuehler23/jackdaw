@@ -22,6 +22,11 @@ serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 glam.workspace = true
+# Deliberately version-less. `jackdaw_scene_types` depends on this crate,
+# so a version here would make the cycle real to crates.io and neither
+# could publish. Cargo drops a dev-dependency that states no version from
+# the published manifest, which breaks the cycle at the registry boundary
+# while keeping it usable for these tests.
 jackdaw_scene_types = { path = "../jackdaw_scene_types", default-features = false }
 serde_json = { workspace = true }
 

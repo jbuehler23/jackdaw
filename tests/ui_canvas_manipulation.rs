@@ -24,7 +24,7 @@ mod util;
 fn pointer_event<E: std::fmt::Debug + Clone + Reflect>(
     world: &mut World,
     target: Entity,
-    camera: Entity,
+    _camera: Entity,
     event: E,
 ) {
     // `PointerTraversal` climbs to the pointer's window entity and stops only

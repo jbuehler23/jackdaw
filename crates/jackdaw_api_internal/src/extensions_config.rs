@@ -49,6 +49,13 @@ pub fn init_extension(id: impl Into<String>) {
     write_enabled_list(&config);
 }
 
+/// Persist one extension's desired state without requiring a running editor.
+pub fn set_extension_enabled(id: impl Into<String>, enabled: bool) {
+    let mut config = read_extension_config().unwrap_or_default();
+    config.entry(id.into()).or_default().enabled = enabled;
+    write_enabled_list(&config);
+}
+
 /// Write the currently-enabled list to disk.
 pub fn write_enabled_list(config: &ExtensionsConfig) {
     let Some(path) = config_path() else {

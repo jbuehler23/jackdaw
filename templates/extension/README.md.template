@@ -2,10 +2,9 @@
 
 A [jackdaw](https://github.com/jbuehler23/jackdaw) editor extension.
 
-- Open this folder in jackdaw to load the extension into the editor;
-  saving a source file rebuilds and reloads it.
+- Open this folder in jackdaw and use Rebuild Project to load or update it.
 - The extension surface (operators, panels, menus, keybindings) lives
-  behind `jackdaw_api`; see the `examples/extension/` directory in the
+  behind `jackdaw_extension`; see the `examples/extension/` directory in the
   jackdaw repository for working samples of each.
 - `cargo check` works standalone for IDE support; the editor performs
   the real builds into `.jackdaw/` (gitignored).

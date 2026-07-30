@@ -1,12 +1,12 @@
 //! {{project-name}}: a jackdaw editor extension.
 //!
 //! Open this folder in jackdaw and the extension loads into the
-//! running editor; rebuilds hot-reload it. The `jackdaw` repository's
+//! running editor; use Rebuild Project to hot-update it. The `jackdaw` repository's
 //! `examples/extension/` directory shows the full API surface:
 //! operators, menu entries, panels, windows, and keybindings.
 
 use bevy::prelude::*;
-use jackdaw_api::prelude::*;
+use jackdaw_extension::prelude::*;
 
 /// The extension type. The editor finds it by name (override with
 /// `plugin = "..."` in jackdaw.toml) and calls [`JackdawExtension::register`]
@@ -27,7 +27,7 @@ impl JackdawExtension for MyExtension {
         "Describe what your extension adds to the editor.".to_string()
     }
 
-    fn register(&self, _ctx: &mut ExtensionContext) {
+    fn register(&self, _registrar: &mut ExtensionRegistrar<'_>) {
         info!("{{project-name}} registered");
     }
 }

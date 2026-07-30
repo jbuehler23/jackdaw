@@ -1,113 +1,26 @@
-//! Cargo build helpers shared by the editor: streaming progress
-//! parsing and the installed-extension-from-source build.
+//! Shared build-progress plumbing for the editor's UI.
 //!
-//! New game and extension projects build through
-//! [`crate::project_build`] (shim crate, per-edge redirect plan,
-//! isolated target dir). This module keeps the cargo-JSON progress
-//! plumbing that surfaces per-crate compile status in the UI, plus
-//! [`build_extension_project_with_progress`], which builds a
-//! self-contained extension crate through the rustc wrapper so its
-//! `TypeId`s line up with the editor.
+//! Project code (games and extensions alike) is compiled by
+//! [`crate::project_build`]: a generated shim crate, a per-edge extern
+//! redirect plan, and an isolated target directory. What lives here is
+//! the presentation-side state that pipeline streams into: the rolling
+//! per-crate progress and log tail the status bar and the Build panel
+//! render.
 
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
-
-use crate::sdk_paths::SdkPaths;
-
-/// Everything that can go wrong while building an extension
-/// project.
-#[derive(Debug)]
-pub enum BuildError {
-    NotADirectory(PathBuf),
-    MissingCargoToml(PathBuf),
-    SdkNotFound {
-        expected_path: PathBuf,
-        hint: &'static str,
-    },
-    WrapperNotFound {
-        expected_path: PathBuf,
-        hint: &'static str,
-    },
-    BuildSpawn(std::io::Error),
-    BuildFailed {
-        status: std::process::ExitStatus,
-        stderr_tail: String,
-    },
-    OutputNotProduced {
-        expected: PathBuf,
-    },
-    /// Caller flipped the cancel flag; child was killed and reaped.
-    Cancelled {
-        stderr_tail: String,
-    },
-}
-
-impl std::fmt::Display for BuildError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotADirectory(p) => write!(f, "{} is not a directory", p.display()),
-            Self::MissingCargoToml(p) => {
-                write!(f, "{} has no Cargo.toml", p.display())
-            }
-            Self::SdkNotFound {
-                expected_path,
-                hint,
-            } => write!(
-                f,
-                "SDK dylib not found at {}. {}",
-                expected_path.display(),
-                hint
-            ),
-            Self::WrapperNotFound {
-                expected_path,
-                hint,
-            } => write!(
-                f,
-                "rustc wrapper not found at {}. {}",
-                expected_path.display(),
-                hint
-            ),
-            Self::BuildSpawn(e) => write!(f, "failed to spawn cargo: {e}"),
-            Self::BuildFailed {
-                status,
-                stderr_tail,
-            } => {
-                write!(f, "cargo exited with {status}\n{stderr_tail}")
-            }
-            Self::OutputNotProduced { expected } => write!(
-                f,
-                "cargo succeeded but no .so was produced at {}",
-                expected.display()
-            ),
-            Self::Cancelled { stderr_tail } => {
-                if stderr_tail.is_empty() {
-                    write!(f, "build cancelled")
-                } else {
-                    write!(f, "build cancelled\n{stderr_tail}")
-                }
-            }
-        }
-    }
-}
-
-impl std::error::Error for BuildError {}
+use std::path::Path;
 
 /// Capacity of the rolling log-tail buffer surfaced in progress UI.
 const LOG_TAIL_CAPACITY: usize = 20;
 
 /// Live progress from a running cargo build. Writers: the build
-/// helper's stdout/stderr reader threads. Reader: the UI poller
-/// that renders the progress bar + log tail each frame. Wrap in
-/// `Arc<Mutex<_>>` when handing to a long-running task.
+/// pipeline's reporter. Reader: the UI poller that renders the progress
+/// bar + log tail each frame. Wrap in `Arc<Mutex<_>>` when handing to a
+/// long-running task.
 ///
-/// `artifacts_total` is `Some` once we've run `cargo metadata` to
-/// compute the expected number of compile units; until then the UI
-/// should render an indeterminate bar (or just the counter).
+/// `artifacts_total` is `Some` once the expected number of compile
+/// units is known; until then the UI renders an indeterminate bar (or
+/// just the counter).
 #[derive(Debug, Default, Clone)]
 pub struct BuildProgress {
     pub current_crate: Option<String>,
@@ -115,11 +28,11 @@ pub struct BuildProgress {
     pub artifacts_total: Option<u32>,
     pub recent_log_lines: VecDeque<String>,
     /// The complete build output, unbounded, for the Build panel's
-    /// IDE-style scrollback. The launcher renders `recent_log_lines`
-    /// instead, a compact tail.
+    /// IDE-style scrollback. Compact surfaces render
+    /// `recent_log_lines` instead.
     pub full_log: String,
-    /// Set to `true` by the helper once cargo exits (success or
-    /// failure). The UI can use this to flip the bar to 100%.
+    /// Set to `true` once cargo exits (success or failure). The UI uses
+    /// this to flip the bar to 100%.
     pub finished: bool,
 }
 
@@ -148,432 +61,10 @@ impl BuildProgress {
     }
 }
 
-/// Discover `libjackdaw_sdk` + `jackdaw-rustc-wrapper` on disk, or
-/// surface a typed error the Build-and-Install dialog can translate
-/// into a user-actionable message.
-fn discover_sdk() -> Result<SdkPaths, BuildError> {
-    let mut paths = SdkPaths::compute();
-    if !paths.dylib_exists() {
-        return Err(BuildError::SdkNotFound {
-            expected_path: paths.dylib,
-            hint: "libjackdaw_sdk was not found. Reinstall jackdaw, \
-                   or set JACKDAW_SDK_DIR to the directory that \
-                   contains it.",
-        });
-    }
-    if !paths.wrapper_exists() {
-        // Dev mode: contributors running `cargo run` get jackdaw built
-        // but not jackdaw_rustc_wrapper (the wrapper is a separate
-        // workspace member, not a dependency of jackdaw). Auto-build
-        // it before giving up so the first scaffold-then-build flow
-        // just works.
-        if let Some(checkout) = crate::new_project::jackdaw_dev_checkout() {
-            bevy::log::info!(
-                "Auto-building jackdaw_rustc_wrapper from dev checkout at {}",
-                checkout.display()
-            );
-            let status = std::process::Command::new("cargo")
-                .args(["build", "-p", "jackdaw_rustc_wrapper"])
-                .current_dir(&checkout)
-                .status();
-            match status {
-                Ok(s) if s.success() => {
-                    paths = SdkPaths::compute();
-                    if !paths.wrapper_exists() {
-                        return Err(BuildError::WrapperNotFound {
-                            expected_path: paths.wrapper,
-                            hint: "Auto-build of jackdaw_rustc_wrapper \
-                                   completed but the binary is still \
-                                   missing. Try `cargo build -p \
-                                   jackdaw_rustc_wrapper` manually.",
-                        });
-                    }
-                }
-                _ => {
-                    return Err(BuildError::WrapperNotFound {
-                        expected_path: paths.wrapper,
-                        hint: "Auto-build of jackdaw_rustc_wrapper \
-                               failed. Run `cargo build -p \
-                               jackdaw_rustc_wrapper` from the jackdaw \
-                               source checkout manually.",
-                    });
-                }
-            }
-        } else {
-            return Err(BuildError::WrapperNotFound {
-                expected_path: paths.wrapper,
-                hint: "The jackdaw_rustc_wrapper binary was not found. \
-                       Reinstall jackdaw to repair this.",
-            });
-        }
-    }
-    Ok(paths)
-}
-
-/// Build the extension project rooted at `project_dir`.
-///
-/// Convenience wrapper around
-/// [`build_extension_project_with_progress`] that ignores progress.
-pub fn build_extension_project(project_dir: &Path) -> Result<PathBuf, BuildError> {
-    build_extension_project_with_progress(project_dir, None, None)
-}
-
-/// Build the project and (optionally) stream progress into `sink`.
-///
-/// While cargo runs, a reader thread parses its stdout (JSON
-/// records from `--message-format=json-render-diagnostics`) and
-/// updates `sink.artifacts_done` + `sink.current_crate` on each
-/// `compiler-artifact` message. A separate thread tails stderr
-/// (which carries `json-render-diagnostics`' human-readable lines)
-/// into `sink.recent_log_lines`.
-pub fn build_extension_project_with_progress(
-    project_dir: &Path,
-    sink: Option<Arc<Mutex<BuildProgress>>>,
-    cancel: Option<Arc<AtomicBool>>,
-) -> Result<PathBuf, BuildError> {
-    let project_dir = project_dir
-        .canonicalize()
-        .map_err(|_| BuildError::NotADirectory(project_dir.to_path_buf()))?;
-
-    if !project_dir.is_dir() {
-        return Err(BuildError::NotADirectory(project_dir));
-    }
-    let manifest = project_dir.join("Cargo.toml");
-    if !manifest.is_file() {
-        return Err(BuildError::MissingCargoToml(project_dir));
-    }
-
-    let sdk = discover_sdk()?;
-
-    // Best-effort: probe the expected artifact count via cargo
-    // metadata before kicking off the real build. Runs in the
-    // current thread because it's usually <1s and we want the
-    // total to be present by the first frame the UI polls.
-    if let Some(ref s) = sink
-        && let Some(total) = estimate_total_artifacts(&project_dir)
-        && let Ok(mut g) = s.lock()
-    {
-        g.artifacts_total = Some(total);
-    }
-
-    let mut cmd = Command::new("cargo");
-    cmd.current_dir(&project_dir);
-    cmd.args([
-        "build",
-        "--manifest-path",
-        manifest
-            .to_str()
-            .expect("Cargo.toml path must be valid UTF-8"),
-        "--message-format=json-render-diagnostics",
-    ]);
-    cmd.env("RUSTC_WRAPPER", &sdk.wrapper);
-    cmd.env("JACKDAW_SDK_DYLIB", &sdk.dylib);
-    cmd.env("JACKDAW_SDK_DEPS", &sdk.deps);
-
-    run_cargo_with_progress(cmd, sink.as_ref(), cancel.as_ref())?;
-
-    let artifact_name = artifact_file_name(&project_dir);
-    let artifact = project_dir.join("target/debug").join(&artifact_name);
-    if !artifact.is_file() {
-        return Err(BuildError::OutputNotProduced { expected: artifact });
-    }
-    Ok(artifact)
-}
-
-/// Spawn `cmd` with stdout/stderr piped, pump cargo's JSON
-/// progress stream into `sink`, and wait for completion. Marks the
-/// sink `finished = true` on the way out (success or failure) and
-/// returns a [`BuildError::BuildFailed`] with a short stderr tail
-/// when cargo exits non-zero.
-fn run_cargo_with_progress(
-    mut cmd: Command,
-    sink: Option<&Arc<Mutex<BuildProgress>>>,
-    cancel: Option<&Arc<AtomicBool>>,
-) -> Result<(), BuildError> {
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
-    let mut child = cmd.spawn().map_err(BuildError::BuildSpawn)?;
-
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
-
-    let stdout_sink = sink.cloned();
-    let stdout_handle = thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines().map_while(Result::ok) {
-            parse_json_line(&line, stdout_sink.as_ref());
-        }
-    });
-
-    let stderr_sink = sink.cloned();
-    let stderr_tail: Arc<Mutex<VecDeque<String>>> =
-        Arc::new(Mutex::new(VecDeque::with_capacity(LOG_TAIL_CAPACITY)));
-    let stderr_tail_for_thread = Arc::clone(&stderr_tail);
-    let stderr_handle = thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            // Tee to the parent's stderr too, so users running
-            // `cargo run` from a terminal see the familiar
-            // "Compiling X" stream alongside the launcher modal's
-            // crate counter. Without this the user sees a
-            // launcher window with no apparent activity for
-            // several minutes on first build. `print_stderr` is
-            // disallowed in the rest of the editor where logs go
-            // through `tracing`, but here we're proxying child
-            // process output for the human watching the terminal,
-            // not emitting our own diagnostics, so the workspace
-            // lint is suppressed deliberately.
-            #[expect(
-                clippy::print_stderr,
-                reason = "tee child cargo stderr to user terminal"
-            )]
-            {
-                eprintln!("{line}");
-            }
-            if let Some(ref s) = stderr_sink
-                && let Ok(mut g) = s.lock()
-            {
-                g.push_log(line.clone());
-            }
-            if let Ok(mut tail) = stderr_tail_for_thread.lock() {
-                if tail.len() >= LOG_TAIL_CAPACITY {
-                    tail.pop_front();
-                }
-                tail.push_back(line);
-            }
-        }
-    });
-
-    // Poll the child so the cancel flag can interrupt it. `try_wait`
-    // returns `Ok(None)` while the child is still running; on cancel
-    // we kill+reap and surface `BuildError::Cancelled`. Drainer
-    // threads exit on their own once the child's pipes close.
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if cancel.map(|c| c.load(Ordering::Acquire)).unwrap_or(false) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = stdout_handle.join();
-                    let _ = stderr_handle.join();
-                    if let Some(s) = sink
-                        && let Ok(mut g) = s.lock()
-                    {
-                        g.finished = true;
-                    }
-                    let tail = stderr_tail
-                        .lock()
-                        .map(|t| t.iter().cloned().collect::<Vec<_>>().join("\n"))
-                        .unwrap_or_default();
-                    return Err(BuildError::Cancelled { stderr_tail: tail });
-                }
-                // Sleep rather than busy-spin: a tight `spin_loop` pins a core
-                // for the whole multi-minute build and can starve the pipe
-                // reader threads on a contended system.
-                thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Err(e) => return Err(BuildError::BuildSpawn(e)),
-        }
-    };
-    // Join the reader threads, but never block forever. If a cargo grandchild
-    // (a build script or a process it spawned) kept a stdout/stderr pipe
-    // write-end open after cargo exited, that pipe never reaches EOF and the
-    // readers would never return, leaving the launcher stuck at the finished
-    // build with no handoff. cargo has emitted all its output by the time it
-    // exits, so after a short grace period proceed regardless and leave any
-    // still-blocked reader detached.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    for handle in [stdout_handle, stderr_handle] {
-        while !handle.is_finished() && std::time::Instant::now() < deadline {
-            thread::sleep(std::time::Duration::from_millis(10));
-        }
-        if handle.is_finished() {
-            let _ = handle.join();
-        } else {
-            bevy::log::warn!(
-                "build: a cargo output reader did not finish after cargo exited; \
-                 proceeding (a child process likely held a pipe open)"
-            );
-        }
-    }
-
-    if let Some(s) = sink
-        && let Ok(mut g) = s.lock()
-    {
-        g.finished = true;
-    }
-
-    if !status.success() {
-        let tail = stderr_tail
-            .lock()
-            .map(|t| t.iter().cloned().collect::<Vec<_>>().join("\n"))
-            .unwrap_or_default();
-        return Err(BuildError::BuildFailed {
-            status,
-            stderr_tail: tail,
-        });
-    }
-    Ok(())
-}
-
-/// Parse a single line from `cargo --message-format=json-...`. On a
-/// `compiler-artifact` record, bump `artifacts_done` + update
-/// `current_crate`. Errors are swallowed; cargo sometimes emits
-/// non-JSON prefix lines, which we ignore.
-fn parse_json_line(line: &str, sink: Option<&Arc<Mutex<BuildProgress>>>) {
-    let Some(sink) = sink else { return };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-        return;
-    };
-    let reason = value.get("reason").and_then(|v| v.as_str()).unwrap_or("");
-    if reason == "compiler-artifact" {
-        let name = value
-            .get("target")
-            .and_then(|t| t.get("name"))
-            .and_then(|n| n.as_str())
-            .map(std::string::ToString::to_string);
-        if let Ok(mut g) = sink.lock() {
-            g.artifacts_done = g.artifacts_done.saturating_add(1);
-            if let Some(n) = name {
-                g.current_crate = Some(n);
-            }
-        }
-    } else if reason == "compiler-message" {
-        // Human-readable rendered text for warnings/errors comes in
-        // the `message.rendered` field. Forward those lines into the
-        // tail buffer alongside stderr's rendered output.
-        if let Some(rendered) = value
-            .get("message")
-            .and_then(|m| m.get("rendered"))
-            .and_then(|r| r.as_str())
-            && let Ok(mut g) = sink.lock()
-        {
-            for l in rendered.lines().take(LOG_TAIL_CAPACITY) {
-                g.push_log(l.to_string());
-            }
-        }
-    }
-}
-
-/// Run `cargo metadata` to count the packages in the resolve set.
-/// Returns `None` on any failure; the progress UI will render an
-/// indeterminate bar instead.
-///
-/// On a fresh bevy project the first `cargo metadata` call takes a
-/// few seconds (it resolves the dep graph and hits the registry).
-/// Subsequent calls use cargo's cache and finish in <200 ms. The
-/// caller runs this on the main thread before spawning the real
-/// build, so the progress bar can render a denominator from the
-/// first frame onward.
-fn estimate_total_artifacts(project_dir: &Path) -> Option<u32> {
-    let output = Command::new("cargo")
-        .current_dir(project_dir)
-        .args(["metadata", "--format-version=1"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
-    let packages = value.get("packages")?.as_array()?;
-    // Each package produces roughly one artifact; build scripts and
-    // proc-macros add a few more. Close enough for a progress bar.
-    Some(packages.len() as u32)
-}
-
-/// Run `cargo clean -p <package>` for the project rooted at
-/// `project_dir`. Used by the auto-recovery path: when the editor
-/// SDK is rebuilt, the user's project `.so` cached in
-/// `<project>/target/debug/` still references the old SDK symbol
-/// hashes. Cleaning just the user's package (not `-p bevy`) drops
-/// that stale artifact without forcing a multi-minute bevy
-/// rebuild; the bevy rlib cache stays.
-///
-/// Blocks until cargo exits. Call from a task pool.
-pub fn cargo_clean_project(project_dir: &Path) -> Result<(), BuildError> {
-    let project_dir = project_dir
-        .canonicalize()
-        .map_err(|_| BuildError::NotADirectory(project_dir.to_path_buf()))?;
-    let manifest = project_dir.join("Cargo.toml");
-    if !manifest.is_file() {
-        return Err(BuildError::MissingCargoToml(project_dir));
-    }
-    let package_name = package_name_from_manifest(&project_dir);
-
-    let mut cmd = Command::new("cargo");
-    cmd.current_dir(&project_dir);
-    cmd.args([
-        "clean",
-        "--manifest-path",
-        manifest
-            .to_str()
-            .expect("Cargo.toml path must be valid UTF-8"),
-        "-p",
-        &package_name,
-    ]);
-    let output = cmd.output().map_err(BuildError::BuildSpawn)?;
-    if !output.status.success() {
-        return Err(BuildError::BuildFailed {
-            status: output.status,
-            stderr_tail: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
-    }
-    Ok(())
-}
-
-/// Parse `name = "..."` out of a project's `Cargo.toml`. Shared
-/// with [`artifact_file_name`]; when the manifest doesn't declare
-/// a name (shouldn't happen for anything cargo accepted), returns
-/// `"unnamed"`.
-fn package_name_from_manifest(project_dir: &Path) -> String {
-    std::fs::read_to_string(project_dir.join("Cargo.toml"))
-        .ok()
-        .and_then(|contents| {
-            contents.lines().find_map(|line| {
-                let trimmed = line.trim();
-                trimmed
-                    .strip_prefix("name")
-                    .and_then(|rest| rest.trim().strip_prefix('='))
-                    .map(|rest| rest.trim().trim_matches('"').trim_matches('\'').to_owned())
-            })
-        })
-        .unwrap_or_else(|| "unnamed".to_string())
-}
-
-/// Quick scan of a project's `Cargo.toml` to decide whether
-/// `cargo build` would actually produce a cdylib. Used at project-
-/// open time: if the manifest is a plain binary crate (e.g., the
-/// editor's own source tree, or a user opening any non-extension
-/// cargo project) we skip the build pipeline entirely and let them
-/// in; otherwise `cargo build` compiles the whole dep tree only to
-/// fail the artifact check at the end.
-///
-/// Same line-based parsing style as [`package_name_from_manifest`]
-/// to avoid pulling in a toml dep. Handles the two shapes scaffolded
-/// projects use: `crate-type = ["cdylib"]` and
-/// `crate-type = ["rlib", "cdylib"]`.
-pub(crate) fn manifest_declares_cdylib(project_dir: &Path) -> bool {
-    let Ok(contents) = std::fs::read_to_string(project_dir.join("Cargo.toml")) else {
-        return false;
-    };
-    contents.lines().any(|line| {
-        let trimmed = line.trim();
-        let Some(rest) = trimmed.strip_prefix("crate-type") else {
-            return false;
-        };
-        let Some(rest) = rest.trim_start().strip_prefix('=') else {
-            return false;
-        };
-        rest.contains("\"cdylib\"") || rest.contains("'cdylib'")
-    })
-}
-
-/// Derive the expected cdylib filename from the project's package
-/// name. Falls back to `libunnamed.<ext>` if the manifest doesn't
-/// declare a name (which cargo would have rejected anyway, but it
-/// keeps this helper infallible).
+/// Derive the platform dylib filename for a project's package name.
+/// Falls back to `libunnamed.<ext>` if the manifest declares no name
+/// (which cargo would have rejected anyway, but it keeps this helper
+/// infallible).
 pub(crate) fn artifact_file_name(project_dir: &Path) -> String {
     let package_name = package_name_from_manifest(project_dir);
 
@@ -583,5 +74,71 @@ pub(crate) fn artifact_file_name(project_dir: &Path) -> String {
         format!("lib{package_name}.dylib")
     } else {
         format!("lib{package_name}.so")
+    }
+}
+
+/// The `[package] name` from a project's manifest, underscored so it
+/// matches the artifact cargo emits.
+fn package_name_from_manifest(project_dir: &Path) -> String {
+    let Ok(contents) = std::fs::read_to_string(project_dir.join("Cargo.toml")) else {
+        return "unnamed".to_string();
+    };
+    contents
+        .lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            let rest = trimmed
+                .strip_prefix("name")?
+                .trim_start()
+                .strip_prefix('=')?;
+            let value = rest.trim().trim_matches(['"', '\'']);
+            (!value.is_empty()).then(|| value.replace('-', "_"))
+        })
+        .unwrap_or_else(|| "unnamed".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_fraction_tracks_the_unit_count() {
+        let mut progress = BuildProgress {
+            artifacts_total: Some(4),
+            artifacts_done: 1,
+            ..Default::default()
+        };
+        assert_eq!(progress.fraction(), Some(0.25));
+        progress.finished = true;
+        assert_eq!(progress.fraction(), Some(1.0));
+    }
+
+    #[test]
+    fn the_log_tail_is_bounded_but_the_full_log_is_not() {
+        let mut progress = BuildProgress::default();
+        for index in 0..LOG_TAIL_CAPACITY + 5 {
+            progress.push_log(format!("line {index}"));
+        }
+        assert_eq!(progress.recent_log_lines.len(), LOG_TAIL_CAPACITY);
+        assert!(progress.full_log.contains("line 0"));
+        assert!(
+            progress
+                .full_log
+                .contains(&format!("line {}", LOG_TAIL_CAPACITY + 4))
+        );
+    }
+
+    #[test]
+    fn the_artifact_name_comes_from_the_package_name() {
+        let dir = std::env::temp_dir().join(format!("jackdaw_artifact_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"my-game\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        assert!(artifact_file_name(&dir).contains("my_game"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

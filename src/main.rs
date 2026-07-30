@@ -9,27 +9,17 @@ use bevy_window_chrome::primary_window_attributes;
 use jackdaw::prelude::*;
 
 fn main() -> AppExit {
-    // CLI subcommands run headless and exit before the GUI launcher.
-    // `jackdaw new <name>` scaffolds a new project; `jackdaw init` wires the
-    // editor into an existing Bevy project.
     let args: Vec<String> = std::env::args().collect();
-    match args.get(1).map(String::as_str) {
-        Some("new") => return jackdaw::scaffold::run_new_cli(&args[2..]),
-        Some("init") => return jackdaw::scaffold::run_init_cli(&args[2..]),
-        Some("migrate") => return jackdaw::migrate::run_migrate_cli(&args[2..]),
-        Some("doctor") => return jackdaw::preflight::run_doctor_cli(),
-        Some("--version" | "-V") => {
-            #[expect(clippy::print_stdout, reason = "--version reports to stdout")]
-            {
-                println!(
-                    "jackdaw {} (targets bevy {})",
-                    jackdaw_project_build::VERSION,
-                    jackdaw_project_build::BEVY_VERSION
-                );
-            }
-            return AppExit::Success;
+    if let Some("--version" | "-V") = args.get(1).map(String::as_str) {
+        #[expect(clippy::print_stdout, reason = "--version reports to stdout")]
+        {
+            println!(
+                "jackdaw {} (targets bevy {})",
+                jackdaw_project_build::VERSION,
+                jackdaw_project_build::BEVY_VERSION
+            );
         }
-        _ => {}
+        return AppExit::Success;
     }
 
     // Install a SIGINT/SIGTERM handler before anything else gets a
@@ -49,7 +39,13 @@ fn main() -> AppExit {
         std::process::exit(130);
     });
 
-    let project_root = jackdaw::project::read_last_project()
+    // The asset root is fixed at startup, so it has to agree with the
+    // project this process will actually open. `jd open <path>` names
+    // one explicitly; without this, opening anything other than the
+    // most recent project would root the asset server at a different
+    // project's `assets/`.
+    let project_root = jackdaw::project::requested_project()
+        .or_else(jackdaw::project::read_last_project)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
     // Picker is the default landing screen on every launch. The
@@ -75,6 +71,13 @@ fn main() -> AppExit {
         jackdaw::project::read_last_project().map(|path| jackdaw::project_select::PendingAutoOpen {
             path,
             skip_build: true,
+        })
+    } else if let Some(path) = jackdaw::project::requested_project() {
+        // `jd open <path>` names the project explicitly rather than
+        // reordering the recents file to make it the most recent.
+        Some(jackdaw::project_select::PendingAutoOpen {
+            path,
+            skip_build: false,
         })
     } else if auto_open_opt_in {
         jackdaw::project::read_last_project()
@@ -139,21 +142,14 @@ fn main() -> AppExit {
 
 /// Build the editor plugin for the prebuilt `jackdaw` binary.
 ///
-/// The dylib loader is always on so users who drop extension `.so`/
-/// `.dll`/`.dylib` files into their config directory don't need to
-/// rebuild the editor. The in-tree example extensions in
-/// `examples/*` are workspace members built as standalone cdylibs ;
-/// point the loader at their build output if you want to exercise
-/// them, rather than bundling them statically into the editor
-/// binary.
+/// Prebuilt releases use the shared SDK and can safely load native
+/// extension bundles. Self-contained source installs remain useful as
+/// editors and project scaffolders, but cannot load Rust dylibs because
+/// they do not share a type graph with those libraries.
 fn editor_plugins(app: &mut App) {
-    app.add_plugins(EditorPlugins::default());
-    // DylibLoaderPlugin is launcher-only. Static editor binaries
-    // built from the static-game template use EditorPlugins WITHOUT
-    // this plugin, since their game code is statically linked and
-    // they have no business scanning `~/.config/jackdaw/games/`
-    // (where dylibs from incompatible bevy compilations may live).
-    app.add_plugins(DylibLoaderPlugin::default());
+    app.add_plugins(JackdawEditorPlugins::default());
+    #[cfg(feature = "dylib")]
+    app.add_plugins(DylibLoaderPlugin);
 }
 
 fn spawn_scene(mut commands: Commands) {

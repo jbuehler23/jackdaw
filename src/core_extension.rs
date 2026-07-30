@@ -23,7 +23,8 @@ use crate::selection::Selection;
 pub const CORE_EXTENSION_ID: &str = "jackdaw.core";
 
 pub(super) fn plugin(app: &mut App) {
-    app.register_extension::<JackdawCoreExtension>()
+    app.add_input_context::<CoreExtensionInputContext>()
+        .register_extension::<JackdawCoreExtension>()
         .add_observer(dispatch_button_operator_call)
         .add_observer(dispatch_activate_operator)
         .add_observer(update_operator_button_availability)
@@ -322,10 +323,6 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::command_palette::add_to_extension(ctx);
         crate::document_ops::add_to_extension(ctx);
         crate::dock_ops::add_to_extension(ctx);
-    }
-
-    fn register_input_context(&self, app: &mut App) {
-        app.add_input_context::<CoreExtensionInputContext>();
     }
 }
 

@@ -10,8 +10,7 @@
 
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Press, *};
-use jackdaw_api::prelude::*;
+use jackdaw_extension::{keymap::PresetInput, prelude::*};
 
 #[derive(Default)]
 pub struct ViewableCameraExtension;
@@ -25,11 +24,7 @@ impl JackdawExtension for ViewableCameraExtension {
         "Viewable Camera".to_string()
     }
 
-    fn register_input_context(&self, app: &mut App) {
-        app.add_input_context::<ViewableCameraContext>();
-    }
-
-    fn register(&self, ctx: &mut ExtensionContext) {
+    fn register(&self, ctx: &mut ExtensionRegistrar<'_>) {
         ctx.init_resource::<CameraPreviewState>();
 
         ctx.register_operator::<PlaceViewableCamera>();
@@ -37,13 +32,8 @@ impl JackdawExtension for ViewableCameraExtension {
 
         ctx.register_menu_entry::<PlaceViewableCamera>(TopLevelMenu::Add);
 
-        ctx.spawn((
-            ViewableCameraContext,
-            actions!(ViewableCameraContext[
-                (Action::<PlaceViewableCamera>::new(), bindings![(KeyCode::F6, Press::default())]),
-                (Action::<ToggleCameraPreview>::new(), bindings![(KeyCode::F7, Press::default())]),
-            ]),
-        ));
+        ctx.bind_operator_host::<PlaceViewableCamera>([PresetInput::key("F6")]);
+        ctx.bind_operator_host::<ToggleCameraPreview>([PresetInput::key("F7")]);
 
         // Exit preview if the previewed camera gets despawned (e.g. the
         // user undoes the placement while preview is active), so the
@@ -69,10 +59,6 @@ impl JackdawExtension for ViewableCameraExtension {
 pub fn jackdaw_extension_ctor() -> Box<dyn JackdawExtension> {
     Box::new(ViewableCameraExtension)
 }
-
-/// BEI context for this extension; gives key-binding isolation.
-#[derive(Component, Default)]
-pub struct ViewableCameraContext;
 
 /// Marker on camera entities created by this extension. Scene data,
 /// not editor-local.

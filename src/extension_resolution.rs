@@ -44,7 +44,7 @@ pub fn resolve_enabled_list(world: &World) -> Vec<String> {
             } else {
                 available
                     .iter()
-                    .filter(|n| config.contains_key(*n))
+                    .filter(|n| config.get(*n).is_some_and(|entry| entry.enabled))
                     .cloned()
                     .collect()
             }

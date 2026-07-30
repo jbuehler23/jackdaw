@@ -162,7 +162,7 @@ fn find_by_node_id(world: &mut World, id: SceneNodeId) -> Option<Entity> {
 
 #[test]
 fn real_scene_with_legacy_type_paths_converts_semantically() {
-    let text = include_str!("fixtures/jsn_to_bsn/real_scene.jsn");
+    let text = include_str!("fixtures/jsn_to_bsn/real_scene.jsn.bak");
 
     // World A: the JSN load path (with canonicalized legacy type paths).
     let mut app_a = headless_app();
@@ -368,7 +368,7 @@ fn legacy_v2_scene_converts() {
 
 #[test]
 fn conversion_is_deterministic() {
-    let text = include_str!("fixtures/jsn_to_bsn/real_scene.jsn");
+    let text = include_str!("fixtures/jsn_to_bsn/real_scene.jsn.bak");
     let mut app = headless_app();
     let first = convert_jsn_text(app.world_mut(), text).expect("first conversion");
     let mut app2 = headless_app();

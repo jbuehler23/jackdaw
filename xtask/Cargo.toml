@@ -5,3 +5,6 @@ edition = "2024"
 publish = false
 
 [workspace]  # detached: a build tool, not part of the editor graph
+
+[dependencies]
+jackdaw_cli_internal = { path = "../crates/jackdaw_cli" }

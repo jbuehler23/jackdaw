@@ -41,8 +41,9 @@ crate, and nothing editor-related.
 
 ## What the editor adds on top
 
-The `jackdaw` crate (top-level) is the editor binary plus the
-plugin group `EditorPlugins`. It depends on nearly everything
+The `jackdaw` package is the official editor installation. The public
+`jackdaw_editor` crate exposes the `JackdawEditorPlugins` composition seam.
+They depend on nearly everything
 else in the workspace. The interesting layers:
 
 - `jackdaw_feathers` / `jackdaw_widgets` / `jackdaw_panels`:
@@ -89,9 +90,8 @@ else in the workspace. The interesting layers:
   the component schema, and owns SDK path resolution and the
   first-run SDK bootstrap. Deliberately bevy-light so the CLI
   can link it without dragging in a renderer.
-- `jackdaw_cli`: the `jackdaw-cli` binary (`build`, `run`,
-  `setup`, `doctor`, plus the release-tooling `package-sdk` and
-  `bundle`).
+- `jackdaw_cli_internal`: bevy-light command implementations used by `jd`.
+  Release-only packaging is invoked through `cargo xtask`.
 - `jackdaw_runner`: the prebuilt game runner. Play dlopens the
   already-built project dylib through it, so nothing compiles
   at play time.

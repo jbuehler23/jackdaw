@@ -20,7 +20,7 @@ the inspector on an entity, click `+ Add Component`, type
 `PlayerSpawn`. It shows up.
 
 If you add a component while the editor is already running, run
-**Rebuild Project** (or `jackdaw-cli build` in a terminal) to pick
+**Rebuild Project** (or `jd build` in a terminal) to pick
 it up. Rebuilds are on request rather than automatic; **Toggle
 Auto Build** switches to rebuild-on-source-change.
 
@@ -172,7 +172,7 @@ of:
 - Has `@EditorHidden` somewhere (intentional or pasted from a
   template).
 - The project hasn't been rebuilt since you added the type. Run
-  Rebuild Project or `jackdaw-cli build`.
+  Rebuild Project or `jd build`.
 
 **Doc comment doesn't show as tooltip.** Tooltips need bevy's
 `reflect_documentation` feature. The SDK the editor builds your

@@ -1,4 +1,4 @@
-//! `jackdaw-cli package-sdk`: stage a relocatable SDK install layout from
+//! `cargo xtask package-sdk`: stage a relocatable SDK install layout from
 //! a release workspace build. This is the artifact a jackdaw release
 //! ships so a downloaded editor builds projects without a source checkout
 //! or a first-run bootstrap compile.
@@ -30,7 +30,7 @@ use std::process::{Command, ExitCode};
 use jackdaw_project_build::plan::SdkManifest;
 use jackdaw_project_build::sdk_paths::SdkPaths;
 
-/// `jackdaw-cli package-sdk --out <dir> [--workspace <path>]`.
+/// `cargo xtask package-sdk --out <dir> [--workspace <path>]`.
 pub fn cmd_package_sdk(args: &[String]) -> ExitCode {
     let Some(out) = flag_value(args, "--out") else {
         eprintln!("jackdaw package-sdk: --out <dir> is required");
@@ -59,7 +59,7 @@ pub fn cmd_package_sdk(args: &[String]) -> ExitCode {
     }
 }
 
-/// `jackdaw-cli bundle --out <dir> [--workspace <path>]`: the full
+/// `cargo xtask bundle --out <dir> [--workspace <path>]`: the full
 /// downloadable release layout - the SDK layout (`package-sdk`) plus the
 /// editor, the CLI, and the three runtime dylibs the editor and runner
 /// load, staged at the bundle root beside the binaries. Combined with a
@@ -99,9 +99,9 @@ fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
         .parent()
         .ok_or_else(|| "release SDK dylib has no parent dir".to_string())?;
 
-    // The editor and CLI, staged beside the SDK's wrapper and runner.
+    // The editor and public CLI, staged beside the SDK's wrapper and runner.
     // EXE_SUFFIX is `.exe` on Windows, empty elsewhere.
-    for bin in ["jackdaw", "jackdaw-cli"] {
+    for bin in ["jackdaw", "jd"] {
         let name = format!("{bin}{}", std::env::consts::EXE_SUFFIX);
         let src = profile_dir.join(&name);
         if !src.is_file() {
@@ -129,7 +129,7 @@ fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
     }
 
     Ok(format!(
-        "{sdk_summary}; + editor, cli, {dylibs} runtime dylibs"
+        "{sdk_summary}; + editor, jd, {dylibs} runtime dylibs"
     ))
 }
 

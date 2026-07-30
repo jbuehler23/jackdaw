@@ -1,0 +1,10 @@
+# jackdaw project settings. Everything here has a working default;
+# delete any line you are not using.
+
+# An extension is loaded by the editor rather than run as a game, so
+# there is no plugin or run configuration here. The pins below record
+# which jackdaw this was built against: an extension only loads into a
+# jackdaw with a matching ABI, and `jd extension abi` prints the exact
+# key a marketplace should serve it under.
+
+{{jackdaw_pins}}

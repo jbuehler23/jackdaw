@@ -218,7 +218,7 @@ fn ui_canvas_and_authored_children_appear_but_generated_parts_do_not() {
     assert!(
         world
             .get::<Children>(button)
-            .is_none_or(|children| children.is_empty()),
+            .is_none_or(bevy::prelude::RelationshipTarget::is_empty),
         "the editor authors UI as inert data: nothing materializes onto the authored button"
     );
 

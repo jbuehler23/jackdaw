@@ -202,6 +202,7 @@ impl Plugin for PiePlugin {
                 (
                     advance_pie_session,
                     prebuild_play_target,
+                    sync_project_build_settings,
                     watch_project_source_for_edit,
                     watch_project_schema,
                     drain_game_events,
@@ -365,9 +366,12 @@ pub(crate) fn project_toggle_auto_build(
     mut commands: Commands,
 ) -> OperatorResult {
     commands.queue(|world: &mut World| {
-        let mut settings = world.resource_mut::<EditorBuildSettings>();
-        settings.auto_build = !settings.auto_build;
-        let enabled = settings.auto_build;
+        let enabled = {
+            let mut settings = world.resource_mut::<EditorBuildSettings>();
+            settings.auto_build = !settings.auto_build;
+            settings.auto_build
+        };
+        persist_project_build_settings(world);
         info!(
             "PIE: auto-build {}",
             if enabled { "enabled" } else { "disabled" }
@@ -616,10 +620,23 @@ fn newest_mtime(dir: &Path) -> Option<std::time::SystemTime> {
 /// may expose both, one, or neither (a plain component library still
 /// contributes its reflected types).
 fn project_shim_spec(world: &World, root: &Path) -> Option<ShimSpec> {
+    project_shim_spec_or_reason(world, root).ok()
+}
+
+/// As [`project_shim_spec`], keeping why resolution failed so the
+/// caller can put it in front of the user instead of opening a project
+/// that will never gain any components.
+fn project_shim_spec_or_reason(world: &World, root: &Path) -> Result<ShimSpec, String> {
     let configured = world
         .get_resource::<RunConfigs>()
         .and_then(|rc| rc.manifest.plugin.clone());
+    // Re-run the resolution the spec builder does, so a failure reports
+    // cargo's own diagnostics rather than a bare "could not resolve".
+    let manifest = crate::project_build::project_manifest::ProjectManifest::read(root);
+    crate::project_build::cargo_meta::resolve_project_package(root, manifest.package.as_deref())
+        .map_err(|error| error.to_string())?;
     crate::project_build::shim_spec_for_project(root, configured)
+        .ok_or_else(|| format!("could not resolve a package to build in {}", root.display()))
 }
 
 /// Start the project-dylib build on the compute pool, returning the
@@ -660,7 +677,16 @@ fn spawn_dylib_build(
                             p.push_log(format!("Compiling {crate_name}"));
                         }
                     }
-                    crate::project_build::BuildEvent::Log(line) => p.push_log(line),
+                    crate::project_build::BuildEvent::Log(line) => {
+                        // Warnings about the SDK explain the compiler
+                        // errors that follow, and a user watching the
+                        // terminal rather than the build panel would
+                        // otherwise see only the errors.
+                        if line.starts_with("warning:") || line.contains("is not usable") {
+                            warn!("{line}");
+                        }
+                        p.push_log(line);
+                    }
                 }
             }
         };
@@ -1100,8 +1126,18 @@ fn prebuild_play_target(world: &mut World) {
     let Some(root) = project_root(world) else {
         return;
     };
-    let Some(spec) = project_shim_spec(world, &root) else {
-        return;
+    let spec = match project_shim_spec_or_reason(world, &root) {
+        Ok(spec) => spec,
+        Err(reason) => {
+            // Without a resolvable package there is nothing to compile,
+            // so the editor would otherwise open with an empty Add
+            // Component list and no explanation anywhere.
+            warn!("PIE: cannot build {}: {reason}", root.display());
+            if let Some(mut status) = world.get_resource_mut::<BuildStatus>() {
+                status.state = crate::build_status::BuildState::Blocked { reason };
+            }
+            return;
+        }
     };
     let mut session = world.non_send_mut::<PieSession>();
     if session.builds.contains_key(&root) {
@@ -1131,7 +1167,7 @@ impl Default for EditRebuildThrottle {
 }
 
 /// Editor-wide project build preferences.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, serde::Serialize, serde::Deserialize)]
 struct EditorBuildSettings {
     /// When true, the editor rebuilds the project automatically on source
     /// change. Opt-in and off by default: otherwise a rebuild fires
@@ -1139,6 +1175,49 @@ struct EditorBuildSettings {
     /// have started themselves. When off, rebuilds come from the Rebuild
     /// action or an out-of-editor `jackdaw build`.
     auto_build: bool,
+}
+
+fn sync_project_build_settings(
+    project: Option<Res<crate::project::ProjectRoot>>,
+    mut settings: ResMut<EditorBuildSettings>,
+    mut loaded_root: Local<Option<PathBuf>>,
+) {
+    let Some(project) = project else {
+        return;
+    };
+    if loaded_root.as_ref() == Some(&project.root) {
+        return;
+    }
+    *loaded_root = Some(project.root.clone());
+    let path = project.root.join(".jackdaw/settings.json");
+    *settings = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+}
+
+fn persist_project_build_settings(world: &World) {
+    let (Some(project), Some(settings)) = (
+        world.get_resource::<crate::project::ProjectRoot>(),
+        world.get_resource::<EditorBuildSettings>(),
+    ) else {
+        return;
+    };
+    let path = project.root.join(".jackdaw/settings.json");
+    if let Some(parent) = path.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        warn!("PIE: could not persist build settings: {error}");
+        return;
+    }
+    match serde_json::to_vec_pretty(settings) {
+        Ok(bytes) => {
+            if let Err(error) = std::fs::write(path, bytes) {
+                warn!("PIE: could not persist build settings: {error}");
+            }
+        }
+        Err(error) => warn!("PIE: could not encode build settings: {error}"),
+    }
 }
 
 /// Start a project dylib build for `root` unless one is already in
@@ -1322,7 +1401,9 @@ fn reconcile_build_status(world: &mut World) {
                     status.state = crate::build_status::BuildState::Idle;
                 }
             }
-            crate::build_status::BuildState::Idle => {}
+            // Sticky: only the user fixing their project clears it.
+            crate::build_status::BuildState::Blocked { .. }
+            | crate::build_status::BuildState::Idle => {}
         },
     }
 }

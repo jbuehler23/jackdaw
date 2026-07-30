@@ -1,6 +1,6 @@
 #![cfg(feature = "dylib")]
 #![expect(clippy::print_stdout, reason = "e2e test reports what it staged")]
-//! Stages a bundle with `jackdaw-cli bundle`, resolves the SDK from the bundle
+//! Stages a bundle with `cargo xtask bundle`, resolves the SDK from the bundle
 //! layout rather than the dev tree, and builds a game against it: the path an
 //! installed user takes.
 //!
@@ -40,11 +40,11 @@ fn game_builds_against_a_staged_bundle_sdk() {
     }
 
     let status = Command::new("cargo")
-        .args(["build", "-p", "jackdaw_cli", "--release"])
+        .args(["build", "-p", "xtask", "--release"])
         .current_dir(&root)
         .status()
-        .expect("spawn cargo for jackdaw-cli");
-    assert!(status.success(), "jackdaw-cli failed to build");
+        .expect("spawn cargo for xtask");
+    assert!(status.success(), "xtask failed to build");
 
     // Not the system temp dir: a bundle is ~3GB and `/tmp` is often a tmpfs.
     let staging = tempfile::Builder::new()
@@ -52,17 +52,17 @@ fn game_builds_against_a_staged_bundle_sdk() {
         .tempdir_in(root.join("target"))
         .expect("tempdir under target/");
     let bundle = staging.path().join("jackdaw-bundle");
-    let cli = root
+    let xtask = root
         .join("target/release")
-        .join(format!("jackdaw-cli{}", std::env::consts::EXE_SUFFIX));
-    let staged = Command::new(&cli)
+        .join(format!("xtask{}", std::env::consts::EXE_SUFFIX));
+    let staged = Command::new(&xtask)
         .arg("bundle")
         .arg("--out")
         .arg(&bundle)
         .arg("--workspace")
         .arg(&root)
         .output()
-        .expect("spawn jackdaw-cli bundle");
+        .expect("spawn cargo xtask bundle");
     assert!(
         staged.status.success(),
         "bundle staging failed:\n{}",

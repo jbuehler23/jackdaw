@@ -1,17 +1,13 @@
 [package]
-name = "jackdaw_cli"
+name = "jackdaw_cli_internal"
 version.workspace = true
 edition = "2024"
-description = "Command-line tools for Jackdaw projects, independent of the editor GUI binary"
+description = "Internal command implementations shared by jd and Jackdaw release tooling"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
-[[bin]]
-name = "jackdaw-cli"
-path = "src/main.rs"
-
 [features]
-# Bake the SDK-builder recipe in so `jackdaw-cli setup` can bootstrap the
+# Bake the SDK-builder recipe in so `jd setup` can bootstrap the
 # SDK on a machine without the jackdaw source. Off by default; packaged
 # releases turn it on.
 embed-recipe = ["jackdaw_project_build/embed-recipe"]

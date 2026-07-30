@@ -181,6 +181,12 @@ fn sync_build_panel(
             None,
             false,
         ),
+        BuildState::Blocked { reason } => (
+            "Cannot build this project".to_string(),
+            tokens::TEXT_ERROR,
+            Some(reason.clone()),
+            false,
+        ),
         BuildState::Idle => (
             "No build running".to_string(),
             tokens::TEXT_SECONDARY,
@@ -252,7 +258,7 @@ fn auto_focus_build_panel(
         return;
     }
     let surface = match &build_status.state {
-        BuildState::Failed { .. } => true,
+        BuildState::Failed { .. } | BuildState::Blocked { .. } => true,
         BuildState::Building { .. } if !focus.first_build_shown => {
             focus.first_build_shown = true;
             true

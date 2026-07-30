@@ -69,7 +69,7 @@ impl Plugin for PhysicsSimulationPlugin {
         debug_assert!(
             app.is_plugin_added::<PhysicsSchedulePlugin>(),
             "PhysicsSimulationPlugin requires PhysicsPlugins first; \
-             add `PhysicsPlugins::default()` in main.rs before EditorPlugins."
+             add `PhysicsPlugins::default()` in main.rs before JackdawEditorPlugins."
         );
         app.init_resource::<PhysicsToolState>()
             .add_systems(Startup, pause_physics_on_startup);

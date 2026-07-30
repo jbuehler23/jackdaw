@@ -15,6 +15,11 @@ bevy.workspace = true
 jackdaw_api_internal.workspace = true
 libloading = "0.8"
 dirs.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ring = "0.17"
+sha2 = "0.10"
 
 [lints]
 workspace = true

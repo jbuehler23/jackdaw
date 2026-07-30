@@ -5,9 +5,7 @@
 //! of failing a multi-minute build at the end. The individual `check_*`
 //! functions each shell out or read the environment, so run them off the main
 //! thread and report results as they complete for live reporting in the
-//! launcher. `run_all_checks` batches them for the `jackdaw doctor` CLI.
-
-use bevy::app::AppExit;
+//! launcher. `run_all_checks` batches them for the setup UI.
 
 /// Outcome of a single check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,34 +151,6 @@ fn first_line(cmd: &str, args: &[&str]) -> Option<String> {
         .next()
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
-}
-
-/// CLI entry point for `jackdaw doctor`.
-#[expect(
-    clippy::print_stdout,
-    reason = "CLI subcommand writes its report to the terminal"
-)]
-pub fn run_doctor_cli() -> AppExit {
-    let results = run_all_checks();
-    println!("jackdaw doctor:");
-    let mut any_fail = false;
-    for r in &results {
-        let tag = match r.status {
-            CheckStatus::Ok => "ok  ",
-            CheckStatus::Warn => "warn",
-            CheckStatus::Fail => "FAIL",
-        };
-        println!("  [{tag}] {}: {}", r.label, r.detail);
-        if let Some(fix) = &r.fix {
-            println!("         fix: {fix}");
-        }
-        any_fail |= r.status == CheckStatus::Fail;
-    }
-    if any_fail {
-        AppExit::error()
-    } else {
-        AppExit::Success
-    }
 }
 
 #[cfg(test)]

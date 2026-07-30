@@ -13,8 +13,7 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 bevy.workspace = true
-bevy_enhanced_input.workspace = true
-jackdaw_api.workspace = true
+jackdaw_extension.workspace = true
 
 [lints]
 workspace = true

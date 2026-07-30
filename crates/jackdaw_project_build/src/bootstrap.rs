@@ -149,7 +149,7 @@ pub struct Prereq {
 /// Check the tools an SDK build needs before committing to a long
 /// compile: cargo and rustup (hard requirements) plus the pinned
 /// toolchain (informational; setup installs it). Fast and side-effect
-/// free. Used by `jackdaw-cli doctor` and as an early gate in
+/// free. Used by `jd doctor` and as an early gate in
 /// [`ensure_sdk`].
 pub fn check_prerequisites() -> Vec<Prereq> {
     let mut out = Vec::new();
@@ -187,6 +187,44 @@ pub fn check_prerequisites() -> Vec<Prereq> {
             ),
         },
     });
+
+    // The SDK build compiles jackdaw's CSG kernel (`manifold-csg-sys`),
+    // a C++ library built with cmake. Without it the failure lands
+    // minutes into a compile, so it belongs in the same up-front report
+    // as cargo and rustup.
+    out.push(match tool_version("cmake", "--version") {
+        Some(version) => Prereq {
+            name: "cmake",
+            ok: true,
+            detail: version,
+            fix: None,
+        },
+        None => Prereq {
+            name: "cmake",
+            ok: false,
+            detail: "not found on PATH".to_string(),
+            fix: Some(
+                "install cmake from https://cmake.org/download (the CSG kernel is built with it)"
+                    .to_string(),
+            ),
+        },
+    });
+
+    // On Windows a MinGW `gcc` on PATH makes cmake pick it over MSVC,
+    // and the resulting objects fail to link (LNK1143).
+    #[cfg(windows)]
+    if tool_version("gcc", "--version").is_some()
+        && !std::env::var("CMAKE_GENERATOR")
+            .is_ok_and(|generator| generator.contains("Visual Studio"))
+    {
+        out.push(Prereq {
+            name: "Windows C++ toolchain",
+            ok: false,
+            detail: "MinGW gcc is on PATH; cmake may pick it over MSVC and fail to link"
+                .to_string(),
+            fix: Some("set CMAKE_GENERATOR=\"Visual Studio 17 2022\" before building".to_string()),
+        });
+    }
 
     // The pinned toolchain is not a hard failure: setup installs it on
     // demand. Report its state so `doctor` can preview whether the first
@@ -260,6 +298,35 @@ pub fn write_recipe(dst: &Path) -> std::io::Result<()> {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&path, bytes)?;
+    }
+    prune_removed_crates(dst)
+}
+
+/// Delete crate directories the recipe no longer ships.
+///
+/// Writing is otherwise purely additive, and the recipe's root declares
+/// `members = ["crates/*"]`, so a crate dropped between versions stays
+/// on disk and stays a workspace member. If it was dropped *because* it
+/// could not resolve there, the cache is permanently broken and no
+/// amount of upgrading fixes it: the user would have to know to delete
+/// `~/.jackdaw/sdk` by hand, which nothing tells them.
+fn prune_removed_crates(dst: &Path) -> std::io::Result<()> {
+    let Ok(entries) = std::fs::read_dir(dst.join("crates")) else {
+        return Ok(());
+    };
+    let shipped: std::collections::BTreeSet<&str> = crate::RECIPE_FILES
+        .iter()
+        .filter_map(|(rel, _)| rel.strip_prefix("crates/"))
+        .filter_map(|rest| rest.split('/').next())
+        .collect();
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        if !shipped.contains(name.to_string_lossy().as_ref()) {
+            std::fs::remove_dir_all(entry.path())?;
+        }
     }
     Ok(())
 }
@@ -345,6 +412,15 @@ pub fn ensure_sdk(mut report: impl FnMut(SetupProgress)) -> Result<PathBuf, Stri
 
     report(SetupProgress::Phase("Writing the SDK manifest"));
     let built = crate::sdk_paths::SdkPaths::for_workspace_profile(&build_dir, "release");
+    // The feature sets the three install paths resolve have to nest:
+    // a release bundle builds `-p jackdaw --features dylib` (the whole
+    // editor), this builds `-p jackdaw_sdk -p jackdaw_runner`, and a
+    // project builds its own graph. Each must be a superset of the next.
+    // Resolving fewer features than a project does is what breaks: the
+    // project compiles code expecting an impl that the SDK rlib it links
+    // was built without, and the error names a crate nobody touched.
+    // `jackdaw_sdk` depends on the whole runtime with every feature on to
+    // keep that ordering; `tests/sdk_feature_closure.rs` guards it.
     // Enumerate artifacts by re-invoking the SAME package set the build
     // phase used (`-p jackdaw_sdk -p jackdaw_runner`). A narrower set (e.g.
     // `-p jackdaw_sdk` alone) resolves different features for shared deps

@@ -300,7 +300,7 @@ fn authored_ui_stays_pure_data_and_derived_entities_stay_out_of_the_outliner() {
     assert!(
         world
             .get::<Children>(button)
-            .is_none_or(|children| children.is_empty()),
+            .is_none_or(bevy::prelude::RelationshipTarget::is_empty),
         "authored button must have no generated children"
     );
 

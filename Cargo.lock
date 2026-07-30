@@ -675,6 +675,7 @@ dependencies = [
  "itertools 0.15.0",
  "obvhs",
  "parry3d",
+ "parry3d-f64",
  "smallvec",
  "thiserror 2.0.18",
  "thread_local",
@@ -1896,7 +1897,7 @@ dependencies = [
 [[package]]
 name = "bevy_rerecast"
 version = "0.4.0"
-source = "git+https://github.com/HeyPlayGames/rerecast?branch=bevy-0-19#493074cd8c1e8c97bc8fc6b51da01e5295696860"
+source = "git+https://github.com/HeyPlayGames/rerecast?rev=493074cd8c1e8c97bc8fc6b51da01e5295696860#493074cd8c1e8c97bc8fc6b51da01e5295696860"
 dependencies = [
  "bevy_app",
  "bevy_rerecast_core",
@@ -1906,7 +1907,7 @@ dependencies = [
 [[package]]
 name = "bevy_rerecast_core"
 version = "0.4.1"
-source = "git+https://github.com/HeyPlayGames/rerecast?branch=bevy-0-19#493074cd8c1e8c97bc8fc6b51da01e5295696860"
+source = "git+https://github.com/HeyPlayGames/rerecast?rev=493074cd8c1e8c97bc8fc6b51da01e5295696860#493074cd8c1e8c97bc8fc6b51da01e5295696860"
 dependencies = [
  "anyhow",
  "bevy_app",
@@ -1937,7 +1938,7 @@ dependencies = [
 [[package]]
 name = "bevy_rerecast_editor_integration"
 version = "0.4.1"
-source = "git+https://github.com/HeyPlayGames/rerecast?branch=bevy-0-19#493074cd8c1e8c97bc8fc6b51da01e5295696860"
+source = "git+https://github.com/HeyPlayGames/rerecast?rev=493074cd8c1e8c97bc8fc6b51da01e5295696860#493074cd8c1e8c97bc8fc6b51da01e5295696860"
 dependencies = [
  "anyhow",
  "base64",
@@ -2968,7 +2969,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "windows 0.62.2",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -3350,9 +3351,8 @@ name = "dynamic_extension"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "bevy_enhanced_input",
- "jackdaw_api",
  "jackdaw_commands",
+ "jackdaw_extension",
 ]
 
 [[package]]
@@ -4001,7 +4001,7 @@ dependencies = [
  "vec_map",
  "wasm-bindgen",
  "web-sys",
- "windows 0.62.2",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -4163,7 +4163,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.18",
- "windows 0.62.2",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -4414,7 +4414,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -4777,6 +4777,7 @@ dependencies = [
  "jackdaw_bsn",
  "jackdaw_camera",
  "jackdaw_camera_rig",
+ "jackdaw_cli_internal",
  "jackdaw_commands",
  "jackdaw_csg",
  "jackdaw_feathers",
@@ -4794,6 +4795,7 @@ dependencies = [
  "jackdaw_pie_protocol",
  "jackdaw_project_build",
  "jackdaw_remote",
+ "jackdaw_runner",
  "jackdaw_runtime",
  "jackdaw_rustc_wrapper",
  "jackdaw_scene_types",
@@ -4813,6 +4815,7 @@ dependencies = [
  "quote",
  "regex",
  "rfd",
+ "semver",
  "serde",
  "serde_json",
  "syn",
@@ -4921,7 +4924,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "jackdaw_cli"
+name = "jackdaw_cli_internal"
 version = "0.19.0"
 dependencies = [
  "jackdaw_project_build",
@@ -4953,6 +4956,22 @@ dependencies = [
  "jackdaw_api_internal",
  "jackdaw_commands",
  "jackdaw_panels",
+]
+
+[[package]]
+name = "jackdaw_editor"
+version = "0.19.0"
+dependencies = [
+ "jackdaw",
+]
+
+[[package]]
+name = "jackdaw_extension"
+version = "0.19.0"
+dependencies = [
+ "bevy_enhanced_input",
+ "jackdaw_api",
+ "jackdaw_api_macros",
 ]
 
 [[package]]
@@ -5019,10 +5038,15 @@ dependencies = [
 name = "jackdaw_loader"
 version = "0.19.0"
 dependencies = [
+ "base64",
  "bevy",
  "dirs",
  "jackdaw_api_internal",
  "libloading",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -5127,6 +5151,7 @@ dependencies = [
  "jackdaw_scene_types",
  "serde",
  "serde_json",
+ "syn",
  "toml",
  "tracing",
 ]
@@ -5193,6 +5218,7 @@ version = "0.19.0"
 dependencies = [
  "bevy",
  "jackdaw_api",
+ "jackdaw_runtime",
 ]
 
 [[package]]
@@ -7201,7 +7227,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -7294,12 +7320,41 @@ dependencies = [
  "num-derive",
  "num-traits",
  "ordered-float",
+ "rayon",
  "rstar",
  "simba",
  "slab",
  "smallvec",
  "spade",
  "static_assertions",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "parry3d-f64"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1f331c2ecfa5c34dfe379eff7efb824e5e8cfcc933d9624d74e7f867ea696dd"
+dependencies = [
+ "approx",
+ "arrayvec",
+ "bitflags 2.11.1",
+ "downcast-rs 2.0.2",
+ "either",
+ "ena",
+ "foldhash 0.2.0",
+ "glamx",
+ "hashbrown 0.16.1",
+ "log",
+ "num-derive",
+ "num-traits",
+ "ordered-float",
+ "rayon",
+ "rstar",
+ "simba",
+ "slab",
+ "smallvec",
+ "spade",
  "thiserror 2.0.18",
 ]
 
@@ -7698,7 +7753,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -7736,7 +7791,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -8070,7 +8125,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 [[package]]
 name = "rerecast"
 version = "0.3.4"
-source = "git+https://github.com/HeyPlayGames/rerecast?branch=bevy-0-19#493074cd8c1e8c97bc8fc6b51da01e5295696860"
+source = "git+https://github.com/HeyPlayGames/rerecast?rev=493074cd8c1e8c97bc8fc6b51da01e5295696860#493074cd8c1e8c97bc8fc6b51da01e5295696860"
 dependencies = [
  "anyhow",
  "bevy_reflect",
@@ -8946,8 +9001,7 @@ name = "test_fixture_extension"
 version = "0.0.0"
 dependencies = [
  "bevy",
- "bevy_enhanced_input",
- "jackdaw_api",
+ "jackdaw_extension",
 ]
 
 [[package]]
@@ -9639,8 +9693,7 @@ name = "viewable_camera_extension"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "bevy_enhanced_input",
- "jackdaw_api",
+ "jackdaw_extension",
 ]
 
 [[package]]

@@ -20,7 +20,7 @@ jackdaw_bsn = { version = "0.19.0", path = "../jackdaw_bsn" }
 jackdaw_geometry = { version = "0.19.0", path = "../jackdaw_geometry", default-features = false }
 jackdaw_scene_types = { version = "0.19.0", path = "../jackdaw_scene_types", default-features = false }
 jackdaw_ui = { version = "0.19.0", path = "../jackdaw_ui" }
-jackdaw_pie_protocol = { path = "../jackdaw_pie_protocol", optional = true }
+jackdaw_pie_protocol = { version = "0.19.0", path = "../jackdaw_pie_protocol", optional = true }
 jackdaw_camera_rig = { version = "0.19.0", path = "../jackdaw_camera_rig", optional = true }
 # Runtime collider bridge: the `AvianCollider` -> `Collider` conversion. Default
 # features are kept so this resolves to the same build as the editor's dependency
