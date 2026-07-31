@@ -15,6 +15,7 @@
 //!   sdk/
 //!     manifest.txt            (basename artifacts: location-independent)
 //!     host-deps/              (proc-macro dylibs)
+//!     native-libs/            (import libs the SDK links by bare name)
 //!     <triple>/
 //!       libjackdaw_sdk.so
 //!       deps/                 (the SDK runtime-closure rlibs)
@@ -187,6 +188,7 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     let triple_out = sdk_out.join(&sdk.triple);
     let deps_out = triple_out.join("deps");
     let host_deps_out = sdk_out.join("host-deps");
+    let native_out = sdk_out.join("native-libs");
     create_dir(&deps_out)?;
     create_dir(&host_deps_out)?;
 
@@ -213,6 +215,18 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
         rlibs += 1;
     }
     write(&sdk_out.join("manifest.txt"), &shipped_manifest)?;
+
+    // Native import libraries the SDK's crates reference by bare name
+    // (the `windows` crates ship their own). The recorded search paths
+    // point into the build machine's cargo registry, which does not
+    // exist on the machine that unpacks this, so the libraries are
+    // staged here and the path rewritten to the one directory that
+    // travels with the bundle.
+    let native_libs = stage_native_libs(&sdk, &native_out)?;
+    write(
+        &sdk_out.join("jackdaw_sdk_link_paths.txt"),
+        &format!("{}\n", native_out.display()),
+    )?;
 
     // Runtime cdylibs the project links through under `prefer-dynamic`:
     // the bevy and jackdaw dylibs sit beside the closure rlibs in the
@@ -251,7 +265,8 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     }
 
     Ok(format!(
-        "{rlibs} rlibs, {cdylibs} runtime cdylibs, {macros} proc-macro dylibs, {runner_note}"
+        "{rlibs} rlibs, {cdylibs} runtime cdylibs, {macros} proc-macro dylibs, \
+         {native_libs} native import libs, {runner_note}"
     ))
 }
 
@@ -350,4 +365,42 @@ fn write(path: &Path, contents: &str) -> Result<(), String> {
         create_dir(parent)?;
     }
     std::fs::write(path, contents).map_err(|e| format!("writing {}: {e}", path.display()))
+}
+
+/// Copy the native import libraries the SDK's crates link by bare name
+/// into the bundle, so a machine without the build machine's cargo
+/// registry can still resolve them.
+///
+/// Only the libraries themselves travel: the recorded search paths are
+/// absolute into `~/.cargo/registry` and are meaningless anywhere else,
+/// so the bundle records its own directory instead. A no-op where the
+/// SDK recorded no paths, which is every platform whose native
+/// libraries are system wide.
+fn stage_native_libs(sdk: &SdkPaths, native_out: &Path) -> Result<usize, String> {
+    let recorded = jackdaw_project_build::plan::read_link_paths(&sdk.manifest);
+    if recorded.is_empty() {
+        return Ok(0);
+    }
+    std::fs::create_dir_all(native_out).map_err(|e| format!("{}: {e}", native_out.display()))?;
+    let mut copied = 0usize;
+    for dir in recorded {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_lib = path
+                .extension()
+                .is_some_and(|ext| ext == "lib" || ext == "a");
+            if !is_lib {
+                continue;
+            }
+            let Some(name) = path.file_name() else {
+                continue;
+            };
+            copy(&path, &native_out.join(name))?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
 }
