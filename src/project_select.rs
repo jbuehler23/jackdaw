@@ -1745,10 +1745,10 @@ fn spawn_step_list(world: &mut World, card: Entity, steps: &[&str], font: &Handl
 /// Render an import plan's changes as one row per file, rather than as
 /// a paragraph.
 ///
-/// The distinction that matters for consent is create-versus-replace: a
-/// replace overwrites something the user already had. As prose bullets
-/// the two read identically, so this gives replaces their own icon and
-/// the warning colour, and puts the verb before the path.
+/// The distinction that matters for consent is create-versus-modify: a
+/// modify touches something the user already had. As prose bullets the
+/// two read identically, so this gives modifies their own icon and the
+/// warning colour, and puts the verb before the path.
 fn spawn_change_list(
     world: &mut World,
     card: Entity,
@@ -1780,10 +1780,10 @@ fn spawn_change_list(
             ImportChange::CreateDirectory { .. } => {
                 (Icon::FolderPlus, "create", tokens::TEXT_SECONDARY)
             }
-            // `summary` decides create-vs-replace by looking at the
+            // `summary` decides create-vs-modify by looking at the
             // disk, so ask it rather than re-deriving the answer here.
-            ImportChange::WriteFile { .. } if change.summary().starts_with("replace") => {
-                (Icon::FilePen, "replace", tokens::TEXT_ERROR)
+            ImportChange::WriteFile { .. } if change.summary().starts_with("modify") => {
+                (Icon::FilePen, "modify", tokens::TEXT_WARNING)
             }
             ImportChange::WriteFile { .. } => (Icon::FilePlus, "create", tokens::TEXT_SECONDARY),
         };
@@ -2333,7 +2333,7 @@ fn show_import_preview_card(world: &mut World, plan: crate::scaffold::ImportPlan
     let (_, card, font) = spawn_modal_card(world, 560.0, 760.0);
     spawn_card_title(world, card, "Review project integration", &font);
     // Lead with the rewrite when there is one. A blanket reassurance
-    // printed above a line reading `replace src/main.rs` is worse than
+    // printed above a line reading `modify src/main.rs` is worse than
     // no reassurance: the user reads the summary, not the bullets.
     let intro = if plan.migrated_bin_target {
         format!(
@@ -3172,10 +3172,10 @@ mod tests {
         }
     }
 
-    /// The consent-critical distinction: a replace overwrites something
+    /// The consent-critical distinction: a modify touches something
     /// the user already had, and must not read like a creation.
     #[test]
-    fn the_preview_marks_replacements_differently_from_creations() {
+    fn the_preview_marks_modifications_differently_from_creations() {
         let mut world = card_world();
         show_import_preview_card(
             &mut world,

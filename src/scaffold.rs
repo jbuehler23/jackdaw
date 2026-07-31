@@ -62,10 +62,10 @@ impl ImportChange {
         match self {
             Self::CreateDirectory { path } => format!("create directory {}", path.display()),
             // `replace` is the plan's intent; check the disk so the
-            // preview never promises to replace a file that is not
+            // preview never promises to modify a file that is not
             // there, or to create one that is.
             Self::WriteFile { path, .. } if path.is_file() => {
-                format!("replace {}", path.display())
+                format!("modify {}", path.display())
             }
             Self::WriteFile { path, .. } => format!("create {}", path.display()),
         }
