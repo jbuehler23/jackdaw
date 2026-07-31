@@ -112,10 +112,23 @@ fn runner_boots_a_project_dylib_over_pie_ipc() {
     std::thread::spawn(move || {
         let _ = accept_tx.send(handle.accept());
     });
-    let mut transport = accept_rx
-        .recv_timeout(Duration::from_secs(60))
-        .expect("the runner never connected to the PIE link")
-        .expect("ipc accept failed");
+    // The child's stderr says why it never got as far as connecting
+    // (a missing adapter, a panic inside the loaded dylib). Without it
+    // the failure is a bare timeout with nothing to act on.
+    let accepted = accept_rx.recv_timeout(Duration::from_secs(60));
+    let mut transport = match accepted {
+        Ok(accepted) => accepted.expect("ipc accept failed"),
+        Err(_) => {
+            let captured = stderr_buf.lock().unwrap().clone();
+            let captured = if captured.trim().is_empty() {
+                "(the runner produced no output at all)".to_string()
+            } else {
+                captured
+            };
+            let _ = child.kill();
+            panic!("the runner never connected to the PIE link. Its output was:\n{captured}");
+        }
+    };
 
     // Ask for frames and wait for the first one.
     use jackdaw_pie_protocol::PieTransport;
