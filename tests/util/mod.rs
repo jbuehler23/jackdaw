@@ -298,3 +298,27 @@ impl OperatorResultExt for OperatorResult {
         );
     }
 }
+
+/// Make sure the SDK's manifest and its native link search paths exist
+/// before a pipeline test drives cargo directly.
+///
+/// The driver generates these on demand, but these tests bypass it and
+/// invoke `cargo rustc` with the wrapper themselves. Without the search
+/// paths a consumer cannot find import libraries the SDK's crates link
+/// by bare name, which on Windows is every `windows.*.lib` and fails the
+/// link. Linux never noticed: its native libraries are system wide.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "used by the SDK pipeline tests only")]
+pub fn ensure_sdk_metadata(sdk: &jackdaw::sdk_paths::SdkPaths) {
+    use jackdaw::project_build::plan::SdkManifest;
+
+    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let have_manifest = SdkManifest::load(&sdk.manifest)
+        .map(|manifest| !manifest.is_empty())
+        .unwrap_or(false);
+    let have_paths = jackdaw::project_build::plan::link_paths_path(&sdk.manifest).is_file();
+    if have_manifest && have_paths {
+        return;
+    }
+    SdkManifest::generate_dev(&workspace, sdk).expect("generate the SDK manifest for the fixture");
+}

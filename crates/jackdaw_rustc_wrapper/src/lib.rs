@@ -259,17 +259,11 @@ fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result
     // crate metadata, but not the directory they live in. Without these
     // the consumer's link fails on a bare library name it cannot find.
     // Never an issue on Linux, where native libraries are system wide.
-    if let Some(paths) = env::var_os(ENV_SDK_LINK_PATHS) {
-        for path in paths.to_string_lossy().lines() {
-            let path = path.trim();
-            if path.is_empty() {
-                continue;
-            }
-            let mut flag = OsString::from("native=");
-            flag.push(path);
-            argv.push(OsString::from("-L"));
-            argv.push(flag);
-        }
+    for path in native_link_paths(&deps) {
+        let mut flag = OsString::from("native=");
+        flag.push(&path);
+        argv.push(OsString::from("-L"));
+        argv.push(flag);
     }
 
     // `-C prefer-dynamic` links through the SDK dll. In the static model
@@ -409,5 +403,93 @@ mod tests {
             )
             .is_none()
         );
+    }
+}
+
+/// Directories holding native import libraries the SDK's crates link by
+/// bare name.
+///
+/// Taken from `$JACKDAW_SDK_LINK_PATHS` when the build driver set it,
+/// and otherwise read from the file the SDK build wrote beside its
+/// manifest. The fallback matters: the SDK pipeline tests drive cargo
+/// directly rather than through the driver, so an env-only channel
+/// reaches production but not them, and they are what proves this on
+/// Windows.
+fn native_link_paths(deps: &OsString) -> Vec<OsString> {
+    if let Some(paths) = env::var_os(ENV_SDK_LINK_PATHS) {
+        return paths
+            .to_string_lossy()
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(OsString::from)
+            .collect();
+    }
+    // `deps/` sits under the triple dir in a checkout or prepared cache,
+    // and under `sdk/<triple>/` in an installed bundle, so the file is
+    // one or two levels up depending on the layout.
+    let deps = std::path::Path::new(deps);
+    let mut out = Vec::new();
+    for up in [
+        deps.parent(),
+        deps.parent().and_then(std::path::Path::parent),
+    ] {
+        let Some(dir) = up else { continue };
+        let Ok(text) = std::fs::read_to_string(dir.join("jackdaw_sdk_link_paths.txt")) else {
+            continue;
+        };
+        out.extend(
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(OsString::from),
+        );
+        break;
+    }
+    out
+}
+
+#[cfg(test)]
+mod link_path_tests {
+    use super::*;
+
+    /// The SDK pipeline tests drive cargo directly and never set the env
+    /// var, so the wrapper has to find the file from the deps dir alone.
+    /// Both layouts: `<triple>/deps` in a checkout or prepared cache,
+    /// `sdk/<triple>/deps` in an installed bundle.
+    #[test]
+    fn link_paths_are_found_from_either_layout() {
+        let root = std::env::temp_dir().join(format!("jackdaw_wrapper_lp_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        // Checkout / cache: the file sits one level above `deps`.
+        let triple = root.join("checkout").join("x86_64").join("release");
+        std::fs::create_dir_all(triple.join("deps")).unwrap();
+        std::fs::write(
+            triple.join("jackdaw_sdk_link_paths.txt"),
+            b"/registry/windows_msvc/lib\n",
+        )
+        .unwrap();
+        let found = native_link_paths(&OsString::from(triple.join("deps").as_os_str()));
+        assert_eq!(found, vec![OsString::from("/registry/windows_msvc/lib")]);
+
+        // Bundle: `sdk/` is two levels above `deps`.
+        let sdk = root.join("bundle").join("sdk");
+        std::fs::create_dir_all(sdk.join("x86_64").join("deps")).unwrap();
+        std::fs::write(
+            sdk.join("jackdaw_sdk_link_paths.txt"),
+            b"/opt/jackdaw/sdk/native-libs\n",
+        )
+        .unwrap();
+        let found = native_link_paths(&OsString::from(sdk.join("x86_64").join("deps").as_os_str()));
+        assert_eq!(found, vec![OsString::from("/opt/jackdaw/sdk/native-libs")]);
+
+        // No file anywhere is not an error: platforms whose native
+        // libraries are system wide record none.
+        let bare = root.join("bare").join("deps");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert!(native_link_paths(&OsString::from(bare.as_os_str())).is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

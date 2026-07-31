@@ -44,6 +44,7 @@ fn ecosystem_dependency_compiles_and_registers_across_the_boundary() {
     );
     assert!(sdk.wrapper_exists(), "wrapper missing");
 
+    util::ensure_sdk_metadata(&sdk);
     let fixture_dir = util::stage_fixture("ecosystem_game");
     let fixture_target = fixture_dir.join("target-fixture");
     let map_path = fixture_dir.join("extern_map.txt");

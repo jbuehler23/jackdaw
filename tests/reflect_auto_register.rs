@@ -46,6 +46,7 @@ fn auto_registered_types_cross_the_dlopen_boundary() {
         sdk.wrapper.display()
     );
 
+    util::ensure_sdk_metadata(&sdk);
     let fixture_dir = util::stage_fixture("reflect_game");
     let fixture_target = fixture_dir.join("target-fixture");
     // Wrapper behavior is not part of cargo's fingerprint; build from
