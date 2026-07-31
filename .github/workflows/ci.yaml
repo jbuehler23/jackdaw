@@ -20,7 +20,11 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # This job runs the fast and integration tiers plus the scaffold,
+    # recipe and SDK-feature checks, and last took 48 minutes. A 60
+    # minute cap left twelve minutes of headroom, so the next test added
+    # here would have failed on the clock rather than on correctness.
+    timeout-minutes: 90
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
