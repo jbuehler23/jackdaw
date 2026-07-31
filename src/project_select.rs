@@ -25,6 +25,7 @@ use crate::{
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
 use bevy_window_chrome::CaptionFont;
 use bevy_window_chrome::{WindowChromeTheme, spawn_window_shell};
+use jackdaw_project_build::cargo_meta::ResolveError;
 
 pub struct ProjectSelectPlugin;
 
@@ -1441,17 +1442,20 @@ pub fn close_new_project_modal(world: &mut World) {
 /// init`) or open it without setup. `error` re-renders the card with
 /// a failure message (e.g. a Bevy version mismatch).
 fn show_setup_jackdaw_card(world: &mut World, root: PathBuf, error: Option<String>) {
-    show_setup_jackdaw_card_with_recovery(world, root, error, false);
+    show_setup_jackdaw_card_with_recovery(world, root, error, false, None);
 }
 
 /// The setup offer. When `recoverable`, the failure is one the user can
 /// choose to proceed past (a Bevy minor mismatch), so a third button
 /// offers that instead of leaving only a retry that cannot succeed.
+/// `package` is the workspace member already chosen (if any), so a
+/// recoverable retry does not lose that choice.
 fn show_setup_jackdaw_card_with_recovery(
     world: &mut World,
     root: PathBuf,
     error: Option<String>,
     recoverable: bool,
+    package: Option<String>,
 ) {
     let (_, card, font) = spawn_modal_card(world, 520.0, 700.0);
     spawn_card_title(world, card, "Set up jackdaw for this project", &font);
@@ -1511,6 +1515,13 @@ fn show_setup_jackdaw_card_with_recovery(
 
     let row = spawn_card_button_row(world, card);
 
+    let cancel = spawn_card_button(world, row, "Cancel", &font, false);
+    world
+        .entity_mut(cancel)
+        .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.queue(close_new_project_modal);
+        });
+
     let open_anyway = spawn_card_button(world, row, "Open without setup", &font, false);
     let root_open = root.clone();
     world
@@ -1532,7 +1543,10 @@ fn show_setup_jackdaw_card_with_recovery(
             .entity_mut(anyway)
             .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                 let root = root_force.clone();
-                commands.queue(move |world: &mut World| plan_and_show_import(world, root, true));
+                let package = package.clone();
+                commands.queue(move |world: &mut World| {
+                    plan_and_show_import(world, root, package, true);
+                });
             });
     } else {
         let setup = spawn_card_button(world, row, "Set up jackdaw", &font, true);
@@ -2111,28 +2125,208 @@ fn show_version_mismatch_card(
 /// Build an import preview for the "Set up jackdaw" card. Planning is
 /// side-effect free; a second explicit action applies the exact proposal.
 fn on_setup_jackdaw_clicked(world: &mut World, root: PathBuf) {
-    plan_and_show_import(world, root, false);
+    plan_and_show_import(world, root, None, false);
 }
 
 /// Plan the import and show the preview, or explain why it could not be
 /// planned. `allow_bevy_mismatch` is the second attempt after the user
 /// chose to proceed past a version mismatch, so the card offers a way
 /// forward instead of a button that fails identically every time.
-fn plan_and_show_import(world: &mut World, root: PathBuf, allow_bevy_mismatch: bool) {
-    match crate::scaffold::plan_import_with(&root, None, None, allow_bevy_mismatch) {
+/// `package` is set when the user already picked a workspace member.
+fn plan_and_show_import(
+    world: &mut World,
+    root: PathBuf,
+    package: Option<String>,
+    allow_bevy_mismatch: bool,
+) {
+    match crate::scaffold::plan_import_with(&root, None, package.as_deref(), allow_bevy_mismatch) {
         Ok(plan) if plan.is_empty() => enter_project_with(world, root, false),
         Ok(plan) => show_import_preview_card(world, plan),
+        Err(ScaffoldError::Package(ResolveError::Ambiguous { candidates })) => {
+            show_package_picker_card(world, root, candidates, allow_bevy_mismatch);
+        }
         Err(error) => {
             warn!("Set up jackdaw failed for {}: {error}", root.display());
-            let recoverable = matches!(error, crate::scaffold::ScaffoldError::BevyVersion { .. });
+            let recoverable = matches!(error, ScaffoldError::BevyVersion { .. });
             show_setup_jackdaw_card_with_recovery(
                 world,
                 root,
                 Some(error.to_string()),
                 recoverable,
+                package,
             );
         }
     }
+}
+
+/// Ask which workspace member is the game when several look like one.
+///
+/// Clicking a row continues setup for that package; Back returns to the
+/// setup offer.
+fn show_package_picker_card(
+    world: &mut World,
+    root: PathBuf,
+    candidates: Vec<String>,
+    allow_bevy_mismatch: bool,
+) {
+    let (_, card, font) = spawn_modal_card(world, 480.0, 560.0);
+    spawn_card_title(world, card, "Which package is the game?", &font);
+    spawn_card_body(
+        world,
+        card,
+        "Several packages in this workspace could be the game. Pick the one the editor should build.",
+        &font,
+    );
+
+    let list_shell = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                width: Val::Percent(100.0),
+                max_height: Val::Px(280.0),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+                overflow: Overflow::clip(),
+                ..Default::default()
+            },
+            BackgroundColor(tokens::INPUT_BG),
+            BorderColor::all(tokens::BORDER_SUBTLE),
+            ChildOf(card),
+        ))
+        .id();
+    let list = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                padding: UiRect::all(Val::Px(6.0)),
+                width: Val::Percent(100.0),
+                max_height: Val::Px(280.0),
+                overflow: Overflow::scroll_y(),
+                ..Default::default()
+            },
+            ScrollPosition::default(),
+            bevy::picking::hover::Hovered::default(),
+            ChildOf(list_shell),
+        ))
+        .id();
+    world.spawn((
+        jackdaw_feathers::scroll::scrollbar(list),
+        ChildOf(list_shell),
+    ));
+
+    let icon_font = world
+        .resource::<jackdaw_feathers::icons::IconFont>()
+        .0
+        .clone();
+    for name in &candidates {
+        spawn_package_candidate_row(
+            world,
+            list,
+            name,
+            &font,
+            &icon_font,
+            root.clone(),
+            allow_bevy_mismatch,
+        );
+    }
+
+    let row = spawn_card_button_row(world, card);
+    let back = spawn_card_button(world, row, "Back", &font, false);
+    world
+        .entity_mut(back)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = root.clone();
+            commands.queue(move |world: &mut World| show_setup_jackdaw_card(world, root, None));
+        });
+}
+
+fn spawn_package_candidate_row(
+    world: &mut World,
+    list: Entity,
+    name: &str,
+    font: &Handle<Font>,
+    icon_font: &Handle<Font>,
+    root: PathBuf,
+    allow_bevy_mismatch: bool,
+) {
+    let row = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                width: Val::Percent(100.0),
+                min_height: Val::Px(40.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(10.0),
+                ..Default::default()
+            },
+            BackgroundColor(tokens::PANEL_BG),
+            BorderColor::all(tokens::BORDER_SUBTLE),
+            ChildOf(list),
+            children![
+                (
+                    Node {
+                        width: Val::Px(26.0),
+                        height: Val::Px(26.0),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+                        ..Default::default()
+                    },
+                    BackgroundColor(tokens::DOC_TAB_ACTIVE_BG),
+                    Pickable::IGNORE,
+                    children![(
+                        Text::new(String::from(Icon::Package.unicode())),
+                        TextFont {
+                            font: icon_font.clone().into(),
+                            font_size: tokens::ICON_SM,
+                            ..Default::default()
+                        },
+                        TextColor(tokens::DIR_ICON_COLOR),
+                    )],
+                ),
+                (
+                    Text::new(name.to_string()),
+                    TextFont {
+                        font: font.clone().into(),
+                        font_size: tokens::TEXT_SIZE,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_PRIMARY),
+                    Pickable::IGNORE,
+                ),
+            ],
+        ))
+        .id();
+
+    world.entity_mut(row).observe(
+        |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
+            if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
+                bg.0 = tokens::HOVER_BG;
+            }
+        },
+    );
+    world.entity_mut(row).observe(
+        |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
+            if let Ok(mut bg) = bg.get_mut(out.event_target()) {
+                bg.0 = tokens::PANEL_BG;
+            }
+        },
+    );
+
+    let package = name.to_string();
+    world
+        .entity_mut(row)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = root.clone();
+            let package = package.clone();
+            commands.queue(move |world: &mut World| {
+                plan_and_show_import(world, root, Some(package), allow_bevy_mismatch);
+            });
+        });
 }
 
 fn show_import_preview_card(world: &mut World, plan: crate::scaffold::ImportPlan) {
@@ -3041,6 +3235,39 @@ mod tests {
         assert!(
             text.iter().any(|t| t.contains("lists every file first")),
             "and so is the promise that nothing is written yet: {text:?}"
+        );
+        assert!(
+            text.iter().any(|t| t == "Cancel"),
+            "offers a way to dismiss: {text:?}"
+        );
+    }
+
+    #[test]
+    fn the_package_picker_lists_each_candidate() {
+        let mut world = card_world();
+        show_package_picker_card(
+            &mut world,
+            PathBuf::from("/proj/workspace"),
+            vec!["package_1".into(), "package_2".into()],
+            false,
+        );
+        let text = rendered_text(&mut world);
+        assert!(
+            text.iter()
+                .any(|t| t.contains("Which package is the game?")),
+            "asks which package: {text:?}"
+        );
+        assert!(
+            text.iter().any(|t| t == "package_1"),
+            "lists the first candidate: {text:?}"
+        );
+        assert!(
+            text.iter().any(|t| t == "package_2"),
+            "lists the second candidate: {text:?}"
+        );
+        assert!(
+            text.iter().any(|t| t == "Back"),
+            "offers a way back: {text:?}"
         );
     }
 

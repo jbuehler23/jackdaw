@@ -1173,7 +1173,8 @@ pub fn plan_import_with(
 
     let jackdaw_toml = root.join("jackdaw.toml");
     if !jackdaw_toml.exists() {
-        let workspace_package = (package_dir != root).then_some(package.name.as_str());
+        let workspace_package =
+            (package_override.is_some() || package_dir != root).then_some(package.name.as_str());
         changes.push(ImportChange::WriteFile {
             path: jackdaw_toml,
             contents: jackdaw_toml_source(
@@ -2120,6 +2121,36 @@ mod tests {
 
         let plan = plan_import_package(&root, None, Some("server")).unwrap();
         assert_eq!(plan.package_name, "server");
+    }
+
+    #[test]
+    fn import_records_package_when_the_game_is_the_workspace_root() {
+        let root = temp_dir("wsroot");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("helper/src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\".\", \"helper\"]\nresolver = \"2\"\n\n\
+             [package]\nname = \"the-game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+             [dependencies]\nbevy = \"0.19\"\nhelper = { path = \"helper\" }\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub struct GamePlugin;\n").unwrap();
+        std::fs::write(
+            root.join("helper/Cargo.toml"),
+            "[package]\nname = \"helper\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+             [dependencies]\nbevy = \"0.19\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("helper/src/lib.rs"), "pub struct HelperPlugin;\n").unwrap();
+
+        let plan = plan_import_package(&root, None, Some("the-game")).unwrap();
+        assert!(plan.changes.iter().any(|change| matches!(
+            change,
+            ImportChange::WriteFile { path, contents, .. }
+                if path == &root.join("jackdaw.toml")
+                    && contents.contains("package = \"the-game\"")
+        )));
     }
 
     #[test]
