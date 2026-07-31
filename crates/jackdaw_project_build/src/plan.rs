@@ -136,7 +136,15 @@ impl SdkManifest {
             ));
         }
 
-        let triple_dir = format!("/{}/", sdk.triple);
+        // Cargo reports artifact paths with the platform's separator,
+        // so matching only on `/` discarded every artifact on Windows
+        // and produced an empty manifest. Nothing downstream can work
+        // without it: the redirect plan has no edges, and a project
+        // silently compiles its own bevy instead of the SDK's.
+        let in_triple_dir = |path: &str| {
+            path.contains(&format!("/{}/", sdk.triple))
+                || path.contains(&format!("\\{}\\", sdk.triple))
+        };
         let mut artifacts = BTreeMap::new();
         let mut link_paths: BTreeSet<String> = BTreeSet::new();
         for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -192,13 +200,13 @@ impl SdkManifest {
             let artifact = filenames
                 .iter()
                 .filter_map(|f| f.as_str())
-                .filter(|f| f.contains(&triple_dir))
+                .filter(|f| in_triple_dir(f))
                 .find(|f| f.ends_with(".rlib"))
                 .or_else(|| {
                     filenames
                         .iter()
                         .filter_map(|f| f.as_str())
-                        .filter(|f| f.contains(&triple_dir))
+                        .filter(|f| in_triple_dir(f))
                         .find(|f| f.ends_with(".rmeta"))
                 });
             if let Some(artifact) = artifact {
@@ -551,5 +559,32 @@ mod link_path_tests {
             link_paths_path(manifest),
             Path::new("/sdk/x86_64/jackdaw_sdk_link_paths.txt")
         );
+    }
+}
+
+#[cfg(test)]
+mod triple_dir_tests {
+    /// Cargo emits artifact paths with the platform's own separator.
+    /// Matching only forward slashes discarded every artifact on
+    /// Windows, so the manifest came out empty and the redirect plan had
+    /// nothing to redirect.
+    #[test]
+    fn the_triple_dir_matches_either_separator() {
+        let triple = "x86_64-pc-windows-msvc";
+        let matches = |path: &str| {
+            path.contains(&format!("/{triple}/")) || path.contains(&format!("\\{triple}\\"))
+        };
+
+        assert!(matches(
+            "D:\\a\\jackdaw\\target\\x86_64-pc-windows-msvc\\debug\\deps\\libbevy.rlib"
+        ));
+        assert!(matches(
+            "/home/joe/jackdaw/target/x86_64-pc-windows-msvc/debug/deps/libbevy.rlib"
+        ));
+        // A host-side unit is not in the triple dir and must stay out.
+        assert!(!matches(
+            "D:\\a\\jackdaw\\target\\debug\\deps\\libbevy.rlib"
+        ));
+        assert!(!matches("/home/joe/jackdaw/target/debug/deps/libbevy.rlib"));
     }
 }
