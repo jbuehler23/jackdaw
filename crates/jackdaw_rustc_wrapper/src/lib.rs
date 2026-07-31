@@ -66,6 +66,10 @@ use tracing::error;
 const ENV_SDK_DYLIB: &str = "JACKDAW_SDK_DYLIB";
 const ENV_SDK_DEPS: &str = "JACKDAW_SDK_DEPS";
 const ENV_SDK_HOST_DEPS: &str = "JACKDAW_SDK_HOST_DEPS";
+// Newline-separated directories holding native import libraries the
+// SDK's crates reference. Paths can contain spaces and, on Windows, a
+// colon after the drive letter, so neither is usable as a separator.
+const ENV_SDK_LINK_PATHS: &str = "JACKDAW_SDK_LINK_PATHS";
 const ENV_PRIMARY_PACKAGE: &str = "CARGO_PRIMARY_PACKAGE";
 const ENV_LOG: &str = "JACKDAW_WRAPPER_LOG";
 const ENV_EXTERN_MAP: &str = "JACKDAW_SDK_EXTERN_MAP";
@@ -247,6 +251,25 @@ fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result
         host_flag.push(&host_deps);
         argv.push(OsString::from("-L"));
         argv.push(host_flag);
+    }
+
+    // Native search paths from the SDK's build scripts. A crate that
+    // ships its own import libraries (`windows` ships `windows.0.52.0.lib`
+    // and friends) passes its `#[link]` directives to consumers through
+    // crate metadata, but not the directory they live in. Without these
+    // the consumer's link fails on a bare library name it cannot find.
+    // Never an issue on Linux, where native libraries are system wide.
+    if let Some(paths) = env::var_os(ENV_SDK_LINK_PATHS) {
+        for path in paths.to_string_lossy().lines() {
+            let path = path.trim();
+            if path.is_empty() {
+                continue;
+            }
+            let mut flag = OsString::from("native=");
+            flag.push(path);
+            argv.push(OsString::from("-L"));
+            argv.push(flag);
+        }
     }
 
     // `-C prefer-dynamic` links through the SDK dll. In the static model

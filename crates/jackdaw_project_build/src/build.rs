@@ -108,6 +108,11 @@ pub struct ProjectBuild {
     pub schema: Option<schema::ProjectSchema>,
 }
 
+/// Separator for the native link search path list handed to the
+/// wrapper. Paths can contain spaces, and on Windows a colon follows
+/// every drive letter, so neither is usable.
+const PATH_LIST_SEPARATOR: &str = "\n";
+
 /// Whether the SDK library is newer than the manifest describing it.
 ///
 /// The manifest is a cache of one build's artifact filenames, and
@@ -338,6 +343,18 @@ pub fn build_project_dylib(
         .env("JACKDAW_SDK_DEPS", &sdk.deps)
         .env("JACKDAW_SDK_HOST_DEPS", &sdk.host_deps)
         .env("JACKDAW_SDK_EXTERN_MAP", &plan_path);
+    // Directories holding native import libraries the SDK's crates
+    // reference. Their `#[link]` directives reach a consumer through
+    // crate metadata, but the search paths only ever existed in the
+    // SDK's own build, so without these the link fails on a bare
+    // library name it cannot find.
+    let link_paths = plan::read_link_paths(&sdk.manifest);
+    if !link_paths.is_empty() {
+        cmd.env(
+            "JACKDAW_SDK_LINK_PATHS",
+            link_paths.join(PATH_LIST_SEPARATOR),
+        );
+    }
     match static_rlibs {
         Some((bevy_rlib, api_rlib)) => {
             cmd.env("JACKDAW_SDK_STATIC", "1")

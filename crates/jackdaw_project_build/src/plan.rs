@@ -17,7 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::sdk_paths::SdkPaths;
@@ -138,10 +138,30 @@ impl SdkManifest {
 
         let triple_dir = format!("/{}/", sdk.triple);
         let mut artifacts = BTreeMap::new();
+        let mut link_paths: BTreeSet<String> = BTreeSet::new();
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
                 continue;
             };
+            // Native search paths a build script emitted. A crate that
+            // ships its own import libraries (the `windows` crates ship
+            // `windows.0.52.0.lib` and friends) is only findable through
+            // these, and they exist solely in the SDK's build. A consumer
+            // inherits the `#[link]` directives through crate metadata but
+            // not the directories, so its link fails on a bare library
+            // name. Invisible on Linux, where native libraries are system
+            // wide.
+            if msg["reason"] == "build-script-executed" {
+                for path in msg["linked_paths"].as_array().into_iter().flatten() {
+                    let Some(path) = path.as_str() else { continue };
+                    // Entries are `kind=path` or a bare path.
+                    let bare = path.split_once('=').map_or(path, |(_, rest)| rest);
+                    if !bare.is_empty() {
+                        link_paths.insert(bare.to_string());
+                    }
+                }
+                continue;
+            }
             if msg["reason"] != "compiler-artifact" {
                 continue;
             }
@@ -186,6 +206,7 @@ impl SdkManifest {
             }
         }
 
+        write_link_paths(&link_paths_path(&sdk.manifest), &link_paths)?;
         let manifest = Self { artifacts };
         manifest.write(&sdk.manifest)?;
         Ok(manifest)
@@ -449,6 +470,86 @@ mod tests {
         assert_eq!(
             resolve_artifact("libglam-abc.rlib", deps),
             "/opt/jackdaw/sdk/x86_64/deps/libglam-abc.rlib"
+        );
+    }
+}
+
+/// Where the native link search paths sit, beside the manifest they were
+/// captured with.
+pub fn link_paths_path(manifest: &Path) -> PathBuf {
+    manifest.with_file_name("jackdaw_sdk_link_paths.txt")
+}
+
+/// Record the directories a consumer's linker needs on its search path,
+/// one per line. Written even when empty, so a stale file from an
+/// earlier SDK never outlives the build that produced it.
+fn write_link_paths(path: &Path, paths: &BTreeSet<String>) -> Result<(), PlanError> {
+    let contents: String = paths.iter().map(|p| format!("{p}\n")).collect();
+    if std::fs::read_to_string(path).ok().as_deref() != Some(contents.as_str()) {
+        std::fs::write(path, contents)?;
+    }
+    Ok(())
+}
+
+/// The native search paths recorded for this SDK, if any. Absent or
+/// unreadable means none, which is the correct answer for an SDK built
+/// before this was captured.
+pub fn read_link_paths(manifest: &Path) -> Vec<String> {
+    std::fs::read_to_string(link_paths_path(manifest))
+        .map(|text| {
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod link_path_tests {
+    use super::*;
+
+    /// Cargo reports these as `kind=path`, and a consumer needs the bare
+    /// directory. An SDK built before this was captured has no file, and
+    /// must read as "none" rather than failing.
+    #[test]
+    fn link_paths_round_trip_and_tolerate_absence() {
+        let dir = std::env::temp_dir().join(format!("jackdaw_linkpaths_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = dir.join("jackdaw_sdk_manifest.txt");
+
+        assert!(
+            read_link_paths(&manifest).is_empty(),
+            "an SDK with no recorded paths reports none"
+        );
+
+        let mut paths = BTreeSet::new();
+        paths.insert("/sdk/windows_x86_64_msvc/lib".to_string());
+        paths.insert("/sdk/other/lib".to_string());
+        write_link_paths(&link_paths_path(&manifest), &paths).unwrap();
+
+        let read = read_link_paths(&manifest);
+        assert_eq!(read.len(), 2, "{read:?}");
+        assert!(read.contains(&"/sdk/windows_x86_64_msvc/lib".to_string()));
+
+        // Rewriting with none clears it, so a stale list cannot outlive
+        // the build that produced it.
+        write_link_paths(&link_paths_path(&manifest), &BTreeSet::new()).unwrap();
+        assert!(read_link_paths(&manifest).is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The file sits beside the manifest so both travel together, in a
+    /// bundle or a cache.
+    #[test]
+    fn the_link_path_file_sits_beside_the_manifest() {
+        let manifest = Path::new("/sdk/x86_64/jackdaw_sdk_manifest.txt");
+        assert_eq!(
+            link_paths_path(manifest),
+            Path::new("/sdk/x86_64/jackdaw_sdk_link_paths.txt")
         );
     }
 }
