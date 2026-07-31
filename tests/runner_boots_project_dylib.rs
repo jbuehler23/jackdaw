@@ -22,6 +22,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use jackdaw::project_build::{BuildEvent, build_project_dylib, shim_spec_for_project};
 use jackdaw_pie_protocol::event::to_bytes;
 use jackdaw_pie_protocol::{ControlEvent, PieChannel, decode_frame};
 
@@ -51,31 +52,28 @@ fn runner_boots_a_project_dylib_over_pie_ipc() {
     assert!(status.success(), "runner build failed");
     let runner = sdk.runner.clone();
 
-    // Build the shim dylib through the SDK pipeline. The shim's graph
-    // is bevy-only, so the facade redirect suffices (no extern map).
-    // Stage the sibling it path-depends on as well, so `../reflect_game`
-    // resolves inside the staging dir.
-    let _dep = util::stage_fixture("reflect_game");
-    let shim_dir = util::stage_fixture("shim_game");
-    let shim_target = shim_dir.join("target-fixture");
-    let _ = std::fs::remove_dir_all(&shim_target);
-    let status = Command::new("cargo")
-        .args(["rustc", "--crate-type", "dylib", "--target", &triple])
-        .current_dir(&shim_dir)
-        .env("CARGO_TARGET_DIR", &shim_target)
-        .env("RUSTC_WRAPPER", &sdk.wrapper)
-        .env("JACKDAW_SDK_DYLIB", &sdk.dylib)
-        .env("JACKDAW_SDK_DEPS", &sdk.deps)
-        .env("JACKDAW_SDK_HOST_DEPS", &sdk.host_deps)
-        .status()
-        .expect("build the shim dylib");
-    assert!(status.success(), "shim dylib failed to build");
-    let shim_dylib = shim_target.join(format!(
-        "{triple}/debug/{}shim_game{}",
-        std::env::consts::DLL_PREFIX,
-        std::env::consts::DLL_SUFFIX
-    ));
-    assert!(shim_dylib.exists(), "shim dylib missing");
+    // Build the project dylib the way the editor does, through the real
+    // shim. A hand-written stand-in used to live in
+    // `tests/fixtures/shim_game`; it drifted from the generated one (the
+    // entry was renamed and changed shape) and the runner then failed
+    // with `undefined symbol: jackdaw_run_game`. Generating it removes
+    // the copy that can drift.
+    let project = util::stage_fixture("reflect_game");
+    util::ensure_sdk_metadata(&sdk);
+    let spec = shim_spec_for_project(&project, None).expect("the fixture is a lib crate");
+    let jackdaw_dir = project.join(".jackdaw");
+    let mut ignore_progress = |_: BuildEvent| {};
+    let build = build_project_dylib(
+        &spec,
+        &jackdaw_dir,
+        &sdk,
+        Some(&workspace_root()),
+        &mut ignore_progress,
+    )
+    .expect("build the project dylib through the pipeline");
+    let shim_dir = build.dylib.parent().unwrap_or(&project).to_path_buf();
+    let shim_dylib = build.dylib.clone();
+    assert!(shim_dylib.exists(), "project dylib missing");
 
     // Open the PIE rendezvous the way the editor does, then launch the
     // runner as the editor would launch a game process.

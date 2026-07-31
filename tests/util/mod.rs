@@ -226,10 +226,22 @@ pub fn run_windowless_game(
     std::thread::spawn(move || {
         let _ = accept_tx.send(handle.accept());
     });
-    let _transport = accept_rx
-        .recv_timeout(Duration::from_secs(90))
-        .expect("the runner never connected to the PIE link")
-        .expect("ipc accept failed");
+    // On timeout the child's stderr is the only evidence of why it never
+    // got as far as connecting. Discarding it left a bare 90 second
+    // timeout with nothing to act on, which is how this failure went
+    // undiagnosed: it gates every release binary through the heavy tier.
+    let accepted = accept_rx.recv_timeout(Duration::from_secs(90));
+    if accepted.is_err() {
+        let captured = stderr_buf.lock().unwrap().clone();
+        let captured = if captured.trim().is_empty() {
+            "(the runner produced no output at all)".to_string()
+        } else {
+            captured
+        };
+        let _ = child.kill();
+        panic!("the runner never connected to the PIE link. Its output was:\n{captured}");
+    }
+    let _transport = accepted.expect("checked above").expect("ipc accept failed");
 
     let deadline = Instant::now() + Duration::from_secs(90);
     let mut loaded = false;
