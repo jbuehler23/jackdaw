@@ -3,11 +3,16 @@
 //! project schema, so the editor can learn a project's component types
 //! without mapping project code into its own process.
 //!
-//! Builds `tests/fixtures/reflect_game` (a plain
-//! Bevy dylib deriving `Reflect` on one component) and the
-//! `jackdaw-runner` binary, runs `jackdaw-runner --extract-schema` on
-//! the dylib, and checks the emitted JSON contains the component with
-//! its fields and a default value.
+//! Builds `tests/fixtures/reflect_game` (a plain Bevy library deriving
+//! `Reflect` on one component) through the real project pipeline, then
+//! runs `jackdaw-runner --extract-schema` on the result and checks the
+//! emitted JSON contains the component with its fields and a default
+//! value.
+//!
+//! The pipeline is what makes this work: `jackdaw_extract_schema` is an
+//! export the generated shim provides, never the user's crate. Building
+//! the fixture directly produced a dylib without it, and the extractor
+//! failed on `undefined symbol: jackdaw_extract_schema`.
 //!
 //! ```text
 //! cargo test --features "dylib runner" --target <host-triple> \
@@ -19,6 +24,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use jackdaw::project_build::schema::ProjectSchema;
+use jackdaw::project_build::{BuildEvent, build_project_dylib, shim_spec_for_project};
 use jackdaw::sdk_paths::SdkPaths;
 
 mod util;
@@ -45,26 +51,23 @@ fn extractor_dumps_project_component_schema() {
         .expect("build jackdaw-runner");
     assert!(status.success(), "runner build failed");
 
-    // Build the fixture project as a Rust dylib through the SDK pipeline.
+    // Build the fixture the way the editor builds a project: through
+    // the shim, which is what supplies the `jackdaw_extract_schema`
+    // export the extractor looks for.
     let fixture_dir = util::stage_fixture("reflect_game");
-    let fixture_target = fixture_dir.join("target-fixture");
-    let status = Command::new("cargo")
-        .args(["rustc", "--crate-type", "dylib", "--target", &triple])
-        .current_dir(&fixture_dir)
-        .env("CARGO_INCREMENTAL", "0")
-        .env("CARGO_TARGET_DIR", &fixture_target)
-        .env("RUSTC_WRAPPER", &sdk.wrapper)
-        .env("JACKDAW_SDK_DYLIB", &sdk.dylib)
-        .env("JACKDAW_SDK_DEPS", &sdk.deps)
-        .env("JACKDAW_SDK_HOST_DEPS", &sdk.host_deps)
-        .status()
-        .expect("build the fixture dylib");
-    assert!(status.success(), "fixture dylib failed to build");
-    let dylib = fixture_target.join(format!(
-        "{triple}/debug/{}reflect_game{}",
-        std::env::consts::DLL_PREFIX,
-        std::env::consts::DLL_SUFFIX
-    ));
+    let spec = shim_spec_for_project(&fixture_dir, None).expect("the fixture is a lib crate");
+    let jackdaw_dir = fixture_dir.join(".jackdaw");
+    let mut ignore_progress = |_: BuildEvent| {};
+    let build = build_project_dylib(
+        &spec,
+        &jackdaw_dir,
+        &sdk,
+        Some(&workspace_root()),
+        &mut ignore_progress,
+    )
+    .expect("build the fixture dylib through the pipeline");
+    let dylib = build.dylib.clone();
+
     assert!(dylib.exists(), "fixture dylib missing");
 
     // Run the extractor.
