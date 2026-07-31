@@ -14,7 +14,12 @@ repository = "https://github.com/jbuehler23/jackdaw"
 crate-type = ["lib", "dylib"]
 
 [dependencies]
-bevy.workspace = true
+# Bevy is linked dynamically so it lands in its own `bevy_dylib` rather
+# than inside this one. A Rust dylib exports its whole closure, and
+# Bevy's closure alone is 43k symbols on Linux and more on Windows,
+# where the PE export table tops out at 65535 ordinals. Keeping Bevy out
+# of this library's export table is what lets it link at all there.
+bevy = { workspace = true, features = ["dynamic_linking"] }
 jackdaw_api.workspace = true
 # Every feature a project can turn on, so the SDK's feature resolution
 # is a superset of any project's.
