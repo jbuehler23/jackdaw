@@ -223,10 +223,15 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     // staged here and the path rewritten to the one directory that
     // travels with the bundle.
     let native_libs = stage_native_libs(&sdk, &native_out)?;
-    write(
-        &sdk_out.join("jackdaw_sdk_link_paths.txt"),
-        &format!("{}\n", native_out.display()),
-    )?;
+    // Empty when nothing was staged, rather than a path to a directory
+    // that was never created. Every platform whose native libraries are
+    // system wide records none, and a consumer should see that plainly.
+    let staged_paths = if native_libs > 0 {
+        format!("{}\n", native_out.display())
+    } else {
+        String::new()
+    };
+    write(&sdk_out.join("jackdaw_sdk_link_paths.txt"), &staged_paths)?;
 
     // Runtime cdylibs the project links through under `prefer-dynamic`:
     // the bevy and jackdaw dylibs sit beside the closure rlibs in the
@@ -274,7 +279,21 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
 /// prior build has not left one. A no-op once present; in CI the editor is
 /// compiled first, so this just re-reads its artifact list.
 fn ensure_manifest(workspace: &Path, sdk: &SdkPaths) -> Result<(), String> {
-    if sdk.manifest.is_file() {
+    // Present is not the same as current. A manifest names one build's
+    // exact rlib filenames, so an SDK rebuilt since leaves it pointing at
+    // artifacts from before: the bundle then redirects consumers to an
+    // older `wgpu_hal` than the one their own graph resolves, and the
+    // game fails to compile with two versions of a crate in scope. The
+    // bundle is the one artifact a user cannot repair, so this is checked
+    // rather than assumed.
+    let stale = match (
+        std::fs::metadata(&sdk.manifest).and_then(|m| m.modified()),
+        std::fs::metadata(&sdk.dylib).and_then(|m| m.modified()),
+    ) {
+        (Ok(manifest), Ok(dylib)) => manifest < dylib,
+        _ => false,
+    };
+    if sdk.manifest.is_file() && !stale {
         return Ok(());
     }
     SdkManifest::generate(

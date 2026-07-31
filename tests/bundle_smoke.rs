@@ -39,8 +39,12 @@ fn game_builds_against_a_staged_bundle_sdk() {
         return;
     }
 
+    // `xtask` is deliberately outside the workspace, so it is only
+    // reachable through its own manifest. `-p xtask` from the root
+    // resolves nothing, which is what the `cargo xtask` alias avoids by
+    // passing `--manifest-path`.
     let status = Command::new("cargo")
-        .args(["build", "-p", "xtask", "--release"])
+        .args(["build", "--release", "--manifest-path", "xtask/Cargo.toml"])
         .current_dir(&root)
         .status()
         .expect("spawn cargo for xtask");
@@ -52,8 +56,9 @@ fn game_builds_against_a_staged_bundle_sdk() {
         .tempdir_in(root.join("target"))
         .expect("tempdir under target/");
     let bundle = staging.path().join("jackdaw-bundle");
+    // Its own manifest means its own target dir, not the workspace's.
     let xtask = root
-        .join("target/release")
+        .join("xtask/target/release")
         .join(format!("xtask{}", std::env::consts::EXE_SUFFIX));
     let staged = Command::new(&xtask)
         .arg("bundle")
