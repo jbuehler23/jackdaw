@@ -85,24 +85,6 @@ const ENV_SDK_API_RLIB: &str = "JACKDAW_SDK_API_RLIB";
 /// to rustc; we rewrite the value here.
 const REDIRECTED_CRATES: &[&str] = &["bevy"];
 
-/// Crates that must resolve from the SDK dylib rather than from a
-/// statically linked rlib, because they hold process-global state.
-///
-/// `inventory` is the registry Bevy's `reflect_auto_register` collects
-/// derived types into. Linking it as an rlib gives every consumer its
-/// own copy of that registry: the loaded project registers into its
-/// own, and the editor reads the SDK's, which is empty.
-///
-/// On Linux this happened to work anyway. ELF's flat namespace lets the
-/// SDK's copy interpose the project's, so both ended up using one
-/// registry by accident. macOS binds each import to the library it came
-/// from, so the copies stayed separate and types never crossed the
-/// boundary (`user component not registered after dlopen`).
-///
-/// Only meaningful in the shared-dylib model. The static model has no
-/// dll to resolve from, and points every crate at a prebuilt rlib.
-const DYLIB_ONLY_CRATES: &[&str] = &["inventory"];
-
 /// Crate aliases we inject unconditionally so `use jackdaw_api::...`
 /// resolves without the user having to declare `jackdaw_api` in
 /// their Cargo.toml. The rustc command picks up these `--extern`
@@ -177,18 +159,17 @@ fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result
     // the shared-dylib model both point at libjackdaw_sdk; in the static
     // model each points at its own prebuilt rlib, so rustc embeds one
     // shared bevy compilation instead of linking a dll.
-    let (bevy_target, api_target, shared_dylib) = if static_mode {
+    let (bevy_target, api_target) = if static_mode {
         (
             env::var_os(ENV_SDK_BEVY_RLIB)
                 .ok_or_else(|| format!("{ENV_SDK_BEVY_RLIB} not set in static mode"))?,
             env::var_os(ENV_SDK_API_RLIB)
                 .ok_or_else(|| format!("{ENV_SDK_API_RLIB} not set in static mode"))?,
-            None,
         )
     } else {
         let dylib = env::var_os(ENV_SDK_DYLIB)
             .ok_or_else(|| format!("{ENV_SDK_DYLIB} not set; cannot redirect --extern"))?;
-        (dylib.clone(), dylib.clone(), Some(dylib))
+        (dylib.clone(), dylib)
     };
     let extern_map = load_extern_map();
 
@@ -213,13 +194,9 @@ fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result
     let mut i = 0;
     while i < argv.len() {
         if argv[i] == "--extern" && i + 1 < argv.len() {
-            if let Some(new_value) = rewrite_extern(
-                &argv[i + 1],
-                &bevy_target,
-                shared_dylib.as_ref(),
-                &extern_map,
-                &consumer,
-            ) {
+            if let Some(new_value) =
+                rewrite_extern(&argv[i + 1], &bevy_target, &extern_map, &consumer)
+            {
                 if log {
                     error!(
                         "jackdaw-rustc-wrapper: rewrite --extern {:?} -> {:?}",
@@ -343,7 +320,6 @@ impl ExternMap {
 fn rewrite_extern(
     value: &OsString,
     bevy_target: &OsString,
-    shared_dylib: Option<&OsString>,
     extern_map: &ExternMap,
     consumer: &str,
 ) -> Option<OsString> {
@@ -353,16 +329,6 @@ fn rewrite_extern(
         let mut out = OsString::from(alias);
         out.push("=");
         out.push(bevy_target);
-        return Some(out);
-    }
-    // Process-global state has to come from the one dylib every
-    // consumer shares, not from a per-consumer rlib copy.
-    if let Some(dylib) = shared_dylib
-        && DYLIB_ONLY_CRATES.contains(&alias)
-    {
-        let mut out = OsString::from(alias);
-        out.push("=");
-        out.push(dylib);
         return Some(out);
     }
     let artifact = extern_map.edge_artifact(consumer, alias)?;
@@ -389,7 +355,6 @@ mod tests {
         let rewritten = rewrite_extern(
             &ext("bevy=/proj/target/deps/libbevy-abc.rlib"),
             &dylib,
-            Some(&dylib),
             &map,
             "my_game@0.1.0",
         )
@@ -400,51 +365,11 @@ mod tests {
         let rewritten = rewrite_extern(
             &ext("bevy=/proj/target/deps/libbevy-abc.rlib"),
             &rlib,
-            None,
             &map,
             "my_game@0.1.0",
         )
         .expect("static mode redirects the facade too");
         assert_eq!(rewritten, ext("bevy=/sdk/deps/libbevy-def.rlib"));
-    }
-
-    /// `inventory` holds the registry derived types register into. Left
-    /// as an rlib it is copied into every consumer, so a project
-    /// registers into its own and the editor reads an empty one. Linux
-    /// hid this because ELF lets the SDK's copy interpose; macOS binds
-    /// imports to the library they came from and does not.
-    #[test]
-    fn process_global_state_resolves_from_the_shared_dylib() {
-        let map = ExternMap::default();
-        let dylib = ext("/sdk/libjackdaw_sdk.so");
-        let rewritten = rewrite_extern(
-            &ext("inventory=/proj/target/deps/libinventory-abc.rlib"),
-            &dylib,
-            Some(&dylib),
-            &map,
-            "my_game@0.1.0",
-        )
-        .expect("inventory is redirected in the shared-dylib model");
-        assert_eq!(rewritten, ext("inventory=/sdk/libjackdaw_sdk.so"));
-    }
-
-    /// The static model has no dll to resolve from, so the plan decides.
-    /// Pointing `inventory` at the bevy rlib would be actively wrong.
-    #[test]
-    fn the_static_model_leaves_inventory_to_the_plan() {
-        let map = ExternMap::default();
-        let rlib = ext("/sdk/deps/libbevy-def.rlib");
-        assert!(
-            rewrite_extern(
-                &ext("inventory=/proj/target/deps/libinventory-abc.rlib"),
-                &rlib,
-                None,
-                &map,
-                "my_game@0.1.0",
-            )
-            .is_none(),
-            "with no plan edge and no shared dylib, the flag is left alone"
-        );
     }
 
     /// A crate nobody has an opinion about passes through untouched.
@@ -456,7 +381,6 @@ mod tests {
             rewrite_extern(
                 &ext("rand=/proj/target/deps/librand-abc.rlib"),
                 &dylib,
-                Some(&dylib),
                 &map,
                 "my_game@0.1.0",
             )
