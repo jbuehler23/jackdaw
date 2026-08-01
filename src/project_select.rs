@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use bevy::text::{FontSize, FontSourceTemplate};
 use bevy::{
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
@@ -7,7 +8,7 @@ use bevy::{
 };
 use jackdaw_feathers::{
     button::{ButtonVariant, IconButtonProps, icon_button},
-    icons::{EditorFont, Icon},
+    icons::{EditorFont, Icon, font_paths},
     text_edit::{TextEditProps, TextEditValue, text_edit},
     tokens,
 };
@@ -2178,57 +2179,34 @@ fn show_package_picker_card(
         &font,
     );
 
-    let list_shell = world
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                width: Val::Percent(100.0),
-                max_height: Val::Px(280.0),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
-                overflow: Overflow::clip(),
-                ..Default::default()
-            },
-            BackgroundColor(tokens::INPUT_BG),
-            BorderColor::all(tokens::BORDER_SUBTLE),
-            ChildOf(card),
-        ))
-        .id();
-    let list = world
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(4.0),
-                padding: UiRect::all(Val::Px(6.0)),
-                width: Val::Percent(100.0),
-                max_height: Val::Px(280.0),
-                overflow: Overflow::scroll_y(),
-                ..Default::default()
-            },
-            ScrollPosition::default(),
-            bevy::picking::hover::Hovered::default(),
-            ChildOf(list_shell),
-        ))
-        .id();
+    let Ok(mut list_shell) = world.spawn_scene(package_picker_list_shell()) else {
+        error!("failed to spawn package picker list shell");
+        return;
+    };
+    list_shell.insert(ChildOf(card));
+    let list_shell = list_shell.id();
+
+    let Ok(mut list) = world.spawn_scene(package_picker_list()) else {
+        error!("failed to spawn package picker list");
+        return;
+    };
+    list.insert(ChildOf(list_shell));
+    let list = list.id();
     world.spawn((
         jackdaw_feathers::scroll::scrollbar(list),
         ChildOf(list_shell),
     ));
 
-    let icon_font = world
-        .resource::<jackdaw_feathers::icons::IconFont>()
-        .0
-        .clone();
-    for name in &candidates {
-        spawn_package_candidate_row(
-            world,
-            list,
+    for name in candidates {
+        let Ok(mut row) = world.spawn_scene(package_candidate_row(
             name,
-            &font,
-            &icon_font,
             root.clone(),
             allow_bevy_mismatch,
-        );
+        )) else {
+            error!("failed to spawn package candidate row");
+            continue;
+        };
+        row.insert(ChildOf(list));
     }
 
     let row = spawn_card_button_row(world, card);
@@ -2241,92 +2219,104 @@ fn show_package_picker_card(
         });
 }
 
-fn spawn_package_candidate_row(
-    world: &mut World,
-    list: Entity,
-    name: &str,
-    font: &Handle<Font>,
-    icon_font: &Handle<Font>,
-    root: PathBuf,
-    allow_bevy_mismatch: bool,
-) {
-    let row = world
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                width: Val::Percent(100.0),
-                min_height: Val::Px(40.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(10.0),
-                ..Default::default()
-            },
-            BackgroundColor(tokens::PANEL_BG),
-            BorderColor::all(tokens::BORDER_SUBTLE),
-            ChildOf(list),
-            children![
-                (
-                    Node {
-                        width: Val::Px(26.0),
-                        height: Val::Px(26.0),
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
-                        border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
-                        ..Default::default()
-                    },
-                    BackgroundColor(tokens::DOC_TAB_ACTIVE_BG),
-                    Pickable::IGNORE,
-                    children![(
-                        Text::new(String::from(Icon::Package.unicode())),
-                        TextFont {
-                            font: icon_font.clone().into(),
-                            font_size: tokens::ICON_SM,
-                            ..Default::default()
-                        },
-                        TextColor(tokens::DIR_ICON_COLOR),
-                    )],
-                ),
-                (
-                    Text::new(name.to_string()),
-                    TextFont {
-                        font: font.clone().into(),
-                        font_size: tokens::TEXT_SIZE,
-                        ..Default::default()
-                    },
-                    TextColor(tokens::TEXT_PRIMARY),
-                    Pickable::IGNORE,
-                ),
-            ],
-        ))
-        .id();
+/// Bordered shell around the scrollable package list.
+fn package_picker_list_shell() -> impl Scene {
+    bsn! {
+        Node {
+            flex_direction: FlexDirection::Column,
+            width: percent(100),
+            max_height: px(280.0),
+            border: UiRect::all(px(1.0)),
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
+            overflow: Overflow::clip(),
+        }
+        BackgroundColor(tokens::INPUT_BG)
+        BorderColor::all(tokens::BORDER_SUBTLE)
+    }
+}
 
-    world.entity_mut(row).observe(
-        |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
+/// Scrollable column that holds package candidate rows.
+fn package_picker_list() -> impl Scene {
+    bsn! {
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(4.0),
+            padding: UiRect::all(px(6.0)),
+            width: percent(100),
+            max_height: px(280.0),
+            overflow: Overflow::scroll_y(),
+        }
+        ScrollPosition::default()
+        bevy::picking::hover::Hovered::default()
+    }
+}
+
+/// clickable workspace-member row in the package picker.
+fn package_candidate_row(name: String, root: PathBuf, allow_bevy_mismatch: bool) -> impl Scene {
+    let glyph = String::from(Icon::Package.unicode());
+    let label = name.clone();
+    bsn! {
+        Node {
+            flex_direction: FlexDirection::Row,
+            width: percent(100),
+            min_height: px(40.0),
+            padding: UiRect::axes(px(10.0), px(8.0)),
+            border: UiRect::all(px(1.0)),
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_LG)),
+            align_items: AlignItems::Center,
+            column_gap: px(10.0),
+        }
+        BackgroundColor(tokens::PANEL_BG)
+        BorderColor::all(tokens::BORDER_SUBTLE)
+        Children [
+            (
+                Node {
+                    width: px(26.0),
+                    height: px(26.0),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
+                }
+                BackgroundColor(tokens::DOC_TAB_ACTIVE_BG)
+                Pickable::IGNORE
+                Children [
+                    (
+                        Text(glyph)
+                        TextFont {
+                            font: FontSourceTemplate::Handle(font_paths::LUCIDE),
+                            font_size: FontSize::Px(tokens::ICON_SM_PX),
+                        }
+                        TextColor(tokens::DIR_ICON_COLOR)
+                    ),
+                ]
+            ),
+            (
+                Text(label)
+                TextFont {
+                    font_size: tokens::TEXT_SIZE,
+                }
+                TextColor(tokens::TEXT_PRIMARY)
+                Pickable::IGNORE
+            ),
+        ]
+        on(|hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
             if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
                 bg.0 = tokens::HOVER_BG;
             }
-        },
-    );
-    world.entity_mut(row).observe(
-        |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
+        })
+        on(|out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
             if let Ok(mut bg) = bg.get_mut(out.event_target()) {
                 bg.0 = tokens::PANEL_BG;
             }
-        },
-    );
-
-    let package = name.to_string();
-    world
-        .entity_mut(row)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        })
+        on(move |_: On<Pointer<Click>>, mut commands: Commands| {
             let root = root.clone();
-            let package = package.clone();
+            let package = name.clone();
             commands.queue(move |world: &mut World| {
                 plan_and_show_import(world, root, Some(package), allow_bevy_mismatch);
             });
-        });
+        })
+    }
 }
 
 fn show_import_preview_card(world: &mut World, plan: crate::scaffold::ImportPlan) {
@@ -3139,17 +3129,23 @@ fn poll_new_project_tasks(
 mod tests {
     use super::*;
 
-    /// The card builders need only the two font resources and the
-    /// modal state; everything else they touch they spawn themselves.
-    /// Exercising them against a bare world checks the thing the type
-    /// checker cannot: that the hierarchy actually gets built, and that
-    /// nothing panics on the way.
+    /// The card builders need the two font resources, the modal state,
+    /// and enough of the asset/scene stack for `bsn!` `spawn_scene`
+    /// calls (the package picker). Exercising them against this world
+    /// checks the thing the type checker cannot: that the hierarchy
+    /// actually gets built, and that nothing panics on the way.
     fn card_world() -> World {
-        let mut world = World::new();
-        world.insert_resource(NewProjectState::default());
-        world.insert_resource(EditorFont(Handle::default()));
-        world.insert_resource(jackdaw_feathers::icons::IconFont(Handle::default()));
-        world
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::scene::ScenePlugin)
+            .init_asset::<Font>();
+        app.world_mut().insert_resource(NewProjectState::default());
+        app.world_mut()
+            .insert_resource(EditorFont(Handle::default()));
+        app.world_mut()
+            .insert_resource(jackdaw_feathers::icons::IconFont(Handle::default()));
+        std::mem::take(app.world_mut())
     }
 
     /// Every `Text` in the world, for asserting on what a card says.
