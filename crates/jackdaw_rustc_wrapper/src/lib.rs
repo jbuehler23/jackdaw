@@ -154,7 +154,16 @@ pub fn run() -> ExitCode {
 }
 
 /// The `--extern` flags an invocation carries, one `alias=>source` per
-/// entry: where the path points, or `no path` for the bare form.
+/// entry: where the path points and how big that file is, or `no path`
+/// for the bare form.
+///
+/// The size is there because every other way an extern can be wrong
+/// announces itself differently: a missing file, a truncated one, a
+/// wrong-target or wrong-crate rlib each produce their own rustc error.
+/// A plain `can't find crate` against a crate that was redirected to a
+/// path means the file itself is not what it should be, and its size is
+/// the cheapest thing that distinguishes "it is fine" from "it is a
+/// stub".
 fn describe_externs(args: &[OsString]) -> String {
     let mut out = Vec::new();
     let mut i = 0;
@@ -162,7 +171,13 @@ fn describe_externs(args: &[OsString]) -> String {
         if args[i] == "--extern" {
             let value = args[i + 1].to_string_lossy();
             out.push(match value.split_once('=') {
-                Some((alias, path)) => format!("{alias}=>{path}"),
+                Some((alias, path)) => {
+                    let size = match std::fs::metadata(path) {
+                        Ok(meta) => format!("{} bytes", meta.len()),
+                        Err(e) => format!("unreadable: {e}"),
+                    };
+                    format!("{alias}=>{path} ({size})")
+                }
                 None => format!("{value}=>no path"),
             });
             i += 2;
@@ -526,6 +541,10 @@ mod tests {
         assert!(
             described.contains("image=>/sdk/deps/libimage-abc.rlib"),
             "{described}"
+        );
+        assert!(
+            described.contains("unreadable"),
+            "a path that is not there says so: {described}"
         );
         assert!(described.contains("glam=>no path"), "{described}");
     }

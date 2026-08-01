@@ -60,6 +60,11 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: onboarding-${{ matrix.os }}
+          # These probes exist to be run against platforms that are
+          # failing, and the default saves nothing from a failed job, so
+          # the platform under investigation is the one that never gets
+          # a warm cache.
+          cache-on-failure: true
 
       - name: Build the SDK, runner, and wrapper
         run: |

@@ -211,6 +211,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: bundle-${{ matrix.triple }}
+          # Save even when the job fails. This job is where a platform
+          # gets iterated on, and the default is to save nothing unless
+          # it succeeds: the two platforms that were failing therefore
+          # never once had a warm cache, so every attempt rebuilt from
+          # scratch and Windows spent 75 minutes on the same step twice
+          # in a row. The build is the same work whether the test after
+          # it passed.
+          cache-on-failure: true
 
       # Every cargo invocation in this job, not just the one that builds
       # the binaries: the later steps rebuild the same graph, and a

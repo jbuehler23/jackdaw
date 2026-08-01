@@ -297,10 +297,26 @@ fn ensure_manifest(workspace: &Path, sdk: &SdkPaths) -> Result<(), String> {
     if sdk.manifest.is_file() && !stale {
         return Ok(());
     }
+    // `--bins`, matching the build that produced the binaries being
+    // staged. Without it cargo resolves a different configuration of the
+    // workspace crates: the two sets coexist in the target dir, so this
+    // step recompiled seven crates and relinked `jackdaw` every time,
+    // twenty minutes on Linux and forty on Windows. Worse than the cost,
+    // it left the shipped editor built from one resolution while the
+    // manifest and SDK dylib beside it came from another, and those are
+    // meant to be the single compilation that makes the editor and a
+    // loaded project agree on `TypeId`.
     SdkManifest::generate(
         workspace,
         sdk,
-        &["-p", "jackdaw", "--features", "dylib", "--release"],
+        &[
+            "-p",
+            "jackdaw",
+            "--features",
+            "dylib",
+            "--release",
+            "--bins",
+        ],
     )
     .map(|_| ())
     .map_err(|e| format!("generating SDK manifest: {e}"))
