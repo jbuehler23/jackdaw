@@ -14,12 +14,18 @@ repository = "https://github.com/jbuehler23/jackdaw"
 crate-type = ["lib", "dylib"]
 
 [dependencies]
-# Bevy is linked dynamically so it lands in its own `bevy_dylib` rather
-# than inside this one. A Rust dylib exports its whole closure, and
-# Bevy's closure alone is 43k symbols on Linux and more on Windows,
-# where the PE export table tops out at 65535 ordinals. Keeping Bevy out
-# of this library's export table is what lets it link at all there.
-bevy = { workspace = true, features = ["dynamic_linking"] }
+# Bevy is linked statically, so this library's export table carries
+# bevy's closure too (roughly 50k of the 65,535 PE ordinals Windows
+# allows). Splitting bevy into its own `bevy_dylib` cuts that to 9k,
+# but pulling a Rust dylib into the graph makes every binary in the
+# workspace link the whole graph dynamically, std included, and a
+# Windows link then fails on the private statics that inlined upstream
+# code reaches for: `bevy_reflect`'s `TypeInfo` cells, tracing's
+# `MAX_LEVEL`, `std`'s `GLOBAL_PANIC_COUNT`. A PE export table holds
+# only what a crate declares public, so those symbols are simply not
+# there to import. The split therefore only pays off on the one
+# platform where it cannot be used.
+bevy.workspace = true
 jackdaw_api.workspace = true
 # Every feature a project can turn on, so the SDK's feature resolution
 # is a superset of any project's.

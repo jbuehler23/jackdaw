@@ -5,6 +5,13 @@ on:
     tags: ["v*"]
   release:
     types: [published]
+  # Dry-run the bundle matrix from a branch. Every step that publishes
+  # anything (crates.io, the archive upload, the attestation) is gated on
+  # a tag ref, so a dispatch builds, stages, and smoke-tests the bundles
+  # and stops there. Cutting a release-candidate tag to find out whether
+  # the bundle job works is a slow way to ask a question that has no
+  # bearing on the tag.
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
@@ -37,9 +44,9 @@ jobs:
     # publish that no-ops on an already-released version still gets
     # checked rather than silently skipped.
     needs: [publish]
-    # Skipped alongside `publish` on a pre-release tag: it asks the index
-    # for a version that tag deliberately did not publish.
-    if: ${{ always() && !contains(github.ref_name, '-') }}
+    # Skipped wherever `publish` is: on a pre-release tag and on a manual
+    # dispatch it would ask the index for a version nothing published.
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -86,8 +93,9 @@ jobs:
     # not from the tag, so a `v0.19.0-rc.1` tag would publish 0.19.0
     # itself, permanently and under the wrong name. crates.io has no
     # unpublish. A pre-release tag is for exercising the binaries job,
-    # which is the part that has never run against a real tag.
-    if: ${{ !contains(github.ref_name, '-') }}
+    # which is the part that has never run against a real tag, and a
+    # manual dispatch is for exercising it without minting a tag at all.
+    if: ${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -200,6 +208,17 @@ jobs:
         with:
           key: bundle-${{ matrix.triple }}
 
+      # Every cargo invocation in this job, not just the one that builds
+      # the binaries: the later steps rebuild the same graph, and a
+      # differing RUSTFLAGS both invalidates all of it and leaves the
+      # staged SDK dylib without the runtime search path it needs to
+      # find libstd beside itself. Skipped where the value is empty,
+      # because setting RUSTFLAGS at all would discard the rust-lld
+      # flags `.cargo/config.toml` supplies for the MSVC target.
+      - name: Pin the runtime search path for the whole job
+        if: matrix.rpath != ''
+        run: echo "RUSTFLAGS=${{ matrix.rpath }}" >> "$GITHUB_ENV"
+
       # The rustc wrapper is a HOST tool (cargo runs it as RUSTC_WRAPPER);
       # built without --target so it lands in target/release, where the
       # bundler's SdkPaths looks for it.
@@ -208,10 +227,28 @@ jobs:
 
       # The root package owns the editor, jd, runner, and installed wrapper.
       - name: Build installed binaries (target)
+        run: cargo build --release --target ${{ matrix.triple }} -p jackdaw --features dylib --bins
+
+      # A PE export table addresses its entries with a 16-bit ordinal, so
+      # 65,535 is the format's ceiling and no linker escapes it.
+      # `jackdaw_sdk.dll` re-exports bevy's whole closure and sits around
+      # 50k, which is fine until something adds another 15k worth of
+      # public surface. Left unmeasured that arrives as an unreadable
+      # link failure in the release job; measured, it arrives as a
+      # number.
+      - name: Check the SDK's PE export headroom
+        if: runner.os == 'Windows'
         run: |
-          RPATH='${{ matrix.rpath }}'
-          if [ -n "$RPATH" ]; then export RUSTFLAGS="$RPATH"; fi
-          cargo build --release --target ${{ matrix.triple }} -p jackdaw --features dylib --bins
+          set -euo pipefail
+          rustup component add llvm-tools
+          readobj="$(rustc --print sysroot)/lib/rustlib/${{ matrix.triple }}/bin/llvm-readobj"
+          dll="target/${{ matrix.triple }}/release/jackdaw_sdk.dll"
+          exports=$("$readobj" --coff-exports "$dll" | grep -c "  Ordinal:")
+          echo "jackdaw_sdk.dll exports $exports symbols of the 65535 a PE file can hold"
+          if [ "$exports" -gt 60000 ]; then
+            echo "under 5000 from the ceiling; split the dll or shrink its public surface"
+            exit 1
+          fi
 
       - name: Stage the bundle
         run: cargo xtask bundle --out "dist/jackdaw-${{ matrix.triple }}" --workspace .

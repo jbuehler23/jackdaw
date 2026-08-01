@@ -111,12 +111,13 @@ fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
         copy_into(&src, out)?;
     }
 
-    // The runtime cdylibs the editor and runner NEED, at the bundle root so
-    // a `rpath=$ORIGIN` link resolves them: bevy + jackdaw from the deps
-    // dir, and std from the pinned toolchain (it is not in the workspace
+    // The runtime dylibs the editor and runner NEED, at the bundle root so
+    // a `rpath=$ORIGIN` link resolves them: jackdaw's from the deps dir,
+    // and std from the pinned toolchain (it is not in the workspace
     // build). Project dylibs NEED the same sonames, so a loaded project
-    // resolves them here too. Names carry the platform's dylib prefix
-    // (`lib` on unix, none on Windows).
+    // resolves them here too. `bevy_dylib` is matched for the builds that
+    // have one; bevy is otherwise linked into `jackdaw_sdk`. Names carry
+    // the platform's dylib prefix (`lib` on unix, none on Windows).
     let prefix = std::env::consts::DLL_PREFIX;
     let bevy = format!("{prefix}bevy_dylib");
     let jackdaw = format!("{prefix}jackdaw_dylib");
@@ -233,9 +234,9 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     };
     write(&sdk_out.join("jackdaw_sdk_link_paths.txt"), &staged_paths)?;
 
-    // Runtime cdylibs the project links through under `prefer-dynamic`:
-    // the bevy and jackdaw dylibs sit beside the closure rlibs in the
-    // triple deps dir, not in the manifest (which lists only rlibs). A
+    // Runtime dylibs the project links through under `prefer-dynamic`:
+    // they sit beside the closure rlibs in the triple deps dir, not in
+    // the manifest (which lists only rlibs). A
     // project dylib NEEDs them by soname, so the linker has to find them
     // on the deps search path. (`libstd` is not among them: rustc resolves
     // it from its own sysroot at link time, and the editor bundle ships it

@@ -8,16 +8,23 @@ so we can talk through the approach.
 ## Windows dylib hardening
 
 The editor loads project and extension code as dylibs built
-against its SDK proxy. On Windows, the PE binary format has a
-65,535 export cap, and bevy + jackdaw types together push close
-to it; the SDK build routes through `rust-lld` and disables
-incremental codegen to stay linkable. That works, but the export
-count grows with every API surface addition, and the failure
-mode when the cap is hit is a link error deep in the SDK build.
+against its SDK proxy. On Windows, a PE export table addresses
+its entries with a 16-bit ordinal, so 65,535 is the ceiling and
+no linker escapes it. `jackdaw_sdk.dll` carries bevy's whole
+closure and exports about 50,000, which the release job now
+measures and fails above 60,000. The SDK build also disables
+incremental codegen, which otherwise leaves undefined hidden
+symbols across the dylib boundary.
 
-Where to dig in: trimming what the SDK proxy re-exports, and a
-CI check that tracks the export count so a regression is caught
-before it ships.
+The obvious relief is splitting bevy into its own `bevy_dylib`,
+which cuts the SDK to about 9,000 exports. It does not work: a
+Rust dylib in the graph makes rustc link the whole graph
+dynamically, std included, and the link then fails on the
+private statics that inlined upstream code reaches for, which
+an export table never carries. So the headroom has to come from
+somewhere else.
+
+Where to dig in: trimming what the SDK proxy re-exports.
 
 ## Play-In-Editor (PIE) depth
 

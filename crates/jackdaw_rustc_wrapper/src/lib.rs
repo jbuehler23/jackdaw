@@ -199,7 +199,7 @@ fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result
     while i < argv.len() {
         if argv[i] == "--extern" && i + 1 < argv.len() {
             if let Some(new_value) =
-                rewrite_extern(&argv[i + 1], &bevy_target, &extern_map, &consumer)
+                rewrite_extern(&argv[i + 1], &bevy_target, &extern_map, &consumer)?
             {
                 if log {
                     error!(
@@ -350,30 +350,54 @@ impl ExternMap {
     }
 }
 
-/// If `value` is `<alias>=<path>` with a redirect target, return the
-/// redirected form. The `bevy` facade goes to `bevy_target` (the SDK dll
-/// in the shared model, the prebuilt bevy rlib in the static model); an
-/// edge listed in the plan for this consumer goes to its recorded
-/// artifact. Otherwise `None`, and the caller leaves the flag alone.
+/// Given an `--extern` value, return the redirected form. The `bevy`
+/// facade goes to `bevy_target` (the SDK dll in the shared model, the
+/// prebuilt bevy rlib in the static model); an edge listed in the plan
+/// for this consumer goes to its recorded artifact. `Ok(None)` means no
+/// redirect applies and the caller leaves the flag alone.
+///
+/// `value` is usually `<alias>=<path>`, but cargo also emits a bare
+/// `<alias>` with no path, and that form has to be redirected too. Left
+/// alone it escapes the plan entirely, and rustc, told a crate exists
+/// but given nowhere to find it, fails with a bare
+/// `can't find crate for X` against the `use` in whichever crate held
+/// the edge. A `-L dependency=` path does not rescue it. That is how a
+/// macOS bundle failed on `image`, a crate neither the user nor the
+/// editor ever names.
+///
+/// A redirect target that is not on disk is an error here rather than
+/// something rustc discovers, for the same reason: the wrapper knows
+/// both the artifact and why it was substituted, so it says so.
 fn rewrite_extern(
     value: &OsString,
     bevy_target: &OsString,
     extern_map: &ExternMap,
     consumer: &str,
-) -> Option<OsString> {
-    let s = value.to_str()?;
-    let (alias, _rest) = s.split_once('=')?;
-    if REDIRECTED_CRATES.contains(&alias) {
-        let mut out = OsString::from(alias);
-        out.push("=");
-        out.push(bevy_target);
-        return Some(out);
+) -> Result<Option<OsString>, String> {
+    let Some(s) = value.to_str() else {
+        return Ok(None);
+    };
+    let alias = s.split_once('=').map_or(s, |(alias, _path)| alias);
+    let target = if REDIRECTED_CRATES.contains(&alias) {
+        bevy_target
+    } else {
+        match extern_map.edge_artifact(consumer, alias) {
+            Some(artifact) => artifact,
+            None => return Ok(None),
+        }
+    };
+    if !std::path::Path::new(target).exists() {
+        return Err(format!(
+            "the SDK artifact for `{alias}` (needed by {consumer}) is missing: {}. \
+             The SDK's manifest names it but the file is not there, so the SDK is \
+             incomplete and every project built against it will fail",
+            target.to_string_lossy()
+        ));
     }
-    let artifact = extern_map.edge_artifact(consumer, alias)?;
     let mut out = OsString::from(alias);
     out.push("=");
-    out.push(artifact);
-    Some(out)
+    out.push(target);
+    Ok(Some(out))
 }
 
 #[cfg(test)]
@@ -384,37 +408,59 @@ mod tests {
         OsString::from(value)
     }
 
+    /// A staged SDK dir holding `names`, so redirect targets exist.
+    fn staged(tag: &str, names: &[&str]) -> std::path::PathBuf {
+        let dir = env::temp_dir().join(format!("jackdaw_wrapper_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("staging dir");
+        for name in names {
+            std::fs::write(dir.join(name), b"").expect("staged artifact");
+        }
+        dir
+    }
+
     /// The bevy facade always resolves to whatever the model's target
     /// is: the dll when sharing one, the prebuilt rlib when static.
     #[test]
     fn the_bevy_facade_follows_the_model() {
         let map = ExternMap::default();
-        let dylib = ext("/sdk/libjackdaw_sdk.so");
+        let sdk = staged("facade", &["libjackdaw_sdk.so", "libbevy-def.rlib"]);
+
+        let dylib = OsString::from(sdk.join("libjackdaw_sdk.so"));
         let rewritten = rewrite_extern(
             &ext("bevy=/proj/target/deps/libbevy-abc.rlib"),
             &dylib,
             &map,
             "my_game@0.1.0",
         )
+        .expect("an existing target is not an error")
         .expect("the facade is always redirected");
-        assert_eq!(rewritten, ext("bevy=/sdk/libjackdaw_sdk.so"));
+        let mut expected = OsString::from("bevy=");
+        expected.push(&dylib);
+        assert_eq!(rewritten, expected);
 
-        let rlib = ext("/sdk/deps/libbevy-def.rlib");
+        let rlib = OsString::from(sdk.join("libbevy-def.rlib"));
         let rewritten = rewrite_extern(
             &ext("bevy=/proj/target/deps/libbevy-abc.rlib"),
             &rlib,
             &map,
             "my_game@0.1.0",
         )
+        .expect("an existing target is not an error")
         .expect("static mode redirects the facade too");
-        assert_eq!(rewritten, ext("bevy=/sdk/deps/libbevy-def.rlib"));
+        let mut expected = OsString::from("bevy=");
+        expected.push(&rlib);
+        assert_eq!(rewritten, expected);
+
+        let _ = std::fs::remove_dir_all(&sdk);
     }
 
     /// A crate nobody has an opinion about passes through untouched.
     #[test]
     fn unlisted_crates_are_left_alone() {
         let map = ExternMap::default();
-        let dylib = ext("/sdk/libjackdaw_sdk.so");
+        let sdk = staged("unlisted", &["libjackdaw_sdk.so"]);
+        let dylib = OsString::from(sdk.join("libjackdaw_sdk.so"));
         assert!(
             rewrite_extern(
                 &ext("rand=/proj/target/deps/librand-abc.rlib"),
@@ -422,8 +468,59 @@ mod tests {
                 &map,
                 "my_game@0.1.0",
             )
+            .expect("no redirect is not an error")
             .is_none()
         );
+        let _ = std::fs::remove_dir_all(&sdk);
+    }
+
+    /// cargo also emits `--extern <alias>` with no path. Left alone it
+    /// escapes the plan, and rustc, told the crate exists but given
+    /// nowhere to find it, fails with a bare `can't find crate for X`
+    /// against a third-party crate. A macOS bundle failed exactly this
+    /// way on `image`.
+    #[test]
+    fn a_pathless_extern_is_redirected_too() {
+        let sdk = staged("pathless", &["libjackdaw_sdk.so", "libimage-abc.rlib"]);
+        let artifact = OsString::from(sdk.join("libimage-abc.rlib"));
+        let map = ExternMap {
+            edges: vec![("bevy_image@0.19.0".into(), "image".into(), artifact.clone())],
+        };
+        let dylib = OsString::from(sdk.join("libjackdaw_sdk.so"));
+        let rewritten = rewrite_extern(&ext("image"), &dylib, &map, "bevy_image@0.19.0")
+            .expect("the artifact is there")
+            .expect("a pathless extern still names an edge in the plan");
+        let mut expected = OsString::from("image=");
+        expected.push(&artifact);
+        assert_eq!(rewritten, expected);
+        let _ = std::fs::remove_dir_all(&sdk);
+    }
+
+    /// An SDK whose manifest names an artifact it did not stage fails
+    /// here, naming the crate and the consumer. Left to rustc it becomes
+    /// `can't find crate` inside whichever third-party crate held the
+    /// edge, which points nowhere near the SDK.
+    #[test]
+    fn a_missing_sdk_artifact_names_itself() {
+        let sdk = staged("missing", &["libjackdaw_sdk.so"]);
+        let map = ExternMap {
+            edges: vec![(
+                "bevy_image@0.19.0".into(),
+                "image".into(),
+                OsString::from(sdk.join("libimage-abc.rlib")),
+            )],
+        };
+        let dylib = OsString::from(sdk.join("libjackdaw_sdk.so"));
+        let err = rewrite_extern(
+            &ext("image=/proj/target/deps/libimage-def.rlib"),
+            &dylib,
+            &map,
+            "bevy_image@0.19.0",
+        )
+        .expect_err("a redirect to a file that is not there is an error");
+        assert!(err.contains("image"), "{err}");
+        assert!(err.contains("bevy_image@0.19.0"), "{err}");
+        let _ = std::fs::remove_dir_all(&sdk);
     }
 }
 

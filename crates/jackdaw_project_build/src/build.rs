@@ -323,8 +323,17 @@ pub fn build_project_dylib(
     let mut cmd = Command::new("cargo");
     cmd.args(["rustc", "--crate-type", "dylib", "--target", &sdk.triple])
         // Machine-readable stream so the editor can show live per-crate
-        // progress; rustc diagnostics arrive rendered in the same stream.
-        .arg("--message-format=json-render-diagnostics")
+        // progress, with rustc's diagnostics in it.
+        //
+        // Plain `json`, deliberately, not `json-render-diagnostics`:
+        // that variant makes cargo render diagnostics to its own stderr
+        // and emit no `compiler-message` at all, so this parser saw none
+        // and every failed build reported "no diagnostics captured"
+        // while the actual error went to a stream nothing reads. The
+        // editor showed the user nothing, and a failing release job
+        // reported an empty log beside a compiler error only a human
+        // scrolling the raw output would find.
+        .arg("--message-format=json")
         // Strip the shim: the editor loads it for its types and entry,
         // never debugs it, so the embedded debuginfo (the bulk of the
         // artifact, since the shim statically links the project's own
@@ -384,7 +393,7 @@ pub fn build_project_dylib(
         if log.trim().is_empty() {
             log.push_str("project failed to compile (no diagnostics captured)");
         }
-        if let Some(note) = stale_sdk_hint(&log, sdk) {
+        if let Some(note) = stale_sdk_hint(&log, sdk, &manifest) {
             log.push_str(&note);
         }
         return Err(ProjectBuildError::Compile { log });
@@ -573,6 +582,14 @@ pub fn last_built_dylib(jackdaw_dir: &Path) -> Option<PathBuf> {
     newest.map(|(_, path)| path)
 }
 
+/// The crate name a rustc "can't find crate for" line names, if that is
+/// what the line is.
+fn unresolved_crate_name(line: &str) -> Option<String> {
+    let rest = line.split_once("can't find crate for `")?.1;
+    let name = rest.split_once('`')?.0;
+    (!name.is_empty()).then(|| name.replace('-', "_"))
+}
+
 /// Turn "can't find crate for X" into something the user can act on.
 ///
 /// The project compiles against prebuilt SDK rlibs, so rustc failing to
@@ -583,7 +600,7 @@ pub fn last_built_dylib(jackdaw_dir: &Path) -> Option<PathBuf> {
 /// most: its `target/` accumulates several builds of the same crate
 /// under different feature resolutions, and the SDK there is preferred
 /// over the bootstrapped cache.
-fn stale_sdk_hint(log: &str, sdk: &SdkPaths) -> Option<String> {
+fn stale_sdk_hint(log: &str, sdk: &SdkPaths, manifest: &SdkManifest) -> Option<String> {
     // Both shapes rustc uses when the SDK's own artifacts disagree.
     // E0463 is a crate it cannot find at all; E0460 is one it found
     // several of, none matching what the dependent was built against.
@@ -595,11 +612,27 @@ fn stale_sdk_hint(log: &str, sdk: &SdkPaths) -> Option<String> {
     // reported without it. Listing SDK crate names instead missed
     // `jackdaw_api_internal`, which is exactly the sort of transitive
     // crate that fails this way.
-    let unresolved = log.lines().find(|line| {
-        (line.contains("can't find crate for")
-            || line.contains("found possibly newer version of crate"))
-            && line.contains("depends on")
-    })?;
+    //
+    // A bare `can't find crate for X` also counts when X is one the SDK
+    // holds. rustc words it that way when the `--extern` flag is absent
+    // altogether, which is not something a redirect does, and it is
+    // otherwise indistinguishable from a dependency the user forgot to
+    // declare. Naming the SDK is what makes it clear which side to look
+    // at: a macOS bundle failed exactly this way on `image`, a crate no
+    // one involved had ever named.
+    let unresolved = log
+        .lines()
+        .find(|line| {
+            (line.contains("can't find crate for")
+                || line.contains("found possibly newer version of crate"))
+                && line.contains("depends on")
+        })
+        .or_else(|| {
+            log.lines().find(|line| {
+                unresolved_crate_name(line)
+                    .is_some_and(|name| manifest.artifact_for(&name).is_some())
+            })
+        })?;
     Some(format!(
         "\nnote: {}\n\
          note: that is an SDK crate, so this is a mismatch between the prebuilt SDK \
@@ -684,6 +717,47 @@ fn dylib_file_name(crate_name: &str) -> String {
 mod tests {
     use super::*;
     use crate::sdk_paths::host_triple;
+
+    /// A failed build has to carry the compiler's own words. This is the
+    /// half of that which can be checked without running cargo: the
+    /// other half is passing `--message-format=json`, because
+    /// `json-render-diagnostics` emits no `compiler-message` at all and
+    /// leaves this parser with nothing to find.
+    #[test]
+    fn a_compiler_message_reaches_the_failure_log() {
+        let line = r#"{"reason":"compiler-message","target":{"name":"bevy_image"},"message":{"rendered":"error[E0463]: can't find crate for `image`\n"}}"#;
+        let mut done = 0;
+        let mut log = String::new();
+        let mut seen = Vec::new();
+        parse_build_line(line, &mut done, &mut log, &mut |event| {
+            if let BuildEvent::Log(l) = event {
+                seen.push(l);
+            }
+        });
+        assert!(log.contains("can't find crate for `image`"), "{log:?}");
+        assert_eq!(seen.len(), 1, "the live sink gets it too: {seen:?}");
+    }
+
+    /// A manifest holding just `names`, so the hint can tell an SDK
+    /// crate from one the user forgot to declare.
+    fn sdk_manifest_with(names: &[&str]) -> SdkManifest {
+        // Keyed by the names themselves: tests run in parallel, and two
+        // that happened to ask for the same count shared one path, so
+        // one deleted the file the other was reading.
+        let path = std::env::temp_dir().join(format!(
+            "jackdaw_hint_manifest_{}_{}.txt",
+            std::process::id(),
+            names.join("_")
+        ));
+        let body: String = names
+            .iter()
+            .map(|n| format!("{n} 1.0.0 lib{n}-abc.rlib\n"))
+            .collect();
+        std::fs::write(&path, body).expect("write a manifest");
+        let manifest = SdkManifest::load(&path).expect("load it back");
+        let _ = std::fs::remove_file(&path);
+        manifest
+    }
 
     fn project(name: &str, lib_rs: &str) -> PathBuf {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -828,7 +902,8 @@ mod tests {
         let sdk = SdkPaths::for_workspace_profile(Path::new("/checkout"), "release");
         let log = "error[E0463]: can't find crate for `jackdaw_api_macros` which \
                    `jackdaw_api` depends on\n";
-        let hint = stale_sdk_hint(log, &sdk).expect("an SDK crate should be recognised");
+        let hint = stale_sdk_hint(log, &sdk, &sdk_manifest_with(&["jackdaw_api_macros"]))
+            .expect("an SDK crate should be recognised");
         assert!(hint.contains("rather than an error in your project"));
         assert!(hint.contains("/checkout"), "names the SDK in use: {hint}");
     }
@@ -842,7 +917,8 @@ mod tests {
         let sdk = SdkPaths::for_workspace_profile(Path::new("/checkout"), "release");
         let log = "error[E0460]: found possibly newer version of crate \
                    `jackdaw_api_internal` which `jackdaw_api` depends on\n";
-        let hint = stale_sdk_hint(log, &sdk).expect("E0460 is an SDK mismatch too");
+        let hint = stale_sdk_hint(log, &sdk, &sdk_manifest_with(&["jackdaw_api_internal"]))
+            .expect("E0460 is an SDK mismatch too");
         assert!(
             hint.contains("jackdaw_sdk_manifest.txt"),
             "points at the cache to delete: {hint}"
@@ -855,7 +931,24 @@ mod tests {
     fn a_users_own_missing_crate_gets_no_sdk_hint() {
         let sdk = SdkPaths::for_workspace_profile(Path::new("/checkout"), "release");
         let log = "error[E0463]: can't find crate for `rand`\n";
-        assert!(stale_sdk_hint(log, &sdk).is_none());
+        assert!(stale_sdk_hint(log, &sdk, &sdk_manifest_with(&["glam"])).is_none());
+    }
+
+    /// The shape a macOS bundle failed with: a bare `can't find crate`
+    /// naming a crate the SDK holds and the user never mentioned. rustc
+    /// words it that way when the `--extern` flag is absent altogether,
+    /// with no `depends on` clause to key off, so it is otherwise
+    /// indistinguishable from a dependency the project forgot.
+    #[test]
+    fn a_bare_missing_sdk_crate_is_still_attributed_to_the_sdk() {
+        let sdk = SdkPaths::for_workspace_profile(Path::new("/checkout"), "release");
+        let log = "error[E0463]: can't find crate for `image`\n";
+        let hint = stale_sdk_hint(log, &sdk, &sdk_manifest_with(&["image", "glam"]))
+            .expect("a crate the SDK holds points at the SDK");
+        assert!(
+            hint.contains("rather than an error in your project"),
+            "{hint}"
+        );
     }
 
     /// Switching build configuration used to delete the cache it was
