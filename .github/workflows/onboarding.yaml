@@ -30,7 +30,11 @@ jobs:
   sdk-pipeline:
     name: SDK pipeline - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    # Nine probes, each building or loading a project against the SDK.
+    # On a cold cache 120 minutes ran out partway through the second one
+    # and the job reported `cancelled`, which reads as an infrastructure
+    # hiccup rather than the missing result it is.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
