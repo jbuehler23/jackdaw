@@ -266,6 +266,27 @@ fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result
         argv.push(flag);
     }
 
+    // macOS binds every import to the library it came from (a two level
+    // namespace), so a crate linked into both the host and a dlopened
+    // dylib ends up with two copies of its statics. `inventory`, which
+    // Bevy's `reflect_auto_register` collects derived types into, keeps
+    // its registry in exactly such a static: the loaded project
+    // registered into its own copy and the editor read an empty one, so
+    // no project type ever crossed the boundary. ELF's flat namespace
+    // makes Linux resolve both to one definition, which is why only
+    // macOS saw it. Asking for the same behaviour here restores a single
+    // registry.
+    if argv
+        .iter()
+        .any(|arg| arg.to_string_lossy().contains("apple-darwin"))
+    {
+        argv.push(OsString::from("-C"));
+        argv.push(OsString::from("link-arg=-Wl,-flat_namespace"));
+        if log {
+            error!("jackdaw-rustc-wrapper: appended -Wl,-flat_namespace for macOS");
+        }
+    }
+
     // `-C prefer-dynamic` links through the SDK dll. In the static model
     // there is no dll: the redirected rlibs are embedded, so it is omitted
     // (and would otherwise pull the toolchain's dynamic std/test crates).
