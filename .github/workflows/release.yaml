@@ -156,7 +156,11 @@ jobs:
     # otherwise skip `scaffold-resolves` and upload nothing at all.
     needs: [heavy]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    # This job builds the editor twice over: once for the binaries, then
+    # a whole game against the staged SDK. On Windows, with a cold cache,
+    # that ran past 120 minutes and was cut off mid-smoke-test, reported
+    # as `cancelled` rather than as anything a reader could act on.
+    timeout-minutes: 180
     permissions:
       contents: write
       id-token: write

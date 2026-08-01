@@ -131,12 +131,46 @@ pub fn run() -> ExitCode {
     let status = Command::new(&rustc).args(&rustc_args).status();
 
     match status {
-        Ok(s) => ExitCode::from(s.code().unwrap_or(1) as u8),
+        Ok(s) if s.success() => ExitCode::from(0),
+        Ok(s) => {
+            // The rewrite is invisible until it goes wrong, and then it
+            // goes wrong as a rustc error against a crate nobody named.
+            // Reporting the externs this unit actually received turns
+            // "can't find crate for X" into something that says whether
+            // X was redirected, left alone, or handed over with no path
+            // at all.
+            error!(
+                "jackdaw-rustc-wrapper: rustc failed for {}; externs it received: {}",
+                env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "<unknown>".into()),
+                describe_externs(&rustc_args)
+            );
+            ExitCode::from(s.code().unwrap_or(1) as u8)
+        }
         Err(e) => {
             error!("jackdaw-rustc-wrapper: failed to spawn {rustc:?}: {e}");
             ExitCode::from(1)
         }
     }
+}
+
+/// The `--extern` flags an invocation carries, one `alias=>source` per
+/// entry: where the path points, or `no path` for the bare form.
+fn describe_externs(args: &[OsString]) -> String {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 1 < args.len() {
+        if args[i] == "--extern" {
+            let value = args[i + 1].to_string_lossy();
+            out.push(match value.split_once('=') {
+                Some((alias, path)) => format!("{alias}=>{path}"),
+                None => format!("{value}=>no path"),
+            });
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    out.join(", ")
 }
 
 /// Rewrite one rustc invocation. The `bevy` facade extern redirects to
@@ -472,6 +506,28 @@ mod tests {
             .is_none()
         );
         let _ = std::fs::remove_dir_all(&sdk);
+    }
+
+    /// What the failure diagnostic reports. The bare form has to be
+    /// distinguishable from a redirected one, because "no path" is the
+    /// difference between a redirect that did not fire and one that
+    /// pointed somewhere wrong.
+    #[test]
+    fn the_failure_report_separates_redirected_from_pathless() {
+        let args = vec![
+            ext("--extern"),
+            ext("image=/sdk/deps/libimage-abc.rlib"),
+            ext("-C"),
+            ext("opt-level=3"),
+            ext("--extern"),
+            ext("glam"),
+        ];
+        let described = describe_externs(&args);
+        assert!(
+            described.contains("image=>/sdk/deps/libimage-abc.rlib"),
+            "{described}"
+        );
+        assert!(described.contains("glam=>no path"), "{described}");
     }
 
     /// cargo also emits `--extern <alias>` with no path. Left alone it
