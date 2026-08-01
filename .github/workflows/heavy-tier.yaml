@@ -53,6 +53,14 @@ jobs:
 
       - name: Install dependencies
         run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+      # This tier launches real games (`bsn_game_run`, `editor_journey`),
+      # and a CI runner has no GPU. Without a software Vulkan driver the
+      # game aborts inside `bevy_render` with `Unable to find a GPU!`
+      # before it can connect back, which surfaced only as a 90 second
+      # timeout. The onboarding workflow already installs this for the
+      # same reason.
+      - name: Install a software Vulkan driver
+        run: sudo apt-get install --no-install-recommends -y mesa-vulkan-drivers
 
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
