@@ -50,11 +50,11 @@ default = ["multiplayer", "camera_rig", "embed-recipe"]
 # default; opt out with `--no-default-features` for a slimmer build.
 multiplayer = ["dep:jackdaw_multiplayer", "dep:jackdaw_multiplayer_editor"]
 camera_rig = ["dep:jackdaw_camera_rig"]
-# The SDK-backed project flow: builds `jackdaw_sdk`, whose prebuilt
-# rlibs every project redirects its dependency edges to, so the editor
-# and every loaded project dylib share one compiled copy of every type
-# that crosses the boundary. Off by default only because building the
-# SDK slows plain dev builds; release editor builds enable it.
+# The SDK-backed project flow: builds the SDK facade plus separate Bevy and
+# Jackdaw runtime dylibs. The editor and every loaded project/extension import
+# those same libraries so TypeIds and process-wide registries cross `dlopen`.
+# Off by default only because building the SDK slows plain dev builds; release
+# editor builds enable it.
 #
 # Build with CARGO_INCREMENTAL=0: incremental codegen leaves undefined
 # hidden anon constants across the dylib boundary at link time.
@@ -345,17 +345,13 @@ tempfile = "3"
 # resulting `.so` by path - it doesn't reference the rlib side.
 test_fixture_extension = { path = "tests/fixtures/test_fixture_extension" }
 
-# Test targets link bevy dynamically for the shorter link, everywhere
-# that works. It does not work on Windows: a Rust dylib in the graph
-# makes rustc link the whole graph dynamically, std included, and the
-# link then fails on the private statics that inlined upstream code
-# reaches for (`bevy_reflect`'s `TypeInfo` cells, tracing's `MAX_LEVEL`,
-# `std`'s `GLOBAL_PANIC_COUNT`), which a PE export table never carries.
-# The release job's bundle smoke test is a test target built for the
-# release triple, so on Windows this is the difference between a bundle
-# that verifies itself and one that cannot link.
+# Plain test targets on Linux and macOS use the same split runtime as release
+# builds. This avoids statically relinking the multi-gigabyte editor graph for
+# small integration tests. Windows enables the split explicitly in the SDK and
+# release jobs, where its full DLL graph and export counts are exercised.
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 bevy = { workspace = true, features = ["dynamic_linking"] }
+jackdaw_api = { workspace = true, features = ["dynamic_linking"] }
 
 [lints]
 workspace = true
@@ -369,11 +365,8 @@ opt-level = 3
 [profile.dev.package.wgpu-types]
 debug-assertions = false
 
-# `jackdaw_sdk`'s dylib re-exports all of bevy + jackdaw_api: roughly
-# 50k of the 65,535 exports a PE file can hold. Full optimisation and a
-# single codegen unit on this one crate keep the count down, which is
-# what leaves headroom on Windows when `--features dylib` is active.
-# See issue #183.
+# Keep the SDK facade compact. Bevy and Jackdaw's runtime closure live in
+# their own dylibs; this crate should never approach the PE export ceiling.
 [profile.dev.package.jackdaw_sdk]
 opt-level = 3
 codegen-units = 1

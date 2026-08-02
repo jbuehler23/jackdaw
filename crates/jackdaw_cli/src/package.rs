@@ -18,7 +18,7 @@
 //!     native-libs/            (import libs the SDK links by bare name)
 //!     <triple>/
 //!       libjackdaw_sdk.so
-//!       deps/                 (the SDK runtime-closure rlibs)
+//!       deps/                 (SDK rlibs plus shared runtime dylibs)
 //! ```
 //!
 //! The shipped manifest stores bare basenames rather than the absolute
@@ -111,18 +111,21 @@ fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
         copy_into(&src, out)?;
     }
 
-    // The runtime dylibs the editor and runner NEED, at the bundle root so
-    // a `rpath=$ORIGIN` link resolves them: jackdaw's from the deps dir,
-    // and std from the pinned toolchain (it is not in the workspace
-    // build). Project dylibs NEED the same sonames, so a loaded project
-    // resolves them here too. `bevy_dylib` is matched for the builds that
-    // have one; bevy is otherwise linked into `jackdaw_sdk`. Names carry
-    // the platform's dylib prefix (`lib` on unix, none on Windows).
+    // The runtime dylibs the editor, runner, games, and extensions NEED, at
+    // the bundle root so a `rpath=$ORIGIN` link resolves them. Bevy and
+    // Jackdaw are deliberately separate libraries: combining their exports
+    // in the SDK facade exceeds Windows' PE export-table ceiling, while
+    // embedding either runtime in a consumer gives it private registries and
+    // TypeIds. Dynamic std comes from the pinned toolchain rather than the
+    // workspace build. Names carry the platform's dylib prefix (`lib` on
+    // Unix, none on Windows).
     let prefix = std::env::consts::DLL_PREFIX;
-    let bevy = format!("{prefix}bevy_dylib");
-    let jackdaw = format!("{prefix}jackdaw_dylib");
     let std_lib = format!("{prefix}std");
-    let mut dylibs = copy_matching(&sdk.deps, out, &[bevy.as_str(), jackdaw.as_str()])?;
+    let mut dylibs = 0;
+    for required in ["bevy_dylib", "jackdaw_dylib"] {
+        copy_rust_dependency_dylib(&sdk, out, required)?;
+        dylibs += 1;
+    }
     match target_libdir(&sdk) {
         Some(libdir) => dylibs += copy_matching(&libdir, out, &[std_lib.as_str()])?,
         None => eprintln!(
@@ -151,10 +154,62 @@ fn target_libdir(sdk: &SdkPaths) -> Option<PathBuf> {
     (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
 }
 
-/// Copy dylibs in `from` whose filename starts with any of `prefixes`
-/// into `to`, returning the count. Narrower than [`copy_dylibs`]: the
-/// bundle root wants only the specific runtime cdylibs, not every dylib
-/// in the source dir.
+/// Copy the exact Rust dylib a built SDK records for `crate_name`.
+///
+/// A restored Cargo cache can hold several hashed builds of the same crate.
+/// Prefix-copying all of them bloats the archive and can accidentally ship an
+/// obsolete ABI beside the one the SDK imports. Rust metadata names the exact
+/// dependency crate identifier, which is also the dylib's hashed basename.
+fn copy_rust_dependency_dylib(sdk: &SdkPaths, to: &Path, crate_name: &str) -> Result<(), String> {
+    let mut cmd = Command::new("rustc");
+    if let Some(channel) = &sdk.toolchain {
+        cmd.arg(format!("+{channel}"));
+    }
+    let output = cmd
+        .arg("-Zls=root")
+        .arg(&sdk.dylib)
+        .output()
+        .map_err(|e| format!("reading metadata from {}: {e}", sdk.dylib.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "reading metadata from {} failed: {}",
+            sdk.dylib.display(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let dependency_prefix = format!("{crate_name}-");
+    let dump = String::from_utf8_lossy(&output.stdout);
+    let crate_id = dump.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let _index = parts.next()?;
+        let id = parts.next()?;
+        (id == crate_name || id.starts_with(&dependency_prefix)).then_some(id)
+    });
+    let Some(crate_id) = crate_id else {
+        return Err(format!(
+            "{} does not record a dynamic dependency on {crate_name}; the shared-runtime split is not active",
+            sdk.dylib.display()
+        ));
+    };
+    let file = format!(
+        "{}{}{}",
+        std::env::consts::DLL_PREFIX,
+        crate_id,
+        std::env::consts::DLL_SUFFIX
+    );
+    let src = sdk.deps.join(&file);
+    if !src.is_file() {
+        return Err(format!(
+            "{crate_name} is recorded as {file}, but that artifact is missing from {}",
+            sdk.deps.display()
+        ));
+    }
+    copy(&src, &to.join(file))
+}
+
+/// Copy dylibs in `from` whose filename starts with one of `prefixes`.
+/// Used for dynamic std in the toolchain directory, where there is only one
+/// artifact for the pinned compiler rather than Cargo's cache of hashed builds.
 fn copy_matching(from: &Path, to: &Path, prefixes: &[&str]) -> Result<usize, String> {
     let ext = dylib_ext();
     let mut count = 0;
@@ -164,7 +219,7 @@ fn copy_matching(from: &Path, to: &Path, prefixes: &[&str]) -> Result<usize, Str
         let path = entry.path();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if path.extension().is_some_and(|e| e == ext)
-            && prefixes.iter().any(|p| name.starts_with(p))
+            && prefixes.iter().any(|prefix| name.starts_with(prefix))
         {
             copy(&path, &to.join(entry.file_name()))?;
             count += 1;
@@ -234,13 +289,13 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     };
     write(&sdk_out.join("jackdaw_sdk_link_paths.txt"), &staged_paths)?;
 
-    // Runtime dylibs the project links through under `prefer-dynamic`:
-    // they sit beside the closure rlibs in the triple deps dir, not in
-    // the manifest (which lists only rlibs). A
-    // project dylib NEEDs them by soname, so the linker has to find them
-    // on the deps search path. (`libstd` is not among them: rustc resolves
-    // it from its own sysroot at link time, and the editor bundle ships it
-    // for load time.)
+    // Runtime dylibs the project links through under `prefer-dynamic` sit
+    // beside the closure rlibs in the triple deps dir, not in the manifest
+    // (which lists only rlibs). A project or extension dylib NEEDs the Bevy,
+    // Jackdaw, and SDK sonames, so the linker must find all of them on the
+    // deps search path. (`libstd` is not among them: rustc resolves it from
+    // its own sysroot at link time, and the editor bundle ships it for load
+    // time.)
     let cdylibs = copy_dylibs(&sdk.deps, &deps_out)?;
 
     // Proc-macro dylibs the SDK rlibs reference at project-compile time.

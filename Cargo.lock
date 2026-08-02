@@ -4851,6 +4851,7 @@ dependencies = [
  "jackdaw_api_internal",
  "jackdaw_api_macros",
  "jackdaw_commands",
+ "jackdaw_dylib",
  "jackdaw_feathers",
  "jackdaw_panels",
  "jackdaw_project_build",

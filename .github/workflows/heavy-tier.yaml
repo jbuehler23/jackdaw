@@ -12,9 +12,9 @@ env:
 jobs:
   heavy:
     name: SDK build + end-to-end tests
-    # Linux only. The heavy tier builds the SDK with a static bevy and
-    # launches the runner out of process; that path is verified here, and
-    # the CI cargo config's linker is Linux-only.
+    # Linux only. The heavy tier builds the shared SDK/runtime graph and
+    # launches the runner out of process; that path is verified here, and the
+    # CI cargo config's linker is Linux-only.
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -47,7 +47,7 @@ jobs:
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
           cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: heavy
 

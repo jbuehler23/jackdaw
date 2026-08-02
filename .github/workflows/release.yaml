@@ -131,6 +131,7 @@ jobs:
           -p jackdaw_bsn
           -p jackdaw_camera_rig
           -p jackdaw_commands
+          -p jackdaw_dylib
           -p jackdaw_extension
           -p jackdaw_feathers
           -p jackdaw_fuzzy
@@ -243,34 +244,44 @@ jobs:
 
       # A PE export table addresses its entries with a 16-bit ordinal, so
       # 65,535 is the format's ceiling and no linker escapes it.
-      # `jackdaw_sdk.dll` re-exports bevy's whole closure and sits around
-      # 50k, which is fine until something adds another 15k worth of
-      # public surface. Left unmeasured that arrives as an unreadable
-      # link failure in the release job; measured, it arrives as a
-      # number.
-      - name: Check the SDK's PE export headroom
+      # Each shared Rust library has its own PE export table. Keep every one
+      # below a conservative ceiling so a future dependency cannot silently
+      # recombine the split and fail only at the final Windows link.
+      - name: Check shared DLL PE export headroom
         if: runner.os == 'Windows'
         run: |
           set -euo pipefail
           rustup component add llvm-tools
           readobj="$(rustc --print sysroot)/lib/rustlib/${{ matrix.triple }}/bin/llvm-readobj"
-          dll="target/${{ matrix.triple }}/release/jackdaw_sdk.dll"
-          exports=$("$readobj" --coff-exports "$dll" | grep -c "  Ordinal:")
-          echo "jackdaw_sdk.dll exports $exports symbols of the 65535 a PE file can hold"
-          if [ "$exports" -gt 60000 ]; then
-            echo "under 5000 from the ceiling; split the dll or shrink its public surface"
+          shopt -s nullglob
+          bevy_dlls=("target/${{ matrix.triple }}/release/deps/bevy_dylib"*.dll)
+          jackdaw_dlls=("target/${{ matrix.triple }}/release/deps/jackdaw_dylib"*.dll)
+          if [ "${#bevy_dlls[@]}" -eq 0 ] || [ "${#jackdaw_dlls[@]}" -eq 0 ]; then
+            echo "expected separate Bevy and Jackdaw runtime DLLs"
             exit 1
           fi
+          dlls=("target/${{ matrix.triple }}/release/jackdaw_sdk.dll" "${bevy_dlls[@]}" "${jackdaw_dlls[@]}")
+          for dll in "${dlls[@]}"; do
+            exports=$("$readobj" --coff-exports "$dll" | grep -c "  Ordinal:")
+            echo "$(basename "$dll") exports $exports symbols of the 65535 a PE file can hold"
+            if [ "$exports" -gt 60000 ]; then
+              echo "under 5000 from the ceiling; split the DLL or shrink its public surface"
+              exit 1
+            fi
+          done
 
       - name: Stage the bundle
-        run: cargo xtask bundle --out "dist/jackdaw-${{ matrix.triple }}" --workspace .
+        # RUNNER_TEMP is outside the source checkout. Running `jd` from here
+        # therefore exercises installed behavior and cannot accidentally
+        # rewrite scaffolded manifests to local path dependencies.
+        run: cargo xtask bundle --out "$RUNNER_TEMP/jackdaw-${{ matrix.triple }}" --workspace .
 
       # An archive that is missing a piece installs and then fails at the first
       # project build, which is how a missing sdk/manifest.txt reached a user.
       - name: Verify the staged bundle
         run: |
           set -euo pipefail
-          root="dist/jackdaw-${{ matrix.triple }}"
+          root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
           exe=""
           if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
           missing=0
@@ -290,15 +301,20 @@ jobs:
       - name: Bundle smoke (game builds against the release SDK)
         env:
           JACKDAW_BUNDLE_SMOKE_REQUIRED: "1"
-        run: cargo test --features dylib --target ${{ matrix.triple }} --test bundle_smoke -- --nocapture
+          JACKDAW_BUNDLE_ROOT: ${{ runner.temp }}/jackdaw-${{ matrix.triple }}
+        # Match the already-built release SDK. The old debug invocation
+        # rebuilt the entire graph and, on Windows, recreated the oversized
+        # debug SDK that the release bundle had already avoided.
+        run: cargo test --release --features dylib --target ${{ matrix.triple }} --test bundle_smoke -- --nocapture
 
       - name: Archive (tar.zst)
         if: matrix.archive == 'tar.zst'
-        run: tar --zstd -cf "jackdaw-${{ matrix.triple }}.tar.zst" -C dist "jackdaw-${{ matrix.triple }}"
+        run: tar --zstd -cf "jackdaw-${{ matrix.triple }}.tar.zst" -C "$RUNNER_TEMP" "jackdaw-${{ matrix.triple }}"
 
       - name: Archive (zip)
         if: matrix.archive == 'zip'
-        run: 7z a "jackdaw-${{ matrix.triple }}.zip" "./dist/jackdaw-${{ matrix.triple }}"
+        working-directory: ${{ runner.temp }}
+        run: 7z a "$GITHUB_WORKSPACE/jackdaw-${{ matrix.triple }}.zip" "./jackdaw-${{ matrix.triple }}"
 
       - name: Generate checksum
         run: openssl dgst -sha256 "jackdaw-${{ matrix.triple }}.${{ matrix.archive }}" > "jackdaw-${{ matrix.triple }}.${{ matrix.archive }}.sha256"

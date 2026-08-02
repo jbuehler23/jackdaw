@@ -6,9 +6,9 @@
 # link.exe on a graph this size and is the linker CI measures against.
 # It does not change what fits: the 65,535 export ceiling is the PE
 # format's 16-bit ordinal field, so every linker hits it alike.
-# `jackdaw_sdk.dll` carries bevy's closure and exports roughly 50k,
-# which is the number to watch. Linux and macOS use their default
-# linker (or the user's override in a different config).
+# Bevy, Jackdaw's extension-facing surface, and the SDK facade have separate
+# DLL export tables. The release workflow measures all three. Linux and macOS
+# use their default linker (or the user's override in a different config).
 
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld"

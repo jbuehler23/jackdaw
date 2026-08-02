@@ -12,6 +12,21 @@ use bevy::prelude::*;
 use jackdaw_runtime::prelude::*;
 use jackdaw_scene_types::SceneNodeId;
 
+/// A minimal editor extension carried by the same independently built project
+/// dylib as the game. The release bundle smoke uses it to prove that one
+/// external artifact can consume both public authoring surfaces through the
+/// shipped shared runtimes.
+#[derive(Default)]
+pub struct BundleFixtureExtension;
+
+impl jackdaw_extension::JackdawExtension for BundleFixtureExtension {
+    fn id(&self) -> String {
+        "bundle_fixture".to_string()
+    }
+
+    fn register(&self, _ctx: &mut jackdaw_extension::ExtensionRegistrar<'_>) {}
+}
+
 #[derive(Default)]
 pub struct GamePlugin;
 

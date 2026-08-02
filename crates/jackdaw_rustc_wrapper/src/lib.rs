@@ -73,16 +73,6 @@ const ENV_SDK_LINK_PATHS: &str = "JACKDAW_SDK_LINK_PATHS";
 const ENV_PRIMARY_PACKAGE: &str = "CARGO_PRIMARY_PACKAGE";
 const ENV_LOG: &str = "JACKDAW_WRAPPER_LOG";
 const ENV_EXTERN_MAP: &str = "JACKDAW_SDK_EXTERN_MAP";
-// Static-SDK model: when set to "1", bevy and jackdaw_api are redirected
-// to their prebuilt rlibs and `-C prefer-dynamic` is not added, so the
-// project dylib embeds one shared bevy compilation (matching TypeIds via
-// the rmeta trick) rather than linking a `libjackdaw_sdk` dll. This is the
-// only model that links on Windows, where a dll cannot export bevy's
-// reflect statics.
-const ENV_STATIC: &str = "JACKDAW_SDK_STATIC";
-const ENV_SDK_BEVY_RLIB: &str = "JACKDAW_SDK_BEVY_RLIB";
-const ENV_SDK_API_RLIB: &str = "JACKDAW_SDK_API_RLIB";
-
 /// Crate aliases we redirect to `libjackdaw_sdk.so` whenever cargo
 /// emits an `--extern` flag for them. User code writes
 /// `use bevy::prelude::*;` and cargo passes `--extern bevy=<stub>.rlib`
@@ -207,23 +197,12 @@ fn describe_externs(args: &[OsString]) -> String {
 fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result<(), String> {
     let deps = env::var_os(ENV_SDK_DEPS)
         .ok_or_else(|| format!("{ENV_SDK_DEPS} not set; cannot point -L at deps/"))?;
-    let static_mode = env::var_os(ENV_STATIC).is_some_and(|v| v == "1");
-    // Redirect targets for the bevy facade and the injected jackdaw_api. In
-    // the shared-dylib model both point at libjackdaw_sdk; in the static
-    // model each points at its own prebuilt rlib, so rustc embeds one
-    // shared bevy compilation instead of linking a dll.
-    let (bevy_target, api_target) = if static_mode {
-        (
-            env::var_os(ENV_SDK_BEVY_RLIB)
-                .ok_or_else(|| format!("{ENV_SDK_BEVY_RLIB} not set in static mode"))?,
-            env::var_os(ENV_SDK_API_RLIB)
-                .ok_or_else(|| format!("{ENV_SDK_API_RLIB} not set in static mode"))?,
-        )
-    } else {
-        let dylib = env::var_os(ENV_SDK_DYLIB)
-            .ok_or_else(|| format!("{ENV_SDK_DYLIB} not set; cannot redirect --extern"))?;
-        (dylib.clone(), dylib)
-    };
+    // The SDK dylib is the metadata facade for both public crate aliases. It
+    // imports the separately shipped Bevy and Jackdaw runtime dylibs, so the
+    // project never embeds their process-wide state.
+    let dylib = env::var_os(ENV_SDK_DYLIB)
+        .ok_or_else(|| format!("{ENV_SDK_DYLIB} not set; cannot redirect --extern"))?;
+    let (bevy_target, api_target) = (dylib.clone(), dylib);
     let extern_map = load_extern_map();
 
     // Host-side units (no --target: build scripts, proc-macro crates
@@ -315,31 +294,9 @@ fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result
         argv.push(flag);
     }
 
-    // macOS binds every import to the library it came from (a two level
-    // namespace), so a crate linked into both the host and a dlopened
-    // dylib ends up with two copies of its statics. `inventory`, which
-    // Bevy's `reflect_auto_register` collects derived types into, keeps
-    // its registry in exactly such a static: the loaded project
-    // registered into its own copy and the editor read an empty one, so
-    // no project type ever crossed the boundary. ELF's flat namespace
-    // makes Linux resolve both to one definition, which is why only
-    // macOS saw it. Asking for the same behaviour here restores a single
-    // registry.
-    if argv
-        .iter()
-        .any(|arg| arg.to_string_lossy().contains("apple-darwin"))
-    {
-        argv.push(OsString::from("-C"));
-        argv.push(OsString::from("link-arg=-Wl,-flat_namespace"));
-        if log {
-            error!("jackdaw-rustc-wrapper: appended -Wl,-flat_namespace for macOS");
-        }
-    }
-
-    // `-C prefer-dynamic` links through the SDK dll. In the static model
-    // there is no dll: the redirected rlibs are embedded, so it is omitted
-    // (and would otherwise pull the toolchain's dynamic std/test crates).
-    if !static_mode && (redirected || is_primary) {
+    // Link through the SDK facade (and therefore its Bevy and Jackdaw runtime
+    // dylibs) rather than embedding the facade's rlib form.
+    if redirected || is_primary {
         argv.push(OsString::from("-C"));
         argv.push(OsString::from("prefer-dynamic"));
         if log {
@@ -400,10 +357,9 @@ impl ExternMap {
 }
 
 /// Given an `--extern` value, return the redirected form. The `bevy`
-/// facade goes to `bevy_target` (the SDK dll in the shared model, the
-/// prebuilt bevy rlib in the static model); an edge listed in the plan
-/// for this consumer goes to its recorded artifact. `Ok(None)` means no
-/// redirect applies and the caller leaves the flag alone.
+/// facade goes to `bevy_target` (the SDK dylib facade); an edge listed in
+/// the plan for this consumer goes to its recorded artifact. `Ok(None)`
+/// means no redirect applies and the caller leaves the flag alone.
 ///
 /// `value` is usually `<alias>=<path>`, but cargo also emits a bare
 /// `<alias>` with no path, and that form has to be redirected too. Left
@@ -468,10 +424,10 @@ mod tests {
         dir
     }
 
-    /// The bevy facade always resolves to whatever the model's target
-    /// is: the dll when sharing one, the prebuilt rlib when static.
+    /// The bevy facade always resolves to the SDK dylib supplied by the
+    /// build driver.
     #[test]
-    fn the_bevy_facade_follows_the_model() {
+    fn the_bevy_facade_uses_the_sdk_dylib() {
         let map = ExternMap::default();
         let sdk = staged("facade", &["libjackdaw_sdk.so", "libbevy-def.rlib"]);
 
@@ -486,19 +442,6 @@ mod tests {
         .expect("the facade is always redirected");
         let mut expected = OsString::from("bevy=");
         expected.push(&dylib);
-        assert_eq!(rewritten, expected);
-
-        let rlib = OsString::from(sdk.join("libbevy-def.rlib"));
-        let rewritten = rewrite_extern(
-            &ext("bevy=/proj/target/deps/libbevy-abc.rlib"),
-            &rlib,
-            &map,
-            "my_game@0.1.0",
-        )
-        .expect("an existing target is not an error")
-        .expect("static mode redirects the facade too");
-        let mut expected = OsString::from("bevy=");
-        expected.push(&rlib);
         assert_eq!(rewritten, expected);
 
         let _ = std::fs::remove_dir_all(&sdk);

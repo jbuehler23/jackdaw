@@ -303,23 +303,6 @@ pub fn build_project_dylib(
     let target_dir = target_root.join(&salt);
     retain_recent_target_dirs(&target_root, &salt);
 
-    // The static SDK links the project dylib against the prebuilt bevy and
-    // jackdaw_api rlibs (one shared bevy compilation, matching the editor's
-    // TypeIds via the rmeta trick) rather than a dll. Resolve them from the
-    // manifest; the shared-dylib path stays as a fallback.
-    let resolve_rlib = |name: &str| -> Option<PathBuf> {
-        manifest.artifact_for(name).map(|artifact| {
-            let p = Path::new(artifact);
-            if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                sdk.deps.join(artifact)
-            }
-        })
-    };
-    let static_rlibs = resolve_rlib("bevy").zip(resolve_rlib("jackdaw_api"));
-    let is_static = static_rlibs.is_some();
-
     let mut cmd = Command::new("cargo");
     cmd.args(["rustc", "--crate-type", "dylib", "--target", &sdk.triple])
         // Machine-readable stream so the editor can show live per-crate
@@ -349,6 +332,7 @@ pub fn build_project_dylib(
         .env("CARGO_INCREMENTAL", "0")
         .env("CARGO_TARGET_DIR", &target_dir)
         .env("RUSTC_WRAPPER", &sdk.wrapper)
+        .env("JACKDAW_SDK_DYLIB", &sdk.dylib)
         .env("JACKDAW_SDK_DEPS", &sdk.deps)
         .env("JACKDAW_SDK_HOST_DEPS", &sdk.host_deps)
         .env("JACKDAW_SDK_EXTERN_MAP", &plan_path);
@@ -363,16 +347,6 @@ pub fn build_project_dylib(
             "JACKDAW_SDK_LINK_PATHS",
             link_paths.join(PATH_LIST_SEPARATOR),
         );
-    }
-    match static_rlibs {
-        Some((bevy_rlib, api_rlib)) => {
-            cmd.env("JACKDAW_SDK_STATIC", "1")
-                .env("JACKDAW_SDK_BEVY_RLIB", bevy_rlib)
-                .env("JACKDAW_SDK_API_RLIB", api_rlib);
-        }
-        None => {
-            cmd.env("JACKDAW_SDK_DYLIB", &sdk.dylib);
-        }
     }
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -403,12 +377,9 @@ pub fn build_project_dylib(
         .join(&sdk.triple)
         .join("debug")
         .join(dylib_file_name("jackdaw_shim"));
-    // In the shared-dylib model, prove the artifact links the running SDK
-    // before anything dlopens it. In the static model the dylib embeds bevy
-    // and depends on no SDK dll, so there is nothing to verify against.
-    if !is_static {
-        linkage::verify_linkage(&dylib, &sdk.dylib).map_err(ProjectBuildError::Linkage)?;
-    }
+    // Prove the artifact imports the exact SDK facade before anything dlopens
+    // it. The facade in turn imports the shipped Bevy and Jackdaw runtimes.
+    linkage::verify_linkage(&dylib, &sdk.dylib).map_err(ProjectBuildError::Linkage)?;
 
     // Extract the project's type schema out-of-process so the editor
     // learns its components without mapping the dylib. A missing runner

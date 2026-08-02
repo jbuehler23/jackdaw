@@ -22,3 +22,4 @@ bevy = { version = "0.19", default-features = false, features = [
 ] }
 jackdaw_runtime = { path = "../../../crates/jackdaw_runtime", default-features = false }
 jackdaw_scene_types = { path = "../../../crates/jackdaw_scene_types", default-features = false }
+jackdaw_extension = { path = "../../../crates/jackdaw_extension" }
