@@ -28,7 +28,12 @@
 // available through this crate while process-wide state lives in one shared
 // runtime library.
 #[cfg(feature = "dynamic_linking")]
-use jackdaw_dylib as _;
+#[expect(
+    unused_imports,
+    clippy::single_component_path_imports,
+    reason = "this forces the shared Jackdaw runtime to be linked"
+)]
+use jackdaw_dylib;
 
 // --- Extension authoring surface ---
 

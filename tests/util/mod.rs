@@ -334,3 +334,33 @@ pub fn ensure_sdk_metadata(sdk: &jackdaw::sdk_paths::SdkPaths) {
     }
     SdkManifest::generate_dev(&workspace, sdk).expect("generate the SDK manifest for the fixture");
 }
+
+/// Build the zero-registration reflection fixture through the same generated
+/// shim, lock alignment, and extern plan used for editor-driven projects.
+/// Keeping this helper shared makes both the dlopen and linkage probes
+/// self-contained while Cargo reuses the salted project target between them.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "used by the SDK reflection probes only")]
+pub fn build_reflect_fixture(
+    sdk: &jackdaw::sdk_paths::SdkPaths,
+) -> jackdaw::project_build::ProjectBuild {
+    ensure_sdk_metadata(sdk);
+    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let project_root = stage_fixture("reflect_game");
+    let jackdaw_dir = project_root.join(".jackdaw");
+    let spec = jackdaw::project_build::shim::ShimSpec {
+        package_name: "reflect_game".into(),
+        crate_name: "reflect_game".into(),
+        project_root,
+        game_plugin: Some("GamePlugin".into()),
+        extension_type: None,
+    };
+    jackdaw::project_build::build_project_dylib(
+        &spec,
+        &jackdaw_dir,
+        sdk,
+        Some(&workspace),
+        &mut |_| {},
+    )
+    .unwrap_or_else(|err| panic!("build reflect fixture through project pipeline: {err:?}"))
+}

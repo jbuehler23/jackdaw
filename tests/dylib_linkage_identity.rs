@@ -9,8 +9,8 @@
 //! the identity discriminates builds: verification against a DIFFERENT
 //! build of the same SDK crate must fail.
 //!
-//! Requires the dylib built by `reflect_auto_register`; run after (or
-//! alongside):
+//! Builds the same generated shim as `reflect_auto_register`; the salted
+//! project target makes the second probe a cache hit when they run together:
 //!
 //! ```text
 //! cargo test --features dylib --target <host-triple> \
@@ -32,22 +32,12 @@ fn workspace_root() -> PathBuf {
 #[test]
 fn dylib_linkage_identity_matches_the_running_sdk() {
     let sdk = SdkPaths::for_workspace(&workspace_root());
-    // The dylib `reflect_auto_register` builds, in the same staging dir.
-    let fixture_dylib = util::stage_fixture("reflect_game").join(format!(
-        "target-fixture/{}/debug/{}reflect_game{}",
-        sdk.triple,
-        std::env::consts::DLL_PREFIX,
-        std::env::consts::DLL_SUFFIX
-    ));
     assert!(
         sdk.dylib_exists(),
         "SDK dylib missing; build with `cargo build -p jackdaw --features dylib --target {}`",
         sdk.triple
     );
-    assert!(
-        fixture_dylib.exists(),
-        "fixture dylib missing; run the reflect_auto_register test first"
-    );
+    let fixture_dylib = util::build_reflect_fixture(&sdk).dylib;
 
     verify_linkage(&fixture_dylib, &sdk.dylib)
         .expect("the fixture dylib does not verify against the running SDK");
