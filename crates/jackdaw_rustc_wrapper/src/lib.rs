@@ -6,13 +6,12 @@
 //! in the project passes through here. Target-side invocations are
 //! rewritten so the whole dependency graph shares the SDK's crates:
 //!
-//! * `--extern bevy=<anything>` becomes
-//!   `--extern bevy=$JACKDAW_SDK_DYLIB` for every consumer. The user's
-//!   Cargo.toml still declares a normal bevy dependency so bevy's proc
-//!   macros find it via `CARGO_MANIFEST_DIR` and emit `::bevy::...`
-//!   paths. Cargo compiles real bevy into the project's target dir;
-//!   those rlibs are ignored because every `--extern` that matters
-//!   points at the SDK's artifacts.
+//! * The generated shim's `--extern bevy=<anything>` becomes
+//!   `--extern bevy=$JACKDAW_SDK_DYLIB`, guaranteeing the final project
+//!   dylib imports the SDK facade. Other crates compile against the
+//!   exact SDK-built Bevy facade rlib from the redirect plan; that rlib
+//!   imports the shared `bevy_dylib` without exposing Jackdaw's merged
+//!   facade to third-party crates.
 //! * Every dependency edge listed in the `$JACKDAW_SDK_EXTERN_MAP`
 //!   redirect plan is rewritten to the SDK artifact it names. The plan
 //!   covers the SDK's full runtime closure (bevy subcrates plus public
@@ -55,7 +54,6 @@
 //! | `JACKDAW_SDK_HOST_DEPS`  | no             | Host deps dir (proc-macro dylibs)    |
 //! | `JACKDAW_SDK_EXTERN_MAP` | no             | Path to the per-edge redirect plan   |
 //! | `JACKDAW_WRAPPER_LOG`    | no             | If `1`, log rewrites to stderr       |
-//! | `CARGO_PRIMARY_PACKAGE`  | (set by cargo) | `1` while compiling the user crate   |
 //! | `CARGO_PKG_NAME`         | (set by cargo) | Consumer key for plan edge lookups   |
 
 use std::env;
@@ -70,9 +68,9 @@ const ENV_SDK_HOST_DEPS: &str = "JACKDAW_SDK_HOST_DEPS";
 // SDK's crates reference. Paths can contain spaces and, on Windows, a
 // colon after the drive letter, so neither is usable as a separator.
 const ENV_SDK_LINK_PATHS: &str = "JACKDAW_SDK_LINK_PATHS";
-const ENV_PRIMARY_PACKAGE: &str = "CARGO_PRIMARY_PACKAGE";
 const ENV_LOG: &str = "JACKDAW_WRAPPER_LOG";
 const ENV_EXTERN_MAP: &str = "JACKDAW_SDK_EXTERN_MAP";
+const PRIMARY_SHIM: &str = "jackdaw_shim@0.0.0";
 /// Crate aliases we redirect to `libjackdaw_sdk.so` whenever cargo
 /// emits an `--extern` flag for them. User code writes
 /// `use bevy::prelude::*;` and cargo passes `--extern bevy=<stub>.rlib`
@@ -106,14 +104,13 @@ pub fn run() -> ExitCode {
     let rustc = argv.remove(1);
     let mut rustc_args: Vec<OsString> = argv.split_off(1);
 
-    let is_primary = env::var_os(ENV_PRIMARY_PACKAGE).is_some_and(|v| v == "1");
     let log = env::var_os(ENV_LOG).is_some_and(|v| v == "1");
 
     // The redirects apply to EVERY target-side crate in the graph, so
     // ecosystem dependencies (physics, etc.) compile against the same
     // SDK bevy and closure crates the user's crate does: one instance
     // of every shared crate. Host-side units pass through unchanged.
-    if let Err(e) = rewrite_args(&mut rustc_args, is_primary, log) {
+    if let Err(e) = rewrite_args(&mut rustc_args, log) {
         error!("jackdaw-rustc-wrapper: {e}");
         return ExitCode::from(1);
     }
@@ -194,7 +191,7 @@ fn describe_externs(args: &[OsString]) -> String {
 /// consume a rewritten sibling and see two instances of one crate, so
 /// coherence requires the SDK-preferred resolution to apply everywhere
 /// or nowhere.
-fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result<(), String> {
+fn rewrite_args(argv: &mut Vec<OsString>, log: bool) -> Result<(), String> {
     let deps = env::var_os(ENV_SDK_DEPS)
         .ok_or_else(|| format!("{ENV_SDK_DEPS} not set; cannot point -L at deps/"))?;
     // The SDK dylib is the metadata facade for both public crate aliases. It
@@ -221,14 +218,23 @@ fn rewrite_args(argv: &mut Vec<OsString>, is_primary: bool, log: bool) -> Result
         (Ok(name), Ok(version)) => format!("{}@{version}", name.replace('-', "_")),
         _ => String::new(),
     };
+    // `cargo rustc` can expose CARGO_PRIMARY_PACKAGE to dependency wrapper
+    // invocations as well as the selected package. The generated build root
+    // has a fixed identity, so use that identity directly: only the shim may
+    // compile against Jackdaw's merged facade or receive the injected API.
+    let is_primary = consumer == PRIMARY_SHIM;
 
     let mut redirected = false;
     let mut i = 0;
     while i < argv.len() {
         if argv[i] == "--extern" && i + 1 < argv.len() {
-            if let Some(new_value) =
-                rewrite_extern(&argv[i + 1], &bevy_target, &extern_map, &consumer)?
-            {
+            if let Some(new_value) = rewrite_extern(
+                &argv[i + 1],
+                &bevy_target,
+                &extern_map,
+                &consumer,
+                is_primary,
+            )? {
                 if log {
                     error!(
                         "jackdaw-rustc-wrapper: rewrite --extern {:?} -> {:?}",
@@ -357,9 +363,12 @@ impl ExternMap {
 }
 
 /// Given an `--extern` value, return the redirected form. The `bevy`
-/// facade goes to `bevy_target` (the SDK dylib facade); an edge listed in
-/// the plan for this consumer goes to its recorded artifact. `Ok(None)`
-/// means no redirect applies and the caller leaves the flag alone.
+/// facade goes to `bevy_target` for the primary shim, guaranteeing the final
+/// dylib records an SDK dependency. Other crates use the exact prebuilt Bevy
+/// facade rlib from the plan; that rlib imports `bevy_dylib`, preserving shared
+/// runtime state without making third-party crates compile against Jackdaw's
+/// merged facade. `Ok(None)` means no redirect applies and the caller leaves
+/// the flag alone.
 ///
 /// `value` is usually `<alias>=<path>`, but cargo also emits a bare
 /// `<alias>` with no path, and that form has to be redirected too. Left
@@ -378,16 +387,18 @@ fn rewrite_extern(
     bevy_target: &OsString,
     extern_map: &ExternMap,
     consumer: &str,
+    is_primary: bool,
 ) -> Result<Option<OsString>, String> {
     let Some(s) = value.to_str() else {
         return Ok(None);
     };
     let alias = s.split_once('=').map_or(s, |(alias, _path)| alias);
-    let target = if REDIRECTED_CRATES.contains(&alias) {
+    let target = if REDIRECTED_CRATES.contains(&alias) && is_primary {
         bevy_target
     } else {
         match extern_map.edge_artifact(consumer, alias) {
             Some(artifact) => artifact,
+            None if REDIRECTED_CRATES.contains(&alias) => bevy_target,
             None => return Ok(None),
         }
     };
@@ -437,6 +448,7 @@ mod tests {
             &dylib,
             &map,
             "my_game@0.1.0",
+            true,
         )
         .expect("an existing target is not an error")
         .expect("the facade is always redirected");
@@ -444,6 +456,36 @@ mod tests {
         expected.push(&dylib);
         assert_eq!(rewritten, expected);
 
+        let _ = std::fs::remove_dir_all(&sdk);
+    }
+
+    /// Dependencies compile against Bevy's real facade rather than the merged
+    /// Jackdaw facade. The selected rlib imports the same `bevy_dylib` as the
+    /// SDK, so this changes compile-time crate shape without duplicating state.
+    #[test]
+    fn a_dependency_uses_the_planned_bevy_facade() {
+        let sdk = staged("bevy_edge", &["libjackdaw_sdk.so", "libbevy-def.rlib"]);
+        let artifact = OsString::from(sdk.join("libbevy-def.rlib"));
+        let map = ExternMap {
+            edges: vec![(
+                "bevy_enhanced_input@0.26.0".into(),
+                "bevy".into(),
+                artifact.clone(),
+            )],
+        };
+        let dylib = OsString::from(sdk.join("libjackdaw_sdk.so"));
+        let rewritten = rewrite_extern(
+            &ext("bevy=/project/deps/libbevy-abc.rlib"),
+            &dylib,
+            &map,
+            "bevy_enhanced_input@0.26.0",
+            false,
+        )
+        .expect("the planned artifact is there")
+        .expect("the dependency's Bevy edge is redirected");
+        let mut expected = OsString::from("bevy=");
+        expected.push(&artifact);
+        assert_eq!(rewritten, expected);
         let _ = std::fs::remove_dir_all(&sdk);
     }
 
@@ -459,6 +501,7 @@ mod tests {
                 &dylib,
                 &map,
                 "my_game@0.1.0",
+                false,
             )
             .expect("no redirect is not an error")
             .is_none()
@@ -505,7 +548,7 @@ mod tests {
             edges: vec![("bevy_image@0.19.0".into(), "image".into(), artifact.clone())],
         };
         let dylib = OsString::from(sdk.join("libjackdaw_sdk.so"));
-        let rewritten = rewrite_extern(&ext("image"), &dylib, &map, "bevy_image@0.19.0")
+        let rewritten = rewrite_extern(&ext("image"), &dylib, &map, "bevy_image@0.19.0", false)
             .expect("the artifact is there")
             .expect("a pathless extern still names an edge in the plan");
         let mut expected = OsString::from("image=");
@@ -534,6 +577,7 @@ mod tests {
             &dylib,
             &map,
             "bevy_image@0.19.0",
+            false,
         )
         .expect_err("a redirect to a file that is not there is an error");
         assert!(err.contains("image"), "{err}");
