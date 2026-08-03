@@ -213,7 +213,12 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          key: bundle-${{ matrix.triple }}
+          # The cargo config is in the key because it carries rustflags
+          # (-Zshare-generics and the linker choice): a cache built under
+          # different flags restores artifacts whose crate disambiguators
+          # no longer match what a fresh build produces, and the mix
+          # surfaces as undefined `type_info::CELL` symbols at link time.
+          key: bundle-${{ matrix.triple }}-${{ hashFiles('.cargo/config.toml') }}
           # Save even when the job fails. This job is where a platform
           # gets iterated on, and the default is to save nothing unless
           # it succeeds: the two platforms that were failing therefore

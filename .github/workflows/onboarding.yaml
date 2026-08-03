@@ -63,7 +63,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
-          shared-key: onboarding-${{ matrix.os }}
+          # Keyed on the cargo config because it carries rustflags: a
+          # cache built under different flags mixes crate generations
+          # with a fresh build's, which fails links (or dlopen) on
+          # symbols whose disambiguators match neither.
+          shared-key: onboarding-${{ matrix.os }}-${{ hashFiles('.cargo/config.toml') }}
           # These probes exist to be run against platforms that are
           # failing, and the default saves nothing from a failed job, so
           # the platform under investigation is the one that never gets

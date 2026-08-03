@@ -267,7 +267,7 @@ fn macho_load_paths(file: &Path) -> Result<Vec<String>, String> {
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .skip(1)
-        .filter_map(|line| line.trim_start().split_whitespace().next())
+        .filter_map(|line| line.split_whitespace().next())
         .map(str::to_string)
         .collect())
 }
