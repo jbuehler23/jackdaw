@@ -5,13 +5,13 @@
 # Introduction
 
 Jackdaw is a 3D level editor built with
-[Bevy](https://bevyengine.org/). It does brush-based geometry,
-material and texture management, heightmap terrain, and a
-human-readable scene format (`.bsn`). Your project stays a
-normal Bevy crate: the editor builds it as a dynamic library
-and loads it, so your own `cargo build` and `cargo run` keep
-compiling plain crates.io Bevy with nothing jackdaw-specific
-in the manifest.
+[Bevy](https://bevyengine.org/). It features brush-based
+geometry, material and texture management, heightmap
+terrain, and a human-readable scene format (`.bsn`). Your
+project builds as a dynamic library and remains a regular
+Bevy crate, so `cargo build` and `cargo run` still compile
+plain crates.io Bevy with nothing jackdaw-specific in the
+manifest.
 
 We are pre-1.0. Things change. Some pieces are still in
 active flux, and this book tries to call out what is solid
@@ -34,28 +34,28 @@ versus what is in flight.
 
 ## Who this is for
 
-Two audiences:
-
-- Bevy developers who want a level editor for their game
+- **Bevy developers** who want a level editor for their game
   and don't want to glue something together themselves.
-- Editor / tooling developers who want to build on top of a
+- **Editor / tooling developers** who want to build on top of a
   pluggable Bevy editor.
 
-If you have used a brush-based level editor before, the
-geometry model will feel familiar: convex volumes carved and
-combined in place rather than meshes imported from a
-modelling tool. If you have used a scene editor, `.bsn` files
-play the same role as its scene files, except they are plain
-text you can read and diff.
+If you have used a brush-based level editor before, building
+scenes with Jackdaw will feel familiar. Geometry is composed
+of primitive shapes (brushes) that add to or carve other
+brushes, allowing for mesh creation directly in the editor.
+If you have used a scene editor, `.bsn` files play the same
+role as its scene files, except they are plain text you can
+read and diff.
 
 ## What this book covers
 
 - **Getting Started**: install, scaffold a project, save a
-  scene, or bring an existing Bevy game in.
-- **User Guide**: the panels and tools you actually click on.
+  scene, or import an existing Bevy project
+- **User Guide**: how to use the editor, its controls, and
+authoring project scenes
 - **Developer Guide**: how the editor is put together, how
-  to write custom components, how to extend the editor with
-  your own operators and windows.
+  to write custom components, and how to extend the editor
+  with your own operators and windows.
 - **Reference**: configuration, file paths.
 - [Open Challenges](developer-guide/open-challenges.md)
   lists what we have not built yet but want to. If you came
