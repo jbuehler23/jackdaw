@@ -26,9 +26,9 @@ impl BsnAssetContext<'_> {
         if let Some(path) = self.asset_server.get_path(id) {
             let path_str = path.to_string();
             if let Some(relative) = pathdiff::diff_paths(&path_str, self.parent_path) {
-                return relative.to_string_lossy().into_owned();
+                return relative.to_string_lossy().replace('\\', "/");
             }
-            return path_str;
+            return path_str.replace('\\', "/");
         }
         if let Some(names) = self.asset_names
             && let Some(name) = names.get(&id)

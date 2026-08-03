@@ -333,34 +333,37 @@ mod tests {
 
     /// A metadata document with the fields the resolver reads.
     fn workspace_json(packages: &[(&str, &str, &[&str], bool)]) -> String {
-        let entries: Vec<String> = packages
+        let entries: Vec<serde_json::Value> = packages
             .iter()
             .map(|(name, dir, deps, has_lib)| {
-                let deps = deps
+                let deps: Vec<serde_json::Value> = deps
                     .iter()
-                    .map(|d| format!(r#"{{"name":"{d}"}}"#))
-                    .collect::<Vec<_>>()
-                    .join(",");
+                    .map(|dependency| serde_json::json!({ "name": dependency }))
+                    .collect();
                 let targets = if *has_lib {
-                    format!(r#"{{"name":"{}","kind":["lib"]}}"#, name.replace('-', "_"))
+                    serde_json::json!({ "name": name.replace('-', "_"), "kind": ["lib"] })
                 } else {
-                    format!(r#"{{"name":"{name}","kind":["bin"]}}"#)
+                    serde_json::json!({ "name": name, "kind": ["bin"] })
                 };
-                format!(
-                    r#"{{"name":"{name}","id":"id-{name}","manifest_path":"{dir}/Cargo.toml",
-                       "targets":[{targets}],"dependencies":[{deps}]}}"#
-                )
+                serde_json::json!({
+                    "name": name,
+                    "id": format!("id-{name}"),
+                    "manifest_path": Path::new(dir).join("Cargo.toml"),
+                    "targets": [targets],
+                    "dependencies": deps,
+                })
             })
             .collect();
         let members: Vec<String> = packages
             .iter()
-            .map(|(name, ..)| format!(r#""id-{name}""#))
+            .map(|(name, ..)| format!("id-{name}"))
             .collect();
-        format!(
-            r#"{{"packages":[{}],"workspace_root":"/ws","workspace_members":[{}]}}"#,
-            entries.join(","),
-            members.join(",")
-        )
+        serde_json::json!({
+            "packages": entries,
+            "workspace_root": Path::new("/ws"),
+            "workspace_members": members,
+        })
+        .to_string()
     }
 
     #[test]

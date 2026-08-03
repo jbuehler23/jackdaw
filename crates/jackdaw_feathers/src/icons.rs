@@ -132,18 +132,23 @@ mod tests {
     /// embedded prefix.
     #[test]
     fn embedded_font_paths_match_registration() {
-        let as_uri = |p: std::path::PathBuf| format!("embedded://{}", p.display());
+        let uri_path = |uri: &str| {
+            std::path::PathBuf::from(
+                uri.strip_prefix("embedded://")
+                    .expect("font constant uses the embedded scheme"),
+            )
+        };
         assert_eq!(
-            as_uri(embedded_path!("../fonts/lucide.ttf")),
-            font_paths::LUCIDE,
+            embedded_path!("../fonts/lucide.ttf"),
+            uri_path(font_paths::LUCIDE),
         );
         assert_eq!(
-            as_uri(embedded_path!("../fonts/FiraSans-Regular.ttf")),
-            font_paths::FIRA_REGULAR,
+            embedded_path!("../fonts/FiraSans-Regular.ttf"),
+            uri_path(font_paths::FIRA_REGULAR),
         );
         assert_eq!(
-            as_uri(embedded_path!("../fonts/FiraSans-Italic.ttf")),
-            font_paths::FIRA_ITALIC,
+            embedded_path!("../fonts/FiraSans-Italic.ttf"),
+            uri_path(font_paths::FIRA_ITALIC),
         );
     }
 

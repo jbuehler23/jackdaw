@@ -553,16 +553,18 @@ mod tests {
 
     #[test]
     fn resolve_artifact_absolute_passthrough_basename_rebases() {
-        let deps = Path::new("/opt/jackdaw/sdk/x86_64/deps");
+        let root = std::env::temp_dir().join("jackdaw_resolve_artifact");
+        let deps = root.join("sdk/x86_64/deps");
+        let built = root.join("target/x86_64/release/deps/libglam-abc.rlib");
         // Dev/bootstrap manifests store absolute paths: used verbatim.
         assert_eq!(
-            resolve_artifact("/ws/target/x86_64/release/deps/libglam-abc.rlib", deps),
-            "/ws/target/x86_64/release/deps/libglam-abc.rlib"
+            PathBuf::from(resolve_artifact(&built.to_string_lossy(), &deps)),
+            built
         );
         // A shipped manifest stores basenames, rebased onto the install deps.
         assert_eq!(
-            resolve_artifact("libglam-abc.rlib", deps),
-            "/opt/jackdaw/sdk/x86_64/deps/libglam-abc.rlib"
+            PathBuf::from(resolve_artifact("libglam-abc.rlib", &deps)),
+            deps.join("libglam-abc.rlib")
         );
     }
 

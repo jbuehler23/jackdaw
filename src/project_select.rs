@@ -3096,8 +3096,8 @@ mod tests {
         let location = PathBuf::from("/home/dev/Projects");
         let ok = crate::scaffold::validated_project_name("My Cool Game").expect("valid");
         assert_eq!(
-            location.join(&ok).display().to_string(),
-            "/home/dev/Projects/my-cool-game",
+            location.join(&ok),
+            location.join("my-cool-game"),
             "the hint shows the sanitized directory, not the raw input"
         );
         let error = crate::scaffold::validated_project_name("2d-shooter")
