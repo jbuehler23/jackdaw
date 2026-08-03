@@ -325,14 +325,20 @@ pub fn ensure_sdk_metadata(sdk: &jackdaw::sdk_paths::SdkPaths) {
     use jackdaw::project_build::plan::SdkManifest;
 
     let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let have_manifest = SdkManifest::load(&sdk.manifest)
-        .map(|manifest| !manifest.is_empty())
-        .unwrap_or(false);
-    let have_paths = jackdaw::project_build::plan::link_paths_path(&sdk.manifest).is_file();
-    if have_manifest && have_paths {
-        return;
-    }
-    SdkManifest::generate_dev(&workspace, sdk).expect("generate the SDK manifest for the fixture");
+    // Match the root feature set that linked this test binary. The heavy
+    // journey enables `runner`, which in turn enables Jackdaw runtime features
+    // and changes Rust's crate identities. Rebuilding only `dylib` here would
+    // replace the loaded SDK's unhashed dylibs with an incompatible variant.
+    // Always refresh this test metadata: a restored target cache can contain a
+    // non-empty manifest from the other feature set, and existence alone does
+    // not prove that it describes the dylibs this process loaded.
+    let features = if cfg!(feature = "runner") {
+        "dylib runner"
+    } else {
+        "dylib"
+    };
+    SdkManifest::generate(&workspace, sdk, &["-p", "jackdaw", "--features", features])
+        .expect("generate the SDK manifest for the fixture");
 }
 
 /// Build the zero-registration reflection fixture through the same generated

@@ -46,6 +46,7 @@ fn author_save_build_play() {
         "SDK wrapper missing; build --features dylib --target {}",
         sdk.triple
     );
+    util::ensure_sdk_metadata(&sdk);
 
     // Author.
     let mut app = util::editor_test_app();

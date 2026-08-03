@@ -33,6 +33,7 @@ fn built_game_loads_and_spawns_a_bsn_scene() {
         sdk.wrapper_exists(),
         "SDK wrapper missing; build --features dylib --target {triple}"
     );
+    util::ensure_sdk_metadata(&sdk);
 
     // Prebuilt in production; here it shares the SDK graph.
     let status = Command::new("cargo")

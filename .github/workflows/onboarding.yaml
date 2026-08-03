@@ -78,31 +78,34 @@ jobs:
           cargo build -p jackdaw_rustc_wrapper
 
       - name: Auto-registration across dlopen
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test reflect_auto_register -- --nocapture
+        # Project builds generate the dev SDK manifest on demand. The test
+        # harness must use that same Cargo profile: dylibs from `test` and
+        # `dev` have different symbol identities but share one output name.
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test reflect_auto_register -- --nocapture
 
       - name: Linkage identity
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test dylib_linkage_identity -- --nocapture
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test dylib_linkage_identity -- --nocapture
 
       - name: Ecosystem extern redirect
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test extern_redirect_ecosystem -- --nocapture
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test extern_redirect_ecosystem -- --nocapture
 
       - name: Schema extraction
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test schema_extract -- --nocapture
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test schema_extract -- --nocapture
 
       - name: Component shape refresh
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test component_shape_refresh -- --nocapture
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test component_shape_refresh -- --nocapture
 
       - name: Dylib reload memory
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test stress_reload -- --nocapture
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test stress_reload -- --nocapture
 
       - name: Extension loading
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test dylib_loading -- --nocapture
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test dylib_loading -- --nocapture
 
       - name: Scaffold end-to-end (scaffold -> build -> schema)
         # The user's first-run loop headlessly: scaffold a game, build its
         # dylib against the SDK, and confirm the template component reaches
         # the schema. No GPU needed, so it runs on all three platforms.
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test scaffold_e2e -- --nocapture
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test scaffold_e2e -- --nocapture
 
       - name: Game runner over PIE IPC
         # Headless runners have no GPU on every platform; the runner
@@ -111,4 +114,4 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get install --no-install-recommends -y mesa-vulkan-drivers
-          cargo test -j 4 --features dylib --target "$TRIPLE" --test runner_boots_project_dylib -- --nocapture
+          cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test runner_boots_project_dylib -- --nocapture

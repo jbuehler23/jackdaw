@@ -109,6 +109,13 @@ fn heavy() -> bool {
                 "run",
                 "--profile",
                 "heavy",
+                // The SDK, runner, and wrapper above use Cargo's dev profile.
+                // Keep the test harnesses on that profile too: SDK manifest
+                // generation performs a nested dev build, and Rust dylibs from
+                // different profiles have incompatible symbol identities even
+                // though Cargo writes them to the same unhashed filename.
+                "--cargo-profile",
+                "dev",
                 "-p",
                 "jackdaw",
                 "--features",
