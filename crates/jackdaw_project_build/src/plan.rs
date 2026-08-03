@@ -739,7 +739,10 @@ mod link_path_tests {
         let cwd = std::env::current_dir().expect("a current dir");
         let roots =
             build_private_roots(&SdkPaths::for_workspace_profile(Path::new("."), "release"));
-        let out_dir = cwd.join("target/x86_64-unknown-linux-gnu/release/build/blake3-abc/out");
+        let out_dir = cwd
+            .join("target")
+            .join(crate::sdk_paths::host_triple())
+            .join("release/build/blake3-abc/out");
         assert!(
             private_to_this_build(&out_dir, &roots),
             "{} is under the relative root {:?}",
