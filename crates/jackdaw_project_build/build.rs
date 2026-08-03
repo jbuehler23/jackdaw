@@ -94,6 +94,17 @@ fn assemble_recipe(ws: &Path, recipe: &Path) -> bool {
     if let Ok(lock) = fs::read(ws.join("Cargo.lock")) {
         fs::write(recipe.join("Cargo.lock"), lock).unwrap();
     }
+    // The extracted first-run SDK has no checkout-level `.cargo/config.toml`.
+    // Preserve the Mach-O/PE dylib codegen rule there too, or a prepared macOS
+    // or Windows SDK can contain unresolved shared-generic instantiations even
+    // though release bundles built from the checkout are sound.
+    fs::create_dir_all(recipe.join(".cargo")).unwrap();
+    fs::write(
+        recipe.join(".cargo/config.toml"),
+        "[target.'cfg(any(target_os = \"macos\", target_os = \"windows\"))']\n\
+         rustflags = [\"-Zshare-generics=no\"]\n",
+    )
+    .unwrap();
     true
 }
 

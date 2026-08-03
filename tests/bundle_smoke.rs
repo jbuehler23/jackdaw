@@ -160,7 +160,7 @@ fn game_builds_against_a_staged_bundle_sdk() {
     std::fs::write(
         imported.join("Cargo.toml"),
         format!(
-            "[package]\nname = \"existing-bevy-game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nbevy = \"{}\"\n",
+            "[package]\nname = \"existing-bevy-game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nbevy = \"{}\"\n\n[workspace]\n",
             jackdaw_project_build::BEVY_VERSION
         ),
     )

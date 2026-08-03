@@ -33,7 +33,9 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # A cold Windows/macOS graph can spend more than an hour in the fast
+    # tier alone. Give integration enough room to report a real result.
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -49,6 +51,9 @@ jobs:
         with:
           save-if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
           shared-key: cross-${{ matrix.os }}
+          # A timeout or platform failure is exactly when retaining the cold
+          # compile makes the next diagnostic run useful instead of identical.
+          cache-on-failure: true
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest

@@ -309,8 +309,28 @@ fn rewrite_args(argv: &mut Vec<OsString>, log: bool) -> Result<(), String> {
             error!("jackdaw-rustc-wrapper: appended -C prefer-dynamic");
         }
     }
+    append_strict_dylib_codegen(argv);
 
     Ok(())
+}
+
+/// Keep Mach-O/PE project and extension dylibs self-contained for generic code.
+///
+/// With cross-crate sharing enabled, rustc can assign a monomorphization used
+/// by the SDK facade to a runtime dylib, while Mach-O's two-level namespace or
+/// PE's import table still requires that otherwise-unreferenced symbol from
+/// that exact library. Every target unit goes through this wrapper, so applying
+/// the same rule here as in the SDK workspace also covers transitive project
+/// dependencies.
+fn append_strict_dylib_codegen(argv: &mut Vec<OsString>) {
+    let targets_strict_dylib = argv.windows(2).any(|pair| {
+        pair[0] == "--target"
+            && (pair[1].to_string_lossy().ends_with("apple-darwin")
+                || pair[1].to_string_lossy().contains("windows"))
+    });
+    if targets_strict_dylib && !argv.iter().any(|arg| arg == "-Zshare-generics=no") {
+        argv.push(OsString::from("-Zshare-generics=no"));
+    }
 }
 
 /// Parse `$JACKDAW_SDK_EXTERN_MAP`, the per-project redirect plan the
@@ -422,6 +442,41 @@ mod tests {
 
     fn ext(value: &str) -> OsString {
         OsString::from(value)
+    }
+
+    #[test]
+    fn apple_project_units_disable_shared_generics() {
+        let mut args = vec![ext("--target"), ext("aarch64-apple-darwin")];
+        append_strict_dylib_codegen(&mut args);
+        assert_eq!(
+            args.iter()
+                .filter(|arg| *arg == "-Zshare-generics=no")
+                .count(),
+            1
+        );
+
+        // Rewriting an already-configured unit is idempotent.
+        append_strict_dylib_codegen(&mut args);
+        assert_eq!(
+            args.iter()
+                .filter(|arg| *arg == "-Zshare-generics=no")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn windows_project_units_disable_shared_generics() {
+        let mut args = vec![ext("--target"), ext("x86_64-pc-windows-msvc")];
+        append_strict_dylib_codegen(&mut args);
+        assert!(args.iter().any(|arg| arg == "-Zshare-generics=no"));
+    }
+
+    #[test]
+    fn non_apple_project_units_keep_their_codegen_flags() {
+        let mut args = vec![ext("--target"), ext("x86_64-unknown-linux-gnu")];
+        append_strict_dylib_codegen(&mut args);
+        assert!(!args.iter().any(|arg| arg == "-Zshare-generics=no"));
     }
 
     /// A staged SDK dir holding `names`, so redirect targets exist.

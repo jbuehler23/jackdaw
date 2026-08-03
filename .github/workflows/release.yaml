@@ -179,7 +179,9 @@ jobs:
             archive: tar.zst
           - os: macos-14
             triple: aarch64-apple-darwin
-            rpath: "-C link-arg=-Wl,-rpath,@loader_path"
+            # RUSTFLAGS overrides target rustflags from .cargo/config.toml, so
+            # carry the Apple no-shared-generics rule alongside the rpath.
+            rpath: "-C link-arg=-Wl,-rpath,@loader_path -Zshare-generics=no"
             archive: tar.zst
           # macOS Intel (x86_64-apple-darwin) is dropped: the macos-13
           # runner hangs this bundle build for hours. Apple Silicon

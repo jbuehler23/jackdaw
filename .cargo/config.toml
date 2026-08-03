@@ -12,7 +12,19 @@
 
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld"
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+rustflags = [
+    "-C",
+    "link-arg=-fuse-ld=lld",
+    "-Zshare-generics=no",
+]
+
+# Mach-O and PE require an imported symbol to come from a specific dylib. Cross-
+# crate generic sharing can assign a monomorphization used by the SDK facade to
+# a runtime dylib even though that symbol is absent from the dylib's export set.
+# Keep each Apple dylib's generic code self-contained; the Windows target above
+# needs the same rule for its DLLs.
+[target.'cfg(target_os = "macos")']
+rustflags = ["-Zshare-generics=no"]
 
 [build]
 # The default `dylib` feature links the editor against the SDK dylib.
