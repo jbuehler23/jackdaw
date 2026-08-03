@@ -71,10 +71,19 @@ jobs:
           cache-on-failure: true
 
       - name: Build the SDK, runner, and wrapper
+        # One target-side cargo invocation, `--bins` included: the root
+        # package owns the `jackdaw-runner` bin, so this builds the
+        # editor, jd, and the runner from a single feature resolution.
+        # The previous separate `cargo build -p jackdaw_runner` resolved
+        # features for a different package selection and rewrote the
+        # stable-named `libjackdaw_dylib` in place, so the dylib pair on
+        # disk mixed two resolutions: on macOS, dlopen then failed on a
+        # `type_info::CELL` whose crate disambiguator matched neither
+        # file. (It also raced the root's runner bin for the same output
+        # filename.)
         run: |
           set -euxo pipefail
-          cargo build -j 4 -p jackdaw --features dylib --target "$TRIPLE"
-          cargo build -j 4 -p jackdaw_runner --target "$TRIPLE"
+          cargo build -j 4 -p jackdaw --features dylib --target "$TRIPLE" --bins
           cargo build -p jackdaw_rustc_wrapper
 
       - name: Auto-registration across dlopen

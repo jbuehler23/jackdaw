@@ -133,9 +133,157 @@ fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
         ),
     }
 
+    relocate_macos_install_names(out, &sdk.triple)?;
+
     Ok(format!(
         "{sdk_summary}; + editor, jd, {dylibs} runtime dylibs"
     ))
+}
+
+/// Rewrite the staged Mach-O files so the bundle is self-contained.
+///
+/// rustc leaves a Mach-O dylib's install name as its build-tree path, and
+/// every consumer copies that path into its own load commands. A staged
+/// `jd` therefore asked dyld for
+/// `/Users/runner/work/.../target/.../deps/libjackdaw_dylib.dylib`: in CI
+/// that resolved to whatever a later build left there (a different
+/// resolution, missing a `type_info::CELL` the binary imported), and on a
+/// user's machine it resolves to nothing at all. ELF does not have this
+/// problem because it records only the soname and `$ORIGIN` does the rest.
+///
+/// Three rewrites make the bundle relocatable, mirroring what `$ORIGIN`
+/// gives Linux for free:
+/// - every staged dylib's id becomes `@rpath/<name>`, so anything linked
+///   against the staged copy records a relocatable reference;
+/// - every staged binary's and dylib's load commands pointing at a
+///   staged name are redirected to `@rpath/<name>`;
+/// - the binaries get rpaths for the bundle root and the SDK dirs, so a
+///   dlopened project dylib (whose own references go through `@rpath`
+///   once it links the rewritten SDK) resolves from the running process.
+///
+/// Editing a Mach-O invalidates its code signature, and Apple Silicon
+/// refuses to run unsigned binaries, so every touched file is re-signed
+/// ad hoc.
+fn relocate_macos_install_names(out: &Path, triple: &str) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+    let sdk_dir = out.join("sdk").join(triple);
+    let dylib_dirs = [out.to_path_buf(), sdk_dir.clone(), sdk_dir.join("deps")];
+    let mut dylibs: Vec<PathBuf> = Vec::new();
+    for dir in &dylib_dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "dylib") {
+                dylibs.push(path);
+            }
+        }
+    }
+    let staged_names: std::collections::BTreeSet<String> = dylibs
+        .iter()
+        .filter_map(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .collect();
+
+    let binaries: Vec<PathBuf> = ["jackdaw", "jd", "jackdaw-runner", "jackdaw-rustc-wrapper"]
+        .iter()
+        .map(|b| out.join(b))
+        .filter(|p| p.is_file())
+        .collect();
+
+    for dylib in &dylibs {
+        let name = dylib.file_name().expect("staged dylib has a name");
+        let mut id = std::ffi::OsString::from("@rpath/");
+        id.push(name);
+        run_tool(
+            Command::new("install_name_tool")
+                .arg("-id")
+                .arg(&id)
+                .arg(dylib),
+        )?;
+    }
+    for file in dylibs.iter().chain(binaries.iter()) {
+        for dep in macho_load_paths(file)? {
+            let Some(base) = Path::new(&dep).file_name() else {
+                continue;
+            };
+            let base_str = base.to_string_lossy();
+            if !staged_names.contains(base_str.as_ref()) || dep.starts_with("@rpath/") {
+                continue;
+            }
+            let mut target = std::ffi::OsString::from("@rpath/");
+            target.push(base);
+            run_tool(
+                Command::new("install_name_tool")
+                    .arg("-change")
+                    .arg(&dep)
+                    .arg(&target)
+                    .arg(file),
+            )?;
+        }
+    }
+    for bin in &binaries {
+        for rpath in [
+            "@loader_path".to_string(),
+            format!("@loader_path/sdk/{triple}"),
+            format!("@loader_path/sdk/{triple}/deps"),
+        ] {
+            // Duplicate rpaths are an error from the tool and fine for
+            // us: the link itself already added `@loader_path`.
+            let _ = Command::new("install_name_tool")
+                .args(["-add_rpath", &rpath])
+                .arg(bin)
+                .output();
+        }
+    }
+    for file in dylibs.iter().chain(binaries.iter()) {
+        run_tool(
+            Command::new("codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(file),
+        )?;
+    }
+    Ok(())
+}
+
+/// The dependency paths in a Mach-O file's load commands, via `otool -L`.
+fn macho_load_paths(file: &Path) -> Result<Vec<String>, String> {
+    let output = Command::new("otool")
+        .arg("-L")
+        .arg(file)
+        .output()
+        .map_err(|e| format!("running otool on {}: {e}", file.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "otool -L {} failed: {}",
+            file.display(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    // Lines after the header are `\t<path> (compatibility version ...)`.
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.trim_start().split_whitespace().next())
+        .map(str::to_string)
+        .collect())
+}
+
+fn run_tool(cmd: &mut Command) -> Result<(), String> {
+    let output = cmd
+        .output()
+        .map_err(|e| format!("running {:?}: {e}", cmd.get_program()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{:?} failed: {}",
+            cmd.get_program(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
 }
 
 /// The pinned toolchain's target lib dir, where the dynamic `libstd`
