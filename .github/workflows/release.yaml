@@ -192,6 +192,14 @@ jobs:
             # rpath. Leaving RUSTFLAGS unset also preserves the rust-lld
             # linker that .cargo/config.toml selects for the MSVC target.
             rpath: ""
+            # Thin LTO on the binaries breaks the split-dylib link on PE
+            # and only there: LTO-recompiled rlib code references bevy
+            # `type_info::CELL` statics directly, and PE cannot import
+            # data without dllimport at codegen. The identical build
+            # links with LTO off (measured: 20 undefined CELLs with
+            # thin, zero without). ELF and Mach-O import data fine, so
+            # the other platforms keep thin LTO.
+            lto: "off"
             archive: zip
     defaults:
       run:
@@ -227,6 +235,14 @@ jobs:
           # in a row. The build is the same work whether the test after
           # it passed.
           cache-on-failure: true
+
+      # The per-platform profile override, for every cargo invocation in
+      # the job: the smoke test compiles at release too, and a step that
+      # resolved a different profile would rebuild the graph and mix
+      # artifact generations.
+      - name: Pin the release profile for the whole job
+        if: matrix.lto != ''
+        run: echo "CARGO_PROFILE_RELEASE_LTO=${{ matrix.lto }}" >> "$GITHUB_ENV"
 
       # Every cargo invocation in this job, not just the one that builds
       # the binaries: the later steps rebuild the same graph, and a
