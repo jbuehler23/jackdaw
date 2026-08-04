@@ -226,12 +226,18 @@ fn describe_externs(args: &[OsString]) -> String {
 /// through the dylib. The primary package additionally gets
 /// `--extern jackdaw_api=` injected.
 ///
-/// Host-side units (no `--target` flag) pass through untouched. Every
-/// target-side unit is rewritten uniformly, including compiles of
-/// crates the plan itself replaces: a unit compiled vanilla could
-/// consume a rewritten sibling and see two instances of one crate, so
-/// coherence requires the SDK-preferred resolution to apply everywhere
-/// or nowhere.
+/// Host-side units (no `--target` flag) pass through untouched. So do
+/// compiles of crates the plan itself replaces: cargo schedules those
+/// units anyway, but every consumer's edge points at the SDK artifact,
+/// so their output is never consumed. They used to be rewritten "for
+/// coherence", which compiled them against the SDK's resolution instead
+/// of their own graph's: where the two resolutions disagreed (macOS),
+/// the shadow `bevy_image` unit failed to load the SDK's `image` and
+/// took the whole build down for an artifact nothing needed. Vanilla,
+/// a shadow unit consumes its own graph's shadow siblings, which is
+/// self-consistent by construction. Non-replaced units still get every
+/// edge rewritten, so nothing that is actually used sees two instances
+/// of one crate.
 fn rewrite_args(argv: &mut Vec<OsString>, log: bool) -> Result<(), String> {
     let deps = env::var_os(ENV_SDK_DEPS)
         .ok_or_else(|| format!("{ENV_SDK_DEPS} not set; cannot point -L at deps/"))?;
@@ -264,6 +270,18 @@ fn rewrite_args(argv: &mut Vec<OsString>, log: bool) -> Result<(), String> {
     // has a fixed identity, so use that identity directly: only the shim may
     // compile against Jackdaw's merged facade or receive the injected API.
     let is_primary = consumer == PRIMARY_SHIM;
+
+    if !is_primary
+        && let Ok(pkg) = env::var("CARGO_PKG_NAME")
+        && extern_map.replaces(&pkg.replace('-', "_"))
+    {
+        if log {
+            error!(
+                "jackdaw-rustc-wrapper: {pkg} is plan-replaced; compiling its shadow unit vanilla"
+            );
+        }
+        return Ok(());
+    }
 
     let mut redirected = false;
     let mut i = 0;
@@ -420,6 +438,14 @@ impl ExternMap {
             .iter()
             .find(|(c, a, _)| c == consumer && a == alias)
             .map(|(_, _, artifact)| artifact)
+    }
+
+    /// Whether `name` is itself a crate the plan redirects consumers to
+    /// the SDK for. Such a crate still gets compiled by cargo, but its
+    /// artifact is dead weight: every consumer's edge points at the SDK
+    /// copy instead.
+    fn replaces(&self, name: &str) -> bool {
+        self.edges.iter().any(|(_, alias, _)| alias == name)
     }
 }
 
@@ -629,6 +655,23 @@ mod tests {
             "a path that is not there says so: {described}"
         );
         assert!(described.contains("glam=>no path"), "{described}");
+    }
+
+    /// A crate the plan replaces compiles as a shadow unit nothing
+    /// consumes; it must pass through vanilla rather than be crossed
+    /// into the SDK's resolution.
+    #[test]
+    fn plan_replaced_crates_are_recognised() {
+        let map = ExternMap {
+            edges: vec![(
+                "bevy_render@0.19.0".into(),
+                "bevy_image".into(),
+                ext("/sdk/deps/libbevy_image-abc.rlib"),
+            )],
+        };
+        assert!(map.replaces("bevy_image"));
+        assert!(!map.replaces("bevy_render"), "consumers are not replaced");
+        assert!(!map.replaces("my_game"));
     }
 
     /// cargo also emits `--extern <alias>` with no path. Left alone it
