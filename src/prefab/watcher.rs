@@ -89,7 +89,7 @@ fn drain_changes(world: &mut World) {
     };
     let now = Instant::now();
     for path in pending_paths {
-        let canonical = path.canonicalize().unwrap_or(path);
+        let canonical = dunce::canonicalize(&path).unwrap_or(path);
         debounced.push((canonical, now));
     }
     let mut to_reload: Vec<PathBuf> = Vec::new();
@@ -112,7 +112,7 @@ fn drain_changes(world: &mut World) {
             cache
                 .paths()
                 .find(|p| {
-                    p.canonicalize().unwrap_or_else(|_| p.to_path_buf()) == path
+                    dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()) == path
                         || *p == path.as_path()
                 })
                 .map(PathBuf::from)

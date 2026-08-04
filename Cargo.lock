@@ -4744,6 +4744,7 @@ dependencies = [
  "bincode",
  "ctrlc",
  "dirs",
+ "dunce",
  "ehttp",
  "image",
  "include_dir",

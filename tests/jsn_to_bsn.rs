@@ -672,10 +672,10 @@ fn catalog_round_trips_as_bsn() {
     fn project_app(root: &std::path::Path) -> App {
         let mut app = headless_app();
         app.init_resource::<AssetCatalog>();
-        app.world_mut().insert_resource(ProjectRoot {
-            root: root.to_path_buf(),
-            config: jackdaw::project::ProjectConfig::default(),
-        });
+        app.world_mut().insert_resource(ProjectRoot::new(
+            root.to_path_buf(),
+            jackdaw::project::ProjectConfig::default(),
+        ));
         app
     }
 
@@ -788,10 +788,10 @@ fn migration_prompt_detects_converts_and_respects_decline() {
 
     let mut editor = headless_app();
     editor.init_resource::<PendingMigration>();
-    editor.world_mut().insert_resource(ProjectRoot {
-        root: dir.path().to_path_buf(),
-        config: jackdaw::project::ProjectConfig::default(),
-    });
+    editor.world_mut().insert_resource(ProjectRoot::new(
+        dir.path().to_path_buf(),
+        jackdaw::project::ProjectConfig::default(),
+    ));
 
     // Decline: files stay, prompt state clears, detection still fires.
     editor
@@ -854,10 +854,10 @@ fn migration_prompt_detects_and_converts_legacy_projects() {
 
     assert_eq!(count_legacy_files(dir.path()), 1);
 
-    app.world_mut().insert_resource(ProjectRoot {
-        root: dir.path().to_path_buf(),
-        config: jackdaw::project::ProjectConfig::default(),
-    });
+    app.world_mut().insert_resource(ProjectRoot::new(
+        dir.path().to_path_buf(),
+        jackdaw::project::ProjectConfig::default(),
+    ));
 
     // Declining leaves the project untouched and clears the pending state.
     app.world_mut()

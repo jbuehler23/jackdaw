@@ -65,6 +65,14 @@ fn parse_project_config(data: &str) -> Option<ProjectConfig> {
 }
 
 impl ProjectRoot {
+    pub fn new(root: impl Into<PathBuf>, config: ProjectConfig) -> Self {
+        let root = root.into();
+        Self {
+            root: dunce::simplified(&root).to_path_buf(),
+            config,
+        }
+    }
+
     /// The `.jackdaw/` directory: gitignored, regenerated build artifacts
     /// (schema, plan, shim, target) plus local editor state
     /// (`project.json`) and caches (`registry.json`). Committed project data
@@ -76,8 +84,9 @@ impl ProjectRoot {
         self.root.join("assets")
     }
     pub fn to_relative(&self, path: impl AsRef<Path>) -> PathBuf {
-        let path = path.as_ref();
-        path.strip_prefix(&self.root).unwrap_or(path).into()
+        let path = dunce::simplified(path.as_ref());
+        let root = dunce::simplified(&self.root);
+        path.strip_prefix(root).unwrap_or(path).to_path_buf()
     }
 }
 

@@ -122,9 +122,9 @@ jobs:
           -p jackdaw_localization
           -p jackdaw_panels
           -p jackdaw_pie_protocol
-          -p jackdaw_project_build
           -p jackdaw_runtime
           -p jackdaw_scene_types
+          -p jackdaw_schema
           -p jackdaw_ui
           -p jackdaw_widgets
 

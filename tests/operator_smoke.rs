@@ -71,10 +71,10 @@ fn smoke_dispatch_every_operator() {
     // leaving artifacts behind.
     let project_dir = tempfile::tempdir().expect("tempdir");
     app.world_mut()
-        .insert_resource(jackdaw::project::ProjectRoot {
-            root: project_dir.path().to_path_buf(),
-            config: jackdaw::project::ProjectConfig::default(),
-        });
+        .insert_resource(jackdaw::project::ProjectRoot::new(
+            project_dir.path().to_path_buf(),
+            jackdaw::project::ProjectConfig::default(),
+        ));
 
     let ids = util::iter_operator_ids(&mut app);
     // Floor catches "we forgot to register a whole module" regressions.

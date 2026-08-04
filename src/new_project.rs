@@ -199,8 +199,13 @@ mod tests {
     fn rewrite_dep_lines_preserves_features_and_optional() {
         let template =
             "jackdaw_runtime = { version = \"0.5\", features = [\"physics\"], optional = true }\n";
-        let out = rewrite_dep_lines(template, Path::new("/dev/checkout")).unwrap();
-        assert!(out.contains("path = '/dev/checkout/crates/jackdaw_runtime'"));
+        let checkout = Path::new("/dev/checkout");
+        let out = rewrite_dep_lines(template, checkout).unwrap();
+        let expected_path = checkout.join("crates").join("jackdaw_runtime");
+        assert!(
+            out.contains(&format!("path = '{}'", expected_path.display())),
+            "got:\n{out}"
+        );
         assert!(out.contains("features = [\"physics\"]"));
         assert!(out.contains("optional = true"));
     }
@@ -208,17 +213,28 @@ mod tests {
     #[test]
     fn rewrite_dep_lines_ignores_default_features_key() {
         let template = "jackdaw_extension = { version = \"0.5\", default-features = false }\n";
-        let out = rewrite_dep_lines(template, Path::new("/dev/checkout")).unwrap();
-        assert!(out.contains("path = '/dev/checkout/crates/jackdaw_extension'"));
+        let checkout = Path::new("/dev/checkout");
+        let out = rewrite_dep_lines(template, checkout).unwrap();
+        let expected_path = checkout.join("crates").join("jackdaw_extension");
+        assert!(
+            out.contains(&format!("path = '{}'", expected_path.display())),
+            "got:\n{out}"
+        );
         assert!(!out.contains("features ="), "got:\n{out}");
     }
 
     #[test]
     fn rewrite_dep_lines_rewrites_plain_version_strings() {
         let template = "[dependencies]\njackdaw_extension = \"0.5\"\n";
-        let out = rewrite_dep_lines(template, Path::new("/dev/checkout")).unwrap();
+        let checkout = Path::new("/dev/checkout");
+        let out = rewrite_dep_lines(template, checkout).unwrap();
+        let expected_path = checkout.join("crates").join("jackdaw_extension");
         assert!(
-            out.contains("jackdaw_extension = { path = '/dev/checkout/crates/jackdaw_extension' }")
+            out.contains(&format!(
+                "jackdaw_extension = {{ path = '{}' }}",
+                expected_path.display()
+            )),
+            "got:\n{out}"
         );
     }
 

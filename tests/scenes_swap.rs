@@ -496,13 +496,13 @@ fn project_config_persists_tab_paths_and_active_index() {
     .unwrap();
 
     app.world_mut()
-        .insert_resource(jackdaw::project::ProjectRoot {
-            root: tmp_root.clone(),
-            config: ProjectConfig {
+        .insert_resource(jackdaw::project::ProjectRoot::new(
+            tmp_root.clone(),
+            ProjectConfig {
                 name: "test".into(),
                 ..Default::default()
             },
-        });
+        ));
 
     // Open one tab.
     jackdaw::scenes::operators::scene_open_system(app.world_mut(), &scene_path);
