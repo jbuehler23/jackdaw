@@ -352,7 +352,8 @@ fn copy_rust_dependency_dylib(sdk: &SdkPaths, to: &Path, crate_name: &str) -> Re
             sdk.deps.display()
         ));
     }
-    copy(&src, &to.join(file))
+    copy(&src, &to.join(&file))?;
+    copy_import_lib(&src, to)
 }
 
 /// Copy dylibs in `from` whose filename starts with one of `prefixes`.
@@ -398,6 +399,7 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
 
     // The SDK dylib itself.
     copy_into(&sdk.dylib, &triple_out)?;
+    copy_import_lib(&sdk.dylib, &triple_out)?;
 
     // Runtime-closure rlibs, plus a manifest that names them by basename
     // only so the plan resolves them against this install's `deps/`.
@@ -538,10 +540,31 @@ fn copy_dylibs(from: &Path, to: &Path) -> Result<usize, String> {
         if path.extension().is_some_and(|e| e == ext) {
             let name = path.file_name().expect("dir entry has a filename");
             copy(&path, &to.join(name))?;
+            copy_import_lib(&path, to)?;
             count += 1;
         }
     }
     Ok(count)
+}
+
+/// Stage a Windows DLL's import library beside it. Linking against a
+/// DLL goes through its `<name>.dll.lib`, which cargo writes as a
+/// sibling; a bundle that ships only the DLL loads at runtime but
+/// cannot be linked against, so every project build against the staged
+/// SDK failed with every cross-boundary symbol undefined at once. ELF
+/// and Mach-O link against the shared object directly, so elsewhere the
+/// sibling never exists and this is a no-op.
+fn copy_import_lib(dylib: &Path, to: &Path) -> Result<(), String> {
+    let Some(name) = dylib.file_name() else {
+        return Ok(());
+    };
+    let mut lib_name = name.to_os_string();
+    lib_name.push(".lib");
+    let sibling = dylib.with_file_name(&lib_name);
+    if sibling.is_file() {
+        copy(&sibling, &to.join(&lib_name))?;
+    }
+    Ok(())
 }
 
 fn dylib_ext() -> &'static str {
