@@ -1,4 +1,3 @@
-#![expect(clippy::print_stderr, reason = "e2e test prints skip diagnostics")]
 //! End-to-end scaffolding regression: scaffold a game project, build it
 //! as a cargo binary, and assert the template's component reaches the
 //! extracted schema. This is the user's first-run loop (New Game -> build

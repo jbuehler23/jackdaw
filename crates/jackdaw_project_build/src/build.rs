@@ -612,7 +612,7 @@ mod tests {
     }
 
     /// A component library with no plugin is a valid project: it still
-    /// resolves to a ShimSpec, and its shim has no extension ctor.
+    /// resolves to a `ShimSpec`, and its shim has no extension ctor.
     #[test]
     fn a_crate_without_a_plugin_gets_no_extension_ctor() {
         let dir = project(

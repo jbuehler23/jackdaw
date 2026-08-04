@@ -1,3 +1,4 @@
+#![expect(clippy::print_stdout, reason = "test prints progress diagnostics")]
 //! Probe: a built game binary reports its reflected types when run with
 //! `--jackdaw-extract-schema`, so the editor can learn project components
 //! without mapping project code into its own process.

@@ -132,7 +132,9 @@ mod tests {
     /// embedded prefix.
     #[test]
     fn embedded_font_paths_match_registration() {
-        let as_uri = |p: std::path::PathBuf| format!("embedded://{}", p.display());
+        let as_uri = |p: std::path::PathBuf| {
+            format!("embedded://{}", p.display().to_string().replace('\\', "/"))
+        };
         assert_eq!(
             as_uri(embedded_path!("../fonts/lucide.ttf")),
             font_paths::LUCIDE,

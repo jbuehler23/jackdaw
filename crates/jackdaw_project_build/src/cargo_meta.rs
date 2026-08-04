@@ -459,12 +459,8 @@ mod tests {
         let rebased: Vec<(String, String, &[&str], bool)> = packages
             .iter()
             .map(|(name, member, deps, has_lib)| {
-                (
-                    (*name).to_string(),
-                    root.join(member).display().to_string(),
-                    *deps,
-                    *has_lib,
-                )
+                let dir = root.join(member).display().to_string().replace('\\', "/");
+                ((*name).to_string(), dir, *deps, *has_lib)
             })
             .collect();
         let borrowed: Vec<(&str, &str, &[&str], bool)> = rebased

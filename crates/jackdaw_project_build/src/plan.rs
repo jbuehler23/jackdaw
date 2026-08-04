@@ -448,7 +448,7 @@ mod tests {
         // A shipped manifest stores basenames, rebased onto the install deps.
         assert_eq!(
             resolve_artifact("libglam-abc.rlib", deps),
-            "/opt/jackdaw/sdk/x86_64/deps/libglam-abc.rlib"
+            deps.join("libglam-abc.rlib").to_string_lossy()
         );
     }
 }
