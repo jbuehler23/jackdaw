@@ -4,9 +4,9 @@
 //! this copies every workspace library crate and a self-contained pure
 //! `[workspace]` root manifest into an `include_bytes!` table plus a
 //! content hash. A shipped jackdaw extracts this at first use and builds
-//! the SDK (`cargo build -p jackdaw_sdk -p jackdaw_runner -p
+//! the SDK (`cargo build -p jackdaw_sdk -p
 //! jackdaw_rustc_wrapper`) against the user's toolchain; cargo compiles
-//! only those three targets and their closure, so shipping every crate's
+//! only those targets and their closure, so shipping every crate's
 //! source (but not the editor's) keeps the manifest correct without
 //! per-crate dependency surgery.
 //!

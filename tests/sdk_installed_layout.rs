@@ -17,8 +17,8 @@ fn installed_root_points_at_the_bundle_sdk_dir() {
         sdk.dylib.display()
     );
     assert!(
-        sdk.wrapper.starts_with(root) && sdk.runner.starts_with(root),
-        "wrapper and runner ship next to the executable"
+        sdk.wrapper.starts_with(root),
+        "wrapper ships next to the executable"
     );
     assert!(
         !sdk.manifest
@@ -47,7 +47,6 @@ fn explicit_sdk_dir_wins_the_resolution_order() {
         "JACKDAW_SDK_DIR must resolve to the installed layout"
     );
     assert_eq!(resolved.dylib, expected.dylib);
-    assert_eq!(resolved.runner, expected.runner);
 }
 
 /// The dev layout must stay distinct, or a dev checkout would look for an

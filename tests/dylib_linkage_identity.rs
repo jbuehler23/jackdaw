@@ -2,7 +2,7 @@
 //! Compat verification with no user-authored tags, via
 //! [`jackdaw::project_build::linkage`].
 //!
-//! A project dylib built as a Rust dylib keeps its `.rustc` metadata
+//! An extension-style dylib built as a Rust dylib keeps its `.rustc` metadata
 //! section recording every dependency's exact SVH; comparing the
 //! recorded `jackdaw_sdk` hash against the running SDK's own hash
 //! proves the dylib links THE running SDK. The negative control checks

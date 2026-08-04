@@ -1,14 +1,14 @@
-//! The editor's knowledge of the open project's dylib-provided types,
+//! The editor's knowledge of the open project's reflected types,
 //! held as data rather than as loaded code.
 //!
 //! Project component types are never registered as real ECS components
 //! in the editor: a loaded dylib can never be unmapped, so loading
 //! project code into the editor would leak on every refresh. Instead
 //! the out-of-process schema extractor
-//! ([`crate::project_build::schema`]) reports each type's shape, the
+//! ([`jackdaw_schema`]) reports each type's shape, the
 //! editor stores it here, and project components live as dynamic data
 //! backed by the scene document. Their real types exist only in the
-//! game runner at Play time.
+//! game binary at Play time.
 //!
 //! Only types the editor does NOT already know natively are kept here.
 //! Native types (bevy, avian, jackdaw) keep their real registrations
@@ -19,9 +19,9 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 
-use crate::project_build::schema::{ProjectSchema, TypeSchema};
+use jackdaw_schema::{ProjectSchema, TypeSchema};
 
-/// Editor resource: the project's dynamic (dylib-provided) component
+/// Editor resource: the project's dynamic (schema-reported) component
 /// and resource types, keyed by reflect type path. Refreshed from the
 /// extractor on each project build.
 #[derive(Resource, Default)]

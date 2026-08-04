@@ -77,25 +77,62 @@ fn game_builds_against_a_staged_bundle_sdk() {
         sdk.manifest.display()
     );
     assert!(sdk.wrapper.is_file(), "bundle is missing the rustc wrapper");
-    assert!(sdk.runner.is_file(), "bundle is missing the game runner");
     assert!(sdk.dylib_exists(), "bundle is missing the SDK dylib");
     assert!(sdk.lockfile.is_file(), "bundle is missing Cargo.lock");
 
-    // `None` workspace root: an installed bundle has no checkout to fall back on.
+    // Build an extension-style dylib against the staged SDK.
     let build_dir = staging.path().join("build");
     std::fs::create_dir_all(&build_dir).expect("create build dir");
+    let extension_dir = staging.path().join("ext");
+    std::fs::create_dir_all(extension_dir.join("src")).expect("create extension dir");
+    std::fs::write(
+        extension_dir.join("Cargo.toml"),
+        format!(
+            r#"[package]
+            name = "bundle_smoke_ext"
+            version = "0.1.0"
+            edition = "2024"
+            publish = false
+
+            [workspace]
+
+            [dependencies]
+            bevy = {{ version = "0.19", default-features = false }}
+            jackdaw_extension = {{ path = "{}" }}
+            "#,
+            root.join("crates/jackdaw_extension")
+                .display()
+                .to_string()
+                .replace('\\', "/")
+        ),
+    )
+    .expect("write extension Cargo.toml");
+    std::fs::write(
+        extension_dir.join("src/lib.rs"),
+        r#"use bevy::prelude::*;
+            use jackdaw_extension::prelude::*;
+
+            #[derive(Default)]
+            pub struct SmokeExtension;
+
+            impl JackdawExtension for SmokeExtension {
+                fn id(&self) -> String { "bundle_smoke".into() }
+                fn register(&self, _: &mut ExtensionRegistrar<'_>) {}
+            }
+            "#,
+    )
+    .expect("write extension lib");
     let spec = ShimSpec {
-        package_name: "bsn_scene_game".into(),
-        crate_name: "bsn_scene_game".into(),
-        project_root: root.join("tests/fixtures/bsn_game"),
-        game_plugin: Some("GamePlugin".into()),
-        extension_type: None,
+        package_name: "bundle_smoke_ext".into(),
+        crate_name: "bundle_smoke_ext".into(),
+        project_root: extension_dir,
+        extension_type: Some("SmokeExtension".into()),
     };
     let build = build_project_dylib(&spec, &build_dir, &sdk, None, &mut |_| {})
-        .expect("build the fixture game against the bundle SDK");
+        .expect("build an extension dylib against the bundle SDK");
     assert!(
         build.dylib.exists(),
-        "game dylib missing at {}",
+        "extension dylib missing at {}",
         build.dylib.display()
     );
 

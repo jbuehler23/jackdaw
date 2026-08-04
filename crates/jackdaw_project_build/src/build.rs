@@ -1,5 +1,5 @@
-//! Editor-driven project builds: from an open project to a loadable
-//! project dylib.
+//! Editor-driven extension builds: from an open extension project to a
+//! loadable dylib against the SDK.
 //!
 //! The pipeline, per build:
 //!
@@ -26,7 +26,6 @@ use std::process::{Command, Stdio};
 
 use crate::linkage;
 use crate::plan::{self, PlanError, SdkManifest};
-use crate::schema;
 use crate::sdk_paths::SdkPaths;
 use crate::shim::{self, ShimSpec};
 
@@ -96,16 +95,12 @@ pub enum BuildEvent {
     Log(String),
 }
 
-/// A completed project build.
+/// A completed extension dylib build against the SDK.
 pub struct ProjectBuild {
-    /// The verified project dylib.
+    /// The verified extension dylib.
     pub dylib: PathBuf,
     /// Redirect edges in the plan.
     pub edges: usize,
-    /// The project's type schema, extracted out-of-process. `None`
-    /// when extraction could not run (e.g. the runner is not built);
-    /// the editor keeps its previous schema in that case.
-    pub schema: Option<schema::ProjectSchema>,
 }
 
 /// Whether the SDK library is newer than the manifest describing it.
@@ -298,7 +293,7 @@ pub fn build_project_dylib(
     let target_dir = target_root.join(&salt);
     retain_recent_target_dirs(&target_root, &salt);
 
-    // The static SDK links the project dylib against the prebuilt bevy and
+    // The static SDK links the extension dylib against the prebuilt bevy and
     // jackdaw_api rlibs (one shared bevy compilation, matching the editor's
     // TypeIds via the rmeta trick) rather than a dll. Resolve them from the
     // manifest; the shared-dylib path stays as a fallback.
@@ -384,40 +379,14 @@ pub fn build_project_dylib(
         linkage::verify_linkage(&dylib, &sdk.dylib).map_err(ProjectBuildError::Linkage)?;
     }
 
-    // Extract the project's type schema out-of-process so the editor
-    // learns its components without mapping the dylib. A missing runner
-    // or a failed extraction is not fatal: the editor keeps its prior
-    // schema and Play still works.
-    let schema = match schema::run_extractor(&sdk.runner, &dylib) {
-        Ok(schema) => Some(schema),
-        Err(err) => {
-            tracing::warn!("project schema extraction skipped: {err}");
-            None
-        }
-    };
-
-    // Persist the schema so pickup is decoupled from building: the
-    // editor watches this file and refreshes its component types when it
-    // changes, whether this build ran in-process or from a terminal
-    // `jackdaw build`. A write failure is not fatal to the build.
-    if let Some(schema) = &schema
-        && let Err(err) = schema::write_schema(jackdaw_dir, schema)
-    {
-        tracing::warn!("failed to persist project schema: {err}");
-    }
-
-    Ok(ProjectBuild {
-        dylib,
-        edges,
-        schema,
-    })
+    Ok(ProjectBuild { dylib, edges })
 }
 
 /// Turn one line of `cargo --message-format=json-render-diagnostics` into a
 /// [`BuildEvent`]: a finished compile unit bumps `done`; a rendered
 /// diagnostic becomes log lines (also accumulated into `log` for the
 /// compile error). Non-JSON or other records are ignored.
-fn parse_build_line(
+pub(crate) fn parse_build_line(
     line: &str,
     done: &mut u32,
     log: &mut String,
@@ -463,72 +432,26 @@ fn parse_build_line(
 }
 
 /// Build a [`ShimSpec`] for a project from the filesystem alone, no
-/// running editor required. `configured_plugin` is the game plugin the
-/// editor's run config named, when there is one; `None` falls back to
-/// the project's `jackdaw.toml`, then source detection, then the
-/// `GamePlugin` convention. Shared by the editor's in-process build and
+/// running editor required. Shared by the editor's in-process build and
 /// `jd build`.
 ///
 /// In a workspace the target member comes from `jackdaw.toml`'s
 /// `package` key, or from the one member that depends on Bevy. The
 /// shim's path dependency and the source scans then point at that
 /// member's directory, not at the opened root.
-pub fn shim_spec_for_project(root: &Path, configured_plugin: Option<String>) -> Option<ShimSpec> {
+pub fn shim_spec_for_project(root: &Path) -> Result<ShimSpec, crate::cargo_meta::ResolveError> {
     let manifest = crate::project_manifest::ProjectManifest::read(root);
-    let package =
-        crate::cargo_meta::resolve_project_package(root, manifest.package.as_deref()).ok()?;
-    let package_dir = &package.dir;
-    let extension_type = crate::detect::detect_extension(package_dir).map(|(_, name)| name);
-    let detected_plugin = crate::detect::detect_plugin(package_dir, &package.crate_name)
-        .and_then(|p| p.split_once("::").map(|(_, name)| name.to_string()));
-    // The shim pastes this name into `app.add_plugins(<crate>::<name>)`,
-    // so naming a type the crate does not define turns into a compile
-    // error inside a generated crate the user never wrote and is told
-    // not to edit. Every source of the name is checked against what the
-    // crate actually declares, including a configured one: a stale
-    // `plugin` key in `jackdaw.toml` (or one written before the type
-    // was renamed) must not be trusted blindly.
-    //
-    // A project with no plugin at all (a plain component library) is a
-    // valid shape: its shim omits the game entry and still contributes
-    // the crate's reflected types.
-    let found = crate::detect::plugin_paths(package_dir);
-    let resolve = |name: &str| {
-        found
-            .iter()
-            .find(|candidate| {
-                candidate.type_name == name || candidate.crate_path.as_deref() == Some(name)
-            })
-            .and_then(|candidate| candidate.crate_path.clone())
-    };
-    let game_plugin = configured_plugin
-        .or(manifest.plugin)
-        .and_then(|configured| {
-            let resolved = resolve(&configured);
-            if resolved.is_none() {
-                tracing::warn!(
-                    "jackdaw.toml names plugin `{configured}`, which {} does not declare; \
-                     ignoring it",
-                    package.crate_name
-                );
-            }
-            resolved
-        })
-        .or(detected_plugin)
-        .or_else(|| {
-            (extension_type.is_none() && resolve("GamePlugin").is_some())
-                .then(|| "GamePlugin".to_string())
-        });
-    Some(ShimSpec {
+    let package = crate::cargo_meta::resolve_project_package(root, manifest.package.as_deref())?;
+    let extension_type = crate::detect::detect_extension(&package.dir).map(|(_, name)| name);
+    Ok(ShimSpec {
         package_name: package.name,
         crate_name: package.crate_name,
         project_root: package.dir,
-        game_plugin,
         extension_type,
     })
 }
 
-/// The most recently built project dylib under `<jackdaw_dir>/target`,
+/// The most recently built extension dylib under `<jackdaw_dir>/target`,
 /// if there is one. The build keys its target directory by a salt that
 /// only the build knows, so consumers that just want "whatever was built
 /// last" (packaging, tooling) search rather than recompute it.
@@ -688,28 +611,21 @@ mod tests {
         dir
     }
 
-    /// A component library with no plugin is a valid project. Naming a
-    /// `GamePlugin` it does not define would fail the build inside the
-    /// generated shim, where the user cannot see or fix it.
+    /// A component library with no plugin is a valid project: it still
+    /// resolves to a ShimSpec, and its shim has no extension ctor.
     #[test]
-    fn a_crate_without_a_plugin_gets_no_game_entry() {
+    fn a_crate_without_a_plugin_gets_no_extension_ctor() {
         let dir = project(
             "noplugin",
             "use bevy::prelude::*;\n\
              #[derive(Component, Reflect)]\npub struct Health(f32);\n",
         );
-        let spec = shim_spec_for_project(&dir, None).expect("spec");
-        assert_eq!(spec.game_plugin, None);
-        assert!(!shim::lib_source_for_test(&spec).contains("add_plugins"));
-        // The schema extractor is still emitted: the crate's reflected
-        // types are the point of building it.
-        assert!(shim::lib_source_for_test(&spec).contains("jackdaw_extract_schema"));
+        let spec = shim_spec_for_project(&dir).expect("spec");
+        assert!(spec.extension_type.is_none());
+        assert!(!shim::lib_source_for_test(&spec).contains("jackdaw_extension_ctor"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A `plugin` key naming a type the crate does not define (stale,
-    /// renamed, or written by an older importer) must not reach the
-    /// shim: it would fail the build inside the generated crate.
     /// A manifest older than the SDK it describes names artifacts from
     /// a previous build. They are usually still on disk, so the plan
     /// resolves and the failure surfaces only inside rustc, against a
@@ -760,47 +676,6 @@ mod tests {
         std::fs::create_dir_all(dir.join("target").join(host_triple()).join("release")).unwrap();
         let sdk = SdkPaths::for_workspace_profile(&dir, "release");
         assert!(!manifest_predates_sdk(&sdk));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_stale_configured_plugin_is_not_trusted() {
-        let dir = project("stale-key", "pub fn helper() {}\n");
-        std::fs::write(
-            dir.join("jackdaw.toml"),
-            "plugin = \"GamePlugin\"\n[[run]]\nname = \"Play\"\n",
-        )
-        .unwrap();
-        let spec = shim_spec_for_project(&dir, None).expect("spec");
-        assert_eq!(spec.game_plugin, None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A configured plugin that does exist is honoured, and resolved to
-    /// the path the shim can actually name it by.
-    #[test]
-    fn a_configured_plugin_resolves_to_its_module_path() {
-        let dir = project("configured", "pub mod game;\n");
-        std::fs::write(
-            dir.join("src/game.rs"),
-            "impl Plugin for WorldPlugin { fn build(&self, _: &mut App) {} }\n",
-        )
-        .unwrap();
-        std::fs::write(dir.join("jackdaw.toml"), "plugin = \"WorldPlugin\"\n").unwrap();
-        let spec = shim_spec_for_project(&dir, None).expect("spec");
-        assert_eq!(spec.game_plugin.as_deref(), Some("game::WorldPlugin"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn the_game_plugin_convention_still_applies_when_the_type_exists() {
-        let dir = project(
-            "convention",
-            "use bevy::prelude::*;\npub struct GamePlugin;\n\
-             impl Plugin for GamePlugin { fn build(&self, _: &mut App) {} }\n",
-        );
-        let spec = shim_spec_for_project(&dir, None).expect("spec");
-        assert_eq!(spec.game_plugin.as_deref(), Some("GamePlugin"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

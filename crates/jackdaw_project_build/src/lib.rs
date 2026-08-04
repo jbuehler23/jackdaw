@@ -1,11 +1,22 @@
 //! Editor-independent project build pipeline: from an open Bevy project
-//! to a loadable dylib plus its extracted type schema.
+//! to a runnable artifact plus its extracted type schema.
 //!
 //! Depended on by the Jackdaw editor (for its in-process builds) and the
 //! `jackdaw` CLI (`jackdaw build`). Kept bevy-light so the CLI stays
 //! small and the pipeline is reusable outside the editor (for example a
-//! Bevy CLI subcommand): only the `reflect` feature, used by the
-//! throwaway extractor process, pulls bevy.
+//! Bevy CLI subcommand): only the `reflect` feature pulls bevy, and only
+//! for the side that owns the reflected types.
+//!
+//! # Two build paths
+//!
+//! [`build_project_binary`] is what games use: the project is a normal
+//! Bevy app, and `cargo build` in its root is the whole build. The game
+//! keeps its own bevy, its own features, and its own toolchain. Schema
+//! extraction runs the built binary with [`jackdaw_schema::SCHEMA_FLAG`].
+//!
+//! [`build_project_dylib`] is the SDK path for extensions, which must
+//! share the editor's Bevy types and therefore compile against jackdaw's
+//! prebuilt SDK so the artifact can be dlopened in-process.
 
 pub mod bootstrap;
 pub mod cargo_meta;
@@ -13,12 +24,15 @@ pub mod detect;
 pub mod linkage;
 pub mod plan;
 pub mod project_manifest;
-pub mod schema;
 pub mod sdk_paths;
 pub mod shim;
 
+mod binary;
 mod build;
 
+pub use binary::{
+    ProjectBinaryBuild, build_project_binary, detach_from_host_build, prepare_game_command,
+};
 pub use build::{
     BuildEvent, ProjectBuild, ProjectBuildError, build_project_dylib, last_built_dylib, sdk_remedy,
     shim_spec_for_project,

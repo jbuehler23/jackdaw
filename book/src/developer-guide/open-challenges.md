@@ -7,13 +7,13 @@ so we can talk through the approach.
 
 ## Windows dylib hardening
 
-The editor loads project and extension code as dylibs built
-against its SDK proxy. On Windows, the PE binary format has a
-65,535 export cap, and bevy + jackdaw types together push close
-to it; the SDK build routes through `rust-lld` and disables
-incremental codegen to stay linkable. That works, but the export
-count grows with every API surface addition, and the failure
-mode when the cap is hit is a link error deep in the SDK build.
+The editor loads extension code as dylibs built against its SDK
+proxy. On Windows, the PE binary format has a 65,535 export cap,
+and bevy + jackdaw types together push close to it; the SDK build
+routes through `rust-lld` and disables incremental codegen to stay
+linkable. That works, but the export count grows with every API
+surface addition, and the failure mode when the cap is hit is a
+link error deep in the SDK build.
 
 Where to dig in: trimming what the SDK proxy re-exports, and a
 CI check that tracks the export count so a regression is caught
@@ -22,8 +22,8 @@ before it ships.
 ## Play-In-Editor (PIE) depth
 
 PIE is the "click play to run your game" flow. The process model
-is settled: the game always runs out of process, launched by the
-prebuilt runner over IPC, with zero play-time compilation. Frame
+is settled: the game always runs out of process as its own cargo
+binary over IPC, with zero play-time compilation once built. Frame
 streaming into the Game panel, input capture, click-to-select
 picking, and the Live entity tree all shipped; see
 [Play-in-editor](../user-guide/play-in-editor.md).

@@ -1,8 +1,8 @@
-//! Inspector rendering and edit conversions for project (dylib-provided)
+//! Inspector rendering and edit conversions for project (schema-reported)
 //! components.
 //!
-//! These types are never real ECS components in the editor: mapping their
-//! dylib would leak on every refresh, so the editor keeps only the schema
+//! These types are never real ECS components in the editor: mapping
+//! project code would leak on every refresh, so the editor keeps only the schema
 //! extracted out-of-process ([`crate::project_types::ProjectTypes`]) and
 //! stores authored values in the scene document. The inspector renders a
 //! project component by assembling a `DynamicStruct` from the schema field
@@ -16,7 +16,7 @@ use bevy::reflect::PartialReflect;
 
 use jackdaw_bsn::{BsnValue, SceneBsnAst};
 
-use crate::project_build::schema::TypeSchema;
+use jackdaw_schema::TypeSchema;
 
 use super::reflect_fields;
 

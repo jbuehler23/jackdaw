@@ -11,8 +11,8 @@ use serde::Deserialize;
 use crate::event::PieMode;
 
 /// One launchable run configuration. Every run launches the same
-/// project dylib through the game runner; configs differ only in
-/// launch environment, not in what gets built.
+/// game binary; configs differ only in launch environment, not in
+/// what gets built.
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct RunConfig {
     /// Dropdown label; defaults to `Play`.
@@ -49,8 +49,9 @@ impl RunConfig {
 /// The parsed `jackdaw.toml`.
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Manifest {
-    /// The game plugin type inside the project's lib crate. Defaults
-    /// to source detection, then to `GamePlugin`.
+    /// Optional name of the project's root Bevy `Plugin`. Recorded by
+    /// import/setup and checked by doctor; Play launches the cargo
+    /// binary, which adds the plugin itself.
     #[serde(default)]
     pub plugin: Option<String>,
     #[serde(default, rename = "run")]

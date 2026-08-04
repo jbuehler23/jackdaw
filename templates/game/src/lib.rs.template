@@ -24,9 +24,8 @@
 use bevy::prelude::*;
 use jackdaw_runtime::prelude::*;
 
-/// Your game's Bevy plugin. The editor finds it by this name (override
-/// with `plugin = "..."` in jackdaw.toml) and runs it on Play; the
-/// standalone binary adds it in `main.rs`.
+/// Your game's Bevy plugin. `main.rs` adds this for both `cargo run`
+/// and the editor's Play button (same binary).
 #[derive(Default)]
 pub struct GamePlugin;
 

@@ -1,8 +1,8 @@
 # jackdaw project settings. Everything here has a working default;
 # delete any line you are not using.
 
-# The game plugin type inside your lib crate. Uncomment to override
-# source detection.
+# Optional name of your game's root Bevy Plugin (for setup / `jd doctor`).
+# Play runs your cargo binary; add the plugin from `main.rs`.
 # plugin = "GamePlugin"
 
 # In a cargo workspace, the member jackdaw builds as the game.

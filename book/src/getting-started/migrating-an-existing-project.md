@@ -111,6 +111,6 @@ pub struct PlayerSpawn;
 
 Use **Rebuild Project** or `jd build`. Manual build is the default; **Toggle
 Auto Build** opts in and persists that choice for this project. Play launches
-the already-built library in a separate `jackdaw-runner` process.
+the project's own cargo binary in a separate process.
 
 Authored `.bsn` scenes are loaded in the game through `jackdaw_runtime`.

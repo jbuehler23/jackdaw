@@ -7,10 +7,10 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [features]
-# Pulls bevy reflection for `schema::extract_from_registry`, used by the
-# throwaway extractor process (the game runner). The editor and CLI
-# consume the wire schema without it.
-reflect = ["dep:bevy", "dep:jackdaw_scene_types"]
+# Pulls bevy reflection for jackdaw_schema's extractors, used by a
+# process that owns the reflected types. The editor and CLI consume the
+# wire schema without it.
+reflect = ["jackdaw_schema/reflect"]
 # Bake the SDK-builder recipe into the binary so a shipped jackdaw can
 # bootstrap its SDK on first use. Off by default: assembling and
 # embedding the crate sources is only wanted in packaged release builds,
@@ -26,8 +26,7 @@ serde_json.workspace = true
 syn = { version = "2", features = ["full", "parsing"] }
 toml = "0.8"
 tracing = { workspace = true }
-bevy = { workspace = true, optional = true }
-jackdaw_scene_types = { workspace = true, optional = true }
+jackdaw_schema.workspace = true
 
 [build-dependencies]
 # The build script assembles the embedded SDK-builder recipe: it parses

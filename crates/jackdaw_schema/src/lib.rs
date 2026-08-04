@@ -1,30 +1,38 @@
 //! Project type schema: the data the editor needs about a project's
-//! reflected types, extracted out-of-process so the editor never maps
-//! project code.
-//!
-//! A loaded dylib can never be unmapped (bevy pins component
-//! descriptors; live code cannot be unloaded), so loading project code
-//! into the editor leaks on every refresh. Instead a throwaway process
-//! (the game runner in `--extract-schema` mode) dlopens the freshly
-//! built dylib, drains its reflected types, serializes this schema to
-//! stdout, and exits. The editor reads the schema and represents
-//! project components as dynamic data backed by the scene document;
-//! their real types live only in the game runner at Play time.
-//!
-//! These types are the wire format shared by the extractor (which
-//! writes them) and the editor (which reads them). They are plain
-//! serde so no reflection is needed to consume them.
+//! reflected types, produced by the project itself and consumed by the
+//! editor as plain data.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// The argument that puts a game into schema-reporting mode.
+///
+/// The editor/build pipeline passes this; `jackdaw_runtime` answers it.
+/// One constant so the two halves cannot drift.
+pub const SCHEMA_FLAG: &str = "--jackdaw-extract-schema";
+
+/// Parse an extractor's stdout into a [`ProjectSchema`].
+///
+/// The whole stream is tried first. Games may print during startup, so
+/// a stray line before the payload falls back to scanning for the line
+/// that parses rather than failing over unrelated output.
+pub fn parse_from_stdout(stdout: &[u8]) -> Result<ProjectSchema, String> {
+    if let Ok(schema) = serde_json::from_slice::<ProjectSchema>(stdout) {
+        return Ok(schema);
+    }
+    let text = String::from_utf8_lossy(stdout);
+    text.lines()
+        .rev()
+        .find_map(|line| serde_json::from_str::<ProjectSchema>(line.trim()).ok())
+        .ok_or_else(|| "extractor produced no parseable schema on stdout".to_string())
+}
+
 /// The on-disk schema file for a project, under its `.jackdaw/` dir.
 /// This file is the decoupling point between building and pickup:
-/// whoever builds the project (the editor's in-process build, or a
-/// `jackdaw build` from the terminal) writes it, and the editor watches
-/// it to refresh its known component types. One artifact, one consumer,
-/// regardless of who triggered the build.
+/// whoever builds the project (the editor's build, or a `jd build` from
+/// the terminal) writes it, and the editor watches it to refresh its
+/// known component types.
 pub fn schema_path(jackdaw_dir: &Path) -> PathBuf {
     jackdaw_dir.join("schema.json")
 }
@@ -49,30 +57,6 @@ pub fn read_schema(jackdaw_dir: &Path) -> Option<ProjectSchema> {
     let path = schema_path(jackdaw_dir);
     let bytes = std::fs::read(&path).ok()?;
     serde_json::from_slice(&bytes).ok()
-}
-
-/// Run the schema extractor (`jackdaw-runner --extract-schema`) on a
-/// built project dylib and parse its output. This is how the editor
-/// learns a project's types without mapping project code: the
-/// subprocess dlopens the dylib and dies, taking the mapping with it.
-/// A missing runner or a nonzero exit yields an error the caller can
-/// treat as "no schema this build" rather than a hard failure.
-pub fn run_extractor(runner: &Path, dylib: &Path) -> Result<ProjectSchema, String> {
-    if !runner.is_file() {
-        return Err(format!("runner not found at {}", runner.display()));
-    }
-    let output = std::process::Command::new(runner)
-        .arg("--extract-schema")
-        .arg(dylib)
-        .output()
-        .map_err(|e| format!("spawn extractor: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "extractor failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    serde_json::from_slice(&output.stdout).map_err(|e| format!("parse extractor output: {e}"))
 }
 
 /// Everything the editor learns about one project build.
@@ -139,10 +123,21 @@ mod extract {
     use bevy::reflect::{TypeInfo, TypeRegistration, TypeRegistry};
     use jackdaw_scene_types::{EditorCategory, EditorDescription, EditorHidden};
 
+    /// Build the schema for this process's reflected types.
+    ///
+    /// Reads the link-time auto-registration inventory rather than a
+    /// running `App`, so it does not matter whether (or in what order)
+    /// the game's plugins have been added. That is what lets a game
+    /// answer the schema flag before it builds anything.
+    pub fn extract_derived_schema() -> ProjectSchema {
+        let mut registry = TypeRegistry::default();
+        registry.register_derived_types();
+        extract_from_registry(&registry)
+    }
+
     /// Build the schema for every reflected `Component` and `Resource`
-    /// in `registry`. The caller drains the project dylib's types into
-    /// `registry` first (via `register_derived_types`). Everything is
-    /// dumped; the editor filters to types it does not already know.
+    /// in `registry`. Everything is dumped; the editor filters to types
+    /// it does not already know.
     pub fn extract_from_registry(registry: &TypeRegistry) -> ProjectSchema {
         let mut schema = ProjectSchema::default();
         for registration in registry.iter() {
@@ -245,4 +240,26 @@ mod extract {
 }
 
 #[cfg(feature = "reflect")]
-pub use extract::extract_from_registry;
+pub use extract::{extract_derived_schema, extract_from_registry};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_stdout_parses() {
+        let json = br#"{"components":[],"resources":[]}"#;
+        assert!(parse_from_stdout(json).is_ok());
+    }
+
+    #[test]
+    fn a_leading_log_line_does_not_defeat_parsing() {
+        let noisy = b"starting up\n{\"components\":[],\"resources\":[]}\n";
+        assert!(parse_from_stdout(noisy).is_ok());
+    }
+
+    #[test]
+    fn output_without_a_schema_is_an_error() {
+        assert!(parse_from_stdout(b"no schema here\n").is_err());
+    }
+}

@@ -2,7 +2,7 @@ name: Onboarding pipeline
 
 # These probes are the regression suite for the SDK build pipeline
 # (extern redirect plan, linkage identity, auto-registration across
-# dlopen, and the game runner over PIE IPC). They build the whole
+# dlopen, and game binary Play over PIE IPC). They build the whole
 # editor with the dylib feature per platform, so they are kept off the
 # per-PR path: they run on pushes to main (which also warms the per-OS
 # cache), on release tags, nightly, and on demand.
@@ -61,11 +61,10 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: onboarding-${{ matrix.os }}
 
-      - name: Build the SDK, runner, and wrapper
+      - name: Build the SDK and wrapper
         run: |
           set -euxo pipefail
           cargo build -j 4 -p jackdaw --features dylib --target "$TRIPLE"
-          cargo build -j 4 -p jackdaw_runner --target "$TRIPLE"
           cargo build -p jackdaw_rustc_wrapper
 
       - name: Auto-registration across dlopen
@@ -78,7 +77,7 @@ jobs:
         run: cargo test -j 4 --features dylib --target "$TRIPLE" --test extern_redirect_ecosystem -- --nocapture
 
       - name: Schema extraction
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test schema_extract -- --nocapture
+        run: cargo test -j 4 --test schema_extract -- --nocapture
 
       - name: Component shape refresh
         run: cargo test -j 4 --features dylib --target "$TRIPLE" --test component_shape_refresh -- --nocapture
@@ -91,15 +90,14 @@ jobs:
 
       - name: Scaffold end-to-end (scaffold -> build -> schema)
         # The user's first-run loop headlessly: scaffold a game, build its
-        # dylib against the SDK, and confirm the template component reaches
-        # the schema. No GPU needed, so it runs on all three platforms.
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test scaffold_e2e -- --nocapture
+        # binary, and confirm the template component reaches the schema.
+        run: cargo test -j 4 --test scaffold_e2e -- --nocapture
 
-      - name: Game runner over PIE IPC
-        # Headless runners have no GPU on every platform; the runner
+      - name: Game binary over PIE IPC
+        # Headless runners have no GPU on every platform; the Play
         # test needs a working wgpu adapter for the Frames lane, so it
         # runs only where lavapipe provides one.
         if: runner.os == 'Linux'
         run: |
           sudo apt-get install --no-install-recommends -y mesa-vulkan-drivers
-          cargo test -j 4 --features dylib --target "$TRIPLE" --test runner_boots_project_dylib -- --nocapture
+          cargo test -j 4 --test bsn_game_run -- --nocapture

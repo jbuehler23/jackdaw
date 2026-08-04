@@ -30,6 +30,12 @@ mod pie_windowless;
 #[cfg(feature = "pie")]
 pub use pie_windowless::{maybe_windowless, windowless_requested};
 
+mod schema_cli;
+pub use schema_cli::{
+    SCHEMA_FLAG, extract_schema_and_exit_if_requested, extract_schema_json,
+    schema_extraction_requested,
+};
+
 pub mod prelude {
     pub use crate::{
         EditorCategory, EditorDescription, EditorHidden, JackdawCatalog, JackdawCatalogPath,
@@ -41,6 +47,13 @@ pub struct JackdawPlugin;
 
 impl Plugin for JackdawPlugin {
     fn build(&self, app: &mut App) {
+        // The editor asks for this binary's reflected types by launching
+        // it with `--jackdaw-extract-schema`. Handle that here so every
+        // game that adds `JackdawPlugin` answers that. Extraction reads
+        // the link-time reflect inventory, not `app`, and exits before
+        // `App::run` opens a window.
+        schema_cli::extract_schema_and_exit_if_requested();
+
         // Registers every scene type for reflection and installs
         // `MeshRebuildPlugin` (which embeds the bundled grid texture
         // used as the brush fallback material).

@@ -177,15 +177,14 @@ pub fn operator_labels(app: &mut App, id: &str) -> Vec<&'static str> {
         .collect()
 }
 
-/// Launch `jackdaw-runner` windowless against a built project dylib, wait for
+/// Launch a built game binary windowless over the PIE link, wait for
 /// the game to report `BSN_SCENE_LOADED ... has_target=true` on stderr, and
 /// return whether it did along with the captured stderr. Shared by the
-/// end-to-end runner tests.
+/// end-to-end Play tests.
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
-#[allow(dead_code, reason = "only the dylib/runner e2e tests use this")]
+#[allow(dead_code, reason = "only the binary Play e2e tests use this")]
 pub fn run_windowless_game(
-    runner: &std::path::Path,
-    dylib: &std::path::Path,
+    binary: &std::path::Path,
     cwd: &std::path::Path,
     extra_env: &[(&str, &std::ffi::OsStr)],
 ) -> (bool, String) {
@@ -194,9 +193,9 @@ pub fn run_windowless_game(
     use std::time::{Duration, Instant};
 
     let (handle, server_name) = jackdaw_pie_protocol::serve().expect("open the ipc rendezvous");
-    let mut command = std::process::Command::new(runner);
+    let mut command = std::process::Command::new(binary);
+    jackdaw_project_build::prepare_game_command(&mut command, binary);
     command
-        .arg(dylib)
         .current_dir(cwd)
         .env("JACKDAW_PIE", &server_name)
         .env("JACKDAW_PIE_WINDOWLESS", "1")
@@ -204,7 +203,7 @@ pub fn run_windowless_game(
     for (key, value) in extra_env {
         command.env(key, value);
     }
-    let mut child = command.spawn().expect("spawn the runner");
+    let mut child = command.spawn().expect("spawn the game");
 
     let child_stderr = child.stderr.take().expect("piped stderr");
     let stderr_buf = Arc::new(Mutex::new(String::new()));
@@ -228,7 +227,7 @@ pub fn run_windowless_game(
     });
     let _transport = accept_rx
         .recv_timeout(Duration::from_secs(90))
-        .expect("the runner never connected to the PIE link")
+        .expect("the game never connected to the PIE link")
         .expect("ipc accept failed");
 
     let deadline = Instant::now() + Duration::from_secs(90);

@@ -2,7 +2,7 @@
 //! A project must never resolve a feature the SDK it links did not.
 //!
 //! Cargo resolves features per package selection. The SDK is built from
-//! `jackdaw_sdk` (plus the runner); a project is built from the shim
+//! `jackdaw_sdk`; a project is built from the shim
 //! rooted at the user's crate. When the project's selection turns on a
 //! feature the SDK's did not, the project compiles code expecting an
 //! impl that the SDK rlib it links was built without, and rustc reports
@@ -105,8 +105,7 @@ fn scaffold_with_shim(root: &Path) -> Result<PathBuf, String> {
     scaffold_new_project(root, "featureprobe", TemplateKind::Game)
         .map_err(|e| format!("scaffold {}: {e}", root.display()))?;
 
-    let spec = shim_spec_for_project(root, None)
-        .ok_or_else(|| format!("{} has no lib crate to build", root.display()))?;
+    let spec = shim_spec_for_project(root).map_err(|error| error.to_string())?;
     shim::ensure_shim(&spec, &root.join(".jackdaw")).map_err(|e| format!("generate shim: {e}"))
 }
 
@@ -124,7 +123,7 @@ fn skip_or_fail(reason: &str) {
 #[test]
 fn a_project_resolves_no_feature_the_sdk_lacks() {
     let workspace = workspace_root();
-    let sdk = match resolved_features(&workspace, &["jackdaw_sdk", "jackdaw_runner"]) {
+    let sdk = match resolved_features(&workspace, &["jackdaw_sdk"]) {
         Ok(features) => features,
         Err(reason) => return skip_or_fail(&reason),
     };

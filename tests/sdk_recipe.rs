@@ -103,7 +103,7 @@ fn the_recipe_contains_every_package_the_sdk_build_names() {
         eprintln!("SKIP: no embedded recipe in this build");
         return;
     };
-    for package in ["jackdaw_sdk", "jackdaw_runner", "jackdaw_rustc_wrapper"] {
+    for package in ["jackdaw_sdk", "jackdaw_rustc_wrapper"] {
         assert!(
             dir.join("crates")
                 .join(package)

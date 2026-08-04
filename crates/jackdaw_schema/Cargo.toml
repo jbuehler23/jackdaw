@@ -1,0 +1,24 @@
+[package]
+name = "jackdaw_schema"
+version.workspace = true
+edition = "2024"
+description = "Project type schema wire format shared by the Jackdaw editor and the games it builds"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[features]
+reflect = ["dep:bevy", "dep:jackdaw_scene_types"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+bevy = { version = "0.19", default-features = false, optional = true, features = [
+    "std",
+    "serialize",
+    "reflect_auto_register",
+    "reflect_documentation",
+] }
+jackdaw_scene_types = { version = "0.19.0", path = "../jackdaw_scene_types", optional = true, default-features = false }
+
+[lints]
+workspace = true

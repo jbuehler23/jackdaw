@@ -513,12 +513,12 @@ impl EditorCommand for AddComponent {
     }
 }
 
-/// Add a project (dylib-provided) component to an entity as a
-/// document-only patch. Project types are never registered as real ECS
-/// components in the editor -- loading their dylib would leak -- so the
-/// component lives purely in the scene document as a default-valued
-/// struct patch, editable through the inspector's document path and
-/// materialized as a real component only in the game runner at Play.
+/// Add a project component to an entity as a document-only patch.
+/// Project types are never registered as real ECS components in the
+/// editor -- loading their code would leak -- so the component lives
+/// purely in the scene document as a default-valued struct patch,
+/// editable through the inspector's document path and materialized as
+/// a real component only in the game binary at Play.
 pub struct AddProjectComponent {
     pub entity: Entity,
     pub type_path: String,
@@ -1264,7 +1264,7 @@ pub(crate) fn json_field_edit_to_bsn_value(
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
     let Some(registration) = registry.get_with_type_path(type_path) else {
-        // Project (dylib-provided) components have no editor registration; the
+        // Project (schema-reported) components have no editor registration; the
         // field's authored value comes straight from the extracted schema type.
         drop(registry);
         return project_field_edit_to_bsn_value(world, type_path, field_path, value);
@@ -1292,7 +1292,7 @@ pub(crate) fn json_field_edit_to_bsn_value(
     Some(jackdaw_bsn::BsnValue::from_reflect(field, &registry))
 }
 
-/// Convert a field edit on a project (dylib-provided) component into the
+/// Convert a field edit on a project (schema-reported) component into the
 /// [`jackdaw_bsn::BsnValue`] to author, without an editor registration. The
 /// field's scalar variant is chosen from its schema type path.
 fn project_field_edit_to_bsn_value(

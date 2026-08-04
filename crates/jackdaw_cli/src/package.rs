@@ -9,7 +9,6 @@
 //! ```text
 //! <out>/
 //!   jackdaw-rustc-wrapper
-//!   jackdaw-runner            (when built; schema extraction needs it)
 //!   Cargo.lock
 //!   toolchain.txt
 //!   sdk/
@@ -61,8 +60,8 @@ pub fn cmd_package_sdk(args: &[String]) -> ExitCode {
 
 /// `cargo xtask bundle --out <dir> [--workspace <path>]`: the full
 /// downloadable release layout - the SDK layout (`package-sdk`) plus the
-/// editor, the CLI, and the three runtime dylibs the editor and runner
-/// load, staged at the bundle root beside the binaries. Combined with a
+/// editor, the CLI, and the runtime dylibs the editor loads, staged at
+/// the bundle root beside the binaries. Combined with a
 /// `rpath=$ORIGIN` link (set via RUSTFLAGS in the release build), the
 /// archive runs offline with no bootstrap: extract and launch.
 pub fn cmd_bundle(args: &[String]) -> ExitCode {
@@ -91,7 +90,7 @@ pub fn cmd_bundle(args: &[String]) -> ExitCode {
 }
 
 fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
-    // The SDK layout first (sdk/, wrapper, runner, Cargo.lock, toolchain).
+    // The SDK layout first (sdk/, wrapper, Cargo.lock, toolchain).
     let sdk_summary = package(workspace, out)?;
     let sdk = SdkPaths::for_workspace_profile(workspace, "release");
     let profile_dir = sdk
@@ -99,7 +98,7 @@ fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
         .parent()
         .ok_or_else(|| "release SDK dylib has no parent dir".to_string())?;
 
-    // The editor and public CLI, staged beside the SDK's wrapper and runner.
+    // The editor and public CLI, staged beside the SDK's wrapper.
     // EXE_SUFFIX is `.exe` on Windows, empty elsewhere.
     for bin in ["jackdaw", "jd"] {
         let name = format!("{bin}{}", std::env::consts::EXE_SUFFIX);
@@ -110,7 +109,7 @@ fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
         copy_into(&src, out)?;
     }
 
-    // The runtime cdylibs the editor and runner NEED, at the bundle root so
+    // The runtime cdylibs the editor NEED, at the bundle root so
     // a `rpath=$ORIGIN` link resolves them: bevy + jackdaw from the deps
     // dir, and std from the pinned toolchain (it is not in the workspace
     // build). Project dylibs NEED the same sonames, so a loaded project
@@ -214,10 +213,10 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     }
     write(&sdk_out.join("manifest.txt"), &shipped_manifest)?;
 
-    // Runtime cdylibs the project links through under `prefer-dynamic`:
+    // Runtime cdylibs extension dylibs link through under `prefer-dynamic`:
     // the bevy and jackdaw dylibs sit beside the closure rlibs in the
-    // triple deps dir, not in the manifest (which lists only rlibs). A
-    // project dylib NEEDs them by soname, so the linker has to find them
+    // triple deps dir, not in the manifest (which lists only rlibs). An
+    // extension dylib NEEDs them by soname, so the linker has to find them
     // on the deps search path. (`libstd` is not among them: rustc resolves
     // it from its own sysroot at link time, and the editor bundle ships it
     // for load time.)
@@ -228,18 +227,6 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
 
     // Host tools next to the editor.
     copy_into(&sdk.wrapper, out)?;
-    let runner_note = if sdk.runner.is_file() {
-        copy_into(&sdk.runner, out)?;
-        "runner"
-    } else {
-        eprintln!(
-            "jackdaw package-sdk: warning: runner not built at {}; schema extraction \
-             will be unavailable (cargo build --release --target {} -p jackdaw_runner)",
-            sdk.runner.display(),
-            sdk.triple
-        );
-        "no runner"
-    };
 
     // The SDK's exact lockfile and toolchain, so a project resolves the
     // shared closure at the same versions and compiles with the same rustc.
@@ -251,7 +238,7 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     }
 
     Ok(format!(
-        "{rlibs} rlibs, {cdylibs} runtime cdylibs, {macros} proc-macro dylibs, {runner_note}"
+        "{rlibs} rlibs, {cdylibs} runtime cdylibs, {macros} proc-macro dylibs"
     ))
 }
 

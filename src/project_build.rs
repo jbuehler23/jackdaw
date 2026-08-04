@@ -4,6 +4,7 @@
 //! pipeline moved to its own bevy-light crate.
 
 pub use jackdaw_project_build::{
-    BuildEvent, ProjectBuild, ProjectBuildError, build_project_dylib, cargo_meta, linkage, plan,
-    project_manifest, schema, shim, shim_spec_for_project,
+    BuildEvent, ProjectBinaryBuild, ProjectBuild, ProjectBuildError, build_project_binary,
+    build_project_dylib, cargo_meta, detach_from_host_build, linkage, plan, prepare_game_command,
+    project_manifest, shim, shim_spec_for_project,
 };

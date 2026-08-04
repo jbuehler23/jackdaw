@@ -21,15 +21,15 @@ App::new()
 
 `JackdawEditorPlugins` pulls in everything jackdaw needs: the launcher,
 viewport, hierarchy, inspector, brush tools, asset browser,
-scene IO, and the extension loader. Project code is not compiled
-into this binary; it arrives as a dynamic library the editor
-builds and loads per project (see below).
+scene IO, and the extension loader. Game project code is not
+compiled into this binary; the editor builds the project's own
+cargo binary and talks to it out of process (see below).
 
-The user's `GamePlugin` is used by the standalone game. The game
-doesn't add `JackdawEditorPlugins`; it adds
-`JackdawPlugin` from `jackdaw_runtime`, which is a much smaller
-plugin that knows how to load authored scenes but doesn't include
-any UI.
+The game's `main` adds `JackdawPlugin` from `jackdaw_runtime`,
+which knows how to load authored scenes and answer schema
+queries, but includes none of the editor UI. Gameplay usually
+lives in a Bevy plugin (often named `GamePlugin`) that `main`
+adds alongside it.
 
 `WindowPlugin` is set by `editor_window_plugin()`.
 
@@ -48,25 +48,20 @@ You can read the transitions in `src/lib.rs` and
 
 ## Project code in the editor
 
-A jackdaw project is a normal Bevy crate. When you open one, the
-editor generates a shim crate into the project's gitignored
-`.jackdaw/` directory and builds the project's library as a
-dynamic library against the editor's SDK (a proxy dylib carrying
-the one compiled copy of bevy + jackdaw types the editor and
-everything it loads share). The build runs in the background;
-when it finishes, an out-of-process extractor reports the project's reflected
-schema. The editor represents those types as data rather than mapping game
-code into its process.
+A jackdaw game is a normal Bevy binary. When you open one, the
+editor runs `cargo build` in the project root (sharing the user's
+`Cargo.toml`, lockfile, target dir, and toolchain) and asks the
+freshly built executable for its reflected type schema via
+`--jackdaw-extract-schema`. The editor represents those types as
+data rather than mapping game code into its process.
 
-The editor owns this build completely: it lives in
-`.jackdaw/target/`, and the user's own `Cargo.toml`,
-`Cargo.lock`, `target/`, and toolchain are never touched. A plain
-`cargo run` in the project compiles ordinary crates.io Bevy.
+Play is the same artifact: the editor launches the project's own
+binary as a child process and talks to it over IPC. What you Play
+is what `cargo run` would run, and a game crash cannot take down
+the editor.
 
-Play is out of process: the editor launches a prebuilt
-`jackdaw-runner` binary that loads the same already-built project
-dylib and talks to the editor over IPC. Nothing compiles at play
-time, and a game crash cannot take down the editor.
+Editor extensions build as dylibs against the SDK so they can
+share the editor's Bevy types and load in-process.
 
 ## Scene format
 
@@ -133,10 +128,10 @@ keybinds. See [Extending the Editor](extending-the-editor.md)
 for the full story.
 
 The dylib loader is `crates/jackdaw_loader`. The proxy dylib
-that projects and extensions link against is
-`crates/jackdaw_sdk`. The rustc wrapper at
-`crates/jackdaw_rustc_wrapper` rewrites `--extern bevy=...` so
-loaded code and the editor share one compiled copy of bevy types.
+that extensions link against is `crates/jackdaw_sdk`. The
+rustc wrapper at `crates/jackdaw_rustc_wrapper` rewrites
+`--extern bevy=...` so loaded extensions and the editor share
+one compiled copy of bevy types.
 
 ## What's not here yet
 

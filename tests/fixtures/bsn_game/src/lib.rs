@@ -2,11 +2,10 @@
 //! `.bsn` scene at runtime through `JackdawPlugin`.
 //!
 //! `GamePlugin` spawns a `JackdawSceneRoot` pointing at `assets/scene.bsn`
-//! at startup; the SDK's `JackdawPlugin` (added by
-//! `jackdaw_api::__run_project_game`) then parses that file and spawns its
-//! entities. An update system watches for the authored marker entity
-//! (`SceneNodeId(999)`) and, once it appears, prints a unique stderr line
-//! carrying real counts read out of the live world.
+//! at startup; `JackdawPlugin` (added from `main`) then parses that file
+//! and spawns its entities. An update system watches for the authored
+//! marker entity (`SceneNodeId(999)`) and, once it appears, prints a
+//! unique stderr line carrying real counts read out of the live world.
 
 use bevy::prelude::*;
 use jackdaw_runtime::prelude::*;

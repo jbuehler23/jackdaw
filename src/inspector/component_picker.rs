@@ -321,7 +321,7 @@ pub(crate) fn on_add_component_button_click(
             })
             .collect();
 
-    // Project (dylib-provided) components are not real ECS components in the
+    // Project (schema-reported) components are not real ECS components in the
     // editor, so they never appear in the registry pass above. They live as
     // schema entries; add each one the target does not already carry in the
     // scene document.

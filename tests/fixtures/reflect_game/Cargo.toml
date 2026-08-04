@@ -7,9 +7,12 @@ publish = false
 # Standalone: detach from the jackdaw workspace this directory sits inside.
 [workspace]
 
-
 [dependencies]
-# reflect_auto_register makes the Reflect derive emit inventory
-# submissions; the submission target resolves into the SDK's shared
-# bevy_reflect at link time.
-bevy = { version = "0.19", default-features = false, features = ["reflect_auto_register"] }
+bevy = { version = "0.19", default-features = false, features = [
+    "std",
+    "serialize",
+    "reflect_auto_register",
+    "reflect_documentation",
+    "bevy_log",
+] }
+jackdaw_runtime = { path = "../../../crates/jackdaw_runtime", default-features = false }

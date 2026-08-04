@@ -16,15 +16,16 @@ Two starting paths:
   just want to author a scene next to ones you have.
 
 A new project opens immediately. The editor builds the project's
-library in the background, into the gitignored `.jackdaw/`
-directory, and your own components show up in the inspector once
-that build finishes. Placing brushes and saving scenes works
-right away, so you do not have to wait for it.
+cargo binary in the background (same as `cargo build` in the
+project root) and asks it for its reflected type schema. Your
+own components show up in the inspector once that finishes.
+Placing brushes and saving scenes works right away, so you do
+not have to wait for it.
 
 Expect that first build to take around nine minutes: it compiles
-Bevy from source, the same as `cargo build` in any Bevy project.
-Every project pays it once. Rebuilds after that are 1 to 4
-seconds, so this is the only time you will sit through it.
+Bevy from source, the same as any Bevy project. Every project
+pays it once. Rebuilds after that are 1 to 4 seconds, so this
+is the only time you will sit through it.
 
 ## Place a cube
 

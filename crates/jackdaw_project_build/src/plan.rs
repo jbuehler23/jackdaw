@@ -102,8 +102,8 @@ impl SdkManifest {
     /// Enumerate the SDK's runtime-closure artifacts by building
     /// `build_args` and reading cargo's JSON. The dev workspace builds the
     /// editor (`-p jackdaw --features dylib`); the bootstrap recipe, which
-    /// has no editor package, builds the SDK crates directly
-    /// (`-p jackdaw_sdk -p jackdaw_runner --release`). The SDK is already
+    /// has no editor package, builds the SDK crate directly
+    /// (`-p jackdaw_sdk --release`). The SDK is already
     /// compiled, so this re-invocation just reports the (fresh) artifact
     /// filenames.
     ///

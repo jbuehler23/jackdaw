@@ -71,7 +71,7 @@ const ENV_LOG: &str = "JACKDAW_WRAPPER_LOG";
 const ENV_EXTERN_MAP: &str = "JACKDAW_SDK_EXTERN_MAP";
 // Static-SDK model: when set to "1", bevy and jackdaw_api are redirected
 // to their prebuilt rlibs and `-C prefer-dynamic` is not added, so the
-// project dylib embeds one shared bevy compilation (matching TypeIds via
+// extension dylib embeds one shared bevy compilation (matching TypeIds via
 // the rmeta trick) rather than linking a `libjackdaw_sdk` dll. This is the
 // only model that links on Windows, where a dll cannot export bevy's
 // reflect statics.

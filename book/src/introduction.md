@@ -8,10 +8,10 @@ Jackdaw is a 3D level editor built with
 [Bevy](https://bevyengine.org/). It does brush-based geometry,
 material and texture management, heightmap terrain, and a
 human-readable scene format (`.bsn`). Your project stays a
-normal Bevy crate: the editor builds it as a dynamic library
-and loads it, so your own `cargo build` and `cargo run` keep
-compiling plain crates.io Bevy with nothing jackdaw-specific
-in the manifest.
+normal Bevy crate: the editor builds and plays the same cargo
+binary you run from a terminal, so `cargo build` and
+`cargo run` keep compiling plain crates.io Bevy with nothing
+jackdaw-specific forced into the manifest.
 
 We are pre-1.0. Things change. Some pieces are still in
 active flux, and this book tries to call out what is solid
