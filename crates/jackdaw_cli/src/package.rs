@@ -456,20 +456,27 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     // were not built against. Every candidate then failed `metadata
     // mismatch` at project-compile time, reported as `can't find crate`
     // for whichever SDK crate held the chain.
+    // The union of the recorded list and the directory: the exact list
+    // pins the generation the rlibs were built against, but it is only
+    // as complete as the enumeration that wrote it (a cached manifest
+    // skips regeneration, and macOS shipped a list missing
+    // jackdaw_api_macros while Windows had it). The sweep restores
+    // completeness; rustc picks among candidates by hash, so a stale
+    // extra is rejected harmlessly while a missing exact file is a
+    // build-stopping hole.
     let recorded_macros = jackdaw_project_build::plan::read_host_deps(&sdk.manifest);
-    let macros = if recorded_macros.is_empty() {
-        copy_dylibs(&sdk.host_deps, &host_deps_out)?
-    } else {
-        let mut staged = 0;
-        for artifact in &recorded_macros {
-            let src = Path::new(artifact);
-            if let Some(name) = src.file_name() {
-                copy(src, &host_deps_out.join(name))?;
-                staged += 1;
-            }
+    let mut staged_names = std::collections::BTreeSet::new();
+    for artifact in &recorded_macros {
+        let src = Path::new(artifact);
+        if let Some(name) = src.file_name()
+            && src.is_file()
+        {
+            copy(src, &host_deps_out.join(name))?;
+            staged_names.insert(name.to_os_string());
         }
-        staged
-    };
+    }
+    let swept = copy_dylibs(&sdk.host_deps, &host_deps_out)?;
+    let macros = staged_names.len().max(swept);
 
     // Host tools next to the editor.
     copy_into(&sdk.wrapper, out)?;
