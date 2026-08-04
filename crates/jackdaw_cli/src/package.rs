@@ -422,6 +422,19 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     }
     write(&sdk_out.join("manifest.txt"), &shipped_manifest)?;
 
+    // The recorded proc-macro list, shipped as basenames like the
+    // manifest: the wrapper rewrites a rewritten unit's proc-macro
+    // externs to these exact files (resolved against the staged
+    // host-deps dir), because an explicit --extern otherwise restricts
+    // rustc to the project's own macro build, which only loads SDK
+    // rlibs where the two builds happen to hash-match.
+    let recorded_list: String = jackdaw_project_build::plan::read_host_deps(&sdk.manifest)
+        .iter()
+        .filter_map(|entry| Path::new(entry).file_name())
+        .map(|name| format!("{}\n", name.to_string_lossy()))
+        .collect();
+    write(&sdk_out.join("jackdaw_sdk_host_deps.txt"), &recorded_list)?;
+
     // Native import libraries the SDK's crates reference by bare name
     // (the `windows` crates ship their own). The recorded search paths
     // point into the build machine's cargo registry, which does not

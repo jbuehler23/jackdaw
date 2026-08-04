@@ -204,23 +204,55 @@ pub fn run() -> ExitCode {
     }
 }
 
-/// The staged SDK proc-macro dylibs matching `alias`, as
-/// `lib<alias>-<hash>` (or `<alias>-<hash>` where the platform has no
-/// lib prefix) with the host dylib suffix.
-fn staged_host_candidates(dir: &std::path::Path, alias: &str) -> Vec<std::ffi::OsString> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    let prefixed = format!("{}{}-", std::env::consts::DLL_PREFIX, alias);
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+/// The SDK's recorded proc-macro dylibs as crate name -> path, from
+/// the `jackdaw_sdk_host_deps.txt` the manifest generation writes. The
+/// exact list, not a directory scan: a deps dir accumulates generations
+/// and the wrapper must name the one the SDK rlibs were built against.
+/// Entries are used as recorded when they exist (a dev checkout records
+/// absolute paths); otherwise their basename is resolved against
+/// `$JACKDAW_SDK_HOST_DEPS` (a bundle stages basenames beside relocated
+/// files). Same layout probing as the native link paths: the file sits
+/// beside the manifest, one or two levels above `deps/`.
+fn sdk_proc_macros(deps: &OsString) -> std::collections::BTreeMap<String, OsString> {
+    let mut out = std::collections::BTreeMap::new();
+    let deps = std::path::Path::new(deps);
+    let host_deps = env::var_os(ENV_SDK_HOST_DEPS);
+    for up in [
+        deps.parent(),
+        deps.parent().and_then(std::path::Path::parent),
+    ] {
+        let Some(dir) = up else { continue };
+        let Ok(text) = std::fs::read_to_string(dir.join("jackdaw_sdk_host_deps.txt")) else {
             continue;
         };
-        if name.starts_with(&prefixed) && name.ends_with(std::env::consts::DLL_SUFFIX) {
-            out.push(path.into_os_string());
+        for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let recorded = std::path::Path::new(line);
+            let Some(file_name) = recorded.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Some(stem) = file_name
+                .strip_prefix(std::env::consts::DLL_PREFIX)
+                .and_then(|rest| rest.strip_suffix(std::env::consts::DLL_SUFFIX))
+            else {
+                continue;
+            };
+            let Some((name, _hash)) = stem.rsplit_once('-') else {
+                continue;
+            };
+            let path = if recorded.is_file() {
+                recorded.as_os_str().to_os_string()
+            } else if let Some(host_deps) = &host_deps {
+                let joined = std::path::Path::new(host_deps).join(file_name);
+                if !joined.is_file() {
+                    continue;
+                }
+                joined.into_os_string()
+            } else {
+                continue;
+            };
+            out.insert(name.to_string(), path);
         }
+        break;
     }
     out
 }
@@ -357,45 +389,44 @@ fn rewrite_args(argv: &mut Vec<OsString>, log: bool) -> Result<(), String> {
     // A rewritten unit consumes SDK rlibs whose metadata pins exact
     // proc-macro hashes, but cargo's `--extern` for a proc macro points
     // at the project's own build of it, and an explicit extern RESTRICTS
-    // rustc to those candidates: the `-L` host-deps dir is never even
+    // rustc to its candidates: the `-L` host-deps dir is never even
     // searched. Where the project's macro build happens to hash-match
     // the SDK's, that works by luck; on macOS it did not, and loading
-    // SDK `jackdaw_api` failed as a bare "can't find crate". Appending
-    // the staged host-deps siblings as ADDITIONAL extern candidates
-    // fixes it without guessing: rustc picks among candidates by the
-    // required hash, so the project's own copy still wins wherever a
-    // vanilla sibling needs it.
-    if redirected && let Some(host_deps) = env::var_os(ENV_SDK_HOST_DEPS) {
-        let mut extra: Vec<OsString> = Vec::new();
-        let mut i = 0;
-        while i < argv.len() {
-            if argv[i] == "--extern" && i + 1 < argv.len() {
-                if let Some(value) = argv[i + 1].to_str()
-                    && let Some((alias, path)) = value.split_once('=')
-                    && path.ends_with(std::env::consts::DLL_SUFFIX)
-                {
-                    for candidate in staged_host_candidates(std::path::Path::new(&host_deps), alias)
+    // SDK `jackdaw_api` failed as a bare "can't find crate". The extern
+    // is REPLACED with the SDK's recorded macro, which satisfies both
+    // roles with one candidate: the transitive pin (which demands the
+    // SDK hash) and the unit's own direct use (macro expansion is
+    // identical). Appending instead of replacing was tried first and
+    // fails with E0464 "multiple candidates" on the direct use.
+    if redirected {
+        let sdk_macros = sdk_proc_macros(&deps);
+        if !sdk_macros.is_empty() {
+            let mut i = 0;
+            while i < argv.len() {
+                if argv[i] == "--extern" && i + 1 < argv.len() {
+                    if let Some(value) = argv[i + 1].to_str()
+                        && let Some((alias, path)) = value.split_once('=')
+                        && path.ends_with(std::env::consts::DLL_SUFFIX)
+                        && let Some(staged) = sdk_macros.get(alias)
                     {
                         let mut flag = OsString::from(alias);
                         flag.push("=");
-                        flag.push(&candidate);
+                        flag.push(staged);
                         if log {
                             error!(
-                                "jackdaw-rustc-wrapper: added proc-macro candidate {}={}",
-                                alias,
-                                candidate.to_string_lossy()
+                                "jackdaw-rustc-wrapper: rewrite proc-macro --extern {:?} -> {:?}",
+                                argv[i + 1],
+                                flag
                             );
                         }
-                        extra.push(OsString::from("--extern"));
-                        extra.push(flag);
+                        argv[i + 1] = flag;
                     }
+                    i += 2;
+                    continue;
                 }
-                i += 2;
-                continue;
+                i += 1;
             }
-            i += 1;
         }
-        argv.extend(extra);
     }
 
     if is_primary {
@@ -762,31 +793,48 @@ mod tests {
         assert!(described.contains("glam=>no path"), "{described}");
     }
 
-    /// The staged proc-macro candidates match by name pattern only;
-    /// rustc does the hash arbitration. A name that is not staged adds
-    /// nothing.
+    /// The recorded proc-macro list maps crate names to exact staged
+    /// files: absolute entries as recorded, basenames resolved against
+    /// the host-deps dir, and entries that resolve to nothing dropped.
     #[test]
-    fn staged_host_candidates_match_by_name() {
-        let dir = std::env::temp_dir().join(format!("jackdaw_hostdeps_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    fn sdk_proc_macros_resolve_from_the_recorded_list() {
+        let root = std::env::temp_dir().join(format!("jackdaw_hostmap_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let triple = root.join("triple");
+        let deps = triple.join("deps");
+        std::fs::create_dir_all(&deps).unwrap();
         let suffix = std::env::consts::DLL_SUFFIX;
         let prefix = std::env::consts::DLL_PREFIX;
-        for f in [
-            format!("{prefix}jackdaw_api_macros-80d8{suffix}"),
-            format!("{prefix}jackdaw_api_macros-4bba{suffix}"),
-            format!("{prefix}serde_derive-aaaa{suffix}"),
-        ] {
-            std::fs::write(dir.join(f), b"").unwrap();
-        }
-        let hits = staged_host_candidates(&dir, "jackdaw_api_macros");
-        assert_eq!(hits.len(), 2, "{hits:?}");
-        assert!(
-            staged_host_candidates(&dir, "serde").is_empty(),
-            "prefix must be exact"
+        let abs = root.join(format!("{prefix}serde_derive-aaaa{suffix}"));
+        std::fs::write(&abs, b"").unwrap();
+        let staged_name = format!("{prefix}jackdaw_api_macros-80d8{suffix}");
+        let host_deps = root.join("host-deps");
+        std::fs::create_dir_all(&host_deps).unwrap();
+        std::fs::write(host_deps.join(&staged_name), b"").unwrap();
+        std::fs::write(
+            triple.join("jackdaw_sdk_host_deps.txt"),
+            format!(
+                "{}\n/nowhere/{staged_name}\n/nowhere/{prefix}gone_macro-ffff{suffix}\n",
+                abs.display()
+            ),
+        )
+        .unwrap();
+        // SAFETY: test-local env mutation, read back immediately.
+        unsafe { env::set_var(ENV_SDK_HOST_DEPS, &host_deps) };
+        let map = sdk_proc_macros(&OsString::from(deps.as_os_str()));
+        unsafe { env::remove_var(ENV_SDK_HOST_DEPS) };
+        assert_eq!(
+            map.get("serde_derive").cloned(),
+            Some(abs.clone().into_os_string()),
+            "absolute recorded entries are used as recorded"
         );
-        assert!(staged_host_candidates(&dir, "missing_macro").is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            map.get("jackdaw_api_macros")
+                .is_some_and(|p| p.to_string_lossy().contains("host-deps")),
+            "missing absolute entries resolve by basename: {map:?}"
+        );
+        assert!(!map.contains_key("gone_macro"), "unresolvable entries drop");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A crate the plan replaces compiles as a shadow unit nothing
