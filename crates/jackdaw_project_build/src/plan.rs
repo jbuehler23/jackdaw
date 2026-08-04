@@ -151,6 +151,7 @@ impl SdkManifest {
         let roots = build_private_roots(sdk);
         let mut artifacts = BTreeMap::new();
         let mut link_paths: BTreeSet<String> = BTreeSet::new();
+        let mut host_deps: BTreeSet<String> = BTreeSet::new();
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
                 continue;
@@ -201,14 +202,33 @@ impl SdkManifest {
             else {
                 continue;
             };
-            if !closure.contains(&(name.clone(), version.to_string())) {
-                continue;
-            }
             let kinds = msg["target"]["kind"]
                 .as_array()
                 .map(|k| k.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
                 .unwrap_or_default();
-            if kinds.contains(&"proc-macro") || kinds.contains(&"custom-build") {
+            // Proc-macro dylibs, recorded by exact path like the rlibs.
+            // Staging used to scoop every dylib in the host deps dir,
+            // and that dir accumulates generations from other package
+            // selections: an SDK whose rlibs referenced one generation
+            // shipped beside proc macros from another, and a project
+            // build failed with `metadata mismatch` on every candidate,
+            // reported as `can't find crate` for whichever SDK crate
+            // held the chain. Kept before the closure filter because the
+            // closure is computed with `no-proc-macro`.
+            if kinds.contains(&"proc-macro") {
+                for file in msg["filenames"].as_array().into_iter().flatten() {
+                    if let Some(file) = file.as_str()
+                        && file.ends_with(std::env::consts::DLL_SUFFIX)
+                    {
+                        host_deps.insert(file.to_string());
+                    }
+                }
+                continue;
+            }
+            if !closure.contains(&(name.clone(), version.to_string())) {
+                continue;
+            }
+            if kinds.contains(&"custom-build") {
                 continue;
             }
             let Some(filenames) = msg["filenames"].as_array() else {
@@ -262,6 +282,7 @@ impl SdkManifest {
         }
 
         write_link_paths(&link_paths_path(&sdk.manifest), &link_paths)?;
+        write_lines(&host_deps_path(&sdk.manifest), &host_deps)?;
         let manifest = Self { artifacts };
         manifest.write(&sdk.manifest)?;
         Ok(manifest)
@@ -629,6 +650,35 @@ fn private_to_this_build(path: &Path, roots: &[PathBuf]) -> bool {
     roots
         .iter()
         .any(|root| resolved.starts_with(root) || path.starts_with(root))
+}
+
+/// Where the proc-macro dylib list sits, beside the manifest it was
+/// captured with.
+pub fn host_deps_path(manifest: &Path) -> PathBuf {
+    manifest.with_file_name("jackdaw_sdk_host_deps.txt")
+}
+
+/// The exact proc-macro dylibs the SDK build produced, if recorded.
+/// Absent means an SDK from before this was captured; the caller falls
+/// back to staging the whole host deps directory.
+pub fn read_host_deps(manifest: &Path) -> Vec<String> {
+    std::fs::read_to_string(host_deps_path(manifest))
+        .map(|text| {
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn write_lines(path: &Path, lines: &BTreeSet<String>) -> Result<(), PlanError> {
+    let contents: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    if std::fs::read_to_string(path).ok().as_deref() != Some(contents.as_str()) {
+        std::fs::write(path, contents)?;
+    }
+    Ok(())
 }
 
 /// Where the native link search paths sit, beside the manifest they were

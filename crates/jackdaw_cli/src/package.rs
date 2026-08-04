@@ -449,7 +449,27 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     let cdylibs = copy_dylibs(&sdk.deps, &deps_out)?;
 
     // Proc-macro dylibs the SDK rlibs reference at project-compile time.
-    let macros = copy_dylibs(&sdk.host_deps, &host_deps_out)?;
+    // From the recorded list when the manifest generation captured one:
+    // the host deps dir accumulates generations from other package
+    // selections (the wrapper build, earlier runs restored from cache),
+    // and staging the directory wholesale shipped proc macros the rlibs
+    // were not built against. Every candidate then failed `metadata
+    // mismatch` at project-compile time, reported as `can't find crate`
+    // for whichever SDK crate held the chain.
+    let recorded_macros = jackdaw_project_build::plan::read_host_deps(&sdk.manifest);
+    let macros = if recorded_macros.is_empty() {
+        copy_dylibs(&sdk.host_deps, &host_deps_out)?
+    } else {
+        let mut staged = 0;
+        for artifact in &recorded_macros {
+            let src = Path::new(artifact);
+            if let Some(name) = src.file_name() {
+                copy(src, &host_deps_out.join(name))?;
+                staged += 1;
+            }
+        }
+        staged
+    };
 
     // Host tools next to the editor.
     copy_into(&sdk.wrapper, out)?;
