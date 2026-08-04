@@ -131,6 +131,29 @@ pub fn run() -> ExitCode {
     }
     let status = cmd.status();
 
+    // One retry before reporting failure. On macOS runners a unit
+    // sporadically fails to load a sibling artifact that demonstrably
+    // exists and validates - the victim crate changes run to run, and
+    // identical re-runs succeed. The real failures this could mask are
+    // deterministic and fail the retry identically, costing one extra
+    // compile of one crate on the way to the same error.
+    let status = match status {
+        Ok(s) if !s.success() => {
+            error!(
+                "jackdaw-rustc-wrapper: rustc failed for {}; retrying the unit once",
+                env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "<unknown>".into()),
+            );
+            let retry = Command::new(&rustc).args(&rustc_args).status();
+            if let Ok(r) = &retry
+                && r.success()
+            {
+                error!("jackdaw-rustc-wrapper: the retry succeeded; the failure was transient");
+            }
+            retry
+        }
+        other => other,
+    };
+
     match status {
         Ok(s) if s.success() => ExitCode::from(0),
         Ok(s) => {
