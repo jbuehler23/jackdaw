@@ -771,7 +771,10 @@ fn fill_project_selector(
                                 spawn_launcher_section_label(list, "Recent", font.clone());
                                 let mut shown_recent = 0usize;
                                 for entry in &recent.projects {
-                                    if cwd_has_project && entry.path == cwd {
+                                    if cwd_has_project
+                                        && dunce::simplified(entry.path.as_path())
+                                            == dunce::simplified(cwd.as_path())
+                                    {
                                         continue;
                                     }
                                     spawn_project_row(

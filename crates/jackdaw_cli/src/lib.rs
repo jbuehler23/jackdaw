@@ -146,7 +146,7 @@ fn cmd_doctor(args: &[String]) -> ExitCode {
     let explicit = requested.is_some();
     let root = requested
         .or_else(|| std::env::current_dir().ok())
-        .and_then(|dir| dir.canonicalize().ok())
+        .and_then(|dir| dunce::canonicalize(dir).ok())
         .filter(|dir| explicit || dir.join("Cargo.toml").is_file());
     match root {
         Some(root) => {
@@ -422,7 +422,7 @@ fn cmd_run(args: &[String]) -> ExitCode {
 fn resolve_root(args: &[String]) -> Result<PathBuf, ExitCode> {
     let root =
         parse_project_arg(args).unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    root.canonicalize().map_err(|err| {
+    dunce::canonicalize(&root).map_err(|err| {
         eprintln!("jd: cannot resolve project path {}: {err}", root.display());
         ExitCode::FAILURE
     })

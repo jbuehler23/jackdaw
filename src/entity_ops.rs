@@ -1255,9 +1255,9 @@ fn hide_all_entities(world: &mut World, scene_entities: &mut SystemState<SceneEn
 /// needed). Returns the original path on a miss and warns; callers should not
 /// rely on the fallback ever loading successfully under `Forbid`.
 pub fn to_asset_path(path: &str) -> String {
-    let path = Path::new(path);
+    let path = dunce::simplified(Path::new(path));
     if let Some(assets_dir) = get_assets_base_dir()
-        && let Ok(relative) = path.strip_prefix(&assets_dir)
+        && let Ok(relative) = path.strip_prefix(dunce::simplified(&assets_dir))
     {
         return relative.to_string_lossy().to_string();
     }
@@ -1279,7 +1279,7 @@ pub fn to_asset_path(path: &str) -> String {
 fn get_assets_base_dir() -> Option<std::path::PathBuf> {
     // Try ProjectRoot via recent projects config
     if let Some(project_dir) = crate::project::read_last_project() {
-        let assets = project_dir.join("assets");
+        let assets = dunce::simplified(project_dir.as_path()).join("assets");
         if assets.is_dir() {
             return Some(assets);
         }
@@ -1292,7 +1292,7 @@ fn get_assets_base_dir() -> Option<std::path::PathBuf> {
     } else {
         std::env::current_exe().ok()?.parent()?.to_path_buf()
     };
-    Some(base.join("assets"))
+    Some(dunce::simplified(base.as_path()).join("assets"))
 }
 
 // ----------------------- Operators ----------------------------

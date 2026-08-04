@@ -410,7 +410,7 @@ pub fn run_import_cli(args: &[String]) -> AppExit {
     let root = match requested_root
         .map(Ok)
         .unwrap_or_else(std::env::current_dir)
-        .and_then(std::fs::canonicalize)
+        .and_then(dunce::canonicalize)
     {
         Ok(d) => d,
         Err(e) => {
@@ -751,7 +751,7 @@ pub fn run_upgrade_cli(args: &[String]) -> AppExit {
         .clone()
         .map(Ok)
         .unwrap_or_else(std::env::current_dir)
-        .and_then(std::fs::canonicalize)
+        .and_then(dunce::canonicalize)
     {
         Ok(root) => root,
         Err(error) => {
@@ -820,7 +820,7 @@ pub fn run_open_cli(args: &[String]) -> AppExit {
         .find(|arg| !arg.starts_with('-'))
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    let root = match root.canonicalize() {
+    let root = match dunce::canonicalize(&root) {
         Ok(root) => root,
         Err(error) => {
             eprintln!("jd open: {}: {error}", root.display());

@@ -31,8 +31,8 @@ pub fn jackdaw_dev_checkout() -> Option<PathBuf> {
         }
     }
     let checkout = source_checkout()?;
-    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
-    let canonical = checkout.canonicalize().unwrap_or_else(|_| checkout.clone());
+    let exe = dunce::canonicalize(std::env::current_exe().ok()?).ok()?;
+    let canonical = dunce::canonicalize(&checkout).unwrap_or_else(|_| checkout.clone());
     exe.starts_with(&canonical).then_some(checkout)
 }
 
@@ -273,8 +273,8 @@ mod tests {
         let Some(checkout) = source_checkout() else {
             return; // no checkout at all; nothing to distinguish
         };
-        let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
-        let canonical = checkout.canonicalize().unwrap_or(checkout);
+        let exe = dunce::canonicalize(std::env::current_exe().unwrap()).unwrap();
+        let canonical = dunce::canonicalize(&checkout).unwrap_or(checkout);
         // The test binary does run from inside the checkout, so this
         // pins the rule the detection applies rather than its outcome.
         assert_eq!(
