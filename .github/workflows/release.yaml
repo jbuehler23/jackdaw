@@ -336,6 +336,10 @@ jobs:
           # crate-locator trace, so a rejected extern says why it was
           # rejected instead of a bare "can't find crate".
           JACKDAW_WRAPPER_EXPLAIN: "1"
+          # Trace bevy_image's FIRST attempt: on macOS it fails and its
+          # identical re-run passes, so only the original attempt's
+          # locator log can show what was rejected.
+          JACKDAW_WRAPPER_TRACE_CRATES: "bevy_image"
         # Match the already-built release SDK. The old debug invocation
         # rebuilt the entire graph and, on Windows, recreated the oversized
         # debug SDK that the release bundle had already avoided.

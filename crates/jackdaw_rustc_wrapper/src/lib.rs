@@ -115,7 +115,21 @@ pub fn run() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let status = Command::new(&rustc).args(&rustc_args).status();
+    // Trace the FIRST attempt for crates named in the comma-separated
+    // list. The failure re-run above only explains deterministic
+    // failures: a unit that fails once and re-runs clean needs its
+    // original attempt traced, and only the caller knows which unit
+    // that is.
+    let mut cmd = Command::new(&rustc);
+    cmd.args(&rustc_args);
+    if let (Ok(traced), Ok(pkg)) = (
+        env::var("JACKDAW_WRAPPER_TRACE_CRATES"),
+        env::var("CARGO_PKG_NAME"),
+    ) && traced.split(',').any(|t| t.trim() == pkg)
+    {
+        cmd.env("RUSTC_LOG", "rustc_metadata::locator=info");
+    }
+    let status = cmd.status();
 
     match status {
         Ok(s) if s.success() => ExitCode::from(0),
@@ -137,12 +151,26 @@ pub fn run() -> ExitCode {
             // reason; re-running the failed unit once with that trace on
             // turns the next CI failure into a self-explaining one.
             // Opt-in because the trace is large.
+            //
+            // The re-run's exit is reported because it has disagreed
+            // with the original: two macOS runs failed a unit whose
+            // identical re-run resolved every crate cleanly, which is
+            // the signature of a racy read of something a concurrent
+            // unit was still writing, not of a broken SDK.
             if env::var_os("JACKDAW_WRAPPER_EXPLAIN").is_some_and(|v| v == "1") {
                 error!("jackdaw-rustc-wrapper: re-running with the crate locator trace");
-                let _ = Command::new(&rustc)
+                let rerun = Command::new(&rustc)
                     .args(&rustc_args)
                     .env("RUSTC_LOG", "rustc_metadata::locator=debug")
                     .status();
+                match rerun {
+                    Ok(r) if r.success() => error!(
+                        "jackdaw-rustc-wrapper: the re-run SUCCEEDED with identical \
+                         arguments; the original failure was not deterministic"
+                    ),
+                    Ok(r) => error!("jackdaw-rustc-wrapper: the re-run failed too ({r})"),
+                    Err(e) => error!("jackdaw-rustc-wrapper: could not re-run: {e}"),
+                }
             }
             ExitCode::from(s.code().unwrap_or(1) as u8)
         }
