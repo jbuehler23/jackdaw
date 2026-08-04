@@ -227,6 +227,13 @@ jobs:
           # no longer match what a fresh build produces, and the mix
           # surfaces as undefined `type_info::CELL` symbols at link time.
           key: bundle-${{ matrix.triple }}-${{ hashFiles('.cargo/config.toml') }}
+          # xtask is a detached workspace with its own target dir, which
+          # the default cache paths do not cover: the bundler rebuilt
+          # cold on every run, which was most of the staging step's
+          # 15-27 minutes.
+          workspaces: |
+            . -> target
+            xtask -> target
           # Save even when the job fails. This job is where a platform
           # gets iterated on, and the default is to save nothing unless
           # it succeeds: the two platforms that were failing therefore
