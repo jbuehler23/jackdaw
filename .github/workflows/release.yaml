@@ -367,6 +367,38 @@ jobs:
         # debug SDK that the release bundle had already avoided.
         run: cargo test --release --features dylib --target ${{ matrix.triple }} --test bundle_smoke -- --nocapture
 
+      # When the smoke fails, reduce it: compile a probe crate straight
+      # against the staged SDK with rustc alone, one flag variant at a
+      # time. The smoke failure only says a rewritten unit cannot load
+      # the SDK externs; this says which ingredient breaks the load,
+      # without cargo or the wrapper in the way.
+      - name: Reduce a failed smoke to a rustc probe
+        if: ${{ failure() }}
+        run: |
+          set -uo pipefail
+          root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
+          sdkd="$root/sdk/${{ matrix.triple }}/deps"
+          hostd="$root/sdk/host-deps"
+          api=$(ls "$sdkd"/libjackdaw_api-*.rlib 2>/dev/null | head -1 || true)
+          bei=$(ls "$sdkd"/libbevy_enhanced_input-*.rlib 2>/dev/null | head -1 || true)
+          if [ -z "$api" ]; then echo "no staged jackdaw_api rlib; nothing to probe"; exit 0; fi
+          echo 'pub use jackdaw_api::op;' > probe.rs
+          echo 'pub use bevy_enhanced_input::prelude::InputAction;' >> probe.rs
+          base=(--edition 2024 --crate-type lib --target ${{ matrix.triple }} probe.rs
+                --extern jackdaw_api="$api" --extern bevy_enhanced_input="$bei"
+                -L dependency="$sdkd" -L dependency="$hostd" -o probe_out)
+          run_variant() {
+            name="$1"; shift
+            echo "=== variant: $name"
+            if rustc "${base[@]}" "$@" 2>probe.err; then echo "PASS"; else
+              echo "FAIL:"; head -20 probe.err
+            fi
+          }
+          run_variant "bare"
+          run_variant "prefer-dynamic" -C prefer-dynamic
+          run_variant "share-generics-no" -Zshare-generics=no
+          run_variant "both" -C prefer-dynamic -Zshare-generics=no
+
       - name: Archive (tar.zst)
         if: matrix.archive == 'tar.zst'
         run: tar --zstd -cf "jackdaw-${{ matrix.triple }}.tar.zst" -C "$RUNNER_TEMP" "jackdaw-${{ matrix.triple }}"
