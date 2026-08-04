@@ -437,7 +437,9 @@ fn load_extern_map() -> ExternMap {
         return map;
     };
     for line in contents.lines() {
-        if let Some((edge, artifact)) = line.split_once('=')
+        if let Some(name) = line.strip_prefix("replaced:") {
+            map.replaced.insert(name.to_string());
+        } else if let Some((edge, artifact)) = line.split_once('=')
             && let Some((consumer, alias)) = edge.split_once(':')
         {
             map.edges.push((
@@ -453,6 +455,9 @@ fn load_extern_map() -> ExternMap {
 #[derive(Default)]
 struct ExternMap {
     edges: Vec<(String, String, OsString)>,
+    /// Package names the plan holds SDK artifacts for, written by
+    /// `write_plan` as `replaced:<name>` lines.
+    replaced: std::collections::BTreeSet<String>,
 }
 
 impl ExternMap {
@@ -467,8 +472,19 @@ impl ExternMap {
     /// the SDK for. Such a crate still gets compiled by cargo, but its
     /// artifact is dead weight: every consumer's edge points at the SDK
     /// copy instead.
+    ///
+    /// Keyed on the PACKAGE names the plan records, not on edge aliases:
+    /// a renamed dependency (rustix consumes `errno` as `libc_errno`)
+    /// splits the two, and an alias-keyed answer sent rustix's shadow
+    /// vanilla while errno's stayed rewritten. The two then disagreed
+    /// about which `libc` exists, failing the build on a crate nothing
+    /// consumes. The alias fallback covers a plan written before the
+    /// `replaced:` lines existed.
     fn replaces(&self, name: &str) -> bool {
-        self.edges.iter().any(|(_, alias, _)| alias == name)
+        if self.replaced.is_empty() {
+            return self.edges.iter().any(|(_, alias, _)| alias == name);
+        }
+        self.replaced.contains(name)
     }
 }
 
@@ -617,6 +633,7 @@ mod tests {
                 "bevy".into(),
                 artifact.clone(),
             )],
+            replaced: std::collections::BTreeSet::new(),
         };
         let dylib = OsString::from(sdk.join("libjackdaw_sdk.so"));
         let rewritten = rewrite_extern(
@@ -685,15 +702,26 @@ mod tests {
     /// into the SDK's resolution.
     #[test]
     fn plan_replaced_crates_are_recognised() {
-        let map = ExternMap {
+        let mut map = ExternMap {
             edges: vec![(
                 "bevy_render@0.19.0".into(),
                 "bevy_image".into(),
                 ext("/sdk/deps/libbevy_image-abc.rlib"),
             )],
+            replaced: std::collections::BTreeSet::new(),
         };
+        // Stale plan without `replaced:` lines: alias fallback.
         assert!(map.replaces("bevy_image"));
         assert!(!map.replaces("bevy_render"), "consumers are not replaced");
+        assert!(!map.replaces("my_game"));
+
+        // A recorded set answers by package name, so a renamed
+        // dependency's package (errno, consumed as libc_errno) is
+        // recognised while the alias is not a package at all.
+        map.replaced
+            .extend(["bevy_image".to_string(), "errno".to_string()]);
+        assert!(map.replaces("errno"));
+        assert!(!map.replaces("libc_errno"), "aliases are not packages");
         assert!(!map.replaces("my_game"));
     }
 
@@ -708,6 +736,7 @@ mod tests {
         let artifact = OsString::from(sdk.join("libimage-abc.rlib"));
         let map = ExternMap {
             edges: vec![("bevy_image@0.19.0".into(), "image".into(), artifact.clone())],
+            replaced: std::collections::BTreeSet::new(),
         };
         let dylib = OsString::from(sdk.join("libjackdaw_sdk.so"));
         let rewritten = rewrite_extern(&ext("image"), &dylib, &map, "bevy_image@0.19.0", false)
@@ -732,6 +761,7 @@ mod tests {
                 "image".into(),
                 OsString::from(sdk.join("libimage-abc.rlib")),
             )],
+            replaced: std::collections::BTreeSet::new(),
         };
         let dylib = OsString::from(sdk.join("libjackdaw_sdk.so"));
         let err = rewrite_extern(

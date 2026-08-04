@@ -346,6 +346,11 @@ impl SdkManifest {
     /// holds a single bevy and `jackdaw_api`, so this uniquely resolves the
     /// rlibs the static wrapper points the bevy facade and the `jackdaw_api`
     /// injection at.
+    /// Every `(name, version)` key in the manifest.
+    pub fn names(&self) -> impl Iterator<Item = &(String, String)> {
+        self.artifacts.keys()
+    }
+
     pub fn artifact_for(&self, name: &str) -> Option<&str> {
         self.artifacts
             .iter()
@@ -445,6 +450,17 @@ pub fn write_plan(
             absent.len(),
             absent.into_iter().collect::<Vec<_>>().join(", ")
         )));
+    }
+    // Every package the manifest holds an artifact for, so the wrapper
+    // can recognise a plan-replaced crate's own compile by PACKAGE name.
+    // Deriving that set from the edge aliases is wrong for renamed
+    // dependencies: rustix consumes `errno` as `libc_errno`, so an
+    // alias-keyed set sent rustix's shadow unit vanilla while errno's
+    // stayed rewritten, and the two disagreed about which `libc` the
+    // universe contains. rustc reported it as a bare "can't find crate
+    // for errno" on both platforms.
+    for (name, _version) in manifest.names() {
+        writeln!(contents, "replaced:{name}")?;
     }
     if std::fs::read(out_path).ok().as_deref() != Some(contents.as_slice()) {
         std::fs::write(out_path, contents)?;
