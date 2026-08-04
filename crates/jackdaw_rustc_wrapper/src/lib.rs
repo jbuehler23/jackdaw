@@ -131,6 +131,19 @@ pub fn run() -> ExitCode {
                 env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "<unknown>".into()),
                 describe_externs(&rustc_args)
             );
+            // A `can't find crate` for a crate that WAS handed over as a
+            // valid rlib means rustc rejected the candidate for a reason
+            // its diagnostic does not name. The crate locator logs the
+            // reason; re-running the failed unit once with that trace on
+            // turns the next CI failure into a self-explaining one.
+            // Opt-in because the trace is large.
+            if env::var_os("JACKDAW_WRAPPER_EXPLAIN").is_some_and(|v| v == "1") {
+                error!("jackdaw-rustc-wrapper: re-running with the crate locator trace");
+                let _ = Command::new(&rustc)
+                    .args(&rustc_args)
+                    .env("RUSTC_LOG", "rustc_metadata::locator=debug")
+                    .status();
+            }
             ExitCode::from(s.code().unwrap_or(1) as u8)
         }
         Err(e) => {

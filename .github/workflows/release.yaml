@@ -325,6 +325,10 @@ jobs:
         env:
           JACKDAW_BUNDLE_SMOKE_REQUIRED: "1"
           JACKDAW_BUNDLE_ROOT: ${{ runner.temp }}/jackdaw-${{ matrix.triple }}
+          # On failure, the wrapper re-runs the failed unit with rustc's
+          # crate-locator trace, so a rejected extern says why it was
+          # rejected instead of a bare "can't find crate".
+          JACKDAW_WRAPPER_EXPLAIN: "1"
         # Match the already-built release SDK. The old debug invocation
         # rebuilt the entire graph and, on Windows, recreated the oversized
         # debug SDK that the release bundle had already avoided.
