@@ -306,6 +306,21 @@ jobs:
         # rewrite scaffolded manifests to local path dependencies.
         run: cargo xtask bundle --out "$RUNNER_TEMP/jackdaw-${{ matrix.triple }}" --workspace .
 
+      # The macOS smoke keeps failing on a proc-macro dylib that every
+      # model says should be staged; stop modelling and look. Which
+      # jackdaw_api_macros files exist at the source, what the recorded
+      # list says, and what actually landed in the staged host-deps.
+      - name: Audit staged host-deps
+        run: |
+          set -uo pipefail
+          root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
+          echo "--- source host deps (target/release/deps), jackdaw+bevy macros:"
+          ls target/release/deps 2>/dev/null | grep -E "jackdaw_api_macros|bevy_reflect_derive" || echo "(none)"
+          echo "--- recorded list ($(wc -l < target/${{ matrix.triple }}/release/jackdaw_sdk_host_deps.txt 2>/dev/null || echo 0) entries), matching lines:"
+          grep -E "jackdaw_api_macros|bevy_reflect_derive" "target/${{ matrix.triple }}/release/jackdaw_sdk_host_deps.txt" 2>/dev/null || echo "(none)"
+          echo "--- staged host-deps ($(ls "$root/sdk/host-deps" 2>/dev/null | wc -l) files), matching:"
+          ls "$root/sdk/host-deps" 2>/dev/null | grep -E "jackdaw_api_macros|bevy_reflect_derive" || echo "(none)"
+
       # An archive that is missing a piece installs and then fails at the first
       # project build, which is how a missing sdk/manifest.txt reached a user.
       - name: Verify the staged bundle
