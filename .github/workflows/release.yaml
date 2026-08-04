@@ -12,6 +12,16 @@ on:
   # the bundle job works is a slow way to ask a question that has no
   # bearing on the tag.
   workflow_dispatch:
+    inputs:
+      platform:
+        description: "Bundle only this platform (iteration mode)"
+        type: choice
+        default: all
+        options: [all, linux, windows, macos]
+      skip_heavy:
+        description: "Skip the heavy gate (iteration mode; uploads stay tag-gated)"
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -24,9 +34,33 @@ env:
   toolchain: nightly-2026-03-05
 
 jobs:
+  # Which bundle legs to run: all of them on tags and default dispatches,
+  # one platform in iteration mode. A matrix cannot be filtered by a
+  # job-level `if` (matrix context is unavailable there), so the include
+  # list is computed here and consumed via fromJSON.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      include: ${{ steps.pick.outputs.include }}
+    steps:
+      - id: pick
+        run: |
+          linux='{"os":"ubuntu-latest","triple":"x86_64-unknown-linux-gnu","rpath":"-C link-arg=-Wl,-rpath,$ORIGIN","archive":"tar.zst"}'
+          macos='{"os":"macos-14","triple":"aarch64-apple-darwin","rpath":"-C link-arg=-Wl,-rpath,@loader_path -Zshare-generics=no","archive":"tar.zst"}'
+          windows='{"os":"windows-latest","triple":"x86_64-pc-windows-msvc","rpath":"","lto":"off","archive":"zip"}'
+          case "${{ github.event_name == 'workflow_dispatch' && inputs.platform || 'all' }}" in
+            linux)   list="[$linux]" ;;
+            macos)   list="[$macos]" ;;
+            windows) list="[$windows]" ;;
+            *)       list="[$linux,$macos,$windows]" ;;
+          esac
+          echo "include=$list" >> "$GITHUB_OUTPUT"
+
   # Nothing ships unless the end-to-end tier is green: the SDK builds, a game
   # builds against it, and the runner loads an authored scene.
   heavy:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_heavy }}
     uses: ./.github/workflows/heavy-tier.yaml
 
   # A scaffolded project depends on the public jackdaw crates by version.
@@ -155,7 +189,11 @@ jobs:
     # path, so it must still ship when the publish is a no-op or fails:
     # re-running a release whose versions are already on crates.io would
     # otherwise skip `scaffold-resolves` and upload nothing at all.
-    needs: [heavy]
+    needs: [heavy, plan]
+    # `always()` so an iteration-mode dispatch that skipped the heavy
+    # gate still builds; a real heavy failure still blocks, and every
+    # publishing step below is tag-gated regardless.
+    if: ${{ always() && needs.plan.result == 'success' && (needs.heavy.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.skip_heavy)) }}
     runs-on: ${{ matrix.os }}
     # This job builds the editor twice over: once for the binaries, then
     # a whole game against the staged SDK. On Windows, with a cold cache,
@@ -169,38 +207,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            triple: x86_64-unknown-linux-gnu
-            # A literal $ORIGIN reaches the linker (single-quoted below so
-            # the shell never expands it): the editor and runner then find
-            # their dylibs beside themselves.
-            rpath: "-C link-arg=-Wl,-rpath,$ORIGIN"
-            archive: tar.zst
-          - os: macos-14
-            triple: aarch64-apple-darwin
-            # RUSTFLAGS overrides target rustflags from .cargo/config.toml, so
-            # carry the Apple no-shared-generics rule alongside the rpath.
-            rpath: "-C link-arg=-Wl,-rpath,@loader_path -Zshare-generics=no"
-            archive: tar.zst
-          # macOS Intel (x86_64-apple-darwin) is dropped: the macos-13
-          # runner hangs this bundle build for hours. Apple Silicon
-          # (aarch64) is covered above; re-add Intel if the hang is fixed.
-          - os: windows-latest
-            triple: x86_64-pc-windows-msvc
-            # Windows loads DLLs from the executable's directory, so no
-            # rpath. Leaving RUSTFLAGS unset also preserves the rust-lld
-            # linker that .cargo/config.toml selects for the MSVC target.
-            rpath: ""
-            # Thin LTO on the binaries breaks the split-dylib link on PE
-            # and only there: LTO-recompiled rlib code references bevy
-            # `type_info::CELL` statics directly, and PE cannot import
-            # data without dllimport at codegen. The identical build
-            # links with LTO off (measured: 20 undefined CELLs with
-            # thin, zero without). ELF and Mach-O import data fine, so
-            # the other platforms keep thin LTO.
-            lto: "off"
-            archive: zip
+        include: ${{ fromJSON(needs.plan.outputs.include) }}
     defaults:
       run:
         shell: bash
