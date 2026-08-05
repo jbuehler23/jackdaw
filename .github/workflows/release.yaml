@@ -375,6 +375,10 @@ jobs:
       - name: Reduce a failed smoke to a rustc probe
         if: ${{ failure() }}
         run: |
+          # The default shell is `bash -e -o pipefail`; a diagnostic step
+          # must not die on a SIGPIPE from `head` or on a failing probe
+          # compile, so both modes are explicitly off.
+          set +e +o pipefail
           set -u
           root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
           sdkd="$root/sdk/${{ matrix.triple }}/deps"
