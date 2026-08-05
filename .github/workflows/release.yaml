@@ -404,7 +404,13 @@ jobs:
           echo "=== can rustc enumerate the staged rlib's deps at all?"
           rustc -Zls=root "$api" 2>&1 | head -12
           echo "=== minimal locator trace of the bare failure"
-          RUSTC_LOG=rustc_metadata::locator=info rustc "${base[@]}" 2>&1 | grep -vE "Compiling|^\s*$" | head -60
+          RUSTC_LOG=rustc_metadata::locator=info rustc "${base[@]}" 2>trace.log || true
+          echo "--- every line naming the externs:"
+          grep -nE "jackdaw_api|bevy_enhanced" trace.log | head -30 || echo "(the externs never appear in the trace)"
+          echo "--- every rejection:"
+          grep -nB1 "Rejecting" trace.log | head -40 || true
+          echo "--- the trace's last 30 lines:"
+          tail -30 trace.log
 
       - name: Archive (tar.zst)
         if: matrix.archive == 'tar.zst'
