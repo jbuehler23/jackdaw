@@ -201,6 +201,35 @@ fn game_builds_against_a_staged_bundle_sdk() {
         build.dylib.display()
     );
 
+    // The editor dlopens a shim with the staged facade already resident, so
+    // the shim's `@rpath/libjackdaw_sdk.dylib` reference binds to the loaded
+    // image by install name before dyld ever searches a path. This harness
+    // is a cargo test binary whose baked-in rpaths point into the workspace
+    // build tree, where a later build leaves a stable-named facade from a
+    // different resolution missing the shim's symbols. Preload the staged
+    // runtime chain by absolute path, dependencies first, so every `@rpath`
+    // reference resolves by install-name match instead of path search.
+    if cfg!(target_os = "macos") {
+        let mut chain: Vec<PathBuf> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&bundle) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name.starts_with("libstd") && name.ends_with(".dylib") {
+                    chain.push(path);
+                }
+            }
+        }
+        chain.push(bundle.join("libbevy_dylib.dylib"));
+        chain.push(bundle.join("libjackdaw_dylib.dylib"));
+        chain.push(sdk.dylib.clone());
+        for dylib in chain {
+            let loaded = unsafe { libloading::Library::new(&dylib) }
+                .unwrap_or_else(|err| panic!("preload staged {}: {err}", dylib.display()));
+            std::mem::forget(loaded);
+        }
+    }
+
     // A marketplace extension is useful only if the installed editor can
     // load it and receive its trait object through the shared Jackdaw ABI.
     // Keep the library loaded until after the object is dropped because its
