@@ -422,6 +422,32 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     }
     write(&sdk_out.join("manifest.txt"), &shipped_manifest)?;
 
+    // Every OTHER rlib generation in the deps dir too, beyond the
+    // manifest's one-per-crate picks. A target dir that held two
+    // resolutions leaves the picks internally inconsistent: some staged
+    // rlib pins a transitive at the generation the manifest did NOT
+    // pick, and the project build dies on a bare "can't find crate" for
+    // a crate whose file was read and was healthy. Proven on macOS by
+    // A/B: the same extern fails against the picked set and passes when
+    // every generation travels. rustc resolves transitives by exact
+    // hash, so the extra files can never shadow anything; they only
+    // close holes. The manifest still names the picks, which is what
+    // the redirect plan points direct edges at.
+    let mut extra_rlibs = 0usize;
+    if let Ok(entries) = std::fs::read_dir(&sdk.deps) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "rlib") {
+                let name = path.file_name().expect("dir entry has a filename");
+                let dst = deps_out.join(name);
+                if !dst.exists() {
+                    copy(&path, &dst)?;
+                    extra_rlibs += 1;
+                }
+            }
+        }
+    }
+
     // The recorded proc-macro list, shipped as basenames like the
     // manifest: the wrapper rewrites a rewritten unit's proc-macro
     // externs to these exact files (resolved against the staged
@@ -516,7 +542,7 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     }
 
     Ok(format!(
-        "{rlibs} rlibs, {cdylibs} runtime cdylibs, {macros} proc-macro dylibs, \
+        "{rlibs}+{extra_rlibs} rlibs, {cdylibs} runtime cdylibs, {macros} proc-macro dylibs, \
          {native_libs} native import libs, {runner_note}"
     ))
 }
