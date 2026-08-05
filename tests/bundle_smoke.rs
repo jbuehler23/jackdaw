@@ -33,9 +33,16 @@ fn bundle_has_runtime(bundle: &Path, crate_name: &str) -> bool {
 }
 
 fn run_jd(jd: &Path, current_dir: &Path, args: &[&str]) -> std::process::Output {
+    // `cargo test` puts the workspace build tree on the loader path and
+    // children inherit it, which masks a staged binary missing its own
+    // runpath. Strip it so the staged binary resolves its dylibs the way
+    // it will on a user's machine.
     Command::new(jd)
         .args(args)
         .env_remove("JACKDAW_DEV_CHECKOUT")
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("DYLD_LIBRARY_PATH")
+        .env_remove("DYLD_FALLBACK_LIBRARY_PATH")
         .current_dir(current_dir)
         .output()
         .expect("run the staged jd binary")

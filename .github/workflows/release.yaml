@@ -265,9 +265,13 @@ jobs:
       # find libstd beside itself. Skipped where the value is empty,
       # because setting RUSTFLAGS at all would discard the rust-lld
       # flags `.cargo/config.toml` supplies for the MSVC target.
+      # Single quotes, or bash expands the undefined `$ORIGIN` inside the
+      # flag to an empty string and every shipped Linux binary loses its
+      # runpath: the dylibs sit beside it and the loader still reports
+      # them "not found".
       - name: Pin the runtime search path for the whole job
         if: matrix.rpath != ''
-        run: echo "RUSTFLAGS=${{ matrix.rpath }}" >> "$GITHUB_ENV"
+        run: echo 'RUSTFLAGS=${{ matrix.rpath }}' >> "$GITHUB_ENV"
 
       # The rustc wrapper is a HOST tool (cargo runs it as RUSTC_WRAPPER);
       # built without --target so it lands in target/release, where the
@@ -312,6 +316,23 @@ jobs:
         # therefore exercises installed behavior and cannot accidentally
         # rewrite scaffolded manifests to local path dependencies.
         run: cargo xtask bundle --out "$RUNNER_TEMP/jackdaw-${{ matrix.triple }}" --workspace .
+
+      # A binary that links the runtime dylibs but carries no `$ORIGIN`
+      # runpath extracts fine and dies at the loader on the user's
+      # machine; CI never notices because `cargo test` puts the build
+      # tree on LD_LIBRARY_PATH.
+      - name: Verify the staged binaries carry their runpath
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
+          for bin in jackdaw jd jackdaw-runner; do
+            if ! readelf -d "$root/$bin" | grep -E 'RUNPATH|RPATH' | grep -qF '$ORIGIN'; then
+              echo "$bin is missing its \$ORIGIN runpath:"
+              readelf -d "$root/$bin" | head -20
+              exit 1
+            fi
+          done
 
       # The macOS smoke keeps failing on a proc-macro dylib that every
       # model says should be staged; stop modelling and look. Which
