@@ -379,7 +379,8 @@ pub fn build_project_dylib(
         .join(dylib_file_name("jackdaw_shim"));
     // Prove the artifact imports the exact SDK facade before anything dlopens
     // it. The facade in turn imports the shipped Bevy and Jackdaw runtimes.
-    linkage::verify_linkage(&dylib, &sdk.dylib).map_err(ProjectBuildError::Linkage)?;
+    linkage::verify_linkage(&dylib, &sdk.dylib, sdk.toolchain.as_deref())
+        .map_err(ProjectBuildError::Linkage)?;
 
     // Extract the project's type schema out-of-process so the editor
     // learns its components without mapping the dylib. A missing runner
