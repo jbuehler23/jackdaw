@@ -395,9 +395,16 @@ jobs:
             fi
           }
           run_variant "bare"
-          run_variant "prefer-dynamic" -C prefer-dynamic
-          run_variant "share-generics-no" -Zshare-generics=no
-          run_variant "both" -C prefer-dynamic -Zshare-generics=no
+          run_variant "metadata-only" --emit=metadata
+          echo "=== staged vs build-tree originals (corrupted by staging?)"
+          for orig in target/${{ matrix.triple }}/release/deps/libjackdaw_api-*.rlib; do
+            [ -f "$orig" ] || continue
+            if cmp -s "$orig" "$api"; then echo "IDENTICAL to $orig"; else echo "differs from $orig"; fi
+          done
+          echo "=== can rustc enumerate the staged rlib's deps at all?"
+          rustc -Zls=root "$api" 2>&1 | head -12
+          echo "=== minimal locator trace of the bare failure"
+          RUSTC_LOG=rustc_metadata::locator=info rustc "${base[@]}" 2>&1 | grep -vE "Compiling|^\s*$" | head -60
 
       - name: Archive (tar.zst)
         if: matrix.archive == 'tar.zst'
