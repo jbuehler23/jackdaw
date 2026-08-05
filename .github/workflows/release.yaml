@@ -375,7 +375,7 @@ jobs:
       - name: Reduce a failed smoke to a rustc probe
         if: ${{ failure() }}
         run: |
-          set -uo pipefail
+          set -u
           root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
           sdkd="$root/sdk/${{ matrix.triple }}/deps"
           hostd="$root/sdk/host-deps"
@@ -432,6 +432,26 @@ jobs:
           rustc --edition 2024 --crate-type lib --target ${{ matrix.triple }} dep.rs -o libprobedep.rlib 2>&1 | head -3
           echo 'pub use probedep::f;' > usedep.rs
           if rustc --edition 2024 --crate-type lib --target ${{ matrix.triple }} usedep.rs --extern probedep=libprobedep.rlib -o usedep_out 2>sanity.err; then echo "sanity PASS"; else echo "sanity FAIL:"; head -6 sanity.err; fi
+
+          echo "=== relocation split: staged rlibs + UNRELOCATED dylibs, and the inverse ==="
+          # The macOS relocation pass (install_name_tool + codesign) is
+          # the one transformation the two passing platforms never run,
+          # and the locator reads the rewritten dylibs for metadata.
+          bt="target/${{ matrix.triple }}/release/deps"
+          mkdir -p mixa mixb
+          cp "$sdkd"/*.rlib mixa/ 2>/dev/null
+          for d in "$bt"/*.dylib; do [ -f "$d" ] && cp "$d" mixa/; done
+          cp "$bt"/*.rlib mixb/ 2>/dev/null
+          for d in "$sdkd"/*.dylib; do [ -f "$d" ] && cp "$d" mixb/; done
+          mix() {
+            name="$1"; dir="$2"; extern="$3"
+            echo "--- $name"
+            if rustc --edition 2024 --crate-type lib --target ${{ matrix.triple }} only_api.rs \
+                 --extern jackdaw_api="$extern" -L dependency="$dir" -L dependency="$hostd" -o mix_out 2>mix.err
+            then echo "PASS"; else echo "FAIL:"; head -4 mix.err; fi
+          }
+          mix "staged rlibs + fresh dylibs" mixa "mixa/$(basename "$api")"
+          mix "fresh rlibs + RELOCATED dylibs" mixb "mixb/$(basename "$api")"
 
       - name: Archive (tar.zst)
         if: matrix.archive == 'tar.zst'
