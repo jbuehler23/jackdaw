@@ -211,17 +211,22 @@ fn game_builds_against_a_staged_bundle_sdk() {
     // reference resolves by install-name match instead of path search.
     if cfg!(target_os = "macos") {
         let mut chain: Vec<PathBuf> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&bundle) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if name.starts_with("libstd") && name.ends_with(".dylib") {
-                    chain.push(path);
-                }
-            }
+        for prefix in ["libstd", "libbevy_dylib", "libjackdaw_dylib"] {
+            let entries = std::fs::read_dir(&bundle).expect("read bundle root");
+            let staged: Vec<PathBuf> = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.extension().is_some_and(|ext| ext == "dylib")
+                        && path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.starts_with(prefix))
+                })
+                .collect();
+            assert!(!staged.is_empty(), "no {prefix}* dylib at the bundle root");
+            chain.extend(staged);
         }
-        chain.push(bundle.join("libbevy_dylib.dylib"));
-        chain.push(bundle.join("libjackdaw_dylib.dylib"));
         chain.push(sdk.dylib.clone());
         for dylib in chain {
             let loaded = unsafe { libloading::Library::new(&dylib) }
