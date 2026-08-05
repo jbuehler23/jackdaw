@@ -421,9 +421,17 @@ jobs:
           single "bei staged" only_bei.rs --extern bevy_enhanced_input="$bei"
           echo "--- build-tree jackdaw_api generations by mtime:"
           ls -la --time-style=+%m-%dT%H:%M target/${{ matrix.triple }}/release/deps/libjackdaw_api-*.rlib 2>/dev/null || ls -l target/${{ matrix.triple }}/release/deps/libjackdaw_api-*.rlib
-          echo "=== tail of the single-extern api trace ==="
-          RUSTC_LOG=rustc_metadata::locator=info rustc --edition 2024 --crate-type lib --target ${{ matrix.triple }} only_api.rs --extern jackdaw_api="$api" -L dependency="$sdkd" -L dependency="$hostd" -o single_out 2>t2.log || true
-          tail -25 t2.log
+          echo "=== the staged rlib's recorded sysroot deps vs the runner's sysroot ==="
+          rustc -Zls=all "$api" 2>&1 | sed -n '/External Dependencies/,$p' | head -16
+          echo "--- runner sysroot:"
+          ls "$(rustc --print sysroot)/lib/rustlib/${{ matrix.triple }}/lib" | grep -E "^lib(std|core|alloc)-" | head -6
+          echo "--- probe rustc:"
+          rustc -vV | head -3
+          echo "=== sanity: fresh two-crate chain on this runner ==="
+          echo 'pub fn f() -> u8 { 7 }' > dep.rs
+          rustc --edition 2024 --crate-type lib --target ${{ matrix.triple }} dep.rs -o libprobedep.rlib 2>&1 | head -3
+          echo 'pub use probedep::f;' > usedep.rs
+          if rustc --edition 2024 --crate-type lib --target ${{ matrix.triple }} usedep.rs --extern probedep=libprobedep.rlib -o usedep_out 2>sanity.err; then echo "sanity PASS"; else echo "sanity FAIL:"; head -6 sanity.err; fi
 
       - name: Archive (tar.zst)
         if: matrix.archive == 'tar.zst'
