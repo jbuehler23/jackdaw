@@ -52,7 +52,7 @@ jobs:
           shared-key: heavy
 
       - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
       # This tier launches real games (`bsn_game_run`, `editor_journey`),
       # and a CI runner has no GPU. Without a software Vulkan driver the
       # game aborts inside `bevy_render` with `Unable to find a GPU!`
