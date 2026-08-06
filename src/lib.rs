@@ -47,6 +47,7 @@ use std::{collections::BTreeMap, marker::PhantomData};
 
 pub use inspector::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 
+pub mod camera_preview;
 pub mod core_extension;
 pub mod dock_ops;
 pub mod document_ops;
@@ -339,6 +340,7 @@ impl Plugin for EditorCorePlugin {
             numeric_transform::NumericTransformPlugin,
             custom_properties::CustomPropertiesPlugin,
             brush::BrushPlugin,
+            camera_preview::CameraPreviewPlugin,
             material_preview::MaterialPreviewPlugin,
             undo_snapshot::plugin,
             migrate_dialog::plugin,
