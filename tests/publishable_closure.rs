@@ -170,23 +170,14 @@ fn the_release_workflow_publishes_the_whole_closure() {
     );
 }
 
-/// The editor is the crate that cannot be published, and the reason the
-/// publish is scoped rather than workspace-wide. If it ever loses its
-/// git dependency this scoping can go away.
+/// The publish is deliberately scoped to the scaffolding closure: the
+/// editor ships as a downloadable bundle, not a crates.io install, so
+/// the closure must never grow to reach it and drag the whole editor
+/// graph onto the registry.
 #[test]
-fn the_editor_is_what_keeps_the_publish_scoped() {
-    let packages = workspace();
-    let editor_has_git = packages["jackdaw"]
-        .deps
-        .iter()
-        .any(|dep| dep.source.as_deref().is_some_and(|s| s.starts_with("git+")));
+fn the_scaffold_closure_stays_clear_of_the_editor() {
     assert!(
-        editor_has_git,
-        "the editor no longer has a git dependency, so `cargo publish --workspace` may now \
-         work; revisit the scoped publish in .github/workflows/release.yaml"
-    );
-    assert!(
-        !scaffold_closure(&packages).contains("jackdaw"),
+        !scaffold_closure(&workspace()).contains("jackdaw"),
         "the scaffolding closure must not reach the editor crate"
     );
 }
