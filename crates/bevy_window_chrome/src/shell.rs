@@ -59,7 +59,11 @@ pub fn spawn_window_shell<S: Component + Copy>(
                 flex_direction: FlexDirection::Column,
                 overflow: Overflow::clip(),
                 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-                border_radius: BorderRadius::all(px(theme.linux_corner_radius)),
+                border_radius: if crate::window::surface_supports_alpha() {
+                    BorderRadius::all(px(theme.linux_corner_radius))
+                } else {
+                    BorderRadius::ZERO
+                },
                 ..default()
             },
         ))

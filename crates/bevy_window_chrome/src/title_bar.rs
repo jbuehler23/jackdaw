@@ -30,7 +30,11 @@ pub fn spawn_window_title_bar(
     caption_font: &CaptionFont,
 ) -> Entity {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    let title_bar_border_radius = BorderRadius::top(px(theme.linux_corner_radius));
+    let title_bar_border_radius = if crate::window::surface_supports_alpha() {
+        BorderRadius::top(px(theme.linux_corner_radius))
+    } else {
+        BorderRadius::ZERO
+    };
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     let title_bar_border_radius = BorderRadius::ZERO;
 
