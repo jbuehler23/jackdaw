@@ -183,8 +183,28 @@ impl Plugin for SceneIoPlugin {
                 (poll_scene_dialog, cleanup_pending_new_scene)
                     .run_if(in_state(crate::AppState::Editor)),
             )
+            .add_systems(PostUpdate, deactivate_document_cameras)
             .add_observer(on_new_scene_save)
             .add_observer(on_new_scene_discard);
+    }
+}
+
+/// Keeps cameras authored in the scene document from rendering in the
+/// editor. `Camera3d` on a document entity pulls in a required `Camera`
+/// whose defaults target the primary window at order 0, the same window
+/// the editor UI camera composites into, so an authored game camera
+/// drew the scene on top of the docks. The components stay on the
+/// entity for inspection and save; only rendering is suppressed.
+fn deactivate_document_cameras(
+    mut cameras: Query<
+        &mut bevy::camera::Camera,
+        (With<jackdaw_bsn::AstNodeRef>, Without<crate::EditorEntity>),
+    >,
+) {
+    for mut camera in &mut cameras {
+        if camera.is_active {
+            camera.is_active = false;
+        }
     }
 }
 
@@ -241,4 +261,38 @@ fn get_window_handle(world: &mut World) -> Option<RawHandleWrapper> {
         .single(world)
         .ok()
         .cloned()
+}
+
+#[cfg(test)]
+mod camera_tests {
+    use super::*;
+
+    #[test]
+    fn document_cameras_are_deactivated_and_editor_cameras_kept() {
+        let mut world = World::new();
+        let ast_node = world.spawn_empty().id();
+        let authored = world
+            .spawn((
+                bevy::camera::Camera::default(),
+                jackdaw_bsn::AstNodeRef {
+                    patches_entity: ast_node,
+                },
+            ))
+            .id();
+        let editor = world.spawn(bevy::camera::Camera::default()).id();
+
+        world
+            .run_system_cached(deactivate_document_cameras)
+            .expect("run the deactivation system");
+
+        let is_active = |world: &World, e| world.get::<bevy::camera::Camera>(e).unwrap().is_active;
+        assert!(
+            !is_active(&world, authored),
+            "a document camera must not render in the editor"
+        );
+        assert!(
+            is_active(&world, editor),
+            "non-document cameras keep rendering"
+        );
+    }
 }
