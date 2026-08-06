@@ -59,7 +59,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::process::{Command, ExitCode};
-use tracing::error;
+use tracing::{error, warn};
 
 const ENV_SDK_DYLIB: &str = "JACKDAW_SDK_DYLIB";
 const ENV_SDK_DEPS: &str = "JACKDAW_SDK_DEPS";
@@ -139,7 +139,7 @@ pub fn run() -> ExitCode {
     // compile of one crate on the way to the same error.
     let status = match status {
         Ok(s) if !s.success() => {
-            error!(
+            warn!(
                 "jackdaw-rustc-wrapper: rustc failed for {}; retrying the unit once",
                 env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "<unknown>".into()),
             );
@@ -147,7 +147,9 @@ pub fn run() -> ExitCode {
             if let Ok(r) = &retry
                 && r.success()
             {
-                error!("jackdaw-rustc-wrapper: the retry succeeded; the failure was transient");
+                warn!(
+                    "jackdaw-rustc-wrapper: the retry succeeded; the failure was transient and the build is fine"
+                );
             }
             retry
         }
