@@ -22,6 +22,8 @@ pub const DESTRUCTIVE_RED: Srgba = tailwind::RED_500;
 pub const DESTRUCTIVE_RED_HOVER: Srgba = tailwind::RED_600;
 /// Positive / success text (e.g. a build that succeeded).
 pub const TEXT_SUCCESS: Color = Color::srgb(0.36, 0.72, 0.42);
+/// Caution / warning text (e.g. modifying an existing project file).
+pub const TEXT_WARNING: Color = Color::srgb(0.92, 0.75, 0.28);
 /// Error text (e.g. a build that failed).
 pub const TEXT_ERROR: Color = Color::srgb(0.9, 0.32, 0.32);
 

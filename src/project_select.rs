@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use bevy::text::{FontSize, FontSourceTemplate};
 use bevy::{
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
@@ -7,7 +8,7 @@ use bevy::{
 };
 use jackdaw_feathers::{
     button::{ButtonVariant, IconButtonProps, icon_button},
-    icons::{EditorFont, Icon},
+    icons::{EditorFont, Icon, font_paths},
     text_edit::{TextEditProps, TextEditValue, text_edit},
     tokens,
 };
@@ -25,6 +26,7 @@ use crate::{
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
 use bevy_window_chrome::CaptionFont;
 use bevy_window_chrome::{WindowChromeTheme, spawn_window_shell};
+use jackdaw_project_build::cargo_meta::ResolveError;
 
 pub struct ProjectSelectPlugin;
 
@@ -1441,17 +1443,20 @@ pub fn close_new_project_modal(world: &mut World) {
 /// init`) or open it without setup. `error` re-renders the card with
 /// a failure message (e.g. a Bevy version mismatch).
 fn show_setup_jackdaw_card(world: &mut World, root: PathBuf, error: Option<String>) {
-    show_setup_jackdaw_card_with_recovery(world, root, error, false);
+    show_setup_jackdaw_card_with_recovery(world, root, error, false, None);
 }
 
 /// The setup offer. When `recoverable`, the failure is one the user can
 /// choose to proceed past (a Bevy minor mismatch), so a third button
 /// offers that instead of leaving only a retry that cannot succeed.
+/// `package` is the workspace member already chosen (if any), so a
+/// recoverable retry does not lose that choice.
 fn show_setup_jackdaw_card_with_recovery(
     world: &mut World,
     root: PathBuf,
     error: Option<String>,
     recoverable: bool,
+    package: Option<String>,
 ) {
     let (_, card, font) = spawn_modal_card(world, 520.0, 700.0);
     spawn_card_title(world, card, "Set up jackdaw for this project", &font);
@@ -1511,6 +1516,13 @@ fn show_setup_jackdaw_card_with_recovery(
 
     let row = spawn_card_button_row(world, card);
 
+    let cancel = spawn_card_button(world, row, "Cancel", &font, false);
+    world
+        .entity_mut(cancel)
+        .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.queue(close_new_project_modal);
+        });
+
     let open_anyway = spawn_card_button(world, row, "Open without setup", &font, false);
     let root_open = root.clone();
     world
@@ -1532,7 +1544,10 @@ fn show_setup_jackdaw_card_with_recovery(
             .entity_mut(anyway)
             .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                 let root = root_force.clone();
-                commands.queue(move |world: &mut World| plan_and_show_import(world, root, true));
+                let package = package.clone();
+                commands.queue(move |world: &mut World| {
+                    plan_and_show_import(world, root, package, true);
+                });
             });
     } else {
         let setup = spawn_card_button(world, row, "Set up jackdaw", &font, true);
@@ -1731,10 +1746,10 @@ fn spawn_step_list(world: &mut World, card: Entity, steps: &[&str], font: &Handl
 /// Render an import plan's changes as one row per file, rather than as
 /// a paragraph.
 ///
-/// The distinction that matters for consent is create-versus-replace: a
-/// replace overwrites something the user already had. As prose bullets
-/// the two read identically, so this gives replaces their own icon and
-/// the warning colour, and puts the verb before the path.
+/// The distinction that matters for consent is create-versus-modify: a
+/// modify touches something the user already had. As prose bullets the
+/// two read identically, so this gives modifies their own icon and the
+/// warning colour, and puts the verb before the path.
 fn spawn_change_list(
     world: &mut World,
     card: Entity,
@@ -1766,10 +1781,10 @@ fn spawn_change_list(
             ImportChange::CreateDirectory { .. } => {
                 (Icon::FolderPlus, "create", tokens::TEXT_SECONDARY)
             }
-            // `summary` decides create-vs-replace by looking at the
+            // `summary` decides create-vs-modify by looking at the
             // disk, so ask it rather than re-deriving the answer here.
-            ImportChange::WriteFile { .. } if change.summary().starts_with("replace") => {
-                (Icon::FilePen, "replace", tokens::TEXT_ERROR)
+            ImportChange::WriteFile { .. } if change.summary().starts_with("modify") => {
+                (Icon::FilePen, "modify", tokens::TEXT_WARNING)
             }
             ImportChange::WriteFile { .. } => (Icon::FilePlus, "create", tokens::TEXT_SECONDARY),
         };
@@ -2111,27 +2126,196 @@ fn show_version_mismatch_card(
 /// Build an import preview for the "Set up jackdaw" card. Planning is
 /// side-effect free; a second explicit action applies the exact proposal.
 fn on_setup_jackdaw_clicked(world: &mut World, root: PathBuf) {
-    plan_and_show_import(world, root, false);
+    plan_and_show_import(world, root, None, false);
 }
 
 /// Plan the import and show the preview, or explain why it could not be
 /// planned. `allow_bevy_mismatch` is the second attempt after the user
 /// chose to proceed past a version mismatch, so the card offers a way
 /// forward instead of a button that fails identically every time.
-fn plan_and_show_import(world: &mut World, root: PathBuf, allow_bevy_mismatch: bool) {
-    match crate::scaffold::plan_import_with(&root, None, None, allow_bevy_mismatch) {
+/// `package` is set when the user already picked a workspace member.
+fn plan_and_show_import(
+    world: &mut World,
+    root: PathBuf,
+    package: Option<String>,
+    allow_bevy_mismatch: bool,
+) {
+    match crate::scaffold::plan_import_with(&root, None, package.as_deref(), allow_bevy_mismatch) {
         Ok(plan) if plan.is_empty() => enter_project_with(world, root, false),
         Ok(plan) => show_import_preview_card(world, plan),
+        Err(ScaffoldError::Package(ResolveError::Ambiguous { candidates })) => {
+            show_package_picker_card(world, root, candidates, allow_bevy_mismatch);
+        }
         Err(error) => {
             warn!("Set up jackdaw failed for {}: {error}", root.display());
-            let recoverable = matches!(error, crate::scaffold::ScaffoldError::BevyVersion { .. });
+            let recoverable = matches!(error, ScaffoldError::BevyVersion { .. });
             show_setup_jackdaw_card_with_recovery(
                 world,
                 root,
                 Some(error.to_string()),
                 recoverable,
+                package,
             );
         }
+    }
+}
+
+/// Ask which workspace member is the game when several look like one.
+///
+/// Clicking a row continues setup for that package; Back returns to the
+/// setup offer.
+fn show_package_picker_card(
+    world: &mut World,
+    root: PathBuf,
+    candidates: Vec<String>,
+    allow_bevy_mismatch: bool,
+) {
+    let (_, card, font) = spawn_modal_card(world, 480.0, 560.0);
+    spawn_card_title(world, card, "Which package is the game?", &font);
+    spawn_card_body(
+        world,
+        card,
+        "Several packages in this workspace could be the game. Pick the one the editor should build.",
+        &font,
+    );
+
+    let Ok(mut list_shell) = world.spawn_scene(package_picker_list_shell()) else {
+        error!("failed to spawn package picker list shell");
+        return;
+    };
+    list_shell.insert(ChildOf(card));
+    let list_shell = list_shell.id();
+
+    let Ok(mut list) = world.spawn_scene(package_picker_list()) else {
+        error!("failed to spawn package picker list");
+        return;
+    };
+    list.insert(ChildOf(list_shell));
+    let list = list.id();
+    world.spawn((
+        jackdaw_feathers::scroll::scrollbar(list),
+        ChildOf(list_shell),
+    ));
+
+    for name in candidates {
+        let Ok(mut row) = world.spawn_scene(package_candidate_row(
+            name,
+            root.clone(),
+            allow_bevy_mismatch,
+        )) else {
+            error!("failed to spawn package candidate row");
+            continue;
+        };
+        row.insert(ChildOf(list));
+    }
+
+    let row = spawn_card_button_row(world, card);
+    let back = spawn_card_button(world, row, "Back", &font, false);
+    world
+        .entity_mut(back)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = root.clone();
+            commands.queue(move |world: &mut World| show_setup_jackdaw_card(world, root, None));
+        });
+}
+
+/// Bordered shell around the scrollable package list.
+fn package_picker_list_shell() -> impl Scene {
+    bsn! {
+        Node {
+            flex_direction: FlexDirection::Column,
+            width: percent(100),
+            max_height: px(280.0),
+            border: UiRect::all(px(1.0)),
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
+            overflow: Overflow::clip(),
+        }
+        BackgroundColor(tokens::INPUT_BG)
+        BorderColor::all(tokens::BORDER_SUBTLE)
+    }
+}
+
+/// Scrollable column that holds package candidate rows.
+fn package_picker_list() -> impl Scene {
+    bsn! {
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(4.0),
+            padding: UiRect::all(px(6.0)),
+            width: percent(100),
+            max_height: px(280.0),
+            overflow: Overflow::scroll_y(),
+        }
+        ScrollPosition::default()
+        bevy::picking::hover::Hovered::default()
+    }
+}
+
+/// clickable workspace-member row in the package picker.
+fn package_candidate_row(name: String, root: PathBuf, allow_bevy_mismatch: bool) -> impl Scene {
+    let glyph = String::from(Icon::Package.unicode());
+    let label = name.clone();
+    bsn! {
+        Node {
+            flex_direction: FlexDirection::Row,
+            width: percent(100),
+            min_height: px(40.0),
+            padding: UiRect::axes(px(10.0), px(8.0)),
+            border: UiRect::all(px(1.0)),
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_LG)),
+            align_items: AlignItems::Center,
+            column_gap: px(10.0),
+        }
+        BackgroundColor(tokens::PANEL_BG)
+        BorderColor::all(tokens::BORDER_SUBTLE)
+        Children [
+            (
+                Node {
+                    width: px(26.0),
+                    height: px(26.0),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
+                }
+                BackgroundColor(tokens::DOC_TAB_ACTIVE_BG)
+                Pickable::IGNORE
+                Children [
+                    (
+                        Text(glyph)
+                        TextFont {
+                            font: FontSourceTemplate::Handle(font_paths::LUCIDE),
+                            font_size: FontSize::Px(tokens::ICON_SM_PX),
+                        }
+                        TextColor(tokens::DIR_ICON_COLOR)
+                    ),
+                ]
+            ),
+            (
+                Text(label)
+                TextFont {
+                    font_size: tokens::TEXT_SIZE,
+                }
+                TextColor(tokens::TEXT_PRIMARY)
+                Pickable::IGNORE
+            ),
+        ]
+        on(|hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
+            if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
+                bg.0 = tokens::HOVER_BG;
+            }
+        })
+        on(|out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
+            if let Ok(mut bg) = bg.get_mut(out.event_target()) {
+                bg.0 = tokens::PANEL_BG;
+            }
+        })
+        on(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = root.clone();
+            let package = name.clone();
+            commands.queue(move |world: &mut World| {
+                plan_and_show_import(world, root, Some(package), allow_bevy_mismatch);
+            });
+        })
     }
 }
 
@@ -2139,7 +2323,7 @@ fn show_import_preview_card(world: &mut World, plan: crate::scaffold::ImportPlan
     let (_, card, font) = spawn_modal_card(world, 560.0, 760.0);
     spawn_card_title(world, card, "Review project integration", &font);
     // Lead with the rewrite when there is one. A blanket reassurance
-    // printed above a line reading `replace src/main.rs` is worse than
+    // printed above a line reading `modify src/main.rs` is worse than
     // no reassurance: the user reads the summary, not the bullets.
     let intro = if plan.migrated_bin_target {
         format!(
@@ -2945,17 +3129,23 @@ fn poll_new_project_tasks(
 mod tests {
     use super::*;
 
-    /// The card builders need only the two font resources and the
-    /// modal state; everything else they touch they spawn themselves.
-    /// Exercising them against a bare world checks the thing the type
-    /// checker cannot: that the hierarchy actually gets built, and that
-    /// nothing panics on the way.
+    /// The card builders need the two font resources, the modal state,
+    /// and enough of the asset/scene stack for `bsn!` `spawn_scene`
+    /// calls (the package picker). Exercising them against this world
+    /// checks the thing the type checker cannot: that the hierarchy
+    /// actually gets built, and that nothing panics on the way.
     fn card_world() -> World {
-        let mut world = World::new();
-        world.insert_resource(NewProjectState::default());
-        world.insert_resource(EditorFont(Handle::default()));
-        world.insert_resource(jackdaw_feathers::icons::IconFont(Handle::default()));
-        world
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::scene::ScenePlugin)
+            .init_asset::<Font>();
+        app.world_mut().insert_resource(NewProjectState::default());
+        app.world_mut()
+            .insert_resource(EditorFont(Handle::default()));
+        app.world_mut()
+            .insert_resource(jackdaw_feathers::icons::IconFont(Handle::default()));
+        std::mem::take(app.world_mut())
     }
 
     /// Every `Text` in the world, for asserting on what a card says.
@@ -2978,10 +3168,10 @@ mod tests {
         }
     }
 
-    /// The consent-critical distinction: a replace overwrites something
+    /// The consent-critical distinction: a modify touches something
     /// the user already had, and must not read like a creation.
     #[test]
-    fn the_preview_marks_replacements_differently_from_creations() {
+    fn the_preview_marks_modifications_differently_from_creations() {
         let mut world = card_world();
         show_import_preview_card(
             &mut world,
@@ -3041,6 +3231,39 @@ mod tests {
         assert!(
             text.iter().any(|t| t.contains("lists every file first")),
             "and so is the promise that nothing is written yet: {text:?}"
+        );
+        assert!(
+            text.iter().any(|t| t == "Cancel"),
+            "offers a way to dismiss: {text:?}"
+        );
+    }
+
+    #[test]
+    fn the_package_picker_lists_each_candidate() {
+        let mut world = card_world();
+        show_package_picker_card(
+            &mut world,
+            PathBuf::from("/proj/workspace"),
+            vec!["package_1".into(), "package_2".into()],
+            false,
+        );
+        let text = rendered_text(&mut world);
+        assert!(
+            text.iter()
+                .any(|t| t.contains("Which package is the game?")),
+            "asks which package: {text:?}"
+        );
+        assert!(
+            text.iter().any(|t| t == "package_1"),
+            "lists the first candidate: {text:?}"
+        );
+        assert!(
+            text.iter().any(|t| t == "package_2"),
+            "lists the second candidate: {text:?}"
+        );
+        assert!(
+            text.iter().any(|t| t == "Back"),
+            "offers a way back: {text:?}"
         );
     }
 
