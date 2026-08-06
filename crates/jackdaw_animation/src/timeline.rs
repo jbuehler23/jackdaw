@@ -2,7 +2,7 @@
 //!
 //! The bundle function [`timeline_panel`] spawns the root node, then
 //! [`rebuild_timeline`] repopulates its children whenever the selection
-//! or a dirty flag says so. Layout follows Blender's model: left column
+//! or a dirty flag says so. Layout: left column
 //! for track labels only, right column for a single pickable grid
 //! (ruler + strips) that receives scrub clicks.
 //!

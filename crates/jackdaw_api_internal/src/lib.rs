@@ -720,7 +720,7 @@ pub struct PanelContext {
 /// when extension entities are despawned.
 ///
 /// Also runs `tick_modal_operator` each frame in Update so modal
-/// operators (Blender-style grab/rotate/scale) re-run their invoke
+/// operators (keyboard-driven grab/rotate/scale) re-run their invoke
 /// system until they return `Finished` or `Cancelled`.
 pub struct ExtensionLoaderPlugin;
 

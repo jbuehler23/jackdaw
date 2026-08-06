@@ -1,6 +1,6 @@
 # Contributing to Jackdaw
 
-Thank you for your interest in contributing to Jackdaw! This document covers the basics of getting set up and submitting changes.
+How to get set up, what to check before a PR, and how editor behaviour is structured as operators.
 
 ## Development Setup
 

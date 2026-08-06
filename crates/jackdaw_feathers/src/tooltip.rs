@@ -1,7 +1,7 @@
 //! Generic hover-tooltip primitive.
 //!
 //! Any UI entity that carries a [`Tooltip`] component plus
-//! [`bevy::picking::hover::Hovered`] gets a Blender-style popover
+//! [`bevy::picking::hover::Hovered`] gets a two-stage popover
 //! after a short delay: bold title, optional wrapped description,
 //! optional dim footer (operator signature, type path, etc.).
 //!
@@ -31,7 +31,7 @@ const SHORT_HOVER_DELAY: Duration = Duration::from_millis(300);
 
 /// Additional delay (counted from the start of the hover) before the
 /// description + footer are appended to the existing popover.
-/// Blender-style two-stage tooltips: glance to discover the name,
+/// Two-stage tooltips: glance to discover the name,
 /// linger to read the manual.
 const FULL_HOVER_DELAY: Duration = Duration::from_millis(1200);
 
@@ -130,7 +130,7 @@ struct TooltipState {
 }
 
 /// Tick the hover delay and spawn / despawn the tooltip popover.
-/// Two-stage Blender-style: a glance gets the title, lingering
+/// Two-stage: a glance gets the title, lingering
 /// expands to the full description + signature.
 fn tick_tooltip(
     time: Res<Time>,

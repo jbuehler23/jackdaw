@@ -10,19 +10,20 @@ so we can talk through the approach.
 The editor loads project and extension code as dylibs built
 against its SDK proxy. On Windows, a PE export table addresses
 its entries with a 16-bit ordinal, so 65,535 is the ceiling and
-no linker escapes it. `jackdaw_sdk.dll` carries bevy's whole
-closure and exports about 50,000, which the release job now
-measures and fails above 60,000. The SDK build also disables
-incremental codegen, which otherwise leaves undefined hidden
-symbols across the dylib boundary.
+no linker escapes it. Release builds split the runtime into
+`bevy_dylib` and `jackdaw_dylib` beside the SDK facade, which
+keeps each library's export count well under the ceiling; the
+release job measures every table and fails above 60,000. Two
+gotchas the split codified: LTO stays off for Windows binaries,
+because a PE file cannot import data across a DLL boundary once
+inlining creates direct references to another library's
+statics, and the SDK build disables incremental codegen, which
+otherwise leaves undefined hidden symbols across the dylib
+boundary.
 
-The obvious relief is splitting bevy into its own `bevy_dylib`,
-which cuts the SDK to about 9,000 exports. It does not work: a
-Rust dylib in the graph makes rustc link the whole graph
-dynamically, std included, and the link then fails on the
-private statics that inlined upstream code reaches for, which
-an export table never carries. So the headroom has to come from
-somewhere else.
+What remains is the debug profile: a debug SDK carries around
+94,000 exports, past the ceiling, so contributors on Windows
+still develop against release SDK artifacts.
 
 Where to dig in: trimming what the SDK proxy re-exports.
 

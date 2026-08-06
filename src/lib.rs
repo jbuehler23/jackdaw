@@ -2014,8 +2014,7 @@ fn register_animation_entities_in_ast(
 /// The guard ("skip if any child already has a `GltfClipRef`") keeps
 /// us from resurrecting clips the user deleted within the session.
 /// Adding new clips to the glTF file externally requires a scene
-/// reload to rediscover them, which matches Blender's "reload glTF"
-/// semantics.
+/// reload to rediscover them.
 ///
 /// Lives in the main crate rather than `jackdaw_animation` because it
 /// needs to read `jackdaw_scene_types::GltfSource`, and we'd rather not wire a
