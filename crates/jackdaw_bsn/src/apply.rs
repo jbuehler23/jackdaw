@@ -150,6 +150,23 @@ pub fn apply_ast_to_ecs(world: &mut World, entity: Entity) {
         }
     }
 
+    // Sibling entities are comma-separated; a hand-edited file that
+    // drops the comma silently folds the next entity's patches into
+    // this one, with only the extra Name patch as evidence. Merged
+    // camera-plus-light entities from exactly this mistake shipped in
+    // the scaffold template once, so the trap deserves a loud pointer.
+    let names = patch_data
+        .iter()
+        .filter(|p| matches!(p, BsnPatch::Name(_)))
+        .count();
+    if names > 1 {
+        log::warn!(
+            "BSN entity has {names} #names; a missing comma between sibling \
+             entities merges them into one. Check the scene file for a \
+             patch group holding more than one #name."
+        );
+    }
+
     for patch in patch_data {
         match patch {
             BsnPatch::Name(name) => {

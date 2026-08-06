@@ -6,13 +6,13 @@
 bevy_transform::components::transform::Transform
 bevy_camera::visibility::Visibility::Visible
 bevy_ecs::hierarchy::Children [
-    #Main Camera
+    #"Main Camera"
     bevy_camera::components::Camera3d
     bevy_transform::components::transform::Transform {
         translation: glam::Vec3 { x: 0.0, y: 6.0, z: 12.0 },
         rotation: glam::Quat { x: -0.2164396, y: 0.0, z: 0.0, w: 0.9762960 },
     }
-    bevy_camera::visibility::Visibility::Visible
+    bevy_camera::visibility::Visibility::Visible,
 
     #Sun
     bevy_light::directional_light::DirectionalLight
