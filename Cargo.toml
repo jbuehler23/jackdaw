@@ -274,7 +274,7 @@ jackdaw_runner = { version = "0.19.0", path = "crates/jackdaw_runner" }
 jackdaw_cli_internal = { version = "0.19.0", path = "crates/jackdaw_cli" }
 bevy_enhanced_input = "0.26"
 rfd = "0.15"
-bevy_rerecast = { git = "https://github.com/HeyPlayGames/rerecast", rev = "493074cd8c1e8c97bc8fc6b51da01e5295696860", default-features = true }
+bevy_rerecast = { version = "0.5.0", default-features = true }
 ehttp = { version = "0.5", default-features = false, features = [
     "native-async",
     "json",
