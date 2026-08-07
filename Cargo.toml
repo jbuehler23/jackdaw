@@ -30,7 +30,7 @@ include = [
 ]
 # The package now ships two binaries: `jackdaw` (the editor) and
 # `jackdaw-rustc-wrapper` (the rustc interceptor used by scaffolded
-# dylib projects). `default-run` makes `cargo run` resolve to the
+# extension projects). `default-run` makes `cargo run` resolve to the
 # editor without an explicit `--bin` flag; the wrapper still builds
 # alongside via `cargo build` and is installed by `cargo install`.
 default-run = "jackdaw"
@@ -244,8 +244,8 @@ rand = "0.9"
 serde = "1"
 lucide-icons = "0.563"
 serde_json = "1"
-# Default features stay on so the SDK resolves at least what a project
-# does: the game template adds a plain `avian3d = "0.7"`, and against an
+# Default features stay on so the SDK resolves at least what an extension
+# does: a physics-enabled graph adds a plain `avian3d = "0.7"`, and against an
 # SDK built leaner, any use of an item behind one of the dropped
 # features fails to compile against the redirected rlib.
 # `tests/sdk_feature_superset.rs` guards that ordering.

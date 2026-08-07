@@ -85,7 +85,7 @@ jobs:
           cargo build -p jackdaw_rustc_wrapper
 
       - name: Auto-registration across dlopen
-        # Project builds generate the dev SDK manifest on demand. The test
+        # Extension builds generate the dev SDK manifest on demand. The test
         # harness must use that same Cargo profile: dylibs from `test` and
         # `dev` have different symbol identities but share one output name.
         run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test reflect_auto_register -- --nocapture

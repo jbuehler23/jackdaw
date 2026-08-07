@@ -34,8 +34,9 @@ pub enum ProjectBuildError {
     Io(std::io::Error),
     Plan(PlanError),
     Linkage(linkage::LinkageError),
-    /// The project compile itself failed; the log carries rustc's
-    /// diagnostics for the problems panel.
+    /// The compile itself failed; the log carries rustc's
+    /// diagnostics for the problems panel. Used by both the game
+    /// binary path and the extension dylib path.
     Compile {
         log: String,
     },
@@ -79,9 +80,10 @@ impl From<PlanError> for ProjectBuildError {
     }
 }
 
-/// Live progress from a project build. Bevy-light so the pipeline crate
-/// stays independent of the editor; the editor maps these onto its
-/// `BuildProgress` sink for the footer bar and the build log.
+/// Live progress from a project build (game binary or extension
+/// dylib). Bevy-light so the pipeline crate stays independent of the
+/// editor; the editor maps these onto its `BuildProgress` sink for the
+/// footer bar and the build log.
 pub enum BuildEvent {
     /// cargo finished one compile unit; `crate_name` is the unit it just
     /// produced, `done` the running count, and `fresh` whether it was a
@@ -166,8 +168,8 @@ pub fn sdk_remedy(sdk: &SdkPaths) -> String {
     "run `jd setup` to prepare one".to_string()
 }
 
-/// Run the full pipeline for one project. `jackdaw_dir` is the
-/// project's `.jackdaw/`; `dev_workspace` points at the jackdaw
+/// Run the full SDK dylib pipeline for one extension. `jackdaw_dir` is
+/// the project's `.jackdaw/`; `dev_workspace` points at the jackdaw
 /// checkout in dev runs (where the SDK manifest is generated rather
 /// than shipped).
 pub fn build_project_dylib(
@@ -178,7 +180,7 @@ pub fn build_project_dylib(
     report: &mut dyn FnMut(BuildEvent),
 ) -> Result<ProjectBuild, ProjectBuildError> {
     // Checked before the shim is even written: an SDK with no library or
-    // no wrapper fails the same way whatever the project is, and it does
+    // no wrapper fails the same way whatever the extension is, and it does
     // so minutes in. Reported through the log too, so the editor's build
     // panel shows what to fix instead of a bare failure line.
     let problems = sdk.problems();
@@ -196,7 +198,7 @@ pub fn build_project_dylib(
 
     // A checkout builds the editor and its SDK with separate commands
     // (`cargo run` writes neither into the triple dir), so they drift
-    // apart silently. The project links the SDK, so an SDK older than
+    // apart silently. The extension links the SDK, so an SDK older than
     // the editor running it fails linkage verification after a full
     // build. Say so in the second it costs to compare two timestamps.
     if let Some(note) = sdk_older_than_editor(sdk) {
@@ -475,7 +477,7 @@ pub fn last_built_dylib(jackdaw_dir: &Path) -> Option<PathBuf> {
 
 /// Turn "can't find crate for X" into something the user can act on.
 ///
-/// The project compiles against prebuilt SDK rlibs, so rustc failing to
+/// The extension compiles against prebuilt SDK rlibs, so rustc failing to
 /// resolve one of the SDK's own crates means those artifacts do not
 /// agree with each other, not that the user's code is wrong. It reads
 /// as a bewildering error about a crate they have never heard of,
@@ -491,7 +493,7 @@ fn stale_sdk_hint(log: &str, sdk: &SdkPaths, manifest: &SdkManifest) -> Option<S
     // `which X depends on` is what separates those from a user's own
     // missing dependency: rustc only adds it when the crate is needed to
     // load metadata for an rlib it was handed, which is to say one the
-    // redirect plan pointed at. A crate the project itself names is
+    // redirect plan pointed at. A crate the extension itself names is
     // reported without it.
     //
     // A bare `can't find crate for X` also counts when X is one the SDK

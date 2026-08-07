@@ -276,7 +276,7 @@ fn poll_install_outcome(
         Ok(()) => {}
         Err(err) if err.is_symbol_mismatch() => {
             warn!(
-                "HotReload: SDK symbol mismatch, project was built against a different editor SDK: {err}"
+                "HotReload: SDK symbol mismatch, extension was built against a different editor SDK: {err}"
             );
             install_status.message = Some(
                 "Hot reload: the new build was compiled against an older editor SDK. \

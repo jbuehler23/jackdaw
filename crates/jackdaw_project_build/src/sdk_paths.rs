@@ -30,7 +30,7 @@ use std::sync::OnceLock;
 /// Three install paths can each supply one, and they can coexist on the
 /// same machine: a downloaded bundle, an SDK this binary built for
 /// itself, and a source checkout's `target/`. Which one won decides how
-/// long builds take and which artifacts a project links, so it has to
+/// long builds take and which artifacts an extension links, so it has to
 /// be reportable rather than implicit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SdkOrigin {
@@ -80,15 +80,15 @@ pub struct SdkPaths {
     /// runtime closure with the exact artifact each crate compiled to.
     /// Present in installed layouts; generated on demand in dev.
     pub manifest: PathBuf,
-    /// The SDK's `Cargo.lock`. Copied into the shim so the project
+    /// The SDK's `Cargo.lock`. Copied into the shim so the extension
     /// dylib resolves the shared dependency closure at the exact
     /// versions the SDK was built with; without it a freshly created
-    /// project drifts to newer patch releases and its redirected rlibs
+    /// extension drifts to newer patch releases and its redirected rlibs
     /// become inconsistent with the SDK's.
     pub lockfile: PathBuf,
     /// The target triple the SDK was built for (the host triple).
     pub triple: String,
-    /// The rustup toolchain channel the SDK was compiled with. Project
+    /// The rustup toolchain channel the SDK was compiled with. Extension
     /// dylibs must build with the same one, or their rlibs are
     /// rejected as compiled by an incompatible rustc. `None` when it
     /// cannot be resolved; the pipeline then relies on the ambient
@@ -129,7 +129,7 @@ impl SdkPaths {
         }
 
         // 2. Dev checkout, when its SDK is actually built. A contributor
-        //    running from `target/` must link project code against the SDK
+        //    running from `target/` must link extension code against the SDK
         //    co-built with this editor, at the same profile: a debug editor
         //    and a release bootstrap cache are not link-compatible, because
         //    cargo bakes the profile into each crate's `-C metadata`, which
@@ -209,7 +209,7 @@ impl SdkPaths {
     /// The profile is read from the path rather than assumed. A release
     /// editor resolving a debug SDK is not a near miss: cargo bakes the
     /// profile into each crate's `-C metadata`, so the mangled symbol
-    /// names differ and nothing the project links will match.
+    /// names differ and nothing the extension links will match.
     fn dev_checkout(triple: &str) -> Self {
         let exe_dir = std::env::current_exe()
             .ok()

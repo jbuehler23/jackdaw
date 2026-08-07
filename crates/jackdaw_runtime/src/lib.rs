@@ -257,7 +257,7 @@ pub enum JackdawLoadError {
 /// children and clear `SceneSpawned` so the next
 /// `spawn_loaded_scenes` tick re-instantiates from the new
 /// asset content. Pair with Bevy's `file_watcher` feature to get
-/// hot reload of `assets/scene.bsn` in the standalone runner.
+/// hot reload of `assets/scene.bsn` in the standalone game binary.
 fn clear_modified_scene_roots(
     mut events: bevy::ecs::message::MessageReader<bevy::asset::AssetEvent<JackdawScene>>,
     roots: Query<(Entity, &JackdawSceneRoot, &SceneInstanceMembers), With<SceneSpawned>>,

@@ -31,9 +31,9 @@ cargo run --example basic
 
 # Working on extension loading? Build with the dylib feature so the
 # dylib loader is exercised end-to-end. It builds jackdaw_sdk, whose
-# prebuilt rlibs a project or extension redirects its dependency
-# edges to, which is what makes the editor and everything it loads
-# agree on TypeId. The first build is slow because bevy and the
+# prebuilt rlibs an extension redirects its dependency edges to,
+# which is what makes the editor and every loaded extension agree on
+# TypeId. The first build is slow because bevy and the
 # workspace's shared types compile into the SDK; later incremental
 # builds are fast.
 cargo run --features dylib

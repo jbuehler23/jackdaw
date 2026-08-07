@@ -22,17 +22,17 @@ crate-type = ["lib", "dylib"]
 # unification) because first-run SDK bootstrap builds this package directly.
 bevy = { workspace = true, features = ["dynamic_linking"] }
 jackdaw_api = { workspace = true, features = ["dynamic_linking"] }
-# Every feature a project can turn on, so the SDK's feature resolution
-# is a superset of any project's.
+# Every feature an extension can turn on, so the SDK's feature resolution
+# is a superset of any extension's.
 #
 # Cargo resolves features per package selection. This crate is what a
-# packaged SDK is built from, so anything a project enables that the SDK
+# packaged SDK is built from, so anything an extension enables that the SDK
 # did not gets compiled against SDK rlibs that were built without it: a
-# default scaffolded project pulls `bevy_math/approx` through the
+# default physics-enabled graph pulls `bevy_math/approx` through the
 # physics integration, and against an SDK whose `glam` lacks `approx`
 # that fails on missing trait impls in a crate the user never named.
 # Depending on the whole runtime here also puts its closure in the SDK
-# manifest, so projects redirect those crates instead of rebuilding
+# manifest, so extensions redirect those crates instead of rebuilding
 # them.
 jackdaw_runtime = { workspace = true, features = ["render", "physics", "pie"] }
 

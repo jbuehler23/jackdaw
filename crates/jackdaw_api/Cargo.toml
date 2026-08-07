@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [features]
-# The bevy feature set the editor, the SDK, and every project/extension
+# The bevy feature set the editor, the SDK, and every extension
 # share so they agree on `TypeId` for the types they both touch.
 #
 # The bevy feature list must mirror what the jackdaw workspace activates

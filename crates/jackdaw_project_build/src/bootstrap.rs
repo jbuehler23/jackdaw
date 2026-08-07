@@ -411,7 +411,7 @@ pub fn ensure_sdk(mut report: impl FnMut(SetupProgress)) -> Result<PathBuf, Stri
     // build cache rather than recompiling from scratch.
     write_recipe(&build_dir).map_err(|e| format!("unpack recipe: {e}"))?;
     // Pin the toolchain for every cargo invocation in this recipe: the
-    // build, the manifest enumeration, and the project builds that later
+    // build, the manifest enumeration, and the extension builds that later
     // resolve this cache all use one rustc, as the rmeta trick requires.
     std::fs::write(
         build_dir.join("rust-toolchain.toml"),
@@ -428,10 +428,10 @@ pub fn ensure_sdk(mut report: impl FnMut(SetupProgress)) -> Result<PathBuf, Stri
     let built = crate::sdk_paths::SdkPaths::for_workspace_profile(&build_dir, "release");
     // The feature sets the three install paths resolve have to nest:
     // a release bundle builds `-p jackdaw --features dylib` (the whole
-    // editor), this builds `-p jackdaw_sdk`, and a
-    // project builds its own graph. Each must be a superset of the next.
-    // Resolving fewer features than a project does is what breaks: the
-    // project compiles code expecting an impl that the SDK rlib it links
+    // editor), this builds `-p jackdaw_sdk`, and an
+    // extension builds its own graph. Each must be a superset of the next.
+    // Resolving fewer features than an extension does is what breaks: the
+    // extension compiles code expecting an impl that the SDK rlib it links
     // was built without, and the error names a crate nobody touched.
     // `jackdaw_sdk` depends on the whole runtime with every feature on to
     // keep that ordering; `tests/sdk_feature_closure.rs` guards it.

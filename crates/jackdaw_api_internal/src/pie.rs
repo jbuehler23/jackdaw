@@ -1,6 +1,6 @@
 //! Types shared between jackdaw's PIE runtime and loaded games.
 //!
-//! Game dylibs import [`PlayState`] to gate their systems on the
+//! Games import [`PlayState`] to gate their systems on the
 //! user's Play/Pause/Stop transport buttons:
 //!
 //! ```ignore

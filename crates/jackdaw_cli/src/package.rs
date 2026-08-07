@@ -1,7 +1,7 @@
 //! `cargo xtask package-sdk`: stage a relocatable SDK install layout from
 //! a release workspace build. This is the artifact a jackdaw release
-//! ships so a downloaded editor builds projects without a source checkout
-//! or a first-run bootstrap compile.
+//! ships so a downloaded editor builds extensions without a source
+//! checkout or a first-run bootstrap compile.
 //!
 //! The output mirrors the layout [`SdkPaths::for_installed_root`] resolves
 //! (rooted at `--out`, pointed to by `JACKDAW_SDK_DIR`):
@@ -425,7 +425,7 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     // manifest's one-per-crate picks. A target dir that held two
     // resolutions leaves the picks internally inconsistent: some staged
     // rlib pins a transitive at the generation the manifest did NOT
-    // pick, and the project build dies on a bare "can't find crate" for
+    // pick, and the extension build dies on a bare "can't find crate" for
     // a crate whose file was read and was healthy. Proven on macOS by
     // A/B: the same extern fails against the picked set and passes when
     // every generation travels. rustc resolves transitives by exact
@@ -477,22 +477,22 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     };
     write(&sdk_out.join("jackdaw_sdk_link_paths.txt"), &staged_paths)?;
 
-    // Runtime dylibs the project links through under `prefer-dynamic` sit
+    // Runtime dylibs the extension links through under `prefer-dynamic` sit
     // beside the closure rlibs in the triple deps dir, not in the manifest
-    // (which lists only rlibs). A project or extension dylib NEEDs the Bevy,
+    // (which lists only rlibs). An extension dylib NEEDs the Bevy,
     // Jackdaw, and SDK sonames, so the linker must find all of them on the
     // deps search path. (`libstd` is not among them: rustc resolves it from
     // its own sysroot at link time, and the editor bundle ships it for load
     // time.)
     let cdylibs = copy_dylibs(&sdk.deps, &deps_out)?;
 
-    // Proc-macro dylibs the SDK rlibs reference at project-compile time.
+    // Proc-macro dylibs the SDK rlibs reference at extension-compile time.
     // From the recorded list when the manifest generation captured one:
     // the host deps dir accumulates generations from other package
     // selections (the wrapper build, earlier runs restored from cache),
     // and staging the directory wholesale shipped proc macros the rlibs
     // were not built against. Every candidate then failed `metadata
-    // mismatch` at project-compile time, reported as `can't find crate`
+    // mismatch` at extension-compile time, reported as `can't find crate`
     // for whichever SDK crate held the chain.
     // The union of the recorded list and the directory: the exact list
     // pins the generation the rlibs were built against, but it is only
@@ -542,7 +542,7 @@ fn ensure_manifest(workspace: &Path, sdk: &SdkPaths) -> Result<(), String> {
     // exact rlib filenames, so an SDK rebuilt since leaves it pointing at
     // artifacts from before: the bundle then redirects consumers to an
     // older `wgpu_hal` than the one their own graph resolves, and the
-    // game fails to compile with two versions of a crate in scope. The
+    // extension fails to compile with two versions of a crate in scope. The
     // bundle is the one artifact a user cannot repair, so this is checked
     // rather than assumed.
     let stale = match (
@@ -563,7 +563,7 @@ fn ensure_manifest(workspace: &Path, sdk: &SdkPaths) -> Result<(), String> {
     // it left the shipped editor built from one resolution while the
     // manifest and SDK dylib beside it came from another, and those are
     // meant to be the single compilation that makes the editor and a
-    // loaded project agree on `TypeId`.
+    // loaded extension agree on `TypeId`.
     SdkManifest::generate(
         workspace,
         sdk,
@@ -603,7 +603,7 @@ fn copy_dylibs(from: &Path, to: &Path) -> Result<usize, String> {
 /// Stage a Windows DLL's import library beside it. Linking against a
 /// DLL goes through its `<name>.dll.lib`, which cargo writes as a
 /// sibling; a bundle that ships only the DLL loads at runtime but
-/// cannot be linked against, so every project build against the staged
+/// cannot be linked against, so every extension build against the staged
 /// SDK failed with every cross-boundary symbol undefined at once. ELF
 /// and Mach-O link against the shared object directly, so elsewhere the
 /// sibling never exists and this is a no-op.

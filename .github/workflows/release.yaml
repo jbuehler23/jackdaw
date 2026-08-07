@@ -196,7 +196,7 @@ jobs:
     if: ${{ always() && needs.plan.result == 'success' && (needs.heavy.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.skip_heavy)) }}
     runs-on: ${{ matrix.os }}
     # This job builds the editor twice over: once for the binaries, then
-    # a whole game against the staged SDK. On Windows, with a cold cache,
+    # an extension against the staged SDK. On Windows, with a cold cache,
     # that ran past 120 minutes and was cut off mid-smoke-test, reported
     # as `cancelled` rather than as anything a reader could act on.
     timeout-minutes: 180
@@ -350,7 +350,7 @@ jobs:
           ls "$root/sdk/host-deps" 2>/dev/null | grep -E "jackdaw_api_macros|bevy_reflect_derive" || echo "(none)"
 
       # An archive that is missing a piece installs and then fails at the first
-      # project build, which is how a missing sdk/manifest.txt reached a user.
+      # extension build, which is how a missing sdk/manifest.txt reached a user.
       - name: Verify the staged bundle
         run: |
           set -euo pipefail
@@ -368,10 +368,10 @@ jobs:
           if [ "$missing" -ne 0 ]; then echo "staged bundle is incomplete"; exit 1; fi
           echo "bundle layout verified"
 
-      # Build a game against the just-built release SDK, the way an installed
-      # user does. JACKDAW_BUNDLE_SMOKE_REQUIRED turns the test's local-only
-      # skip into a hard failure so a broken bundle cannot pass silently.
-      - name: Bundle smoke (game builds against the release SDK)
+      # Build an extension against the just-built release SDK, the way an
+      # installed user does. JACKDAW_BUNDLE_SMOKE_REQUIRED turns the test's
+      # local-only skip into a hard failure so a broken bundle cannot pass silently.
+      - name: Bundle smoke (extension builds against the release SDK)
         env:
           JACKDAW_BUNDLE_SMOKE_REQUIRED: "1"
           JACKDAW_BUNDLE_ROOT: ${{ runner.temp }}/jackdaw-${{ matrix.triple }}

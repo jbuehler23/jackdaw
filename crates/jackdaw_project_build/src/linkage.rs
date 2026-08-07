@@ -8,7 +8,7 @@
 //! dylib links THE running SDK: a stale or foreign SDK build has a
 //! different hash even at the same crate version. The hashes are read
 //! with `rustc -Zls=root` using the toolchain the editor already ships
-//! for project builds; a foreign compiler's artifact fails to parse
+//! for extension builds; a foreign compiler's artifact fails to parse
 //! outright (the metadata format is versioned), which is itself the
 //! toolchain-mismatch signal.
 

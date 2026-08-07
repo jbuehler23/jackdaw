@@ -205,11 +205,11 @@ adding statically linked ones is documented in
 
 The repo ships a `rust-toolchain.toml` pinning
 `nightly-2026-03-05`, and CI uses the same channel. The SDK is
-pinned to that exact rustc: project builds and the SDK have to
+pinned to that exact rustc: extension builds and the SDK have to
 share one compiler for the shared type graph to line up, so
 setup installs it through rustup rather than using whatever is
 selected.
 
-This affects the editor and the code it builds for the editor.
-Your project's own `cargo build` and `cargo run` use your own
+This affects the editor and the extensions it builds in-process.
+Your game's own `cargo build` and `cargo run` use your own
 toolchain, untouched.
