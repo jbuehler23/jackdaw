@@ -1,8 +1,12 @@
 # Installation
 
-Jackdaw supports a signed precompiled release, a source checkout, and Cargo
-installation. All three provide the GUI, `jd`, the game runner, the rustc
-wrapper, project scaffolding, and import.
+Jackdaw provides a signed precompiled release. You can also
+build with a Cargo installation or source checkout. All
+options provide everything you need to get started with
+Jackdaw.
+
+Jackdaw versions track Bevy minors: Jackdaw
+0.19 targets Bevy 0.19.
 
 ## Prerequisites
 
@@ -18,73 +22,58 @@ Check an installation with:
 jd doctor
 ```
 
-## Which one to use
+## Choose your install method
 
-All three give you the editor, `jd`, and project scaffolding. They differ
-in one thing: whether the SDK your projects link against is already built.
+Install methods are equivalent, however building from
+cargo or source will take sigificantly longer initially
+as the editor and SDK must be compiled. You should use the
+precompiled release if you're unsure which option to choose.
 
-| | Get the SDK | Then, per project |
-|---|---|---|
-| **Precompiled release** | already built, nothing to do | ~9 min first build |
-| `cargo install` | ~30 min, once per Jackdaw version | ~9 min first build |
-| Source checkout | build the editor, then its SDK | ~9 min first build |
+| | Initial build time |
+|---|---|
+| **Precompiled release** | Already built |
+| `cargo install` | ~30 min |
+| Source checkout | ~30 min |
 
-The SDK is a full compilation of Bevy and the Jackdaw API that every
-project links against. A release archive ships it prebuilt. The other two
-compile it on your machine, once per Jackdaw version. That is a real half
-hour, so take the release archive unless you have a reason not to.
-
-There are two costs here and the archive only removes the first one. Your
-project still compiles its own copy of Bevy the first time you build it,
-around nine minutes, and every project pays that separately. The SDK is
-shared so the editor and your game agree on component types, not to skip
-that build. After the first build, rebuilds are 1 to 4 seconds, which is
-the number you actually live with.
-
-Whichever you use, `jd doctor` reports which SDK is in play:
+The SDK is a full compilation of Bevy and the Jackdaw
+API that projects link against. You can use `jd doctor` to see the active SDK:
 
 ```
 [ ok ] SDK: release bundle (/opt/jackdaw/sdk/x86_64-unknown-linux-gnu/libjackdaw_sdk.so)
 ```
 
-## Precompiled release
+### Precompiled release
 
-Tagged releases provide checksummed, provenance-attested archives for
-x86-64 Linux, x86-64 Windows, and Apple Silicon macOS. Extract the archive
-and run `jackdaw`. Intel macOS users currently build from source.
+[Tagged
+releases](https://github.com/jbuehler23/jackdaw/releases)
+provide checksummed archives for x86-64 Linux, x86-64
+Windows, and Apple Silicon macOS. Extract the archive and
+run `jackdaw`. Intel macOS users currently must build from
+source.
 
-The archive includes its pinned SDK, so nothing of Jackdaw is compiled on
-your machine. Extract it and you can create a project immediately. That
-project's first build still takes around nine minutes, since it compiles
-its own Bevy; see [Which one to use](#which-one-to-use).
+### Compile from source
 
-## Cargo install
+Both install methods provide `jackdaw`, `jd`, `jackdaw-runner`, and
+`jackdaw-rustc-wrapper`. Do not install workspace packages individually.
+
+
+**Cargo installation**
+
+To install via cargo, install pointing to the git
+repository.  A crates.io install is not available because
+it depends on `bevy_rerecast` by git which crates.io does
+not allow.
 
 ```bash
 cargo install --git https://github.com/jbuehler23/jackdaw jackdaw --locked
 ```
 
-The editor is installed from git rather than crates.io because it depends on
-`bevy_rerecast` by git, which crates.io does not accept. That restriction is
-the editor's alone: the crates your own project depends on
-(`jackdaw_runtime`, `jackdaw_extension`, and everything under them) are
-published normally, so a scaffolded project resolves from the registry like
-any other Bevy project.
+**Source checkout installation**
 
-The install provides `jackdaw`, `jd`, `jackdaw-runner`, and
-`jackdaw-rustc-wrapper`; do not install workspace packages individually.
+You can also install by checkout out the source. Note that 
+this method uses the SDK under its own `target/`, which
+means `cargo clean` will require the SDK to be rebuilt.
 
-This path has no prebuilt SDK, so it prepares one on first use: roughly
-half an hour of compiling Bevy, once per Jackdaw version, before any
-project can be built. The editor shows a progress screen while it runs;
-`jd setup` does the same thing from a terminal if you would rather get it
-out of the way first. Cargo installs are self-contained; use a precompiled
-release to load signed native extensions.
-
-Jackdaw versions track Bevy minors: Jackdaw 0.19 targets Bevy 0.19, and so do
-the `jackdaw_*` crates your project depends on.
-
-## Source checkout
 
 ```bash
 git clone https://github.com/jbuehler23/jackdaw
@@ -92,23 +81,30 @@ cd jackdaw
 cargo run --bin jackdaw
 ```
 
-The checkout uses the SDK under its own `target/`, in preference to any
-prepared one, because a project must link the SDK co-built with the editor
-running it. That also means `cargo clean` throws the SDK away. `jd doctor`
-reports which SDK is in play, so it is clear when a checkout's is the one
-being used.
-
-To build an editor with live native extension loading, use the same
-shared-SDK mode as releases:
+To build an editor with live native extension loading, use the
+same shared-SDK mode as releases:
 
 ```bash
 cargo run --bin jackdaw --features dylib --target "$(rustc -vV | sed -n 's/host: //p')"
 ```
 
+**Setup**
+
+Compiling via cargo or by source checkout will take roughly
+30 minutes initially as the editor and SDK must be compiled.
+You can initiate SDK setup after editor compilation by opening the editor or running `jd
+setup` from the terminal. The editor shows a progress screen
+while it runs.
+
+
 ## Create or import a project
 
 Use the launcher's **New Game**, **New Extension**, and **Import Bevy
-Project** actions, or:
+Project**. Jackdaw keeps generated builds in the project's gitignored
+`.jackdaw/`.
+
+You can also create or import a project via the command line:
+
 
 ```bash
 jd new my-game                          # also: --extension, --path <dir>, --no-git
@@ -118,17 +114,20 @@ jd import /path/to/existing-game        # preview
 jd import /path/to/existing-game --apply
 ```
 
-`jd import` previews exact file operations and changes nothing without
-`--apply`. Jackdaw keeps generated builds in the project's gitignored
-`.jackdaw/` directory. Ordinary `cargo run` remains a normal game build and
-does not invoke Jackdaw.
+To import a project and apply changes, use `jd import
+/path/to/existing-game --apply`. To preview the changes
+first, omit `--apply`.
 
-`jd new` initialises a git repository, the way `cargo new` does, unless the
-destination already sits inside one or you pass `--no-git`.
+`cargo run` builds the project without invoking Jackdaw.
 
-If anything looks wrong, `jd doctor` reports the build prerequisites, and
-`jd doctor --project <path>` adds the project's own setup state, including
-whether its dependencies resolve.
+`jd new` initialises a git repository, the way `cargo new`
+does, unless the destination already sits inside one or you
+pass `--no-git`.
 
-After a Jackdaw update, `jd upgrade <path>` moves a project onto the new
-version.
+If anything looks wrong, `jd doctor` reports the build
+prerequisites, and `jd doctor --project <path>` adds the
+project's setup state, including whether its dependencies
+resolve.
+
+After a Jackdaw update, use `jd upgrade <path>` to update
+a project.
