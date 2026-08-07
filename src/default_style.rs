@@ -3,7 +3,7 @@ use bevy::{
     prelude::Color,
 };
 
-// -- Axis colors (Blender default theme, X = red, Y = green, Z = blue) --
+// -- Axis colors (X = red, Y = green, Z = blue) --
 pub const AXIS_X: Color = Color::srgba(1.0, 0.2, 0.32, 0.6);
 pub const AXIS_Y: Color = Color::srgba(0.545, 0.863, 0.0, 0.6);
 pub const AXIS_Z: Color = Color::srgba(0.157, 0.565, 1.0, 0.6);

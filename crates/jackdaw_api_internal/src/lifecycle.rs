@@ -85,7 +85,7 @@ pub struct OperatorEntity {
     pub(crate) execute: OperatorSystemId,
     pub(crate) invoke: OperatorSystemId,
     /// Optional system that returns whether the operator can run in
-    /// the current editor state. Equivalent to Blender's `poll`.
+    /// the current editor state.
     pub(crate) availability_check: Option<SystemId<(), bool>>,
     /// Mirrors [`crate::Operator::MODAL`]. Set at registration so the
     /// dispatcher can enter modal mode without re-resolving the generic

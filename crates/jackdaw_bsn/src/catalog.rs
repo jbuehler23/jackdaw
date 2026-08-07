@@ -484,13 +484,19 @@ mod tests {
         let base_path = server
             .get_path(loaded.base_color_texture.id())
             .expect("base texture path");
-        assert_eq!(base_path.to_string(), "textures/base.png");
+        assert_eq!(
+            base_path.to_string().replace('\\', "/"),
+            "textures/base.png"
+        );
 
         let normal_handle = loaded.normal_map.expect("normal map should be Some");
         let normal_path = server
             .get_path(normal_handle.id())
             .expect("normal texture path");
-        assert_eq!(normal_path.to_string(), "textures/normal.png");
+        assert_eq!(
+            normal_path.to_string().replace('\\', "/"),
+            "textures/normal.png"
+        );
     }
 
     // An asset whose `Option<Handle>` field defaults to `Some`, so a `None`

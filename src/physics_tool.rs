@@ -1,4 +1,4 @@
-//! Hammer-style physics placement tool.
+//! Physics placement tool: pick a shape, stamp it into the scene.
 //!
 //! When `EditMode::Physics` is active, only selected entities simulate.
 //! Non-selected `RigidBody` entities get `RigidBodyDisabled` so they act as

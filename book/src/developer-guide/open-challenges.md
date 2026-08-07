@@ -8,16 +8,23 @@ so we can talk through the approach.
 ## Windows dylib hardening
 
 The editor loads extension code as dylibs built against its SDK
-proxy. On Windows, the PE binary format has a 65,535 export cap,
-and bevy + jackdaw types together push close to it; the SDK build
-routes through `rust-lld` and disables incremental codegen to stay
-linkable. That works, but the export count grows with every API
-surface addition, and the failure mode when the cap is hit is a
-link error deep in the SDK build.
+proxy. On Windows, a PE export table addresses its entries with a
+16-bit ordinal, so 65,535 is the ceiling and no linker escapes it.
+Release builds split the runtime into `bevy_dylib` and
+`jackdaw_dylib` beside the SDK facade, which keeps each library's
+export count well under the ceiling; the release job measures every
+table and fails above 60,000. Two gotchas the split codified: LTO
+stays off for Windows binaries, because a PE file cannot import
+data across a DLL boundary once inlining creates direct references
+to another library's statics, and the SDK build disables incremental
+codegen, which otherwise leaves undefined hidden symbols across the
+dylib boundary.
 
-Where to dig in: trimming what the SDK proxy re-exports, and a
-CI check that tracks the export count so a regression is caught
-before it ships.
+What remains is the debug profile: a debug SDK carries around
+94,000 exports, past the ceiling, so contributors on Windows
+still develop against release SDK artifacts.
+
+Where to dig in: trimming what the SDK proxy re-exports.
 
 ## Play-In-Editor (PIE) depth
 

@@ -69,11 +69,11 @@ impl LoadedDylibs {
 
 /// Load active extensions from the signed, versioned installation index.
 ///
-/// Dynamic-library extensions require the host binary to be
-/// built with `bevy/dynamic_linking` so the editor and every
-/// loaded extension share one copy of Bevy at runtime. Without
-/// that, trait-object calls across the dylib boundary are
-/// unsound.
+/// Dynamic-library extensions require the host binary and every
+/// extension to have been built against one compilation of Bevy,
+/// which is what the SDK's prebuilt rlibs and the wrapper's extern
+/// redirect arrange. Without that, trait-object calls across the
+/// dylib boundary are unsound.
 ///
 #[derive(Default)]
 pub struct DylibLoaderPlugin;

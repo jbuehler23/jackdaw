@@ -10,19 +10,14 @@ repository = "https://github.com/jbuehler23/jackdaw"
 # The bevy feature set the editor, the SDK, and every project/extension
 # share so they agree on `TypeId` for the types they both touch.
 #
-# NOTE: despite the name, this no longer enables `bevy/dynamic_linking` or
-# the `jackdaw_dylib` proxy. jackdaw links bevy STATICALLY now: the rmeta
-# trick redirects every consumer to the SAME prebuilt bevy rlibs, so one
-# compilation is embedded rather than shared through a dll. That is the
-# only model that links on Windows (a dll cannot export bevy's reflect
-# statics). The name is kept because extension authors still write
-# `features = ["dynamic_linking"]`.
-#
 # The bevy feature list must mirror what the jackdaw workspace activates
 # for its own bevy dependency: feature unification means a different set
-# produces a different bevy SVH, and the redirect only fires when the
-# consumer's bevy is byte-identical to the SDK's.
+# produces a different bevy dylib and crate identity. Marketplace extensions
+# build against the SDK's pinned artifacts, so the editor and every loaded
+# extension import the same Bevy and Jackdaw runtime libraries.
 dynamic_linking = [
+    "dep:jackdaw_dylib",
+    "bevy/dynamic_linking",
     "bevy/bevy_feathers",
     "bevy/serialize",
     "bevy/debug",
@@ -36,6 +31,7 @@ bevy_enhanced_input.workspace = true
 jackdaw_api_internal.workspace = true
 jackdaw_api_macros.workspace = true
 jackdaw_commands.workspace = true
+jackdaw_dylib = { workspace = true, optional = true }
 jackdaw_feathers.workspace = true
 jackdaw_scene_types.workspace = true
 jackdaw_panels.workspace = true

@@ -103,17 +103,22 @@ Crates for building and loading extension dylibs against the SDK:
 
 - `jackdaw_api`: the public surface extensions link against.
   Re-exports bevy plus the operator / extension traits
-  (including `JackdawExtension`). Has a `dynamic_linking`
-  feature that flips bevy to its dylib build.
+  (including `JackdawExtension`). Its `dynamic_linking`
+  feature selects the bevy feature set the editor and the SDK
+  share, so the two resolve to one bevy. Despite the name it
+  no longer switches bevy to its dylib build; the name stays
+  because extension authors already write it.
 - `jackdaw_api_internal`: host-side plumbing (loader plugin,
   catalog, enable/disable helpers, internal markers).
   `jackdaw_api` deliberately does not re-export this.
 - `jackdaw_api_macros`: proc-macros backing the extension
   API.
-- `jackdaw_sdk`: the proxy dylib that extension builds link
-  against via `--extern bevy=libjackdaw_sdk.so`.
-  Holds the single compiled copy of bevy + jackdaw types
-  shared between both sides.
+- `jackdaw_sdk`: the facade dylib extension builds link
+  against via `--extern bevy=libjackdaw_sdk.so`. Bevy and
+  Jackdaw runtime types live in separate `bevy_dylib` and
+  `jackdaw_dylib` shared libraries so the editor and every
+  loaded extension share one TypeId universe. Games do not
+  use this path.
 - `jackdaw_dylib`: the dynamic-loader shim that dlopens
   dylibs at runtime.
 - `jackdaw_loader`: the host-side resource that tracks

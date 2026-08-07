@@ -12,9 +12,9 @@ env:
 jobs:
   heavy:
     name: SDK build + end-to-end tests
-    # Linux only. The heavy tier builds the SDK with a static bevy and
-    # runs game binary Play out of process; that path is verified here, and
-    # the CI cargo config's linker is Linux-only.
+    # Linux only. The heavy tier builds the shared SDK/runtime graph for
+    # extensions and runs game binary Play out of process; that path is
+    # verified here, and the CI cargo config's linker is Linux-only.
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -47,12 +47,20 @@ jobs:
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
           cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: heavy
 
       - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+      # This tier launches real games (`bsn_game_run`, `editor_journey`),
+      # and a CI runner has no GPU. Without a software Vulkan driver the
+      # game aborts inside `bevy_render` with `Unable to find a GPU!`
+      # before it can connect back, which surfaced only as a 90 second
+      # timeout. The onboarding workflow already installs this for the
+      # same reason.
+      - name: Install a software Vulkan driver
+        run: sudo apt-get install --no-install-recommends -y mesa-vulkan-drivers
 
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml

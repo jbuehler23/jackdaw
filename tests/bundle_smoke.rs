@@ -1,12 +1,12 @@
 #![cfg(feature = "dylib")]
 #![expect(clippy::print_stdout, reason = "e2e test reports what it staged")]
 //! Stages a bundle with `cargo xtask bundle`, resolves the SDK from the bundle
-//! layout rather than the dev tree, and builds a game against it: the path an
-//! installed user takes.
+//! layout rather than the dev tree, and builds an extension against it: the
+//! path an installed user takes for marketplace dylibs.
 //!
 //! Requires a release SDK, which the bundle is cut from.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use jackdaw::project_build::build_project_dylib;
@@ -17,8 +17,22 @@ fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+fn bundle_has_runtime(bundle: &Path, crate_id: &str) -> bool {
+    let prefix = format!("{}{crate_id}", std::env::consts::DLL_PREFIX);
+    let suffix = std::env::consts::DLL_SUFFIX;
+    std::fs::read_dir(bundle)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(&prefix) && name.ends_with(suffix)
+        })
+}
+
 #[test]
-fn game_builds_against_a_staged_bundle_sdk() {
+fn extension_builds_against_a_staged_bundle_sdk() {
     let root = workspace_root();
     let release_sdk = SdkPaths::for_workspace_profile(&root, "release");
     if !release_sdk.dylib_exists() {
@@ -39,35 +53,43 @@ fn game_builds_against_a_staged_bundle_sdk() {
         return;
     }
 
-    let status = Command::new("cargo")
-        .args(["build", "-p", "xtask", "--release"])
-        .current_dir(&root)
-        .status()
-        .expect("spawn cargo for xtask");
-    assert!(status.success(), "xtask failed to build");
-
     // Not the system temp dir: a bundle is ~3GB and `/tmp` is often a tmpfs.
     let staging = tempfile::Builder::new()
         .prefix("bundle-smoke-")
         .tempdir_in(root.join("target"))
         .expect("tempdir under target/");
-    let bundle = staging.path().join("jackdaw-bundle");
-    let xtask = root
-        .join("target/release")
-        .join(format!("xtask{}", std::env::consts::EXE_SUFFIX));
-    let staged = Command::new(&xtask)
-        .arg("bundle")
-        .arg("--out")
-        .arg(&bundle)
-        .arg("--workspace")
-        .arg(&root)
-        .output()
-        .expect("spawn cargo xtask bundle");
-    assert!(
-        staged.status.success(),
-        "bundle staging failed:\n{}",
-        String::from_utf8_lossy(&staged.stderr)
-    );
+    let bundle = match std::env::var_os("JACKDAW_BUNDLE_ROOT") {
+        Some(path) => PathBuf::from(path),
+        None => {
+            // `xtask` is deliberately outside the workspace, so it is only
+            // reachable through its own manifest.
+            let status = Command::new("cargo")
+                .args(["build", "--release", "--manifest-path", "xtask/Cargo.toml"])
+                .current_dir(&root)
+                .status()
+                .expect("spawn cargo for xtask");
+            assert!(status.success(), "xtask failed to build");
+
+            let bundle = staging.path().join("jackdaw-bundle");
+            let xtask = root
+                .join("xtask/target/release")
+                .join(format!("xtask{}", std::env::consts::EXE_SUFFIX));
+            let staged = Command::new(&xtask)
+                .arg("bundle")
+                .arg("--out")
+                .arg(&bundle)
+                .arg("--workspace")
+                .arg(&root)
+                .output()
+                .expect("spawn cargo xtask bundle");
+            assert!(
+                staged.status.success(),
+                "bundle staging failed:\n{}",
+                String::from_utf8_lossy(&staged.stderr)
+            );
+            bundle
+        }
+    };
 
     // Resolved the way an installed editor does, from the bundle root.
     let sdk = SdkPaths::for_installed_root(&bundle);
@@ -79,8 +101,16 @@ fn game_builds_against_a_staged_bundle_sdk() {
     assert!(sdk.wrapper.is_file(), "bundle is missing the rustc wrapper");
     assert!(sdk.dylib_exists(), "bundle is missing the SDK dylib");
     assert!(sdk.lockfile.is_file(), "bundle is missing Cargo.lock");
+    assert!(
+        bundle_has_runtime(&bundle, "bevy_dylib"),
+        "bundle is missing the shared Bevy runtime"
+    );
+    assert!(
+        bundle_has_runtime(&bundle, "jackdaw_dylib"),
+        "bundle is missing the shared Jackdaw runtime"
+    );
 
-    // Build an extension-style dylib against the staged SDK.
+    // Build an extension dylib against the staged SDK.
     let build_dir = staging.path().join("build");
     std::fs::create_dir_all(&build_dir).expect("create build dir");
     let extension_dir = staging.path().join("ext");

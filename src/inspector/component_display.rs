@@ -438,6 +438,13 @@ pub(crate) fn build_inspector_displays(
             .get_info(component_id)
             .and_then(ComponentInfo::type_id);
 
+        // A camera card leads with what the camera frames: a live
+        // render-to-texture strip fed by the editor's mirror camera
+        // (`camera_preview`), above the reflected fields.
+        if type_id == Some(TypeId::of::<Camera3d>()) {
+            crate::camera_preview::spawn_camera_preview_strip(commands, body_entity);
+        }
+
         if let Some(type_id) = type_id
             && let Some(registration) = registry.get(type_id)
             && let Some(reflect_component) = registration.data::<ReflectComponent>()

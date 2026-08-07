@@ -130,6 +130,20 @@ pub fn needs_setup() -> bool {
     if !recipe_is_embedded() {
         return false;
     }
+    // A release bundle (or an explicit JACKDAW_SDK_DIR) already ships a
+    // complete SDK next to the binary; without this check every `jd
+    // build` and editor first-run on a downloaded bundle recompiled the
+    // whole SDK from the embedded recipe anyway, hours of work for
+    // artifacts the download already contains.
+    let resolved = crate::sdk_paths::SdkPaths::compute();
+    if matches!(
+        resolved.origin,
+        crate::sdk_paths::SdkOrigin::Bundled | crate::sdk_paths::SdkOrigin::Override
+    ) && resolved.problems().is_empty()
+        && resolved.manifest.is_file()
+    {
+        return false;
+    }
     let triple = crate::sdk_paths::host_triple();
     let Some(cache) = cache_dir() else {
         return false;

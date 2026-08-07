@@ -48,24 +48,38 @@ impl std::fmt::Display for LinkageError {
 impl std::error::Error for LinkageError {}
 
 /// Verify that `dylib` links the running SDK at `sdk_dylib`.
-pub fn verify_linkage(dylib: &Path, sdk_dylib: &Path) -> Result<(), LinkageError> {
-    let expected = own_hash(sdk_dylib)?;
-    let recorded = recorded_sdk_dep_hash(dylib)?;
+///
+/// `toolchain` is the SDK's pinned toolchain: the metadata dump needs a
+/// nightly rustc, and on a user machine the ambient default is usually
+/// stable, which rejects `-Z` outright.
+pub fn verify_linkage(
+    dylib: &Path,
+    sdk_dylib: &Path,
+    toolchain: Option<&str>,
+) -> Result<(), LinkageError> {
+    let expected = own_hash(sdk_dylib, toolchain)?;
+    let recorded = recorded_sdk_dep_hash(dylib, toolchain)?;
     if recorded != expected {
         return Err(LinkageError::Mismatch { expected, recorded });
     }
     Ok(())
 }
 
-fn metadata_dump(artifact: &Path) -> Result<String, LinkageError> {
-    let output = Command::new("rustc")
-        .arg("-Zls=root")
-        .arg(artifact)
-        .output()
-        .map_err(|e| LinkageError::Unreadable {
-            artifact: artifact.display().to_string(),
-            detail: e.to_string(),
-        })?;
+fn metadata_dump(artifact: &Path, toolchain: Option<&str>) -> Result<String, LinkageError> {
+    let mut cmd = Command::new("rustc");
+    // The rustup proxy selects the pinned toolchain from this variable;
+    // a real rustc binary ignores it.
+    if let Some(toolchain) = toolchain {
+        cmd.env("RUSTUP_TOOLCHAIN", toolchain);
+    }
+    let output =
+        cmd.arg("-Zls=root")
+            .arg(artifact)
+            .output()
+            .map_err(|e| LinkageError::Unreadable {
+                artifact: artifact.display().to_string(),
+                detail: e.to_string(),
+            })?;
     if !output.status.success() {
         return Err(LinkageError::Unreadable {
             artifact: artifact.display().to_string(),
@@ -76,8 +90,8 @@ fn metadata_dump(artifact: &Path) -> Result<String, LinkageError> {
 }
 
 /// The artifact's own SVH: the `hash <H>` field of its crate info.
-fn own_hash(artifact: &Path) -> Result<String, LinkageError> {
-    let dump = metadata_dump(artifact)?;
+fn own_hash(artifact: &Path, toolchain: Option<&str>) -> Result<String, LinkageError> {
+    let dump = metadata_dump(artifact, toolchain)?;
     dump.lines()
         .find_map(|line| {
             let rest = line.strip_prefix("hash ")?;
@@ -90,8 +104,8 @@ fn own_hash(artifact: &Path) -> Result<String, LinkageError> {
 }
 
 /// The SVH the artifact recorded for its `jackdaw_sdk` dependency.
-fn recorded_sdk_dep_hash(artifact: &Path) -> Result<String, LinkageError> {
-    let dump = metadata_dump(artifact)?;
+fn recorded_sdk_dep_hash(artifact: &Path, toolchain: Option<&str>) -> Result<String, LinkageError> {
+    let dump = metadata_dump(artifact, toolchain)?;
     dump.lines()
         .find_map(|line| {
             let mut parts = line.split_whitespace();

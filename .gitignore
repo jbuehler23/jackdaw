@@ -5,6 +5,8 @@ xtask/target
 # test fixtures target and cargo lock files
 tests/fixtures/**/target/
 tests/fixtures/**/Cargo.lock
+# where `cargo xtask bundle` stages a release bundle: several GB
+/dist
 # mdBook build output
 /book/book
 # Large media files

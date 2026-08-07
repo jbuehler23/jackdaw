@@ -84,7 +84,7 @@ pub struct WorkspaceChanged {
 
 /// Serializable snapshot of every workspace in the registry, suitable
 /// for round-tripping through `project.jsn`. Each workspace owns its
-/// full `DockTree` (Blender's model: each workspace owns its layout
+/// full `DockTree` (each workspace owns its layout
 /// independently).
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct WorkspacesPersist {

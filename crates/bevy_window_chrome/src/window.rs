@@ -8,14 +8,43 @@ use bevy::window::WindowCreated;
 use bevy::window::{PrimaryWindow, Window};
 use bevy::winit::WINIT_WINDOWS;
 
+/// Whether the primary window can use a transparent surface.
+///
+/// Transparency needs both a compositor and a driver that supports an
+/// alpha swapchain. Wayland guarantees a compositor; on X11 some
+/// driver stacks render a transparent `PreMultiplied` surface black or
+/// not at all, so X11 sessions get an opaque window and square
+/// corners. `JACKDAW_OPAQUE_WINDOW=1` forces the opaque path anywhere
+/// as an escape hatch.
+pub fn surface_supports_alpha() -> bool {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    {
+        if std::env::var_os("JACKDAW_OPAQUE_WINDOW").is_some_and(|v| v == "1") {
+            return false;
+        }
+        std::env::var_os("WAYLAND_DISPLAY").is_some()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    {
+        true
+    }
+}
+
 pub fn primary_window_attributes() -> Window {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
-        Window {
-            decorations: false,
-            transparent: true,
-            composite_alpha_mode: CompositeAlphaMode::PreMultiplied,
-            ..default()
+        if surface_supports_alpha() {
+            Window {
+                decorations: false,
+                transparent: true,
+                composite_alpha_mode: CompositeAlphaMode::PreMultiplied,
+                ..default()
+            }
+        } else {
+            Window {
+                decorations: false,
+                ..default()
+            }
         }
     }
 

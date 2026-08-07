@@ -103,6 +103,11 @@ pub struct ProjectBuild {
     pub edges: usize,
 }
 
+/// Separator for the native link search path list handed to the
+/// wrapper. Paths can contain spaces, and on Windows a colon follows
+/// every drive letter, so neither is usable.
+const PATH_LIST_SEPARATOR: &str = "\n";
+
 /// Whether the SDK library is newer than the manifest describing it.
 ///
 /// The manifest is a cache of one build's artifact filenames, and
@@ -293,31 +298,19 @@ pub fn build_project_dylib(
     let target_dir = target_root.join(&salt);
     retain_recent_target_dirs(&target_root, &salt);
 
-    // The static SDK links the extension dylib against the prebuilt bevy and
-    // jackdaw_api rlibs (one shared bevy compilation, matching the editor's
-    // TypeIds via the rmeta trick) rather than a dll. Resolve them from the
-    // manifest; the shared-dylib path stays as a fallback.
-    let resolve_rlib = |name: &str| -> Option<PathBuf> {
-        manifest.artifact_for(name).map(|artifact| {
-            let p = Path::new(artifact);
-            if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                sdk.deps.join(artifact)
-            }
-        })
-    };
-    let static_rlibs = resolve_rlib("bevy").zip(resolve_rlib("jackdaw_api"));
-    let is_static = static_rlibs.is_some();
-
     let mut cmd = Command::new("cargo");
     cmd.args(["rustc", "--crate-type", "dylib", "--target", &sdk.triple])
         // Machine-readable stream so the editor can show live per-crate
-        // progress; rustc diagnostics arrive rendered in the same stream.
-        .arg("--message-format=json-render-diagnostics")
+        // progress, with rustc's diagnostics in it.
+        //
+        // Plain `json`, deliberately, not `json-render-diagnostics`:
+        // that variant makes cargo render diagnostics to its own stderr
+        // and emit no `compiler-message` at all, so this parser saw none
+        // and every failed build reported "no diagnostics captured".
+        .arg("--message-format=json")
         // Strip the shim: the editor loads it for its types and entry,
         // never debugs it, so the embedded debuginfo (the bulk of the
-        // artifact, since the shim statically links the project's own
+        // artifact, since the shim statically links the extension's own
         // crates) is dead weight. Stripping shrinks it by roughly an
         // order of magnitude, which matters because a loaded dylib is
         // never unloaded, so every reload's pages stay resident.
@@ -330,18 +323,21 @@ pub fn build_project_dylib(
         .env("CARGO_INCREMENTAL", "0")
         .env("CARGO_TARGET_DIR", &target_dir)
         .env("RUSTC_WRAPPER", &sdk.wrapper)
+        .env("JACKDAW_SDK_DYLIB", &sdk.dylib)
         .env("JACKDAW_SDK_DEPS", &sdk.deps)
         .env("JACKDAW_SDK_HOST_DEPS", &sdk.host_deps)
         .env("JACKDAW_SDK_EXTERN_MAP", &plan_path);
-    match static_rlibs {
-        Some((bevy_rlib, api_rlib)) => {
-            cmd.env("JACKDAW_SDK_STATIC", "1")
-                .env("JACKDAW_SDK_BEVY_RLIB", bevy_rlib)
-                .env("JACKDAW_SDK_API_RLIB", api_rlib);
-        }
-        None => {
-            cmd.env("JACKDAW_SDK_DYLIB", &sdk.dylib);
-        }
+    // Directories holding native import libraries the SDK's crates
+    // reference. Their `#[link]` directives reach a consumer through
+    // crate metadata, but the search paths only ever existed in the
+    // SDK's own build, so without these the link fails on a bare
+    // library name it cannot find.
+    let link_paths = plan::read_link_paths(&sdk.manifest);
+    if !link_paths.is_empty() {
+        cmd.env(
+            "JACKDAW_SDK_LINK_PATHS",
+            link_paths.join(PATH_LIST_SEPARATOR),
+        );
     }
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -360,9 +356,9 @@ pub fn build_project_dylib(
     let status = child.wait()?;
     if !status.success() {
         if log.trim().is_empty() {
-            log.push_str("project failed to compile (no diagnostics captured)");
+            log.push_str("extension failed to compile (no diagnostics captured)");
         }
-        if let Some(note) = stale_sdk_hint(&log, sdk) {
+        if let Some(note) = stale_sdk_hint(&log, sdk, &manifest) {
             log.push_str(&note);
         }
         return Err(ProjectBuildError::Compile { log });
@@ -372,12 +368,10 @@ pub fn build_project_dylib(
         .join(&sdk.triple)
         .join("debug")
         .join(dylib_file_name("jackdaw_shim"));
-    // In the shared-dylib model, prove the artifact links the running SDK
-    // before anything dlopens it. In the static model the dylib embeds bevy
-    // and depends on no SDK dll, so there is nothing to verify against.
-    if !is_static {
-        linkage::verify_linkage(&dylib, &sdk.dylib).map_err(ProjectBuildError::Linkage)?;
-    }
+    // Prove the artifact imports the exact SDK facade before anything dlopens
+    // it. The facade in turn imports the shipped Bevy and Jackdaw runtimes.
+    linkage::verify_linkage(&dylib, &sdk.dylib, sdk.toolchain.as_deref())
+        .map_err(ProjectBuildError::Linkage)?;
 
     Ok(ProjectBuild { dylib, edges })
 }
@@ -489,7 +483,7 @@ pub fn last_built_dylib(jackdaw_dir: &Path) -> Option<PathBuf> {
 /// most: its `target/` accumulates several builds of the same crate
 /// under different feature resolutions, and the SDK there is preferred
 /// over the bootstrapped cache.
-fn stale_sdk_hint(log: &str, sdk: &SdkPaths) -> Option<String> {
+fn stale_sdk_hint(log: &str, sdk: &SdkPaths, manifest: &SdkManifest) -> Option<String> {
     // Both shapes rustc uses when the SDK's own artifacts disagree.
     // E0463 is a crate it cannot find at all; E0460 is one it found
     // several of, none matching what the dependent was built against.
@@ -498,14 +492,24 @@ fn stale_sdk_hint(log: &str, sdk: &SdkPaths) -> Option<String> {
     // missing dependency: rustc only adds it when the crate is needed to
     // load metadata for an rlib it was handed, which is to say one the
     // redirect plan pointed at. A crate the project itself names is
-    // reported without it. Listing SDK crate names instead missed
-    // `jackdaw_api_internal`, which is exactly the sort of transitive
-    // crate that fails this way.
-    let unresolved = log.lines().find(|line| {
-        (line.contains("can't find crate for")
-            || line.contains("found possibly newer version of crate"))
-            && line.contains("depends on")
-    })?;
+    // reported without it.
+    //
+    // A bare `can't find crate for X` also counts when X is one the SDK
+    // holds. rustc words it that way when the `--extern` flag is absent
+    // altogether.
+    let unresolved = log
+        .lines()
+        .find(|line| {
+            (line.contains("can't find crate for")
+                || line.contains("found possibly newer version of crate"))
+                && line.contains("depends on")
+        })
+        .or_else(|| {
+            log.lines().find(|line| {
+                unresolved_crate_name(line)
+                    .is_some_and(|name| manifest.artifact_for(&name).is_some())
+            })
+        })?;
     Some(format!(
         "\nnote: {}\n\
          note: that is an SDK crate, so this is a mismatch between the prebuilt SDK \
@@ -519,6 +523,13 @@ fn stale_sdk_hint(log: &str, sdk: &SdkPaths) -> Option<String> {
         sdk.deps.display(),
         sdk.manifest.display(),
     ))
+}
+
+fn unresolved_crate_name(line: &str) -> Option<String> {
+    let marker = "can't find crate for `";
+    let start = line.find(marker)? + marker.len();
+    let end = line[start..].find('`')? + start;
+    Some(line[start..end].to_string())
 }
 
 /// How many keyed target directories to keep, including the current

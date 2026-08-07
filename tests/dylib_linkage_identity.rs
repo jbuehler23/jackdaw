@@ -49,7 +49,7 @@ fn dylib_linkage_identity_matches_the_running_sdk() {
         "fixture dylib missing; run the reflect_auto_register test first"
     );
 
-    verify_linkage(&fixture_dylib, &sdk.dylib)
+    verify_linkage(&fixture_dylib, &sdk.dylib, sdk.toolchain.as_deref())
         .expect("the fixture dylib does not verify against the running SDK");
 
     // Negative control: a different build of the same SDK crate (the
@@ -61,7 +61,7 @@ fn dylib_linkage_identity_matches_the_running_sdk() {
         std::env::consts::DLL_SUFFIX
     ));
     if stale_sdk.exists() {
-        match verify_linkage(&fixture_dylib, &stale_sdk) {
+        match verify_linkage(&fixture_dylib, &stale_sdk, sdk.toolchain.as_deref()) {
             Err(LinkageError::Mismatch { .. }) => {}
             other => panic!(
                 "negative control failed: expected a mismatch against a \

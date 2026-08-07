@@ -50,23 +50,16 @@ default = ["multiplayer", "camera_rig", "embed-recipe"]
 # default; opt out with `--no-default-features` for a slimmer build.
 multiplayer = ["dep:jackdaw_multiplayer", "dep:jackdaw_multiplayer_editor"]
 camera_rig = ["dep:jackdaw_camera_rig"]
-# The SDK-backed extension flow: enables Bevy's `dynamic_linking` plus
-# `jackdaw_sdk`, the proxy dylib that extension builds link against via
-# `--extern bevy=libjackdaw_sdk.{so,dll,dylib}`, so the editor and
-# every loaded extension dylib share one compiled copy of every type
-# that crosses the boundary. Off by default only because linking the
-# SDK dylib slows plain dev builds; release editor builds enable it.
+# The SDK-backed extension flow: builds the SDK facade plus separate Bevy
+# and Jackdaw runtime dylibs. The editor and every loaded extension import
+# those same libraries so TypeIds and process-wide registries cross
+# `dlopen`. Games do not use this path; they build as ordinary cargo
+# binaries with their own Bevy. Off by default only because building the
+# SDK slows plain dev builds; release editor builds enable it.
 #
-# Windows builds route through `rust-lld` via `.cargo/config.toml`
-# so the SDK proxy clears MSVC's 65,535 PE export cap when this
-# feature is enabled. Build with CARGO_INCREMENTAL=0: incremental
-# codegen leaves undefined hidden anon constants across the dylib
-# boundary at link time.
-dylib = [
-    "dep:jackdaw_sdk",
-    "jackdaw_api/dynamic_linking",
-    "jackdaw_project_build/reflect",
-]
+# Build with CARGO_INCREMENTAL=0: incremental codegen leaves undefined
+# hidden anon constants across the dylib boundary at link time.
+dylib = ["dep:jackdaw_sdk", "jackdaw_api/dynamic_linking", "jackdaw_project_build/reflect"]
 # Bake the SDK-builder recipe into the editor binary so a self-contained
 # Cargo install can build its SDK on first launch (the first-run setup
 # screen). Enabled by default; release bundles already carry a built SDK.
@@ -277,7 +270,7 @@ jackdaw_rustc_wrapper = { version = "0.19.0", path = "crates/jackdaw_rustc_wrapp
 jackdaw_cli_internal = { version = "0.19.0", path = "crates/jackdaw_cli" }
 bevy_enhanced_input = "0.26"
 rfd = "0.15"
-bevy_rerecast = { git = "https://github.com/HeyPlayGames/rerecast", rev = "493074cd8c1e8c97bc8fc6b51da01e5295696860", default-features = true }
+bevy_rerecast = { version = "0.5.0", default-features = true }
 ehttp = { version = "0.5", default-features = false, features = [
     "native-async",
     "json",
@@ -338,7 +331,7 @@ redundant_closure_for_method_calls = "warn"
 # undocumented_unsafe_blocks = "warn"
 
 [dev-dependencies]
-bevy = { workspace = true, features = ["dynamic_linking"] }
+bevy.workspace = true
 jackdaw_runtime.workspace = true
 libloading = "0.8"
 serde_json.workspace = true
@@ -347,6 +340,14 @@ tempfile = "3"
 # workspace test-target graph. `tests/dylib_loading.rs` dlopens the
 # resulting `.so` by path - it doesn't reference the rlib side.
 test_fixture_extension = { path = "tests/fixtures/test_fixture_extension" }
+
+# Plain test targets on Linux and macOS use the same split runtime as release
+# builds. This avoids statically relinking the multi-gigabyte editor graph for
+# small integration tests. Windows enables the split explicitly in the SDK and
+# release jobs, where its full DLL graph and export counts are exercised.
+[target.'cfg(not(target_os = "windows"))'.dev-dependencies]
+bevy = { workspace = true, features = ["dynamic_linking"] }
+jackdaw_api = { workspace = true, features = ["dynamic_linking"] }
 
 [lints]
 workspace = true
@@ -360,11 +361,8 @@ opt-level = 3
 [profile.dev.package.wgpu-types]
 debug-assertions = false
 
-# `jackdaw_sdk`'s dylib re-exports all of bevy + jackdaw_api, which
-# is right at the Windows MSVC PE export cap (65,535 symbols). Force
-# full optimisation and a single codegen unit on just this one crate
-# so the linker has a chance of fitting it under the cap when
-# `--features dylib` is active on Windows. See issue #183.
+# Keep the SDK facade compact. Bevy and Jackdaw's runtime closure live in
+# their own dylibs; this crate should never approach the PE export ceiling.
 [profile.dev.package.jackdaw_sdk]
 opt-level = 3
 codegen-units = 1

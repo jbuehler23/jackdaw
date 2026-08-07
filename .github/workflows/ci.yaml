@@ -20,7 +20,11 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # This job runs the fast and integration tiers plus the scaffold,
+    # recipe and SDK-feature checks, and last took 48 minutes. A 60
+    # minute cap left twelve minutes of headroom, so the next test added
+    # here would have failed on the clock rather than on correctness.
+    timeout-minutes: 90
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -53,7 +57,7 @@ jobs:
           shared-key: tests
 
       - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
@@ -154,7 +158,7 @@ jobs:
         run: cargo binstall cargo-nextest --locked --force
 
       - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
@@ -250,7 +254,7 @@ jobs:
         run: cargo binstall wild-linker --locked --force
 
       - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
@@ -297,7 +301,7 @@ jobs:
           toolchain: ${{ env.toolchain }}
 
       - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
@@ -349,7 +353,7 @@ jobs:
         run: cargo binstall wild-linker --locked --force
 
       - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
@@ -377,7 +381,7 @@ jobs:
           toolchain: ${{ env.toolchain }}
 
       - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2

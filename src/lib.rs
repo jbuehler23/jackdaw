@@ -47,6 +47,7 @@ use std::{collections::BTreeMap, marker::PhantomData};
 
 pub use inspector::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 
+pub mod camera_preview;
 pub mod core_extension;
 pub mod dock_ops;
 pub mod document_ops;
@@ -339,6 +340,7 @@ impl Plugin for EditorCorePlugin {
             numeric_transform::NumericTransformPlugin,
             custom_properties::CustomPropertiesPlugin,
             brush::BrushPlugin,
+            camera_preview::CameraPreviewPlugin,
             material_preview::MaterialPreviewPlugin,
             undo_snapshot::plugin,
             migrate_dialog::plugin,
@@ -2012,8 +2014,7 @@ fn register_animation_entities_in_ast(
 /// The guard ("skip if any child already has a `GltfClipRef`") keeps
 /// us from resurrecting clips the user deleted within the session.
 /// Adding new clips to the glTF file externally requires a scene
-/// reload to rediscover them, which matches Blender's "reload glTF"
-/// semantics.
+/// reload to rediscover them.
 ///
 /// Lives in the main crate rather than `jackdaw_animation` because it
 /// needs to read `jackdaw_scene_types::GltfSource`, and we'd rather not wire a

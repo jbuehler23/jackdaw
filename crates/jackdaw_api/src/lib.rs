@@ -23,6 +23,18 @@
 //! The host binary must also enable jackdaw's `dylib` feature so the
 //! editor and loaded dylibs share one compilation of the shared types.
 
+// Force the Jackdaw proxy dylib into every dynamic host and extension.
+// This mirrors Bevy's own `bevy/dynamic_linking` facade: public API remains
+// available through this crate while process-wide state lives in one shared
+// runtime library.
+#[cfg(feature = "dynamic_linking")]
+#[expect(
+    unused_imports,
+    clippy::single_component_path_imports,
+    reason = "this forces the shared Jackdaw runtime to be linked"
+)]
+use jackdaw_dylib;
+
 // --- Extension authoring surface ---
 
 pub use jackdaw_api_internal::{

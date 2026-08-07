@@ -2099,7 +2099,10 @@ mod tests {
 
         let plan = plan_import_project(&root, None).unwrap();
         assert_eq!(plan.package_name, "game");
-        assert_eq!(plan.package_dir, root.join("game"));
+        assert_eq!(
+            plan.package_dir.canonicalize().unwrap(),
+            root.join("game").canonicalize().unwrap()
+        );
         // The settings file belongs to the folder the user opened, not
         // to the member; the member is recorded inside it instead.
         assert!(plan.changes.iter().any(|change| matches!(

@@ -225,9 +225,21 @@ pub fn run_windowless_game(
     std::thread::spawn(move || {
         let _ = accept_tx.send(handle.accept());
     });
-    let _transport = accept_rx
-        .recv_timeout(Duration::from_secs(90))
-        .expect("the game never connected to the PIE link")
+    // On timeout the child's stderr is the only evidence of why it never
+    // got as far as connecting.
+    let accepted = accept_rx.recv_timeout(Duration::from_secs(90));
+    if accepted.is_err() {
+        let captured = stderr_buf.lock().unwrap().clone();
+        let captured = if captured.trim().is_empty() {
+            "(the game produced no output at all)".to_string()
+        } else {
+            captured
+        };
+        let _ = child.kill();
+        panic!("the game never connected to the PIE link. Its output was:\n{captured}");
+    }
+    let _transport = accepted
+        .expect("checked above")
         .expect("ipc accept failed");
 
     let deadline = Instant::now() + Duration::from_secs(90);
@@ -296,4 +308,22 @@ impl OperatorResultExt for OperatorResult {
             "Operator did not enter modal Running state"
         );
     }
+}
+
+/// Make sure the SDK's manifest and its native link search paths exist
+/// before a pipeline test drives cargo directly.
+///
+/// The driver generates these on demand, but these tests bypass it and
+/// invoke `cargo rustc` with the wrapper themselves. Without the search
+/// paths a consumer cannot find import libraries the SDK's crates link
+/// by bare name, which on Windows is every `windows.*.lib` and fails the
+/// link.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "used by the SDK pipeline tests only")]
+pub fn ensure_sdk_metadata(sdk: &jackdaw::sdk_paths::SdkPaths) {
+    use jackdaw::project_build::plan::SdkManifest;
+
+    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    SdkManifest::generate(&workspace, sdk, &["-p", "jackdaw", "--features", "dylib"])
+        .expect("generate the SDK manifest for the fixture");
 }

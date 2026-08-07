@@ -21,7 +21,7 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(Update, tick_modal_operator);
 }
 
-/// A Blender-style operator.
+/// A named, dispatchable editor action.
 ///
 /// The trait is bounded on [`InputAction`] so the operator type itself
 /// can be used as a BEI action.

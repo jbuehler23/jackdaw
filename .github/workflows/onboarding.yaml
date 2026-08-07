@@ -30,7 +30,11 @@ jobs:
   sdk-pipeline:
     name: SDK pipeline - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    # Nine probes, each building or loading a project against the SDK.
+    # On a cold cache 120 minutes ran out partway through the second one
+    # and the job reported `cancelled`, which reads as an infrastructure
+    # hiccup rather than the missing result it is.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -49,7 +53,7 @@ jobs:
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
       - name: Resolve host triple
         run: |
@@ -58,35 +62,51 @@ jobs:
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          shared-key: onboarding-${{ matrix.os }}
+          save-if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
+          # Keyed on the cargo config because it carries rustflags: a
+          # cache built under different flags mixes crate generations
+          # with a fresh build's, which fails links (or dlopen) on
+          # symbols whose disambiguators match neither.
+          shared-key: onboarding-${{ matrix.os }}-${{ hashFiles('.cargo/config.toml') }}
+          # These probes exist to be run against platforms that are
+          # failing, and the default saves nothing from a failed job, so
+          # the platform under investigation is the one that never gets
+          # a warm cache.
+          cache-on-failure: true
 
       - name: Build the SDK and wrapper
+        # One target-side cargo invocation with `--bins`: the root package
+        # owns the editor bins, so this builds them from a single feature
+        # resolution. A separate package selection can rewrite the
+        # stable-named runtime dylibs in place and mix two resolutions.
         run: |
           set -euxo pipefail
-          cargo build -j 4 -p jackdaw --features dylib --target "$TRIPLE"
+          cargo build -j 4 -p jackdaw --features dylib --target "$TRIPLE" --bins
           cargo build -p jackdaw_rustc_wrapper
 
       - name: Auto-registration across dlopen
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test reflect_auto_register -- --nocapture
+        # Project builds generate the dev SDK manifest on demand. The test
+        # harness must use that same Cargo profile: dylibs from `test` and
+        # `dev` have different symbol identities but share one output name.
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test reflect_auto_register -- --nocapture
 
       - name: Linkage identity
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test dylib_linkage_identity -- --nocapture
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test dylib_linkage_identity -- --nocapture
 
       - name: Ecosystem extern redirect
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test extern_redirect_ecosystem -- --nocapture
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test extern_redirect_ecosystem -- --nocapture
 
       - name: Schema extraction
         run: cargo test -j 4 --test schema_extract -- --nocapture
 
       - name: Component shape refresh
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test component_shape_refresh -- --nocapture
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test component_shape_refresh -- --nocapture
 
       - name: Dylib reload memory
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test stress_reload -- --nocapture
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test stress_reload -- --nocapture
 
       - name: Extension loading
-        run: cargo test -j 4 --features dylib --target "$TRIPLE" --test dylib_loading -- --nocapture
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test dylib_loading -- --nocapture
 
       - name: Scaffold end-to-end (scaffold -> build -> schema)
         # The user's first-run loop headlessly: scaffold a game, build its

@@ -183,7 +183,7 @@ pub struct BrushMeshChunk {
 #[derive(Component)]
 pub struct BrushPreview;
 
-/// Edit mode: Object (default), brush editing, or the Hammer-style physics
+/// Edit mode: Object (default), brush editing, or the physics
 /// placement tool.
 #[derive(Resource, Default, PartialEq, Eq, Clone, Copy, Debug, Reflect)]
 pub enum EditMode {

@@ -2,15 +2,29 @@
 # `.cargo/config_fast_builds.toml` (Mold/LLD speed-ups) and
 # `.cargo/config_ci.toml` (cranelift backend for CI).
 #
-# This file targets correctness on Windows: the MSVC linker has a
-# hard 65,535 PE export cap, which `jackdaw_sdk`'s aggregate of
-# `bevy + jackdaw_api` exceeds. `rust-lld` does not share that cap,
-# so we route Windows builds through it. Linux and macOS use their
-# default linker (or the user's override in a different config).
+# Windows builds link through `rust-lld`, which is faster than
+# link.exe on a graph this size and is the linker CI measures against.
+# It does not change what fits: the 65,535 export ceiling is the PE
+# format's 16-bit ordinal field, so every linker hits it alike.
+# Bevy, Jackdaw's extension-facing surface, and the SDK facade have separate
+# DLL export tables. The release workflow measures all three. Linux and macOS
+# use their default linker (or the user's override in a different config).
 
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld"
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+rustflags = [
+    "-C",
+    "link-arg=-fuse-ld=lld",
+    "-Zshare-generics=no",
+]
+
+# Mach-O and PE require an imported symbol to come from a specific dylib. Cross-
+# crate generic sharing can assign a monomorphization used by the SDK facade to
+# a runtime dylib even though that symbol is absent from the dylib's export set.
+# Keep each Apple dylib's generic code self-contained; the Windows target above
+# needs the same rule for its DLLs.
+[target.'cfg(target_os = "macos")']
+rustflags = ["-Zshare-generics=no"]
 
 [build]
 # The default `dylib` feature links the editor against the SDK dylib.

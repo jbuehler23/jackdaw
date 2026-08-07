@@ -11,3 +11,4 @@ publish = false
 bevy = "0.19"
 jackdaw_runtime = { path = "../../../crates/jackdaw_runtime", features = ["pie"] }
 jackdaw_scene_types = { path = "../../../crates/jackdaw_scene_types", default-features = false }
+jackdaw_extension = { path = "../../../crates/jackdaw_extension" }

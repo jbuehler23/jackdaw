@@ -17,7 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::sdk_paths::SdkPaths;
@@ -27,6 +27,8 @@ pub enum PlanError {
     Io(std::io::Error),
     Cargo(String),
     Parse(String),
+    /// The SDK itself is not usable, whatever the project asked for.
+    Sdk(String),
 }
 
 impl std::fmt::Display for PlanError {
@@ -35,6 +37,7 @@ impl std::fmt::Display for PlanError {
             Self::Io(e) => write!(f, "io error: {e}"),
             Self::Cargo(msg) => write!(f, "cargo failed: {msg}"),
             Self::Parse(msg) => write!(f, "could not parse: {msg}"),
+            Self::Sdk(msg) => write!(f, "unusable SDK: {msg}"),
         }
     }
 }
@@ -102,7 +105,7 @@ impl SdkManifest {
     /// Enumerate the SDK's runtime-closure artifacts by building
     /// `build_args` and reading cargo's JSON. The dev workspace builds the
     /// editor (`-p jackdaw --features dylib`); the bootstrap recipe, which
-    /// has no editor package, builds the SDK crate directly
+    /// has no editor package, builds the SDK crates directly
     /// (`-p jackdaw_sdk --release`). The SDK is already
     /// compiled, so this re-invocation just reports the (fresh) artifact
     /// filenames.
@@ -116,7 +119,7 @@ impl SdkManifest {
         sdk: &SdkPaths,
         build_args: &[&str],
     ) -> Result<Self, PlanError> {
-        let closure = sdk_runtime_closure(workspace_root)?;
+        let closure = sdk_runtime_closure(workspace_root, &sdk.triple)?;
 
         // Capture stdout (the JSON artifact stream) but let cargo's own
         // progress reach the terminal, so this step never looks hung on a
@@ -136,30 +139,96 @@ impl SdkManifest {
             ));
         }
 
-        let triple_dir = format!("/{}/", sdk.triple);
+        // Cargo reports artifact paths with the platform's separator,
+        // so matching only on `/` discarded every artifact on Windows
+        // and produced an empty manifest. Nothing downstream can work
+        // without it: the redirect plan has no edges, and a project
+        // silently compiles its own bevy instead of the SDK's.
+        let in_triple_dir = |path: &str| {
+            path.contains(&format!("/{}/", sdk.triple))
+                || path.contains(&format!("\\{}\\", sdk.triple))
+        };
+        let roots = build_private_roots(sdk);
         let mut artifacts = BTreeMap::new();
+        let mut link_paths: BTreeSet<String> = BTreeSet::new();
+        let mut host_deps: BTreeSet<String> = BTreeSet::new();
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
                 continue;
             };
+            // Native search paths a build script emitted. A crate that
+            // ships its own import libraries (the `windows` crates ship
+            // `windows.0.52.0.lib` and friends) is only findable through
+            // these, and they exist solely in the SDK's build. A consumer
+            // inherits the `#[link]` directives through crate metadata but
+            // not the directories, so its link fails on a bare library
+            // name.
+            //
+            // Only directories private to this build are recorded.
+            // pkg-config emits system directories such as
+            // `/usr/lib/x86_64-linux-gnu`, and those already exist on the
+            // consumer's machine and are already on its default search
+            // path. Recording one is worse than useless: the bundler
+            // copies every archive it holds, so a static `libc.a` lands
+            // ahead of the sysroot's `libc.so` and a project dylib fails
+            // to link on relocations that only a static executable
+            // allows.
+            if msg["reason"] == "build-script-executed" {
+                for path in msg["linked_paths"].as_array().into_iter().flatten() {
+                    let Some(path) = path.as_str() else { continue };
+                    // Entries are `kind=path` or a bare path.
+                    let bare = path.split_once('=').map_or(path, |(_, rest)| rest);
+                    if !bare.is_empty() && private_to_this_build(Path::new(bare), &roots) {
+                        link_paths.insert(bare.to_string());
+                    }
+                }
+                continue;
+            }
             if msg["reason"] != "compiler-artifact" {
                 continue;
             }
-            let Some(name) = msg["target"]["name"].as_str() else {
+            // Keyed on the package name, not the lib target's. The two
+            // usually agree, and where they do not (`coreaudio-rs` builds
+            // a lib called `coreaudio`) a target-name key matches nothing
+            // in the closure, so the crate silently drops out of the
+            // manifest. `write_plan` looks these up by package name too,
+            // and a project whose edge finds no entry compiles its own
+            // copy instead of the SDK's, which is a type-identity
+            // divergence nothing reports.
+            let Some(pkg_id) = msg["package_id"].as_str() else {
                 continue;
             };
-            let name = name.replace('-', "_");
-            let Some(version) = msg["package_id"].as_str().and_then(package_id_version) else {
+            let (Some(name), Some(version)) = (package_id_name(pkg_id), package_id_version(pkg_id))
+            else {
                 continue;
             };
-            if !closure.contains(&(name.clone(), version.to_string())) {
-                continue;
-            }
             let kinds = msg["target"]["kind"]
                 .as_array()
                 .map(|k| k.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
                 .unwrap_or_default();
-            if kinds.contains(&"proc-macro") || kinds.contains(&"custom-build") {
+            // Proc-macro dylibs, recorded by exact path like the rlibs.
+            // Staging used to scoop every dylib in the host deps dir,
+            // and that dir accumulates generations from other package
+            // selections: an SDK whose rlibs referenced one generation
+            // shipped beside proc macros from another, and a project
+            // build failed with `metadata mismatch` on every candidate,
+            // reported as `can't find crate` for whichever SDK crate
+            // held the chain. Kept before the closure filter because the
+            // closure is computed with `no-proc-macro`.
+            if kinds.contains(&"proc-macro") {
+                for file in msg["filenames"].as_array().into_iter().flatten() {
+                    if let Some(file) = file.as_str()
+                        && file.ends_with(std::env::consts::DLL_SUFFIX)
+                    {
+                        host_deps.insert(file.to_string());
+                    }
+                }
+                continue;
+            }
+            if !closure.contains(&(name.clone(), version.to_string())) {
+                continue;
+            }
+            if kinds.contains(&"custom-build") {
                 continue;
             }
             let Some(filenames) = msg["filenames"].as_array() else {
@@ -172,13 +241,13 @@ impl SdkManifest {
             let artifact = filenames
                 .iter()
                 .filter_map(|f| f.as_str())
-                .filter(|f| f.contains(&triple_dir))
+                .filter(|f| in_triple_dir(f))
                 .find(|f| f.ends_with(".rlib"))
                 .or_else(|| {
                     filenames
                         .iter()
                         .filter_map(|f| f.as_str())
-                        .filter(|f| f.contains(&triple_dir))
+                        .filter(|f| in_triple_dir(f))
                         .find(|f| f.ends_with(".rmeta"))
                 });
             if let Some(artifact) = artifact {
@@ -186,6 +255,34 @@ impl SdkManifest {
             }
         }
 
+        // A crate the closure names and this build produced no artifact
+        // for is not fatal on its own: `cargo tree -p jackdaw_sdk`
+        // resolves features for a narrower package selection than the
+        // build, so the two can legitimately differ. It is worth saying
+        // out loud, because the manifest is what every project redirects
+        // against and a gap here becomes a missing artifact there.
+        let uncovered: Vec<String> = closure
+            .iter()
+            .filter(|key| !artifacts.contains_key(*key))
+            .map(|(name, version)| format!("{name} {version}"))
+            .collect();
+        // The SDK build runs from the bundler and from a CLI, neither of
+        // which installs a tracing subscriber, so a `warn!` here would
+        // go nowhere.
+        #[expect(clippy::print_stderr, reason = "no subscriber is installed here")]
+        if !uncovered.is_empty() {
+            eprintln!(
+                "jackdaw: the SDK build produced no {} artifact for {} of the {} crates in \
+                 jackdaw_sdk's runtime closure: {}",
+                sdk.triple,
+                uncovered.len(),
+                closure.len(),
+                uncovered.join(", ")
+            );
+        }
+
+        write_link_paths(&link_paths_path(&sdk.manifest), &link_paths)?;
+        write_lines(&host_deps_path(&sdk.manifest), &host_deps)?;
         let manifest = Self { artifacts };
         manifest.write(&sdk.manifest)?;
         Ok(manifest)
@@ -249,6 +346,11 @@ impl SdkManifest {
     /// holds a single bevy and `jackdaw_api`, so this uniquely resolves the
     /// rlibs the static wrapper points the bevy facade and the `jackdaw_api`
     /// injection at.
+    /// Every `(name, version)` key in the manifest.
+    pub fn names(&self) -> impl Iterator<Item = &(String, String)> {
+        self.artifacts.keys()
+    }
+
     pub fn artifact_for(&self, name: &str) -> Option<&str> {
         self.artifacts
             .iter()
@@ -264,13 +366,21 @@ impl SdkManifest {
 /// with the install's `deps/` dir here. Keeping the shipped form
 /// location-independent is what lets a downloaded SDK build projects
 /// wherever it is unpacked, without rewriting the manifest on install.
+///
+/// The result is absolute even when `deps_dir` is not. rustc runs from
+/// the generated shim's directory, not from wherever the SDK was
+/// resolved, so a relative `--extern` path points at nothing there and
+/// the compile fails with `can't find crate` naming whichever crate
+/// held the edge. `cargo xtask bundle --workspace .` is enough to
+/// produce a relative `deps_dir`.
 fn resolve_artifact(artifact: &str, deps_dir: &Path) -> String {
     let path = Path::new(artifact);
-    if path.is_absolute() {
-        artifact.to_string()
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
     } else {
-        deps_dir.join(artifact).to_string_lossy().into_owned()
-    }
+        deps_dir.join(artifact)
+    };
+    absolute(&joined).to_string_lossy().into_owned()
 }
 
 /// Write the per-edge redirect plan for the build root's resolve
@@ -288,6 +398,7 @@ pub fn write_plan(
     let metadata = cargo_metadata(build_root)?;
     let mut contents = Vec::new();
     let mut edges = 0;
+    let mut absent: BTreeSet<String> = BTreeSet::new();
     let empty = Vec::new();
     for node in metadata["resolve"]["nodes"].as_array().unwrap_or(&empty) {
         let Some(consumer_id) = node["id"].as_str() else {
@@ -317,10 +428,39 @@ pub fn write_plan(
                 // wanting a different version of the same dependency, so
                 // the name alone cannot pick the right redirect.
                 let resolved = resolve_artifact(artifact, deps_dir);
+                if !Path::new(&resolved).exists() {
+                    absent.insert(format!("{dep_name} {dep_version} ({resolved})"));
+                    continue;
+                }
                 writeln!(contents, "{consumer}@{consumer_version}:{alias}={resolved}")?;
                 edges += 1;
             }
         }
+    }
+    // An SDK whose manifest names an artifact it does not hold is
+    // broken, and every project built against it fails. Left to the
+    // compile, rustc reports it as `can't find crate` against a `use` in
+    // whichever third-party crate happened to hold the edge, pointing
+    // nowhere near the SDK. Said here it costs seconds instead of a
+    // whole build, and names the crate.
+    if !absent.is_empty() {
+        return Err(PlanError::Sdk(format!(
+            "its manifest names {} artifact(s) that are not on disk, so nothing can be built \
+             against it. Missing: {}",
+            absent.len(),
+            absent.into_iter().collect::<Vec<_>>().join(", ")
+        )));
+    }
+    // Every package the manifest holds an artifact for, so the wrapper
+    // can recognise a plan-replaced crate's own compile by PACKAGE name.
+    // Deriving that set from the edge aliases is wrong for renamed
+    // dependencies: rustix consumes `errno` as `libc_errno`, so an
+    // alias-keyed set sent rustix's shadow unit vanilla while errno's
+    // stayed rewritten, and the two disagreed about which `libc` the
+    // universe contains. rustc reported it as a bare "can't find crate
+    // for errno" on both platforms.
+    for (name, _version) in manifest.names() {
+        writeln!(contents, "replaced:{name}")?;
     }
     if std::fs::read(out_path).ok().as_deref() != Some(contents.as_slice()) {
         std::fs::write(out_path, contents)?;
@@ -330,7 +470,16 @@ pub fn write_plan(
 
 /// The SDK dylib's runtime dependency closure: `(name, version)`
 /// pairs from `cargo tree`. Dev-checkout only.
-fn sdk_runtime_closure(workspace_root: &Path) -> Result<BTreeSet<(String, String)>, PlanError> {
+///
+/// Resolved for `triple`, not the host: platform-conditional
+/// dependencies differ (52 crates separate a Linux graph from a macOS
+/// one), and the closure is compared against artifacts from a
+/// `--target triple` build. Taking the host's answer while
+/// cross-compiling would name crates the target build never has.
+fn sdk_runtime_closure(
+    workspace_root: &Path,
+    triple: &str,
+) -> Result<BTreeSet<(String, String)>, PlanError> {
     let output = Command::new("cargo")
         .args([
             "tree",
@@ -340,6 +489,8 @@ fn sdk_runtime_closure(workspace_root: &Path) -> Result<BTreeSet<(String, String
             "normal,no-proc-macro",
             "--prefix",
             "none",
+            "--target",
+            triple,
         ])
         .current_dir(workspace_root)
         .output()?;
@@ -439,16 +590,274 @@ mod tests {
 
     #[test]
     fn resolve_artifact_absolute_passthrough_basename_rebases() {
-        let deps = Path::new("/opt/jackdaw/sdk/x86_64/deps");
+        let root = std::env::temp_dir().join("jackdaw_resolve_artifact");
+        let deps = root.join("sdk/x86_64/deps");
+        let built = root.join("target/x86_64/release/deps/libglam-abc.rlib");
         // Dev/bootstrap manifests store absolute paths: used verbatim.
         assert_eq!(
-            resolve_artifact("/ws/target/x86_64/release/deps/libglam-abc.rlib", deps),
-            "/ws/target/x86_64/release/deps/libglam-abc.rlib"
+            PathBuf::from(resolve_artifact(&built.to_string_lossy(), &deps)),
+            built
         );
         // A shipped manifest stores basenames, rebased onto the install deps.
         assert_eq!(
-            resolve_artifact("libglam-abc.rlib", deps),
-            deps.join("libglam-abc.rlib").to_string_lossy()
+            PathBuf::from(resolve_artifact("libglam-abc.rlib", &deps)),
+            deps.join("libglam-abc.rlib")
         );
+    }
+
+    /// rustc runs from the shim's directory, so a relative result would
+    /// name a file that is not there and fail the compile against a
+    /// crate the user never mentioned.
+    #[test]
+    fn a_relative_deps_dir_still_resolves_to_an_absolute_artifact() {
+        let resolved = resolve_artifact("libglam-abc.rlib", Path::new("./target/sdk/deps"));
+        assert!(
+            Path::new(&resolved).is_absolute(),
+            "{resolved} has to be absolute"
+        );
+        assert!(resolved.ends_with("libglam-abc.rlib"), "{resolved}");
+    }
+}
+
+/// The directory trees whose contents exist only because this build ran:
+/// the target directory (where build scripts compile native code into
+/// their `OUT_DIR`) and the cargo home (where crates such as the
+/// `windows` family ship prebuilt import libraries). A link search path
+/// under either travels with the SDK; anything else belongs to the
+/// machine and is already on the consumer's default search path.
+/// Roots are absolutised because the paths they are matched against
+/// are: cargo reports an absolute `linked_paths`, while the SDK's own
+/// dirs are only as absolute as the caller made them. `cargo xtask
+/// bundle --workspace .` gives a relative root, and a relative root
+/// matches no absolute path at all, so the filter would silently drop
+/// every entry and the SDK would ship without the search paths a
+/// consumer's link needs.
+fn build_private_roots(sdk: &SdkPaths) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    // `deps` is `<target>/<triple>/<profile>/deps`; its parent holds the
+    // sibling `build/<pkg>-<hash>/out` directories.
+    if let Some(profile_dir) = sdk.deps.parent() {
+        roots.push(absolute(profile_dir));
+    }
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".cargo"))
+        })
+        .map(|home| absolute(&home));
+    roots.extend(cargo_home);
+    roots
+}
+
+/// `path` resolved against the current directory, with symlinks
+/// followed where it exists. Falls back to the path as given rather
+/// than failing: a root that cannot be resolved still matches whatever
+/// it literally prefixes.
+fn absolute(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn private_to_this_build(path: &Path, roots: &[PathBuf]) -> bool {
+    let resolved = absolute(path);
+    roots
+        .iter()
+        .any(|root| resolved.starts_with(root) || path.starts_with(root))
+}
+
+/// Where the proc-macro dylib list sits, beside the manifest it was
+/// captured with.
+pub fn host_deps_path(manifest: &Path) -> PathBuf {
+    manifest.with_file_name("jackdaw_sdk_host_deps.txt")
+}
+
+/// The exact proc-macro dylibs the SDK build produced, if recorded.
+/// Absent means an SDK from before this was captured; the caller falls
+/// back to staging the whole host deps directory.
+pub fn read_host_deps(manifest: &Path) -> Vec<String> {
+    std::fs::read_to_string(host_deps_path(manifest))
+        .map(|text| {
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn write_lines(path: &Path, lines: &BTreeSet<String>) -> Result<(), PlanError> {
+    let contents: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    if std::fs::read_to_string(path).ok().as_deref() != Some(contents.as_str()) {
+        std::fs::write(path, contents)?;
+    }
+    Ok(())
+}
+
+/// Where the native link search paths sit, beside the manifest they were
+/// captured with.
+pub fn link_paths_path(manifest: &Path) -> PathBuf {
+    manifest.with_file_name("jackdaw_sdk_link_paths.txt")
+}
+
+/// Record the directories a consumer's linker needs on its search path,
+/// one per line. Written even when empty, so a stale file from an
+/// earlier SDK never outlives the build that produced it.
+fn write_link_paths(path: &Path, paths: &BTreeSet<String>) -> Result<(), PlanError> {
+    let contents: String = paths.iter().map(|p| format!("{p}\n")).collect();
+    if std::fs::read_to_string(path).ok().as_deref() != Some(contents.as_str()) {
+        std::fs::write(path, contents)?;
+    }
+    Ok(())
+}
+
+/// The native search paths recorded for this SDK, if any. Absent or
+/// unreadable means none, which is the correct answer for an SDK built
+/// before this was captured.
+pub fn read_link_paths(manifest: &Path) -> Vec<String> {
+    std::fs::read_to_string(link_paths_path(manifest))
+        .map(|text| {
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod link_path_tests {
+    use super::*;
+
+    /// Cargo reports these as `kind=path`, and a consumer needs the bare
+    /// directory. An SDK built before this was captured has no file, and
+    /// must read as "none" rather than failing.
+    #[test]
+    fn link_paths_round_trip_and_tolerate_absence() {
+        let dir = std::env::temp_dir().join(format!("jackdaw_linkpaths_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = dir.join("jackdaw_sdk_manifest.txt");
+
+        assert!(
+            read_link_paths(&manifest).is_empty(),
+            "an SDK with no recorded paths reports none"
+        );
+
+        let mut paths = BTreeSet::new();
+        paths.insert("/sdk/windows_x86_64_msvc/lib".to_string());
+        paths.insert("/sdk/other/lib".to_string());
+        write_link_paths(&link_paths_path(&manifest), &paths).unwrap();
+
+        let read = read_link_paths(&manifest);
+        assert_eq!(read.len(), 2, "{read:?}");
+        assert!(read.contains(&"/sdk/windows_x86_64_msvc/lib".to_string()));
+
+        // Rewriting with none clears it, so a stale list cannot outlive
+        // the build that produced it.
+        write_link_paths(&link_paths_path(&manifest), &BTreeSet::new()).unwrap();
+        assert!(read_link_paths(&manifest).is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A build script that ran pkg-config emits system directories, and
+    /// the bundler copies every archive in a directory it is given. Left
+    /// unfiltered, `/usr/lib/x86_64-linux-gnu/libc.a` ships in the SDK
+    /// and shadows the sysroot's shared libc, which fails a project's
+    /// dylib link on `R_X86_64_TPOFF32` relocations.
+    #[test]
+    fn only_directories_this_build_created_are_recorded() {
+        let roots = vec![
+            PathBuf::from("/work/target/x86_64-unknown-linux-gnu/release"),
+            PathBuf::from("/home/user/.cargo"),
+        ];
+        for private in [
+            "/work/target/x86_64-unknown-linux-gnu/release/build/blake3-abc/out",
+            "/home/user/.cargo/registry/src/index.crates.io-1/windows_x86_64_msvc-0.52.6/lib",
+        ] {
+            assert!(
+                private_to_this_build(Path::new(private), &roots),
+                "{private} exists only where this build ran"
+            );
+        }
+        for system in [
+            "/usr/lib/x86_64-linux-gnu",
+            "/usr/local/lib",
+            "/opt/homebrew/lib",
+        ] {
+            assert!(
+                !private_to_this_build(Path::new(system), &roots),
+                "{system} belongs to the machine, not the SDK"
+            );
+        }
+    }
+
+    /// `cargo xtask bundle --workspace .` resolves the SDK under a
+    /// relative root while cargo reports `linked_paths` absolute. Left
+    /// literal, the two never match and every path is dropped, which
+    /// costs a consumer the search paths its link needs and shows up
+    /// only as a bare library name the linker cannot find.
+    #[test]
+    fn a_relative_root_still_matches_the_absolute_path_cargo_reports() {
+        let cwd = std::env::current_dir().expect("a current dir");
+        let roots =
+            build_private_roots(&SdkPaths::for_workspace_profile(Path::new("."), "release"));
+        let out_dir = cwd
+            .join("target")
+            .join(crate::sdk_paths::host_triple())
+            .join("release/build/blake3-abc/out");
+        assert!(
+            private_to_this_build(&out_dir, &roots),
+            "{} is under the relative root {:?}",
+            out_dir.display(),
+            roots
+        );
+        assert!(
+            !private_to_this_build(Path::new("/usr/lib"), &roots),
+            "a system dir is still not this build's"
+        );
+    }
+
+    /// The file sits beside the manifest so both travel together, in a
+    /// bundle or a cache.
+    #[test]
+    fn the_link_path_file_sits_beside_the_manifest() {
+        let manifest = Path::new("/sdk/x86_64/jackdaw_sdk_manifest.txt");
+        assert_eq!(
+            link_paths_path(manifest),
+            Path::new("/sdk/x86_64/jackdaw_sdk_link_paths.txt")
+        );
+    }
+}
+
+#[cfg(test)]
+mod triple_dir_tests {
+    /// Cargo emits artifact paths with the platform's own separator.
+    /// Matching only forward slashes discarded every artifact on
+    /// Windows, so the manifest came out empty and the redirect plan had
+    /// nothing to redirect.
+    #[test]
+    fn the_triple_dir_matches_either_separator() {
+        let triple = "x86_64-pc-windows-msvc";
+        let matches = |path: &str| {
+            path.contains(&format!("/{triple}/")) || path.contains(&format!("\\{triple}\\"))
+        };
+
+        assert!(matches(
+            "D:\\a\\jackdaw\\target\\x86_64-pc-windows-msvc\\debug\\deps\\libbevy.rlib"
+        ));
+        assert!(matches(
+            "/home/joe/jackdaw/target/x86_64-pc-windows-msvc/debug/deps/libbevy.rlib"
+        ));
+        // A host-side unit is not in the triple dir and must stay out.
+        assert!(!matches(
+            "D:\\a\\jackdaw\\target\\debug\\deps\\libbevy.rlib"
+        ));
+        assert!(!matches("/home/joe/jackdaw/target/debug/deps/libbevy.rlib"));
     }
 }

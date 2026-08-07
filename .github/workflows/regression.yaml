@@ -15,7 +15,12 @@ env:
   toolchain: nightly-2026-03-05
 
 jobs:
+  # Release already gates a tag on this exact reusable workflow. Running it a
+  # second time under Regression spent another ~54 minutes compiling the same
+  # Linux graph without adding coverage. Keep it for nightly/manual runs; tag
+  # pushes still run the Windows/macOS fast + integration matrix below.
   heavy:
+    if: github.event_name != 'push'
     uses: ./.github/workflows/heavy-tier.yaml
 
   # The tiers that do not need the SDK, on the platforms we ship bundles for.
@@ -28,7 +33,9 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # A cold Windows/macOS graph can spend more than an hour in the fast
+    # tier alone. Give integration enough room to report a real result.
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -42,8 +49,11 @@ jobs:
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
           shared-key: cross-${{ matrix.os }}
+          # A timeout or platform failure is exactly when retaining the cold
+          # compile makes the next diagnostic run useful instead of identical.
+          cache-on-failure: true
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
