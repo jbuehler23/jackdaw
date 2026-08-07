@@ -107,12 +107,6 @@ pub struct SceneBsnAst {
     pub ast_to_ecs: HashMap<Entity, Entity>,
 }
 
-/// Component types on a document node that were computed by editor systems
-/// rather than authored by the user. Derived components are skipped on save;
-/// an explicit user edit promotes the component to authored.
-#[derive(Component, Debug, Default)]
-pub struct DerivedComponents(pub bevy::platform::collections::HashSet<String>);
-
 /// Component on every ECS entity that was spawned from (or synced to) BSN.
 /// Points back to the AST node entity in [`SceneBsnAst::world`].
 #[derive(Component)]

@@ -3,7 +3,7 @@
 
 use bevy::ecs::entity::Entity;
 
-use super::{BsnPatch, BsnPatches, BsnValue, DerivedComponents, SceneBsnAst};
+use super::{BsnPatch, BsnPatches, BsnValue, SceneBsnAst};
 
 /// Check if `stored_path` is an enum variant of `base_path`.
 /// e.g. `foo::Bar::Sphere` is a variant of `foo::Bar`.
@@ -65,14 +65,6 @@ impl SceneBsnAst {
             }
         }
         None
-    }
-
-    /// Whether `type_path` is marked derived (computed, not authored) on this
-    /// node.
-    pub fn is_derived(&self, patches_entity: Entity, type_path: &str) -> bool {
-        self.world
-            .get::<DerivedComponents>(patches_entity)
-            .is_some_and(|d| d.0.contains(type_path))
     }
 
     /// The stable node id carried by a document node's `SceneNodeId(id)`

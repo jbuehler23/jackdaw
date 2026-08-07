@@ -3,7 +3,7 @@
 
 use bevy::ecs::entity::Entity;
 
-use super::{BsnPatch, BsnPatches, DerivedComponents, SceneBsnAst};
+use super::{BsnPatch, BsnPatches, SceneBsnAst};
 
 impl SceneBsnAst {
     /// Create a new AST node for an entity with the given patches.
@@ -52,28 +52,6 @@ impl SceneBsnAst {
         self.world
             .get_mut::<BsnPatches>(patches_entity)
             .map(bevy::ecs::change_detection::Mut::into_inner)
-    }
-
-    /// Clear the derived mark on `type_path` (a user edit makes it authored).
-    /// Returns true when the component was previously derived.
-    pub fn promote_derived(&mut self, patches_entity: Entity, type_path: &str) -> bool {
-        self.world
-            .get_mut::<DerivedComponents>(patches_entity)
-            .map(|mut d| d.0.remove(type_path))
-            .unwrap_or(false)
-    }
-
-    /// Mark `type_path` as derived on this node.
-    pub fn demote_to_derived(&mut self, patches_entity: Entity, type_path: &str) {
-        if let Some(mut d) = self.world.get_mut::<DerivedComponents>(patches_entity) {
-            d.0.insert(type_path.to_string());
-            return;
-        }
-        let mut set = bevy::platform::collections::HashSet::default();
-        set.insert(type_path.to_string());
-        if let Ok(mut node) = self.world.get_entity_mut(patches_entity) {
-            node.insert(DerivedComponents(set));
-        }
     }
 
     /// Remove the component patch for `type_path` from a node (the undo of

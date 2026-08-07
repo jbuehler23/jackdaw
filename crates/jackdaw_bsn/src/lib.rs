@@ -27,8 +27,8 @@ pub use delta::{apply_deltas, bsn_value_eq, shallow_diff};
 
 pub use document::{
     AstNodeRef, BsnAssetContext, BsnField, BsnPatch, BsnPatches, BsnStructData, BsnStructFields,
-    BsnTupleStructData, BsnValue, DerivedComponents, SceneBsnAst, bsn_value_as_int,
-    clone_node_into, component_to_bsn_patch, component_to_bsn_patch_with_assets,
+    BsnTupleStructData, BsnValue, SceneBsnAst, bsn_value_as_int, clone_node_into,
+    component_to_bsn_patch, component_to_bsn_patch_with_assets,
 };
 pub use emitter::{emit_entities, emit_entity, emit_scene};
 pub use loader::{BsnLoadError, parse_bsn_text};

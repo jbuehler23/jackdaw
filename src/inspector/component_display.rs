@@ -83,7 +83,7 @@ pub(crate) fn add_component_displays(
     let source_entity = entity_ref.entity();
     let sel_count = selection.entities.len();
 
-    let jsn_type_paths = inspector_type_paths_for(
+    let authored_type_paths = inspector_type_paths_for(
         &asts.bsn,
         &prefab_cache,
         source_entity,
@@ -109,7 +109,7 @@ pub(crate) fn add_component_displays(
             &editor_font,
             false,
             &materials,
-            &jsn_type_paths,
+            &authored_type_paths,
             Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
@@ -199,7 +199,7 @@ pub(crate) fn build_inspector_displays(
     editor_font: &EditorFont,
     _read_only: bool,
     materials: &Assets<StandardMaterial>,
-    jsn_type_paths: &HashSet<String>,
+    authored_type_paths: &HashSet<String>,
     scene_ast: Option<&jackdaw_bsn::SceneBsnAst>,
     prefab_cache: Option<&PrefabAstCache>,
     collapse_state: &super::InspectorCollapseState,
@@ -295,8 +295,8 @@ pub(crate) fn build_inspector_displays(
                         || full_path.starts_with("jackdaw_avian_integration")
                         || full_path.starts_with("jackdaw_multiplayer"));
                 if !is_user_type
-                    && !jsn_type_paths.is_empty()
-                    && !ast_tracks(jsn_type_paths, full_path)
+                    && !authored_type_paths.is_empty()
+                    && !ast_tracks(authored_type_paths, full_path)
                 {
                     return None;
                 }
@@ -410,6 +410,8 @@ pub(crate) fn build_inspector_displays(
         });
 
         let is_overridden = is_overridden_baseline || is_overridden_prefab;
+        let is_derived =
+            !authored_type_paths.is_empty() && !authored_type_paths.contains(type_path.as_str());
 
         // Forward the prefab context whenever the entity sits inside a
         // prefab instance so the right-click menu can offer Revert /
@@ -472,6 +474,7 @@ pub(crate) fn build_inspector_displays(
                 entity: source_entity,
                 component: Some(component_id),
                 is_overridden,
+                is_derived,
                 prefab_ctx: spec_prefab_ctx,
                 revert_through_prefab,
                 icon_font: &icon_font.0,
@@ -610,6 +613,7 @@ pub(crate) fn build_inspector_displays(
                     entity: source_entity,
                     component: None,
                     is_overridden: false,
+                    is_derived: false,
                     prefab_ctx: None,
                     revert_through_prefab: false,
                     icon_font: &icon_font.0,
@@ -770,7 +774,7 @@ pub(crate) fn on_inspector_dirty(
         }
         let sel_count = selection.entities.len();
 
-        let jsn_type_paths = inspector_type_paths_for(
+        let authored_type_paths = inspector_type_paths_for(
             &asts.bsn,
             &prefab_cache,
             source_entity,
@@ -793,7 +797,7 @@ pub(crate) fn on_inspector_dirty(
             &editor_font,
             false,
             &materials,
-            &jsn_type_paths,
+            &authored_type_paths,
             Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
@@ -867,6 +871,9 @@ pub(crate) struct ComponentDisplaySpec<'a> {
     pub entity: Entity,
     pub component: Option<ComponentId>,
     pub is_overridden: bool,
+    /// True when the component is on the live entity but has no authored
+    /// document patch (`#[require]` companions, runtime inserts, etc.).
+    pub is_derived: bool,
     /// When `Some`, the entity sits inside a prefab instance. Drives
     /// the right-click menu for every component on the entity.
     pub prefab_ctx: Option<PrefabInstanceCtx>,
@@ -893,6 +900,7 @@ pub(crate) fn spawn_component_display(
         entity,
         component,
         is_overridden,
+        is_derived,
         prefab_ctx,
         revert_through_prefab,
         icon_font,
@@ -991,9 +999,27 @@ pub(crate) fn spawn_component_display(
         ChildOf(toggle_area),
     ));
 
-    // Component name (orange if overridden).
+    // Derived (= on the live entity, no authored document patch) gets a
+    // dashed-circle mark so required/runtime companions read differently
+    // from explicitly authored components.
+    if is_derived {
+        commands.spawn((
+            Text::new(String::from(Icon::CircleDashed.unicode())),
+            TextFont {
+                font: font.clone().into(),
+                font_size: tokens::TEXT_SIZE_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_MUTED_COLOR.into()),
+            ChildOf(toggle_area),
+        ));
+    }
+
+    // Component name (orange if overridden; muted when derived).
     let name_color = if is_overridden {
         default_style::INSPECTOR_OVERRIDE
+    } else if is_derived {
+        tokens::TEXT_MUTED_COLOR.into()
     } else {
         tokens::TEXT_DISPLAY_COLOR.into()
     };
@@ -1094,30 +1120,33 @@ pub(crate) fn spawn_component_display(
         }
 
         // Remove component button (X icon). See revert button for the
-        // tooltip-data + manual-dispatch pattern.
-        let remove_path = type_path_owned.clone();
-        let remove_call = ButtonOperatorCall::new(super::ops::ComponentRemoveOp::ID)
-            .with_param("entity", entity_param)
-            .with_param("type_path", remove_path.clone());
-        commands.spawn((
-            Text::new(String::from(Icon::X.unicode())),
-            TextFont {
-                font: font.clone().into(),
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-            Hovered::default(),
-            remove_call,
-            ChildOf(header),
-            bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-                commands
-                    .operator(super::ops::ComponentRemoveOp::ID)
-                    .param("entity", entity_param)
-                    .param("type_path", type_path_owned.clone())
-                    .call();
-            }),
-        ));
+        // tooltip-data + manual-dispatch pattern. Derived companions have
+        // no document patch to remove — hide the control.
+        if !is_derived {
+            let remove_path = type_path_owned.clone();
+            let remove_call = ButtonOperatorCall::new(super::ops::ComponentRemoveOp::ID)
+                .with_param("entity", entity_param)
+                .with_param("type_path", remove_path.clone());
+            commands.spawn((
+                Text::new(String::from(Icon::X.unicode())),
+                TextFont {
+                    font: font.clone().into(),
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+                Hovered::default(),
+                remove_call,
+                ChildOf(header),
+                bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                    commands
+                        .operator(super::ops::ComponentRemoveOp::ID)
+                        .param("entity", entity_param)
+                        .param("type_path", type_path_owned.clone())
+                        .call();
+                }),
+            ));
+        }
     }
 
     // Right-click context menu on prefab-instance component headers.
