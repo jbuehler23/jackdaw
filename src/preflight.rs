@@ -102,7 +102,9 @@ fn classify_rustc(version: &str) -> (CheckStatus, Option<&'static str>) {
     } else {
         (
             CheckStatus::Warn,
-            Some("jackdaw targets a nightly toolchain: `rustup default nightly`"),
+            Some(
+                "jackdaw targets a nightly toolchain. Ensure Rust commands on path (rustc, cargo) are managed by rustup!",
+            ),
         )
     }
 }
