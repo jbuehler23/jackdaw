@@ -28,6 +28,7 @@ toml = "0.8"
 tracing = { workspace = true }
 bevy = { workspace = true, optional = true }
 jackdaw_scene_types = { workspace = true, optional = true }
+jackdaw_env.workspace = true
 
 [build-dependencies]
 # The build script assembles the embedded SDK-builder recipe: it parses

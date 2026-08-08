@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use jackdaw_env::rust_env_command;
 use serde::Deserialize;
 
 /// A project's cargo metadata: packages and their targets.
@@ -155,7 +156,7 @@ impl CargoMeta {
             root: project_dir.to_path_buf(),
             detail,
         };
-        let out = std::process::Command::new("cargo")
+        let out = rust_env_command("cargo")
             .current_dir(project_dir)
             .args(["metadata", "--no-deps", "--format-version", "1"])
             .output()

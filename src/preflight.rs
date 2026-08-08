@@ -7,6 +7,8 @@
 //! thread and report results as they complete for live reporting in the
 //! launcher. `run_all_checks` batches them for the setup UI.
 
+use jackdaw_env::rust_env_command;
+
 /// Outcome of a single check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckStatus {
@@ -142,7 +144,7 @@ fn windows_linker_status(
 
 /// Run `cmd args` and return its first stdout line, or `None` if it cannot run.
 fn first_line(cmd: &str, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new(cmd).args(args).output().ok()?;
+    let out = rust_env_command(cmd).args(args).output().ok()?;
     if !out.status.success() {
         return None;
     }

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::app::AppExit;
 use include_dir::{Dir, include_dir};
+use jackdaw_env::rust_env_command;
 use toml_edit::DocumentMut;
 
 /// The one Bevy minor this editor release supports.
@@ -325,7 +326,7 @@ fn enclosing_workspace(dest: &Path) -> Option<PathBuf> {
 /// reporting its first error line. Unlike the `--no-deps` metadata call
 /// used to find a package, this one does the version solving.
 fn resolves(root: &Path) -> Result<(), String> {
-    let output = std::process::Command::new("cargo")
+    let output = rust_env_command("cargo")
         .current_dir(root)
         .args(["metadata", "--format-version", "1"])
         .output()
