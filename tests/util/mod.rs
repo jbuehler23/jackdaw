@@ -238,9 +238,7 @@ pub fn run_windowless_game(
         let _ = child.kill();
         panic!("the game never connected to the PIE link. Its output was:\n{captured}");
     }
-    let _transport = accepted
-        .expect("checked above")
-        .expect("ipc accept failed");
+    let _transport = accepted.expect("checked above").expect("ipc accept failed");
 
     let deadline = Instant::now() + Duration::from_secs(90);
     let mut loaded = false;
