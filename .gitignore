@@ -2,6 +2,9 @@
 /target
 # xtask is a detached workspace with its own build output
 xtask/target
+# test fixtures target and cargo lock files
+tests/fixtures/**/target/
+tests/fixtures/**/Cargo.lock
 # where `cargo xtask bundle` stages a release bundle: several GB
 /dist
 # mdBook build output

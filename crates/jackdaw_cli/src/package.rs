@@ -1,7 +1,7 @@
 //! `cargo xtask package-sdk`: stage a relocatable SDK install layout from
 //! a release workspace build. This is the artifact a jackdaw release
-//! ships so a downloaded editor builds projects without a source checkout
-//! or a first-run bootstrap compile.
+//! ships so a downloaded editor builds extensions without a source
+//! checkout or a first-run bootstrap compile.
 //!
 //! The output mirrors the layout [`SdkPaths::for_installed_root`] resolves
 //! (rooted at `--out`, pointed to by `JACKDAW_SDK_DIR`):
@@ -9,7 +9,6 @@
 //! ```text
 //! <out>/
 //!   jackdaw-rustc-wrapper
-//!   jackdaw-runner            (when built; schema extraction needs it)
 //!   Cargo.lock
 //!   toolchain.txt
 //!   sdk/
@@ -63,7 +62,7 @@ pub fn cmd_package_sdk(args: &[String]) -> ExitCode {
 
 /// `cargo xtask bundle --out <dir> [--workspace <path>]`: the full
 /// downloadable release layout - the SDK layout (`package-sdk`) plus the
-/// editor, the CLI, and the three runtime dylibs the editor and runner
+/// editor, the CLI, and the runtime dylibs the editor and extensions
 /// load, staged at the bundle root beside the binaries. Combined with a
 /// `rpath=$ORIGIN` link (set via RUSTFLAGS in the release build), the
 /// archive runs offline with no bootstrap: extract and launch.
@@ -93,7 +92,7 @@ pub fn cmd_bundle(args: &[String]) -> ExitCode {
 }
 
 fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
-    // The SDK layout first (sdk/, wrapper, runner, Cargo.lock, toolchain).
+    // The SDK layout first (sdk/, wrapper, Cargo.lock, toolchain).
     let sdk_summary = package(workspace, out)?;
     let sdk = SdkPaths::for_workspace_profile(workspace, "release");
     let profile_dir = sdk
@@ -101,7 +100,7 @@ fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
         .parent()
         .ok_or_else(|| "release SDK dylib has no parent dir".to_string())?;
 
-    // The editor and public CLI, staged beside the SDK's wrapper and runner.
+    // The editor and public CLI, staged beside the SDK's wrapper.
     // EXE_SUFFIX is `.exe` on Windows, empty elsewhere.
     for bin in ["jackdaw", "jd"] {
         let name = format!("{bin}{}", std::env::consts::EXE_SUFFIX);
@@ -112,14 +111,14 @@ fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
         copy_into(&src, out)?;
     }
 
-    // The runtime dylibs the editor, runner, games, and extensions NEED, at
-    // the bundle root so a `rpath=$ORIGIN` link resolves them. Bevy and
-    // Jackdaw are deliberately separate libraries: combining their exports
-    // in the SDK facade exceeds Windows' PE export-table ceiling, while
-    // embedding either runtime in a consumer gives it private registries and
-    // TypeIds. Dynamic std comes from the pinned toolchain rather than the
-    // workspace build. Names carry the platform's dylib prefix (`lib` on
-    // Unix, none on Windows).
+    // The runtime dylibs the editor and extensions NEED, at the bundle root
+    // so a `rpath=$ORIGIN` link resolves them. Bevy and Jackdaw are
+    // deliberately separate libraries: combining their exports in the SDK
+    // facade exceeds Windows' PE export-table ceiling, while embedding
+    // either runtime in a consumer gives it private registries and TypeIds.
+    // Dynamic std comes from the pinned toolchain rather than the workspace
+    // build. Names carry the platform's dylib prefix (`lib` on Unix, none
+    // on Windows).
     let prefix = std::env::consts::DLL_PREFIX;
     let std_lib = format!("{prefix}std");
     let mut dylibs = 0;
@@ -159,7 +158,7 @@ fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
 /// - every staged binary's and dylib's load commands pointing at a
 ///   staged name are redirected to `@rpath/<name>`;
 /// - the binaries get rpaths for the bundle root and the SDK dirs, so a
-///   dlopened project dylib (whose own references go through `@rpath`
+///   dlopened extension dylib (whose own references go through `@rpath`
 ///   once it links the rewritten SDK) resolves from the running process.
 ///
 /// Editing a Mach-O invalidates its code signature, and Apple Silicon
@@ -189,7 +188,7 @@ fn relocate_macos_install_names(out: &Path, triple: &str) -> Result<(), String> 
         .map(|n| n.to_string_lossy().into_owned())
         .collect();
 
-    let binaries: Vec<PathBuf> = ["jackdaw", "jd", "jackdaw-runner", "jackdaw-rustc-wrapper"]
+    let binaries: Vec<PathBuf> = ["jackdaw", "jd", "jackdaw-rustc-wrapper"]
         .iter()
         .map(|b| out.join(b))
         .filter(|p| p.is_file())
@@ -427,7 +426,7 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     // manifest's one-per-crate picks. A target dir that held two
     // resolutions leaves the picks internally inconsistent: some staged
     // rlib pins a transitive at the generation the manifest did NOT
-    // pick, and the project build dies on a bare "can't find crate" for
+    // pick, and the extension build dies on a bare "can't find crate" for
     // a crate whose file was read and was healthy. Proven on macOS by
     // A/B: the same extern fails against the picked set and passes when
     // every generation travels. rustc resolves transitives by exact
@@ -479,22 +478,22 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     };
     write(&sdk_out.join("jackdaw_sdk_link_paths.txt"), &staged_paths)?;
 
-    // Runtime dylibs the project links through under `prefer-dynamic` sit
+    // Runtime dylibs the extension links through under `prefer-dynamic` sit
     // beside the closure rlibs in the triple deps dir, not in the manifest
-    // (which lists only rlibs). A project or extension dylib NEEDs the Bevy,
+    // (which lists only rlibs). An extension dylib NEEDs the Bevy,
     // Jackdaw, and SDK sonames, so the linker must find all of them on the
     // deps search path. (`libstd` is not among them: rustc resolves it from
     // its own sysroot at link time, and the editor bundle ships it for load
     // time.)
     let cdylibs = copy_dylibs(&sdk.deps, &deps_out)?;
 
-    // Proc-macro dylibs the SDK rlibs reference at project-compile time.
+    // Proc-macro dylibs the SDK rlibs reference at extension-compile time.
     // From the recorded list when the manifest generation captured one:
     // the host deps dir accumulates generations from other package
     // selections (the wrapper build, earlier runs restored from cache),
     // and staging the directory wholesale shipped proc macros the rlibs
     // were not built against. Every candidate then failed `metadata
-    // mismatch` at project-compile time, reported as `can't find crate`
+    // mismatch` at extension-compile time, reported as `can't find crate`
     // for whichever SDK crate held the chain.
     // The union of the recorded list and the directory: the exact list
     // pins the generation the rlibs were built against, but it is only
@@ -520,20 +519,8 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
 
     // Host tools next to the editor.
     copy_into(&sdk.wrapper, out)?;
-    let runner_note = if sdk.runner.is_file() {
-        copy_into(&sdk.runner, out)?;
-        "runner"
-    } else {
-        eprintln!(
-            "jackdaw package-sdk: warning: runner not built at {}; schema extraction \
-             will be unavailable (cargo build --release --target {} -p jackdaw_runner)",
-            sdk.runner.display(),
-            sdk.triple
-        );
-        "no runner"
-    };
 
-    // The SDK's exact lockfile and toolchain, so a project resolves the
+    // The SDK's exact lockfile and toolchain, so an extension resolves the
     // shared closure at the same versions and compiles with the same rustc.
     if sdk.lockfile.is_file() {
         copy(&sdk.lockfile, &out.join("Cargo.lock"))?;
@@ -544,7 +531,7 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
 
     Ok(format!(
         "{rlibs}+{extra_rlibs} rlibs, {cdylibs} runtime cdylibs, {macros} proc-macro dylibs, \
-         {native_libs} native import libs, {runner_note}"
+         {native_libs} native import libs"
     ))
 }
 
@@ -556,7 +543,7 @@ fn ensure_manifest(workspace: &Path, sdk: &SdkPaths) -> Result<(), String> {
     // exact rlib filenames, so an SDK rebuilt since leaves it pointing at
     // artifacts from before: the bundle then redirects consumers to an
     // older `wgpu_hal` than the one their own graph resolves, and the
-    // game fails to compile with two versions of a crate in scope. The
+    // extension fails to compile with two versions of a crate in scope. The
     // bundle is the one artifact a user cannot repair, so this is checked
     // rather than assumed.
     let stale = match (
@@ -577,7 +564,7 @@ fn ensure_manifest(workspace: &Path, sdk: &SdkPaths) -> Result<(), String> {
     // it left the shipped editor built from one resolution while the
     // manifest and SDK dylib beside it came from another, and those are
     // meant to be the single compilation that makes the editor and a
-    // loaded project agree on `TypeId`.
+    // loaded extension agree on `TypeId`.
     SdkManifest::generate(
         workspace,
         sdk,
@@ -617,7 +604,7 @@ fn copy_dylibs(from: &Path, to: &Path) -> Result<usize, String> {
 /// Stage a Windows DLL's import library beside it. Linking against a
 /// DLL goes through its `<name>.dll.lib`, which cargo writes as a
 /// sibling; a bundle that ships only the DLL loads at runtime but
-/// cannot be linked against, so every project build against the staged
+/// cannot be linked against, so every extension build against the staged
 /// SDK failed with every cross-boundary symbol undefined at once. ELF
 /// and Mach-O link against the shared object directly, so elsewhere the
 /// sibling never exists and this is a no-op.

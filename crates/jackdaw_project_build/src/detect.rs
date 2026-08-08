@@ -1,6 +1,10 @@
 //! Source detection: find a project's `JackdawExtension` impl and its
-//! game `Plugin` type, and work out how the generated shim can name
-//! them.
+//! game `Plugin` type.
+//!
+//! Extension builds need a path the generated shim can name.
+//! Game plugin detection feeds import/setup notes and `jd doctor`;
+//! Play launches the project's cargo binary, which adds the plugin
+//! itself.
 //!
 //! The sources are parsed, not scanned. A text scan cannot be made
 //! correct here: doc comments contain `/*` (the game template's own
@@ -226,7 +230,7 @@ fn walk(
                 );
             }
             // A module that may not be compiled cannot be relied on to
-            // hold the plugin the shim will name.
+            // hold a plugin the crate can export.
             Item::Mod(module_item) if is_conditional(&module_item.attrs) => {}
             Item::Mod(module_item) => {
                 let mut child = module.to_vec();
@@ -740,7 +744,7 @@ mod tests {
     }
 
     /// A module that may not be compiled cannot be relied on to hold
-    /// the plugin the shim will name.
+    /// a plugin the crate can export.
     #[test]
     fn a_conditionally_compiled_module_is_not_walked() {
         let dir = project(&[

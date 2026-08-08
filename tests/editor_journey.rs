@@ -1,4 +1,3 @@
-#![cfg(feature = "dylib")]
 #![expect(clippy::print_stdout, reason = "e2e test reports the journey it ran")]
 //! Authors a scene headless through the operators, saves it, builds a game
 //! around the saved `.bsn`, runs that game, and asserts the authored entity
@@ -9,13 +8,11 @@
 //! the editor minted out of the saved file and points the fixture at it.
 
 use std::path::PathBuf;
-use std::process::Command;
 
 use bevy::prelude::*;
-use jackdaw::project_build::build_project_dylib;
+use jackdaw::project_build::build_project_binary;
 use jackdaw::project_build::shim::ShimSpec;
 use jackdaw::scenes::Scenes;
-use jackdaw::sdk_paths::SdkPaths;
 use jackdaw_api::prelude::*;
 use jackdaw_scene_types::{Brush, SceneNodeId};
 
@@ -40,13 +37,6 @@ fn dispatch(app: &mut App, id: &'static str) {
 #[test]
 fn author_save_build_play() {
     let root = workspace_root();
-    let sdk = SdkPaths::for_workspace(&root);
-    assert!(
-        sdk.wrapper_exists(),
-        "SDK wrapper missing; build --features dylib --target {}",
-        sdk.triple
-    );
-    util::ensure_sdk_metadata(&sdk);
 
     // Author.
     let mut app = util::editor_test_app();
@@ -115,24 +105,15 @@ fn author_save_build_play() {
         package_name: "bsn_scene_game".into(),
         crate_name: "bsn_scene_game".into(),
         project_root: root.join("tests/fixtures/bsn_game"),
-        game_plugin: Some("GamePlugin".into()),
         extension_type: None,
     };
-    let build = build_project_dylib(&spec, &build_dir, &sdk, Some(&root), &mut |_| {})
+    let build = build_project_binary(&spec, &build_dir, &mut |_| {})
         .expect("build the game around the authored scene");
-
-    let status = Command::new("cargo")
-        .args(["build", "-p", "jackdaw_runner", "--target", &sdk.triple])
-        .current_dir(&root)
-        .status()
-        .expect("build jackdaw-runner");
-    assert!(status.success(), "runner build failed");
 
     // The asset root is the staged dir, so the game loads the scene just
     // authored rather than the fixture's committed one.
     let (loaded, stderr) = util::run_windowless_game(
-        &sdk.runner,
-        &build.dylib,
+        &build.binary,
         stage.path(),
         &[
             ("BEVY_ASSET_ROOT", stage.path().as_os_str()),
@@ -143,7 +124,7 @@ fn author_save_build_play() {
     assert!(
         loaded,
         "the game never spawned the authored entity from the saved scene \
-         (no `BSN_SCENE_LOADED ... has_target=true`); runner stderr:\n{stderr}"
+         (no `BSN_SCENE_LOADED ... has_target=true`); game stderr:\n{stderr}"
     );
 
     for line in stderr.lines() {

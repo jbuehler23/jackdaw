@@ -42,12 +42,6 @@ pub use jackdaw_api::{
     JackdawExtension, MenuEntryDescriptor, PanelContext, WindowDescriptor, op, pie, runtime, scene,
 };
 
-// The generated project shim is compiled with this dylib aliased as
-// `jackdaw_api`, so its internal bridge calls must be visible through the
-// facade too. Keeping the calls here makes the runner Bevy-free on Windows.
-#[doc(hidden)]
-pub use jackdaw_api::{__extract_project_schema_json, __run_project_game};
-
 /// Bevy root surface for extension code walking bevy paths beyond
 /// the prelude. Safe to glob: none of the explicit `jackdaw_api`
 /// re-exports above are items bevy defines at its root.

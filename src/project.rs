@@ -65,6 +65,14 @@ fn parse_project_config(data: &str) -> Option<ProjectConfig> {
 }
 
 impl ProjectRoot {
+    pub fn new(root: impl Into<PathBuf>, config: ProjectConfig) -> Self {
+        let root = root.into();
+        Self {
+            root: dunce::simplified(&root).to_path_buf(),
+            config,
+        }
+    }
+
     /// The `.jackdaw/` directory: gitignored, regenerated build artifacts
     /// (schema, plan, shim, target) plus local editor state
     /// (`project.json`) and caches (`registry.json`). Committed project data
@@ -76,8 +84,9 @@ impl ProjectRoot {
         self.root.join("assets")
     }
     pub fn to_relative(&self, path: impl AsRef<Path>) -> PathBuf {
-        let path = path.as_ref();
-        path.strip_prefix(&self.root).unwrap_or(path).into()
+        let path = dunce::simplified(path.as_ref());
+        let root = dunce::simplified(&self.root);
+        path.strip_prefix(root).unwrap_or(path).to_path_buf()
     }
 }
 
@@ -152,12 +161,16 @@ pub const ENV_OPEN_PROJECT: &str = "JACKDAW_OPEN_PROJECT";
 pub fn requested_project() -> Option<PathBuf> {
     std::env::var_os(ENV_OPEN_PROJECT)
         .map(PathBuf::from)
+        .map(|path| dunce::simplified(&path).to_path_buf())
         .filter(|path| path.is_dir())
 }
 
 pub fn read_last_project() -> Option<PathBuf> {
     let recent = read_recent_projects();
-    recent.projects.first().map(|e| e.path.clone())
+    recent
+        .projects
+        .first()
+        .map(|entry| dunce::simplified(entry.path.as_path()).to_path_buf())
 }
 
 pub fn save_project_config(root: &Path, config: &ProjectConfig) -> std::io::Result<()> {
@@ -222,23 +235,29 @@ pub fn create_default_project(root: &Path) -> ProjectConfig {
 
 /// Remove a project from the recent projects list.
 pub fn remove_recent(path: &Path) {
+    let path = dunce::simplified(path);
     let mut recent = read_recent_projects();
-    recent.projects.retain(|e| e.path != path);
+    recent
+        .projects
+        .retain(|entry| dunce::simplified(entry.path.as_path()) != path);
     save_recent_projects(&recent);
 }
 
 /// Record a project in the recent projects list.
 pub fn touch_recent(root: &Path, name: &str) {
+    let root = dunce::simplified(root).to_path_buf();
     let mut recent = read_recent_projects();
 
     // Remove existing entry for this path
-    recent.projects.retain(|e| e.path != root);
+    recent
+        .projects
+        .retain(|entry| dunce::simplified(entry.path.as_path()) != root);
 
     // Insert at the front
     recent.projects.insert(
         0,
         RecentEntry {
-            path: root.to_path_buf(),
+            path: root,
             name: name.to_string(),
             last_opened: crate::timestamps::utc_rfc3339_now(),
         },

@@ -1,5 +1,5 @@
-//! Editor-driven project builds: from an open project to a loadable
-//! project dylib.
+//! Editor-driven extension builds: from an open extension project to a
+//! loadable dylib against the SDK.
 //!
 //! The pipeline, per build:
 //!
@@ -26,7 +26,6 @@ use std::process::{Command, Stdio};
 
 use crate::linkage;
 use crate::plan::{self, PlanError, SdkManifest};
-use crate::schema;
 use crate::sdk_paths::SdkPaths;
 use crate::shim::{self, ShimSpec};
 
@@ -35,8 +34,9 @@ pub enum ProjectBuildError {
     Io(std::io::Error),
     Plan(PlanError),
     Linkage(linkage::LinkageError),
-    /// The project compile itself failed; the log carries rustc's
-    /// diagnostics for the problems panel.
+    /// The compile itself failed; the log carries rustc's
+    /// diagnostics for the problems panel. Used by both the game
+    /// binary path and the extension dylib path.
     Compile {
         log: String,
     },
@@ -80,9 +80,10 @@ impl From<PlanError> for ProjectBuildError {
     }
 }
 
-/// Live progress from a project build. Bevy-light so the pipeline crate
-/// stays independent of the editor; the editor maps these onto its
-/// `BuildProgress` sink for the footer bar and the build log.
+/// Live progress from a project build (game binary or extension
+/// dylib). Bevy-light so the pipeline crate stays independent of the
+/// editor; the editor maps these onto its `BuildProgress` sink for the
+/// footer bar and the build log.
 pub enum BuildEvent {
     /// cargo finished one compile unit; `crate_name` is the unit it just
     /// produced, `done` the running count, and `fresh` whether it was a
@@ -96,16 +97,12 @@ pub enum BuildEvent {
     Log(String),
 }
 
-/// A completed project build.
+/// A completed extension dylib build against the SDK.
 pub struct ProjectBuild {
-    /// The verified project dylib.
+    /// The verified extension dylib.
     pub dylib: PathBuf,
     /// Redirect edges in the plan.
     pub edges: usize,
-    /// The project's type schema, extracted out-of-process. `None`
-    /// when extraction could not run (e.g. the runner is not built);
-    /// the editor keeps its previous schema in that case.
-    pub schema: Option<schema::ProjectSchema>,
 }
 
 /// Separator for the native link search path list handed to the
@@ -171,8 +168,8 @@ pub fn sdk_remedy(sdk: &SdkPaths) -> String {
     "run `jd setup` to prepare one".to_string()
 }
 
-/// Run the full pipeline for one project. `jackdaw_dir` is the
-/// project's `.jackdaw/`; `dev_workspace` points at the jackdaw
+/// Run the full SDK dylib pipeline for one extension. `jackdaw_dir` is
+/// the project's `.jackdaw/`; `dev_workspace` points at the jackdaw
 /// checkout in dev runs (where the SDK manifest is generated rather
 /// than shipped).
 pub fn build_project_dylib(
@@ -183,7 +180,7 @@ pub fn build_project_dylib(
     report: &mut dyn FnMut(BuildEvent),
 ) -> Result<ProjectBuild, ProjectBuildError> {
     // Checked before the shim is even written: an SDK with no library or
-    // no wrapper fails the same way whatever the project is, and it does
+    // no wrapper fails the same way whatever the extension is, and it does
     // so minutes in. Reported through the log too, so the editor's build
     // panel shows what to fix instead of a bare failure line.
     let problems = sdk.problems();
@@ -201,7 +198,7 @@ pub fn build_project_dylib(
 
     // A checkout builds the editor and its SDK with separate commands
     // (`cargo run` writes neither into the triple dir), so they drift
-    // apart silently. The project links the SDK, so an SDK older than
+    // apart silently. The extension links the SDK, so an SDK older than
     // the editor running it fails linkage verification after a full
     // build. Say so in the second it costs to compare two timestamps.
     if let Some(note) = sdk_older_than_editor(sdk) {
@@ -311,15 +308,11 @@ pub fn build_project_dylib(
         // Plain `json`, deliberately, not `json-render-diagnostics`:
         // that variant makes cargo render diagnostics to its own stderr
         // and emit no `compiler-message` at all, so this parser saw none
-        // and every failed build reported "no diagnostics captured"
-        // while the actual error went to a stream nothing reads. The
-        // editor showed the user nothing, and a failing release job
-        // reported an empty log beside a compiler error only a human
-        // scrolling the raw output would find.
+        // and every failed build reported "no diagnostics captured".
         .arg("--message-format=json")
         // Strip the shim: the editor loads it for its types and entry,
         // never debugs it, so the embedded debuginfo (the bulk of the
-        // artifact, since the shim statically links the project's own
+        // artifact, since the shim statically links the extension's own
         // crates) is dead weight. Stripping shrinks it by roughly an
         // order of magnitude, which matters because a loaded dylib is
         // never unloaded, so every reload's pages stay resident.
@@ -365,7 +358,7 @@ pub fn build_project_dylib(
     let status = child.wait()?;
     if !status.success() {
         if log.trim().is_empty() {
-            log.push_str("project failed to compile (no diagnostics captured)");
+            log.push_str("extension failed to compile (no diagnostics captured)");
         }
         if let Some(note) = stale_sdk_hint(&log, sdk, &manifest) {
             log.push_str(&note);
@@ -382,40 +375,14 @@ pub fn build_project_dylib(
     linkage::verify_linkage(&dylib, &sdk.dylib, sdk.toolchain.as_deref())
         .map_err(ProjectBuildError::Linkage)?;
 
-    // Extract the project's type schema out-of-process so the editor
-    // learns its components without mapping the dylib. A missing runner
-    // or a failed extraction is not fatal: the editor keeps its prior
-    // schema and Play still works.
-    let schema = match schema::run_extractor(&sdk.runner, &dylib) {
-        Ok(schema) => Some(schema),
-        Err(err) => {
-            tracing::warn!("project schema extraction skipped: {err}");
-            None
-        }
-    };
-
-    // Persist the schema so pickup is decoupled from building: the
-    // editor watches this file and refreshes its component types when it
-    // changes, whether this build ran in-process or from a terminal
-    // `jackdaw build`. A write failure is not fatal to the build.
-    if let Some(schema) = &schema
-        && let Err(err) = schema::write_schema(jackdaw_dir, schema)
-    {
-        tracing::warn!("failed to persist project schema: {err}");
-    }
-
-    Ok(ProjectBuild {
-        dylib,
-        edges,
-        schema,
-    })
+    Ok(ProjectBuild { dylib, edges })
 }
 
 /// Turn one line of `cargo --message-format=json-render-diagnostics` into a
 /// [`BuildEvent`]: a finished compile unit bumps `done`; a rendered
 /// diagnostic becomes log lines (also accumulated into `log` for the
 /// compile error). Non-JSON or other records are ignored.
-fn parse_build_line(
+pub(crate) fn parse_build_line(
     line: &str,
     done: &mut u32,
     log: &mut String,
@@ -461,72 +428,26 @@ fn parse_build_line(
 }
 
 /// Build a [`ShimSpec`] for a project from the filesystem alone, no
-/// running editor required. `configured_plugin` is the game plugin the
-/// editor's run config named, when there is one; `None` falls back to
-/// the project's `jackdaw.toml`, then source detection, then the
-/// `GamePlugin` convention. Shared by the editor's in-process build and
+/// running editor required. Shared by the editor's in-process build and
 /// `jd build`.
 ///
 /// In a workspace the target member comes from `jackdaw.toml`'s
 /// `package` key, or from the one member that depends on Bevy. The
 /// shim's path dependency and the source scans then point at that
 /// member's directory, not at the opened root.
-pub fn shim_spec_for_project(root: &Path, configured_plugin: Option<String>) -> Option<ShimSpec> {
+pub fn shim_spec_for_project(root: &Path) -> Result<ShimSpec, crate::cargo_meta::ResolveError> {
     let manifest = crate::project_manifest::ProjectManifest::read(root);
-    let package =
-        crate::cargo_meta::resolve_project_package(root, manifest.package.as_deref()).ok()?;
-    let package_dir = &package.dir;
-    let extension_type = crate::detect::detect_extension(package_dir).map(|(_, name)| name);
-    let detected_plugin = crate::detect::detect_plugin(package_dir, &package.crate_name)
-        .and_then(|p| p.split_once("::").map(|(_, name)| name.to_string()));
-    // The shim pastes this name into `app.add_plugins(<crate>::<name>)`,
-    // so naming a type the crate does not define turns into a compile
-    // error inside a generated crate the user never wrote and is told
-    // not to edit. Every source of the name is checked against what the
-    // crate actually declares, including a configured one: a stale
-    // `plugin` key in `jackdaw.toml` (or one written before the type
-    // was renamed) must not be trusted blindly.
-    //
-    // A project with no plugin at all (a plain component library) is a
-    // valid shape: its shim omits the game entry and still contributes
-    // the crate's reflected types.
-    let found = crate::detect::plugin_paths(package_dir);
-    let resolve = |name: &str| {
-        found
-            .iter()
-            .find(|candidate| {
-                candidate.type_name == name || candidate.crate_path.as_deref() == Some(name)
-            })
-            .and_then(|candidate| candidate.crate_path.clone())
-    };
-    let game_plugin = configured_plugin
-        .or(manifest.plugin)
-        .and_then(|configured| {
-            let resolved = resolve(&configured);
-            if resolved.is_none() {
-                tracing::warn!(
-                    "jackdaw.toml names plugin `{configured}`, which {} does not declare; \
-                     ignoring it",
-                    package.crate_name
-                );
-            }
-            resolved
-        })
-        .or(detected_plugin)
-        .or_else(|| {
-            (extension_type.is_none() && resolve("GamePlugin").is_some())
-                .then(|| "GamePlugin".to_string())
-        });
-    Some(ShimSpec {
+    let package = crate::cargo_meta::resolve_project_package(root, manifest.package.as_deref())?;
+    let extension_type = crate::detect::detect_extension(&package.dir).map(|(_, name)| name);
+    Ok(ShimSpec {
         package_name: package.name,
         crate_name: package.crate_name,
         project_root: package.dir,
-        game_plugin,
         extension_type,
     })
 }
 
-/// The most recently built project dylib under `<jackdaw_dir>/target`,
+/// The most recently built extension dylib under `<jackdaw_dir>/target`,
 /// if there is one. The build keys its target directory by a salt that
 /// only the build knows, so consumers that just want "whatever was built
 /// last" (packaging, tooling) search rather than recompute it.
@@ -554,17 +475,9 @@ pub fn last_built_dylib(jackdaw_dir: &Path) -> Option<PathBuf> {
     newest.map(|(_, path)| path)
 }
 
-/// The crate name a rustc "can't find crate for" line names, if that is
-/// what the line is.
-fn unresolved_crate_name(line: &str) -> Option<String> {
-    let rest = line.split_once("can't find crate for `")?.1;
-    let name = rest.split_once('`')?.0;
-    (!name.is_empty()).then(|| name.replace('-', "_"))
-}
-
 /// Turn "can't find crate for X" into something the user can act on.
 ///
-/// The project compiles against prebuilt SDK rlibs, so rustc failing to
+/// The extension compiles against prebuilt SDK rlibs, so rustc failing to
 /// resolve one of the SDK's own crates means those artifacts do not
 /// agree with each other, not that the user's code is wrong. It reads
 /// as a bewildering error about a crate they have never heard of,
@@ -580,18 +493,12 @@ fn stale_sdk_hint(log: &str, sdk: &SdkPaths, manifest: &SdkManifest) -> Option<S
     // `which X depends on` is what separates those from a user's own
     // missing dependency: rustc only adds it when the crate is needed to
     // load metadata for an rlib it was handed, which is to say one the
-    // redirect plan pointed at. A crate the project itself names is
-    // reported without it. Listing SDK crate names instead missed
-    // `jackdaw_api_internal`, which is exactly the sort of transitive
-    // crate that fails this way.
+    // redirect plan pointed at. A crate the extension itself names is
+    // reported without it.
     //
     // A bare `can't find crate for X` also counts when X is one the SDK
     // holds. rustc words it that way when the `--extern` flag is absent
-    // altogether, which is not something a redirect does, and it is
-    // otherwise indistinguishable from a dependency the user forgot to
-    // declare. Naming the SDK is what makes it clear which side to look
-    // at: a macOS bundle failed exactly this way on `image`, a crate no
-    // one involved had ever named.
+    // altogether.
     let unresolved = log
         .lines()
         .find(|line| {
@@ -618,6 +525,13 @@ fn stale_sdk_hint(log: &str, sdk: &SdkPaths, manifest: &SdkManifest) -> Option<S
         sdk.deps.display(),
         sdk.manifest.display(),
     ))
+}
+
+fn unresolved_crate_name(line: &str) -> Option<String> {
+    let marker = "can't find crate for `";
+    let start = line.find(marker)? + marker.len();
+    let end = line[start..].find('`')? + start;
+    Some(line[start..end].to_string())
 }
 
 /// How many keyed target directories to keep, including the current
@@ -690,47 +604,6 @@ mod tests {
     use super::*;
     use crate::sdk_paths::host_triple;
 
-    /// A failed build has to carry the compiler's own words. This is the
-    /// half of that which can be checked without running cargo: the
-    /// other half is passing `--message-format=json`, because
-    /// `json-render-diagnostics` emits no `compiler-message` at all and
-    /// leaves this parser with nothing to find.
-    #[test]
-    fn a_compiler_message_reaches_the_failure_log() {
-        let line = r#"{"reason":"compiler-message","target":{"name":"bevy_image"},"message":{"rendered":"error[E0463]: can't find crate for `image`\n"}}"#;
-        let mut done = 0;
-        let mut log = String::new();
-        let mut seen = Vec::new();
-        parse_build_line(line, &mut done, &mut log, &mut |event| {
-            if let BuildEvent::Log(l) = event {
-                seen.push(l);
-            }
-        });
-        assert!(log.contains("can't find crate for `image`"), "{log:?}");
-        assert_eq!(seen.len(), 1, "the live sink gets it too: {seen:?}");
-    }
-
-    /// A manifest holding just `names`, so the hint can tell an SDK
-    /// crate from one the user forgot to declare.
-    fn sdk_manifest_with(names: &[&str]) -> SdkManifest {
-        // Keyed by the names themselves: tests run in parallel, and two
-        // that happened to ask for the same count shared one path, so
-        // one deleted the file the other was reading.
-        let path = std::env::temp_dir().join(format!(
-            "jackdaw_hint_manifest_{}_{}.txt",
-            std::process::id(),
-            names.join("_")
-        ));
-        let body: String = names
-            .iter()
-            .map(|n| format!("{n} 1.0.0 lib{n}-abc.rlib\n"))
-            .collect();
-        std::fs::write(&path, body).expect("write a manifest");
-        let manifest = SdkManifest::load(&path).expect("load it back");
-        let _ = std::fs::remove_file(&path);
-        manifest
-    }
-
     fn project(name: &str, lib_rs: &str) -> PathBuf {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -751,28 +624,21 @@ mod tests {
         dir
     }
 
-    /// A component library with no plugin is a valid project. Naming a
-    /// `GamePlugin` it does not define would fail the build inside the
-    /// generated shim, where the user cannot see or fix it.
+    /// A component library with no plugin is a valid project: it still
+    /// resolves to a `ShimSpec`, and its shim has no extension ctor.
     #[test]
-    fn a_crate_without_a_plugin_gets_no_game_entry() {
+    fn a_crate_without_a_plugin_gets_no_extension_ctor() {
         let dir = project(
             "noplugin",
             "use bevy::prelude::*;\n\
              #[derive(Component, Reflect)]\npub struct Health(f32);\n",
         );
-        let spec = shim_spec_for_project(&dir, None).expect("spec");
-        assert_eq!(spec.game_plugin, None);
-        assert!(!shim::lib_source_for_test(&spec).contains("add_plugins"));
-        // The schema extractor is still emitted: the crate's reflected
-        // types are the point of building it.
-        assert!(shim::lib_source_for_test(&spec).contains("jackdaw_extract_schema"));
+        let spec = shim_spec_for_project(&dir).expect("spec");
+        assert!(spec.extension_type.is_none());
+        assert!(!shim::lib_source_for_test(&spec).contains("jackdaw_extension_ctor"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A `plugin` key naming a type the crate does not define (stale,
-    /// renamed, or written by an older importer) must not reach the
-    /// shim: it would fail the build inside the generated crate.
     /// A manifest older than the SDK it describes names artifacts from
     /// a previous build. They are usually still on disk, so the plan
     /// resolves and the failure surfaces only inside rustc, against a
@@ -826,45 +692,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn a_stale_configured_plugin_is_not_trusted() {
-        let dir = project("stale-key", "pub fn helper() {}\n");
-        std::fs::write(
-            dir.join("jackdaw.toml"),
-            "plugin = \"GamePlugin\"\n[[run]]\nname = \"Play\"\n",
-        )
-        .unwrap();
-        let spec = shim_spec_for_project(&dir, None).expect("spec");
-        assert_eq!(spec.game_plugin, None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A configured plugin that does exist is honoured, and resolved to
-    /// the path the shim can actually name it by.
-    #[test]
-    fn a_configured_plugin_resolves_to_its_module_path() {
-        let dir = project("configured", "pub mod game;\n");
-        std::fs::write(
-            dir.join("src/game.rs"),
-            "impl Plugin for WorldPlugin { fn build(&self, _: &mut App) {} }\n",
-        )
-        .unwrap();
-        std::fs::write(dir.join("jackdaw.toml"), "plugin = \"WorldPlugin\"\n").unwrap();
-        let spec = shim_spec_for_project(&dir, None).expect("spec");
-        assert_eq!(spec.game_plugin.as_deref(), Some("game::WorldPlugin"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn the_game_plugin_convention_still_applies_when_the_type_exists() {
-        let dir = project(
-            "convention",
-            "use bevy::prelude::*;\npub struct GamePlugin;\n\
-             impl Plugin for GamePlugin { fn build(&self, _: &mut App) {} }\n",
-        );
-        let spec = shim_spec_for_project(&dir, None).expect("spec");
-        assert_eq!(spec.game_plugin.as_deref(), Some("GamePlugin"));
-        let _ = std::fs::remove_dir_all(&dir);
+    fn empty_manifest() -> SdkManifest {
+        let path =
+            std::env::temp_dir().join(format!("jackdaw_empty_manifest_{}", std::process::id()));
+        std::fs::write(&path, b"").unwrap();
+        SdkManifest::load(&path).unwrap()
     }
 
     /// An SDK-crate resolution failure is not the user's bug, and says
@@ -872,10 +704,10 @@ mod tests {
     #[test]
     fn an_unresolvable_sdk_crate_is_explained() {
         let sdk = SdkPaths::for_workspace_profile(Path::new("/checkout"), "release");
+        let manifest = empty_manifest();
         let log = "error[E0463]: can't find crate for `jackdaw_api_macros` which \
                    `jackdaw_api` depends on\n";
-        let hint = stale_sdk_hint(log, &sdk, &sdk_manifest_with(&["jackdaw_api_macros"]))
-            .expect("an SDK crate should be recognised");
+        let hint = stale_sdk_hint(log, &sdk, &manifest).expect("an SDK crate should be recognised");
         assert!(hint.contains("rather than an error in your project"));
         assert!(hint.contains("/checkout"), "names the SDK in use: {hint}");
     }
@@ -887,10 +719,10 @@ mod tests {
     #[test]
     fn a_replaced_transitive_sdk_crate_is_explained() {
         let sdk = SdkPaths::for_workspace_profile(Path::new("/checkout"), "release");
+        let manifest = empty_manifest();
         let log = "error[E0460]: found possibly newer version of crate \
                    `jackdaw_api_internal` which `jackdaw_api` depends on\n";
-        let hint = stale_sdk_hint(log, &sdk, &sdk_manifest_with(&["jackdaw_api_internal"]))
-            .expect("E0460 is an SDK mismatch too");
+        let hint = stale_sdk_hint(log, &sdk, &manifest).expect("E0460 is an SDK mismatch too");
         assert!(
             hint.contains("jackdaw_sdk_manifest.txt"),
             "points at the cache to delete: {hint}"
@@ -902,25 +734,9 @@ mod tests {
     #[test]
     fn a_users_own_missing_crate_gets_no_sdk_hint() {
         let sdk = SdkPaths::for_workspace_profile(Path::new("/checkout"), "release");
+        let manifest = empty_manifest();
         let log = "error[E0463]: can't find crate for `rand`\n";
-        assert!(stale_sdk_hint(log, &sdk, &sdk_manifest_with(&["glam"])).is_none());
-    }
-
-    /// The shape a macOS bundle failed with: a bare `can't find crate`
-    /// naming a crate the SDK holds and the user never mentioned. rustc
-    /// words it that way when the `--extern` flag is absent altogether,
-    /// with no `depends on` clause to key off, so it is otherwise
-    /// indistinguishable from a dependency the project forgot.
-    #[test]
-    fn a_bare_missing_sdk_crate_is_still_attributed_to_the_sdk() {
-        let sdk = SdkPaths::for_workspace_profile(Path::new("/checkout"), "release");
-        let log = "error[E0463]: can't find crate for `image`\n";
-        let hint = stale_sdk_hint(log, &sdk, &sdk_manifest_with(&["image", "glam"]))
-            .expect("a crate the SDK holds points at the SDK");
-        assert!(
-            hint.contains("rather than an error in your project"),
-            "{hint}"
-        );
+        assert!(stale_sdk_hint(log, &sdk, &manifest).is_none());
     }
 
     /// Switching build configuration used to delete the cache it was

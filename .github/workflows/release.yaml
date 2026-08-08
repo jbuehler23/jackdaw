@@ -58,7 +58,7 @@ jobs:
           echo "include=$list" >> "$GITHUB_OUTPUT"
 
   # Nothing ships unless the end-to-end tier is green: the SDK builds, a game
-  # builds against it, and the runner loads an authored scene.
+  # binary builds and loads an authored scene over PIE.
   heavy:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_heavy }}
     uses: ./.github/workflows/heavy-tier.yaml
@@ -173,16 +173,16 @@ jobs:
           -p jackdaw_localization
           -p jackdaw_panels
           -p jackdaw_pie_protocol
-          -p jackdaw_project_build
           -p jackdaw_runtime
           -p jackdaw_scene_types
+          -p jackdaw_schema
           -p jackdaw_ui
           -p jackdaw_widgets
 
   # Downloadable per-platform bundles: the editor, its CLI, the rustc
-  # wrapper, the game runner, the three runtime dylibs, and a relocatable
-  # SDK, all in one archive. A user extracts and runs offline - no bootstrap
-  # compile, no source checkout. Independent of the crates.io publish.
+  # wrapper, the runtime dylibs, and a relocatable SDK, all in one archive.
+  # A user extracts and runs offline - no bootstrap compile, no source
+  # checkout. Independent of the crates.io publish.
   binaries:
     name: Bundle - ${{ matrix.triple }}
     # Only on the tests. The downloadable bundle is the primary install
@@ -196,7 +196,7 @@ jobs:
     if: ${{ always() && needs.plan.result == 'success' && (needs.heavy.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.skip_heavy)) }}
     runs-on: ${{ matrix.os }}
     # This job builds the editor twice over: once for the binaries, then
-    # a whole game against the staged SDK. On Windows, with a cold cache,
+    # an extension against the staged SDK. On Windows, with a cold cache,
     # that ran past 120 minutes and was cut off mid-smoke-test, reported
     # as `cancelled` rather than as anything a reader could act on.
     timeout-minutes: 180
@@ -279,7 +279,7 @@ jobs:
       - name: Build rustc wrapper (host)
         run: cargo build --release -p jackdaw_rustc_wrapper
 
-      # The root package owns the editor, jd, runner, and installed wrapper.
+      # The root package owns the editor, jd, and installed wrapper.
       - name: Build installed binaries (target)
         run: cargo build --release --target ${{ matrix.triple }} -p jackdaw --features dylib --bins
 
@@ -326,7 +326,7 @@ jobs:
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
-          for bin in jackdaw jd jackdaw-runner; do
+          for bin in jackdaw jd; do
             if ! readelf -d "$root/$bin" | grep -E 'RUNPATH|RPATH' | grep -qF '$ORIGIN'; then
               echo "$bin is missing its \$ORIGIN runpath:"
               readelf -d "$root/$bin" | head -20
@@ -350,7 +350,7 @@ jobs:
           ls "$root/sdk/host-deps" 2>/dev/null | grep -E "jackdaw_api_macros|bevy_reflect_derive" || echo "(none)"
 
       # An archive that is missing a piece installs and then fails at the first
-      # project build, which is how a missing sdk/manifest.txt reached a user.
+      # extension build, which is how a missing sdk/manifest.txt reached a user.
       - name: Verify the staged bundle
         run: |
           set -euo pipefail
@@ -359,7 +359,7 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
           missing=0
           for f in sdk/manifest.txt Cargo.lock toolchain.txt \
-                   "jackdaw$exe" "jd$exe" "jackdaw-runner$exe" "jackdaw-rustc-wrapper$exe"; do
+                   "jackdaw$exe" "jd$exe" "jackdaw-rustc-wrapper$exe"; do
             if [ ! -f "$root/$f" ]; then echo "bundle is missing $f"; missing=1; fi
           done
           if [ ! -d "$root/sdk/${{ matrix.triple }}" ]; then
@@ -368,10 +368,10 @@ jobs:
           if [ "$missing" -ne 0 ]; then echo "staged bundle is incomplete"; exit 1; fi
           echo "bundle layout verified"
 
-      # Build a game against the just-built release SDK, the way an installed
-      # user does. JACKDAW_BUNDLE_SMOKE_REQUIRED turns the test's local-only
-      # skip into a hard failure so a broken bundle cannot pass silently.
-      - name: Bundle smoke (game builds against the release SDK)
+      # Build an extension against the just-built release SDK, the way an
+      # installed user does. JACKDAW_BUNDLE_SMOKE_REQUIRED turns the test's
+      # local-only skip into a hard failure so a broken bundle cannot pass silently.
+      - name: Bundle smoke (extension builds against the release SDK)
         env:
           JACKDAW_BUNDLE_SMOKE_REQUIRED: "1"
           JACKDAW_BUNDLE_ROOT: ${{ runner.temp }}/jackdaw-${{ matrix.triple }}

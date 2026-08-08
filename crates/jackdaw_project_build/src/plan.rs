@@ -1,16 +1,16 @@
 //! The per-edge extern redirect plan and the lock alignment that
 //! precedes it.
 //!
-//! A project builds against the shipped SDK by having the rustc
+//! An extension builds against the shipped SDK by having the rustc
 //! wrapper rewrite `--extern` flags to the SDK's exact artifacts. The
 //! decisions are per dependency edge: an edge redirects only when the
-//! project resolves that dependency at the byte-identical version the
+//! extension resolves that dependency at the byte-identical version the
 //! SDK holds. Name-keyed redirection cannot work (the SDK closure
 //! itself holds two hashbrown versions; user graphs hold private newer
 //! copies of closure crates), so the plan is a `consumer:alias=artifact`
 //! line per edge, consumed by `jackdaw-rustc-wrapper`.
 //!
-//! Before planning, the project's lockfile is aligned: closure crates
+//! Before planning, the extension's lockfile is aligned: closure crates
 //! resolved at a semver-compatible but different version get pinned to
 //! the SDK's exact version. The lockfile in question is the generated
 //! shim crate's, never the user's.
@@ -28,7 +28,7 @@ pub enum PlanError {
     Io(std::io::Error),
     Cargo(String),
     Parse(String),
-    /// The SDK itself is not usable, whatever the project asked for.
+    /// The SDK itself is not usable, whatever the extension asked for.
     Sdk(String),
 }
 
@@ -89,7 +89,7 @@ impl SdkManifest {
     /// `sdk.manifest` so later opens skip the cargo runs.
     pub fn generate_dev(workspace_root: &Path, sdk: &SdkPaths) -> Result<Self, PlanError> {
         // Enumerate artifacts from the same profile the SDK was built at, so a
-        // release SDK's manifest points at release rlibs (what projects redirect
+        // release SDK's manifest points at release rlibs (what extensions redirect
         // against) rather than debug ones from a stray earlier build.
         let mut args = vec!["-p", "jackdaw", "--features", "dylib"];
         let is_release = sdk
@@ -107,7 +107,7 @@ impl SdkManifest {
     /// `build_args` and reading cargo's JSON. The dev workspace builds the
     /// editor (`-p jackdaw --features dylib`); the bootstrap recipe, which
     /// has no editor package, builds the SDK crates directly
-    /// (`-p jackdaw_sdk -p jackdaw_runner --release`). The SDK is already
+    /// (`-p jackdaw_sdk --release`). The SDK is already
     /// compiled, so this re-invocation just reports the (fresh) artifact
     /// filenames.
     ///
@@ -143,7 +143,7 @@ impl SdkManifest {
         // Cargo reports artifact paths with the platform's separator,
         // so matching only on `/` discarded every artifact on Windows
         // and produced an empty manifest. Nothing downstream can work
-        // without it: the redirect plan has no edges, and a project
+        // without it: the redirect plan has no edges, and an extension
         // silently compiles its own bevy instead of the SDK's.
         let in_triple_dir = |path: &str| {
             path.contains(&format!("/{}/", sdk.triple))
@@ -171,7 +171,7 @@ impl SdkManifest {
             // consumer's machine and are already on its default search
             // path. Recording one is worse than useless: the bundler
             // copies every archive it holds, so a static `libc.a` lands
-            // ahead of the sysroot's `libc.so` and a project dylib fails
+            // ahead of the sysroot's `libc.so` and an extension dylib fails
             // to link on relocations that only a static executable
             // allows.
             if msg["reason"] == "build-script-executed" {
@@ -193,7 +193,7 @@ impl SdkManifest {
             // a lib called `coreaudio`) a target-name key matches nothing
             // in the closure, so the crate silently drops out of the
             // manifest. `write_plan` looks these up by package name too,
-            // and a project whose edge finds no entry compiles its own
+            // and an extension whose edge finds no entry compiles its own
             // copy instead of the SDK's, which is a type-identity
             // divergence nothing reports.
             let Some(pkg_id) = msg["package_id"].as_str() else {
@@ -211,7 +211,7 @@ impl SdkManifest {
             // Staging used to scoop every dylib in the host deps dir,
             // and that dir accumulates generations from other package
             // selections: an SDK whose rlibs referenced one generation
-            // shipped beside proc macros from another, and a project
+            // shipped beside proc macros from another, and an extension
             // build failed with `metadata mismatch` on every candidate,
             // reported as `can't find crate` for whichever SDK crate
             // held the chain. Kept before the closure filter because the
@@ -260,7 +260,7 @@ impl SdkManifest {
         // for is not fatal on its own: `cargo tree -p jackdaw_sdk`
         // resolves features for a narrower package selection than the
         // build, so the two can legitimately differ. It is worth saying
-        // out loud, because the manifest is what every project redirects
+        // out loud, because the manifest is what every extension redirects
         // against and a gap here becomes a missing artifact there.
         let uncovered: Vec<String> = closure
             .iter()

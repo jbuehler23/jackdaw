@@ -1,14 +1,14 @@
 //! Linkage identity: compatibility verification with no user-authored
 //! tags.
 //!
-//! A project dylib built as a Rust dylib keeps its `.rustc` metadata
+//! An extension dylib built as a Rust dylib keeps its `.rustc` metadata
 //! section, which records every dependency crate with the exact SVH it
 //! was compiled against. Comparing the dylib's recorded `jackdaw_sdk`
 //! dependency hash with the running SDK dylib's own hash proves the
 //! dylib links THE running SDK: a stale or foreign SDK build has a
 //! different hash even at the same crate version. The hashes are read
 //! with `rustc -Zls=root` using the toolchain the editor already ships
-//! for project builds; a foreign compiler's artifact fails to parse
+//! for extension builds; a foreign compiler's artifact fails to parse
 //! outright (the metadata format is versioned), which is itself the
 //! toolchain-mismatch signal.
 

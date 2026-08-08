@@ -372,7 +372,7 @@ fn load_resolves_isa_and_caches_prefab() {
                 }}
             }}]
         }}"#,
-        prefab_path.to_str().unwrap()
+        prefab_path.to_string_lossy().replace('\\', "/")
     );
     std::fs::write(&scene_path, scene_jsn).unwrap();
 
@@ -430,7 +430,7 @@ fn load_resolves_isa_spawns_inherited_entities() {
                 }}
             }}]
         }}"#,
-        prefab_path.to_str().unwrap()
+        prefab_path.to_string_lossy().replace('\\', "/")
     );
     std::fs::write(&scene_path, scene_jsn).unwrap();
 
@@ -490,7 +490,7 @@ fn save_writes_sparse_deltas_only() {
                 }}
             }}]
         }}"#,
-        prefab_path.to_str().unwrap()
+        prefab_path.to_string_lossy().replace('\\', "/")
     );
     std::fs::write(&scene_path, scene_jsn).unwrap();
 
@@ -622,7 +622,7 @@ fn scene_referencing(prefab: &std::path::Path) -> String {
             }}
         }}]
     }}"#,
-        prefab.to_string_lossy()
+        prefab.to_string_lossy().replace('\\', "/")
     )
 }
 
@@ -1294,7 +1294,7 @@ fn unpack_child_adds_to_deleted_and_creates_standalone_node() {
                     }}
                 ]
             }}"#,
-            prefab_path.to_string_lossy()
+            prefab_path.to_string_lossy().replace('\\', "/")
         ),
     )
     .unwrap();

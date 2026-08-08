@@ -13,9 +13,9 @@ PIE keeps two surfaces strictly separate:
 
 ## What you need
 
-Nothing compiles at play time. The editor already built your project's
-library when the project opened; Play launches the prebuilt game runner
-with that library and connects to it over IPC.
+Nothing compiles at play time once the project is built. The editor
+builds your game as an ordinary cargo binary when the project opens;
+Play launches that same executable and connects to it over IPC.
 
 The Play dropdown is filled from the **run configurations** in your
 project's `jackdaw.toml` (`[[run]]` entries carrying a name, environment

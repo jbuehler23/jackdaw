@@ -7,7 +7,15 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-bevy.workspace = true
+# See `jackdaw_pie_protocol`: this crate ships inside games, so its bevy
+# features unify into theirs. Keep the list minimal and explicit.
+bevy = { version = "0.19", default-features = false, features = [
+    "std",
+    "serialize",
+    "reflect_auto_register",
+    "bevy_asset",
+    "bevy_mesh",
+] }
 avian3d = { workspace = true }
 jackdaw_geometry = { version = "0.19.0", path = "../jackdaw_geometry" }
 jackdaw_scene_types = { version = "0.19.0", path = "../jackdaw_scene_types" }
@@ -16,8 +24,10 @@ jackdaw_scene_types = { version = "0.19.0", path = "../jackdaw_scene_types" }
 default = ["overlays"]
 # Editor-only collider/sensor wireframe gizmos and hierarchy arrows. Pulls
 # avian's `debug-plugin` (`PhysicsGizmoExt::draw_collider`, the `PhysicsGizmos`
-# config group). The runtime collider bridge builds without it.
-overlays = ["avian3d/debug-plugin"]
+# config group). The runtime collider bridge builds without it, which is why
+# the gizmo dependency is gated here rather than always on: a shipped game
+# takes the bridge and leaves bevy's gizmo stack behind.
+overlays = ["avian3d/debug-plugin", "bevy/bevy_gizmos"]
 
 [lints]
 workspace = true

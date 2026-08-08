@@ -2,7 +2,7 @@ name: Onboarding pipeline
 
 # These probes are the regression suite for the SDK build pipeline
 # (extern redirect plan, linkage identity, auto-registration across
-# dlopen, and the game runner over PIE IPC). They build the whole
+# dlopen, and game binary Play over PIE IPC). They build the whole
 # editor with the dylib feature per platform, so they are kept off the
 # per-PR path: they run on pushes to main (which also warms the per-OS
 # cache), on release tags, nightly, and on demand.
@@ -74,24 +74,18 @@ jobs:
           # a warm cache.
           cache-on-failure: true
 
-      - name: Build the SDK, runner, and wrapper
-        # One target-side cargo invocation, `--bins` included: the root
-        # package owns the `jackdaw-runner` bin, so this builds the
-        # editor, jd, and the runner from a single feature resolution.
-        # The previous separate `cargo build -p jackdaw_runner` resolved
-        # features for a different package selection and rewrote the
-        # stable-named `libjackdaw_dylib` in place, so the dylib pair on
-        # disk mixed two resolutions: on macOS, dlopen then failed on a
-        # `type_info::CELL` whose crate disambiguator matched neither
-        # file. (It also raced the root's runner bin for the same output
-        # filename.)
+      - name: Build the SDK and wrapper
+        # One target-side cargo invocation with `--bins`: the root package
+        # owns the editor bins, so this builds them from a single feature
+        # resolution. A separate package selection can rewrite the
+        # stable-named runtime dylibs in place and mix two resolutions.
         run: |
           set -euxo pipefail
           cargo build -j 4 -p jackdaw --features dylib --target "$TRIPLE" --bins
           cargo build -p jackdaw_rustc_wrapper
 
       - name: Auto-registration across dlopen
-        # Project builds generate the dev SDK manifest on demand. The test
+        # Extension builds generate the dev SDK manifest on demand. The test
         # harness must use that same Cargo profile: dylibs from `test` and
         # `dev` have different symbol identities but share one output name.
         run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test reflect_auto_register -- --nocapture
@@ -103,7 +97,7 @@ jobs:
         run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test extern_redirect_ecosystem -- --nocapture
 
       - name: Schema extraction
-        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test schema_extract -- --nocapture
+        run: cargo test -j 4 --test schema_extract -- --nocapture
 
       - name: Component shape refresh
         run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test component_shape_refresh -- --nocapture
@@ -116,15 +110,14 @@ jobs:
 
       - name: Scaffold end-to-end (scaffold -> build -> schema)
         # The user's first-run loop headlessly: scaffold a game, build its
-        # dylib against the SDK, and confirm the template component reaches
-        # the schema. No GPU needed, so it runs on all three platforms.
-        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test scaffold_e2e -- --nocapture
+        # binary, and confirm the template component reaches the schema.
+        run: cargo test -j 4 --test scaffold_e2e -- --nocapture
 
-      - name: Game runner over PIE IPC
-        # Headless runners have no GPU on every platform; the runner
+      - name: Game binary over PIE IPC
+        # Headless runners have no GPU on every platform; the Play
         # test needs a working wgpu adapter for the Frames lane, so it
         # runs only where lavapipe provides one.
         if: runner.os == 'Linux'
         run: |
           sudo apt-get install --no-install-recommends -y mesa-vulkan-drivers
-          cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test runner_boots_project_dylib -- --nocapture
+          cargo test -j 4 --test bsn_game_run -- --nocapture

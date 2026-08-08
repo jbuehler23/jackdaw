@@ -12,9 +12,9 @@ env:
 jobs:
   heavy:
     name: SDK build + end-to-end tests
-    # Linux only. The heavy tier builds the shared SDK/runtime graph and
-    # launches the runner out of process; that path is verified here, and the
-    # CI cargo config's linker is Linux-only.
+    # Linux only. The heavy tier builds the shared SDK/runtime graph for
+    # extensions and runs game binary Play out of process; that path is
+    # verified here, and the CI cargo config's linker is Linux-only.
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

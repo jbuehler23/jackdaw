@@ -46,51 +46,6 @@ pub use jackdaw_api_internal::{
 
 pub use jackdaw_api_internal::lifecycle::ExtensionKind;
 
-/// Drain the process's reflected types into a project schema and return
-/// it as JSON. Called by the generated project shim's
-/// `jackdaw_extract_schema` export, which the game runner invokes over
-/// FFI after `dlopen`.
-///
-/// It lives in `jackdaw_api` so it compiles into the SDK dylib: the
-/// bevy_reflect machinery it instantiates (per-type `type_info` cells and
-/// the auto-registration inventory) then resides in the one dylib the
-/// shim and the editor already share, instead of in the runner binary,
-/// which cannot resolve those symbols when statically linked on Windows.
-/// The shim submitted its `#[derive(Reflect)]` types into that same
-/// inventory when it was dlopened, so draining here sees them.
-#[doc(hidden)]
-pub fn __extract_project_schema_json() -> String {
-    let mut registry = bevy::reflect::TypeRegistry::default();
-    registry.register_derived_types();
-    let schema = jackdaw_project_build::schema::extract_from_registry(&registry);
-    serde_json::to_string(&schema)
-        .unwrap_or_else(|_| String::from(r#"{"components":[],"resources":[]}"#))
-}
-
-/// Assemble the engine app, let the project install its plugin via
-/// `add_game`, and run it. Called by the generated project shim's
-/// `jackdaw_run_game` export, which the game runner invokes over FFI.
-///
-/// Like schema extraction, this lives in `jackdaw_api` so the whole bevy
-/// app is built and run inside the SDK dylib and the project dylib - both
-/// of which link on Windows - instead of in the runner binary, which as a
-/// secondary binary cannot link bevy there. The runner just `dlopen`s and
-/// calls this, staying bevy-free.
-#[doc(hidden)]
-pub fn __run_project_game(add_game: impl FnOnce(&mut bevy::app::App)) {
-    use bevy::prelude::*;
-    let mut app = App::new();
-    app.add_plugins(jackdaw_runtime::maybe_windowless(DefaultPlugins));
-    app.add_plugins(jackdaw_runtime::JackdawPlugin);
-    // A fallback camera so the PIE frame stream renders something; real
-    // projects spawn their own and this becomes redundant.
-    app.add_systems(Startup, |mut commands: Commands| {
-        commands.spawn(Camera3d::default());
-    });
-    add_game(&mut app);
-    app.run();
-}
-
 /// Maps component type paths to the icon the outliner shows for entities
 /// carrying them. Extensions seed it through
 /// [`ExtensionContext::register_entity_icon`].

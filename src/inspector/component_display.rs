@@ -540,7 +540,7 @@ pub(crate) fn build_inspector_displays(
         ));
     }
 
-    // Project (dylib-provided) components are not real ECS components in the
+    // Project (schema-reported) components are not real ECS components in the
     // editor, so the archetype pass above never sees them. Render each one the
     // document authored on this entity from its extracted schema; values come
     // from the document and edits round-trip back through the same field

@@ -18,6 +18,7 @@
 #![cfg(feature = "dylib")]
 
 use std::path::PathBuf;
+use std::process::Command;
 
 use bevy::reflect::TypeRegistry;
 use jackdaw::sdk_paths::SdkPaths;
@@ -45,10 +46,34 @@ fn auto_registered_types_cross_the_dlopen_boundary() {
         sdk.wrapper.display()
     );
 
-    // Build through the real generated-shim path. This pins the fixture's
-    // closure to the SDK lock and supplies the same per-edge extern plan an
-    // editor-created game or marketplace extension receives.
-    let fixture_dylib = util::build_reflect_fixture(&sdk).dylib;
+    let fixture_dir = util::stage_fixture("reflect_game");
+    let fixture_target = fixture_dir.join("target-fixture");
+    // Wrapper behavior is not part of cargo's fingerprint; build from
+    // clean so stale units cannot poison the probe.
+    let _ = std::fs::remove_dir_all(&fixture_target);
+
+    // Build the fixture project through the SDK pipeline, isolated target
+    // dir. The crate type is a build flag, never a manifest entry: the
+    // Rust dylib keeps the .rustc metadata section carrying the linkage
+    // identity, which a cdylib would strip.
+    let status = Command::new("cargo")
+        .args(["rustc", "--crate-type", "dylib", "--target", &triple])
+        .current_dir(&fixture_dir)
+        .env("CARGO_TARGET_DIR", &fixture_target)
+        .env("RUSTC_WRAPPER", &sdk.wrapper)
+        .env("JACKDAW_SDK_DYLIB", &sdk.dylib)
+        .env("JACKDAW_SDK_DEPS", &sdk.deps)
+        .env("JACKDAW_SDK_HOST_DEPS", &sdk.host_deps)
+        .env("JACKDAW_WRAPPER_LOG", "1")
+        .status()
+        .expect("spawn cargo for the fixture project");
+    assert!(status.success(), "fixture project failed to build");
+
+    let fixture_dylib = fixture_target.join(format!(
+        "{triple}/debug/{}reflect_game{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    ));
     assert!(
         fixture_dylib.exists(),
         "fixture dylib missing at {}",

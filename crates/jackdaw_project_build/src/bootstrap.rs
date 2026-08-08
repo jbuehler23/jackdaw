@@ -293,7 +293,7 @@ pub enum SetupProgress {
     /// once before compilation starts. The bar's denominator.
     Total(u32),
     /// One more compile unit finished. `done` is cumulative across the
-    /// SDK, runner, and wrapper cargo invocations.
+    /// SDK and wrapper cargo invocations.
     Compiled { crate_name: String, done: u32 },
     /// A line of rendered cargo diagnostics, for a log tail.
     Log(String),
@@ -412,7 +412,7 @@ pub fn ensure_sdk(mut report: impl FnMut(SetupProgress)) -> Result<PathBuf, Stri
     // build cache rather than recompiling from scratch.
     write_recipe(&build_dir).map_err(|e| format!("unpack recipe: {e}"))?;
     // Pin the toolchain for every cargo invocation in this recipe: the
-    // build, the manifest enumeration, and the project builds that later
+    // build, the manifest enumeration, and the extension builds that later
     // resolve this cache all use one rustc, as the rmeta trick requires.
     std::fs::write(
         build_dir.join("rust-toolchain.toml"),
@@ -429,26 +429,18 @@ pub fn ensure_sdk(mut report: impl FnMut(SetupProgress)) -> Result<PathBuf, Stri
     let built = crate::sdk_paths::SdkPaths::for_workspace_profile(&build_dir, "release");
     // The feature sets the three install paths resolve have to nest:
     // a release bundle builds `-p jackdaw --features dylib` (the whole
-    // editor), this builds `-p jackdaw_sdk -p jackdaw_runner`, and a
-    // project builds its own graph. Each must be a superset of the next.
-    // Resolving fewer features than a project does is what breaks: the
-    // project compiles code expecting an impl that the SDK rlib it links
+    // editor), this builds `-p jackdaw_sdk`, and an
+    // extension builds its own graph. Each must be a superset of the next.
+    // Resolving fewer features than an extension does is what breaks: the
+    // extension compiles code expecting an impl that the SDK rlib it links
     // was built without, and the error names a crate nobody touched.
     // `jackdaw_sdk` depends on the whole runtime with every feature on to
     // keep that ordering; `tests/sdk_feature_closure.rs` guards it.
     // Enumerate artifacts by re-invoking the SAME package set the build
-    // phase used (`-p jackdaw_sdk -p jackdaw_runner`). A narrower set (e.g.
-    // `-p jackdaw_sdk` alone) resolves different features for shared deps
-    // like bevy and forces a full second rebuild; matching it makes this a
-    // pure cache hit that only re-reports the artifact filenames. The
-    // manifest still filters to jackdaw_sdk's runtime closure, so the extra
-    // runner artifacts drop out.
-    crate::plan::SdkManifest::generate(
-        &build_dir,
-        &built,
-        &["-p", "jackdaw_sdk", "-p", "jackdaw_runner", "--release"],
-    )
-    .map_err(|e| format!("generate SDK manifest: {e}"))?;
+    // phase used (`-p jackdaw_sdk`). Matching it makes this a
+    // pure cache hit that only re-reports the artifact filenames.
+    crate::plan::SdkManifest::generate(&build_dir, &built, &["-p", "jackdaw_sdk", "--release"])
+        .map_err(|e| format!("generate SDK manifest: {e}"))?;
 
     write_stamp(&cache, &Stamp::current(&triple, crate::RECIPE_HASH))
         .map_err(|e| format!("write stamp: {e}"))?;
@@ -490,7 +482,7 @@ fn build_recipe(
     // `done` is cumulative so the bar advances continuously across both
     // cargo invocations rather than resetting for the wrapper.
     let mut done = 0u32;
-    // SDK dylib + runner are cross-target artifacts (`--target`); their
+    // SDK dylib is a cross-target artifact (`--target`); its
     // deps land in `target/<triple>/release` and proc-macro host deps in
     // `target/release`.
     run_cargo(
@@ -502,8 +494,6 @@ fn build_recipe(
             triple,
             "-p",
             "jackdaw_sdk",
-            "-p",
-            "jackdaw_runner",
         ],
         &mut done,
         report,
@@ -593,7 +583,7 @@ fn report_cargo_line(line: &str, done: &mut u32, report: &mut impl FnMut(SetupPr
 }
 
 /// Estimate the build phase's compile-unit count from the union normal +
-/// build dependency closure of the three artifacts (`cargo tree`). A
+/// build dependency closure of the SDK artifacts (`cargo tree`). A
 /// denominator for the progress bar; `None` on any failure, and the UI
 /// then shows a running count instead of a filled bar.
 fn estimate_units(build_dir: &Path, triple: &str) -> Option<u32> {
@@ -602,8 +592,6 @@ fn estimate_units(build_dir: &Path, triple: &str) -> Option<u32> {
             "tree",
             "-p",
             "jackdaw_sdk",
-            "-p",
-            "jackdaw_runner",
             "-p",
             "jackdaw_rustc_wrapper",
             "--target",

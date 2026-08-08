@@ -146,9 +146,8 @@ fn the_shipped_binary_scaffolds_without_a_checkout() {
         "unsubstituted placeholder:\n{manifest}"
     );
 
-    // The editor finds the game's entry point by reading these sources.
-    // If that fails, Play does nothing and the template's own tutorial
-    // cannot be completed.
+    // Scaffolded games expose a detectable root Bevy Plugin so import,
+    // doctor, and the template tutorial agree on the project shape.
     assert_eq!(
         jackdaw_project_build::detect::detect_plugin(&project, "standalone_game").as_deref(),
         Some("standalone_game::GamePlugin"),

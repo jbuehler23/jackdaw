@@ -14,10 +14,10 @@ use bevy::prelude::*;
 pub struct PlayerSpawn;
 ```
 
-That's it. The editor builds your project's library in the
-background when the project opens; once the build finishes, open
-the inspector on an entity, click `+ Add Component`, type
-`PlayerSpawn`. It shows up.
+That's it. The editor builds your project's game binary in the
+background when the project opens and extracts its type schema;
+once that finishes, open the inspector on an entity, click
+`+ Add Component`, type `PlayerSpawn`. It shows up.
 
 If you add a component while the editor is already running, run
 **Rebuild Project** (or `jd build` in a terminal) to pick
@@ -27,15 +27,14 @@ Auto Build** switches to rebuild-on-source-change.
 A few things make this work without ceremony:
 
 - Bevy's `reflect_auto_register` registers the type when the
-  editor loads your project's library, so you don't need
+  schema extractor runs your game binary, so you don't need
   `app.register_type::<PlayerSpawn>()` and there is no
   jackdaw-specific registration code anywhere. A type in a
   dependency crate that your library never references can be
   stripped by the linker before registration runs; register it
   explicitly if it never shows up.
-- The SDK your project compiles against enables bevy's
-  `reflect_documentation` feature, so doc comments on the type
-  become picker tooltips.
+- `jackdaw_runtime` enables bevy's `reflect_documentation`
+  feature, so doc comments on the type become picker tooltips.
 - Jackdaw can construct a default-valued instance from
   primitive field defaults, so you don't strictly need
   `Default`. Adding it is just nicer.
@@ -175,9 +174,9 @@ of:
   Rebuild Project or `jd build`.
 
 **Doc comment doesn't show as tooltip.** Tooltips need bevy's
-`reflect_documentation` feature. The SDK the editor builds your
-project against turns it on; if you patch or vendor your own bevy,
-make sure `reflect_documentation` is in its feature list.
+`reflect_documentation` feature. `jackdaw_runtime` turns it on;
+if you patch or vendor your own bevy, make sure
+`reflect_documentation` is in its feature list.
 
 **`On<Insert, T>` runs but the entity has the wrong
 GlobalTransform.** Shouldn't happen in current jackdaw. If it

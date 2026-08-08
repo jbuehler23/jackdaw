@@ -7,31 +7,36 @@ so we can talk through the approach.
 
 ## Windows dylib hardening
 
-The editor loads project and extension code as dylibs built
-against its SDK proxy. On Windows, a PE export table addresses
-its entries with a 16-bit ordinal, so 65,535 is the ceiling and
-no linker escapes it. Release builds split the runtime into
-`bevy_dylib` and `jackdaw_dylib` beside the SDK facade, which
-keeps each library's export count well under the ceiling; the
-release job measures every table and fails above 60,000. Two
-gotchas the split codified: LTO stays off for Windows binaries,
-because a PE file cannot import data across a DLL boundary once
-inlining creates direct references to another library's
-statics, and the SDK build disables incremental codegen, which
-otherwise leaves undefined hidden symbols across the dylib
+The editor loads extension code as dylibs built against its SDK
+proxy. On Windows, a PE export table addresses its entries with a
+16-bit ordinal, so 65,535 is the ceiling and no linker escapes it.
+Builds split the runtime into `bevy_dylib` and `jackdaw_dylib`
+beside the SDK facade, so each library has its own table. Measured
+on the current split, the hottest table is `bevy_dylib` (~46k
+exports in the workspace debug profile, ~41k in release); the
+Jackdaw runtime and the facade are a few thousand and a handful
+respectively. The release job measures every table and fails above
+60,000. Two gotchas the split codified: LTO stays off for Windows
+binaries, because a PE file cannot import data across a DLL
+boundary once inlining creates direct references to another
+library's statics, and the SDK build disables incremental codegen,
+which otherwise leaves undefined hidden symbols across the dylib
 boundary.
 
-What remains is the debug profile: a debug SDK carries around
-94,000 exports, past the ceiling, so contributors on Windows
-still develop against release SDK artifacts.
+What remains is headroom and those link-model gotchas: Bevy's
+export surface grows with the engine, and a regression that merges
+the runtimes again (or drops the split on one profile) would put
+Windows back against the ceiling.
 
-Where to dig in: trimming what the SDK proxy re-exports.
+Where to dig in: keep the release export check green, and watch
+`bevy_dylib`'s count when bumping Bevy or widening what extensions
+share.
 
 ## Play-In-Editor (PIE) depth
 
 PIE is the "click play to run your game" flow. The process model
-is settled: the game always runs out of process, launched by the
-prebuilt runner over IPC, with zero play-time compilation. Frame
+is settled: the game always runs out of process as its own cargo
+binary over IPC, with zero play-time compilation once built. Frame
 streaming into the Game panel, input capture, click-to-select
 picking, and the Live entity tree all shipped; see
 [Play-in-editor](../user-guide/play-in-editor.md).

@@ -31,8 +31,8 @@ pub fn jackdaw_dev_checkout() -> Option<PathBuf> {
         }
     }
     let checkout = source_checkout()?;
-    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
-    let canonical = checkout.canonicalize().unwrap_or_else(|_| checkout.clone());
+    let exe = dunce::canonicalize(std::env::current_exe().ok()?).ok()?;
+    let canonical = dunce::canonicalize(&checkout).unwrap_or_else(|_| checkout.clone());
     exe.starts_with(&canonical).then_some(checkout)
 }
 
@@ -201,8 +201,11 @@ mod tests {
             "jackdaw_runtime = { version = \"0.5\", features = [\"physics\"], optional = true }\n";
         let checkout = Path::new("/dev/checkout");
         let out = rewrite_dep_lines(template, checkout).unwrap();
-        let runtime = checkout.join("crates/jackdaw_runtime");
-        assert!(out.contains(&format!("path = '{}'", runtime.display())));
+        let expected_path = checkout.join("crates").join("jackdaw_runtime");
+        assert!(
+            out.contains(&format!("path = '{}'", expected_path.display())),
+            "got:\n{out}"
+        );
         assert!(out.contains("features = [\"physics\"]"));
         assert!(out.contains("optional = true"));
     }
@@ -212,8 +215,11 @@ mod tests {
         let template = "jackdaw_extension = { version = \"0.5\", default-features = false }\n";
         let checkout = Path::new("/dev/checkout");
         let out = rewrite_dep_lines(template, checkout).unwrap();
-        let extension = checkout.join("crates/jackdaw_extension");
-        assert!(out.contains(&format!("path = '{}'", extension.display())));
+        let expected_path = checkout.join("crates").join("jackdaw_extension");
+        assert!(
+            out.contains(&format!("path = '{}'", expected_path.display())),
+            "got:\n{out}"
+        );
         assert!(!out.contains("features ="), "got:\n{out}");
     }
 
@@ -222,11 +228,14 @@ mod tests {
         let template = "[dependencies]\njackdaw_extension = \"0.5\"\n";
         let checkout = Path::new("/dev/checkout");
         let out = rewrite_dep_lines(template, checkout).unwrap();
-        let extension = checkout.join("crates/jackdaw_extension");
-        assert!(out.contains(&format!(
-            "jackdaw_extension = {{ path = '{}' }}",
-            extension.display()
-        )));
+        let expected_path = checkout.join("crates").join("jackdaw_extension");
+        assert!(
+            out.contains(&format!(
+                "jackdaw_extension = {{ path = '{}' }}",
+                expected_path.display()
+            )),
+            "got:\n{out}"
+        );
     }
 
     #[test]
@@ -264,8 +273,8 @@ mod tests {
         let Some(checkout) = source_checkout() else {
             return; // no checkout at all; nothing to distinguish
         };
-        let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
-        let canonical = checkout.canonicalize().unwrap_or(checkout);
+        let exe = dunce::canonicalize(std::env::current_exe().unwrap()).unwrap();
+        let canonical = dunce::canonicalize(&checkout).unwrap_or(checkout);
         // The test binary does run from inside the checkout, so this
         // pins the rule the detection applies rather than its outcome.
         assert_eq!(

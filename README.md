@@ -60,7 +60,7 @@ which is about half an hour, once per Jackdaw version. Either way your
 project's own first build is around nine minutes, because it compiles Bevy
 like any other Bevy project. Rebuilds after that are 1 to 4 seconds.
 
-This installs `jackdaw`, `jd`, `jackdaw-runner`, and
+This installs `jackdaw`, `jd`, and
 `jackdaw-rustc-wrapper`. Open Jackdaw and use **New Game** or **Import Bevy
 Project**; the import preview shows every proposed change before applying it.
 The same flows are available from the terminal:

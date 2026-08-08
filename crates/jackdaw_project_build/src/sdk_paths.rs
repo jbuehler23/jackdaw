@@ -10,7 +10,7 @@
 //! 1. An installed distribution:
 //!    `<dir>/sdk/<triple>/libjackdaw_sdk.so` + `deps/`,
 //!    `<dir>/sdk/host-deps/`, `<dir>/sdk/manifest.txt`, wrapper and
-//!    runner binaries next to the editor in `<dir>`. This is what a
+//!    wrapper binary next to the editor in `<dir>`. This is what a
 //!    downloaded bundle unpacks to, named by `JACKDAW_SDK_DIR` or
 //!    found next to the running executable.
 //! 2. A cargo workspace's `target/`: the SDK build lives in
@@ -31,7 +31,7 @@ use jackdaw_env::rust_env_command;
 /// Three install paths can each supply one, and they can coexist on the
 /// same machine: a downloaded bundle, an SDK this binary built for
 /// itself, and a source checkout's `target/`. Which one won decides how
-/// long builds take and which artifacts a project links, so it has to
+/// long builds take and which artifacts an extension links, so it has to
 /// be reportable rather than implicit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SdkOrigin {
@@ -77,21 +77,19 @@ pub struct SdkPaths {
     pub host_deps: PathBuf,
     /// Absolute path to `jackdaw-rustc-wrapper(.exe)`.
     pub wrapper: PathBuf,
-    /// Absolute path to `jackdaw-runner(.exe)`.
-    pub runner: PathBuf,
     /// The SDK manifest (`name version artifact` lines): the SDK's
     /// runtime closure with the exact artifact each crate compiled to.
     /// Present in installed layouts; generated on demand in dev.
     pub manifest: PathBuf,
-    /// The SDK's `Cargo.lock`. Copied into the shim so the project
+    /// The SDK's `Cargo.lock`. Copied into the shim so the extension
     /// dylib resolves the shared dependency closure at the exact
     /// versions the SDK was built with; without it a freshly created
-    /// project drifts to newer patch releases and its redirected rlibs
+    /// extension drifts to newer patch releases and its redirected rlibs
     /// become inconsistent with the SDK's.
     pub lockfile: PathBuf,
     /// The target triple the SDK was built for (the host triple).
     pub triple: String,
-    /// The rustup toolchain channel the SDK was compiled with. Project
+    /// The rustup toolchain channel the SDK was compiled with. Extension
     /// dylibs must build with the same one, or their rlibs are
     /// rejected as compiled by an incompatible rustc. `None` when it
     /// cannot be resolved; the pipeline then relies on the ambient
@@ -132,7 +130,7 @@ impl SdkPaths {
         }
 
         // 2. Dev checkout, when its SDK is actually built. A contributor
-        //    running from `target/` must link project code against the SDK
+        //    running from `target/` must link extension code against the SDK
         //    co-built with this editor, at the same profile: a debug editor
         //    and a release bootstrap cache are not link-compatible, because
         //    cargo bakes the profile into each crate's `-C metadata`, which
@@ -195,7 +193,6 @@ impl SdkPaths {
             deps: triple_dir.join("deps"),
             host_deps: host_dir.join("deps"),
             wrapper: host_dir.join(wrapper_name()),
-            runner: triple_dir.join(runner_name()),
             manifest: triple_dir.join("jackdaw_sdk_manifest.txt"),
             triple,
             toolchain,
@@ -213,7 +210,7 @@ impl SdkPaths {
     /// The profile is read from the path rather than assumed. A release
     /// editor resolving a debug SDK is not a near miss: cargo bakes the
     /// profile into each crate's `-C metadata`, so the mangled symbol
-    /// names differ and nothing the project links will match.
+    /// names differ and nothing the extension links will match.
     fn dev_checkout(triple: &str) -> Self {
         let exe_dir = std::env::current_exe()
             .ok()
@@ -252,8 +249,8 @@ impl SdkPaths {
 
     /// Build the paths for a packaged / bootstrapped "installed layout"
     /// rooted at `root`: `sdk/<triple>/libjackdaw_sdk.*` + `deps/`,
-    /// `sdk/host-deps/`, `sdk/manifest.txt`, the wrapper and runner
-    /// binaries in `root`, `toolchain.txt`, and `Cargo.lock`. Shared by
+    /// `sdk/host-deps/`, `sdk/manifest.txt`, the rustc wrapper binary
+    /// in `root`, `toolchain.txt`, and `Cargo.lock`. Shared by
     /// the `JACKDAW_SDK_DIR` override and the bootstrap cache.
     pub fn for_installed_root(root: &std::path::Path) -> Self {
         let triple = host_triple().to_string();
@@ -264,7 +261,6 @@ impl SdkPaths {
             deps: sdk.join("deps"),
             host_deps: root.join("sdk").join("host-deps"),
             wrapper: root.join(wrapper_name()),
-            runner: root.join(runner_name()),
             manifest: root.join("sdk").join("manifest.txt"),
             triple,
             toolchain: read_toolchain_txt(&root.join("toolchain.txt")),
@@ -443,14 +439,6 @@ pub(crate) fn wrapper_name() -> &'static str {
     }
 }
 
-pub(crate) fn runner_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "jackdaw-runner.exe"
-    } else {
-        "jackdaw-runner"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,7 +456,6 @@ mod tests {
         std::fs::write(sdk.join(dylib_name()), b"sdk").unwrap();
         std::fs::write(root.join("sdk").join("manifest.txt"), b"").unwrap();
         std::fs::write(root.join(wrapper_name()), b"wrapper").unwrap();
-        std::fs::write(root.join(runner_name()), b"runner").unwrap();
         std::fs::write(root.join("Cargo.lock"), b"").unwrap();
         std::fs::write(root.join("toolchain.txt"), b"nightly-2026-03-05\n").unwrap();
         root
@@ -485,7 +472,6 @@ mod tests {
         assert_eq!(sdk.origin, SdkOrigin::Bundled);
         assert!(sdk.dylib_exists(), "dylib at {}", sdk.dylib.display());
         assert!(sdk.wrapper.is_file());
-        assert!(sdk.runner.is_file());
         assert!(sdk.manifest.is_file());
         assert!(sdk.lockfile.is_file());
         assert_eq!(sdk.toolchain.as_deref(), Some("nightly-2026-03-05"));

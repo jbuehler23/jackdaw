@@ -19,5 +19,9 @@ bevy = "{{bevy_version}}"
 # Loads the scenes you author in the editor (assets/*.bsn) and builds
 # physics colliders from them. An ordinary dependency; remove it if you
 # stop using authored scenes.
-jackdaw_runtime = { version = "{{jackdaw_version}}", features = ["physics"] }
+#
+# `pie` adds the play-in-editor link: the editor's Play button runs this
+# binary and talks to it over IPC. Drop that feature for a shipping
+# build and the game still runs, just without the editor connection.
+jackdaw_runtime = { version = "{{jackdaw_version}}", features = ["physics", "pie"] }
 avian3d = "0.7"

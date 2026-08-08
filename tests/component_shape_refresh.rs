@@ -2,7 +2,7 @@
 //! Can the editor adopt a CHANGED component shape by swapping registry
 //! entries, with no restart and no ECS involvement?
 //!
-//! The dynamic-representation design keeps dylib-provided types out of
+//! The dynamic-representation design keeps schema-reported types out of
 //! the editor's ECS entirely (they live as reflection data backed by
 //! the scene document), so a reload only has to update the
 //! `TypeRegistry`. This probe builds the same component at two shapes

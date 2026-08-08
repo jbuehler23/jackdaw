@@ -541,7 +541,7 @@ fn resolve_pack_project(args: &[String]) -> Result<PackProject, String> {
     let explicit = requested.is_some();
     let Some(root) = requested
         .or_else(|| std::env::current_dir().ok())
-        .and_then(|dir| dir.canonicalize().ok())
+        .and_then(|dir| dunce::canonicalize(dir).ok())
         .filter(|dir| explicit || dir.join("Cargo.toml").is_file())
     else {
         return if explicit {

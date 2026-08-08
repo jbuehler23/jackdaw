@@ -9,7 +9,7 @@
 //!
 //! # Why `exec` on Unix, `spawn + exit` on Windows
 //!
-//! On Unix we use [`std::os::unix::process::CommandExt::exec`] so
+//! On Unix we use `std::os::unix::process::CommandExt::exec` so
 //! the new jackdaw takes over the current PID. This preserves:
 //!
 //! - The process-group membership (the terminal's foreground

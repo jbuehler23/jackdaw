@@ -75,7 +75,7 @@ fn integration() -> bool {
             "-E",
             "not (binary(bsn_game_run) | binary(editor_journey) | binary(bundle_smoke) \
                | binary(stress_reload) | binary(scaffold_e2e) \
-               | binary(runner_boots_project_dylib) | binary(schema_extract) | binary(reflect_auto_register) \
+               | binary(schema_extract) | binary(reflect_auto_register) \
                | binary(component_shape_refresh) | binary(dylib_linkage_identity) | binary(extern_redirect_ecosystem))",
         ],
     )
@@ -93,15 +93,11 @@ fn heavy() -> bool {
             "-p",
             "jackdaw",
             "--features",
-            "dylib runner",
+            "dylib",
             "--target",
             triple,
         ],
     ) && sh("cargo", &["build", "-p", "jackdaw_rustc_wrapper"])
-        && sh(
-            "cargo",
-            &["build", "-p", "jackdaw_runner", "--target", triple],
-        )
         && sh(
             "cargo",
             &[
@@ -109,7 +105,7 @@ fn heavy() -> bool {
                 "run",
                 "--profile",
                 "heavy",
-                // The SDK, runner, and wrapper above use Cargo's dev profile.
+                // The SDK and wrapper above use Cargo's dev profile.
                 // Keep the test harnesses on that profile too: SDK manifest
                 // generation performs a nested dev build, and Rust dylibs from
                 // different profiles have incompatible symbol identities even
@@ -119,7 +115,7 @@ fn heavy() -> bool {
                 "-p",
                 "jackdaw",
                 "--features",
-                "dylib runner",
+                "dylib",
                 "--target",
                 triple,
                 // `--test` rather than an `-E` filter: `-E` selects what runs but

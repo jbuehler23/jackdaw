@@ -90,7 +90,7 @@ pub fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> Operator
 /// Sync system body. Public so tests and the asset browser can call it
 /// without going through the file-dialog path.
 pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
     // De-dupe: if a tab with this path is already open, switch to it. A
     // legacy `.jsn` pick also matches its converted `.bsn` sibling, since
@@ -103,7 +103,7 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
         t.path
             .as_ref()
             .map(|p| {
-                let tab_path = p.canonicalize().unwrap_or_else(|_| p.clone());
+                let tab_path = dunce::canonicalize(p).unwrap_or_else(|_| p.clone());
                 tab_path == canonical || Some(&tab_path) == bsn_sibling.as_ref()
             })
             .unwrap_or(false)

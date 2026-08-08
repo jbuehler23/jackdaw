@@ -319,7 +319,7 @@ jobs:
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/jackdaw-install/bin"
-          for command in jackdaw jd jackdaw-runner jackdaw-rustc-wrapper; do
+          for command in jackdaw jd jackdaw-rustc-wrapper; do
             test -x "$root/$command"
           done
           "$root/jd" --version

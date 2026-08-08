@@ -177,15 +177,14 @@ pub fn operator_labels(app: &mut App, id: &str) -> Vec<&'static str> {
         .collect()
 }
 
-/// Launch `jackdaw-runner` windowless against a built project dylib, wait for
+/// Launch a built game binary windowless over the PIE link, wait for
 /// the game to report `BSN_SCENE_LOADED ... has_target=true` on stderr, and
 /// return whether it did along with the captured stderr. Shared by the
-/// end-to-end runner tests.
+/// end-to-end Play tests.
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
-#[allow(dead_code, reason = "only the dylib/runner e2e tests use this")]
+#[allow(dead_code, reason = "only the binary Play e2e tests use this")]
 pub fn run_windowless_game(
-    runner: &std::path::Path,
-    dylib: &std::path::Path,
+    binary: &std::path::Path,
     cwd: &std::path::Path,
     extra_env: &[(&str, &std::ffi::OsStr)],
 ) -> (bool, String) {
@@ -194,9 +193,9 @@ pub fn run_windowless_game(
     use std::time::{Duration, Instant};
 
     let (handle, server_name) = jackdaw_pie_protocol::serve().expect("open the ipc rendezvous");
-    let mut command = std::process::Command::new(runner);
+    let mut command = std::process::Command::new(binary);
+    jackdaw_project_build::prepare_game_command(&mut command, binary);
     command
-        .arg(dylib)
         .current_dir(cwd)
         .env("JACKDAW_PIE", &server_name)
         .env("JACKDAW_PIE_WINDOWLESS", "1")
@@ -204,7 +203,7 @@ pub fn run_windowless_game(
     for (key, value) in extra_env {
         command.env(key, value);
     }
-    let mut child = command.spawn().expect("spawn the runner");
+    let mut child = command.spawn().expect("spawn the game");
 
     let child_stderr = child.stderr.take().expect("piped stderr");
     let stderr_buf = Arc::new(Mutex::new(String::new()));
@@ -227,19 +226,17 @@ pub fn run_windowless_game(
         let _ = accept_tx.send(handle.accept());
     });
     // On timeout the child's stderr is the only evidence of why it never
-    // got as far as connecting. Discarding it left a bare 90 second
-    // timeout with nothing to act on, which is how this failure went
-    // undiagnosed: it gates every release binary through the heavy tier.
+    // got as far as connecting.
     let accepted = accept_rx.recv_timeout(Duration::from_secs(90));
     if accepted.is_err() {
         let captured = stderr_buf.lock().unwrap().clone();
         let captured = if captured.trim().is_empty() {
-            "(the runner produced no output at all)".to_string()
+            "(the game produced no output at all)".to_string()
         } else {
             captured
         };
         let _ = child.kill();
-        panic!("the runner never connected to the PIE link. Its output was:\n{captured}");
+        panic!("the game never connected to the PIE link. Its output was:\n{captured}");
     }
     let _transport = accepted.expect("checked above").expect("ipc accept failed");
 
@@ -318,55 +315,13 @@ impl OperatorResultExt for OperatorResult {
 /// invoke `cargo rustc` with the wrapper themselves. Without the search
 /// paths a consumer cannot find import libraries the SDK's crates link
 /// by bare name, which on Windows is every `windows.*.lib` and fails the
-/// link. Linux never noticed: its native libraries are system wide.
+/// link.
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
 #[allow(dead_code, reason = "used by the SDK pipeline tests only")]
 pub fn ensure_sdk_metadata(sdk: &jackdaw::sdk_paths::SdkPaths) {
     use jackdaw::project_build::plan::SdkManifest;
 
     let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // Match the root feature set that linked this test binary. The heavy
-    // journey enables `runner`, which in turn enables Jackdaw runtime features
-    // and changes Rust's crate identities. Rebuilding only `dylib` here would
-    // replace the loaded SDK's unhashed dylibs with an incompatible variant.
-    // Always refresh this test metadata: a restored target cache can contain a
-    // non-empty manifest from the other feature set, and existence alone does
-    // not prove that it describes the dylibs this process loaded.
-    let features = if cfg!(feature = "runner") {
-        "dylib runner"
-    } else {
-        "dylib"
-    };
-    SdkManifest::generate(&workspace, sdk, &["-p", "jackdaw", "--features", features])
+    SdkManifest::generate(&workspace, sdk, &["-p", "jackdaw", "--features", "dylib"])
         .expect("generate the SDK manifest for the fixture");
-}
-
-/// Build the zero-registration reflection fixture through the same generated
-/// shim, lock alignment, and extern plan used for editor-driven projects.
-/// Keeping this helper shared makes both the dlopen and linkage probes
-/// self-contained while Cargo reuses the salted project target between them.
-#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
-#[allow(dead_code, reason = "used by the SDK reflection probes only")]
-pub fn build_reflect_fixture(
-    sdk: &jackdaw::sdk_paths::SdkPaths,
-) -> jackdaw::project_build::ProjectBuild {
-    ensure_sdk_metadata(sdk);
-    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let project_root = stage_fixture("reflect_game");
-    let jackdaw_dir = project_root.join(".jackdaw");
-    let spec = jackdaw::project_build::shim::ShimSpec {
-        package_name: "reflect_game".into(),
-        crate_name: "reflect_game".into(),
-        project_root,
-        game_plugin: Some("GamePlugin".into()),
-        extension_type: None,
-    };
-    jackdaw::project_build::build_project_dylib(
-        &spec,
-        &jackdaw_dir,
-        sdk,
-        Some(&workspace),
-        &mut |_| {},
-    )
-    .unwrap_or_else(|err| panic!("build reflect fixture through project pipeline: {err:?}"))
 }

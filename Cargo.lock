@@ -4770,6 +4770,7 @@ dependencies = [
  "bincode",
  "ctrlc",
  "dirs",
+ "dunce",
  "ehttp",
  "image",
  "include_dir",
@@ -4799,10 +4800,10 @@ dependencies = [
  "jackdaw_pie_protocol",
  "jackdaw_project_build",
  "jackdaw_remote",
- "jackdaw_runner",
  "jackdaw_runtime",
  "jackdaw_rustc_wrapper",
  "jackdaw_scene_types",
+ "jackdaw_schema",
  "jackdaw_sdk",
  "jackdaw_select",
  "jackdaw_snap",
@@ -4858,11 +4859,8 @@ dependencies = [
  "jackdaw_dylib",
  "jackdaw_feathers",
  "jackdaw_panels",
- "jackdaw_project_build",
- "jackdaw_runtime",
  "jackdaw_scene_types",
  "jackdaw_widgets",
- "serde_json",
 ]
 
 [[package]]
@@ -4932,8 +4930,10 @@ dependencies = [
 name = "jackdaw_cli_internal"
 version = "0.19.0"
 dependencies = [
+ "dunce",
  "jackdaw_env",
  "jackdaw_project_build",
+ "jackdaw_schema",
 ]
 
 [[package]]
@@ -5157,9 +5157,8 @@ dependencies = [
 name = "jackdaw_project_build"
 version = "0.19.0"
 dependencies = [
- "bevy",
  "jackdaw_env",
- "jackdaw_scene_types",
+ "jackdaw_schema",
  "serde",
  "serde_json",
  "syn",
@@ -5179,13 +5178,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jackdaw_runner"
-version = "0.19.0"
-dependencies = [
- "libloading",
-]
-
-[[package]]
 name = "jackdaw_runtime"
 version = "0.19.0"
 dependencies = [
@@ -5196,6 +5188,7 @@ dependencies = [
  "jackdaw_geometry",
  "jackdaw_pie_protocol",
  "jackdaw_scene_types",
+ "jackdaw_schema",
  "jackdaw_ui",
  "serde",
  "serde_json",
@@ -5219,6 +5212,16 @@ dependencies = [
  "glam 0.32.1",
  "jackdaw_geometry",
  "rand 0.9.4",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "jackdaw_schema"
+version = "0.19.0"
+dependencies = [
+ "bevy",
+ "jackdaw_scene_types",
  "serde",
  "serde_json",
 ]

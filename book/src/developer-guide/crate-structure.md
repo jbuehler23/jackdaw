@@ -85,24 +85,21 @@ else in the workspace. The interesting layers:
 
 ## Play and the command line
 
-- `jackdaw_project_build`: the build pipeline. Generates the
-  shim crate, drives cargo through the rustc wrapper, extracts
-  the component schema, and owns SDK path resolution and the
-  first-run SDK bootstrap. Deliberately bevy-light so the CLI
-  can link it without dragging in a renderer.
+- `jackdaw_project_build`: the build pipeline. Binary builds for
+  games, SDK/shim dylib builds for extensions, schema persistence,
+  SDK path resolution, and first-run SDK bootstrap. Deliberately
+  bevy-light so the CLI can link it without dragging in a renderer.
+- `jackdaw_schema`: the project type-schema wire format shared by
+  games (which produce it) and the editor (which consumes it).
 - `jackdaw_cli_internal`: bevy-light command implementations used by `jd`.
   Release-only packaging is invoked through `cargo xtask`.
-- `jackdaw_runner`: the prebuilt game runner. Play dlopens the
-  already-built project dylib through it, so nothing compiles
-  at play time.
 - `jackdaw_pie_protocol`: the IPC message types and the
   `jackdaw.toml` run-configuration manifest shared by the
-  editor and the runner.
+  editor and the game binary.
 
-## Project and extension dylib plumbing
+## Extension dylib plumbing
 
-Seven crates exist for building and loading project and
-extension dylibs:
+Crates for building and loading extension dylibs against the SDK:
 
 - `jackdaw_api`: the public surface extensions link against.
   Re-exports bevy plus the operator / extension traits
@@ -116,12 +113,12 @@ extension dylibs:
   `jackdaw_api` deliberately does not re-export this.
 - `jackdaw_api_macros`: proc-macros backing the extension
   API.
-- `jackdaw_sdk`: the one build that holds bevy + the jackdaw
-  types both sides share. A project or extension build
-  redirects its dependency edges to the rlibs this produced,
-  so both sides embed the same compilation and agree on
-  `TypeId`. It also builds as a dylib, which is what a
-  project links when the shared-dylib model is in use.
+- `jackdaw_sdk`: the facade dylib extension builds link
+  against via `--extern bevy=libjackdaw_sdk.so`. Bevy and
+  Jackdaw runtime types live in separate `bevy_dylib` and
+  `jackdaw_dylib` shared libraries so the editor and every
+  loaded extension share one TypeId universe. Games do not
+  use this path.
 - `jackdaw_dylib`: the dynamic-loader shim that dlopens
   dylibs at runtime.
 - `jackdaw_loader`: the host-side resource that tracks

@@ -30,7 +30,7 @@ include = [
 ]
 # The package now ships two binaries: `jackdaw` (the editor) and
 # `jackdaw-rustc-wrapper` (the rustc interceptor used by scaffolded
-# dylib projects). `default-run` makes `cargo run` resolve to the
+# extension projects). `default-run` makes `cargo run` resolve to the
 # editor without an explicit `--bin` flag; the wrapper still builds
 # alongside via `cargo build` and is installed by `cargo install`.
 default-run = "jackdaw"
@@ -50,11 +50,12 @@ default = ["multiplayer", "camera_rig", "embed-recipe"]
 # default; opt out with `--no-default-features` for a slimmer build.
 multiplayer = ["dep:jackdaw_multiplayer", "dep:jackdaw_multiplayer_editor"]
 camera_rig = ["dep:jackdaw_camera_rig"]
-# The SDK-backed project flow: builds the SDK facade plus separate Bevy and
-# Jackdaw runtime dylibs. The editor and every loaded project/extension import
-# those same libraries so TypeIds and process-wide registries cross `dlopen`.
-# Off by default only because building the SDK slows plain dev builds; release
-# editor builds enable it.
+# The SDK-backed extension flow: builds the SDK facade plus separate Bevy
+# and Jackdaw runtime dylibs. The editor and every loaded extension import
+# those same libraries so TypeIds and process-wide registries cross
+# `dlopen`. Games do not use this path; they build as ordinary cargo
+# binaries with their own Bevy. Off by default only because building the
+# SDK slows plain dev builds; release editor builds enable it.
 #
 # Build with CARGO_INCREMENTAL=0: incremental codegen leaves undefined
 # hidden anon constants across the dylib boundary at link time.
@@ -63,10 +64,6 @@ dylib = ["dep:jackdaw_sdk", "jackdaw_api/dynamic_linking", "jackdaw_project_buil
 # Cargo install can build its SDK on first launch (the first-run setup
 # screen). Enabled by default; release bundles already carry a built SDK.
 embed-recipe = ["jackdaw_project_build/embed-recipe"]
-# The prebuilt game runner: dlopens a project dylib built through the
-# SDK pipeline and runs it over the PIE link with zero play-time
-# compilation.
-runner = ["dylib", "jackdaw_runtime/pie", "dep:libloading"]
 
 [workspace]
 members = [
@@ -83,6 +80,7 @@ jackdaw_bsn.workspace = true
 jackdaw_ui.workspace = true
 jackdaw_geometry.workspace = true
 jackdaw_scene_types.workspace = true
+jackdaw_schema.workspace = true
 jackdaw_project_build.workspace = true
 jackdaw_csg.workspace = true
 bevy_monitors.workspace = true
@@ -119,8 +117,6 @@ jackdaw_api.workspace = true
 # doesn't re-export.
 jackdaw_api_internal.workspace = true
 jackdaw_loader.workspace = true
-# Used by the jackdaw-runner binary to dlopen project dylibs.
-libloading = { version = "0.8", optional = true }
 # `jackdaw_runtime` hosts the standalone scene loader plus the
 # `EditorMeta`/`ReflectEditorMeta` trait that user game crates
 # implement. The editor depends on it (rather than the other way
@@ -150,7 +146,6 @@ jackdaw_sdk = { workspace = true, optional = true }
 # wrapper crate's `[[bin]]` is also available; either path works at
 # runtime.
 jackdaw_rustc_wrapper.workspace = true
-jackdaw_runner.workspace = true
 jackdaw_cli_internal.workspace = true
 bevy_enhanced_input.workspace = true
 serde.workspace = true
@@ -166,6 +161,7 @@ arboard = { version = "3", features = ["wayland-data-control"] }
 dirs.workspace = true
 regex.workspace = true
 pathdiff.workspace = true
+dunce = "1.0.5"
 notify = "8"
 ctrlc = "3"
 toml = "0.8"
@@ -219,6 +215,7 @@ bevy = { version = "0.19", features = [
 jackdaw_jsn = { version = "0.19.0", path = "crates/jackdaw_jsn" }
 jackdaw_geometry = { version = "0.19.0", path = "crates/jackdaw_geometry" }
 jackdaw_scene_types = { version = "0.19.0", path = "crates/jackdaw_scene_types" }
+jackdaw_schema = { version = "0.19.0", path = "crates/jackdaw_schema" }
 jackdaw_project_build = { version = "0.19.0", path = "crates/jackdaw_project_build" }
 jackdaw_bsn = { version = "0.19.0", path = "crates/jackdaw_bsn" }
 jackdaw_ui = { version = "0.19.0", path = "crates/jackdaw_ui" }
@@ -248,8 +245,8 @@ rand = "0.9"
 serde = "1"
 lucide-icons = "0.563"
 serde_json = "1"
-# Default features stay on so the SDK resolves at least what a project
-# does: the game template adds a plain `avian3d = "0.7"`, and against an
+# Default features stay on so the SDK resolves at least what an extension
+# does: a physics-enabled graph adds a plain `avian3d = "0.7"`, and against an
 # SDK built leaner, any use of an item behind one of the dropped
 # features fails to compile against the redirected rlib.
 # `tests/sdk_feature_superset.rs` guards that ordering.
@@ -271,7 +268,6 @@ jackdaw_dylib = { version = "0.19.0", path = "crates/jackdaw_dylib" }
 jackdaw_loader = { version = "0.19.0", path = "crates/jackdaw_loader" }
 jackdaw_sdk = { version = "0.19.0", path = "crates/jackdaw_sdk" }
 jackdaw_rustc_wrapper = { version = "0.19.0", path = "crates/jackdaw_rustc_wrapper" }
-jackdaw_runner = { version = "0.19.0", path = "crates/jackdaw_runner" }
 jackdaw_cli_internal = { version = "0.19.0", path = "crates/jackdaw_cli" }
 jackdaw_env = { version = "0.19.0", path = "crates/jackdaw_env" }
 bevy_enhanced_input = "0.26"
@@ -398,9 +394,4 @@ doc = false
 [[bin]]
 name = "jd"
 path = "src/bin/jd.rs"
-doc = false
-
-[[bin]]
-name = "jackdaw-runner"
-path = "src/bin/jackdaw-runner.rs"
 doc = false

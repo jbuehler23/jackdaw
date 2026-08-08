@@ -25,7 +25,8 @@ use std::process::ExitCode;
 
 use jackdaw_env::rust_env_command;
 use jackdaw_project_build::bootstrap::{self, SetupProgress};
-use jackdaw_project_build::{BuildEvent, build_project_dylib, schema, sdk_paths};
+use jackdaw_project_build::{BuildEvent, build_project_binary, sdk_paths};
+use jackdaw_schema::{read_schema, schema_path};
 
 pub mod package;
 
@@ -146,7 +147,7 @@ fn cmd_doctor(args: &[String]) -> ExitCode {
     let explicit = requested.is_some();
     let root = requested
         .or_else(|| std::env::current_dir().ok())
-        .and_then(|dir| dir.canonicalize().ok())
+        .and_then(|dir| dunce::canonicalize(dir).ok())
         .filter(|dir| explicit || dir.join("Cargo.toml").is_file());
     match root {
         Some(root) => {
@@ -230,14 +231,12 @@ fn report_project(root: &Path) -> bool {
             let extension = jackdaw_project_build::detect::detect_extension(&package.dir);
             // Check any configured plugin against what the crate really
             // declares. Echoing the key back would certify a name that
-            // only fails much later, as an error inside the generated
-            // shim, which is precisely what doctor exists to pre-empt.
+            // only fails later in doctor re-runs or setup notes.
             let found = jackdaw_project_build::detect::plugin_paths(&package.dir);
             let configured = manifest.plugin.as_deref();
-            // Match the build's rule exactly: a candidate the shim
-            // cannot name is not a usable plugin, so requiring a
-            // `crate_path` here keeps doctor from blessing a key the
-            // build will silently discard.
+            // A candidate not reachable from the crate root is not a
+            // usable plugin name, so requiring a `crate_path` here keeps
+            // doctor from blessing a key that cannot be referenced.
             let resolved = configured.and_then(|name| {
                 found.iter().find(|candidate| {
                     candidate.crate_path.is_some()
@@ -295,7 +294,9 @@ fn report_project(root: &Path) -> bool {
                     Some(name) => pass(format!("game plugin: {name}")),
                     None => println!(
                         "  [warn] game plugin: none declared; the editor still reads this \
-                         crate's components, but Play needs one"
+                         crate's components. Play launches your cargo binary, so add a Bevy \
+                         Plugin in the library and wire it from `main.rs` when you want \
+                         gameplay under Play"
                     ),
                 },
             }
@@ -330,11 +331,11 @@ fn report_project(root: &Path) -> bool {
     }
 
     let jackdaw_dir = root.join(".jackdaw");
-    match schema::read_schema(&jackdaw_dir) {
+    match read_schema(&jackdaw_dir) {
         Some(schema) => pass(format!(
             "project types: {} components known ({})",
             schema.components.len(),
-            schema::schema_path(&jackdaw_dir).display()
+            schema_path(&jackdaw_dir).display()
         )),
         None => println!(
             "  [warn] project types: not built yet; run `jd build` so the editor sees your \
@@ -391,24 +392,17 @@ fn cmd_build(args: &[String]) -> ExitCode {
         Ok(root) => root,
         Err(code) => return code,
     };
-    if let Err(code) = ensure_sdk_ready() {
-        return code;
-    }
     build_project(&root)
 }
 
-/// `jd run [--project <path>]`: build the editor-compatible
-/// dylib (refreshing the schema a running editor reloads), then launch
-/// the game standalone through the project's own binary. A build failure
-/// aborts before running, since the game would fail to compile anyway.
+/// `jd run [--project <path>]`: build the game (refreshing the schema a
+/// running editor reloads), then launch it. A build failure aborts
+/// before running, since the game would fail to compile anyway.
 fn cmd_run(args: &[String]) -> ExitCode {
     let root = match resolve_root(args) {
         Ok(root) => root,
         Err(code) => return code,
     };
-    if let Err(code) = ensure_sdk_ready() {
-        return code;
-    }
     let built = build_project(&root);
     if !matches!(built, ExitCode::SUCCESS) {
         return built;
@@ -428,49 +422,28 @@ fn cmd_run(args: &[String]) -> ExitCode {
     }
 }
 
-/// Build the SDK into the cache first when this binary carries a recipe
-/// and no usable cache exists yet, so `build`/`run` work on a fresh
-/// install without a separate `setup`. A no-op in a dev checkout (no
-/// embedded recipe) and once the cache is warm.
-fn ensure_sdk_ready() -> Result<(), ExitCode> {
-    if !bootstrap::needs_setup() {
-        return Ok(());
-    }
-    let report = |event: SetupProgress| {
-        if let SetupProgress::Phase(phase) = event {
-            println!("jackdaw: {phase}");
-        }
-    };
-    bootstrap::ensure_sdk(report).map(|_| ()).map_err(|err| {
-        eprintln!("jackdaw: SDK setup failed: {err}");
-        ExitCode::FAILURE
-    })
-}
-
 /// Resolve and canonicalize the target project directory from
 /// `--project`/`-p` or a bare path, defaulting to the current directory.
 fn resolve_root(args: &[String]) -> Result<PathBuf, ExitCode> {
     let root =
         parse_project_arg(args).unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    root.canonicalize().map_err(|err| {
+    dunce::canonicalize(&root).map_err(|err| {
         eprintln!("jd: cannot resolve project path {}: {err}", root.display());
         ExitCode::FAILURE
     })
 }
 
-/// Build the project dylib for `root` and persist its schema.
+/// Build the game for `root` and persist its schema.
 fn build_project(root: &Path) -> ExitCode {
-    let Some(spec) = jackdaw_project_build::shim_spec_for_project(root, None) else {
-        eprintln!(
-            "jackdaw build: {} is not a jackdaw project (no lib crate in Cargo metadata)",
-            root.display()
-        );
-        return ExitCode::FAILURE;
+    let spec = match jackdaw_project_build::shim_spec_for_project(root) {
+        Ok(spec) => spec,
+        Err(error) => {
+            eprintln!("jackdaw build: {error}");
+            return ExitCode::FAILURE;
+        }
     };
 
     let jackdaw_dir = root.join(".jackdaw");
-    let dev_workspace = dev_workspace();
-    let sdk = resolve_sdk(dev_workspace.as_deref());
 
     println!("jackdaw build: building {}", root.display());
     // Rendered diagnostics stream through the reporter; cargo's own
@@ -480,13 +453,7 @@ fn build_project(root: &Path) -> ExitCode {
             eprintln!("{line}");
         }
     };
-    match build_project_dylib(
-        &spec,
-        &jackdaw_dir,
-        &sdk,
-        dev_workspace.as_deref(),
-        &mut report,
-    ) {
+    match build_project_binary(&spec, &jackdaw_dir, &mut report) {
         Ok(build) => {
             let components = build
                 .schema
@@ -494,9 +461,9 @@ fn build_project(root: &Path) -> ExitCode {
                 .map(|s| s.components.len())
                 .unwrap_or(0);
             println!(
-                "jackdaw build: ok ({} redirect edges, {components} components); schema at {}",
-                build.edges,
-                schema::schema_path(&jackdaw_dir).display()
+                "jackdaw build: ok ({components} components); binary at {}, schema at {}",
+                build.binary.display(),
+                schema_path(&jackdaw_dir).display()
             );
             ExitCode::SUCCESS
         }

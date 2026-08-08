@@ -1,4 +1,4 @@
-//! Thin rustc wrapper for jackdaw extension and game projects.
+//! Thin rustc wrapper for jackdaw extension projects.
 //!
 //! # What it does
 //!
@@ -7,7 +7,7 @@
 //! rewritten so the whole dependency graph shares the SDK's crates:
 //!
 //! * The generated shim's `--extern bevy=<anything>` becomes
-//!   `--extern bevy=$JACKDAW_SDK_DYLIB`, guaranteeing the final project
+//!   `--extern bevy=$JACKDAW_SDK_DYLIB`, guaranteeing the final extension
 //!   dylib imports the SDK facade. Other crates compile against the
 //!   exact SDK-built Bevy facade rlib from the redirect plan; that rlib
 //!   imports the shared `bevy_dylib` without exposing Jackdaw's merged
@@ -15,7 +15,7 @@
 //! * Every dependency edge listed in the `$JACKDAW_SDK_EXTERN_MAP`
 //!   redirect plan is rewritten to the SDK artifact it names. The plan
 //!   covers the SDK's full runtime closure (bevy subcrates plus public
-//!   deps like glam and serde), per edge, only where the project's
+//!   deps like glam and serde), per edge, only where the extension's
 //!   resolved version is byte-identical to the SDK's.
 //! * `--extern jackdaw_api=$JACKDAW_SDK_DYLIB` is injected for the
 //!   primary crate. The user never declares `jackdaw_api`; the wrapper
@@ -40,9 +40,9 @@
 //!
 //! Cargo's `-Cmetadata` hash is not stable across independent
 //! workspaces, so "build bevy twice and hope the hashes line up"
-//! doesn't work. Forcing the user crate to link against the one
+//! doesn't work. Forcing the extension crate to link against the one
 //! `libjackdaw_sdk.so` shipped with the editor makes every
-//! `TypeId::of::<T>()` in user code agree with the editor's copy,
+//! `TypeId::of::<T>()` in extension code agree with the editor's copy,
 //! which is what reflection and dlopen require.
 //!
 //! # Env vars the wrapper reads
@@ -494,13 +494,13 @@ fn rewrite_args(argv: &mut Vec<OsString>, log: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Keep Mach-O/PE project and extension dylibs self-contained for generic code.
+/// Keep Mach-O/PE extension dylibs self-contained for generic code.
 ///
 /// With cross-crate sharing enabled, rustc can assign a monomorphization used
 /// by the SDK facade to a runtime dylib, while Mach-O's two-level namespace or
 /// PE's import table still requires that otherwise-unreferenced symbol from
 /// that exact library. Every target unit goes through this wrapper, so applying
-/// the same rule here as in the SDK workspace also covers transitive project
+/// the same rule here as in the SDK workspace also covers transitive extension
 /// dependencies.
 fn append_strict_dylib_codegen(argv: &mut Vec<OsString>) {
     let targets_strict_dylib = argv.windows(2).any(|pair| {

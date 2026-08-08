@@ -51,8 +51,8 @@ fn parse_manifest_str(text: &str) -> Manifest {
 pub use jackdaw_project_build::cargo_meta::CargoMeta;
 
 /// A config-less project gets a one-entry default so its Play button
-/// works with no manifest: every run launches the same project dylib
-/// through the game runner, so there is nothing to resolve.
+/// works with no manifest: every run launches the same game binary,
+/// so there is nothing to resolve.
 fn synthesize_default(_root: &Path) -> Manifest {
     Manifest {
         plugin: None,
@@ -60,12 +60,12 @@ fn synthesize_default(_root: &Path) -> Manifest {
     }
 }
 
-/// Produce a starter `jackdaw.toml` body: the plugin override slot, the
-/// version pins the open check compares against, and one default run.
+/// Produce a starter `jackdaw.toml` body: the optional plugin name,
+/// the version pins the open check compares against, and one default run.
 pub fn scaffold_manifest(_meta: &CargoMeta) -> String {
     format!(
-        "# The game plugin type inside your lib crate. Uncomment to\n\
-         # override source detection.\n\
+        "# Optional name of your game's root Bevy Plugin (for setup / `jd doctor`).\n\
+         # Play runs your cargo binary; add the plugin from `main.rs`.\n\
          # plugin = \"GamePlugin\"\n\
          \n\
          {pins}\n\

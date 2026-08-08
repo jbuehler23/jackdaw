@@ -164,9 +164,9 @@ pub(crate) fn component_add(
             );
             return;
         }
-        // A project (dylib-provided) component is never a real ECS component
-        // in the editor. It lives in the scene document as a dynamic patch;
-        // its real type exists only in the game runner at Play.
+        // A project component is never a real ECS component in the
+        // editor. It lives in the scene document as a dynamic patch;
+        // its real type exists only in the game binary at Play.
         if world
             .get_resource::<ProjectTypes>()
             .is_some_and(|pt| pt.is_project_component(&type_path))

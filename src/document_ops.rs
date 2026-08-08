@@ -50,9 +50,8 @@ fn document_operators(
             return OperatorResult::Cancelled;
         }
     };
-    // done after creation because path.canonicalize() fails if the path doesn't exist
-    let canonical_path = path
-        .canonicalize()
+    // done after creation because canonicalize fails if the path doesn't exist
+    let canonical_path = dunce::canonicalize(&path)
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "operators.md".to_string());
     match std::io::Write::write_all(&mut file, md.as_bytes()) {

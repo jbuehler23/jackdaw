@@ -15,8 +15,12 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_camera",
     "bevy_world_serialization",
     "bevy_log",
+    "reflect_documentation",
 ] }
 jackdaw_bsn = { version = "0.19.0", path = "../jackdaw_bsn" }
+jackdaw_schema = { version = "0.19.0", path = "../jackdaw_schema", features = [
+    "reflect",
+] }
 jackdaw_geometry = { version = "0.19.0", path = "../jackdaw_geometry", default-features = false }
 jackdaw_scene_types = { version = "0.19.0", path = "../jackdaw_scene_types", default-features = false }
 jackdaw_ui = { version = "0.19.0", path = "../jackdaw_ui" }

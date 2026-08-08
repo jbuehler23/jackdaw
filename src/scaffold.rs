@@ -411,7 +411,7 @@ pub fn run_import_cli(args: &[String]) -> AppExit {
     let root = match requested_root
         .map(Ok)
         .unwrap_or_else(std::env::current_dir)
-        .and_then(std::fs::canonicalize)
+        .and_then(dunce::canonicalize)
     {
         Ok(d) => d,
         Err(e) => {
@@ -752,7 +752,7 @@ pub fn run_upgrade_cli(args: &[String]) -> AppExit {
         .clone()
         .map(Ok)
         .unwrap_or_else(std::env::current_dir)
-        .and_then(std::fs::canonicalize)
+        .and_then(dunce::canonicalize)
     {
         Ok(root) => root,
         Err(error) => {
@@ -821,7 +821,7 @@ pub fn run_open_cli(args: &[String]) -> AppExit {
         .find(|arg| !arg.starts_with('-'))
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    let root = match root.canonicalize() {
+    let root = match dunce::canonicalize(&root) {
         Ok(root) => root,
         Err(error) => {
             eprintln!("jd open: {}: {error}", root.display());
@@ -1085,9 +1085,8 @@ pub fn plan_import_with(
     }
 
     // Plugin type: explicit override, then source detection, then the
-    // GamePlugin convention (which is what the stub provides). Whatever
-    // is chosen is stated in the notes, because a wrong plugin here only
-    // shows up much later as a build error inside the generated shim.
+    // GamePlugin convention (which is what the stub provides). Recorded
+    // in jackdaw.toml for setup notes and `jd doctor`.
     let candidates = jackdaw_project_build::detect::plugin_candidates(&package_dir);
     let detected = detect_plugin(&package_dir, &package.crate_name)
         .and_then(|p| p.split_once("::").map(|(_, name)| name.to_string()));
@@ -1104,8 +1103,8 @@ pub fn plan_import_with(
         .clone()
         .or_else(|| detected.clone())
         .or(will_create_plugin);
-    // An override is the user's call, but a name their crate does not
-    // declare only fails much later, inside the generated shim.
+    // An override is the user's call; warn when the crate does not
+    // declare that name so doctor does not later fail on it.
     if let Some(name) = &plugin_override
         && !candidates.iter().any(|candidate| candidate == name)
     {
@@ -1120,9 +1119,10 @@ pub fn plan_import_with(
         ));
     }
     if plugin_override.is_none() {
-        // Distinguish "none exists" from "one exists but the shim
-        // cannot name it": telling a user with a perfectly good plugin
-        // that none was found sends them looking for the wrong problem.
+        // Distinguish "none exists" from "one exists but is not
+        // reachable from outside the crate": telling a user with a
+        // perfectly good plugin that none was found sends them looking
+        // for the wrong problem.
         let unreachable: Vec<String> = jackdaw_project_build::detect::plugin_paths(&package_dir)
             .into_iter()
             .filter(|found| found.crate_path.is_none())
@@ -1131,12 +1131,12 @@ pub fn plan_import_with(
         match &plugin {
             Some(name) if detected.is_some() => notes.push(format!("game plugin: {name}")),
             Some(name) => notes.push(format!("game plugin: {name} (created by this setup)")),
-            // Recording a name the crate does not define would make the
-            // generated shim reference a nonexistent type, so leave the
-            // key unset and say what to do when there is one.
+            // Recording a name the crate does not define would leave
+            // doctor failing on a key that does not match source, so
+            // leave it unset and say what to do when there is one.
             None if candidates.len() >= 2 => notes.push(format!(
                 "several plugins found ({}) and none is named GamePlugin; set `plugin` in \
-                 jackdaw.toml to pick the one Play should run",
+                 jackdaw.toml to name the root one, and add it from `main.rs` for Play",
                 candidates.join(", ")
             )),
             None if !unreachable.is_empty() => notes.push(format!(
@@ -1154,7 +1154,8 @@ pub fn plan_import_with(
                 )),
                 None => notes.push(
                     "no `impl Plugin for ...` found; the editor will still read this crate's \
-                     components. Add a plugin and set `plugin` in jackdaw.toml to use Play."
+                     components. Add a Bevy Plugin in the library and wire it from `main.rs` \
+                     for Play."
                         .to_string(),
                 ),
             },
@@ -1350,9 +1351,10 @@ fn has_jackdaw_gitignore(contents: &str) -> bool {
 }
 
 fn lib_stub_source() -> &'static str {
-    r#"//! Game library: the editor runs [`GamePlugin`] on Play, and your
-//! own binary can add it too. Move your game setup (systems,
-//! resources, observers) in here from main.rs.
+    r#"//! Game library: put gameplay here and add [`GamePlugin`] from
+//! `main.rs` so `cargo run` and the editor's Play button share it.
+//! Move your game setup (systems, resources, observers) in here
+//! from main.rs.
 //!
 //! # Adding components the editor can see
 //!
@@ -1414,14 +1416,17 @@ fn jackdaw_toml_source(
         }
         None => String::new(),
     };
-    // With no plugin to name, the key stays commented: the shim only
-    // emits a game entry when one is set, and pointing it at a type the
-    // crate does not define would break the build.
+    // With no plugin to name, the key stays commented so doctor does
+    // not fail on a type the crate does not declare.
     let plugin = match plugin {
         Some(name) => {
-            format!("# The game plugin type inside your lib crate.\nplugin = \"{name}\"\n")
+            format!(
+                "# Optional name of your game's root Bevy Plugin (for setup / `jd doctor`).\n\
+                 plugin = \"{name}\"\n"
+            )
         }
-        None => "# The game plugin type inside your lib crate. Set this once you have one.\n\
+        None => "# Optional name of your game's root Bevy Plugin (for setup / `jd doctor`).\n\
+                 # Play runs your cargo binary; add the plugin from `main.rs`.\n\
                  # plugin = \"GamePlugin\"\n"
             .to_string(),
     };
@@ -1770,11 +1775,9 @@ mod tests {
         )));
     }
 
-    /// With no plugin to find, the convention is still recorded, but the
-    /// guess is stated rather than presented as a detection.
-    /// Recording a plugin the crate does not define would make the
-    /// generated shim reference a nonexistent type, failing the build
-    /// inside a crate the user never wrote.
+    /// With no plugin to find, the key stays commented. Recording a
+    /// plugin the crate does not define would leave doctor failing on
+    /// a name that does not match source.
     #[test]
     fn no_plugin_means_no_plugin_key() {
         let root = temp_dir("no-plugin-key");

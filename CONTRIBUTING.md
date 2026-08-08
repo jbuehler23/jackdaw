@@ -11,6 +11,7 @@ How to get set up, what to check before a PR, and how editor behaviour is struct
   rustup toolchain install nightly
   rustup default nightly
   ```
+- **cargo-nextest** - required for `cargo xtask` test tiers (`cargo install cargo-nextest --locked`)
 - **System dependencies** - GPU drivers with Vulkan support (or Metal on macOS)
 - **Linux extras** - `libudev-dev`, `libasound2-dev`, `libwayland-dev` (or equivalent for your distro)
 
@@ -30,9 +31,9 @@ cargo run --example basic
 
 # Working on extension loading? Build with the dylib feature so the
 # dylib loader is exercised end-to-end. It builds jackdaw_sdk, whose
-# prebuilt rlibs a project or extension redirects its dependency
-# edges to, which is what makes the editor and everything it loads
-# agree on TypeId. The first build is slow because bevy and the
+# prebuilt rlibs an extension redirects its dependency edges to,
+# which is what makes the editor and every loaded extension agree on
+# TypeId. The first build is slow because bevy and the
 # workspace's shared types compile into the SDK; later incremental
 # builds are fast.
 cargo run --features dylib
@@ -40,20 +41,35 @@ cargo run --features dylib
 
 ## Checks
 
-Before submitting a PR, make sure the following pass:
+Before submitting a PR, work through these in order. The quick set is for a fast local smoke pass; the CI set is what should pass before you open a PR.
+
+### Quick
 
 ```sh
 # Format
-cargo fmt --all --check
+cargo fmt --all -- --check
 
 # Lint
 cargo clippy --workspace -- -D warnings
 
 # Tests
-cargo test --workspace
+cargo test --workspace --lib
+```
 
-# Doc build
-cargo doc --workspace --no-deps
+### CI
+
+```sh
+# Fast tier: fmt, clippy (--all-targets --features dylib), lib tests
+cargo xtask fast
+
+# Integration tier: workspace integration tests that do not need a built SDK
+cargo xtask integration
+
+# Docs
+cargo doc --locked --workspace --document-private-items --no-deps
+
+# Doctests
+cargo test --locked --workspace --doc --features bevy/dynamic_linking
 ```
 
 ## Pull Requests

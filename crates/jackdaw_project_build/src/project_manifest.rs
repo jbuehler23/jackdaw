@@ -1,10 +1,10 @@
 //! The build pipeline's view of `jackdaw.toml`.
 //!
-//! Only the keys a build needs: which package to build, which plugin
-//! type to install, and the version pins written when the project was
-//! set up. Run configurations live in the same file but are the
-//! editor's concern and are parsed there (`jackdaw_pie_protocol`);
-//! unknown keys are ignored on both sides, so the two readers coexist.
+//! Only the keys a build needs: which package to build, and the
+//! version pins written when the project was set up. Run
+//! configurations live in the same file but are the editor's concern
+//! and are parsed there (`jackdaw_pie_protocol`); unknown keys are
+//! ignored on both sides, so the two readers coexist.
 
 use std::path::{Path, PathBuf};
 
@@ -29,7 +29,9 @@ pub struct VersionPins {
 /// The subset of `jackdaw.toml` the build pipeline reads.
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct ProjectManifest {
-    /// The game plugin type inside the project's lib crate.
+    /// Optional name of the project's root Bevy `Plugin`. Recorded by
+    /// import/setup and checked by doctor; the binary build path does
+    /// not read it.
     #[serde(default)]
     pub plugin: Option<String>,
     /// Which workspace member is the game. Absent for single-package

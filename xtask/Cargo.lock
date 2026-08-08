@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -34,18 +40,29 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 name = "jackdaw_cli_internal"
 version = "0.19.0"
 dependencies = [
+ "dunce",
  "jackdaw_project_build",
+ "jackdaw_schema",
 ]
 
 [[package]]
 name = "jackdaw_project_build"
 version = "0.19.0"
 dependencies = [
+ "jackdaw_schema",
  "serde",
  "serde_json",
  "syn 2.0.119",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "jackdaw_schema"
+version = "0.19.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

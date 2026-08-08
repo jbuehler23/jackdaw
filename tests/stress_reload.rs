@@ -1,10 +1,10 @@
 #![expect(clippy::print_stdout, reason = "test prints progress diagnostics")]
 //! Stress test: measure the resident-memory cost of reloading a
-//! project dylib repeatedly (the edit-mode live-reload leak).
+//! dylib repeatedly (the edit-mode live-reload leak).
 //!
 //! A loaded dylib is never unloaded, so each reload leaves its mapped
-//! pages resident. This builds one representative project dylib
-//! (bevy + avian, like a real game), then dlopens fresh copies in a
+//! pages resident. This builds one representative SDK-linked dylib
+//! (bevy + avian), then dlopens fresh copies in a
 //! loop and reports the RSS growth per load, so we know whether
 //! auto-reload-per-save is viable and how aggressively reloads must
 //! be bounded.
@@ -19,7 +19,6 @@ use std::path::PathBuf;
 
 use bevy::reflect::TypeRegistry;
 use jackdaw::project_build::plan::{SdkManifest, write_plan};
-use jackdaw::project_build::shim::ShimSpec;
 use jackdaw::sdk_paths::SdkPaths;
 
 mod util;
@@ -53,7 +52,7 @@ fn measure_reload_memory_growth() {
         "SDK dylib missing; build --features dylib --target {triple}"
     );
 
-    // Build the representative project dylib through the production
+    // Build the representative SDK-linked dylib through the production
     // pipeline (bevy + avian).
     let fixture_dir = util::stage_fixture("ecosystem_game");
     std::fs::copy(&sdk.lockfile, fixture_dir.join("Cargo.lock")).expect("seed lock");
@@ -84,13 +83,6 @@ fn measure_reload_memory_growth() {
     assert!(dylib.exists(), "dylib missing");
 
     let size_mb = std::fs::metadata(&dylib).unwrap().len() as f64 / 1024.0 / 1024.0;
-    let _ = ShimSpec {
-        package_name: "ecosystem_game".into(),
-        crate_name: "ecosystem_game".into(),
-        project_root: fixture_dir.clone(),
-        game_plugin: None,
-        extension_type: None,
-    };
 
     const RELOADS: usize = 20;
     let load_dir = std::env::temp_dir().join("jackdaw-stress-reload");

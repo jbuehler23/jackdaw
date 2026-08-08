@@ -1,7 +1,7 @@
 # Configuration
 
 Configuration is split across three places: `jackdaw.toml` in the
-project root (plugin override and run configurations), the user
+project root (package selection and run configurations), the user
 config directory (global preferences and extension install dirs),
 and `.jackdaw/project.json` (per-project editor settings). A
 fourth location, the SDK, is resolved rather than configured; see
@@ -14,9 +14,8 @@ working default; a project with an empty (or missing) file still
 opens and plays.
 
 ```toml
-# The game plugin type inside your lib crate. Uncomment to
-# override source detection.
-# plugin = "GamePlugin"
+# In a cargo workspace, the member jackdaw builds as the game.
+# package = "my-game"
 
 [[run]]
 name = "Play"
@@ -28,13 +27,16 @@ name = "Play"
 
 Top-level keys:
 
-- `plugin`: the game plugin type inside your lib crate. Defaults
-  to source detection, then to `GamePlugin`.
+- `package`: which workspace member is the game. Single-package
+  projects omit this.
+- `plugin`: optional name of the project's root Bevy `Plugin`
+  type. Recorded by import/setup and checked by `jd doctor`;
+  Play launches your cargo binary, which must add the plugin
+  itself in `main.rs`.
 
 Each `[[run]]` entry is one item in the Play dropdown. Every run
-launches the same already-built project library through the game
-runner; entries differ only in launch environment, never in what
-gets built. Fields:
+launches the same already-built game binary; entries differ only
+in launch environment, never in what gets built. Fields:
 
 - `name`: dropdown label. Defaults to `Play`.
 - `instances`: number of individually launchable copies of this
@@ -53,13 +55,14 @@ run.
 
 ## The .jackdaw/ directory
 
-`.jackdaw/` is the editor's build root inside the project:
-a generated shim crate and a `target/` directory where the editor
-builds the project as a dynamic library against its SDK. It is
-gitignored (the scaffold and import both add the entry), owned
-entirely by the editor, and safe to delete; the next project open
-rebuilds it. The editor never touches the project's own
-`Cargo.toml`, `Cargo.lock`, `target/`, or toolchain.
+`.jackdaw/` is the editor's per-project scratch space: persisted
+editor settings (`project.json`), the extracted type schema from
+the game binary, and for extension projects the generated shim
+crate and SDK-linked build target. It is gitignored (the scaffold
+and import both add the entry), owned entirely by the editor, and
+safe to delete; the next project open rebuilds what it needs. The
+editor never touches the project's own `Cargo.toml`, `Cargo.lock`,
+`target/`, or toolchain.
 
 ## Command line
 
@@ -79,15 +82,15 @@ Release-only `package-sdk` and `bundle` operations live under `cargo xtask`.
 
 ## Where the SDK lives
 
-The SDK is the proxy dylib plus the compiled closure that project
-and extension builds link against. The editor resolves it in this
+The SDK is the proxy dylib plus the compiled closure that
+extension builds link against. The editor resolves it in this
 order, and the first hit wins:
 
 1. `JACKDAW_SDK_DIR`, if set. Usually an installed layout: an
-   `sdk/manifest.txt` with the rustc wrapper, the runner,
-   `Cargo.lock`, and `toolchain.txt` beside it. A bootstrap cache
-   directory or a jackdaw checkout is accepted too, so pointing it
-   at any of the three works.
+   `sdk/manifest.txt` with the rustc wrapper, `Cargo.lock`, and
+   `toolchain.txt` beside it. A bootstrap cache directory or a
+   jackdaw checkout is accepted too, so pointing it at any of the
+   three works.
 2. A dev checkout's own `target/<triple>/`, when the SDK there is
    built. An in-tree SDK beats any cache, because a debug editor
    and a release cache are not link-compatible.
@@ -124,19 +127,18 @@ features.
   extension. The editor writes replication metadata; no lightyear
   is compiled into it.
 - `camera_rig`. The authorable camera-rig components.
-- `dylib`. The SDK-backed project flow: builds the proxy dylib
-  that project and extension builds link against. On by default,
-  in precompiled releases because loading native project code and
-  extensions in-process requires sharing the SDK's type graph.
+- `dylib`. The SDK-backed extension flow: builds the proxy dylib
+  that extension builds link against. On by default in
+  precompiled releases because loading native extensions
+  in-process requires sharing the SDK's type graph.
   Source builds opt in explicitly with `--features dylib`.
-- `runner`. Enables runner integration used by Play. Implies `dylib`.
 - `embed-recipe`. Bakes the SDK-builder recipe into the binary so
   a packaged, source-free jackdaw can build its own SDK on first
   launch. On by default for self-contained Cargo installs.
 
 Building with `dylib` needs an explicit `--target <host-triple>`,
 so the editor links the same SDK the build pipeline compiles
-project dylibs against.
+extension dylibs against.
 
 ## User config directory
 
@@ -203,11 +205,11 @@ adding statically linked ones is documented in
 
 The repo ships a `rust-toolchain.toml` pinning
 `nightly-2026-03-05`, and CI uses the same channel. The SDK is
-pinned to that exact rustc: project builds and the SDK have to
+pinned to that exact rustc: extension builds and the SDK have to
 share one compiler for the shared type graph to line up, so
 setup installs it through rustup rather than using whatever is
 selected.
 
-This affects the editor and the code it builds for the editor.
-Your project's own `cargo build` and `cargo run` use your own
+This affects the editor and the extensions it builds in-process.
+Your game's own `cargo build` and `cargo run` use your own
 toolchain, untouched.

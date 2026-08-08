@@ -1,8 +1,8 @@
 #![cfg(feature = "dylib")]
 #![expect(clippy::print_stdout, reason = "e2e test reports what it staged")]
 //! Stages a bundle with `cargo xtask bundle`, resolves the SDK from the bundle
-//! layout rather than the dev tree, and builds a game against it: the path an
-//! installed user takes.
+//! layout rather than the dev tree, and builds an extension against it: the
+//! path an installed user takes for marketplace dylibs.
 //!
 //! Requires a release SDK, which the bundle is cut from.
 
@@ -17,39 +17,22 @@ fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-fn bundle_has_runtime(bundle: &Path, crate_name: &str) -> bool {
-    let prefix = format!("{}{}", std::env::consts::DLL_PREFIX, crate_name);
-    std::fs::read_dir(bundle).is_ok_and(|entries| {
-        entries.flatten().any(|entry| {
-            let path = entry.path();
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(&prefix))
-                && path
-                    .extension()
-                    .is_some_and(|ext| ext == std::env::consts::DLL_EXTENSION)
+fn bundle_has_runtime(bundle: &Path, crate_id: &str) -> bool {
+    let prefix = format!("{}{crate_id}", std::env::consts::DLL_PREFIX);
+    let suffix = std::env::consts::DLL_SUFFIX;
+    std::fs::read_dir(bundle)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(&prefix) && name.ends_with(suffix)
         })
-    })
-}
-
-fn run_jd(jd: &Path, current_dir: &Path, args: &[&str]) -> std::process::Output {
-    // `cargo test` puts the workspace build tree on the loader path and
-    // children inherit it, which masks a staged binary missing its own
-    // runpath. Strip it so the staged binary resolves its dylibs the way
-    // it will on a user's machine.
-    Command::new(jd)
-        .args(args)
-        .env_remove("JACKDAW_DEV_CHECKOUT")
-        .env_remove("LD_LIBRARY_PATH")
-        .env_remove("DYLD_LIBRARY_PATH")
-        .env_remove("DYLD_FALLBACK_LIBRARY_PATH")
-        .current_dir(current_dir)
-        .output()
-        .expect("run the staged jd binary")
 }
 
 #[test]
-fn game_builds_against_a_staged_bundle_sdk() {
+fn extension_builds_against_a_staged_bundle_sdk() {
     let root = workspace_root();
     let release_sdk = SdkPaths::for_workspace_profile(&root, "release");
     if !release_sdk.dylib_exists() {
@@ -79,9 +62,7 @@ fn game_builds_against_a_staged_bundle_sdk() {
         Some(path) => PathBuf::from(path),
         None => {
             // `xtask` is deliberately outside the workspace, so it is only
-            // reachable through its own manifest. `-p xtask` from the root
-            // resolves nothing, which is what the `cargo xtask` alias avoids
-            // by passing `--manifest-path`.
+            // reachable through its own manifest.
             let status = Command::new("cargo")
                 .args(["build", "--release", "--manifest-path", "xtask/Cargo.toml"])
                 .current_dir(&root)
@@ -90,7 +71,6 @@ fn game_builds_against_a_staged_bundle_sdk() {
             assert!(status.success(), "xtask failed to build");
 
             let bundle = staging.path().join("jackdaw-bundle");
-            // Its own manifest means its own target dir, not the workspace's.
             let xtask = root
                 .join("xtask/target/release")
                 .join(format!("xtask{}", std::env::consts::EXE_SUFFIX));
@@ -119,7 +99,6 @@ fn game_builds_against_a_staged_bundle_sdk() {
         sdk.manifest.display()
     );
     assert!(sdk.wrapper.is_file(), "bundle is missing the rustc wrapper");
-    assert!(sdk.runner.is_file(), "bundle is missing the game runner");
     assert!(sdk.dylib_exists(), "bundle is missing the SDK dylib");
     assert!(sdk.lockfile.is_file(), "bundle is missing Cargo.lock");
     assert!(
@@ -131,136 +110,64 @@ fn game_builds_against_a_staged_bundle_sdk() {
         "bundle is missing the shared Jackdaw runtime"
     );
 
-    // Run the shipped CLI from the staged bundle, outside the source
-    // checkout. This is the same embedded-template path the editor launcher
-    // calls for New Game/New Extension, plus the same import planner it uses
-    // for an existing Bevy project.
-    let jd = bundle.join(format!("jd{}", std::env::consts::EXE_SUFFIX));
-    assert!(jd.is_file(), "bundle is missing the jd binary");
-    let user_projects = staging.path().join("standalone-projects");
-    std::fs::create_dir_all(&user_projects).expect("create standalone project root");
-
-    for (name, extension) in [("bundle-game", false), ("bundle-extension", true)] {
-        let mut args = vec!["new", name, "--no-git", "--path"];
-        let project_root = user_projects.to_string_lossy().into_owned();
-        args.push(&project_root);
-        if extension {
-            args.push("--extension");
-        }
-        let output = run_jd(&jd, &user_projects, &args);
-        assert!(
-            output.status.success(),
-            "staged jd failed to scaffold {name}:\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let manifest = std::fs::read_to_string(user_projects.join(name).join("Cargo.toml"))
-            .expect("read scaffolded manifest");
-        assert!(
-            !manifest.contains("path ="),
-            "a standalone bundle scaffold must not point back at the checkout:\n{manifest}"
-        );
-    }
-
-    let imported = user_projects.join("existing-bevy-game");
-    std::fs::create_dir_all(imported.join("src")).expect("create imported project");
-    std::fs::write(
-        imported.join("Cargo.toml"),
-        format!(
-            "[package]\nname = \"existing-bevy-game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nbevy = \"{}\"\n\n[workspace]\n",
-            jackdaw_project_build::BEVY_VERSION
-        ),
-    )
-    .expect("write imported manifest");
-    std::fs::write(
-        imported.join("src/lib.rs"),
-        "use bevy::prelude::*;\npub struct ExistingPlugin;\nimpl Plugin for ExistingPlugin { fn build(&self, _: &mut App) {} }\n",
-    )
-    .expect("write imported lib");
-    let imported_path = imported.to_string_lossy().into_owned();
-    let output = run_jd(&jd, &user_projects, &["import", "--apply", &imported_path]);
-    assert!(
-        output.status.success(),
-        "staged jd failed to import an existing project:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        imported.join("jackdaw.toml").is_file(),
-        "import did not create jackdaw.toml"
-    );
-
-    // `None` workspace root: an installed bundle has no checkout to fall back on.
+    // Build an extension dylib against the staged SDK.
     let build_dir = staging.path().join("build");
     std::fs::create_dir_all(&build_dir).expect("create build dir");
+    let extension_dir = staging.path().join("ext");
+    std::fs::create_dir_all(extension_dir.join("src")).expect("create extension dir");
+    std::fs::write(
+        extension_dir.join("Cargo.toml"),
+        format!(
+            r#"[package]
+            name = "bundle_smoke_ext"
+            version = "0.1.0"
+            edition = "2024"
+            publish = false
+
+            [workspace]
+
+            [dependencies]
+            bevy = {{ version = "0.19", default-features = false }}
+            jackdaw_extension = {{ path = "{}" }}
+            "#,
+            root.join("crates/jackdaw_extension")
+                .display()
+                .to_string()
+                .replace('\\', "/")
+        ),
+    )
+    .expect("write extension Cargo.toml");
+    std::fs::write(
+        extension_dir.join("src/lib.rs"),
+        r#"use bevy::prelude::*;
+            use jackdaw_extension::prelude::*;
+
+            #[derive(Default)]
+            pub struct SmokeExtension;
+
+            impl JackdawExtension for SmokeExtension {
+                fn id(&self) -> String { "bundle_smoke".into() }
+                fn register(&self, _: &mut ExtensionRegistrar<'_>) {}
+            }
+            "#,
+    )
+    .expect("write extension lib");
     let spec = ShimSpec {
-        package_name: "bsn_scene_game".into(),
-        crate_name: "bsn_scene_game".into(),
-        project_root: root.join("tests/fixtures/bsn_game"),
-        game_plugin: Some("GamePlugin".into()),
-        extension_type: Some("BundleFixtureExtension".into()),
+        package_name: "bundle_smoke_ext".into(),
+        crate_name: "bundle_smoke_ext".into(),
+        project_root: extension_dir,
+        extension_type: Some("SmokeExtension".into()),
     };
     let build = build_project_dylib(&spec, &build_dir, &sdk, None, &mut |_| {})
-        .expect("build the fixture game against the bundle SDK");
+        .expect("build an extension dylib against the bundle SDK");
     assert!(
         build.dylib.exists(),
-        "game dylib missing at {}",
+        "extension dylib missing at {}",
         build.dylib.display()
     );
 
-    // The editor dlopens a shim with the staged facade already resident, so
-    // the shim's `@rpath/libjackdaw_sdk.dylib` reference binds to the loaded
-    // image by install name before dyld ever searches a path. This harness
-    // is a cargo test binary whose baked-in rpaths point into the workspace
-    // build tree, where a later build leaves a stable-named facade from a
-    // different resolution missing the shim's symbols. Preload the staged
-    // runtime chain by absolute path, dependencies first, so every `@rpath`
-    // reference resolves by install-name match instead of path search.
-    if cfg!(target_os = "macos") {
-        let mut chain: Vec<PathBuf> = Vec::new();
-        for prefix in ["libstd", "libbevy_dylib", "libjackdaw_dylib"] {
-            let entries = std::fs::read_dir(&bundle).expect("read bundle root");
-            let staged: Vec<PathBuf> = entries
-                .flatten()
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.extension().is_some_and(|ext| ext == "dylib")
-                        && path
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .is_some_and(|name| name.starts_with(prefix))
-                })
-                .collect();
-            assert!(!staged.is_empty(), "no {prefix}* dylib at the bundle root");
-            chain.extend(staged);
-        }
-        chain.push(sdk.dylib.clone());
-        for dylib in chain {
-            let loaded = unsafe { libloading::Library::new(&dylib) }
-                .unwrap_or_else(|err| panic!("preload staged {}: {err}", dylib.display()));
-            std::mem::forget(loaded);
-        }
-    }
-
-    // A marketplace extension is useful only if the installed editor can
-    // load it and receive its trait object through the shared Jackdaw ABI.
-    // Keep the library loaded until after the object is dropped because its
-    // vtable lives in the project dylib.
-    type ExtensionCtor = fn() -> Box<dyn jackdaw_api::JackdawExtension>;
-    let library = unsafe { libloading::Library::new(&build.dylib) }
-        .expect("load the independently built project/extension dylib");
-    let extension = unsafe {
-        let ctor: libloading::Symbol<'_, ExtensionCtor> = library
-            .get(b"jackdaw_extension_ctor\0")
-            .expect("project dylib exports the extension constructor");
-        ctor()
-    };
-    assert_eq!(extension.id(), "bundle_fixture");
-    drop(extension);
-    std::mem::forget(library);
-
     println!(
-        "BUNDLE SMOKE PASS: standalone scaffold/import and game/extension dylib {}",
+        "BUNDLE SMOKE PASS: staged a bundle and built {} against its SDK",
         build.dylib.display()
     );
 }

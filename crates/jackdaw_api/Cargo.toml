@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [features]
-# The bevy feature set the editor, the SDK, and every project/extension
+# The bevy feature set the editor, the SDK, and every extension
 # share so they agree on `TypeId` for the types they both touch.
 #
 # The bevy feature list must mirror what the jackdaw workspace activates
@@ -36,15 +36,6 @@ jackdaw_feathers.workspace = true
 jackdaw_scene_types.workspace = true
 jackdaw_panels.workspace = true
 jackdaw_widgets.workspace = true
-# Schema extraction and the Play app-runner live here so they compile into
-# the SDK dylib: the generated project shim calls them through the injected
-# `jackdaw_api`, keeping bevy (its reflect generics, the engine app) inside
-# the dll and project dylib rather than in the runner binary. A secondary
-# binary cannot resolve those symbols when linked on Windows, so the runner
-# must stay bevy-free and drive everything over FFI.
-jackdaw_project_build = { workspace = true, features = ["reflect"] }
-jackdaw_runtime = { workspace = true, features = ["pie"] }
-serde_json.workspace = true
 
 [lints]
 workspace = true

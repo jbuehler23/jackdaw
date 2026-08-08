@@ -1,6 +1,10 @@
-//! Standalone binary for {{project-name}}: `cargo run` plays the game
-//! without the editor. The editor's Play button runs the same
-//! [`{{crate_name}}::GamePlugin`] through its own game runner instead.
+//! Entry point for {{project-name}}.
+//!
+//! This is an ordinary Bevy binary. `cargo run` plays the game, and the
+//! editor's Play button builds and runs this exact executable, so what
+//! you test in the editor is what you ship. The editor talks to it over
+//! an IPC link it sets up in the environment; nothing here is linked
+//! against the editor.
 
 use bevy::image::{ImageAddressMode, ImagePlugin, ImageSamplerDescriptor};
 use bevy::prelude::*;
@@ -17,6 +21,12 @@ fn main() -> AppExit {
             ..ImageSamplerDescriptor::linear()
         },
     });
+
+    // When the editor plays the game inside its viewport it asks for a
+    // windowless launch, and this swaps winit for a schedule runner that
+    // renders into the streamed image. Outside the editor it returns the
+    // plugin group untouched.
+    let default_plugins = jackdaw_runtime::maybe_windowless(default_plugins);
 
     App::new()
         .add_plugins(default_plugins)
