@@ -692,14 +692,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn empty_manifest() -> SdkManifest {
+        let path =
+            std::env::temp_dir().join(format!("jackdaw_empty_manifest_{}", std::process::id()));
+        std::fs::write(&path, b"").unwrap();
+        SdkManifest::load(&path).unwrap()
+    }
+
     /// An SDK-crate resolution failure is not the user's bug, and says
     /// so, naming the SDK actually in use.
     #[test]
     fn an_unresolvable_sdk_crate_is_explained() {
         let sdk = SdkPaths::for_workspace_profile(Path::new("/checkout"), "release");
+        let manifest = empty_manifest();
         let log = "error[E0463]: can't find crate for `jackdaw_api_macros` which \
                    `jackdaw_api` depends on\n";
-        let hint = stale_sdk_hint(log, &sdk).expect("an SDK crate should be recognised");
+        let hint = stale_sdk_hint(log, &sdk, &manifest).expect("an SDK crate should be recognised");
         assert!(hint.contains("rather than an error in your project"));
         assert!(hint.contains("/checkout"), "names the SDK in use: {hint}");
     }
@@ -711,9 +719,10 @@ mod tests {
     #[test]
     fn a_replaced_transitive_sdk_crate_is_explained() {
         let sdk = SdkPaths::for_workspace_profile(Path::new("/checkout"), "release");
+        let manifest = empty_manifest();
         let log = "error[E0460]: found possibly newer version of crate \
                    `jackdaw_api_internal` which `jackdaw_api` depends on\n";
-        let hint = stale_sdk_hint(log, &sdk).expect("E0460 is an SDK mismatch too");
+        let hint = stale_sdk_hint(log, &sdk, &manifest).expect("E0460 is an SDK mismatch too");
         assert!(
             hint.contains("jackdaw_sdk_manifest.txt"),
             "points at the cache to delete: {hint}"
@@ -725,8 +734,9 @@ mod tests {
     #[test]
     fn a_users_own_missing_crate_gets_no_sdk_hint() {
         let sdk = SdkPaths::for_workspace_profile(Path::new("/checkout"), "release");
+        let manifest = empty_manifest();
         let log = "error[E0463]: can't find crate for `rand`\n";
-        assert!(stale_sdk_hint(log, &sdk).is_none());
+        assert!(stale_sdk_hint(log, &sdk, &manifest).is_none());
     }
 
     /// Switching build configuration used to delete the cache it was
