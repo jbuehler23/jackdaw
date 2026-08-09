@@ -554,8 +554,9 @@ fn load_extern_map() -> ExternMap {
 #[derive(Default)]
 struct ExternMap {
     edges: Vec<(String, String, OsString)>,
-    /// Package names whose own unit nothing in this build consumes,
-    /// written by `write_plan` as `replaced:<name>` lines.
+    /// Package names to compile untouched: the ones the plan holds SDK
+    /// artifacts for, plus every crate those link. Written by
+    /// `write_plan` as `replaced:<name>` lines.
     replaced: std::collections::BTreeSet<String>,
 }
 
@@ -567,10 +568,17 @@ impl ExternMap {
             .map(|(_, _, artifact)| artifact)
     }
 
-    /// Whether `name` is itself a crate the plan redirects consumers to
-    /// the SDK for, or one only such crates consume. Such a crate still
-    /// gets compiled by cargo, but its artifact is dead weight: nothing
-    /// outside the replaced set ever opens it.
+    /// Whether the plan says to compile `name`'s own unit untouched.
+    ///
+    /// Usually that costs nothing, because the crate is one the plan
+    /// redirects every consumer to the SDK for and its local artifact
+    /// is dead weight. It is not always so: the plan is keyed by name,
+    /// so a crate the SDK holds at a different version lands here too
+    /// and no edge redirects past it, and the crates it links land here
+    /// with it (that is deliberate - a unit compiled untouched can only
+    /// resolve untouched siblings). Those artifacts do get opened, by
+    /// consumers that were rewritten. See `write_plan`'s `shadow_names`
+    /// for which way that trade falls and why.
     ///
     /// Keyed on the PACKAGE names the plan records, not on edge aliases:
     /// a renamed dependency (rustix consumes `errno` as `libc_errno`)

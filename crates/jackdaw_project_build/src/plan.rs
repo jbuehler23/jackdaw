@@ -503,12 +503,31 @@ fn plan_contents(
 /// crates the user never mentioned.
 ///
 /// Closing the set downward, rather than dropping tokio out of it, is
-/// the direction that cannot make things worse. Only a shadow is blind
-/// to the SDK's deps dir; a redirected unit carries both dirs on its
-/// search path, so one of its dependencies staying vanilla still
-/// resolves. Dropping a crate the other way costs its shadow consumers
-/// a candidate they cannot replace, which rustc reports as a flat
-/// `can't find crate`.
+/// what ends that failure. Only a shadow is blind to the SDK's deps
+/// dir, so a dependency of a shadow that got redirected is a candidate
+/// nothing can replace and rustc reports a flat `can't find crate`.
+/// Growing the set cannot produce one of those; dropping names does,
+/// which is how the first attempt at this took `glam` and
+/// `bevy_platform` down over `approx` and `hashbrown`.
+///
+/// Growth is not free, though, and the residual has a name: a
+/// **redirected-consumer straddle**. Adding a crate here also takes it
+/// off the SDK's resolution of its own dependencies, so a redirected
+/// unit that links it now sees the project's copy of every covered
+/// crate underneath it as well as the SDK's. Two instances of one
+/// crate, reported as a trait or type mismatch rather than a missing
+/// one, because a redirected unit carries both deps dirs and can find
+/// both. `insta` already fails this way over `toml_edit` and
+/// `serde_core`; this walk adds fourteen more sites of that shape to
+/// one real project's graph, five of them reachable on the host it was
+/// resolved for and the rest waiting on the platform they belong to.
+///
+/// Neither direction is safe, and this is only the safer one: a
+/// straddling crate made redirected instead just moves the failure
+/// onto its shadow consumers, where it is fatal rather than
+/// conditional. What actually retires the class is not letting a
+/// manifest name resolve at two versions in the first place. Do not
+/// simplify this walk on the belief that growth is proven harmless.
 ///
 /// Only target-side edges are followed. Build dependencies and
 /// proc-macro crates compile as host units, which the wrapper passes
