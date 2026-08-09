@@ -204,8 +204,7 @@ fn chunk_mesh_data(
 
 /// Colour every vertex of a chunk by what is painted under it.
 ///
-/// This is jackdaw's answer to `Terrain3D`'s control-texture debug view:
-/// without it the user is painting data they cannot see. Off, or with no
+/// Without it the user is painting data they cannot see. Off, or with no
 /// channel selected, every vertex is [`UNPAINTED`] and the terrain looks
 /// exactly as it did before channels existed.
 ///

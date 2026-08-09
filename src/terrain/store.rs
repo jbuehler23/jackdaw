@@ -1,0 +1,364 @@
+//! In-memory source of truth for terrain bulk data.
+//!
+//! Heights and paint-channel values do not live on the `Terrain`
+//! component and never enter the scene document. They live here, keyed by
+//! the scene-relative sidecar path the component carries, and they are
+//! written to that sidecar when the scene is saved.
+//!
+//! The indirection is what makes tab swaps safe. `capture_active_tab`
+//! snapshots the live scene by emitting it to BSN *text* and re-parsing
+//! it, and `activate_tab` respawns every entity from that text
+//! (`src/scenes/swap.rs`) -- no disk involved. Anything held on an entity
+//! is destroyed and rebuilt from text on every swap. A `Resource` is not,
+//! and a reflected `String` key survives the text round-trip, so nothing
+//! has to be carried across the swap at all.
+
+use bevy::platform::collections::HashMap;
+use bevy::prelude::*;
+use jackdaw_terrain::TerrainData;
+use jackdaw_terrain::sidecar;
+
+/// Every open terrain's bulk per-cell data, keyed by
+/// [`jackdaw_scene_types::Terrain::data_path`].
+///
+/// Scope boundary: the key is the scene-relative path exactly as written
+/// on the component, so two scenes open at once that share both a file
+/// name and a terrain index address the same entry. Qualifying the key
+/// with the scene's own location would fix it and is not done here --
+/// untitled scenes have no location to qualify with, and the re-keying
+/// dance on first save is a bigger design decision than this issue owns.
+#[derive(Resource, Default)]
+pub struct TerrainDataStore {
+    entries: HashMap<String, TerrainData>,
+}
+
+impl TerrainDataStore {
+    /// Data for a sidecar path, if this store has any.
+    pub fn get(&self, data_path: &str) -> Option<&TerrainData> {
+        self.entries.get(data_path)
+    }
+
+    /// Mutable data for a sidecar path, if this store has any.
+    pub fn get_mut(&mut self, data_path: &str) -> Option<&mut TerrainData> {
+        self.entries.get_mut(data_path)
+    }
+
+    /// Heights for a sidecar path, or an empty slice when absent.
+    ///
+    /// Callers that only sample heights want a slice, not an `Option`,
+    /// and a terrain with no data reads as flat -- which is exactly what
+    /// a missing sidecar is supposed to look like.
+    pub fn heights(&self, data_path: &str) -> &[f32] {
+        self.entries
+            .get(data_path)
+            .map(|data| data.heights.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Install data for a sidecar path, replacing anything already there.
+    pub fn insert(&mut self, data_path: impl Into<String>, data: TerrainData) {
+        self.entries.insert(data_path.into(), data);
+    }
+
+    /// Drop a sidecar path's data.
+    pub fn remove(&mut self, data_path: &str) -> Option<TerrainData> {
+        self.entries.remove(data_path)
+    }
+
+    /// Whether a sidecar path has data.
+    pub fn contains(&self, data_path: &str) -> bool {
+        self.entries.contains_key(data_path)
+    }
+
+    /// Data for a terrain, created zeroed at the terrain's resolution if
+    /// absent, resized if the resolution changed underneath, and
+    /// reconciled against the terrain's declared channels.
+    ///
+    /// Every mutating path goes through here, so a channel or height
+    /// array can never be a different length than the terrain claims, and
+    /// a channel the user just added is already zeroed at the right
+    /// length by the time anything tries to paint it.
+    pub fn entry_for(
+        &mut self,
+        terrain: &jackdaw_scene_types::Terrain,
+    ) -> Option<&mut TerrainData> {
+        if terrain.data_path.is_empty() {
+            return None;
+        }
+        let data = self
+            .entries
+            .entry(terrain.data_path.clone())
+            .or_insert_with(|| TerrainData {
+                resolution: terrain.resolution,
+                ..default()
+            });
+        if data.resolution != terrain.resolution {
+            data.resolution = terrain.resolution;
+        }
+        if data.heights.len() != terrain.cell_count() {
+            data.normalize();
+        }
+        reconcile_channels(data, terrain);
+        Some(data)
+    }
+
+    /// Every (sidecar path, data) pair currently held.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &TerrainData)> {
+        self.entries.iter()
+    }
+}
+
+/// Bring a terrain's stored channel values in line with the channel
+/// descriptors on its component.
+///
+/// The component owns the channel table -- names, widths, order -- and
+/// the sidecar owns the values. When the user adds, removes, renames or
+/// reorders a channel in the inspector, this is what carries the values
+/// along: matched by name, so a rename keeps what was painted and a
+/// reorder moves it rather than shuffling it into the wrong layer.
+///
+/// A channel added to a terrain that already has heights is initialised
+/// to zero at `resolution^2` here, which is the only place that can
+/// happen without the caller having to remember it.
+fn reconcile_channels(data: &mut TerrainData, terrain: &jackdaw_scene_types::Terrain) {
+    use jackdaw_terrain::{ChannelData, ChannelElement};
+
+    let wanted = |element: jackdaw_scene_types::TerrainChannelElement| match element {
+        jackdaw_scene_types::TerrainChannelElement::U8 => ChannelElement::U8,
+        jackdaw_scene_types::TerrainChannelElement::U16 => ChannelElement::U16,
+    };
+
+    if data.channels.len() == terrain.channels.len()
+        && data
+            .channels
+            .iter()
+            .zip(&terrain.channels)
+            .all(|(have, want)| have.name == want.name && have.element == wanted(want.element))
+    {
+        for channel in &mut data.channels {
+            channel.resize_to(terrain.resolution);
+        }
+        return;
+    }
+
+    let mut previous = std::mem::take(&mut data.channels);
+    data.channels = terrain
+        .channels
+        .iter()
+        .map(|descriptor| {
+            let element = wanted(descriptor.element);
+            let taken = previous
+                .iter()
+                .position(|had| had.name == descriptor.name)
+                .map(|at| previous.remove(at));
+            let mut channel = taken.unwrap_or_else(|| {
+                ChannelData::new(descriptor.name.clone(), element, terrain.resolution)
+            });
+            channel.name = descriptor.name.clone();
+            channel.element = element;
+            channel.resize_to(terrain.resolution);
+            channel
+        })
+        .collect();
+}
+
+/// Mint a sidecar path for a new terrain in `scene_stem`'s scene, unique
+/// against everything the store already holds.
+///
+/// Uniqueness is checked against the whole store rather than the current
+/// scene so two terrains created in two open tabs cannot collide.
+pub fn mint_data_path(store: &TerrainDataStore, scene_stem: &str) -> String {
+    let stem = if scene_stem.is_empty() {
+        "untitled"
+    } else {
+        scene_stem
+    };
+    for n in 0.. {
+        let candidate = format!("{stem}.terrain-{n}.{}", sidecar::EXTENSION);
+        if !store.contains(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("the candidate space is unbounded")
+}
+
+/// File stem of the scene currently being saved or edited, for naming a
+/// new terrain's sidecar. Falls back to `untitled` for unsaved scenes.
+pub fn active_scene_stem(world: &World) -> String {
+    world
+        .get_resource::<crate::scene_io::SceneFilePath>()
+        .and_then(|scene| scene.path.as_ref())
+        .and_then(|path| {
+            std::path::Path::new(path)
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "untitled".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn terrain(resolution: u32, data_path: &str) -> jackdaw_scene_types::Terrain {
+        jackdaw_scene_types::Terrain {
+            resolution,
+            data_path: data_path.to_string(),
+            ..default()
+        }
+    }
+
+    #[test]
+    fn entry_for_creates_a_zeroed_array_at_the_terrain_resolution() {
+        let mut store = TerrainDataStore::default();
+        let data = store.entry_for(&terrain(4, "a.jdterrain")).expect("keyed");
+        assert_eq!(data.heights.len(), 16);
+        assert!(data.heights.iter().all(|h| *h == 0.0));
+    }
+
+    #[test]
+    fn entry_for_resizes_when_the_resolution_changed_underneath() {
+        let mut store = TerrainDataStore::default();
+        store
+            .entry_for(&terrain(4, "a.jdterrain"))
+            .expect("keyed")
+            .heights[0] = 3.0;
+        let grown = store.entry_for(&terrain(8, "a.jdterrain")).expect("keyed");
+        assert_eq!(grown.resolution, 8);
+        assert_eq!(grown.heights.len(), 64);
+        assert_eq!(grown.heights[0], 3.0, "existing cells survive the resize");
+    }
+
+    #[test]
+    fn a_terrain_without_a_data_path_has_no_entry() {
+        let mut store = TerrainDataStore::default();
+        assert!(store.entry_for(&terrain(4, "")).is_none());
+        assert_eq!(store.iter().count(), 0);
+    }
+
+    #[test]
+    fn heights_of_an_unknown_path_read_as_flat_rather_than_panicking() {
+        let store = TerrainDataStore::default();
+        assert!(store.heights("nothing-here.jdterrain").is_empty());
+    }
+
+    /// The headline acceptance for channels: adding one to a terrain that
+    /// already has heights must give it `resolution^2` zeroes, without
+    /// the caller having to remember to size it.
+    #[test]
+    fn a_channel_added_to_a_sculpted_terrain_is_zeroed_at_the_right_length() {
+        use jackdaw_scene_types::{TerrainChannel, TerrainChannelElement};
+
+        let mut store = TerrainDataStore::default();
+        let mut sculpted = terrain(8, "a.jdterrain");
+        store.entry_for(&sculpted).expect("keyed").heights = vec![2.0; 64];
+
+        sculpted.channels.push(TerrainChannel {
+            name: "biome".to_string(),
+            element: TerrainChannelElement::U8,
+            palette: vec![],
+        });
+        let data = store.entry_for(&sculpted).expect("keyed");
+        assert_eq!(data.channels.len(), 1);
+        assert_eq!(data.channels[0].values.len(), 64);
+        assert!(data.channels[0].values.iter().all(|v| *v == 0));
+        assert_eq!(data.heights, vec![2.0; 64], "heights are untouched");
+    }
+
+    /// Renaming a channel must carry what was painted into it. Matching
+    /// by name means a reorder moves values with their layer instead of
+    /// shuffling them into the wrong one.
+    #[test]
+    fn reordering_channels_moves_their_values_rather_than_shuffling_them() {
+        use jackdaw_scene_types::{TerrainChannel, TerrainChannelElement};
+
+        let channel = |name: &str| TerrainChannel {
+            name: name.to_string(),
+            element: TerrainChannelElement::U8,
+            palette: vec![],
+        };
+
+        let mut store = TerrainDataStore::default();
+        let mut two = terrain(4, "a.jdterrain");
+        two.channels = vec![channel("biome"), channel("walkable")];
+        {
+            let data = store.entry_for(&two).expect("keyed");
+            data.channels[0].values[0] = 11;
+            data.channels[1].values[0] = 22;
+        }
+
+        two.channels.swap(0, 1);
+        let data = store.entry_for(&two).expect("keyed");
+        assert_eq!(data.channels[0].name, "walkable");
+        assert_eq!(data.channels[0].values[0], 22);
+        assert_eq!(data.channels[1].name, "biome");
+        assert_eq!(data.channels[1].values[0], 11);
+    }
+
+    /// Removing a channel drops its values with it, and leaves the
+    /// survivors alone.
+    #[test]
+    fn removing_a_channel_drops_only_its_own_values() {
+        use jackdaw_scene_types::{TerrainChannel, TerrainChannelElement};
+
+        let channel = |name: &str| TerrainChannel {
+            name: name.to_string(),
+            element: TerrainChannelElement::U8,
+            palette: vec![],
+        };
+
+        let mut store = TerrainDataStore::default();
+        let mut two = terrain(4, "a.jdterrain");
+        two.channels = vec![channel("biome"), channel("walkable")];
+        store.entry_for(&two).expect("keyed").channels[1].values[3] = 9;
+
+        two.channels.remove(0);
+        let data = store.entry_for(&two).expect("keyed");
+        assert_eq!(data.channels.len(), 1);
+        assert_eq!(data.channels[0].name, "walkable");
+        assert_eq!(data.channels[0].values[3], 9);
+    }
+
+    /// A `u8` channel widened to `u16` keeps what was painted; only its
+    /// ceiling changes.
+    #[test]
+    fn widening_a_channel_keeps_its_values() {
+        use jackdaw_scene_types::{TerrainChannel, TerrainChannelElement};
+
+        let mut store = TerrainDataStore::default();
+        let mut narrow = terrain(4, "a.jdterrain");
+        narrow.channels = vec![TerrainChannel {
+            name: "biome".to_string(),
+            element: TerrainChannelElement::U8,
+            palette: vec![],
+        }];
+        store.entry_for(&narrow).expect("keyed").channels[0].values[2] = 200;
+
+        narrow.channels[0].element = TerrainChannelElement::U16;
+        let data = store.entry_for(&narrow).expect("keyed");
+        assert_eq!(
+            data.channels[0].element,
+            jackdaw_terrain::ChannelElement::U16
+        );
+        assert_eq!(data.channels[0].values[2], 200);
+    }
+
+    #[test]
+    fn minted_paths_do_not_collide_with_what_the_store_already_holds() {
+        let mut store = TerrainDataStore::default();
+        let first = mint_data_path(&store, "level");
+        assert_eq!(first, format!("level.terrain-0.{}", sidecar::EXTENSION));
+        store.insert(first.clone(), TerrainData::default());
+        let second = mint_data_path(&store, "level");
+        assert_ne!(second, first);
+        assert_eq!(second, format!("level.terrain-1.{}", sidecar::EXTENSION));
+    }
+
+    #[test]
+    fn an_unnamed_scene_still_mints_a_usable_path() {
+        let store = TerrainDataStore::default();
+        let path = mint_data_path(&store, "");
+        assert!(path.starts_with("untitled.terrain-"));
+        assert!(path.ends_with(sidecar::EXTENSION));
+    }
+}

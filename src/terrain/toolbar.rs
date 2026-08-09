@@ -34,10 +34,8 @@ pub struct TerrainToolbar;
 
 /// Marker on the text node that describes the active terrain tool.
 ///
-/// Every reference tool pairs its icon row with a one-line description of
-/// the selected tool -- Unity puts "Paints the selected material layer
-/// onto the terrain texture" directly under its five icons. Each terrain
-/// operator already carries a `description`; this surfaces it.
+/// Each terrain operator already carries a `description`; this surfaces
+/// the selected one under the icon row.
 #[derive(Component, Clone, Default)]
 struct TerrainToolDescription;
 
@@ -111,8 +109,7 @@ fn active_tool_description() -> impl Scene {
     }
 }
 
-/// Human-readable summary of what the active tool does, in the same
-/// register as Unity's one-liner under its tool icons.
+/// Human-readable summary of what the active tool does.
 fn describe(mode: &TerrainEditMode) -> &'static str {
     use jackdaw_terrain::SculptTool;
     match mode {

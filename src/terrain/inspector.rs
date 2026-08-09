@@ -591,20 +591,16 @@ fn sync_brush_fields(
 
 /// Edge of one channel / palette tile.
 const TILE_PX: f32 = 52.0;
-/// Height of the accent bar marking the selected tile. Unity underlines
-/// the selected layer, Unreal bars it above the name, `Terrain3D` outlines
-/// it; a bar is the same idea in jackdaw's own colour language.
+/// Height of the accent bar marking the selected tile.
 const ACCENT_PX: f32 = 3.0;
 
 /// The channel tile grid, the active channel's palette swatches, and the
 /// painted-state toggle.
 ///
-/// Shaped after the layer grids in Unity's Paint Texture tab, Unreal's
-/// Target Layers, and `Terrain3D`'s asset dock: a grid of tiles rather than
-/// a text list, each tile click-to-select with an accent bar when active,
-/// and a `+` tile at the end to add one. The tiles show a palette swatch
-/// instead of a texture thumbnail because a channel is an integer layer,
-/// not a material.
+/// A grid of tiles rather than a text list: each tile is click-to-select
+/// with an accent bar when active, and a `+` tile at the end adds one. The
+/// tiles show a palette swatch rather than a texture thumbnail because a
+/// channel is an integer layer, not a material.
 fn spawn_channel_ui(
     commands: &mut Commands,
     parent: Entity,
@@ -674,9 +670,8 @@ fn spawn_channel_ui(
         crate::terrain::channel_ops::TerrainChannelValueAddOp::ID,
     );
 
-    // The painted-state view. Terrain3D's control-texture debug view is
-    // the closest equivalent, and without something like it the user is
-    // painting data with no feedback at all.
+    // The painted-state view. Without it the user is painting data with
+    // no feedback at all.
     commands.spawn((
         button::button(
             ButtonProps::new(if paint.show_channel {
@@ -795,8 +790,8 @@ pub(super) fn spawn_tile(
         });
 }
 
-/// `Terrain3D`'s `+` tile, carried over directly: the way to add a layer
-/// sits at the end of the grid, not in a separate menu.
+/// The `+` tile: the way to add a layer sits at the end of the grid, not
+/// in a separate menu.
 pub(super) fn spawn_add_tile(commands: &mut Commands, parent: Entity, op_id: &'static str) {
     let tile = commands
         .spawn((
@@ -828,8 +823,8 @@ pub(super) fn spawn_add_tile(commands: &mut Commands, parent: Entity, op_id: &'s
         });
 }
 
-/// `Terrain3D` puts a remove affordance on the tile itself; jackdaw puts a
-/// small one beside it, so the swatch stays a clean colour sample.
+/// A small remove affordance beside the tile rather than on it, so the
+/// swatch stays a clean colour sample.
 ///
 /// `op_id` is dispatched with the tile's index, so the same affordance
 /// serves the channel grid and the scatter palette.
