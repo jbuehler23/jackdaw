@@ -1583,6 +1583,7 @@ fn spawn_instance(
     command
         .current_dir(&cwd)
         .envs(&run.env)
+        .env("BEVY_ASSET_ROOT", &cwd)
         .env("JACKDAW_PIE", &server_name)
         .args(&run.args)
         .stderr(Stdio::piped());
