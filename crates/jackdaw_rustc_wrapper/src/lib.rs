@@ -312,10 +312,11 @@ fn describe_externs(args: &[OsString]) -> String {
 /// of their own graph's: where the two resolutions disagreed (macOS),
 /// the shadow `bevy_image` unit failed to load the SDK's `image` and
 /// took the whole build down for an artifact nothing needed. Vanilla,
-/// a shadow unit consumes its own graph's shadow siblings, which is
-/// self-consistent by construction. Non-replaced units still get every
-/// edge rewritten, so nothing that is actually used sees two instances
-/// of one crate.
+/// a shadow unit consumes its own graph's shadow siblings, which the
+/// plan guarantees: it names a crate `replaced:` only when every
+/// dependency that crate links is replaced too. Non-replaced units
+/// still get every edge rewritten, so nothing that is actually used
+/// sees two instances of one crate.
 fn rewrite_args(argv: &mut Vec<OsString>, log: bool) -> Result<(), String> {
     let deps = env::var_os(ENV_SDK_DEPS)
         .ok_or_else(|| format!("{ENV_SDK_DEPS} not set; cannot point -L at deps/"))?;
@@ -553,8 +554,8 @@ fn load_extern_map() -> ExternMap {
 #[derive(Default)]
 struct ExternMap {
     edges: Vec<(String, String, OsString)>,
-    /// Package names the plan holds SDK artifacts for, written by
-    /// `write_plan` as `replaced:<name>` lines.
+    /// Package names whose own unit nothing in this build consumes,
+    /// written by `write_plan` as `replaced:<name>` lines.
     replaced: std::collections::BTreeSet<String>,
 }
 
@@ -567,9 +568,9 @@ impl ExternMap {
     }
 
     /// Whether `name` is itself a crate the plan redirects consumers to
-    /// the SDK for. Such a crate still gets compiled by cargo, but its
-    /// artifact is dead weight: every consumer's edge points at the SDK
-    /// copy instead.
+    /// the SDK for, or one only such crates consume. Such a crate still
+    /// gets compiled by cargo, but its artifact is dead weight: nothing
+    /// outside the replaced set ever opens it.
     ///
     /// Keyed on the PACKAGE names the plan records, not on edge aliases:
     /// a renamed dependency (rustix consumes `errno` as `libc_errno`)
