@@ -203,6 +203,20 @@ pub fn activate_tab(world: &mut World, target: usize) {
         spath.path = tab_path.as_ref().map(|p| p.to_string_lossy().into_owned());
     }
 
+    // Hydrate any terrain sidecar the store has not seen yet. A tab opened
+    // by `scene_open_system` pushes a parsed document straight onto the
+    // tab strip and never goes through `finish_load_scene`, so this is the
+    // only place its bulk data gets read. `FillMissing` is deliberate: a
+    // swap back to a tab the user has been sculpting must keep the unsaved
+    // edits the store holds rather than re-reading the older file.
+    if let Some(path) = tab_path.as_ref() {
+        crate::scene_io::import_terrain_sidecars(
+            world,
+            &path.to_string_lossy(),
+            crate::scene_io::SidecarImport::FillMissing,
+        );
+    }
+
     let mut scenes = world.resource_mut::<Scenes>();
     scenes.active = target;
     scenes.tabs[target].history_depth_at_last_check = history_depth;

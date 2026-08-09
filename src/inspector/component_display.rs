@@ -124,6 +124,63 @@ pub(crate) fn add_component_displays(
     }
 }
 
+/// Scene-document components that live under `jackdaw_scene_types` and
+/// carry the inspector's dedicated tool surfaces: `Brush` mounts the
+/// mesh card (`brush_display`, and with it the whole Mesh tab), `Terrain`
+/// mounts the scatter / quantization / channel / generation sections.
+///
+/// [`hidden_by_namespace`] exists to keep jackdaw's own bookkeeping
+/// components out of the generic list. These two are not bookkeeping --
+/// they are the scene data the user selected the entity to edit -- so
+/// culling them takes their entire tool surface with them and leaves a
+/// cube or a terrain showing nothing but `Transform`.
+const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 2] = [
+    "jackdaw_scene_types::types::Brush",
+    "jackdaw_scene_types::types::Terrain",
+];
+
+/// Whether a `jackdaw*` type is editor bookkeeping rather than something
+/// the inspector should offer as a card.
+///
+/// A namespace cull with two kinds of hole punched in it: the crates whose
+/// components are user-facing wholesale, and the individual scene-data
+/// types in [`SCENE_TYPES_WITH_INSPECTOR_CARDS`].
+fn hidden_by_namespace(full_path: &str) -> bool {
+    full_path.starts_with("jackdaw")
+        && !full_path.starts_with("jackdaw_jsn")
+        && !full_path.starts_with("jackdaw_geometry")
+        && !full_path.starts_with("jackdaw::reference_image")
+        && !full_path.starts_with("jackdaw_avian_integration")
+        && !full_path.starts_with("jackdaw_animation")
+        && !full_path.starts_with("jackdaw_multiplayer")
+        && !SCENE_TYPES_WITH_INSPECTOR_CARDS.contains(&full_path)
+}
+
+/// Whether the scene document tracks `full_path` on the inspected entity.
+///
+/// A document node records an enum component under its authored VARIANT
+/// path (`bevy_camera::visibility::Visibility::Visible`), never the bare
+/// type path, so an exact set lookup misses every enum component the
+/// scene authors and the AST filter drops it from the inspector. Match a
+/// stored path that is `full_path` plus exactly one `::`-separated
+/// variant segment; requiring a single segment keeps `Foo` from claiming
+/// a nested `Foo::Bar::Baz`.
+///
+/// Same rule `SceneBsnAst::find_patch_by_type_path` applies when it looks
+/// a patch up by type -- this is the string-set twin of it, because
+/// `component_type_paths` hands back raw authored paths.
+fn ast_tracks(jsn_type_paths: &HashSet<String>, full_path: &str) -> bool {
+    if jsn_type_paths.contains(full_path) {
+        return true;
+    }
+    jsn_type_paths.iter().any(|stored| {
+        stored
+            .strip_prefix(full_path)
+            .and_then(|rest| rest.strip_prefix("::"))
+            .is_some_and(|variant| !variant.is_empty() && !variant.contains("::"))
+    })
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "inspector rebuild needs the full system param set; bundling into a struct would just push the problem one frame down"
@@ -216,14 +273,7 @@ pub(crate) fn build_inspector_displays(
             {
                 let table = registration.type_info().type_path_table();
                 let full_path = table.path();
-                if full_path.starts_with("jackdaw")
-                    && !full_path.starts_with("jackdaw_jsn")
-                    && !full_path.starts_with("jackdaw_geometry")
-                    && !full_path.starts_with("jackdaw::reference_image")
-                    && !full_path.starts_with("jackdaw_avian_integration")
-                    && !full_path.starts_with("jackdaw_animation")
-                    && !full_path.starts_with("jackdaw_multiplayer")
-                {
+                if hidden_by_namespace(full_path) {
                     return None;
                 }
                 // AST filter: hide Bevy-internal components that
@@ -246,7 +296,7 @@ pub(crate) fn build_inspector_displays(
                         || full_path.starts_with("jackdaw_multiplayer"));
                 if !is_user_type
                     && !jsn_type_paths.is_empty()
-                    && !jsn_type_paths.contains(full_path)
+                    && !ast_tracks(jsn_type_paths, full_path)
                 {
                     return None;
                 }
@@ -1191,5 +1241,73 @@ pub(crate) fn filter_inspector_components(
                 Display::None
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ast_tracks, hidden_by_namespace};
+    use std::collections::HashSet;
+
+    fn set(paths: &[&str]) -> HashSet<String> {
+        paths.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn an_enum_component_authored_as_a_variant_still_counts_as_tracked() {
+        // What a scene document actually stores for `Visibility`.
+        let tracked = set(&[
+            "bevy_transform::components::transform::Transform",
+            "bevy_camera::visibility::Visibility::Visible",
+        ]);
+        assert!(ast_tracks(&tracked, "bevy_camera::visibility::Visibility"));
+        assert!(ast_tracks(
+            &tracked,
+            "bevy_transform::components::transform::Transform"
+        ));
+    }
+
+    #[test]
+    fn a_type_the_document_never_authored_stays_untracked() {
+        let tracked = set(&["bevy_camera::visibility::Visibility::Visible"]);
+        // Computed siblings share a module, not an identity.
+        assert!(!ast_tracks(
+            &tracked,
+            "bevy_camera::visibility::InheritedVisibility"
+        ));
+        // A prefix that is not followed by `::` is not a variant.
+        assert!(!ast_tracks(&tracked, "bevy_camera::visibility::Visib"));
+        // One variant segment only: `Foo` must not claim `Foo::Bar::Baz`.
+        assert!(!ast_tracks(&set(&["a::B::C::D"]), "a::B"));
+        assert!(ast_tracks(&set(&["a::B::C"]), "a::B"));
+    }
+
+    #[test]
+    fn the_scene_data_components_with_their_own_cards_survive_the_namespace_cull() {
+        // Each mounts a dedicated inspector surface; culling either one
+        // takes a whole tool panel out of the editor.
+        assert!(!hidden_by_namespace("jackdaw_scene_types::types::Brush"));
+        assert!(!hidden_by_namespace("jackdaw_scene_types::types::Terrain"));
+    }
+
+    #[test]
+    fn editor_bookkeeping_stays_out_of_the_generic_list() {
+        assert!(hidden_by_namespace(
+            "jackdaw_scene_types::node_id::SceneNodeId"
+        ));
+        assert!(hidden_by_namespace(
+            "jackdaw::draw_brush::stable_id::BrushStableId"
+        ));
+        // The wholesale-allowed crates are untouched by the cull.
+        assert!(!hidden_by_namespace(
+            "jackdaw_avian_integration::AvianCollider"
+        ));
+        assert!(!hidden_by_namespace(
+            "jackdaw_geometry::modifiers::ModifierStack"
+        ));
+        // Non-jackdaw types never reach this rule's business end.
+        assert!(!hidden_by_namespace(
+            "bevy_transform::components::transform::Transform"
+        ));
     }
 }

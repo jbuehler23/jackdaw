@@ -169,6 +169,117 @@ fn swap_round_trips_a_single_brush() {
     assert_eq!(name_count, 1, "tab A's AST entity should respawn");
 }
 
+/// A tab swap round-trips the scene through BSN *text* and respawns every
+/// entity, with no disk involved. That is exactly what would destroy a
+/// sculpted heightmap if heights lived on the component, so this pins the
+/// arrangement that makes it safe: the sidecar path travels as an ordinary
+/// reflected `String`, the heights live in a `Resource`, and neither one
+/// depends on the entity surviving.
+#[test]
+fn swap_preserves_a_sculpted_terrain() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+    use jackdaw::terrain::TerrainDataStore;
+    use jackdaw_scene_types::Terrain;
+    use jackdaw_terrain::TerrainData;
+
+    const DATA_PATH: &str = "zone.terrain-0.jdterrain";
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: None,
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+    app.init_resource::<TerrainDataStore>();
+
+    // A sculpted 4x4 terrain: heights in the store, path on the component.
+    let sculpted: Vec<f32> = (0..16).map(|i| i as f32 * 0.5).collect();
+    app.world_mut().resource_mut::<TerrainDataStore>().insert(
+        DATA_PATH.to_string(),
+        TerrainData {
+            resolution: 4,
+            heights: sculpted.clone(),
+            channels: vec![],
+        },
+    );
+    let terrain_entity = app
+        .world_mut()
+        .spawn((
+            Terrain {
+                resolution: 4,
+                data_path: DATA_PATH.to_string(),
+                ..default()
+            },
+            Name::new("ground"),
+        ))
+        .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("ground".to_string())]);
+        ast.add_to_roots(node);
+        ast.link(terrain_entity, node);
+    }
+    {
+        let terrain = app.world().get::<Terrain>(terrain_entity).cloned().unwrap();
+        jackdaw::commands::sync_component_to_ast(
+            app.world_mut(),
+            terrain_entity,
+            "jackdaw_scene_types::types::Terrain",
+            &terrain,
+        );
+    }
+
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(1));
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(2));
+        scenes.active = 0;
+    }
+
+    // Away and back.
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    assert!(
+        app.world().get::<Terrain>(terrain_entity).is_none(),
+        "the original entity is despawned by the swap"
+    );
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+
+    // The respawned terrain still names the same sidecar...
+    let respawned = app
+        .world_mut()
+        .query::<&Terrain>()
+        .iter(app.world())
+        .next()
+        .cloned()
+        .expect("terrain respawns from the AST");
+    assert_eq!(
+        respawned.data_path, DATA_PATH,
+        "the sidecar path survives the BSN text round-trip"
+    );
+    assert!(
+        respawned.heights.is_empty(),
+        "heights never enter the scene document"
+    );
+
+    // ...and the sculpt itself is untouched.
+    let store = app.world().resource::<TerrainDataStore>();
+    assert_eq!(store.heights(DATA_PATH), sculpted.as_slice());
+}
+
 #[test]
 fn swap_preserves_camera_transform_per_tab() {
     use bevy::prelude::*;

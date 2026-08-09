@@ -1,13 +1,21 @@
+pub mod channel_ops;
+pub mod export;
 pub mod inspector;
 pub mod mesh;
 pub mod ops;
+pub mod paint;
+pub mod quantize_ops;
+pub mod scatter;
 pub mod sculpt;
+pub mod store;
 pub mod toolbar;
 
 use std::collections::HashSet;
 
 use bevy::prelude::*;
 
+pub use paint::TerrainPaintState;
+pub use store::TerrainDataStore;
 pub use toolbar::TerrainToolbar;
 
 pub struct TerrainPlugin;
@@ -19,13 +27,18 @@ impl Plugin for TerrainPlugin {
         app.init_resource::<TerrainEditMode>()
             .init_resource::<TerrainBrushSettings>()
             .init_resource::<TerrainSculptState>()
+            .init_resource::<TerrainDataStore>()
             .add_systems(
                 Update,
-                ensure_terrain_dirty_chunks.run_if(in_state(crate::AppState::Editor)),
+                (ensure_terrain_dirty_chunks, ensure_terrain_data_path)
+                    .chain()
+                    .run_if(in_state(crate::AppState::Editor)),
             )
             .add_plugins((
                 mesh::plugin,
                 sculpt::plugin,
+                paint::plugin,
+                scatter::plugin,
                 toolbar::plugin,
                 inspector::plugin,
             ));
@@ -51,6 +64,84 @@ fn ensure_terrain_dirty_chunks(
             rebuild_all: true,
             ..default()
         });
+    }
+}
+
+/// Give every terrain a sidecar path and a store entry.
+///
+/// One system covers every way a terrain can appear -- the add-entity
+/// operator, a paste, a duplicate, a legacy scene with no `data_path` --
+/// so no spawn site has to remember to do it. Terrains that already carry
+/// a path are left alone, which is what makes this cheap enough to run
+/// every frame.
+///
+/// A duplicated terrain arrives carrying the original's `data_path`. That
+/// would silently alias two terrains onto one heightmap, so the copy is
+/// re-keyed here and the original's data is cloned into the new key.
+fn ensure_terrain_data_path(world: &mut World) {
+    let mut query = world.query::<(Entity, &jackdaw_scene_types::Terrain)>();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut needs_path: Vec<(Entity, Option<String>)> = Vec::new();
+    for (entity, terrain) in query.iter(world) {
+        if terrain.data_path.is_empty() {
+            needs_path.push((entity, None));
+        } else if !seen.insert(terrain.data_path.clone()) {
+            needs_path.push((entity, Some(terrain.data_path.clone())));
+        }
+    }
+    if needs_path.is_empty() {
+        return;
+    }
+
+    let stem = store::active_scene_stem(world);
+    for (entity, aliased) in needs_path {
+        let minted = {
+            let store = world.resource::<TerrainDataStore>();
+            store::mint_data_path(store, &stem)
+        };
+        // A duplicate starts from the original's data rather than flat
+        // ground: the user copied a shape, not an empty terrain.
+        let cloned =
+            aliased.and_then(|from| world.resource::<TerrainDataStore>().get(&from).cloned());
+        {
+            let mut store = world.resource_mut::<TerrainDataStore>();
+            match cloned {
+                Some(data) => store.insert(minted.clone(), data),
+                None => {
+                    if !store.contains(&minted) {
+                        store.insert(minted.clone(), jackdaw_terrain::TerrainData::default());
+                    }
+                }
+            }
+        }
+        let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(entity) else {
+            continue;
+        };
+        terrain.data_path = minted;
+        // Drain any legacy inline heights the same pass, so a scene
+        // authored before the sidecar existed keeps its shape.
+        let legacy = std::mem::take(&mut terrain.heights);
+        let terrain = terrain.clone();
+        {
+            let mut store = world.resource_mut::<TerrainDataStore>();
+            if let Some(data) = store.entry_for(&terrain)
+                && !legacy.is_empty()
+            {
+                data.heights = legacy;
+                data.normalize();
+            }
+        }
+        // The document is the save-time source of truth, so the emptied
+        // heights and the new path have to reach it explicitly.
+        crate::commands::sync_component_to_ast(
+            world,
+            entity,
+            "jackdaw_scene_types::types::Terrain",
+            &terrain,
+        );
+        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(entity) {
+            dirty.rebuild_all = true;
+        }
     }
 }
 
@@ -82,6 +173,8 @@ pub enum TerrainEditMode {
     #[default]
     None,
     Sculpt(jackdaw_terrain::SculptTool),
+    /// Stamping palette values into the active paint channel.
+    Paint,
     Generate,
 }
 

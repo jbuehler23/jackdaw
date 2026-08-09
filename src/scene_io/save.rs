@@ -212,6 +212,10 @@ pub(super) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     // `<scene>.nav` file so it survives reload. No-op when nothing is baked.
     export_navmesh_sibling(world, &path);
 
+    // Terrain heights and paint channels live beside the scene, not in
+    // it. No-op for a scene with no terrain.
+    export_terrain_sidecars(world, &path);
+
     // Save catalog alongside scene if dirty
     crate::asset_catalog::save_catalog(world);
 
@@ -263,6 +267,74 @@ fn export_navmesh_sibling(world: &World, scene_path: &str) {
             match result {
                 Ok(()) => info!("Navmesh exported to {}", nav_path.display()),
                 Err(err) => warn!("Failed to export navmesh: {err}"),
+            }
+        })
+        .detach();
+}
+
+/// Write every terrain's bulk data to its sidecar beside the scene.
+///
+/// Same contract as [`export_navmesh_sibling`]: a clean no-op when the
+/// scene has no terrain, detached onto the `IoTaskPool`, and it never
+/// fails the scene save. One file per terrain, named by the
+/// scene-relative `data_path` the `Terrain` component carries, so a
+/// scene and its terrain data move together.
+///
+/// Only terrains that are actually in the scene are written. The store
+/// can outlive them -- an undo can bring one back, and other tabs keep
+/// their own entries -- so writing the whole store would scatter files
+/// for terrains this scene does not own.
+pub(crate) fn export_terrain_sidecars(world: &mut World, scene_path: &str) {
+    use jackdaw_terrain::sidecar;
+
+    if world
+        .get_resource::<crate::terrain::TerrainDataStore>()
+        .is_none()
+    {
+        return;
+    }
+    let scene_dir = Path::new(scene_path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+
+    let mut paths: Vec<String> = Vec::new();
+    let mut query = world.query::<&jackdaw_scene_types::Terrain>();
+    for terrain in query.iter(world) {
+        if !terrain.data_path.is_empty() && !paths.contains(&terrain.data_path) {
+            paths.push(terrain.data_path.clone());
+        }
+    }
+
+    let store = world.resource::<crate::terrain::TerrainDataStore>();
+    let mut writes: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    for data_path in paths {
+        let Some(data) = store.get(&data_path) else {
+            continue;
+        };
+        let Some(bytes) = sidecar::encode(data) else {
+            warn!("terrain sidecar {data_path} declares more data than fits in memory");
+            continue;
+        };
+        writes.push((scene_dir.join(&data_path), bytes));
+    }
+    if writes.is_empty() {
+        return;
+    }
+
+    IoTaskPool::get()
+        .spawn(async move {
+            for (path, bytes) in writes {
+                let result = (|| -> std::io::Result<()> {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(&path, &bytes)
+                })();
+                match result {
+                    Ok(()) => info!("Terrain data written to {}", path.display()),
+                    Err(err) => warn!("Failed to write terrain data {}: {err}", path.display()),
+                }
             }
         })
         .detach();
@@ -993,6 +1065,237 @@ mod navmesh_export_tests {
             !nav_path.exists(),
             "no .nav must be written when nothing is baked: {}",
             nav_path.display()
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+/// Tests for the terrain sidecar sibling writer.
+///
+/// Same shape as `navmesh_export_tests` above and for the same reason:
+/// the write is detached onto `IoTaskPool`, so the file appears before its
+/// bytes are flushed and `exists()` alone races the writer. A successful
+/// `sidecar::decode` is the real readiness signal.
+#[cfg(test)]
+mod terrain_sidecar_tests {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use bevy::prelude::*;
+    use bevy::tasks::{AsyncComputeTaskPool, ComputeTaskPool, IoTaskPool, TaskPoolBuilder};
+    use jackdaw_terrain::{TerrainData, sidecar};
+
+    use super::{emit_bsn_scene_with_inline_assets, export_terrain_sidecars};
+    use crate::terrain::TerrainDataStore;
+
+    fn unique_tmp_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("jd_terr_{}_{label}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    /// The production write runs on `IoTaskPool`, and the poll loop below
+    /// nudges the main thread with `tick_global_task_pools_on_main_thread`,
+    /// which unwraps *all three* global pools. These tests drive a bare
+    /// `World` rather than an `App`, so nothing has initialized them.
+    /// `get_or_init` is idempotent, so this is safe alongside any other
+    /// test that already did it.
+    fn init_task_pools() {
+        ComputeTaskPool::get_or_init(|| TaskPoolBuilder::new().build());
+        AsyncComputeTaskPool::get_or_init(|| TaskPoolBuilder::new().build());
+        IoTaskPool::get_or_init(|| TaskPoolBuilder::new().build());
+    }
+
+    /// A sculpted 4x4 terrain, distinctive enough that a zeroed or
+    /// truncated round-trip fails loudly.
+    fn sculpted() -> TerrainData {
+        TerrainData {
+            resolution: 4,
+            heights: (0..16).map(|i| i as f32 * 0.5).collect(),
+            channels: vec![],
+        }
+    }
+
+    fn world_with_terrain(data_path: &str, data: TerrainData) -> World {
+        let mut world = World::new();
+        let mut store = TerrainDataStore::default();
+        store.insert(data_path.to_string(), data);
+        world.insert_resource(store);
+        world.spawn(jackdaw_scene_types::Terrain {
+            resolution: 4,
+            data_path: data_path.to_string(),
+            ..default()
+        });
+        world
+    }
+
+    /// Poll for a sidecar to appear and fully decode, bounded at ~3s.
+    fn poll_decode(path: &std::path::Path) -> Option<TerrainData> {
+        for _ in 0..300 {
+            if path.exists()
+                && let Ok(bytes) = std::fs::read(path)
+                && let Ok(data) = sidecar::decode(&bytes)
+            {
+                return Some(data);
+            }
+            bevy::tasks::tick_global_task_pools_on_main_thread();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        None
+    }
+
+    #[test]
+    fn writes_a_sidecar_that_decodes_back_to_the_sculpted_heights() {
+        init_task_pools();
+
+        let tmp = unique_tmp_dir("roundtrip");
+        let scene_path = tmp.join("zone.bsn");
+        let sidecar_path = tmp.join("zone.terrain-0.jdterrain");
+
+        let mut world = world_with_terrain("zone.terrain-0.jdterrain", sculpted());
+        export_terrain_sidecars(&mut world, &scene_path.to_string_lossy());
+
+        let decoded = poll_decode(&sidecar_path)
+            .unwrap_or_else(|| panic!("sidecar not written: {}", sidecar_path.display()));
+        assert_eq!(decoded, sculpted());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Saving twice with no edits in between must produce the same bytes,
+    /// so a sidecar can be committed and diffed like any other artifact.
+    #[test]
+    fn saving_twice_produces_identical_bytes() {
+        init_task_pools();
+
+        let tmp = unique_tmp_dir("stable");
+        let scene_path = tmp.join("zone.bsn");
+        let sidecar_path = tmp.join("zone.terrain-0.jdterrain");
+
+        let mut world = world_with_terrain("zone.terrain-0.jdterrain", sculpted());
+        export_terrain_sidecars(&mut world, &scene_path.to_string_lossy());
+        assert!(poll_decode(&sidecar_path).is_some(), "first write landed");
+        let first = std::fs::read(&sidecar_path).expect("read first write");
+
+        export_terrain_sidecars(&mut world, &scene_path.to_string_lossy());
+        // The second write overwrites in place, so poll until the bytes
+        // are decodable again rather than for the file's existence.
+        assert!(poll_decode(&sidecar_path).is_some(), "second write landed");
+        let second = std::fs::read(&sidecar_path).expect("read second write");
+
+        assert_eq!(first, second);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A scene with no terrain must not litter the project with an empty
+    /// sidecar, exactly as the navmesh writer no-ops when nothing is baked.
+    #[test]
+    fn no_sidecar_when_the_scene_has_no_terrain() {
+        init_task_pools();
+
+        let tmp = unique_tmp_dir("bare");
+        let scene_path = tmp.join("bare.bsn");
+
+        let mut world = World::new();
+        world.insert_resource(TerrainDataStore::default());
+        export_terrain_sidecars(&mut world, &scene_path.to_string_lossy());
+
+        for _ in 0..20 {
+            bevy::tasks::tick_global_task_pools_on_main_thread();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let stray = std::fs::read_dir(&tmp)
+            .expect("temp dir readable")
+            .filter_map(Result::ok)
+            .any(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|ext| ext == sidecar::EXTENSION)
+            });
+        assert!(!stray, "no sidecar may be written for a terrain-less scene");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The defect this whole design exists to fix: a 512-resolution
+    /// terrain used to write 262,144 text floats into the scene file on
+    /// every save. `.bsn` is sold as a format you can read in a `git
+    /// diff`, so the terrain's contribution has to be a handful of lines.
+    #[test]
+    fn a_512_terrain_contributes_almost_nothing_to_the_scene_text() {
+        use bevy::ecs::reflect::AppTypeRegistry;
+        use jackdaw_bsn::SceneBsnAst;
+
+        let mut world = World::new();
+        world.init_resource::<AppTypeRegistry>();
+        {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            let mut writer = registry.write();
+            writer.register::<Name>();
+            writer.register::<jackdaw_scene_types::Terrain>();
+            writer.register::<jackdaw_scene_types::SceneNodeId>();
+        }
+        world.init_resource::<SceneBsnAst>();
+
+        let mut store = TerrainDataStore::default();
+        store.insert(
+            "zone.terrain-0.jdterrain".to_string(),
+            TerrainData {
+                resolution: 512,
+                heights: vec![0.75; 512 * 512],
+                channels: vec![],
+            },
+        );
+        world.insert_resource(store);
+
+        let entity = world
+            .spawn((
+                Name::new("ground"),
+                jackdaw_scene_types::Terrain {
+                    resolution: 512,
+                    data_path: "zone.terrain-0.jdterrain".to_string(),
+                    ..default()
+                },
+            ))
+            .id();
+        crate::scene_io::register_entity_in_ast(&mut world, entity);
+
+        let text = emit_bsn_scene_with_inline_assets(&mut world, std::path::Path::new("."));
+        assert!(
+            text.contains("zone.terrain-0.jdterrain"),
+            "the scene must name the sidecar it depends on:\n{text}"
+        );
+        assert!(
+            text.len() < 2048,
+            "a 512 terrain must not bloat the scene text; got {} bytes:\n{text}",
+            text.len()
+        );
+    }
+
+    /// Store entries whose terrain is not in this scene belong to another
+    /// tab (or to an undone delete) and must not be written beside it.
+    #[test]
+    fn only_terrains_present_in_the_scene_are_written() {
+        init_task_pools();
+
+        let tmp = unique_tmp_dir("scoped");
+        let scene_path = tmp.join("zone.bsn");
+
+        let mut world = world_with_terrain("zone.terrain-0.jdterrain", sculpted());
+        world
+            .resource_mut::<TerrainDataStore>()
+            .insert("other-scene.terrain-0.jdterrain".to_string(), sculpted());
+        export_terrain_sidecars(&mut world, &scene_path.to_string_lossy());
+
+        assert!(
+            poll_decode(&tmp.join("zone.terrain-0.jdterrain")).is_some(),
+            "this scene's terrain is written"
+        );
+        assert!(
+            !tmp.join("other-scene.terrain-0.jdterrain").exists(),
+            "another scene's terrain must not be written here"
         );
 
         let _ = std::fs::remove_dir_all(&tmp);

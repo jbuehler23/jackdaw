@@ -243,10 +243,98 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) {
         }
     }
 
+    // Terrain bulk data lives beside the scene rather than in it. An
+    // explicit load means disk is the truth, so this overwrites whatever
+    // the store held for these paths.
+    import_terrain_sidecars(world, &path, SidecarImport::Reload);
+
     world.resource_mut::<SceneFilePath>().path = Some(path);
 
     // Stacks were cleared by clear_scene_entities, so dirty baseline is 0
     world.resource_mut::<SceneDirtyState>().undo_len_at_save = 0;
+}
+
+/// Whether a sidecar import may overwrite data the store already holds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SidecarImport {
+    /// Disk wins. Used when the user explicitly loads or reloads a scene.
+    Reload,
+    /// Only fill paths the store has never heard of. Used on tab
+    /// activation, where the store may be holding unsaved sculpting that
+    /// the file on disk does not have yet.
+    FillMissing,
+}
+
+/// Read each terrain's binary sidecar into the store.
+///
+/// A missing or unreadable sidecar warns and leaves the terrain flat
+/// rather than failing the load: a scene whose data file was not copied
+/// alongside it should still open, so the user can see what happened and
+/// fix it. A legacy scene carrying inline `heights` has no sidecar and is
+/// left alone here -- `ensure_terrain_data_path` drains the inline values
+/// into the store, and the next save writes them out properly.
+///
+/// Called from two places, because there are two ways a terrain reaches
+/// the world: `finish_load_scene` for an explicit open, and
+/// `scenes::swap::activate_tab` for a tab that was opened by pushing a
+/// parsed document straight onto the tab strip. Wiring only the first
+/// leaves every scene opened from the tab strip flat.
+pub(crate) fn import_terrain_sidecars(world: &mut World, scene_path: &str, mode: SidecarImport) {
+    use jackdaw_terrain::sidecar;
+
+    if world
+        .get_resource::<crate::terrain::TerrainDataStore>()
+        .is_none()
+    {
+        return;
+    }
+    let scene_dir = std::path::Path::new(scene_path)
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+
+    let mut wanted: Vec<(String, bool)> = Vec::new();
+    let mut query = world.query::<&jackdaw_scene_types::Terrain>();
+    for terrain in query.iter(world) {
+        if terrain.data_path.is_empty() {
+            continue;
+        }
+        if wanted.iter().any(|(path, _)| path == &terrain.data_path) {
+            continue;
+        }
+        wanted.push((terrain.data_path.clone(), terrain.heights.is_empty()));
+    }
+    if mode == SidecarImport::FillMissing {
+        let store = world.resource::<crate::terrain::TerrainDataStore>();
+        wanted.retain(|(path, _)| !store.contains(path));
+    }
+    if wanted.is_empty() {
+        return;
+    }
+
+    for (data_path, no_inline_heights) in wanted {
+        let full = scene_dir.join(&data_path);
+        match std::fs::read(&full) {
+            Ok(bytes) => match sidecar::decode(&bytes) {
+                Ok(mut data) => {
+                    data.normalize();
+                    world
+                        .resource_mut::<crate::terrain::TerrainDataStore>()
+                        .insert(data_path, data);
+                }
+                Err(err) => warn!("Terrain data {} is unreadable: {err}", full.display()),
+            },
+            // A legacy scene names no sidecar it ever wrote, so only a
+            // terrain that expected one is worth warning about.
+            Err(err) if no_inline_heights => {
+                warn!(
+                    "Terrain data {} is missing ({err}); loading a flat terrain",
+                    full.display()
+                );
+            }
+            Err(_) => {}
+        }
+    }
 }
 
 pub fn new_scene(world: &mut World) {
@@ -505,5 +593,153 @@ pub(super) fn poll_scene_dialog(world: &mut World) {
                 );
             }
         }
+    }
+}
+
+/// Tests for reading terrain sidecars back into the store.
+///
+/// The mode distinction is the substance here. A terrain reaches the
+/// world by two routes -- `finish_load_scene` for an explicit open, and
+/// `scenes::swap::activate_tab` for a tab pushed straight onto the strip
+/// by `scene_open_system` -- and only the first is an instruction to take
+/// disk as the truth. Wiring the second as a reload would silently throw
+/// away unsaved sculpting on every tab switch.
+#[cfg(test)]
+mod terrain_sidecar_import_tests {
+    use std::path::PathBuf;
+
+    use bevy::prelude::*;
+    use jackdaw_terrain::{TerrainData, sidecar};
+
+    use super::{SidecarImport, import_terrain_sidecars};
+    use crate::terrain::TerrainDataStore;
+
+    fn unique_tmp_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("jd_terrin_{}_{label}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn on_disk() -> TerrainData {
+        TerrainData {
+            resolution: 4,
+            heights: (0..16).map(|i| i as f32).collect(),
+            channels: vec![],
+        }
+    }
+
+    /// A world with one terrain naming `data_path`, and a sidecar for it
+    /// written beside `zone.bsn` in a fresh temp dir.
+    fn world_and_scene(label: &str, data_path: &str) -> (World, PathBuf) {
+        let tmp = unique_tmp_dir(label);
+        let bytes = sidecar::encode(&on_disk()).expect("encodes");
+        std::fs::write(tmp.join(data_path), bytes).expect("write sidecar");
+
+        let mut world = World::new();
+        world.insert_resource(TerrainDataStore::default());
+        world.spawn(jackdaw_scene_types::Terrain {
+            resolution: 4,
+            data_path: data_path.to_string(),
+            ..default()
+        });
+        (world, tmp.join("zone.bsn"))
+    }
+
+    #[test]
+    fn a_terrain_with_no_stored_data_is_hydrated_from_its_sidecar() {
+        let (mut world, scene) = world_and_scene("fill", "zone.terrain-0.jdterrain");
+        import_terrain_sidecars(
+            &mut world,
+            &scene.to_string_lossy(),
+            SidecarImport::FillMissing,
+        );
+        assert_eq!(
+            world
+                .resource::<TerrainDataStore>()
+                .heights("zone.terrain-0.jdterrain"),
+            on_disk().heights.as_slice(),
+        );
+        let _ = std::fs::remove_dir_all(scene.parent().expect("temp dir"));
+    }
+
+    /// The regression this mode exists for: sculpt, switch tabs without
+    /// saving, switch back. The store is the truth, not the older file.
+    #[test]
+    fn fill_missing_leaves_unsaved_edits_alone() {
+        let (mut world, scene) = world_and_scene("unsaved", "zone.terrain-0.jdterrain");
+        let unsaved = TerrainData {
+            resolution: 4,
+            heights: vec![99.0; 16],
+            channels: vec![],
+        };
+        world
+            .resource_mut::<TerrainDataStore>()
+            .insert("zone.terrain-0.jdterrain".to_string(), unsaved);
+
+        import_terrain_sidecars(
+            &mut world,
+            &scene.to_string_lossy(),
+            SidecarImport::FillMissing,
+        );
+        assert_eq!(
+            world
+                .resource::<TerrainDataStore>()
+                .heights("zone.terrain-0.jdterrain"),
+            vec![99.0; 16].as_slice(),
+            "a tab swap must not re-read over unsaved sculpting",
+        );
+        let _ = std::fs::remove_dir_all(scene.parent().expect("temp dir"));
+    }
+
+    /// An explicit open, by contrast, is exactly a request for what is on
+    /// disk.
+    #[test]
+    fn reload_overwrites_what_the_store_was_holding() {
+        let (mut world, scene) = world_and_scene("reload", "zone.terrain-0.jdterrain");
+        world.resource_mut::<TerrainDataStore>().insert(
+            "zone.terrain-0.jdterrain".to_string(),
+            TerrainData {
+                resolution: 4,
+                heights: vec![99.0; 16],
+                channels: vec![],
+            },
+        );
+
+        import_terrain_sidecars(&mut world, &scene.to_string_lossy(), SidecarImport::Reload);
+        assert_eq!(
+            world
+                .resource::<TerrainDataStore>()
+                .heights("zone.terrain-0.jdterrain"),
+            on_disk().heights.as_slice(),
+        );
+        let _ = std::fs::remove_dir_all(scene.parent().expect("temp dir"));
+    }
+
+    /// A scene whose sidecar was never copied alongside it opens flat with
+    /// a warning rather than failing.
+    #[test]
+    fn a_missing_sidecar_loads_flat_rather_than_erroring() {
+        let tmp = unique_tmp_dir("missing");
+        let mut world = World::new();
+        world.insert_resource(TerrainDataStore::default());
+        world.spawn(jackdaw_scene_types::Terrain {
+            resolution: 4,
+            data_path: "gone.jdterrain".to_string(),
+            ..default()
+        });
+
+        import_terrain_sidecars(
+            &mut world,
+            &tmp.join("zone.bsn").to_string_lossy(),
+            SidecarImport::Reload,
+        );
+        assert!(
+            world
+                .resource::<TerrainDataStore>()
+                .heights("gone.jdterrain")
+                .is_empty(),
+            "a missing sidecar leaves the terrain flat",
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

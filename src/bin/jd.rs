@@ -25,6 +25,7 @@ fn main() -> ExitCode {
         Some("import") => exit(jackdaw::scaffold::run_import_cli(&args[1..])),
         Some("open") => exit(jackdaw::scaffold::run_open_cli(&args[1..])),
         Some("upgrade") => exit(jackdaw::scaffold::run_upgrade_cli(&args[1..])),
+        Some("export-terrain") => jackdaw::terrain::export::run_export_terrain_cli(&args[1..]),
         Some("extension") => extension_command(&args[1..]),
         Some("--help" | "-h" | "help") | None => {
             print_usage();
@@ -105,6 +106,13 @@ const SPECS: &[CommandSpec] = &[
         values: &["--project", "-p"],
         usage: "jd doctor [--project <path>]",
     },
+    CommandSpec {
+        name: "export-terrain",
+        flags: &["--raw-heights"],
+        values: &["--out", "--cell-size", "--elevation-step"],
+        usage: "jd export-terrain <scene.bsn> --out <dir> [--cell-size <metres>] \
+                [--elevation-step <metres>] [--raw-heights]",
+    },
 ];
 
 enum OptionCheck {
@@ -184,6 +192,11 @@ fn print_usage() {
          run [--project <path>]     Build and run the game\n  \
          setup                      Prepare the pinned SDK\n  \
          doctor [--project <path>]  Check build prerequisites and a project's setup\n  \
+         export-terrain <scene.bsn> --out <dir>\n    \
+                                    Export a terrain's heightmap/channels/placements\n    \
+           --cell-size <m>            declare the XZ quantization cell size\n    \
+           --elevation-step <m>       declare the elevation quantization step\n    \
+           --raw-heights              also write heights.f32 (raw float heights)\n  \
          extension <command>        Package or manage signed extensions\n\n\
          Start here: `jd new my-game` then `jd open my-game`, or `jd import .` in an \
          existing Bevy project."

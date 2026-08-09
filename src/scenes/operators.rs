@@ -390,6 +390,11 @@ pub fn scene_save_all_system(world: &mut World) {
         }
         match std::fs::write(&target_path, &contents) {
             Ok(()) => {
+                // Save All inlines its own emit + write instead of going
+                // through `save_scene_inner`, so it skips every sibling
+                // export hanging off that path. Terrain data has to be
+                // written here too or a Save All silently drops it.
+                crate::scene_io::export_terrain_sidecars(world, &path_str);
                 let depth = world
                     .resource::<crate::commands::CommandHistory>()
                     .undo_stack
