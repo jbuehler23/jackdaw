@@ -24,6 +24,7 @@
 
 use std::path::Path;
 
+use jackdaw_env::rust_env_command;
 use proc_macro2::LineColumn;
 use syn::spanned::Spanned;
 
@@ -145,9 +146,9 @@ fn unreflected_components(items: &[String]) -> Vec<String> {
 /// migration that is correct but plainly formatted still beats none.
 fn rustfmt(source: String) -> String {
     use std::io::Write as _;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
-    let Ok(mut child) = Command::new("rustfmt")
+    let Ok(mut child) = rust_env_command("rustfmt")
         .args(["--emit", "stdout", "--edition", "2024", "--quiet"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

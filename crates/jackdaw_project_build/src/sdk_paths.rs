@@ -22,8 +22,9 @@
 //!    `project_build::plan`.
 
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::OnceLock;
+
+use jackdaw_env::rust_env_command;
 
 /// Where the SDK a build is using came from.
 ///
@@ -387,7 +388,7 @@ fn dev_sdk_superseded(dev: &SdkPaths, triple: &str) -> bool {
 pub fn host_triple() -> &'static str {
     static TRIPLE: OnceLock<String> = OnceLock::new();
     TRIPLE.get_or_init(|| {
-        let output = Command::new("rustc")
+        let output = rust_env_command("rustc")
             .arg("-vV")
             .output()
             .expect("rustc -vV must run; the editor requires a Rust toolchain");

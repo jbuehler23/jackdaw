@@ -186,6 +186,7 @@ winit.workspace = true
 image.workspace = true
 time.workspace = true
 jackdaw_localization = { version = "0.19.0", path = "crates/jackdaw_localization" }
+jackdaw_env.workspace = true
 webbrowser.workspace = true
 
 # Powers the Linux `PR_SET_PDEATHSIG` hook that takes PIE game processes down
@@ -268,6 +269,7 @@ jackdaw_loader = { version = "0.19.0", path = "crates/jackdaw_loader" }
 jackdaw_sdk = { version = "0.19.0", path = "crates/jackdaw_sdk" }
 jackdaw_rustc_wrapper = { version = "0.19.0", path = "crates/jackdaw_rustc_wrapper" }
 jackdaw_cli_internal = { version = "0.19.0", path = "crates/jackdaw_cli" }
+jackdaw_env = { version = "0.19.0", path = "crates/jackdaw_env" }
 bevy_enhanced_input = "0.26"
 rfd = "0.15"
 bevy_rerecast = { version = "0.5.0", default-features = true }

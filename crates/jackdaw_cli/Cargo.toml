@@ -14,6 +14,7 @@ embed-recipe = ["jackdaw_project_build/embed-recipe"]
 
 [dependencies]
 jackdaw_project_build.workspace = true
+jackdaw_env.workspace = true
 jackdaw_schema.workspace = true
 dunce = "1.0.5"
 

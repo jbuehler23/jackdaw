@@ -12,12 +12,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use jackdaw_env::rust_env_command;
 use serde::{Deserialize, Serialize};
 
 /// The rustup toolchain the SDK is pinned to. Must match the embedded
 /// recipe's `rust-toolchain.toml`: the rmeta trick requires project
 /// builds and the SDK to share an exact rustc.
-pub const SDK_TOOLCHAIN_CHANNEL: &str = "nightly-2026-03-05";
+pub const SDK_TOOLCHAIN_CHANNEL: &str = jackdaw_env::RUSTUP_TOOLCHAIN;
 
 /// The jackdaw data dir: `$XDG_DATA_HOME/jackdaw` when set to an absolute
 /// path, else `~/.jackdaw`. `None` when no home directory resolves.
@@ -244,7 +245,7 @@ pub fn check_prerequisites() -> Vec<Prereq> {
     // demand. Report its state so `doctor` can preview whether the first
     // build pays for a toolchain download.
     if rustup.is_some() {
-        let installed = Command::new("rustup")
+        let installed = rust_env_command("rustup")
             .args(["toolchain", "list"])
             .output()
             .ok()
@@ -267,7 +268,7 @@ pub fn check_prerequisites() -> Vec<Prereq> {
 /// First line of `<cmd> <arg>` stdout, or `None` if the tool is absent or
 /// exits non-zero.
 fn tool_version(cmd: &str, arg: &str) -> Option<String> {
-    let output = Command::new(cmd).arg(arg).output().ok()?;
+    let output = rust_env_command(cmd).arg(arg).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -520,8 +521,7 @@ fn run_cargo(
 ) -> Result<(), String> {
     use std::io::BufRead;
 
-    let mut child = Command::new("cargo")
-        .arg(format!("+{SDK_TOOLCHAIN_CHANNEL}"))
+    let mut child = rust_env_command("cargo")
         .args(args)
         .arg("--message-format=json-render-diagnostics")
         .env("CARGO_INCREMENTAL", "0")
@@ -587,8 +587,7 @@ fn report_cargo_line(line: &str, done: &mut u32, report: &mut impl FnMut(SetupPr
 /// denominator for the progress bar; `None` on any failure, and the UI
 /// then shows a running count instead of a filled bar.
 fn estimate_units(build_dir: &Path, triple: &str) -> Option<u32> {
-    let output = Command::new("cargo")
-        .arg(format!("+{SDK_TOOLCHAIN_CHANNEL}"))
+    let output = rust_env_command("cargo")
         .args([
             "tree",
             "-p",

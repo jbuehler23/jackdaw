@@ -21,8 +21,9 @@
 )]
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 
+use jackdaw_env::rust_env_command;
 use jackdaw_project_build::bootstrap::{self, SetupProgress};
 use jackdaw_project_build::{BuildEvent, build_project_binary, sdk_paths};
 use jackdaw_schema::{read_schema, schema_path};
@@ -366,7 +367,7 @@ fn report_project(root: &Path) -> bool {
 /// find the package, this one does the version solving, which is where
 /// an unpublished or mistyped requirement surfaces.
 fn resolve_dependencies(root: &Path) -> Result<(), String> {
-    let output = Command::new("cargo")
+    let output = rust_env_command("cargo")
         .current_dir(root)
         .args(["metadata", "--format-version", "1"])
         .output()
@@ -407,7 +408,11 @@ fn cmd_run(args: &[String]) -> ExitCode {
         return built;
     }
     println!("jackdaw run: launching {}", root.display());
-    match Command::new("cargo").arg("run").current_dir(&root).status() {
+    match rust_env_command("cargo")
+        .arg("run")
+        .current_dir(&root)
+        .status()
+    {
         Ok(status) if status.success() => ExitCode::SUCCESS,
         Ok(status) => ExitCode::from(u8::try_from(status.code().unwrap_or(1)).unwrap_or(1)),
         Err(err) => {

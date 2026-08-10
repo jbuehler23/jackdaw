@@ -13,7 +13,8 @@
 //! toolchain-mismatch signal.
 
 use std::path::Path;
-use std::process::Command;
+
+use jackdaw_env::rust_env_command;
 
 #[derive(Debug)]
 pub enum LinkageError {
@@ -66,7 +67,7 @@ pub fn verify_linkage(
 }
 
 fn metadata_dump(artifact: &Path, toolchain: Option<&str>) -> Result<String, LinkageError> {
-    let mut cmd = Command::new("rustc");
+    let mut cmd = rust_env_command("rustc");
     // The rustup proxy selects the pinned toolchain from this variable;
     // a real rustc binary ignores it.
     if let Some(toolchain) = toolchain {

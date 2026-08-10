@@ -24,7 +24,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use jackdaw_env::rust_env_command;
 
 use crate::sdk_paths::SdkPaths;
 
@@ -130,7 +131,7 @@ impl SdkManifest {
         // Capture stdout (the JSON artifact stream) but let cargo's own
         // progress reach the terminal, so this step never looks hung on a
         // cold cache.
-        let child = Command::new("cargo")
+        let child = rust_env_command("cargo")
             .arg("build")
             .args(build_args)
             .args(["--target", &sdk.triple, "--message-format=json"])
@@ -606,7 +607,7 @@ fn sdk_runtime_closure(
     workspace_root: &Path,
     triple: &str,
 ) -> Result<BTreeSet<(String, String)>, PlanError> {
-    let output = Command::new("cargo")
+    let output = rust_env_command("cargo")
         .args([
             "tree",
             "-p",
@@ -638,7 +639,7 @@ fn sdk_runtime_closure(
 }
 
 fn cargo_metadata(dir: &Path) -> Result<serde_json::Value, PlanError> {
-    let output = Command::new("cargo")
+    let output = rust_env_command("cargo")
         .args(["metadata", "--format-version", "1"])
         .current_dir(dir)
         .output()?;

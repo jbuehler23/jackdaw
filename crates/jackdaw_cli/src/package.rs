@@ -27,6 +27,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+use jackdaw_env::rust_env_command;
 use jackdaw_project_build::plan::SdkManifest;
 use jackdaw_project_build::sdk_paths::SdkPaths;
 
@@ -288,7 +289,7 @@ fn run_tool(cmd: &mut Command) -> Result<(), String> {
 /// The pinned toolchain's target lib dir, where the dynamic `libstd`
 /// lives. Uses the SDK's channel so it matches what the dylibs link.
 fn target_libdir(sdk: &SdkPaths) -> Option<PathBuf> {
-    let mut cmd = Command::new("rustc");
+    let mut cmd = rust_env_command("rustc");
     if let Some(channel) = &sdk.toolchain {
         cmd.arg(format!("+{channel}"));
     }
@@ -308,7 +309,7 @@ fn target_libdir(sdk: &SdkPaths) -> Option<PathBuf> {
 /// obsolete ABI beside the one the SDK imports. Rust metadata names the exact
 /// dependency crate identifier, which is also the dylib's hashed basename.
 fn copy_rust_dependency_dylib(sdk: &SdkPaths, to: &Path, crate_name: &str) -> Result<(), String> {
-    let mut cmd = Command::new("rustc");
+    let mut cmd = rust_env_command("rustc");
     if let Some(channel) = &sdk.toolchain {
         cmd.arg(format!("+{channel}"));
     }
