@@ -10,6 +10,12 @@
 //! copies of closure crates), so the plan is a `consumer:alias=artifact`
 //! line per edge, consumed by `jackdaw-rustc-wrapper`.
 //!
+//! The plan also names the *shadow* crates: units cargo schedules whose
+//! output every consumer redirects past, which the wrapper therefore
+//! compiles untouched. That set is a walk over the same graph, not a
+//! reading of the manifest, because a shadow may only depend on
+//! shadows. See `shadow_names`.
+//!
 //! Before planning, the extension's lockfile is aligned: closure crates
 //! resolved at a semver-compatible but different version get pinned to
 //! the SDK's exact version. The lockfile in question is the generated
@@ -396,6 +402,21 @@ pub fn write_plan(
     out_path: &Path,
 ) -> Result<usize, PlanError> {
     let metadata = cargo_metadata(build_root)?;
+    let (contents, edges) = plan_contents(&metadata, manifest, deps_dir)?;
+    if std::fs::read(out_path).ok().as_deref() != Some(contents.as_slice()) {
+        std::fs::write(out_path, contents)?;
+    }
+    Ok(edges)
+}
+
+/// The plan's bytes for one `cargo metadata` document, and the edge
+/// count. Separated from the file handling so the classification can be
+/// exercised against a hand-built graph.
+fn plan_contents(
+    metadata: &serde_json::Value,
+    manifest: &SdkManifest,
+    deps_dir: &Path,
+) -> Result<(Vec<u8>, usize), PlanError> {
     let mut contents = Vec::new();
     let mut edges = 0;
     let mut absent: BTreeSet<String> = BTreeSet::new();
@@ -451,21 +472,126 @@ pub fn write_plan(
             absent.into_iter().collect::<Vec<_>>().join(", ")
         )));
     }
-    // Every package the manifest holds an artifact for, so the wrapper
-    // can recognise a plan-replaced crate's own compile by PACKAGE name.
-    // Deriving that set from the edge aliases is wrong for renamed
-    // dependencies: rustix consumes `errno` as `libc_errno`, so an
-    // alias-keyed set sent rustix's shadow unit vanilla while errno's
-    // stayed rewritten, and the two disagreed about which `libc` the
-    // universe contains. rustc reported it as a bare "can't find crate
-    // for errno" on both platforms.
-    for (name, _version) in manifest.names() {
+    // The shadow set, by PACKAGE name, so the wrapper can recognise a
+    // shadow's own compile. Deriving it from the edge aliases is wrong
+    // for renamed dependencies: rustix consumes `errno` as `libc_errno`,
+    // so an alias-keyed set sent rustix's shadow unit vanilla while
+    // errno's stayed rewritten, and the two disagreed about which `libc`
+    // the universe contains. rustc reported it as a bare "can't find
+    // crate for errno" on both platforms.
+    for name in shadow_names(metadata, manifest) {
         writeln!(contents, "replaced:{name}")?;
     }
-    if std::fs::read(out_path).ok().as_deref() != Some(contents.as_slice()) {
-        std::fs::write(out_path, contents)?;
+    Ok((contents, edges))
+}
+
+/// The packages the wrapper compiles untouched: the crates every
+/// consumer's edge redirects past, and everything those crates link.
+///
+/// A shadow unit is compiled with nothing rewritten and without
+/// `-L dependency=$JACKDAW_SDK_DEPS`, so the only artifacts it can
+/// resolve are the project's own. That holds together for exactly as
+/// long as the set is closed downward: a shadow may only link shadows.
+/// It was not closed. The set was the SDK manifest's names, and the
+/// manifest records a crate as the SDK's own build of it resolved -
+/// this project asked `tokio` for `net` and `signal`, features the
+/// editor never needed, so the project's tokio gained `socket2` and
+/// `signal-hook-registry`, which no manifest entry names. Those two
+/// compiled with their `libc` edge redirected onto the SDK's while
+/// tokio's own shadow compiled against the project's, and tokio's
+/// single rustc invocation needed both. E0460 and E0463, against
+/// crates the user never mentioned.
+///
+/// Closing the set downward, rather than dropping tokio out of it, is
+/// what ends that failure. Only a shadow is blind to the SDK's deps
+/// dir, so a dependency of a shadow that got redirected is a candidate
+/// nothing can replace and rustc reports a flat `can't find crate`.
+/// Growing the set cannot produce one of those; dropping names does,
+/// which is how the first attempt at this took `glam` and
+/// `bevy_platform` down over `approx` and `hashbrown`.
+///
+/// Growth is not free, though, and the residual has a name: a
+/// **redirected-consumer straddle**. Adding a crate here also takes it
+/// off the SDK's resolution of its own dependencies, so a redirected
+/// unit that links it now sees the project's copy of every covered
+/// crate underneath it as well as the SDK's. Two instances of one
+/// crate, reported as a trait or type mismatch rather than a missing
+/// one, because a redirected unit carries both deps dirs and can find
+/// both. `insta` already fails this way over `toml_edit` and
+/// `serde_core`; this walk adds fourteen more sites of that shape to
+/// one real project's graph, five of them reachable on the host it was
+/// resolved for and the rest waiting on the platform they belong to.
+///
+/// Neither direction is safe, and this is only the safer one: a
+/// straddling crate made redirected instead just moves the failure
+/// onto its shadow consumers, where it is fatal rather than
+/// conditional. What actually retires the class is not letting a
+/// manifest name resolve at two versions in the first place. Do not
+/// simplify this walk on the belief that growth is proven harmless.
+///
+/// Only target-side edges are followed. Build dependencies and
+/// proc-macro crates compile as host units, which the wrapper passes
+/// through untouched whatever the plan says.
+fn shadow_names(metadata: &serde_json::Value, manifest: &SdkManifest) -> BTreeSet<String> {
+    let empty = Vec::new();
+    let host_only: BTreeSet<&str> = metadata["packages"]
+        .as_array()
+        .unwrap_or(&empty)
+        .iter()
+        .filter(|package| {
+            package["targets"]
+                .as_array()
+                .unwrap_or(&empty)
+                .iter()
+                .any(|target| {
+                    target["kind"]
+                        .as_array()
+                        .unwrap_or(&empty)
+                        .iter()
+                        .any(|kind| kind == "proc-macro")
+                })
+        })
+        .filter_map(|package| package["id"].as_str())
+        .collect();
+
+    // Keyed by name, not by package: the wrapper only learns the name of
+    // the crate it is compiling, so a name held at two versions answers
+    // once, and both versions' dependencies have to be in the set for
+    // that one answer to be safe.
+    let mut links: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for node in metadata["resolve"]["nodes"].as_array().unwrap_or(&empty) {
+        let Some(consumer) = node["id"].as_str().and_then(package_id_name) else {
+            continue;
+        };
+        let linked = links.entry(consumer).or_default();
+        for dep in node["deps"].as_array().unwrap_or(&empty) {
+            let target_side = dep["dep_kinds"]
+                .as_array()
+                .unwrap_or(&empty)
+                .iter()
+                .any(|kind| kind["kind"].is_null());
+            let Some(pkg) = dep["pkg"].as_str() else {
+                continue;
+            };
+            if !target_side || host_only.contains(pkg) {
+                continue;
+            }
+            if let Some(name) = package_id_name(pkg) {
+                linked.insert(name);
+            }
+        }
     }
-    Ok(edges)
+
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    let mut pending: Vec<String> = manifest.names().map(|(name, _)| name.clone()).collect();
+    while let Some(name) = pending.pop() {
+        let linked = links.get(&name);
+        if !names.insert(name) {
+            continue;
+        }
+        pending.extend(linked.into_iter().flatten().cloned());
+    }
+    names
 }
 
 /// The SDK dylib's runtime dependency closure: `(name, version)`
@@ -603,6 +729,232 @@ mod tests {
             PathBuf::from(resolve_artifact("libglam-abc.rlib", &deps)),
             deps.join("libglam-abc.rlib")
         );
+    }
+
+    fn package_id(spec: &str) -> String {
+        format!("registry+https://github.com/rust-lang/crates.io-index#{spec}")
+    }
+
+    /// A `cargo metadata` document over `nodes`, each `("name@version",
+    /// deps)` with deps spelled the same way. The first node is the
+    /// workspace member, as the generated shim is of its own workspace.
+    /// A name in `proc_macros` is reported the way cargo reports a
+    /// proc-macro package.
+    fn metadata(nodes: &[(&str, &[&str])], proc_macros: &[&str]) -> serde_json::Value {
+        let packages: Vec<_> = nodes
+            .iter()
+            .map(|(spec, _)| {
+                let name = spec.split('@').next().unwrap_or(spec);
+                let kind = if proc_macros.contains(&name) {
+                    "proc-macro"
+                } else {
+                    "lib"
+                };
+                serde_json::json!({ "id": package_id(spec), "targets": [{ "kind": [kind] }] })
+            })
+            .collect();
+        let resolved: Vec<_> = nodes
+            .iter()
+            .map(|(spec, deps)| {
+                let deps: Vec<_> = deps
+                    .iter()
+                    .map(|dep| {
+                        serde_json::json!({
+                            "name": dep.split('@').next().unwrap_or(dep).replace('-', "_"),
+                            "pkg": package_id(dep),
+                            "dep_kinds": [{ "kind": null, "target": null }],
+                        })
+                    })
+                    .collect();
+                serde_json::json!({ "id": package_id(spec), "deps": deps })
+            })
+            .collect();
+        serde_json::json!({
+            "packages": packages,
+            "workspace_members": [package_id(nodes[0].0)],
+            "resolve": { "nodes": resolved, "root": package_id(nodes[0].0) },
+        })
+    }
+
+    fn sdk_manifest(entries: &[&str]) -> SdkManifest {
+        let artifacts = entries
+            .iter()
+            .map(|spec| {
+                let (name, version) = spec.split_once('@').expect("name@version");
+                (
+                    (name.to_string(), version.to_string()),
+                    format!("lib{name}-abc.rlib"),
+                )
+            })
+            .collect();
+        SdkManifest { artifacts }
+    }
+
+    fn shadows(metadata: &serde_json::Value, manifest: &SdkManifest) -> Vec<String> {
+        shadow_names(metadata, manifest).into_iter().collect()
+    }
+
+    /// The E0460/E0463 failure this walk exists to prevent, in the shape
+    /// it was reported in: the SDK holds `tokio`, but the project asks
+    /// tokio for `net` and `signal`, so tokio pulls two crates the SDK's
+    /// narrower tokio never had. Left out of the shadow set, those two
+    /// compile with their `libc` edge redirected onto the SDK's while
+    /// tokio's own shadow compiles against the project's, and tokio's
+    /// single rustc invocation needs both.
+    #[test]
+    fn a_shadow_crates_uncovered_dependencies_are_shadows_too() {
+        let graph = metadata(
+            &[
+                ("shim@0.0.0", &["tokio@1.52.0"]),
+                (
+                    "tokio@1.52.0",
+                    &[
+                        "libc@0.2.185",
+                        "signal-hook-registry@1.4.8",
+                        "socket2@0.6.4",
+                    ],
+                ),
+                ("signal-hook-registry@1.4.8", &["libc@0.2.185"]),
+                ("socket2@0.6.4", &["libc@0.2.185"]),
+                ("libc@0.2.185", &[]),
+            ],
+            &[],
+        );
+        let manifest = sdk_manifest(&["tokio@1.52.0", "libc@0.2.185"]);
+        assert_eq!(
+            shadows(&graph, &manifest),
+            ["libc", "signal_hook_registry", "socket2", "tokio"],
+            "a shadow's own dependencies have to be shadows for its compile to resolve"
+        );
+    }
+
+    /// The wrapper knows only the name of the crate it is compiling, so
+    /// a manifest entry speaks for every version of that name in the
+    /// graph, including one the SDK does not hold. That is survivable -
+    /// a consumer of the unheld version redirects nowhere and links the
+    /// vanilla artifact - but only if the closing walk follows that
+    /// version's dependencies too.
+    #[test]
+    fn a_version_the_sdk_does_not_hold_still_brings_its_dependencies_in() {
+        let graph = metadata(
+            &[
+                ("shim@0.0.0", &["my-game@0.1.0"]),
+                ("my-game@0.1.0", &["tokio@1.53.1"]),
+                ("tokio@1.53.1", &["libc@0.2.185", "socket2@0.6.4"]),
+                ("socket2@0.6.4", &["libc@0.2.185"]),
+                ("libc@0.2.185", &[]),
+            ],
+            &[],
+        );
+        let manifest = sdk_manifest(&["tokio@1.52.0", "libc@0.2.185"]);
+        assert_eq!(shadows(&graph, &manifest), ["libc", "socket2", "tokio"]);
+    }
+
+    /// The SDK's whole closure has to stay shared, and a closure that is
+    /// entirely covered adds nothing to the set. A fix that narrowed it
+    /// instead would take bevy out, and every crate that redirects onto
+    /// the SDK's bevy today would compile its own.
+    #[test]
+    fn the_sdks_own_closure_stays_shadowed() {
+        let graph = metadata(
+            &[
+                ("shim@0.0.0", &["bevy@0.19.0", "my-game@0.1.0"]),
+                ("my-game@0.1.0", &["bevy@0.19.0"]),
+                ("bevy@0.19.0", &["bevy_ecs@0.19.0", "glam@0.32.1"]),
+                ("bevy_ecs@0.19.0", &["glam@0.32.1"]),
+                ("glam@0.32.1", &[]),
+            ],
+            &[],
+        );
+        let manifest = sdk_manifest(&["bevy@0.19.0", "bevy_ecs@0.19.0", "glam@0.32.1"]);
+        assert_eq!(shadows(&graph, &manifest), ["bevy", "bevy_ecs", "glam"]);
+    }
+
+    /// A crate the project links directly and a shadow links too has to
+    /// be a shadow. The redirected consumer can still resolve it - its
+    /// search path holds the project's deps dir as well as the SDK's -
+    /// where the shadow consumer has no way to reach a redirected
+    /// artifact at all, and reports it as `can't find crate`.
+    #[test]
+    fn a_crate_both_worlds_link_is_left_to_the_shadow_side() {
+        let graph = metadata(
+            &[
+                ("shim@0.0.0", &["my-game@0.1.0"]),
+                ("my-game@0.1.0", &["socket2@0.6.4", "tokio@1.52.0"]),
+                ("tokio@1.52.0", &["socket2@0.6.4"]),
+                ("socket2@0.6.4", &["libc@0.2.185"]),
+                ("libc@0.2.185", &[]),
+            ],
+            &[],
+        );
+        let manifest = sdk_manifest(&["tokio@1.52.0", "libc@0.2.185"]);
+        assert_eq!(shadows(&graph, &manifest), ["libc", "socket2", "tokio"]);
+    }
+
+    /// Proc-macro crates and build dependencies compile as host units,
+    /// which the wrapper passes through whatever the plan says. Walking
+    /// into them would grow the set by a chain of crates whose answer
+    /// cannot matter.
+    #[test]
+    fn host_side_edges_are_not_followed() {
+        let mut graph = metadata(
+            &[
+                ("shim@0.0.0", &["my-game@0.1.0"]),
+                ("my-game@0.1.0", &["serde@1.0.228"]),
+                ("serde@1.0.228", &["serde_derive@1.0.228"]),
+                ("serde_derive@1.0.228", &["syn@2.0.117"]),
+                ("syn@2.0.117", &[]),
+                ("cc@1.2.60", &[]),
+            ],
+            &["serde_derive"],
+        );
+        // serde builds `cc`, and derives through a proc macro.
+        graph["resolve"]["nodes"][2]["deps"] = serde_json::json!([
+            { "name": "serde_derive", "pkg": package_id("serde_derive@1.0.228"),
+              "dep_kinds": [{ "kind": null, "target": null }] },
+            { "name": "cc", "pkg": package_id("cc@1.2.60"),
+              "dep_kinds": [{ "kind": "build", "target": null }] },
+        ]);
+        let manifest = sdk_manifest(&["serde@1.0.228"]);
+        assert_eq!(shadows(&graph, &manifest), ["serde"]);
+    }
+
+    /// Both halves of the plan, over one graph: an edge line per covered
+    /// dependency edge and the shadow set under it. The `replaced:`
+    /// lines were once one per manifest entry regardless of the graph,
+    /// which is what let a crate the SDK does not hold be treated as
+    /// one.
+    #[test]
+    fn the_plan_pairs_covered_edges_with_the_shadow_set() {
+        let deps_dir = std::env::temp_dir().join(format!("jackdaw_plan_{}", std::process::id()));
+        std::fs::create_dir_all(&deps_dir).unwrap();
+        std::fs::write(deps_dir.join("libglam-abc.rlib"), b"rlib").unwrap();
+
+        let graph = metadata(
+            &[
+                ("shim@0.0.0", &["my-game@0.1.0"]),
+                ("my-game@0.1.0", &["glam@0.32.1"]),
+                ("glam@0.32.1", &[]),
+            ],
+            &[],
+        );
+        let manifest = sdk_manifest(&["glam@0.32.1"]);
+        let (contents, edges) = plan_contents(&graph, &manifest, &deps_dir).unwrap();
+        let contents = String::from_utf8(contents).unwrap();
+
+        assert_eq!(edges, 1, "{contents}");
+        assert!(
+            contents.contains(&format!(
+                "my_game@0.1.0:glam={}\n",
+                deps_dir.join("libglam-abc.rlib").display()
+            )),
+            "{contents}"
+        );
+        assert!(contents.contains("replaced:glam\n"), "{contents}");
+        assert!(!contents.contains("replaced:my_game"), "{contents}");
+        assert!(!contents.contains("replaced:shim"), "{contents}");
+
+        let _ = std::fs::remove_dir_all(&deps_dir);
     }
 
     /// rustc runs from the shim's directory, so a relative result would
