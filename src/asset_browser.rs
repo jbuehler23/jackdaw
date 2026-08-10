@@ -892,8 +892,6 @@ fn refresh_browser_on_change(
     }
 
     // Each path component is a clickable button that navigates to that directory.
-    let current_dir = state.current_directory.to_string_lossy().to_string();
-
     commands
         .spawn((
             Node {
@@ -906,17 +904,32 @@ fn refresh_browser_on_change(
             ChildOf(breadcrumb_entity),
         ))
         .with_children(|parent| {
-            // Split the absolute path into components and build up cumulative paths
-            let components: Vec<&str> = current_dir
-                .split(std::path::MAIN_SEPARATOR)
-                .filter(|s| !s.is_empty())
-                .collect();
+            let mut ancestors: Vec<_> = state.current_directory.ancestors().collect();
+            ancestors.reverse();
 
-            let mut cumulative = String::new();
-            for (i, component) in components.iter().enumerate() {
-                cumulative += std::path::MAIN_SEPARATOR_STR;
-                cumulative += component;
-                let nav_path = cumulative.clone();
+            for (i, path) in ancestors.iter().enumerate() {
+                let component = path
+                    .file_name()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| {
+                        // Ok so we don't have a filename. This *should* only happen for the root path (e.g. /, E:\).
+                        if i != 0 {
+                            return "?".to_owned();
+                        }
+
+                        // Use the components() API to do a decent job.
+                        match path.components().next() {
+                            // Unix-style root path.
+                            // Replace with a unique string so that it's nicely clickable.
+                            Some(std::path::Component::RootDir) => "Root".to_owned(),
+                            // Anything else. Unless something went wrong, this should only be Windows prefixes (E:, \\foo\bar, etc).
+                            // We format it like this to avoid the backslash after the prefix (which `path` has).
+                            Some(comp) => comp.as_os_str().to_string_lossy().into_owned(),
+                            None => "?".to_owned(),
+                        }
+                    });
+
+                let path = path.to_string_lossy().into_owned();
 
                 // Separator (skip before first)
                 if i > 0 {
@@ -934,7 +947,7 @@ fn refresh_browser_on_change(
                 parent
                     .spawn((
                         Button,
-                        Text::new(*component),
+                        Text::new(component),
                         Node {
                             border_radius: BorderRadius::all(Val::Px(3.0)),
                             padding: UiRect::axes(Val::Px(2.0), Val::Px(1.0)),
@@ -948,7 +961,7 @@ fn refresh_browser_on_change(
                     ))
                     .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                         commands.trigger(FileItemDoubleClicked {
-                            path: nav_path.clone(),
+                            path: path.clone(),
                             is_directory: true,
                         });
                     })
