@@ -11,7 +11,7 @@
 [![Discord](https://img.shields.io/discord/1486394042563428388.svg?label=&logo=discord&logoColor=ffffff&color=7389D8&labelColor=6A7EC2)](https://discord.gg/sDUPhWtGSM)
 
 A 3D editor built for and with [Bevy](https://bevyengine.org/).
-Very early in dev, expect bugs and changes! A BSN-friendly branch exists on the bsn-editor branch (the flow is to read/write to the BSN AST and then sync to the ECS for rendering the UI and viewport).
+Very early in dev, expect bugs and changes!
 
 We have also recently refactored our UX/UI to be _very_ similar to the official Bevy Editor Figma design, to keep things consistent. [Link here](https://www.figma.com/design/fkYfFPSBgnGkhbQd3HOMsL/Bevy-Editor?node-id=90-2)
 
@@ -35,7 +35,7 @@ https://github.com/user-attachments/assets/56834720-599e-4461-b712-fff7b85fb128
 
 ## Features
 
-- **Brush-based geometry** draw, edit, and CSG-combine convex brushes with vertex/edge/face/clip editing modes
+- **Brush-based geometry** draw, edit, and CSG-combine concave brushes with vertex/edge/face editing modes
 - **Material system** VERY wip - texture browser, material definitions with ORM auto-detection, per-face application
 - **Terrain** heightmap sculpting and texture painting, very WIP :)
 - **Scene serialization** save/load scenes in the `.bsn` format with full asset references. Older `.jsn` scenes are migrated on open.
