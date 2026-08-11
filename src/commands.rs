@@ -1095,13 +1095,6 @@ impl EditorCommand for SetBsnField {
         if self.old_value.is_none() && !self.field_path.is_empty() && live_before && !had_patch {
             self.old_value = live_bsn_field(world, self.entity, &self.type_path, &self.field_path);
         }
-        // First override of a derived component: seed the full live value into
-        // the document before the field write. Otherwise `set_bsn_field` mints
-        // an empty struct + one field, and save/load resets sibling fields to
-        // type defaults.
-        if !had_patch && live_before && !self.field_path.is_empty() {
-            seed_live_component_to_bsn_doc(world, self.entity, &self.type_path);
-        }
         {
             let registry = world.resource::<AppTypeRegistry>().clone();
             let registry = registry.read();
@@ -1632,33 +1625,6 @@ pub(crate) fn sync_component_to_bsn_doc(
     }
 }
 
-/// Copy a live ECS component into the scene document as a full patch.
-///
-/// Used when minting the first authored override for a derived component so
-/// sibling fields that only existed as runtime state are pinned before the
-/// field edit runs. No-ops when the entity is untracked or the component is
-/// missing / not reflectable.
-fn seed_live_component_to_bsn_doc(world: &mut World, entity: Entity, type_path: &str) {
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let dynamic = {
-        let registry = registry.read();
-        let Some(registration) = registry.get_with_type_path(type_path) else {
-            return;
-        };
-        let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-            return;
-        };
-        let Ok(entity_ref) = world.get_entity(entity) else {
-            return;
-        };
-        let Some(component) = reflect_component.reflect(entity_ref) else {
-            return;
-        };
-        component.to_dynamic()
-    };
-    sync_component_to_bsn_doc(world, entity, dynamic.as_partial_reflect(), &registry);
-}
-
 /// Reflected component type paths currently on `entity`, excluding structural
 /// / skip-listed types. Used to diff `#[require]` companions around an insert
 /// without writing them into the scene document.
@@ -1975,17 +1941,13 @@ mod set_bsn_field_tests {
                 get_bsn_field(ast, pe, type_path, "translation.x"),
                 Some(BsnValue::Float(7.0))
             );
-            // Live sibling fields must be pinned at mint time so save/load
-            // does not reset them to type defaults.
-            assert_eq!(
-                get_bsn_field(ast, pe, type_path, "translation.y"),
-                Some(BsnValue::Float(5.0)),
-                "mint seeds live translation.y into the document"
+            assert!(
+                get_bsn_field(ast, pe, type_path, "translation.y").is_none(),
+                "sibling fields stay unauthored (sparse override)"
             );
-            assert_eq!(
-                get_bsn_field(ast, pe, type_path, "translation.z"),
-                Some(BsnValue::Float(8.0)),
-                "mint seeds live translation.z into the document"
+            assert!(
+                get_bsn_field(ast, pe, type_path, "translation.z").is_none(),
+                "sibling fields stay unauthored (sparse override)"
             );
         }
         let translation = app.world().get::<Transform>(entity).unwrap().translation;
@@ -2003,7 +1965,7 @@ mod set_bsn_field_tests {
         assert_eq!(
             app.world().get::<Transform>(entity).unwrap().translation,
             Vec3::new(2.0, 5.0, 8.0),
-            "undo restores the pre-edit live value"
+            "undo restores the pre-edit live field; siblings unchanged"
         );
     }
 
