@@ -180,8 +180,25 @@ pub fn build_export(input: &ExportInput) -> Result<Vec<ExportedFile>, ExportErro
             jackdaw_terrain::quantize_heights(&mut snapped_heights, elevation_step);
             elevation_step
         }
-        None if input.max_height > 0.0 => input.max_height / 65535.0,
-        None => 1.0,
+        // `max_height` is a configured ceiling, not necessarily the
+        // actual authored span: sculpted heights can run below zero or
+        // above it, and a step sized off `max_height` alone then
+        // overflows the u16 pixel range for that real span. Derive the
+        // step from the actual min..max of the heights being exported
+        // instead, so the pixel range always fits by construction.
+        None => {
+            let min = snapped_heights.iter().copied().fold(f32::INFINITY, f32::min);
+            let max = snapped_heights
+                .iter()
+                .copied()
+                .fold(f32::NEG_INFINITY, f32::max);
+            let span = if min.is_finite() && max.is_finite() {
+                max - min
+            } else {
+                0.0
+            };
+            if span > 0.0 { span / 65535.0 } else { 1.0 }
+        }
     };
 
     let min_height = snapped_heights

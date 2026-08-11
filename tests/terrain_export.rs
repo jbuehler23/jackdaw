@@ -95,7 +95,8 @@ fn pixel_fidelity_heightmap_and_channel_round_trip_exactly() {
         .expect("decode heightmap.png")
         .into_luma16();
     assert_eq!(decoded.dimensions(), (3, 3));
-    // Unquantized: step_m = max_height / 65535, base_m = floor(min/step)*step.
+    // Unquantized: step_m = (max - min) / 65535, base_m = floor(min/step)*step.
+    // sample_heights() spans exactly 0..22, so this coincides with 22.0 / 65535.
     let step_m = 22.0_f32 / 65535.0;
     let base_m = (0.0_f32 / step_m).floor() * step_m;
     for z in 0..3u32 {
@@ -227,6 +228,46 @@ fn manifest_quantization_populated_when_quantized() {
         serde_json::from_slice(&find_file(&files, "manifest.json").bytes).unwrap();
     assert_eq!(manifest["quantization"]["cell_size_m"], 1.0);
     assert_eq!(manifest["quantization"]["elevation_step_m"], 0.25);
+}
+
+// I1 pinning test, the exact scenario from the review finding: authored
+// heights whose span exceeds the terrain's configured `max_height` must
+// still export. The old step derivation (`max_height / 65535`) sized the
+// pixel range off the ceiling rather than the actual data, so a span
+// wider than that ceiling overflowed HeightOutOfRange on data that is
+// perfectly representable once the step is sized off the real span.
+#[test]
+fn heights_spanning_more_than_max_height_still_export() {
+    let heights: Vec<f32> = (0..9).map(|i| i as f32 * 7.5).collect(); // 0..60
+    let channels: Vec<ExportChannel> = Vec::new();
+    let mut input = base_input(&heights, &channels, &[]);
+    input.max_height = 50.0;
+
+    let files =
+        build_export(&input).expect("a span wider than max_height must still be representable");
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&find_file(&files, "manifest.json").bytes).unwrap();
+    let step_m = manifest["heightmap"]["step_m"].as_f64().unwrap() as f32;
+    let expected_step = 60.0_f32 / 65535.0;
+    assert!(
+        (step_m - expected_step).abs() < 1e-6,
+        "step_m {step_m} must derive from the actual 0..60 span, not max_height 50",
+    );
+
+    let decoded = image::load_from_memory(&find_file(&files, "heightmap.png").bytes)
+        .unwrap()
+        .into_luma16();
+    let base_m = manifest["heightmap"]["base_m"].as_f64().unwrap() as f32;
+    for (i, &expected_h) in heights.iter().enumerate() {
+        let (x, z) = (i as u32 % 3, i as u32 / 3);
+        let pixel = decoded.get_pixel(x, z).0[0];
+        let decoded_h = base_m + pixel as f32 * step_m;
+        assert!(
+            (decoded_h - expected_h).abs() < step_m,
+            "x={x} z={z}: decoded {decoded_h} vs expected {expected_h}"
+        );
+    }
 }
 
 // 4. Quantized heights: every decoded height is an exact multiple of the
