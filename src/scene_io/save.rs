@@ -16,6 +16,38 @@ use super::{
     structural_skip_type_ids,
 };
 
+/// Write `contents` to `path` atomically: write to a temp file beside
+/// `path`, then rename over the target. `std::fs::write` truncates the
+/// destination in place, so a crash or a full disk mid-write would leave
+/// a truncated file where the last-known-good copy used to be; a rename
+/// within one directory is a single filesystem operation and cannot
+/// observe a half-written state.
+///
+/// The temp file is created in `path`'s own directory rather than a
+/// system temp dir: a rename across filesystems (e.g. `/tmp` to a
+/// project on another mount) is not atomic and fails outright on most
+/// platforms.
+fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other(format!("{} has no file name", path.display())))?;
+    let temp_path = parent.join(format!(
+        ".{}.tmp-{}",
+        file_name.to_string_lossy(),
+        std::process::id()
+    ));
+    if let Err(err) = std::fs::write(&temp_path, contents) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(err);
+    }
+    if let Err(err) = std::fs::rename(&temp_path, path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(err);
+    }
+    Ok(())
+}
+
 fn spawn_save_dialog(world: &mut World) {
     let raw_handle = get_window_handle(world);
     let last_dir = world.resource::<SceneFilePath>().last_directory.clone();
@@ -171,7 +203,12 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     // Terrain heights and paint channels are authoritative authored data.
     // Complete those writes before the scene text is committed and before
     // the tab is marked clean, so failures remain visible and repeated saves
-    // cannot finish out of order.
+    // cannot finish out of order. Each write lands via write_atomic, so a
+    // sidecar failure partway through never truncates one that already
+    // landed; the scene text below is written the same way. There is no
+    // cross-file rollback if the scene text write fails after sidecars
+    // already landed -- the sidecars stay updated and the tab stays dirty,
+    // so the next save retries the scene text with the same sidecars.
     export_terrain_sidecars(world, &path)?;
 
     // A redirected save renames the legacy source to `.jsn.bak` first so a
@@ -184,7 +221,7 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
             ))
         })?;
     }
-    std::fs::write(&path, &contents)
+    write_atomic(Path::new(&path), contents.as_bytes())
         .map_err(|err| BevyError::from(format!("failed to write scene file {path}: {err}")))?;
     info!("Scene saved to {path}");
 
@@ -272,10 +309,11 @@ fn export_navmesh_sibling(world: &World, scene_path: &str) {
 /// Write every terrain's bulk data to its sidecar beside the scene.
 ///
 /// A scene with no terrain is a clean no-op. Each write completes before
-/// returning, and an invalid path, encoding failure, or filesystem error
-/// is returned to the save boundary so the tab stays dirty. One file per
-/// terrain is named by the scene-relative `data_path` the `Terrain`
-/// component carries, so a scene and its terrain data move together.
+/// returning (atomically, via `write_atomic`), and an invalid path,
+/// encoding failure, or filesystem error is returned to the save boundary
+/// so the tab stays dirty. One file per terrain is named by the
+/// scene-relative `data_path` the `Terrain` component carries, so a scene
+/// and its terrain data move together.
 ///
 /// A path with no store entry (never loaded -- its sidecar was missing --
 /// and never edited) is silently skipped: there is nothing to write and
@@ -356,7 +394,7 @@ pub(crate) fn export_terrain_sidecars(
                 ))
             })?;
         }
-        std::fs::write(&path, &bytes).map_err(|err| {
+        write_atomic(&path, &bytes).map_err(|err| {
             BevyError::from(format!(
                 "failed to write terrain data {}: {err}",
                 path.display()
@@ -1017,6 +1055,39 @@ mod tests {
             .expect("successful save has already reached disk on return");
         assert!(saved.contains("bevy_transform::components::transform::Transform"));
         assert!(!world.resource::<crate::scenes::Scenes>().tabs[0].dirty);
+    }
+
+    /// C2: `write_atomic` must fully replace an existing file's content
+    /// (proving the write goes through a rename, not an in-place
+    /// truncate) and must not leave its temp file behind.
+    #[test]
+    fn write_atomic_replaces_existing_content_and_cleans_up_its_temp_file() {
+        let tmp = tempfile::tempdir().expect("temp directory");
+        let target = tmp.path().join("scene.bsn");
+        std::fs::write(&target, b"old contents, much longer than the new ones")
+            .expect("seed original file");
+
+        write_atomic(&target, b"new").expect("atomic write succeeds");
+
+        assert_eq!(std::fs::read(&target).expect("read back"), b"new");
+        let stray_temp = std::fs::read_dir(tmp.path())
+            .expect("read temp dir")
+            .filter_map(Result::ok)
+            .any(|entry| entry.path() != target);
+        assert!(!stray_temp, "no temp file may remain beside the target");
+    }
+
+    /// C2: a failed write must not touch the destination at all -- the
+    /// crash-safety property this exists for is that a partial write can
+    /// only ever land in the temp file, never in the file callers read.
+    #[test]
+    fn write_atomic_leaves_the_destination_untouched_on_failure() {
+        let tmp = tempfile::tempdir().expect("temp directory");
+        let missing_parent = tmp.path().join("does-not-exist").join("scene.bsn");
+
+        let err = write_atomic(&missing_parent, b"new").expect_err("parent dir is missing");
+        assert!(!missing_parent.exists());
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 }
 
