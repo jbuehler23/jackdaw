@@ -105,6 +105,26 @@ pub fn save_scene_as(world: &mut World) {
     spawn_save_dialog(world);
 }
 
+/// Save the active tab's scene text and terrain sidecars, synchronously,
+/// on the calling (main) thread.
+///
+/// This used to spawn the write onto an async task. It does not anymore:
+/// ordering has to hold across the whole boundary -- sidecars before
+/// scene text, dirty state cleared only after every authoritative write
+/// lands (see the ordering comments below) -- and that is far simpler to
+/// reason about, and to keep correct under future edits, as a single
+/// synchronous call than as a task whose completion has to be raced
+/// against the next save, the next tab swap, or the app closing mid-write.
+///
+/// The tradeoff: this blocks the main thread for the duration of the
+/// write, and `scene.save_all` (`scenes/operators.rs`) calls this once
+/// per dirty tab in a loop, so the block time is `O(tabs)`, not `O(1)`.
+/// Scene text and terrain sidecars are not sized to make that
+/// noticeable in practice, but a project with many large open tabs is
+/// the case to watch. If it ever needs revisiting, the fix is a
+/// different concurrency shape for `scene.save_all` specifically, not
+/// bringing async back to this function -- the ordering argument above
+/// still applies to any single save.
 pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     // If the active tab is a prefab, flush the live AST into the cache
     // and persist via the prefab-aware writer. Reflect-serializing the
