@@ -137,13 +137,17 @@ fn initialize_terrain_chunks(
 
 /// Rebuild meshes for chunks in the dirty set.
 fn rebuild_dirty_chunks(
-    mut terrains: Query<(&jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
+    mut terrains: Query<(
+        Entity,
+        &jackdaw_scene_types::Terrain,
+        &mut TerrainDirtyChunks,
+    )>,
     mut chunks: Query<(&TerrainChunk, &mut Mesh3d)>,
     mut meshes: ResMut<Assets<Mesh>>,
     store: Res<TerrainDataStore>,
     paint: Res<TerrainPaintState>,
 ) {
-    for (terrain, mut dirty) in &mut terrains {
+    for (terrain_entity, terrain, mut dirty) in &mut terrains {
         if dirty.dirty.is_empty() {
             continue;
         }
@@ -151,8 +155,15 @@ fn rebuild_dirty_chunks(
         let heightmap = heightmap_from_terrain(terrain, &store);
         let dirty_set: Vec<(u32, u32)> = dirty.dirty.drain().collect();
 
+        // Chunk coordinates are small integers starting at (0, 0) for
+        // every terrain, so two terrains routinely share a (chunk_x,
+        // chunk_z) pair. Without the owner filter, a coordinate match
+        // alone would rebuild another terrain's chunk with this
+        // terrain's heightmap.
         for (chunk, mut mesh3d) in &mut chunks {
-            if dirty_set.contains(&(chunk.chunk_x, chunk.chunk_z)) {
+            if chunk.terrain_entity == terrain_entity
+                && dirty_set.contains(&(chunk.chunk_x, chunk.chunk_z))
+            {
                 let mesh_data = chunk_mesh_data(&heightmap, terrain, chunk.chunk_x, chunk.chunk_z);
                 let colors = chunk_vertex_colors(terrain, &store, &paint, &mesh_data.grid);
                 let mesh = build_bevy_mesh(mesh_data, colors);
@@ -258,4 +269,110 @@ fn build_bevy_mesh(data: jackdaw_terrain::ChunkMeshData, colors: Vec<[f32; 4]>) 
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(data.indices));
     mesh
+}
+
+#[cfg(test)]
+mod rebuild_dirty_chunks_tests {
+    use jackdaw_terrain::TerrainData;
+
+    use super::*;
+
+    fn terrain(data_path: &str) -> jackdaw_scene_types::Terrain {
+        jackdaw_scene_types::Terrain {
+            resolution: 2,
+            size: Vec2::splat(2.0),
+            data_path: data_path.to_string(),
+            ..default()
+        }
+    }
+
+    fn placeholder_mesh() -> Mesh {
+        Mesh::new(PrimitiveTopology::TriangleList, default())
+    }
+
+    /// I6 pinning test, the exact scenario from the review finding: two
+    /// terrains whose chunk grids both start at (0, 0) share that
+    /// coordinate. Only one of them is dirty; before the owner filter,
+    /// the coordinate-only match rebuilt the other terrain's chunk too,
+    /// with the wrong terrain's heightmap.
+    #[test]
+    fn a_coordinate_match_on_another_terrains_chunk_is_left_alone() {
+        let mut world = World::new();
+        world.insert_resource(Assets::<Mesh>::default());
+        world.insert_resource(TerrainPaintState::default());
+
+        let mut store = TerrainDataStore::default();
+        store.insert(
+            "a.jdterrain",
+            TerrainData {
+                resolution: 2,
+                heights: vec![1.0; 4],
+                channels: vec![],
+            },
+        );
+        store.insert(
+            "b.jdterrain",
+            TerrainData {
+                resolution: 2,
+                heights: vec![9.0; 4],
+                channels: vec![],
+            },
+        );
+        world.insert_resource(store);
+
+        let terrain_a = world.spawn(terrain("a.jdterrain")).id();
+        let terrain_b = world.spawn(terrain("b.jdterrain")).id();
+
+        let mut dirty_a = TerrainDirtyChunks::default();
+        dirty_a.dirty.insert((0, 0));
+        world.entity_mut(terrain_a).insert(dirty_a);
+        world
+            .entity_mut(terrain_b)
+            .insert(TerrainDirtyChunks::default());
+
+        let b_original_handle = {
+            let mut meshes = world.resource_mut::<Assets<Mesh>>();
+            meshes.add(placeholder_mesh())
+        };
+        let chunk_b = world
+            .spawn((
+                TerrainChunk {
+                    terrain_entity: terrain_b,
+                    chunk_x: 0,
+                    chunk_z: 0,
+                },
+                Mesh3d(b_original_handle.clone()),
+            ))
+            .id();
+
+        let a_original_handle = {
+            let mut meshes = world.resource_mut::<Assets<Mesh>>();
+            meshes.add(placeholder_mesh())
+        };
+        let chunk_a = world
+            .spawn((
+                TerrainChunk {
+                    terrain_entity: terrain_a,
+                    chunk_x: 0,
+                    chunk_z: 0,
+                },
+                Mesh3d(a_original_handle.clone()),
+            ))
+            .id();
+
+        world
+            .run_system_cached(rebuild_dirty_chunks)
+            .expect("system runs");
+
+        assert_eq!(
+            world.get::<Mesh3d>(chunk_b).unwrap().0,
+            b_original_handle,
+            "terrain B's chunk was not dirty and must keep its original mesh",
+        );
+        assert_ne!(
+            world.get::<Mesh3d>(chunk_a).unwrap().0,
+            a_original_handle,
+            "terrain A's chunk was dirty and must have been rebuilt",
+        );
+    }
 }
