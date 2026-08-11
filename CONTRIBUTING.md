@@ -39,6 +39,40 @@ cargo run --example basic
 cargo run --features dylib
 ```
 
+### Improving compile times
+
+If you intend to contribute significantly to Jackdaw, you'll likely want to make some changes to improve compile times when iterating. Jackdaw is not, by default, set up for some of these, as they conflict with other features like SDK dynamic linking.
+
+#### `Cargo.toml`
+
+You can disable optimizations for the `jackdaw` crate (or any other crates you're working on). This will significantly improve compile times:
+
+```toml
+[profile.dev.package.jackdaw]
+opt-level = 0
+```
+
+You can also enable Bevy's `dynamic_linking` feature, which can improve link times significantly, especially on Windows:
+
+```toml
+[workspace.dependencies]
+bevy = { version = "0.19", features = [
+    "dynamic_linking", # Add this line!
+    "bevy_feathers",
+    "bevy_scene",
+    "bevy_dev_tools",
+    "serialize",
+    "debug",
+    "bevy_remote",
+    "file_watcher",
+    "reflect_documentation",
+] }
+```
+
+#### `.cargo/config.toml`
+
+Under `[build]`, you can enable `incremental = true` to improve compile times after the first compile. You can also comment out the lines specifying `-Zshare-generics=no` to allow the compiler to do less work.
+
 ## Checks
 
 Before submitting a PR, work through these in order. The quick set is for a fast local smoke pass; the CI set is what should pass before you open a PR.
