@@ -29,6 +29,7 @@ pub use document::{
     AstNodeRef, BsnAssetContext, BsnField, BsnPatch, BsnPatches, BsnStructData, BsnStructFields,
     BsnTupleStructData, BsnValue, SceneBsnAst, bsn_value_as_int, clone_node_into,
     clone_subtree_into, component_to_bsn_patch, component_to_bsn_patch_with_assets,
+    is_enum_variant_of, type_paths_include,
 };
 pub use emitter::{emit_entities, emit_entity, emit_scene};
 pub use loader::{BsnLoadError, parse_bsn_text};
