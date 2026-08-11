@@ -187,7 +187,10 @@ pub fn build_export(input: &ExportInput) -> Result<Vec<ExportedFile>, ExportErro
         // step from the actual min..max of the heights being exported
         // instead, so the pixel range always fits by construction.
         None => {
-            let min = snapped_heights.iter().copied().fold(f32::INFINITY, f32::min);
+            let min = snapped_heights
+                .iter()
+                .copied()
+                .fold(f32::INFINITY, f32::min);
             let max = snapped_heights
                 .iter()
                 .copied()

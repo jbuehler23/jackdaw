@@ -501,7 +501,15 @@ fn a_u8_channel_value_over_255_saturates_rather_than_wraps() {
     let decoded = image::load_from_memory(&find_file(&files, "channels/biome.png").bytes)
         .unwrap()
         .into_luma8();
-    assert_eq!(decoded.get_pixel(0, 0).0[0], 255, "256 must saturate to 255, not wrap to 0");
-    assert_eq!(decoded.get_pixel(1, 0).0[0], 255, "300 must saturate to 255");
+    assert_eq!(
+        decoded.get_pixel(0, 0).0[0],
+        255,
+        "256 must saturate to 255, not wrap to 0"
+    );
+    assert_eq!(
+        decoded.get_pixel(1, 0).0[0],
+        255,
+        "300 must saturate to 255"
+    );
     assert_eq!(decoded.get_pixel(2, 0).0[0], 0);
 }

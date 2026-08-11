@@ -420,7 +420,10 @@ fn update_terrain_inspector(
         ));
         commands
             .spawn((
-                combobox::combobox_with_selected(noise_options, gen_state.settings.noise_type.index()),
+                combobox::combobox_with_selected(
+                    noise_options,
+                    gen_state.settings.noise_type.index(),
+                ),
                 ChildOf(noise_row),
             ))
             .observe(
@@ -843,9 +846,7 @@ pub(super) fn spawn_tile(
     commands
         .entity(tile)
         .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            let mut call = commands
-                .operator(op_id)
-                .settings(tile_dispatch_settings());
+            let mut call = commands.operator(op_id).settings(tile_dispatch_settings());
             if let Some(index) = index {
                 call = call.param("index", index as i64);
             }
@@ -1172,7 +1173,9 @@ mod update_terrain_inspector_tests {
         world.flush();
 
         // Frame 2: the container shows up.
-        let container = world.spawn((TerrainInspectorContainer, Node::default())).id();
+        let container = world
+            .spawn((TerrainInspectorContainer, Node::default()))
+            .id();
         world
             .run_system_cached(update_terrain_inspector)
             .expect("system runs");
@@ -1194,8 +1197,12 @@ mod update_terrain_inspector_tests {
         let mut world = base_world();
         select_a_terrain(&mut world);
 
-        let a = world.spawn((TerrainInspectorContainer, Node::default())).id();
-        let b = world.spawn((TerrainInspectorContainer, Node::default())).id();
+        let a = world
+            .spawn((TerrainInspectorContainer, Node::default()))
+            .id();
+        let b = world
+            .spawn((TerrainInspectorContainer, Node::default()))
+            .id();
 
         world
             .run_system_cached(update_terrain_inspector)

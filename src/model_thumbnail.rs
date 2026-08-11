@@ -991,7 +991,10 @@ mod tests {
         );
 
         cache.record(path, epoch(1), ThumbState::Ready(Handle::default()));
-        assert!(!cache.is_failed(path, epoch(1)), "a later success clears it");
+        assert!(
+            !cache.is_failed(path, epoch(1)),
+            "a later success clears it"
+        );
     }
 
     #[test]

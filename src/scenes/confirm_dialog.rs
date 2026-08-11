@@ -463,8 +463,7 @@ fn apply_confirm_dialog_action(world: &mut World, action: ConfirmDialogButton, t
 
                 // Point SceneFilePath at this tab so save works correctly.
                 let path_str = path.to_string_lossy().into_owned();
-                if let Some(mut sfp) = world.get_resource_mut::<crate::scene_io::SceneFilePath>()
-                {
+                if let Some(mut sfp) = world.get_resource_mut::<crate::scene_io::SceneFilePath>() {
                     sfp.path = Some(path_str);
                 }
 
@@ -508,7 +507,7 @@ fn apply_confirm_dialog_action(world: &mut World, action: ConfirmDialogButton, t
 #[cfg(test)]
 mod apply_confirm_dialog_action_tests {
     use crate::scene_io::SceneFilePath;
-    use crate::scenes::{Scenes, SceneTab};
+    use crate::scenes::{SceneTab, Scenes};
 
     use super::*;
 
