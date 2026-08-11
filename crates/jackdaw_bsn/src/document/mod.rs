@@ -18,7 +18,7 @@ mod query;
 pub use from_reflect::{
     BsnAssetContext, component_to_bsn_patch, component_to_bsn_patch_with_assets,
 };
-pub use mutate::clone_node_into;
+pub use mutate::{clone_node_into, clone_subtree_into};
 pub use query::bsn_value_as_int;
 
 /// A list of patches that together define one BSN entity.

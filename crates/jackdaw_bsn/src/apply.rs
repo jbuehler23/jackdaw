@@ -47,27 +47,28 @@ pub struct BsnSceneAssets(
 /// AST nodes. All entities are marked [`AstDirty`] so a following call to
 /// [`apply_dirty_ast_patches`] populates ECS components.
 pub fn spawn_from_ast(world: &mut World) -> Vec<Entity> {
-    let roots: Vec<Entity> = world.resource::<SceneBsnAst>().roots.clone();
     let registry = world.resource::<AppTypeRegistry>().clone();
+    let roots = {
+        let reg = registry.read();
+        let ast = world.resource::<SceneBsnAst>();
+        // Named asset entries stay in the document for round-trip save but
+        // are not scene entities; the loader routes them into asset stores.
+        crate::catalog::entity_roots(ast, &reg)
+    };
     let mut spawned = Vec::new();
 
     for root in roots {
-        // Named asset entries stay in the document for round-trip save but
-        // are not scene entities; the loader routes them into asset stores.
-        {
-            let reg = registry.read();
-            let ast = world.resource::<SceneBsnAst>();
-            if crate::catalog::is_asset_root(ast, root, &reg) {
-                continue;
-            }
-        }
         spawn_ast_node(world, root, None, &mut spawned);
     }
 
     spawned
 }
 
-fn spawn_ast_node(
+/// Spawn an ECS entity for `ast_entity` (and recursively its authored children),
+/// link them in [`SceneBsnAst`], and mark them [`AstDirty`]. `parent` is the
+/// live ECS parent (`ChildOf`), when any. Callers must follow with
+/// [`apply_dirty_ast_patches`].
+pub fn spawn_ast_node(
     world: &mut World,
     ast_entity: Entity,
     parent: Option<Entity>,

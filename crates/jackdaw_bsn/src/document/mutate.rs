@@ -216,12 +216,6 @@ impl SceneBsnAst {
     }
 }
 
-/// Create a new AST node in `dst` under `dst_parent`, deep-copying the component
-/// patches of `src_node` from `src`. Every patch except the
-/// [`BsnPatch::Children`] relation is cloned, so the new node keeps its
-/// components, name, and base reference but adopts none of `src_node`'s
-/// children. `dst_parent` gains the new node as a child. Returns the new node's
-/// AST entity in `dst`.
 impl SceneBsnAst {
     /// Deep-copy the whole document into a fresh one: every root and its
     /// subtree, all component patches, and the node-to-ECS links (re-keyed to
@@ -229,33 +223,13 @@ impl SceneBsnAst {
     /// the linked ECS entities carry over. Useful for read-only emission or
     /// resolution passes that must not mutate the live document.
     pub fn deep_clone(&self) -> SceneBsnAst {
-        fn clone_subtree(
-            dst: &mut SceneBsnAst,
-            src: &SceneBsnAst,
-            src_node: Entity,
-            dst_parent: Option<Entity>,
-        ) -> Entity {
-            let new_node = match dst_parent {
-                Some(parent) => clone_node_into(dst, src, src_node, parent),
-                None => {
-                    let patches = src.cloned_component_patches(src_node);
-                    let node = dst.create_entity_node(patches);
-                    dst.add_to_roots(node);
-                    node
-                }
-            };
-            if let Some(ecs) = src.ecs_for_ast(src_node) {
-                dst.link(ecs, new_node);
-            }
-            for child in src.get_children_ast(src_node) {
-                clone_subtree(dst, src, child, Some(new_node));
-            }
-            new_node
-        }
-
         let mut dst = SceneBsnAst::default();
         for &root in &self.roots {
-            clone_subtree(&mut dst, self, root, None);
+            let new_root = clone_subtree_into(&mut dst, self, root, None);
+            if let Some(ecs) = self.ecs_for_ast(root) {
+                dst.link(ecs, new_root);
+            }
+            link_cloned_subtree(&mut dst, self, root, new_root);
         }
         dst
     }
@@ -278,6 +252,30 @@ impl SceneBsnAst {
     }
 }
 
+/// Graft `src_node`'s full subtree into `dst` under `dst_parent` (`None` = new root).
+pub fn clone_subtree_into(
+    dst: &mut SceneBsnAst,
+    src: &SceneBsnAst,
+    src_node: Entity,
+    dst_parent: Option<Entity>,
+) -> Entity {
+    let new_node = match dst_parent {
+        Some(parent) => clone_node_into(dst, src, src_node, parent),
+        None => {
+            let patches = src.cloned_component_patches(src_node);
+            let node = dst.create_entity_node(patches);
+            dst.add_to_roots(node);
+            node
+        }
+    };
+    for child in src.get_children_ast(src_node) {
+        clone_subtree_into(dst, src, child, Some(new_node));
+    }
+    new_node
+}
+
+/// Create a new AST node in `dst` under `dst_parent`, deep-copying the component
+/// patches of `src_node` from `src`.
 pub fn clone_node_into(
     dst: &mut SceneBsnAst,
     src: &SceneBsnAst,
@@ -288,4 +286,21 @@ pub fn clone_node_into(
     let new_node = dst.create_entity_node(cloned_patches);
     dst.add_child_to_ast(dst_parent, new_node);
     new_node
+}
+
+/// Copy ECS links from `src`'s subtree onto the already-cloned nodes in `dst`
+fn link_cloned_subtree(
+    dst: &mut SceneBsnAst,
+    src: &SceneBsnAst,
+    src_node: Entity,
+    dst_node: Entity,
+) {
+    let src_children = src.get_children_ast(src_node);
+    let dst_children = dst.get_children_ast(dst_node);
+    for (src_child, dst_child) in src_children.into_iter().zip(dst_children) {
+        if let Some(ecs) = src.ecs_for_ast(src_child) {
+            dst.link(ecs, dst_child);
+        }
+        link_cloned_subtree(dst, src, src_child, dst_child);
+    }
 }

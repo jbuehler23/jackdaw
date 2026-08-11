@@ -1062,7 +1062,11 @@ fn bsn_value_string(value: &jackdaw_bsn::BsnValue) -> Option<&str> {
 
 /// Set, replace, or remove the [`jackdaw_bsn::BsnPatch::Name`] patch on a
 /// document node.
-fn set_name_patch(ast: &mut jackdaw_bsn::SceneBsnAst, node: Entity, name: Option<&str>) {
+pub(crate) fn set_name_patch(
+    ast: &mut jackdaw_bsn::SceneBsnAst,
+    node: Entity,
+    name: Option<&str>,
+) {
     let existing = ast.get_patches(node).and_then(|patches| {
         patches
             .0

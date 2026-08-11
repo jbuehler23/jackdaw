@@ -167,7 +167,7 @@ impl SceneBsnAst {
 
     /// Find which AST entity contains `child_ast` in a Children patch.
     /// Returns `None` if `child_ast` is a root (or not found).
-    pub(super) fn find_ast_parent_of(&self, child_ast: Entity) -> Option<Entity> {
+    pub fn find_ast_parent_of(&self, child_ast: Entity) -> Option<Entity> {
         if self.roots.contains(&child_ast) {
             return None;
         }

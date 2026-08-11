@@ -863,13 +863,13 @@ fn rederive_handle_patches(
 }
 
 /// Emit a subset of the live BSN document (the given document nodes with
-/// their subtrees) as self-contained BSN text for the clipboard.
+/// their subtrees) as BSN text for the clipboard.
 ///
-/// Referenced runtime inline assets embed as `#Name` roots so a cross-scene
-/// paste carries them along; only catalog `@Name` assets are assumed to
-/// resolve at the destination. Stable node ids are stripped from the emitted
-/// text, so a paste mints fresh ones. Works on a deep clone of the document,
-/// so emission never mutates the live state.
+/// Same-scene inline `#Name` refs are preserved via the live
+/// [`jackdaw_bsn::BsnSceneAssets`] seed (same as full-scene save). Pathless
+/// handles unknown to the live scene still embed as `#Name` roots. Stable
+/// node ids are stripped so paste can mint fresh ones. Works on a deep clone
+/// of the document, so emission never mutates the live state.
 pub(crate) fn emit_bsn_entities_with_inline_assets(
     world: &mut World,
     parent_path: &Path,
@@ -890,14 +890,21 @@ pub(crate) fn emit_bsn_entities_with_inline_assets(
 
     let registry = world.resource::<AppTypeRegistry>().clone();
 
-    // Seed only catalog names: scene-inline assets referenced by the copied
-    // components must embed into the clipboard text to survive a paste into
-    // another scene.
+    // Seed catalog and live scene-inline names so same-scene copy keeps the
+    // existing `#Name` refs. Cross-scene paste of unknown inline assets is
+    // not supported yet; those handles would need embedding + merge.
     let mut seed: bevy::platform::collections::HashMap<UntypedAssetId, String> =
         bevy::platform::collections::HashMap::default();
     if let Some(catalog) = world.get_resource::<crate::asset_catalog::AssetCatalog>() {
         for (id, name) in &catalog.id_to_name {
             seed.entry(*id).or_insert_with(|| name.clone());
+        }
+    }
+    if let Some(scene_assets) = world.get_resource::<jackdaw_bsn::BsnSceneAssets>() {
+        for (ref_name, handle) in &scene_assets.0 {
+            if ref_name.starts_with('#') {
+                seed.insert(handle.id(), ref_name.clone());
+            }
         }
     }
 
@@ -917,8 +924,8 @@ pub(crate) fn emit_bsn_entities_with_inline_assets(
         collect_bsn_inline_assets(world, &reg, &entities, seed)
     };
 
-    // Strip stable node ids from the copied subtrees; a paste mints fresh
-    // ones, so the clipboard must not carry the source ids.
+    // Strip stable node ids from the copied subtrees; paste mints fresh ones
+    // before grafting, so the clipboard must not carry the source ids.
     for &node in &subtree_nodes {
         let found = ast.get_patches(node).and_then(|patches| {
             patches.0.iter().copied().find(|&pe| {
