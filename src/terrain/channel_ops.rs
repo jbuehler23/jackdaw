@@ -40,6 +40,51 @@ fn seed_color(index: usize) -> Color {
     SEED_COLORS[index % SEED_COLORS.len()].into()
 }
 
+/// Mint a channel name unique against `existing`, first free `channel-N`.
+///
+/// Naming by `existing.len()` alone collides once a channel has been
+/// removed from the middle: add, add, remove index 0, add would mint
+/// `channel-1` twice. Exact-duplicate channel names collapse to one
+/// exported file (`export.rs`'s writer is last-wins), so uniqueness has
+/// to be enforced here at creation, not just caught at export time.
+fn mint_channel_name(existing: &[TerrainChannel]) -> String {
+    for n in 0.. {
+        let candidate = format!("channel-{n}");
+        if !existing.iter().any(|channel| channel.name == candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("the candidate space is unbounded")
+}
+
+#[cfg(test)]
+mod mint_channel_name_tests {
+    use super::*;
+
+    fn channel(name: &str) -> TerrainChannel {
+        TerrainChannel {
+            name: name.to_string(),
+            element: TerrainChannelElement::U8,
+            palette: vec![],
+        }
+    }
+
+    /// C3 pinning test, the exact scenario from the review finding: add,
+    /// add, remove index 0, add must not mint the same name twice.
+    #[test]
+    fn does_not_repeat_after_a_remove_from_the_middle() {
+        let mut channels = vec![channel("channel-0"), channel("channel-1")];
+        channels.remove(0);
+        let minted = mint_channel_name(&channels);
+        assert_ne!(minted, "channel-1", "must not mint a name already in use");
+    }
+
+    #[test]
+    fn starts_at_zero_for_an_empty_terrain() {
+        assert_eq!(mint_channel_name(&[]), "channel-0");
+    }
+}
+
 /// Push the terrain's channel table back into the scene document and
 /// force a mesh rebuild, so a table edit is both saved and visible.
 fn commit_channels(world: &mut World, entity: Entity) {
@@ -79,8 +124,9 @@ pub(crate) fn terrain_channel_add(
     let mut terrain = terrains.get_mut(entity)?;
 
     let index = terrain.channels.len();
+    let name = mint_channel_name(&terrain.channels);
     terrain.channels.push(TerrainChannel {
-        name: format!("channel-{index}"),
+        name,
         element: TerrainChannelElement::U8,
         // A channel is born with an "unset" entry plus one paintable
         // value, so the user can paint something immediately instead of

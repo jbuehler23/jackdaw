@@ -403,3 +403,31 @@ fn channel_filename_collision_is_refused_naming_both() {
     assert!(message.contains("biome/a"));
     assert!(message.contains("biome_a"));
 }
+
+/// C3: two channels with the exact same name must be refused, not
+/// silently collapsed to one exported file by the last-wins writer.
+/// Reachable through the UI: add, add, remove index 0, add mints
+/// `channel-1` twice (see `channel_ops.rs`'s `mint_channel_name`, which
+/// this pins from the export side).
+#[test]
+fn exact_duplicate_channel_names_are_refused() {
+    let heights = sample_heights();
+    let channels = vec![
+        ExportChannel {
+            name: "channel-1".to_string(),
+            element: ExportChannelElement::U8,
+            values: vec![1; 9],
+            palette: vec![],
+        },
+        ExportChannel {
+            name: "channel-1".to_string(),
+            element: ExportChannelElement::U8,
+            values: vec![2; 9],
+            palette: vec![],
+        },
+    ];
+    let input = base_input(&heights, &channels, &[]);
+
+    let error = build_export(&input).expect_err("exact-duplicate channel names must be refused");
+    assert!(error.to_string().contains("channel-1"));
+}

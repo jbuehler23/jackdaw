@@ -120,6 +120,7 @@ pub enum ExportError {
         derived: f32,
     },
     ChannelNameCollision(String, String),
+    DuplicateChannelName(String),
     Encode(String),
 }
 
@@ -143,6 +144,11 @@ impl std::fmt::Display for ExportError {
             Self::ChannelNameCollision(a, b) => write!(
                 f,
                 "channel names {a:?} and {b:?} both sanitize to the same export filename"
+            ),
+            Self::DuplicateChannelName(name) => write!(
+                f,
+                "channel name {name:?} is used by more than one channel; \
+                 rename one before exporting"
             ),
             Self::Encode(message) => write!(f, "{message}"),
         }
@@ -214,15 +220,19 @@ pub fn build_export(input: &ExportInput) -> Result<Vec<ExportedFile>, ExportErro
     for channel in &ordered_channels {
         let filename = sanitize_channel_filename(&channel.name);
         if let Some((_, owner)) = filename_owners.iter().find(|(f, _)| *f == filename) {
-            if owner != &channel.name {
-                return Err(ExportError::ChannelNameCollision(
-                    owner.clone(),
-                    channel.name.clone(),
-                ));
+            if owner == &channel.name {
+                // Two channels with the exact same name: not a filename
+                // collision between distinct names, but two distinct
+                // channels racing for one output file. Last-wins in the
+                // writer would silently drop one.
+                return Err(ExportError::DuplicateChannelName(channel.name.clone()));
             }
-        } else {
-            filename_owners.push((filename.clone(), channel.name.clone()));
+            return Err(ExportError::ChannelNameCollision(
+                owner.clone(),
+                channel.name.clone(),
+            ));
         }
+        filename_owners.push((filename.clone(), channel.name.clone()));
 
         let relative_path = format!("channels/{filename}.png");
         let bytes = match channel.element {
