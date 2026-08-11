@@ -35,11 +35,10 @@ struct FieldEditSessionKey {
 /// Live field values at [`field_edit_begin`] for in-progress gestures.
 ///
 /// Lifecycle: [`field_edit_begin`] → [`field_edit_preview`]* →
-/// [`field_edit_commit`] | [`field_edit_cancel`].
+/// [`field_edit_commit`].
 ///
 /// Preview mutates ECS before any `SetBsnField` exists. Capturing live values
-/// at begin lets commit build undo baselines for derived (no-patch) components
-/// and lets cancel restore the pre-preview ECS state.
+/// at begin lets commit build undo baselines for derived (no-patch) components.
 #[derive(Resource, Default)]
 pub(crate) struct FieldEditSessions {
     /// Live field value at gesture start, keyed by entity + field.
@@ -211,74 +210,6 @@ pub(crate) fn field_edit_commit(
     };
     cmd.execute(world);
     world.resource_mut::<CommandHistory>().push_executed(cmd);
-}
-
-/// Cancel an in-progress gesture: restore each target's live field to the
-/// value captured at begin, then clear the session. No document write.
-///
-/// Call from pointer-cancel / Escape abort paths once those emit into the
-/// inspector; unit tests cover the restore semantics today.
-#[allow(dead_code)]
-pub(crate) fn field_edit_cancel(world: &mut World, type_path: &str, field_path: &str) {
-    let restores: Vec<(Entity, jackdaw_bsn::BsnValue)> = world
-        .resource::<FieldEditSessions>()
-        .live_at_begin
-        .iter()
-        .filter(|(key, _)| key.type_path == type_path && key.field_path == field_path)
-        .map(|(key, value)| (key.entity, value.clone()))
-        .collect();
-    for (entity, value) in restores {
-        apply_bsn_field_to_ecs(world, entity, type_path, field_path, &value);
-    }
-    clear_field_edit_session(world, type_path, field_path);
-}
-
-/// Apply a [`jackdaw_bsn::BsnValue`] to one live ECS field (or whole component
-/// when `field_path` is empty). Document is untouched.
-#[allow(dead_code)]
-fn apply_bsn_field_to_ecs(
-    world: &mut World,
-    entity: Entity,
-    type_path: &str,
-    field_path: &str,
-    value: &jackdaw_bsn::BsnValue,
-) {
-    use bevy::reflect::GetPath;
-
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let registry = registry.read();
-    let Some(registration) = registry.get_with_type_path(type_path) else {
-        return;
-    };
-    let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-        return;
-    };
-
-    if field_path.is_empty() {
-        let Some(reflected) =
-            jackdaw_bsn::bsn_value_to_reflect(value, registration.type_id(), &registry, None)
-        else {
-            return;
-        };
-        reflect_component.insert(&mut world.entity_mut(entity), reflected.as_ref(), &registry);
-        return;
-    }
-
-    let Some(component) = reflect_component.reflect_mut(world.entity_mut(entity)) else {
-        return;
-    };
-    let Ok(field) = component.into_inner().reflect_path_mut(field_path) else {
-        return;
-    };
-    let Some(type_info) = field.get_represented_type_info() else {
-        return;
-    };
-    let Some(reflected) =
-        jackdaw_bsn::bsn_value_to_reflect(value, type_info.type_id(), &registry, None)
-    else {
-        return;
-    };
-    field.apply(reflected.as_ref());
 }
 
 pub struct SetTransform {
@@ -2128,51 +2059,6 @@ mod set_bsn_field_tests {
             app.world().get::<Transform>(entity).unwrap().translation,
             Vec3::new(2.0, 5.0, 8.0),
             "undo restores the gesture-start live value, not the previewed value"
-        );
-    }
-
-    #[test]
-    fn field_edit_cancel_restores_live_without_document_write() {
-        let mut app = field_app();
-        let entity = app
-            .world_mut()
-            .spawn(Transform::from_xyz(2.0, 5.0, 8.0))
-            .id();
-        create_entity_in_ast(app.world_mut(), entity, None);
-        app.world_mut().resource_mut::<Selection>().entities = vec![entity];
-
-        let type_path = "bevy_transform::components::transform::Transform";
-        let field_path = "translation.x";
-
-        field_edit_preview(
-            app.world_mut(),
-            type_path,
-            field_path,
-            &serde_json::json!(9.0),
-        );
-        assert_eq!(
-            app.world().get::<Transform>(entity).unwrap().translation.x,
-            9.0
-        );
-
-        field_edit_cancel(app.world_mut(), type_path, field_path);
-        assert_eq!(
-            app.world().get::<Transform>(entity).unwrap().translation,
-            Vec3::new(2.0, 5.0, 8.0),
-            "cancel restores the begin baseline"
-        );
-        {
-            let ast = app.world().resource::<SceneBsnAst>();
-            let pe = ast.ast_for(entity).unwrap();
-            assert!(
-                !ast.component_type_paths(pe).iter().any(|p| p == type_path),
-                "cancel must not author a document patch"
-            );
-        }
-        assert_eq!(
-            app.world().resource::<CommandHistory>().undo_stack.len(),
-            0,
-            "cancel mints no undo entry"
         );
     }
 
