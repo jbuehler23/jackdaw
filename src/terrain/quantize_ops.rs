@@ -63,8 +63,7 @@ pub(super) fn commit_quantization(
 #[operator(
     id = "terrain.quantize.toggle",
     label = "Toggle Quantization",
-    description = "Snap this terrain to a metric grid, and mesh it as flat cells. \
-                   Turning it off leaves stored heights exactly as they are.",
+    description = "Snap the terrain to a metric grid and show its surface as flat cells.",
     is_available = has_selected_terrain
 )]
 pub(crate) fn terrain_quantize_toggle(

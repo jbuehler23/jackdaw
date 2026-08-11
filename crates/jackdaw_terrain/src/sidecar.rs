@@ -2,8 +2,8 @@
 //!
 //! A terrain's heights and paint channels are far too large to live in a
 //! text scene file: a 512-resolution heightmap is 262,144 floats, and a
-//! `.bsn` document has to stay readable in a `git diff`. They go in a
-//! versioned binary file beside the scene instead, and the scene
+//! `.bsn` document is meant to be read in a `git diff` without crying. They
+//! go in a versioned binary file beside the scene instead, and the scene
 //! keeps only the small descriptive parts -- resolution, world size, the
 //! channel table.
 //!
@@ -30,6 +30,8 @@
 //! the data, so the same terrain always produces the same bytes and a
 //! sidecar can be committed and diffed.
 
+use std::path::{Component, Path, PathBuf};
+
 use crate::channel::{ChannelData, ChannelElement};
 
 /// Magic bytes at the head of every sidecar.
@@ -40,6 +42,82 @@ pub const VERSION: u16 = 1;
 
 /// Conventional file extension for a terrain sidecar.
 pub const EXTENSION: &str = "jdterrain";
+
+/// Why a terrain sidecar path could not be resolved beneath a scene.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SidecarPathError {
+    /// No sidecar path was provided.
+    Empty,
+    /// The path is absolute or carries a platform-specific prefix.
+    Absolute,
+    /// The path contains a separator or component that is not a plain name.
+    InvalidComponent,
+    /// The path does not end in the exact lowercase `.jdterrain` extension.
+    WrongExtension,
+}
+
+impl core::fmt::Display for SidecarPathError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "terrain sidecar path is empty"),
+            Self::Absolute => write!(f, "terrain sidecar path must be relative to the scene"),
+            Self::InvalidComponent => write!(
+                f,
+                "terrain sidecar path must contain only normal forward-slash-separated components"
+            ),
+            Self::WrongExtension => write!(
+                f,
+                "terrain sidecar path must end in the exact .{EXTENSION} extension"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for SidecarPathError {}
+
+/// Validate `data_path` and resolve it beneath `scene_dir`.
+///
+/// Scene metadata is portable, so validation is deliberately stricter than
+/// the host platform: backslashes and Windows drive prefixes are rejected on
+/// every platform, as are empty, `.` and `..` components.
+pub fn resolve_path(scene_dir: &Path, data_path: &str) -> Result<PathBuf, SidecarPathError> {
+    if data_path.is_empty() {
+        return Err(SidecarPathError::Empty);
+    }
+    if data_path.contains('\\') {
+        return Err(SidecarPathError::InvalidComponent);
+    }
+
+    let path = Path::new(data_path);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
+    {
+        return Err(SidecarPathError::Absolute);
+    }
+
+    for (index, component) in data_path.split('/').enumerate() {
+        if component.is_empty() || matches!(component, "." | "..") {
+            return Err(SidecarPathError::InvalidComponent);
+        }
+        if index == 0
+            && component.as_bytes().get(1) == Some(&b':')
+            && component.as_bytes()[0].is_ascii_alphabetic()
+        {
+            return Err(SidecarPathError::Absolute);
+        }
+        if component.contains(':') {
+            return Err(SidecarPathError::InvalidComponent);
+        }
+    }
+
+    if path.extension().and_then(|extension| extension.to_str()) != Some(EXTENSION) {
+        return Err(SidecarPathError::WrongExtension);
+    }
+
+    Ok(scene_dir.join(path))
+}
 
 /// A terrain's bulk per-cell data: the heightmap plus every paint channel.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -263,6 +341,8 @@ pub fn decode(bytes: &[u8]) -> Result<TerrainData, SidecarError> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     fn sample() -> TerrainData {
@@ -435,5 +515,45 @@ mod tests {
         data.normalize();
         assert_eq!(data.heights.len(), 9);
         assert_eq!(data.channels[0].values.len(), 9);
+    }
+
+    #[test]
+    fn resolves_nested_sidecars_beneath_the_scene_directory() {
+        let scene_dir = Path::new("project").join("scenes");
+
+        assert_eq!(
+            resolve_path(&scene_dir, "terrain/chunks/ground.jdterrain"),
+            Ok(scene_dir.join("terrain/chunks/ground.jdterrain")),
+        );
+    }
+
+    #[test]
+    fn rejects_paths_that_can_escape_or_change_meaning_across_platforms() {
+        let scene_dir = Path::new("project/scenes");
+        let invalid = [
+            "",
+            ".",
+            "..",
+            "./ground.jdterrain",
+            "terrain/./ground.jdterrain",
+            "terrain/../ground.jdterrain",
+            "terrain//ground.jdterrain",
+            "/tmp/ground.jdterrain",
+            "//server/share/ground.jdterrain",
+            "C:/terrain/ground.jdterrain",
+            r"C:\terrain\ground.jdterrain",
+            r"terrain\ground.jdterrain",
+            "terrain/ground:stream.jdterrain",
+            "ground.terrain",
+            "ground.jdterrain.bak",
+            "ground.JDTERRAIN",
+        ];
+
+        for data_path in invalid {
+            assert!(
+                resolve_path(scene_dir, data_path).is_err(),
+                "{data_path:?} must not resolve",
+            );
+        }
     }
 }

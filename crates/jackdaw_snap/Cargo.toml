@@ -10,5 +10,8 @@ repository = "https://github.com/jbuehler23/jackdaw"
 glam.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true

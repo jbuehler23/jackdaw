@@ -22,7 +22,7 @@ use bevy::app::App;
 use bevy::ecs::query::{With, Without};
 use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::ecs::world::World;
-use bevy::prelude::{MinimalPlugins, Name, Transform};
+use bevy::prelude::{GlobalTransform, MinimalPlugins, Name, Transform};
 use bevy::reflect::TypePath;
 use bevy::reflect::serde::TypedReflectSerializer;
 use image::{ImageBuffer, Luma};
@@ -92,7 +92,7 @@ pub struct ExportInput<'a> {
     /// `(size.x, size.y)` -- world-space XZ extent.
     pub size: (f32, f32),
     /// World-space XZ position of heightmap sample `(0, 0)` -- the terrain
-    /// entity's own `Transform.translation` minus half `size`, since the
+    /// entity's computed world translation minus half `size`, since the
     /// mesh is built terrain-LOCAL (`world_x = gx * cell.x - half_size.x`,
     /// `jackdaw_terrain::mesh`) and jackdaw terrains are entity-centred. An
     /// importer that places sample `(0, 0)` at its own coordinate-system
@@ -476,6 +476,11 @@ struct PlacementEntry {
 
 /// `jd export-terrain <scene.bsn> --out <dir> [--cell-size <m>] \
 /// [--elevation-step <m>] [--raw-heights]`
+#[expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "CLI results are written to stdout and errors to stderr"
+)]
 pub fn run_export_terrain_cli(args: &[String]) -> ExitCode {
     match run(args) {
         Ok(summary) => {
@@ -511,17 +516,8 @@ fn run(args: &[String]) -> Result<String, String> {
     let scene_text = std::fs::read_to_string(&scene_path)
         .map_err(|e| format!("{}: {e}", scene_path.display()))?;
 
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::transform::TransformPlugin);
-    app.add_plugins(bevy::asset::AssetPlugin::default());
-    app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
-    app.add_plugins(jackdaw_runtime::JackdawPlugin);
-    app.register_type::<Name>();
-    app.register_type::<Transform>();
-
-    jackdaw_bsn::load_bsn_scene(app.world_mut(), &scene_text)
-        .map_err(|e| format!("{}: {e}", scene_path.display()))?;
+    let mut app = load_export_app(&scene_text)
+        .map_err(|error| format!("{}: {error}", scene_path.display()))?;
 
     let world = app.world_mut();
     let terrain_entity = world
@@ -533,21 +529,7 @@ fn run(args: &[String]) -> Result<String, String> {
         .get::<Terrain>(terrain_entity)
         .expect("queried entity carries Terrain")
         .clone();
-    // Placements and the terrain entity itself both carry local `Transform`
-    // only (no `app.update()` runs here to propagate `GlobalTransform`), so
-    // this reads the same space `collect_placements` below reads -- terrain
-    // origin and placement translations stay comparable. See
-    // `jackdaw_terrain::mesh`: the mesh is built terrain-LOCAL
-    // (`world_x = gx * cell.x - half_size.x`), so sample `(0, 0)` sits at
-    // this entity's translation minus half `size`.
-    let terrain_translation = world
-        .get::<Transform>(terrain_entity)
-        .map(|t| t.translation)
-        .unwrap_or(bevy::prelude::Vec3::ZERO);
-    let terrain_origin_m = [
-        terrain_translation.x - terrain.size.x / 2.0,
-        terrain_translation.z - terrain.size.y / 2.0,
-    ];
+    let terrain_origin_m = terrain_origin_for(world, terrain_entity, &terrain)?;
 
     let (quantization, quantization_source) =
         resolve_quantization(&terrain, cell_size_flag, elevation_step_flag)?;
@@ -635,6 +617,23 @@ fn run(args: &[String]) -> Result<String, String> {
     ))
 }
 
+/// Load a scene into the same headless app the CLI uses and bring derived
+/// transforms up to date before any export query reads them.
+fn load_export_app(scene_text: &str) -> Result<App, String> {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::transform::TransformPlugin);
+    app.add_plugins(bevy::asset::AssetPlugin::default());
+    app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+    app.add_plugins(jackdaw_runtime::JackdawPlugin);
+    app.register_type::<Name>();
+    app.register_type::<Transform>();
+
+    jackdaw_bsn::load_bsn_scene(app.world_mut(), scene_text).map_err(|error| error.to_string())?;
+    app.update();
+    Ok(app)
+}
+
 /// Where a completed export's quantization setting came from, for the
 /// CLI's stdout report.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -682,7 +681,8 @@ fn parse_f32_flag(args: &[String], name: &str) -> Result<Option<f32>, String> {
 
 /// Resolve the export's quantization and where it came from.
 ///
-/// Precedence: the terrain's own authored [`TerrainQuantization`] wins when
+/// Precedence: the terrain's own authored
+/// [`TerrainQuantization`](jackdaw_scene_types::TerrainQuantization) wins when
 /// it is actually turned on (`enabled` and both `cell_size` and
 /// `height_step` positive) -- that is the project's durable setting, not a
 /// one-off export choice. `--cell-size`/`--elevation-step` are the fallback
@@ -737,86 +737,13 @@ fn resolve_quantization(
     }
 }
 
-#[cfg(test)]
-mod resolve_quantization_tests {
-    use super::*;
-
-    fn terrain_with_quantization(enabled: bool, cell_size: f32, height_step: f32) -> Terrain {
-        Terrain {
-            quantization: jackdaw_scene_types::TerrainQuantization {
-                enabled,
-                cell_size,
-                height_step,
-            },
-            ..Terrain::default()
-        }
-    }
-
-    #[test]
-    fn terrain_quantization_wins_when_enabled() {
-        let terrain = terrain_with_quantization(true, 1.0, 0.25);
-        let (quantization, source) = resolve_quantization(&terrain, None, None).unwrap();
-        assert_eq!(quantization, Some((1.0, 0.25)));
-        assert_eq!(source, QuantizationSource::Terrain);
-    }
-
-    #[test]
-    fn flags_are_used_when_terrain_quantization_is_off() {
-        let terrain = Terrain::default();
-        let (quantization, source) = resolve_quantization(&terrain, Some(2.0), Some(0.5)).unwrap();
-        assert_eq!(quantization, Some((2.0, 0.5)));
-        assert_eq!(source, QuantizationSource::Flags);
-    }
-
-    #[test]
-    fn neither_terrain_nor_flags_is_unquantized() {
-        let terrain = Terrain::default();
-        let (quantization, source) = resolve_quantization(&terrain, None, None).unwrap();
-        assert_eq!(quantization, None);
-        assert_eq!(source, QuantizationSource::None);
-    }
-
-    #[test]
-    fn agreeing_terrain_and_flags_are_accepted_as_terrain_sourced() {
-        let terrain = terrain_with_quantization(true, 1.0, 0.25);
-        let (quantization, source) = resolve_quantization(&terrain, Some(1.0), Some(0.25)).unwrap();
-        assert_eq!(quantization, Some((1.0, 0.25)));
-        assert_eq!(source, QuantizationSource::Terrain);
-    }
-
-    #[test]
-    fn disagreeing_terrain_and_flags_are_refused_naming_both() {
-        let terrain = terrain_with_quantization(true, 1.0, 0.25);
-        let error = resolve_quantization(&terrain, Some(2.0), Some(0.25)).unwrap_err();
-        assert!(error.contains("1"), "names the terrain value: {error}");
-        assert!(error.contains("2"), "names the flag value: {error}");
-    }
-
-    #[test]
-    fn one_flag_without_the_other_is_rejected() {
-        let terrain = Terrain::default();
-        let error = resolve_quantization(&terrain, Some(1.0), None).unwrap_err();
-        assert!(error.contains("together"));
-    }
-
-    #[test]
-    fn terrain_quantization_disabled_falls_through_to_flags_even_with_stale_values() {
-        // `enabled: false` with nonzero leftover fields must not leak
-        // through -- disabling quantization has to mean "off", not "off
-        // unless someone forgot to zero the numbers".
-        let terrain = terrain_with_quantization(false, 1.0, 0.25);
-        let (quantization, source) = resolve_quantization(&terrain, Some(3.0), Some(0.75)).unwrap();
-        assert_eq!(quantization, Some((3.0, 0.75)));
-        assert_eq!(source, QuantizationSource::Flags);
-    }
-}
-
 fn load_terrain_data(
     terrain: &Terrain,
     scene_dir: &Path,
 ) -> Result<jackdaw_terrain::TerrainData, String> {
     if !terrain.data_path.is_empty() {
-        let sidecar_path = scene_dir.join(&terrain.data_path);
+        let sidecar_path = jackdaw_terrain::sidecar::resolve_path(scene_dir, &terrain.data_path)
+            .map_err(|err| format!("invalid terrain data path {:?}: {err}", terrain.data_path))?;
         match std::fs::read(&sidecar_path) {
             Ok(bytes) => {
                 let mut data = jackdaw_terrain::sidecar::decode(&bytes)
@@ -853,6 +780,61 @@ fn color_to_hex(color: bevy::color::Color) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
+/// The transform an exported entity occupies in scene space.
+///
+/// Runtime scene loading computes `GlobalTransform` parent-first. A local
+/// fallback keeps isolated worlds and older hand-built fixtures usable.
+fn transform_for_export(local: Transform, global: Option<&GlobalTransform>) -> Transform {
+    global
+        .map(GlobalTransform::compute_transform)
+        .unwrap_or(local)
+}
+
+fn resolved_transform(world: &World, entity: bevy::ecs::entity::Entity) -> Transform {
+    transform_for_export(
+        world.get::<Transform>(entity).copied().unwrap_or_default(),
+        world.get::<GlobalTransform>(entity),
+    )
+}
+
+/// World-space XZ origin for heightmap sample `(0, 0)`.
+///
+/// The export contract is an axis-aligned heightfield and carries no terrain
+/// orientation or scale basis. Reject transforms that cannot be represented
+/// instead of emitting coordinates that only appear valid.
+fn terrain_origin_for(
+    world: &World,
+    entity: bevy::ecs::entity::Entity,
+    terrain: &Terrain,
+) -> Result<[f32; 2], String> {
+    const EPSILON: f32 = 1e-5;
+
+    let transform = resolved_transform(world, entity);
+    let identity_alignment = transform.rotation.dot(bevy::math::Quat::IDENTITY).abs();
+    if 1.0 - identity_alignment > EPSILON {
+        return Err(
+            "terrain export cannot represent terrain rotation; apply the rotation before export"
+                .to_string(),
+        );
+    }
+    if transform
+        .scale
+        .to_array()
+        .into_iter()
+        .any(|axis| (axis - 1.0).abs() > EPSILON)
+    {
+        return Err(
+            "terrain export cannot represent terrain scale; apply the scale before export"
+                .to_string(),
+        );
+    }
+
+    Ok([
+        transform.translation.x - terrain.size.x / 2.0,
+        transform.translation.z - terrain.size.y / 2.0,
+    ])
+}
+
 fn collect_placements(
     world: &mut World,
     terrain_entity: bevy::ecs::entity::Entity,
@@ -860,6 +842,7 @@ fn collect_placements(
     let excluded = [
         Terrain::type_path(),
         Transform::type_path(),
+        GlobalTransform::type_path(),
         Name::type_path(),
         GltfSource::type_path(),
     ];
@@ -867,11 +850,14 @@ fn collect_placements(
     let registry = world.resource::<AppTypeRegistry>().clone();
     let reg = registry.read();
 
-    let mut query =
-        world.query_filtered::<(bevy::ecs::entity::Entity, &Transform), Without<Terrain>>();
+    let mut query = world.query_filtered::<(
+        bevy::ecs::entity::Entity,
+        &Transform,
+        Option<&GlobalTransform>,
+    ), Without<Terrain>>();
     let entities: Vec<(bevy::ecs::entity::Entity, Transform)> = query
         .iter(world)
-        .map(|(entity, transform)| (entity, *transform))
+        .map(|(entity, local, global)| (entity, transform_for_export(*local, global)))
         .collect();
 
     let components = world.components();
@@ -926,4 +912,248 @@ fn collect_placements(
         });
     }
     placements
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::prelude::*;
+
+    use super::*;
+
+    fn terrain_with_quantization(enabled: bool, cell_size: f32, height_step: f32) -> Terrain {
+        Terrain {
+            quantization: jackdaw_scene_types::TerrainQuantization {
+                enabled,
+                cell_size,
+                height_step,
+            },
+            ..Terrain::default()
+        }
+    }
+
+    #[test]
+    fn terrain_quantization_wins_when_enabled() {
+        let terrain = terrain_with_quantization(true, 1.0, 0.25);
+        let (quantization, source) = resolve_quantization(&terrain, None, None).unwrap();
+        assert_eq!(quantization, Some((1.0, 0.25)));
+        assert_eq!(source, QuantizationSource::Terrain);
+    }
+
+    #[test]
+    fn flags_are_used_when_terrain_quantization_is_off() {
+        let terrain = Terrain::default();
+        let (quantization, source) = resolve_quantization(&terrain, Some(2.0), Some(0.5)).unwrap();
+        assert_eq!(quantization, Some((2.0, 0.5)));
+        assert_eq!(source, QuantizationSource::Flags);
+    }
+
+    #[test]
+    fn neither_terrain_nor_flags_is_unquantized() {
+        let terrain = Terrain::default();
+        let (quantization, source) = resolve_quantization(&terrain, None, None).unwrap();
+        assert_eq!(quantization, None);
+        assert_eq!(source, QuantizationSource::None);
+    }
+
+    #[test]
+    fn agreeing_terrain_and_flags_are_accepted_as_terrain_sourced() {
+        let terrain = terrain_with_quantization(true, 1.0, 0.25);
+        let (quantization, source) = resolve_quantization(&terrain, Some(1.0), Some(0.25)).unwrap();
+        assert_eq!(quantization, Some((1.0, 0.25)));
+        assert_eq!(source, QuantizationSource::Terrain);
+    }
+
+    #[test]
+    fn disagreeing_terrain_and_flags_are_refused_naming_both() {
+        let terrain = terrain_with_quantization(true, 1.0, 0.25);
+        let error = resolve_quantization(&terrain, Some(2.0), Some(0.25)).unwrap_err();
+        assert!(error.contains('1'), "names the terrain value: {error}");
+        assert!(error.contains('2'), "names the flag value: {error}");
+    }
+
+    #[test]
+    fn one_flag_without_the_other_is_rejected() {
+        let terrain = Terrain::default();
+        let error = resolve_quantization(&terrain, Some(1.0), None).unwrap_err();
+        assert!(error.contains("together"));
+    }
+
+    #[test]
+    fn terrain_quantization_disabled_falls_through_to_flags_even_with_stale_values() {
+        // `enabled: false` with nonzero leftover fields must not leak
+        // through -- disabling quantization has to mean "off", not "off
+        // unless someone forgot to zero the numbers".
+        let terrain = terrain_with_quantization(false, 1.0, 0.25);
+        let (quantization, source) = resolve_quantization(&terrain, Some(3.0), Some(0.75)).unwrap();
+        assert_eq!(quantization, Some((3.0, 0.75)));
+        assert_eq!(source, QuantizationSource::Flags);
+    }
+
+    fn assert_array_close(actual: [f32; 3], expected: [f32; 3]) {
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-5, "{actual} != {expected}");
+        }
+    }
+
+    #[test]
+    fn placements_export_the_propagated_world_transform() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin));
+        app.init_resource::<AppTypeRegistry>();
+        app.register_type::<Name>();
+        app.register_type::<Transform>();
+        app.register_type::<GlobalTransform>();
+
+        let parent = app
+            .world_mut()
+            .spawn((
+                Transform {
+                    translation: Vec3::new(10.0, 0.0, -2.0),
+                    rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+                    scale: Vec3::splat(2.0),
+                },
+                GlobalTransform::default(),
+            ))
+            .id();
+        let child = app
+            .world_mut()
+            .spawn((
+                Name::new("child"),
+                Transform {
+                    translation: Vec3::new(1.0, 2.0, 3.0),
+                    rotation: Quat::from_rotation_y(0.25),
+                    scale: Vec3::splat(0.5),
+                },
+                GlobalTransform::default(),
+                ChildOf(parent),
+            ))
+            .id();
+        let terrain_entity = app.world_mut().spawn(Terrain::default()).id();
+
+        app.update();
+        let expected = app
+            .world()
+            .get::<GlobalTransform>(child)
+            .expect("transform propagated")
+            .compute_transform();
+        let placements = collect_placements(app.world_mut(), terrain_entity);
+        let placement = placements
+            .iter()
+            .find(|placement| placement.name == "child")
+            .expect("child exported");
+
+        assert_array_close(placement.translation, expected.translation.to_array());
+        assert_array_close(placement.scale, expected.scale.to_array());
+        for (actual, expected) in placement
+            .rotation
+            .into_iter()
+            .zip(expected.rotation.to_array())
+        {
+            assert!((actual - expected).abs() < 1e-5, "{actual} != {expected}");
+        }
+        assert!(
+            placement
+                .components
+                .keys()
+                .all(|name| !name.contains("GlobalTransform")),
+            "runtime world transform must not be exported as metadata",
+        );
+    }
+
+    #[test]
+    fn terrain_origin_uses_world_translation_and_rejects_unrepresentable_transforms() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Transform::from_xyz(1.0, 0.0, 2.0),
+                GlobalTransform::from(Transform::from_xyz(11.0, 4.0, -7.0)),
+            ))
+            .id();
+        let terrain = Terrain {
+            size: Vec2::new(4.0, 6.0),
+            ..default()
+        };
+
+        assert_eq!(
+            terrain_origin_for(&world, entity, &terrain),
+            Ok([9.0, -10.0])
+        );
+
+        world
+            .entity_mut(entity)
+            .insert(GlobalTransform::from(Transform {
+                translation: Vec3::new(11.0, 4.0, -7.0),
+                rotation: Quat::from_rotation_y(0.25),
+                ..default()
+            }));
+        assert!(
+            terrain_origin_for(&world, entity, &terrain)
+                .unwrap_err()
+                .contains("rotation")
+        );
+
+        world
+            .entity_mut(entity)
+            .insert(GlobalTransform::from(Transform {
+                translation: Vec3::new(11.0, 4.0, -7.0),
+                scale: Vec3::new(2.0, 1.0, 1.0),
+                ..default()
+            }));
+        assert!(
+            terrain_origin_for(&world, entity, &terrain)
+                .unwrap_err()
+                .contains("scale")
+        );
+    }
+
+    #[test]
+    fn loaded_scene_propagates_parent_rotation_before_export_reads_transforms() {
+        let mut source = App::new();
+        source
+            .register_type::<Name>()
+            .register_type::<Transform>()
+            .register_type::<ChildOf>()
+            .register_type::<Children>()
+            .register_type::<Terrain>();
+
+        let parent = source
+            .world_mut()
+            .spawn((
+                Name::new("parent"),
+                Transform::from_rotation(Quat::from_rotation_y(0.25)),
+            ))
+            .id();
+        source.world_mut().spawn((
+            Name::new("terrain"),
+            Transform::from_xyz(3.0, 0.0, 5.0),
+            Terrain::default(),
+            ChildOf(parent),
+        ));
+        let scene = jackdaw_bsn::serialize_to_bsn(source.world());
+
+        let loaded = load_export_app(&scene).expect("scene reloads through the export shell");
+        let world = loaded.world();
+        let terrain_entity = world
+            .iter_entities()
+            .find(bevy::prelude::EntityRef::contains::<Terrain>)
+            .expect("terrain reloads")
+            .id();
+        let terrain = world
+            .get::<Terrain>(terrain_entity)
+            .expect("queried entity carries Terrain");
+
+        assert!(
+            terrain_origin_for(world, terrain_entity, terrain)
+                .unwrap_err()
+                .contains("rotation"),
+            "the inherited rotation must be propagated before export",
+        );
+    }
+
+    #[test]
+    fn a_missing_global_transform_falls_back_to_local_space() {
+        let local = Transform::from_xyz(3.0, 4.0, 5.0);
+
+        assert_eq!(transform_for_export(local, None), local);
+    }
 }

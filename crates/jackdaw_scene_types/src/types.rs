@@ -868,9 +868,10 @@ pub struct NavmeshRegion {
 ///
 /// Only the small, human-editable fields live here. The bulk per-cell
 /// arrays -- heights and every paint channel -- live in a binary sidecar
-/// beside the scene ([`jackdaw_terrain::sidecar`]), keyed by
-/// [`Terrain::data_path`]. A 512-resolution heightmap is 262,144 floats,
-/// which scene text cannot carry and stay readable in a `git diff`.
+/// beside the scene (`jackdaw_terrain::sidecar`), keyed by
+/// [`Terrain::data_path`]. A 512-resolution heightmap is 262,144 floats;
+/// serializing that as scene text defeats the point of a format you can
+/// read in a `git diff`.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component, Default, @crate::EditorCategory::new("Terrain"), @crate::EditorHidden)]
 pub struct Terrain {

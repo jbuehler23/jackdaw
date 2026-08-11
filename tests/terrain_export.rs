@@ -76,7 +76,7 @@ fn find_file<'a>(
 ) -> &'a jackdaw::terrain::export::ExportedFile {
     files
         .iter()
-        .find(|f| f.relative_path == std::path::PathBuf::from(relative))
+        .find(|f| f.relative_path.as_path() == std::path::Path::new(relative))
         .unwrap_or_else(|| panic!("missing output file {relative}"))
 }
 
@@ -372,7 +372,7 @@ fn heights_f32_absent_without_raw_heights_flag() {
     assert!(
         !files
             .iter()
-            .any(|f| f.relative_path == std::path::PathBuf::from("heights.f32")),
+            .any(|f| f.relative_path.as_path() == std::path::Path::new("heights.f32")),
         "heights.f32 must be absent without --raw-heights"
     );
 }

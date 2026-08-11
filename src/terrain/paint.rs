@@ -2,12 +2,15 @@
 //!
 //! Mirrors [`super::sculpt`] exactly: a modal operator driven by LMB, one
 //! history entry pushed on release, Escape restoring the pre-stroke
-//! snapshot, and Shift+scroll resizing the same brush. One brush idiom
-//! covers both modes.
+//! snapshot, and Shift+scroll resizing the same brush. Sculpt and paint
+//! share one brush idiom because that is what the tools people arrive
+//! from do -- Unity, Unreal and `Terrain3D` all use one set of brush
+//! controls across their terrain modes.
 //!
 //! The values are integers, so the brush is a threshold stamp rather than
 //! an accumulation: a cell inside the falloff is written, a cell outside
-//! is left alone. Holding Ctrl paints 0, the erase gesture.
+//! is left alone. Holding Ctrl paints 0 -- the erase gesture every one of
+//! those tools has and jackdaw did not.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -49,8 +52,13 @@ pub struct TerrainPaintState {
     pub active_entry: usize,
     /// Tint the terrain by the active channel.
     ///
-    /// On by default: without it the user is painting invisible data. A
-    /// terrain with no channels is unaffected.
+    /// `Terrain3D` calls this a control-texture debug view and it is the
+    /// single most borrowable thing in the reference set: without it a
+    /// user is painting invisible data.
+    ///
+    /// On by default. A terrain with no channels is unaffected, and for
+    /// one that has them the alternative is opening a painted scene,
+    /// seeing flat grey, and concluding nothing was ever painted.
     pub show_channel: bool,
     /// The terrain the brush is over.
     pub target: Option<Entity>,
@@ -216,9 +224,7 @@ fn paint_invoke_trigger(
 #[operator(
     id = "terrain.paint",
     label = "Paint Terrain",
-    description = "Stamp the active channel value while LMB is held. Modal: commits \
-                   the change as a single undo entry on release; Escape restores \
-                   the pre-stroke values. Hold Ctrl to erase.",
+    description = "Paint the active channel under the brush, or erase it while holding Ctrl.",
     modal = true,
     allows_undo = false,
     cancel = cancel_terrain_paint,

@@ -313,7 +313,13 @@ pub(crate) fn import_terrain_sidecars(world: &mut World, scene_path: &str, mode:
     }
 
     for (data_path, no_inline_heights) in wanted {
-        let full = scene_dir.join(&data_path);
+        let full = match sidecar::resolve_path(&scene_dir, &data_path) {
+            Ok(path) => path,
+            Err(err) => {
+                warn!("Skipping invalid terrain data path {data_path:?}: {err}");
+                continue;
+            }
+        };
         match std::fs::read(&full) {
             Ok(bytes) => match sidecar::decode(&bytes) {
                 Ok(mut data) => {
@@ -406,8 +412,11 @@ pub(super) fn on_new_scene_save(
         if world.remove_resource::<PendingNewScene>().is_none() {
             return;
         }
-        save_scene(world);
-        do_new_scene(world);
+        if save_scene(world) {
+            do_new_scene(world);
+        } else {
+            warn!("new scene cancelled because the current scene was not saved");
+        }
     });
 }
 

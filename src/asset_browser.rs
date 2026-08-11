@@ -4,6 +4,7 @@ use std::sync::{Mutex, mpsc};
 use bevy::{
     asset::RenderAssetUsages,
     feathers::cursor::{EntityCursor, OverrideCursor},
+    feathers::theme::ThemedText,
     image::{CompressedImageFormats, ImageSampler, ImageType},
     picking::hover::Hovered,
     prelude::*,
@@ -22,6 +23,7 @@ use crate::{
     EditorEntity,
     brush::{Brush, BrushEditMode, BrushSelection, EditMode, LastUsedMaterial},
     material_browser::MaterialRegistry,
+    model_thumbnail::ModelThumbnailSlot,
     prelude::*,
     selection::Selection,
 };
@@ -309,10 +311,10 @@ pub struct AssetBrowserState {
     pub selected_file: Option<String>,
     /// Timestamp of last click for double-click detection.
     pub last_click_time: f64,
-    /// When true, only `.jsn` files that contain a `Prefab` component are
+    /// When true, only scene files that contain a `Prefab` component are
     /// shown in the grid.
     pub prefabs_only: bool,
-    /// Per-path memo of whether a `.jsn` file is a prefab. Keyed by
+    /// Per-path memo of whether a scene file is a prefab. Keyed by
     /// absolute path, valued by `(mtime, is_prefab)`; invalidated when
     /// the file's mtime changes.
     prefab_cache: PrefabCheckCache,
@@ -345,10 +347,50 @@ pub struct DirEntry {
     pub is_prefab: bool,
 }
 
-/// Returns true if `path` is a `.jsn` file whose first scene entity carries
-/// a `jackdaw::prefab::components::Prefab` component. The file is opened and
-/// parsed as JSON; any I/O or parse error returns false.
+/// Returns true if `path` is a prefab: a scene document whose root entity
+/// carries a `jackdaw::prefab::components::Prefab` component.
+///
+/// Both formats the editor can hold a prefab in are recognised. `.bsn` is
+/// what the editor writes today (`crate::prefab::operators::write_prefab_doc`
+/// redirects even a `.jsn` target to a `.bsn` file); `.jsn` is the legacy
+/// form. Anything else, and any I/O or parse error, is not a prefab.
 fn read_is_prefab(path: &Path) -> bool {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("bsn") => read_is_bsn_prefab(path),
+        Some(ext) if ext.eq_ignore_ascii_case("jsn") => read_is_jsn_prefab(path),
+        _ => false,
+    }
+}
+
+/// A `.bsn` document is a prefab when one of its roots carries the `Prefab`
+/// marker.
+///
+/// Deliberately *not* routed through `crate::prefab::save_load::read_prefab_ast`:
+/// that calls `normalize_as_prefab_source`, which wraps any plain scene into
+/// an instanceable prefab, so every `.bsn` in the project would answer yes.
+/// Detection has to see the file as authored.
+fn read_is_bsn_prefab(path: &Path) -> bool {
+    use crate::prefab::resolver_bsn::PREFAB_TYPE;
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    // Cheap reject before the parser runs: the marker's type path appears
+    // verbatim in BSN text, so a document that never mentions it cannot be a
+    // prefab. Worth having when a directory holds hundreds of scenes.
+    if !text.contains(PREFAB_TYPE) {
+        return false;
+    }
+    let Ok(ast) = jackdaw_bsn::parse_bsn_text(&text) else {
+        return false;
+    };
+    ast.roots
+        .iter()
+        .any(|&root| ast.find_patch_by_type_path(root, PREFAB_TYPE).is_some())
+}
+
+/// A legacy `.jsn` document is a prefab when its first scene entity carries
+/// the `Prefab` component. Parsed as plain JSON.
+fn read_is_jsn_prefab(path: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(path) else {
         return false;
     };
@@ -359,7 +401,7 @@ fn read_is_prefab(path: &Path) -> bool {
         .get("scene")
         .and_then(|v| v.get(0))
         .and_then(|e| e.get("components"))
-        .and_then(|c| c.get("jackdaw::prefab::components::Prefab"))
+        .and_then(|c| c.get(crate::prefab::resolver_bsn::PREFAB_TYPE))
         .is_some()
 }
 
@@ -508,7 +550,12 @@ fn refresh_browser_on_change(
                     return None;
                 }
                 let path = entry.path();
-                let is_directory = entry.file_type().ok()?.is_dir();
+                // `DirEntry::file_type` reports the link itself, so a
+                // symlinked directory used to classify as a file and render
+                // as an unopenable row. Ask the path, which follows the
+                // link: symlinking a shared art kit into a project is a
+                // normal way to avoid copying gigabytes of models.
+                let is_directory = path.is_dir();
 
                 let texture_info = if !is_directory && is_image_file_path(&path) {
                     let ext = path
@@ -554,15 +601,15 @@ fn refresh_browser_on_change(
             })
             .collect();
 
-        // Compute is_prefab for `.jsn` files (cached by mtime), then apply
-        // the prefabs_only filter if it's enabled.
+        // Compute is_prefab for scene documents (cached by mtime), then
+        // apply the prefabs_only filter if it's enabled.
         for entry in entries.iter_mut() {
             if !entry.is_directory
                 && entry
                     .path
                     .extension()
                     .and_then(|e| e.to_str())
-                    .is_some_and(|e| e.eq_ignore_ascii_case("jsn"))
+                    .is_some_and(|e| e.eq_ignore_ascii_case("jsn") || e.eq_ignore_ascii_case("bsn"))
             {
                 entry.is_prefab = state.prefab_cache.check(&entry.path);
             }
@@ -762,6 +809,20 @@ fn refresh_browser_on_change(
             };
 
             let item_entity = match state.view_mode {
+                // A `.glb`/`.gltf` grid tile gets a thumbnail slot in place
+                // of the plain glyph. List mode keeps the glyph: a 16px row
+                // is too small for a rendered model to say anything.
+                BrowserViewMode::Grid
+                    if crate::model_thumbnail::is_model_path(&entry.path)
+                        && !entry.is_directory =>
+                {
+                    commands
+                        .spawn((
+                            model_grid_tile(&item, &icon_font, entry.path.clone()),
+                            ChildOf(content_entity),
+                        ))
+                        .id()
+                }
                 BrowserViewMode::Grid => commands
                     .spawn((
                         file_browser::file_browser_item_with_icon(&item, &icon_font, icon_override),
@@ -1004,6 +1065,72 @@ fn unhighlight_on_out(out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>
     if let Ok(mut bg) = bg.get_mut(out.event_target()) {
         bg.0 = Color::NONE;
     }
+}
+
+/// Grid tile for a `.glb` / `.gltf` entry.
+///
+/// Same shape as [`file_browser::file_browser_item_with_icon`] -- and it
+/// carries the same `FileBrowserItem`, so click, double-click, right-click
+/// and drag-to-viewport all keep working through the observers the caller
+/// attaches. The one difference is that the icon sits inside a fixed square
+/// tagged [`ModelThumbnailSlot`], which [`crate::model_thumbnail`] swaps for
+/// the rendered picture once there is one. The glyph is the fallback, so a
+/// pending or failed thumbnail looks exactly like the browser did before.
+fn model_grid_tile(item: &FileBrowserItem, icon_font: &IconFont, path: PathBuf) -> impl Bundle {
+    let slot_size = crate::model_thumbnail::THUMBNAIL_DISPLAY_SIZE;
+    (
+        item.clone(),
+        Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            padding: UiRect::all(Val::Px(6.0)),
+            width: Val::Px(80.0),
+            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+        children![
+            (
+                ModelThumbnailSlot::new(path),
+                Node {
+                    width: Val::Px(slot_size),
+                    height: Val::Px(slot_size),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                children![(
+                    Text::new(String::from(
+                        file_browser::file_icon(&item.file_name).unicode()
+                    )),
+                    TextFont {
+                        font: icon_font.0.clone().into(),
+                        font_size: tokens::ICON_LG,
+                        ..default()
+                    },
+                    TextColor(tokens::FILE_ICON_COLOR),
+                )],
+            ),
+            (
+                Text::new(truncate_tile_name(&item.file_name, 12)),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..default()
+                },
+                ThemedText,
+            ),
+        ],
+    )
+}
+
+/// Shorten a file name to fit a grid tile, cutting on a character boundary
+/// so a non-ASCII name cannot panic the slice.
+fn truncate_tile_name(name: &str, max_len: usize) -> String {
+    if name.chars().count() <= max_len {
+        return name.to_string();
+    }
+    let head: String = name.chars().take(max_len.saturating_sub(3)).collect();
+    format!("{head}...")
 }
 
 fn load_thumbnail(path: &Path, asset_server: &AssetServer) -> Option<Handle<Image>> {
@@ -1742,7 +1869,7 @@ fn prefabs_only_chip(icon_font: Handle<Font>) -> impl Bundle {
         Interaction::default(),
         Hovered::default(),
         Tooltip::title("Prefabs only")
-            .with_description("Show only `.jsn` files that define a prefab."),
+            .with_description("Show only scene files that define a prefab."),
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -1948,5 +2075,57 @@ mod tests {
         let path = tmp.path().join("g.jsn");
         std::fs::write(&path, "not json at all").unwrap();
         assert!(!read_is_prefab(&path), "invalid JSON returns false");
+    }
+
+    /// `.bsn` is the format the editor actually writes prefabs in, so it is
+    /// the case that matters most; detection used to parse every candidate
+    /// as JSON and missed all of them.
+    #[test]
+    fn read_is_prefab_detects_a_bsn_prefab() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("Cube1.bsn");
+        let body = "jackdaw::prefab::components::Prefab\n\
+                    jackdaw::prefab::components::PrefabEntityId(0)\n\
+                    #Cube1\n\
+                    bevy_camera::visibility::Visibility::Inherited\n";
+        std::fs::write(&path, body).unwrap();
+        assert!(read_is_prefab(&path), "a .bsn prefab is detected");
+    }
+
+    #[test]
+    fn read_is_prefab_rejects_a_plain_bsn_scene() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("scene.bsn");
+        let body = "#Root\n\
+                    bevy_transform::components::transform::Transform\n\
+                    bevy_camera::visibility::Visibility::Inherited\n";
+        std::fs::write(&path, body).unwrap();
+        assert!(
+            !read_is_prefab(&path),
+            "a hand-authored scene is not a prefab"
+        );
+    }
+
+    /// The marker has to be on a root. A document that only mentions the
+    /// type path in passing must not pass the filter.
+    #[test]
+    fn read_is_prefab_rejects_a_bsn_that_only_mentions_the_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("named.bsn");
+        let body = "#\"jackdaw::prefab::components::Prefab\"\n\
+                    bevy_camera::visibility::Visibility::Inherited\n";
+        std::fs::write(&path, body).unwrap();
+        assert!(
+            !read_is_prefab(&path),
+            "the marker as a name is not the marker as a component"
+        );
+    }
+
+    #[test]
+    fn read_is_prefab_returns_false_on_unparseable_bsn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("broken.bsn");
+        std::fs::write(&path, "jackdaw::prefab::components::Prefab {{{{").unwrap();
+        assert!(!read_is_prefab(&path), "a parse failure is not a prefab");
     }
 }

@@ -1,6 +1,6 @@
 //! The `terrain.scatter` operator: PCG placement over paint channels.
 //!
-//! A run stamps ordinary editable
+//! Generator proposes, painter disposes. A run stamps ordinary editable
 //! entities -- the same `GltfSource` + `WorldAssetRoot` + `Transform`
 //! shape a drag from the asset browser produces
 //! ([`crate::entity_ops::spawn_gltf`]) -- parented under one named group
@@ -13,11 +13,11 @@
 //! generator produced. On re-run an instance whose live `Transform` still
 //! equals its recorded one is *untouched* and gets replaced; one the user
 //! moved, rotated or scaled no longer matches and is preserved. That is
-//! the whole rule: it needs no bookkeeping beyond what the scene already
-//! saves, and it survives a save/load round trip because both halves are
-//! reflected data.
+//! the whole definition, and it is deliberately narrow: it needs no
+//! bookkeeping beyond what is already saved in the scene, and it survives
+//! a save/load round trip because both halves are reflected data.
 //!
-//! The random stream lives in [`jackdaw_terrain::scatter`] and derives
+//! The random stream lives in [`jackdaw_terrain::scatter()`] and derives
 //! from `(seed, cell index)` only. Nothing in this file adds randomness.
 
 use std::sync::{Arc, Mutex};
@@ -100,7 +100,8 @@ pub struct ScatterInstance {
 pub struct ScatterAsset {
     /// Project-relative or absolute path to a `.gltf` / `.glb`.
     pub path: String,
-    /// Whether this entry takes part in the next run.
+    /// Whether this entry takes part in the next run. Unreal's per-row
+    /// checkbox and `Terrain3D`'s per-tile eye are the same control.
     pub active: bool,
 }
 
@@ -863,9 +864,10 @@ pub(super) fn signature(
 
 /// The Scatter section of the terrain inspector.
 ///
-/// Reads top to bottom in workflow order: *what* is being placed (the
-/// asset palette), *where* it may go (the mask), then *how much* and *how
-/// varied*.
+/// Laid out in the order the reference tools use, so the workflow reads
+/// top to bottom the way it does in Unreal's Foliage panel and Unity's
+/// Paint Trees: *what* is being placed (the asset palette), *where* it
+/// may go (the mask), then *how much* and *how varied*.
 pub(super) fn spawn_scatter_ui(
     commands: &mut Commands,
     parent: Entity,
@@ -1029,8 +1031,9 @@ pub(super) fn spawn_scatter_ui(
         ChildOf(parent),
     ));
 
-    // Instance-count feedback: without it a user cannot tell a run that
-    // placed nothing from one that never ran.
+    // Instance-count feedback, the way Unreal shows a live count on the
+    // foliage type and ProtonScatter shows Instance Count: without it a
+    // user cannot tell a run that placed nothing from one that never ran.
     if !report.message.is_empty() {
         spawn_hint(commands, parent, &report.message);
     }

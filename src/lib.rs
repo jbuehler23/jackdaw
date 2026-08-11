@@ -13,6 +13,7 @@ pub mod app_ops;
 pub mod asset_browser;
 pub mod asset_catalog;
 pub mod asset_ingest;
+pub mod boot_ops;
 pub mod brush;
 pub mod brush_drag_ops;
 pub mod brush_element_ops;
@@ -71,6 +72,7 @@ pub mod mesh_quick_menu;
 pub mod migrate;
 pub mod modal_inputs;
 pub mod modal_transform;
+pub mod model_thumbnail;
 pub mod modifier_ops;
 pub mod navmesh;
 pub mod new_project;
@@ -98,6 +100,7 @@ pub mod scaffold;
 pub mod scene_io;
 pub mod scene_ops;
 pub mod scenes;
+pub mod screenshot;
 pub mod scrolling_log;
 pub mod sdk_paths;
 pub mod sdk_setup;
@@ -355,12 +358,15 @@ impl Plugin for EditorCorePlugin {
             alignment_guides::AlignmentGuidesPlugin,
             navmesh::NavmeshPlugin,
             terrain::TerrainPlugin,
+            screenshot::plugin,
             reference_image::ReferenceImagePlugin,
             jackdaw_widgets::RadialMenuPlugin,
             mesh_quick_menu::MeshQuickMenuPlugin,
             remote::RemoteConnectionPlugin,
             remote::debug::RemoteDebugPlugin,
         ))
+        .add_plugins(model_thumbnail::plugin)
+        .add_plugins(boot_ops::plugin)
         .add_plugins(jackdaw_avian_integration::PhysicsOverlaysPlugin::<
             selection::Selected,
         >::new())

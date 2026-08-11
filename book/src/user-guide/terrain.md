@@ -44,13 +44,65 @@ runs on the CPU and rebuilds every chunk mesh when it
 finishes. Save before you click. We do not have a cancel
 button yet.
 
-## Texture painting
+## Paint channels
 
-Texture painting on terrain is on the roadmap but not built.
-Today the terrain takes a single material applied to the
-whole surface. If you need varied surface textures, blend in
-your fragment shader or split the heightmap into multiple
-terrains, each with its own material.
+Choose the paintbrush in the terrain toolbar to edit integer
+channels such as biome, ground type, or buildability. Add a
+channel and one or more palette values in the **Paint
+Channels** section, select the value to write, and drag over
+the terrain. Hold `Ctrl` while painting to restore value `0`.
+
+**Show Painted Values** tints the terrain with the active
+palette so the stored data is visible even before a game
+material consumes it. New channel and palette entries receive
+generated names and colours; project-specific descriptor
+names, integer widths, labels, values, and colours can also be
+authored directly in the scene document.
+
+## Quantization
+
+Enable quantization when the game needs a fixed metric grid or
+terraced elevations. **Cell Size** controls the world-space
+distance between samples and **Height Step** controls the
+elevation interval. Sculpt, generation, and erosion snap new
+changes while quantization is enabled. Click **Apply** once to
+snap heights that existed before it was enabled.
+
+Turning quantization off stops future snapping but does not
+alter heights that are already stored.
+
+## Scatter
+
+The **Scatter** section places model instances across the
+selected terrain. Add one or more model assets, then configure
+density, spacing, scale, yaw, normal alignment, and an optional
+paint-channel mask. A seed produces the same placement for the
+same terrain and channel data.
+
+Re-running the same scatter group replaces untouched generated
+instances. Instances moved, rotated, or scaled by hand are
+preserved. The whole run is a single undoable edit.
+
+## Sidecars and export
+
+Scene files keep the small terrain descriptor, while heights
+and per-cell channel values are stored beside the scene in
+versioned `.jdterrain` files. Save and move those sidecars with
+the `.bsn` scene that references them.
+
+For a headless runtime or another engine, export the authored
+terrain with:
+
+```text
+jd export-terrain path/to/scene.bsn --out path/to/export
+```
+
+The export contains height and channel images, a manifest, and
+placed-scene data. Quantized projects normally keep cell size
+and elevation step on the terrain; unquantized scenes can pass
+`--cell-size` and `--elevation-step` together for an export-only
+grid. Add `--raw-heights` when the consumer also needs the raw
+height buffer.
 
 ## Chunking
 

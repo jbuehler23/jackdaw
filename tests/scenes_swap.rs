@@ -281,6 +281,126 @@ fn swap_preserves_a_sculpted_terrain() {
 }
 
 #[test]
+fn scene_tabs_keep_same_named_terrain_sidecars_isolated() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+    use jackdaw::terrain::TerrainDataStore;
+    use jackdaw_scene_types::Terrain;
+    use jackdaw_terrain::{TerrainData, sidecar};
+
+    const DATA_PATH: &str = "zone.terrain-0.jdterrain";
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: None,
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+    app.init_resource::<jackdaw::scene_io::SceneFilePath>();
+    app.init_resource::<TerrainDataStore>();
+
+    let terrain_entity = app
+        .world_mut()
+        .spawn((
+            Terrain {
+                resolution: 4,
+                data_path: DATA_PATH.to_string(),
+                ..default()
+            },
+            Name::new("ground"),
+        ))
+        .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("ground".to_string())]);
+        ast.add_to_roots(node);
+        ast.link(terrain_entity, node);
+    }
+    {
+        let terrain = app.world().get::<Terrain>(terrain_entity).cloned().unwrap();
+        jackdaw::commands::sync_component_to_ast(
+            app.world_mut(),
+            terrain_entity,
+            "jackdaw_scene_types::types::Terrain",
+            &terrain,
+        );
+    }
+    let scene_text = jackdaw_bsn::emit_scene(app.world().resource::<jackdaw_bsn::SceneBsnAst>());
+    app.world_mut().despawn(terrain_entity);
+    app.world_mut()
+        .insert_resource(jackdaw_bsn::SceneBsnAst::default());
+
+    let first_dir = tempfile::tempdir().unwrap();
+    let second_dir = tempfile::tempdir().unwrap();
+    let first_scene = first_dir.path().join("zone.bsn");
+    let second_scene = second_dir.path().join("zone.bsn");
+    std::fs::write(&first_scene, &scene_text).unwrap();
+    std::fs::write(&second_scene, &scene_text).unwrap();
+
+    let first_heights = vec![1.0; 16];
+    let second_heights = vec![2.0; 16];
+    for (dir, heights) in [
+        (first_dir.path(), first_heights.as_slice()),
+        (second_dir.path(), second_heights.as_slice()),
+    ] {
+        let bytes = sidecar::encode(&TerrainData {
+            resolution: 4,
+            heights: heights.to_vec(),
+            channels: vec![],
+        })
+        .expect("terrain data encodes");
+        std::fs::write(dir.join(DATA_PATH), bytes).unwrap();
+    }
+
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &first_scene);
+    assert_eq!(
+        app.world()
+            .resource::<TerrainDataStore>()
+            .heights(DATA_PATH),
+        first_heights,
+    );
+
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &second_scene);
+    assert_eq!(
+        app.world()
+            .resource::<TerrainDataStore>()
+            .heights(DATA_PATH),
+        second_heights,
+        "the second tab must hydrate its own same-named sidecar",
+    );
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+    assert_eq!(
+        app.world()
+            .resource::<TerrainDataStore>()
+            .heights(DATA_PATH),
+        first_heights,
+        "switching back must restore the first tab's terrain data",
+    );
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    assert_eq!(
+        app.world()
+            .resource::<TerrainDataStore>()
+            .heights(DATA_PATH),
+        second_heights,
+        "switching again must restore the second tab's terrain data",
+    );
+}
+
+#[test]
 fn swap_preserves_camera_transform_per_tab() {
     use bevy::prelude::*;
     use bevy::render::RenderPlugin;
@@ -507,6 +627,10 @@ fn scene_save_all_writes_each_path_bound_tab() {
     let _ = std::fs::remove_file(&tmp_b);
     let _ = std::fs::remove_file(&bsn_a);
     let _ = std::fs::remove_file(&bsn_b);
+    let _ = std::fs::remove_file(format!("{}.bak", tmp_a.to_string_lossy()));
+    let _ = std::fs::remove_file(format!("{}.bak", tmp_b.to_string_lossy()));
+    std::fs::write(&tmp_a, "legacy scene").expect("create legacy scene A");
+    std::fs::write(&tmp_b, "legacy scene").expect("create legacy scene B");
 
     {
         let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
@@ -514,13 +638,57 @@ fn scene_save_all_writes_each_path_bound_tab() {
         scenes.tabs[1].path = Some(tmp_b.clone());
     }
 
-    jackdaw::scenes::operators::scene_save_all_system(app.world_mut());
+    assert!(jackdaw::scenes::operators::scene_save_all_system(
+        app.world_mut()
+    ));
 
     assert!(bsn_a.exists(), "tab 0 should have been saved as .bsn");
     assert!(bsn_b.exists(), "tab 1 should have been saved as .bsn");
 
     let _ = std::fs::remove_file(&bsn_a);
     let _ = std::fs::remove_file(&bsn_b);
+    let _ = std::fs::remove_file(format!("{}.bak", tmp_a.to_string_lossy()));
+    let _ = std::fs::remove_file(format!("{}.bak", tmp_b.to_string_lossy()));
+}
+
+#[test]
+fn scene_save_all_reports_failure_and_keeps_a_tab_dirty() {
+    let mut app = make_app_with_n_tabs(1);
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let blocked_parent = tmp.path().join("not-a-directory");
+    std::fs::write(&blocked_parent, b"file blocks directory creation")
+        .expect("create blocking file");
+    let scene_path = blocked_parent.join("zone.bsn");
+
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs[0].path = Some(scene_path);
+        scenes.tabs[0].dirty = true;
+    }
+    let data_path = "zone.terrain-0.jdterrain";
+    let mut store = jackdaw::terrain::TerrainDataStore::default();
+    store.insert(
+        data_path.to_string(),
+        jackdaw_terrain::TerrainData {
+            resolution: 2,
+            heights: vec![0.0; 4],
+            channels: vec![],
+        },
+    );
+    app.world_mut().insert_resource(store);
+    app.world_mut().spawn(jackdaw_scene_types::Terrain {
+        resolution: 2,
+        data_path: data_path.to_string(),
+        ..Default::default()
+    });
+
+    let saved = jackdaw::scenes::operators::scene_save_all_system(app.world_mut());
+
+    assert!(
+        !saved,
+        "Save All must report an authoritative write failure"
+    );
+    assert!(app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty);
 }
 
 #[test]
@@ -786,6 +954,7 @@ fn swap_does_not_keep_a_jsn_scene_snapshot_field() {
         content: TabContent::Scene(None),
         view_state: jackdaw::scenes::ViewState::default(),
         history: jackdaw::commands::CommandHistory::default(),
+        terrain_data_store: jackdaw::terrain::TerrainDataStore::default(),
         history_depth_at_last_check: 0,
     };
 }

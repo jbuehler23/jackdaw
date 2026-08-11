@@ -83,15 +83,16 @@ struct AxisIndicatorAsset(Handle<GizmoAsset>);
 pub struct ViewportGrid(pub Entity);
 
 /// Shared counter that hands out a unique [`RenderLayers`] index per
-/// viewport. Layer 0 is the default world; layer 1 is reserved for
-/// the material preview. Per-viewport grids start at layer 2 so
-/// they only render to "their" camera.
+/// viewport. Layer 0 is the default world; layer 1 is reserved for the
+/// material preview and layer 2 for the asset browser's model thumbnail
+/// stage ([`crate::model_thumbnail::THUMBNAIL_LAYER`]). Per-viewport grids
+/// start after those so they only render to "their" camera.
 #[derive(Resource)]
 pub(crate) struct ViewportLayerCounter(usize);
 
 impl Default for ViewportLayerCounter {
     fn default() -> Self {
-        Self(1)
+        Self(crate::model_thumbnail::THUMBNAIL_LAYER)
     }
 }
 

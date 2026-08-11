@@ -383,10 +383,13 @@ pub fn on_quit_dialog_button_click(
 
         match action {
             ConfirmQuitButton::SaveAll => {
-                crate::scenes::operators::scene_save_all_system(world);
-                world
-                    .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
-                    .write(bevy::app::AppExit::Success);
+                if crate::scenes::operators::scene_save_all_system(world) {
+                    world
+                        .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
+                        .write(bevy::app::AppExit::Success);
+                } else {
+                    warn!("quit cancelled because one or more scenes could not be saved");
+                }
             }
             ConfirmQuitButton::DiscardAll => {
                 world
@@ -457,21 +460,15 @@ pub fn on_dialog_button_click(
                         sfp.path = Some(path_str);
                     }
 
-                    crate::scene_io::save_scene(world);
+                    if crate::scene_io::save_scene(world) {
+                        world.resource_mut::<PendingTabClose>().tab_index = None;
 
-                    // Mark not-dirty after save.
-                    if let Some(tab) = world
-                        .resource_mut::<crate::scenes::Scenes>()
-                        .tabs
-                        .get_mut(target)
-                    {
-                        tab.dirty = false;
+                        // The save boundary cleared dirty state only after
+                        // every authoritative file reached disk.
+                        crate::scenes::operators::scene_close_system_unprompted(world, target);
+                    } else {
+                        warn!("confirm_dialog: save failed; keeping tab {target} open");
                     }
-
-                    world.resource_mut::<PendingTabClose>().tab_index = None;
-
-                    // Now close the (now-clean) tab.
-                    crate::scenes::operators::scene_close_system_unprompted(world, target);
                 } else {
                     // Untitled tab: no path available.
                     // Deviation: falling back to Discard with a warning.

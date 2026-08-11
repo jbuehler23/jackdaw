@@ -4,7 +4,7 @@
 //! list of placements. It knows nothing about entities, assets, or the
 //! editor: the caller decides what a placement becomes.
 //!
-//! Determinism is the contract. The same seed and the same
+//! Determinism is the contract, not a nicety. The same seed and the same
 //! channel data must produce byte-identical placements, on any machine,
 //! in any build, regardless of what order the cells happened to be
 //! visited in. Everything below is arranged around that:
@@ -22,7 +22,7 @@
 //! it). `rand`'s generators do not promise a stable value stream across
 //! versions, and a scatter that silently re-rolls on a `cargo update`
 //! would break the re-run contract that the editor operator is built on.
-//! A hand-rolled splitmix64 pins the stream to this file.
+//! Sixteen lines of splitmix64 pin the stream to this file forever.
 
 use bevy_math::{Vec2, Vec3};
 

@@ -60,9 +60,14 @@ pub fn quantize_region(heights: &mut [f32], resolution: u32, center: Vec2, radiu
         return;
     }
     let (max_x, max_z) = (max_x as u32, max_z as u32);
+    let radius_squared = radius * radius;
 
     for gz in min_z..=max_z {
         for gx in min_x..=max_x {
+            let delta = Vec2::new(gx as f32, gz as f32) - center;
+            if delta.length_squared() >= radius_squared {
+                continue;
+            }
             let idx = (gz * res + gx) as usize;
             if let Some(h) = heights.get_mut(idx) {
                 *h = (*h / step).round() * step;
@@ -130,12 +135,16 @@ mod tests {
     fn a_region_touches_only_the_cells_under_the_brush() {
         // 5x5 grid, every cell off-lattice by the same amount.
         let mut heights = vec![0.3_f32; 25];
-        quantize_region(&mut heights, 5, Vec2::new(1.0, 1.0), 1.0, 0.25);
+        let center = Vec2::new(2.0, 2.0);
+        let radius = 1.5;
+        quantize_region(&mut heights, 5, center, radius, 0.25);
 
-        // The brush at (1,1) with radius 1 owns the 3x3 block 0..=2.
+        // Quantization follows the same circular footprint as sculpting,
+        // not the square used only to bound the iteration.
         for gz in 0..5_usize {
             for gx in 0..5_usize {
-                let inside = gx <= 2 && gz <= 2;
+                let sample = Vec2::new(gx as f32, gz as f32);
+                let inside = sample.distance(center) < radius;
                 let h = heights[gz * 5 + gx];
                 if inside {
                     assert_eq!(h, 0.25, "cell ({gx},{gz}) should have snapped");
@@ -149,11 +158,13 @@ mod tests {
     #[test]
     fn a_region_clamps_to_the_grid_instead_of_wrapping() {
         let mut heights = vec![0.3_f32; 25];
-        // Centre off the near corner: the clamped window is 0..=1.
+        // Centre off the near corner: only (0,0) lies inside the circular
+        // footprint after the iteration bounds clamp to the grid.
         quantize_region(&mut heights, 5, Vec2::new(-0.5, -0.5), 1.0, 0.25);
         assert_eq!(heights[0], 0.25);
-        assert_eq!(heights[1], 0.25);
-        assert_eq!(heights[5 + 1], 0.25);
+        assert_eq!(heights[1], 0.3);
+        assert_eq!(heights[5], 0.3);
+        assert_eq!(heights[5 + 1], 0.3);
         assert_eq!(heights[2], 0.3);
         assert_eq!(heights[24], 0.3);
     }

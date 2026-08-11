@@ -5,28 +5,20 @@
 //! the scene-relative sidecar path the component carries, and they are
 //! written to that sidecar when the scene is saved.
 //!
-//! The indirection is what makes tab swaps safe. `capture_active_tab`
-//! snapshots the live scene by emitting it to BSN *text* and re-parsing
-//! it, and `activate_tab` respawns every entity from that text
-//! (`src/scenes/swap.rs`) -- no disk involved. Anything held on an entity
-//! is destroyed and rebuilt from text on every swap. A `Resource` is not,
-//! and a reflected `String` key survives the text round-trip, so nothing
-//! has to be carried across the swap at all.
+//! The active tab's decoded data lives in this resource. Inactive
+//! [`crate::scenes::SceneTab`]s own their stores directly; tab capture moves
+//! the live resource into the outgoing tab and activation restores the
+//! incoming tab's store before importing sidecars (`src/scenes/swap.rs`).
+//! This keeps identical scene-relative paths isolated between tabs while
+//! entities continue to round-trip through BSN text.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use jackdaw_terrain::TerrainData;
 use jackdaw_terrain::sidecar;
 
-/// Every open terrain's bulk per-cell data, keyed by
+/// The active scene's terrain bulk data, keyed by
 /// [`jackdaw_scene_types::Terrain::data_path`].
-///
-/// Scope boundary: the key is the scene-relative path exactly as written
-/// on the component, so two scenes open at once that share both a file
-/// name and a terrain index address the same entry. Qualifying the key
-/// with the scene's own location would fix it and is not done here --
-/// untitled scenes have no location to qualify with, and the re-keying
-/// dance on first save is a bigger design decision than this issue owns.
 #[derive(Resource, Default)]
 pub struct TerrainDataStore {
     entries: HashMap<String, TerrainData>,

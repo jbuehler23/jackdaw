@@ -8,6 +8,12 @@
 //!
 //! Run: `cargo run --example author_bake_loop_world -- <project-dir>`
 
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "the example reports authored output and verification results"
+)]
+
 use std::collections::HashSet;
 use std::path::PathBuf;
 
