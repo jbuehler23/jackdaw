@@ -61,9 +61,9 @@ fn document_has_component_patch(world: &World, entity: Entity, type_path: &str) 
 
 fn clear_field_edit_session(world: &mut World, type_path: &str, field_path: &str) {
     let mut sessions = world.resource_mut::<FieldEditSessions>();
-    sessions.live_at_begin.retain(|key, _| {
-        key.type_path != type_path || key.field_path != field_path
-    });
+    sessions
+        .live_at_begin
+        .retain(|key, _| key.type_path != type_path || key.field_path != field_path);
 }
 
 fn peek_live_at_begin(
@@ -1062,11 +1062,7 @@ fn bsn_value_string(value: &jackdaw_bsn::BsnValue) -> Option<&str> {
 
 /// Set, replace, or remove the [`jackdaw_bsn::BsnPatch::Name`] patch on a
 /// document node.
-pub(crate) fn set_name_patch(
-    ast: &mut jackdaw_bsn::SceneBsnAst,
-    node: Entity,
-    name: Option<&str>,
-) {
+pub(crate) fn set_name_patch(ast: &mut jackdaw_bsn::SceneBsnAst, node: Entity, name: Option<&str>) {
     let existing = ast.get_patches(node).and_then(|patches| {
         patches
             .0
@@ -1156,24 +1152,19 @@ impl EditorCommand for SetBsnField {
             .is_some_and(|pt| pt.is_project_component(&self.type_path));
         let had_patch = {
             let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
-            ast.ast_for(self.entity).is_some_and(|node| {
-                ast.find_patch_by_type_path(node, &self.type_path).is_some()
-            })
+            ast.ast_for(self.entity)
+                .is_some_and(|node| ast.find_patch_by_type_path(node, &self.type_path).is_some())
         };
         // Derived = on the live entity with no document patch. Project
         // components are document-only; a missing patch is still a first
         // author that undo should drop entirely.
-        let live_before = !is_project
-            && entity_has_reflected_component(world, self.entity, &self.type_path);
+        let live_before =
+            !is_project && entity_has_reflected_component(world, self.entity, &self.type_path);
         // First override of a derived component: capture the pre-edit live
         // field when the caller did not supply a baseline. Do not fill when a
         // patch already exists — `old_value: None` then means "field was
         // absent from the sparse patch" and undo must remove it.
-        if self.old_value.is_none()
-            && !self.field_path.is_empty()
-            && live_before
-            && !had_patch
-        {
+        if self.old_value.is_none() && !self.field_path.is_empty() && live_before && !had_patch {
             self.old_value = live_bsn_field(world, self.entity, &self.type_path, &self.field_path);
         }
         // First override of a derived component: seed the full live value into
