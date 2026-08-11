@@ -474,8 +474,7 @@ pub struct AddComponent {
     pub component_id: ComponentId,
     pub type_path: String,
     /// Type paths of components inserted by `#[require]` (or other side
-    /// effects) during `execute`. Tracked for ECS cleanup on `undo` only —
-    /// they are never written into the scene document.
+    /// effects) during `execute`.
     required_companions: Vec<String>,
 }
 
@@ -1092,9 +1091,7 @@ impl EditorCommand for SetBsnField {
         let live_before =
             !is_project && entity_has_reflected_component(world, self.entity, &self.type_path);
         // First override of a derived component: capture the pre-edit live
-        // field when the caller did not supply a baseline. Do not fill when a
-        // patch already exists — `old_value: None` then means "field was
-        // absent from the sparse patch" and undo must remove it.
+        // field when the caller did not supply a baseline.
         if self.old_value.is_none() && !self.field_path.is_empty() && live_before && !had_patch {
             self.old_value = live_bsn_field(world, self.entity, &self.type_path, &self.field_path);
         }
@@ -1256,7 +1253,7 @@ impl EditorCommand for SetBsnField {
     }
 }
 
-/// Apply a JSON value to an ECS component — either full component replacement
+/// Apply a JSON value to an ECS component -- either full component replacement
 /// (empty `field_path`) or field-level update.
 ///
 /// Writes only the live ECS component, leaving the scene document untouched.

@@ -1120,8 +1120,7 @@ pub(crate) fn spawn_component_display(
         }
 
         // Remove component button (X icon). See revert button for the
-        // tooltip-data + manual-dispatch pattern. Derived companions have
-        // no document patch to remove — hide the control.
+        // tooltip-data + manual-dispatch pattern.
         if !is_derived {
             let remove_path = type_path_owned.clone();
             let remove_call = ButtonOperatorCall::new(super::ops::ComponentRemoveOp::ID)

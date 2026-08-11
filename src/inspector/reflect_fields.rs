@@ -2440,7 +2440,7 @@ pub(crate) fn on_text_edit_commit(
 }
 
 /// Apply a drag-tick (non-final) numeric edit via [`crate::commands::field_edit_preview`].
-/// Live ECS only — no document write, no undo. In PIE Live mode it routes
+/// Live ECS only, no document write or minting of undo. In PIE Live mode it routes
 /// through the live-edit stream instead.
 fn apply_field_value_live(
     world: &mut World,
@@ -3184,7 +3184,7 @@ fn apply_enum_variant_with_undo(
         &new_json,
         "Set enum on multiple entities",
     );
-    // No need to flag anything — `refresh_enum_variants` detects the ECS
+    // No need to flag anything -- `refresh_enum_variants` detects the ECS
     // variant change and rebuilds the affected subtree automatically. Same
     // goes for undo/redo since the command framework mutates the ECS too.
 }
