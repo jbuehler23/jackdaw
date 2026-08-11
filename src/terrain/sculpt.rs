@@ -255,7 +255,11 @@ pub fn terrain_sculpt(
     if modal.is_none() {
         sculpt_state.active = true;
         sculpt_state.stroke_snapshot = data.heights.clone();
-    } else if mouse.just_released(MouseButton::Left) {
+    }
+
+    // See `super::stroke_should_end` doc: checked every frame, including
+    // the modal's first, not gated behind `else`/`modal.is_some()`.
+    if super::stroke_should_end(&mouse) {
         sculpt_state.active = false;
         history.push_executed(Box::new(SetTerrainHeights::new(
             target,

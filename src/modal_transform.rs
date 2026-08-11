@@ -179,11 +179,8 @@ fn viewport_drag_detect(
         return;
     }
 
-    // Block viewport drag during terrain sculpt mode
-    if matches!(
-        *terrain_edit_mode,
-        crate::terrain::TerrainEditMode::Sculpt(_)
-    ) {
+    // Block viewport drag during terrain sculpt or paint mode
+    if terrain_edit_mode.brush_active() {
         return;
     }
 
@@ -295,11 +292,8 @@ fn viewport_drag_update(
         return;
     }
 
-    // Cancel pending drag if terrain sculpt mode became active
-    if matches!(
-        *terrain_edit_mode,
-        crate::terrain::TerrainEditMode::Sculpt(_)
-    ) {
+    // Cancel pending drag if terrain sculpt or paint mode became active
+    if terrain_edit_mode.brush_active() {
         drag_state.pending = None;
         return;
     }

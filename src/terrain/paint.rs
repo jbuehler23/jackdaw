@@ -264,7 +264,11 @@ pub fn terrain_paint(
         paint_state.active = true;
         paint_state.stroke_channel = channel_index;
         paint_state.stroke_snapshot = channel.values.clone();
-    } else if mouse.just_released(MouseButton::Left) {
+    }
+
+    // See `super::stroke_should_end` doc: checked every frame, including
+    // the modal's first, not gated behind `else`/`modal.is_some()`.
+    if super::stroke_should_end(&mouse) {
         paint_state.active = false;
         let old_values = std::mem::take(&mut paint_state.stroke_snapshot);
         // A stroke that changed nothing (repainting a value onto itself)

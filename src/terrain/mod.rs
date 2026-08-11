@@ -178,6 +178,91 @@ pub enum TerrainEditMode {
     Generate,
 }
 
+impl TerrainEditMode {
+    /// Whether the brush (sculpt or paint) is the active tool and should
+    /// own viewport input: entity click-select, gizmo drag, and
+    /// Shift+Scroll grid resize all defer to it. `Generate` and `None`
+    /// do not claim the viewport this way.
+    ///
+    /// One predicate for every mode guard that used to check `Sculpt(_)`
+    /// alone: each left `Paint` unguarded, so painting could select
+    /// entities out from under the brush, drag the gizmo, or resize the
+    /// snap grid mid-stroke.
+    pub fn brush_active(&self) -> bool {
+        matches!(self, Self::Sculpt(_) | Self::Paint)
+    }
+}
+
+#[cfg(test)]
+mod terrain_edit_mode_tests {
+    use super::*;
+
+    /// I4 pinning test, the exact scenario from the review finding: every
+    /// mode guard that special-cased `Sculpt(_)` alone left `Paint`
+    /// unguarded.
+    #[test]
+    fn brush_active_covers_both_sculpt_and_paint() {
+        assert!(TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Raise).brush_active());
+        assert!(TerrainEditMode::Paint.brush_active());
+    }
+
+    #[test]
+    fn brush_active_excludes_generate_and_none() {
+        assert!(!TerrainEditMode::None.brush_active());
+        assert!(!TerrainEditMode::Generate.brush_active());
+    }
+}
+
+/// Whether a brush-modal stroke (`terrain.sculpt`, `terrain.paint`)
+/// should end this frame.
+///
+/// Level state (`pressed`), not a `just_released` edge -- and meant to
+/// be checked unconditionally every frame the modal runs, including its
+/// first, when `ActiveModalOperator` has not been attached yet. A press
+/// and release that land within the same input frame set `just_released`
+/// on that very first frame; a modal that only checks the edge once
+/// `ActiveModalOperator` exists (i.e. on later frames, gated behind an
+/// `else` on the initialization branch) never observes it, and the
+/// brush keeps applying every frame with no way to stop.
+pub(crate) fn stroke_should_end(mouse: &bevy::input::ButtonInput<MouseButton>) -> bool {
+    !mouse.pressed(MouseButton::Left)
+}
+
+#[cfg(test)]
+mod stroke_should_end_tests {
+    use bevy::input::ButtonInput;
+
+    use super::*;
+
+    /// I5 pinning test, the exact scenario from the review finding: a
+    /// press and release that both land within one input frame (before
+    /// `ButtonInput::clear` runs) must still read as "should end" --
+    /// `pressed()` is already false, unlike `just_released()`, which
+    /// depends on which frame happens to check it.
+    #[test]
+    fn a_press_and_release_within_one_frame_still_ends_the_stroke() {
+        let mut mouse = ButtonInput::<MouseButton>::default();
+        mouse.press(MouseButton::Left);
+        mouse.release(MouseButton::Left);
+
+        assert!(mouse.just_released(MouseButton::Left));
+        assert!(stroke_should_end(&mouse));
+    }
+
+    #[test]
+    fn a_held_button_does_not_end_the_stroke() {
+        let mut mouse = ButtonInput::<MouseButton>::default();
+        mouse.press(MouseButton::Left);
+        assert!(!stroke_should_end(&mouse));
+    }
+
+    #[test]
+    fn a_button_that_was_never_pressed_ends_the_stroke() {
+        let mouse = ButtonInput::<MouseButton>::default();
+        assert!(stroke_should_end(&mouse));
+    }
+}
+
 /// Brush settings for terrain sculpting.
 #[derive(Resource)]
 pub struct TerrainBrushSettings {
