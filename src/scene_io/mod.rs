@@ -24,7 +24,8 @@ pub use load::{load_scene, load_scene_from_file, new_scene, spawn_default_lighti
 pub use registration::{register_entities_in_ast, register_entity_in_ast};
 pub(crate) use save::{emit_bsn_entities_with_inline_assets, save_scene_inner};
 pub use save::{
-    emit_bsn_scene_with_inline_assets, save_layout_to_project, save_scene, save_scene_as,
+    SaveOutcome, emit_bsn_scene_with_inline_assets, save_layout_to_project, save_scene,
+    save_scene_as, save_scene_with_outcome,
 };
 
 use load::{cleanup_pending_new_scene, on_new_scene_discard, on_new_scene_save, poll_scene_dialog};

@@ -69,8 +69,34 @@ fn spawn_save_dialog(world: &mut World) {
     world.insert_resource(SceneDialogTask::Save(task));
 }
 
-/// Save the active scene, returning whether its authoritative files reached disk.
+/// What happened when [`save_scene`] or [`save_scene_with_outcome`] ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveOutcome {
+    /// The authoritative files reached disk.
+    Saved,
+    /// The active tab had no path, so a Save As dialog was opened
+    /// instead of writing anything. Whether the scene ends up saved
+    /// depends on what the user picks and is only known once
+    /// `poll_scene_dialog` observes the dialog resolve -- a caller that
+    /// needs to act on an eventual success (not just "a save was
+    /// attempted") has to defer that action to there, not treat this
+    /// outcome as failure and give up.
+    DialogOpened,
+    /// The save was attempted and failed.
+    Failed,
+}
+
+/// Save the active scene, returning whether its authoritative files
+/// reached disk. A thin `bool` view over [`save_scene_with_outcome`] for
+/// callers that only care about "did the save happen right now" and have
+/// no work to defer past an opened Save As dialog.
 pub fn save_scene(world: &mut World) -> bool {
+    save_scene_with_outcome(world) == SaveOutcome::Saved
+}
+
+/// Save the active scene, distinguishing an opened Save As dialog from
+/// an outright failure. See [`SaveOutcome`].
+pub fn save_scene_with_outcome(world: &mut World) -> SaveOutcome {
     // The active scene tab is the source of truth for which file to
     // save to. Re-sync the global `SceneFilePath` from it so a stale
     // path from a previous tab can never cause us to overwrite the
@@ -86,14 +112,14 @@ pub fn save_scene(world: &mut World) -> bool {
     let has_path = world.resource::<SceneFilePath>().path.is_some();
     if !has_path {
         save_scene_as(world);
-        return false;
+        return SaveOutcome::DialogOpened;
     }
 
     match save_scene_inner(world) {
-        Ok(()) => true,
+        Ok(()) => SaveOutcome::Saved,
         Err(err) => {
             error!("scene save failed: {err}");
-            false
+            SaveOutcome::Failed
         }
     }
 }
@@ -1051,6 +1077,46 @@ mod tests {
             baseline,
             "failed saves must not advance the clean-history baseline",
         );
+    }
+
+    /// I10(a): `save_scene_with_outcome` must distinguish a genuine
+    /// failure from "opened a dialog instead" so a caller with work to
+    /// defer (see `scene_io::load::on_new_scene_save`) does not give up
+    /// on a save that has not actually finished yet.
+    #[test]
+    fn save_scene_with_outcome_reports_saved_on_success() {
+        let mut world = build_live_save_world();
+        let tmp = tempfile::tempdir().expect("temp directory");
+        let scene_path = tmp.path().join("zone.bsn");
+
+        let mut tab = crate::scenes::SceneTab::new_untitled(1);
+        tab.path = Some(scene_path);
+        tab.dirty = true;
+        world.insert_resource(crate::scenes::Scenes {
+            tabs: vec![tab],
+            active: 0,
+        });
+
+        assert_eq!(save_scene_with_outcome(&mut world), SaveOutcome::Saved);
+    }
+
+    #[test]
+    fn save_scene_with_outcome_reports_failed_on_a_blocked_write() {
+        let mut world = build_live_save_world();
+        let tmp = tempfile::tempdir().expect("temp directory");
+        let blocked_parent = tmp.path().join("not-a-directory");
+        std::fs::write(&blocked_parent, b"blocks directory creation").expect("seed blocker");
+        let scene_path = blocked_parent.join("zone.bsn");
+
+        let mut tab = crate::scenes::SceneTab::new_untitled(1);
+        tab.path = Some(scene_path);
+        tab.dirty = true;
+        world.insert_resource(crate::scenes::Scenes {
+            tabs: vec![tab],
+            active: 0,
+        });
+
+        assert_eq!(save_scene_with_outcome(&mut world), SaveOutcome::Failed);
     }
 
     #[test]
