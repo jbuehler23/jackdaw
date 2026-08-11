@@ -34,6 +34,16 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// not to the scene document. Pushing 262,144 floats through the BSN AST
 /// on every stroke is the defect the sidecar exists to fix, so this
 /// command deliberately does not sync the heights to the document.
+///
+/// Memory model: each entry holds two full heightmap copies (`old_heights`
+/// and `new_heights`), and [`CommandHistory`](crate::commands::CommandHistory)'s
+/// `undo_stack` is a plain, uncapped `Vec`. A long sculpting session on a
+/// large terrain therefore accumulates memory proportional to
+/// `resolution^2 * strokes` for as long as the tab stays open -- there is
+/// currently no depth cap or delta compression, and none is planned this
+/// round. If this becomes a real problem, the fix belongs at
+/// `CommandHistory` (a shared depth cap for every command type), not as
+/// special-casing here.
 pub struct SetTerrainHeights {
     pub entity: Entity,
     pub old_heights: Vec<f32>,
@@ -103,19 +113,17 @@ impl SetTerrainHeights {
 
 impl EditorCommand for SetTerrainHeights {
     fn execute(&mut self, world: &mut World) {
-        self.apply(
-            world,
-            &self.new_heights.clone(),
-            self.resize.map(|(_, new)| new),
-        );
+        // `apply` already copies its `heights` slice into the store
+        // (`data.heights = heights.to_vec()`), so cloning `new_heights`
+        // here first was a second full-array copy for nothing -- a
+        // 512-resolution terrain is 262,144 floats, so that was 1 MiB
+        // wasted per undo/redo click. `&self.new_heights` borrows
+        // straight from the command.
+        self.apply(world, &self.new_heights, self.resize.map(|(_, new)| new));
     }
 
     fn undo(&mut self, world: &mut World) {
-        self.apply(
-            world,
-            &self.old_heights.clone(),
-            self.resize.map(|(old, _)| old),
-        );
+        self.apply(world, &self.old_heights, self.resize.map(|(old, _)| old));
     }
 
     fn description(&self) -> &str {
