@@ -3,7 +3,9 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{self, ButtonProps, ButtonVariant},
+    checkbox::{self, CheckboxCommitEvent, CheckboxProps},
     combobox::{self, ComboBoxChangeEvent},
+    icons::EditorFont,
     text_edit::{
         self, TextEditCommitEvent, TextEditDragging, TextEditProps, TextEditVariant,
         TextEditWrapper, format_numeric_value, set_text_input_value,
@@ -20,7 +22,56 @@ pub(super) fn plugin(app: &mut App) {
             Update,
             (update_terrain_inspector, sync_brush_fields).run_if(in_state(crate::AppState::Editor)),
         )
-        .add_observer(on_terrain_text_commit);
+        .add_observer(on_terrain_text_commit)
+        .add_observer(on_quantization_checkbox_commit);
+}
+
+/// Tags the Quantization section's on/off checkbox so its commit handler
+/// can tell "this checkbox" from any other in the editor -- `CheckboxCommitEvent`
+/// is a plain, untargeted `Event`, delivered to every observer regardless
+/// of which checkbox fired it.
+#[derive(Component)]
+struct QuantizationToggleCheckbox;
+
+/// Dispatches `terrain.quantize.toggle` through the same history-creating
+/// settings as a toolbar button (see `tile_dispatch_settings`), so
+/// toggling quantization from the checkbox still produces an undo entry
+/// and marks the tab dirty like the button it replaced did.
+fn on_quantization_checkbox_commit(
+    event: On<CheckboxCommitEvent>,
+    marked: Query<(), With<QuantizationToggleCheckbox>>,
+    mut commands: Commands,
+) {
+    if !marked.contains(event.entity) {
+        return;
+    }
+    commands
+        .operator(crate::terrain::quantize_ops::TerrainQuantizeToggleOp::ID)
+        .settings(tile_dispatch_settings())
+        .call();
+}
+
+#[cfg(test)]
+mod quantization_checkbox_tests {
+    use super::*;
+
+    /// I11 pinning test: `CheckboxCommitEvent` is a plain, untargeted
+    /// event delivered to every observer, so `on_quantization_checkbox_commit`
+    /// depends entirely on `QuantizationToggleCheckbox` to tell its one
+    /// checkbox apart from any other in the editor. Only the entity
+    /// spawned with the marker may match.
+    #[test]
+    fn only_the_marked_entity_matches_the_checkbox_query() {
+        let mut world = World::new();
+        let marked = world.spawn(QuantizationToggleCheckbox).id();
+        let unmarked = world.spawn_empty().id();
+
+        let mut query = world.query_filtered::<Entity, With<QuantizationToggleCheckbox>>();
+        let matched: Vec<Entity> = query.iter(&world).collect();
+
+        assert_eq!(matched, vec![marked]);
+        assert!(!matched.contains(&unmarked));
+    }
 }
 
 // --- State ---
@@ -129,6 +180,7 @@ fn update_terrain_inspector(
     brush_settings: Res<TerrainBrushSettings>,
     gen_state: Res<TerrainGenerateState>,
     icon_font: Res<jackdaw_feathers::icons::IconFont>,
+    editor_font: Res<EditorFont>,
     paint_state: Res<TerrainPaintState>,
     terrain_data: Query<&jackdaw_scene_types::Terrain>,
     scatter_state: Res<crate::terrain::scatter::TerrainScatterState>,
@@ -289,19 +341,12 @@ fn update_terrain_inspector(
             );
 
             commands.spawn((
-                button::button(
-                    ButtonProps::new(if quantization.enabled {
-                        "Quantization: On"
-                    } else {
-                        "Quantization: Off"
-                    })
-                    .with_variant(if quantization.enabled {
-                        ButtonVariant::Primary
-                    } else {
-                        ButtonVariant::Default
-                    })
-                    .call_operator(crate::terrain::quantize_ops::TerrainQuantizeToggleOp::ID),
+                checkbox::checkbox(
+                    CheckboxProps::new("Quantization").checked(quantization.enabled),
+                    &editor_font.0,
+                    &icon_font.0,
                 ),
+                QuantizationToggleCheckbox,
                 ChildOf(body),
             ));
 
@@ -1187,7 +1232,14 @@ fn on_terrain_text_commit(
         }
         if let Ok(&field) = erosion_bindings.get(parent) {
             match field {
-                ErosionField::Iterations => gen_state.erosion.iterations = value as u32,
+                // Clamped at entry too, not just at run time in
+                // hydraulic_erosion: an absurd typed value should not
+                // even sit displayed in the field looking like it will
+                // do what it says.
+                ErosionField::Iterations => {
+                    gen_state.erosion.iterations =
+                        (value as u32).min(jackdaw_terrain::erosion::MAX_ITERATIONS)
+                }
                 ErosionField::ErosionRadius => gen_state.erosion.erosion_radius = value as u32,
                 ErosionField::Inertia => gen_state.erosion.inertia = value as f32,
                 ErosionField::Capacity => gen_state.erosion.capacity = value as f32,
