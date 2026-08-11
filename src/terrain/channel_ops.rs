@@ -11,6 +11,7 @@ use jackdaw_scene_types::{TerrainChannel, TerrainChannelElement, TerrainPaletteE
 
 use super::ops::has_selected_terrain;
 use super::{TerrainDataStore, TerrainDirtyChunks, TerrainPaintState};
+use crate::commands::{CommandHistory, EditorCommand};
 use crate::selection::Selection;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -153,34 +154,213 @@ pub(crate) fn terrain_channel_add(
 }
 
 /// Remove a channel from the selected terrain.
+///
+/// `allows_undo = false` because it pushes its own [`RemoveTerrainChannel`]
+/// entry; the generic diff only ever sees the descriptor half of a
+/// remove (bulk channel values live outside the AST), so letting it also
+/// capture a snapshot would both double-record the change and lose the
+/// painted data on undo.
 #[operator(
     id = "terrain.channel.remove",
     label = "Remove Channel",
     description = "Remove a paint channel and everything painted into it.",
     is_available = has_selected_terrain,
+    allows_undo = false,
     params(index(i64, doc = "Channel index to remove."))
 )]
 pub(crate) fn terrain_channel_remove(
     params: In<OperatorParameters>,
     selection: Res<Selection>,
-    mut terrains: Query<&mut jackdaw_scene_types::Terrain>,
+    terrains: Query<&jackdaw_scene_types::Terrain>,
+    store: Res<TerrainDataStore>,
     mut paint: ResMut<TerrainPaintState>,
     mut commands: Commands,
 ) -> OperatorResult {
     let entity = selection.primary()?;
     let index = usize::try_from(params.as_int("index")?).ok()?;
-    let mut terrain = terrains.get_mut(entity)?;
+    let terrain = terrains.get(entity)?;
     if index >= terrain.channels.len() {
         return OperatorResult::Cancelled;
     }
-    terrain.channels.remove(index);
-    paint.active_channel = paint
-        .active_channel
-        .min(terrain.channels.len().saturating_sub(1));
+    let descriptor = terrain.channels[index].clone();
+    let data = store
+        .get(&terrain.data_path)
+        .and_then(|data| data.channels.get(index))
+        .cloned();
+
+    let remaining = terrain.channels.len() - 1;
+    paint.active_channel = paint.active_channel.min(remaining.saturating_sub(1));
     paint.active_entry = 0;
 
-    commands.queue(move |world: &mut World| commit_channels(world, entity));
+    commands.queue(move |world: &mut World| {
+        let command = RemoveTerrainChannel {
+            entity,
+            index,
+            descriptor,
+            data,
+            label: "Remove Channel".to_string(),
+        };
+        world.resource_scope(|world, mut history: Mut<CommandHistory>| {
+            history.execute(Box::new(command), world);
+        });
+    });
     OperatorResult::Finished
+}
+
+/// Undo command for `terrain.channel.remove`.
+///
+/// A channel removal touches two stores: the descriptor leaves
+/// `Terrain::channels` (reflected, reaches the AST) and its per-cell
+/// values leave [`TerrainDataStore`] (bulk data, dropped by
+/// [`TerrainDataStore::entry_for`]'s reconcile the moment the descriptor
+/// is gone -- see `store.rs`). The generic history diff only ever sees
+/// the AST half, so a remove dispatched through it would restore the
+/// descriptor on undo and mint a zeroed channel in its place. This
+/// command captures both halves up front, at construction time, and
+/// restores both on undo.
+pub struct RemoveTerrainChannel {
+    pub entity: Entity,
+    pub index: usize,
+    pub descriptor: TerrainChannel,
+    pub data: Option<jackdaw_terrain::ChannelData>,
+    pub label: String,
+}
+
+impl RemoveTerrainChannel {
+    fn apply_removed(&self, world: &mut World) {
+        let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(self.entity) else {
+            return;
+        };
+        if self.index >= terrain.channels.len() {
+            return;
+        }
+        terrain.channels.remove(self.index);
+        commit_channels(world, self.entity);
+    }
+
+    fn apply_restored(&self, world: &mut World) {
+        let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(self.entity) else {
+            return;
+        };
+        let at = self.index.min(terrain.channels.len());
+        terrain.channels.insert(at, self.descriptor.clone());
+        let terrain = terrain.clone();
+
+        if let Some(data) = world.resource_mut::<TerrainDataStore>().entry_for(&terrain)
+            && let Some(restored) = &self.data
+            && let Some(slot) = data
+                .channels
+                .iter_mut()
+                .find(|channel| channel.name == self.descriptor.name)
+        {
+            *slot = restored.clone();
+        }
+        crate::commands::sync_component_to_ast(
+            world,
+            self.entity,
+            "jackdaw_scene_types::types::Terrain",
+            &terrain,
+        );
+        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(self.entity) {
+            dirty.rebuild_all = true;
+        }
+    }
+}
+
+impl EditorCommand for RemoveTerrainChannel {
+    fn execute(&mut self, world: &mut World) {
+        self.apply_removed(world);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        self.apply_restored(world);
+    }
+
+    fn description(&self) -> &str {
+        &self.label
+    }
+}
+
+#[cfg(test)]
+mod remove_tests {
+    use bevy::ecs::reflect::AppTypeRegistry;
+
+    use super::*;
+
+    fn channel(name: &str) -> TerrainChannel {
+        TerrainChannel {
+            name: name.to_string(),
+            element: TerrainChannelElement::U8,
+            palette: vec![],
+        }
+    }
+
+    /// C4 pinning test: undoing `terrain.channel.remove` must restore the
+    /// channel's painted values, not mint a zeroed replacement.
+    #[test]
+    fn undoing_a_channel_remove_restores_its_painted_values() {
+        let mut world = World::new();
+        world.init_resource::<AppTypeRegistry>();
+        world.init_resource::<TerrainDataStore>();
+
+        let terrain = jackdaw_scene_types::Terrain {
+            resolution: 2,
+            data_path: "zone.terrain-0.jdterrain".to_string(),
+            channels: vec![channel("biome"), channel("walkable")],
+            ..default()
+        };
+        let entity = world.spawn(terrain.clone()).id();
+
+        {
+            let mut store = world.resource_mut::<TerrainDataStore>();
+            let data = store.entry_for(&terrain).expect("keyed");
+            data.channels[1].values = vec![7, 7, 7, 7];
+        }
+
+        let descriptor = terrain.channels[1].clone();
+        let painted = world
+            .resource::<TerrainDataStore>()
+            .get(&terrain.data_path)
+            .and_then(|data| data.channels.get(1))
+            .cloned()
+            .expect("painted data captured");
+
+        let mut command = RemoveTerrainChannel {
+            entity,
+            index: 1,
+            descriptor,
+            data: Some(painted),
+            label: "Remove Channel".to_string(),
+        };
+
+        command.execute(&mut world);
+        assert_eq!(
+            world
+                .get::<jackdaw_scene_types::Terrain>(entity)
+                .expect("terrain")
+                .channels
+                .len(),
+            1,
+            "the descriptor is gone after execute",
+        );
+
+        command.undo(&mut world);
+        let restored = world
+            .get::<jackdaw_scene_types::Terrain>(entity)
+            .expect("terrain");
+        assert_eq!(restored.channels.len(), 2);
+        assert_eq!(restored.channels[1].name, "walkable");
+
+        let data = world
+            .resource::<TerrainDataStore>()
+            .get(&restored.data_path)
+            .expect("store entry still present");
+        assert_eq!(
+            data.channels[1].values,
+            vec![7, 7, 7, 7],
+            "undo must restore the painted values, not mint zeros",
+        );
+    }
 }
 
 /// Make a channel the one the brush writes and the viewport tints.

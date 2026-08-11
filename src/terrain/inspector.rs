@@ -787,12 +787,26 @@ pub(super) fn spawn_tile(
     commands
         .entity(tile)
         .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            let mut call = commands.operator(op_id);
+            let mut call = commands
+                .operator(op_id)
+                .settings(tile_dispatch_settings());
             if let Some(index) = index {
                 call = call.param("index", index as i64);
             }
             call.call();
         });
+}
+
+/// Dispatch settings shared by every tile-grid affordance (select, add,
+/// remove). Matches the house dispatcher in `core_extension.rs`: history
+/// entries and tab dirtiness must follow a tile click exactly as they do
+/// a toolbar button click. Operators that opt out (`allows_undo = false`,
+/// e.g. the select tiles) are unaffected either way.
+fn tile_dispatch_settings() -> CallOperatorSettings {
+    CallOperatorSettings {
+        creates_history_entry: true,
+        execution_context: ExecutionContext::Invoke,
+    }
 }
 
 /// `Terrain3D`'s `+` tile, carried over directly: the way to add a layer
@@ -824,7 +838,10 @@ pub(super) fn spawn_add_tile(commands: &mut Commands, parent: Entity, op_id: &'s
     commands
         .entity(tile)
         .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.operator(op_id).call();
+            commands
+                .operator(op_id)
+                .settings(tile_dispatch_settings())
+                .call();
         });
 }
 
@@ -863,7 +880,11 @@ pub(super) fn spawn_tile_remove(
     commands
         .entity(button)
         .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.operator(op_id).param("index", index as i64).call();
+            commands
+                .operator(op_id)
+                .param("index", index as i64)
+                .settings(tile_dispatch_settings())
+                .call();
         });
 }
 
