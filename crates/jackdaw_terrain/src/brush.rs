@@ -64,6 +64,14 @@ pub fn apply_brush(
     dt: f32,
     noise_fn: Option<&dyn Fn(f32, f32) -> f32>,
 ) {
+    // `compute_falloff` already swallows a non-finite falloff or distance
+    // via `f32::max`'s NaN-ignoring semantics, but `amount = strength * f
+    // * dt` below has no such protection: a non-finite radius, strength,
+    // or dt would otherwise write NaN straight into the heightmap.
+    if !radius.is_finite() || radius <= 0.0 || !strength.is_finite() || !dt.is_finite() {
+        return;
+    }
+
     let res = heightmap.resolution;
     let center_height = heightmap.sample_bilinear(center.x, center.y);
 
@@ -218,5 +226,51 @@ mod tests {
     fn a_stroke_spanning_a_chunk_seam_marks_both_chunks() {
         let touched = affected_chunks_at(65, Vec2::new(32.0, 32.0), 3.0, 32);
         assert_eq!(touched.len(), 4, "got {touched:?}");
+    }
+
+    /// I2 pinning test: a non-finite strength (parsed from a hand-typed
+    /// "nan" or "inf" in the strength field) must not poison the
+    /// heightmap. Before the guard, `amount = strength * f * dt` wrote
+    /// NaN directly into every cell the falloff touched.
+    #[test]
+    fn a_non_finite_strength_does_not_poison_the_heightmap() {
+        let mut hm = Heightmap::new(5, Vec2::splat(4.0), 10.0);
+        hm.heights = vec![1.0; 25];
+
+        apply_brush(
+            &mut hm,
+            SculptTool::Raise,
+            Vec2::new(2.0, 2.0),
+            2.0,
+            f32::NAN,
+            1.0,
+            1.0 / 60.0,
+            None,
+        );
+
+        assert!(
+            hm.heights.iter().all(|h| *h == 1.0),
+            "a non-finite strength must leave the heightmap untouched: {:?}",
+            hm.heights
+        );
+    }
+
+    #[test]
+    fn a_non_finite_radius_does_not_poison_the_heightmap() {
+        let mut hm = Heightmap::new(5, Vec2::splat(4.0), 10.0);
+        hm.heights = vec![1.0; 25];
+
+        apply_brush(
+            &mut hm,
+            SculptTool::Raise,
+            Vec2::new(2.0, 2.0),
+            f32::INFINITY,
+            1.0,
+            1.0,
+            1.0 / 60.0,
+            None,
+        );
+
+        assert!(hm.heights.iter().all(|h| *h == 1.0));
     }
 }
