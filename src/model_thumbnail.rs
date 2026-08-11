@@ -148,6 +148,13 @@ struct CacheEntry {
 /// which memoizes prefab detection the same way.
 #[derive(Default)]
 struct ThumbnailCache {
+    // Grows for the life of the process: entries are replaced on a stale
+    // mtime but never evicted for a path that stops being referenced
+    // (deleted model, browser navigated elsewhere for good). A project
+    // with a very large, high-churn asset set could grow this
+    // unboundedly over a long editor session. Not a problem this round
+    // (one `Handle<Image>` + a mtime per entry), but a real cache would
+    // want an eviction policy if that ever changes.
     entries: HashMap<PathBuf, CacheEntry>,
     queue: VecDeque<PathBuf>,
     queued: HashSet<PathBuf>,
@@ -164,6 +171,16 @@ impl ThumbnailCache {
             },
             _ => None,
         }
+    }
+
+    /// Whether `path` is known to have failed at the mtime it currently
+    /// has. `false` for "never tried" as well as for a stale failure (the
+    /// file changed since), both of which still deserve a fresh attempt.
+    fn is_failed(&self, path: &Path, mtime: SystemTime) -> bool {
+        matches!(
+            self.entries.get(path),
+            Some(entry) if entry.mtime == mtime && matches!(entry.state, ThumbState::Failed)
+        )
     }
 
     /// Ask for a thumbnail. A no-op when one is already known for this mtime
@@ -220,6 +237,23 @@ impl ModelThumbnails {
     /// failed, or the file is unreadable.
     pub fn ready(&self, path: &Path) -> Option<Handle<Image>> {
         self.cache.ready(path, source_mtime(path)?)
+    }
+
+    /// Whether `path` has a cached failure at its current mtime.
+    ///
+    /// One `fs::metadata` call, same as [`Self::ready`]. Callers driving
+    /// a per-frame slot (`update_thumbnail_slots`) should call this only
+    /// until it returns `true` once, then stop asking entirely: without
+    /// that latch, a permanently-broken model on screen paid this
+    /// syscall (and `ready`'s) every single frame for as long as it
+    /// stayed visible.
+    pub fn is_failed(&self, path: &Path) -> bool {
+        match source_mtime(path) {
+            Some(mtime) => self.cache.is_failed(path, mtime),
+            // Cannot even stat it: treat like a permanent failure so the
+            // caller latches and stops asking, same as a render failure.
+            None => true,
+        }
     }
 
     /// Queue `path` for a thumbnail if one is not already known or pending.
@@ -833,6 +867,16 @@ fn update_thumbnail_slots(
         }
 
         let Some(handle) = thumbnails.ready(&slot.path) else {
+            if thumbnails.is_failed(&slot.path) {
+                // Latch: `applied` takes the slot out of this loop
+                // entirely (see its doc), same as a successful install.
+                // Without it, a model that fails to render paid an
+                // fs::metadata call here, and another inside `ready`
+                // above, every single frame for as long as it stayed
+                // visible.
+                slot.applied = true;
+                continue;
+            }
             thumbnails.request(&slot.path);
             continue;
         };
@@ -925,6 +969,29 @@ mod tests {
         // Fixing the file on disk is what makes it eligible again.
         cache.request(path, epoch(2));
         assert_eq!(cache.take_next().as_deref(), Some(path));
+    }
+
+    /// M12 pinning test: `ThumbnailCache::is_failed` (which
+    /// `update_thumbnail_slots` uses to latch `slot.applied` and stop
+    /// hitting the filesystem every frame) must read `true` for a
+    /// failure at the current mtime and `false` for both "never tried"
+    /// and "failed at a stale mtime" -- both of the latter deserve
+    /// another attempt, not a permanent latch.
+    #[test]
+    fn is_failed_reads_true_only_for_a_failure_at_the_current_mtime() {
+        let mut cache = ThumbnailCache::default();
+        let path = Path::new("/kit/broken.gltf");
+        assert!(!cache.is_failed(path, epoch(1)), "never attempted yet");
+
+        cache.record(path, epoch(1), ThumbState::Failed);
+        assert!(cache.is_failed(path, epoch(1)));
+        assert!(
+            !cache.is_failed(path, epoch(2)),
+            "the file changed since the failure; it deserves another try"
+        );
+
+        cache.record(path, epoch(1), ThumbState::Ready(Handle::default()));
+        assert!(!cache.is_failed(path, epoch(1)), "a later success clears it");
     }
 
     #[test]

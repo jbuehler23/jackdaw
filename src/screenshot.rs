@@ -187,6 +187,11 @@ fn drive_shot_probe(world: &mut World) {
         Ok(()) => world.resource_mut::<ShotProbe>().queued = true,
         Err(err) if frames > SETTLE_FRAMES + CAPTURE_TIMEOUT_FRAMES => {
             error!("{ENV_SHOT}: {err}");
+            // Latch: `queued` doubles as "nothing left to do here", so
+            // without setting it a capture that keeps failing past the
+            // timeout re-entered this arm and re-emitted AppExit every
+            // frame from then on.
+            world.resource_mut::<ShotProbe>().queued = true;
             world.write_message(AppExit::error());
         }
         Err(_) => {}
@@ -275,5 +280,36 @@ mod tests {
         // Colons are legal on unix and illegal on Windows; a timestamped
         // default has to be writable on both.
         assert!(!path.to_string_lossy().contains(':'), "{path:?}");
+    }
+
+    /// M12 pinning test: a capture that never gets a viewport keeps
+    /// failing every frame past the timeout. Before the latch,
+    /// drive_shot_probe re-entered the timeout arm on every subsequent
+    /// call and wrote a fresh AppExit each time.
+    #[test]
+    fn a_capture_that_never_starts_emits_app_exit_only_once() {
+        let mut world = World::new();
+        world.init_resource::<bevy::ecs::message::Messages<AppExit>>();
+        world.insert_resource(ShotProbe {
+            path: PathBuf::from("unused.png"),
+            frames: SETTLE_FRAMES + CAPTURE_TIMEOUT_FRAMES,
+            queued: false,
+        });
+
+        for _ in 0..5 {
+            drive_shot_probe(&mut world);
+        }
+
+        assert_eq!(
+            world
+                .resource::<bevy::ecs::message::Messages<AppExit>>()
+                .len(),
+            1,
+            "AppExit must be written exactly once, not once per frame",
+        );
+        assert!(
+            world.resource::<ShotProbe>().queued,
+            "must latch so drive_shot_probe stops retrying",
+        );
     }
 }
