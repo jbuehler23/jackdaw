@@ -796,6 +796,7 @@ fn refresh_browser_on_change(
                 .observe(
                     move |click: On<Pointer<Click>>,
                           mut state: ResMut<AssetBrowserState>,
+                          mut commands: Commands,
                           time: Res<Time>| {
                         // Right-click is handled by the context menu observer
                         // below; let it through here.
@@ -806,14 +807,11 @@ fn refresh_browser_on_change(
                         let is_double = state.selected_file.as_deref() == Some(&path_for_click)
                             && (now - state.last_click_time) < 0.4;
 
-                        if is_double && is_dir {
-                            // Double-click on directory: navigate
-                            state.current_directory = PathBuf::from(&path_for_click);
-                            state.selected_file = None;
-                            state.needs_refresh = true;
-                        } else if is_double && !is_dir {
-                            // Double-click on file: open/apply
-                            // (handled by FileItemDoubleClicked observer)
+                        if is_double {
+                            commands.trigger(FileItemDoubleClicked {
+                                path: path_for_click.clone(),
+                                is_directory: is_dir,
+                            });
                         } else {
                             // Single-click: select
                             state.selected_file = Some(path_for_click.clone());
@@ -1043,7 +1041,7 @@ fn handle_file_double_click(
     }
 
     let path_lower = event.path.to_lowercase();
-    if path_lower.ends_with(".jsn") {
+    if path_lower.ends_with(".jsn") || path_lower.ends_with(".bsn") {
         let path_owned = std::path::PathBuf::from(&event.path);
         commands.queue(move |world: &mut World| {
             crate::scenes::operators::scene_open_system(world, &path_owned);
