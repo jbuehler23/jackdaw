@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 
 use super::{
     CHUNK_SIZE, TerrainBrushSettings, TerrainDataStore, TerrainDirtyChunks, TerrainEditMode,
@@ -234,9 +233,7 @@ fn sculpt_invoke_trigger(
 #[operator(
     id = "terrain.sculpt",
     label = "Sculpt Terrain",
-    description = "Apply the active sculpt tool while LMB is held. Modal: commits \
-                   the height delta as a single undo entry on release; Escape \
-                   restores the pre-stroke heights.",
+    description = "Sculpt the terrain under the brush while the mouse button is held.",
     modal = true,
     allows_undo = false,
     cancel = cancel_terrain_sculpt,
@@ -251,7 +248,7 @@ pub fn terrain_sculpt(
     mut store: ResMut<TerrainDataStore>,
     mut history: ResMut<CommandHistory>,
     time: Res<Time>,
-    modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+    active: ActiveModalQuery,
 ) -> OperatorResult {
     let TerrainEditMode::Sculpt(tool) = *edit_mode else {
         return OperatorResult::Cancelled;
@@ -260,7 +257,7 @@ pub fn terrain_sculpt(
     let (terrain, mut dirty) = terrain_query.get_mut(target)?;
     let data = store.entry_for(terrain)?;
 
-    if modal.is_none() {
+    if !active.is_modal_running() {
         sculpt_state.active = true;
         sculpt_state.stroke_snapshot = data.heights.clone();
     }

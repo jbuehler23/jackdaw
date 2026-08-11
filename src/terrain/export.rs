@@ -257,7 +257,14 @@ pub fn build_export(input: &ExportInput) -> Result<Vec<ExportedFile>, ExportErro
                 encode_png_u16(input.resolution, input.resolution, &channel.values)?
             }
             ExportChannelElement::U8 => {
-                let values8: Vec<u8> = channel.values.iter().map(|&v| v as u8).collect();
+                // Saturate rather than wrap, matching sidecar.rs's own
+                // U8 encode: a value of 256 truncating to 0 would be a
+                // silently wrong palette index, not just a clipped one.
+                let values8: Vec<u8> = channel
+                    .values
+                    .iter()
+                    .map(|&v| v.min(u16::from(u8::MAX)) as u8)
+                    .collect();
                 encode_png_u8(input.resolution, input.resolution, &values8)?
             }
         };

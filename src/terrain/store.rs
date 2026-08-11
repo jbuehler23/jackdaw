@@ -197,8 +197,16 @@ fn reconcile_channels(data: &mut TerrainData, terrain: &jackdaw_scene_types::Ter
 /// Mint a sidecar path for a new terrain in `scene_stem`'s scene, unique
 /// against everything the store already holds.
 ///
-/// Uniqueness is checked against the whole store rather than the current
-/// scene so two terrains created in two open tabs cannot collide.
+/// Uniqueness is checked against the whole store, not just the terrains
+/// currently spawned in the scene: the store can hold entries for a
+/// terrain the scene does not currently have live, e.g. one an undo
+/// brought back or a delete has not yet been redone past. Checking only
+/// live terrains could mint a path that collides with one of those once
+/// it resurfaces. This does not, on its own, prevent a collision with a
+/// path minted in a *different* open tab -- each inactive
+/// [`crate::scenes::SceneTab`] owns its own separate
+/// [`TerrainDataStore`], so this function only ever sees one tab's store
+/// at a time.
 pub fn mint_data_path(store: &TerrainDataStore, scene_stem: &str) -> String {
     let stem = if scene_stem.is_empty() {
         "untitled"

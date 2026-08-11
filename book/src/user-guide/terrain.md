@@ -104,6 +104,41 @@ and elevation step on the terrain; unquantized scenes can pass
 grid. Add `--raw-heights` when the consumer also needs the raw
 height buffer.
 
+### Export format contract
+
+This is a cross-repo contract: an importer in another repo is
+built against it, so treat the shapes below as stable.
+
+- `manifest.json`, `format_version: 2`. Bumped whenever a field
+  is added, removed, or reinterpreted; an importer should check
+  it and refuse (or degrade explicitly) on a version it does
+  not understand, rather than assume the shape it expects.
+- `heightmap.png` is a 16-bit grayscale PNG. Every pixel decodes
+  to a world-space height via
+  `height = manifest.heightmap.base_m + pixel * manifest.heightmap.step_m`
+  (`encoding: "unsigned-steps-from-base"`). Quantized exports
+  set `step_m` to the terrain's elevation step; unquantized
+  exports derive `step_m` from the actual authored height span
+  (not from `max_height_m`, which is a configured ceiling and
+  can differ from the real data range).
+- Each paint channel is its own PNG (`channels/<name>.png`, 8-
+  or 16-bit depending on the channel's element width) plus a
+  manifest entry: `name`, `file`, `bit_depth`, `element`
+  (`"u8"` / `"u16"`), and `palette` -- a list of
+  `{ value, label, color }` entries, `color` as `#rrggbb`.
+  Channel names are guaranteed unique in one export: the writer
+  refuses the whole export if the scene's channel names collide,
+  either exactly or after filename sanitization.
+- `placements.json`, its own `format_version: 1`, lists every
+  scattered / placed instance: `name`, `asset` (nullable),
+  `translation_m` / `rotation_quat` / `scale`, and `components`
+  (a free-form JSON map of any extra authored component data on
+  that instance).
+- `heights.f32`, present only with `--raw-heights`: the raw
+  height buffer as little-endian `f32`, row-major, unquantized
+  and unscaled -- for a consumer that wants the source values
+  rather than the quantized PNG encoding.
+
 ## Chunking
 
 Chunks are 32 cells per edge (`src/terrain/mod.rs::CHUNK_SIZE`).
@@ -123,9 +158,16 @@ renders at full resolution.
   knob to tune first. Defaults aim for a generic mountain;
   rolling hills want fewer iterations and a higher
   evaporation rate.
-- **Standalone game shows no terrain.** `jackdaw_runtime`
-  doesn't pull in `jackdaw_terrain`. If your game needs
-  terrain at runtime, add `jackdaw_terrain` to your
-  standalone `Cargo.toml` and bring whatever plugin /
-  systems you want into your game's plugin alongside
-  `JackdawPlugin`.
+- **Standalone game shows no terrain.** Two separate causes
+  land on the same symptom. First, `jackdaw_runtime` doesn't
+  pull in `jackdaw_terrain`: if your game needs terrain at
+  runtime, add `jackdaw_terrain` to your standalone
+  `Cargo.toml` and bring whatever plugin / systems you want
+  into your game's plugin alongside `JackdawPlugin`. Second,
+  even with the crate present, a terrain's heights and paint
+  channels live in a `.jdterrain` sidecar next to the `.bsn`
+  scene, not in the scene file itself (see "Sidecars and
+  export" above) -- if you load a `.bsn` scene directly at
+  runtime rather than through the `jd export-terrain` pipeline,
+  every referenced `.jdterrain` sidecar has to ship and load
+  alongside it, or the terrain reads as flat.

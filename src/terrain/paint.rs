@@ -14,7 +14,6 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 
 use super::{
     CHUNK_SIZE, TerrainBrushSettings, TerrainDataStore, TerrainDirtyChunks, TerrainEditMode,
@@ -239,7 +238,7 @@ pub fn terrain_paint(
     terrain_query: Query<(&jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
     mut store: ResMut<TerrainDataStore>,
     mut history: ResMut<CommandHistory>,
-    modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+    active: ActiveModalQuery,
 ) -> OperatorResult {
     if *edit_mode != TerrainEditMode::Paint {
         return OperatorResult::Cancelled;
@@ -251,16 +250,16 @@ pub fn terrain_paint(
 
     let erase = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let value = paint_state.value_for(&terrain, erase)?;
-    let channel_index = if modal.is_none() {
-        paint_state.active_channel
-    } else {
+    let channel_index = if active.is_modal_running() {
         paint_state.stroke_channel
+    } else {
+        paint_state.active_channel
     };
 
     let data = store.entry_for(&terrain)?;
     let channel = data.channels.get_mut(channel_index)?;
 
-    if modal.is_none() {
+    if !active.is_modal_running() {
         paint_state.active = true;
         paint_state.stroke_channel = channel_index;
         paint_state.stroke_snapshot = channel.values.clone();

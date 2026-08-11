@@ -270,10 +270,17 @@ fn heights_spanning_more_than_max_height_still_export() {
     }
 }
 
-// 4. Quantized heights: every decoded height is an exact multiple of the
-//    elevation step.
+// M1: quantized heights decode back to the actual snapped value, not
+// merely to *some* multiple of the step. The previous assertion checked
+// only "decoded_h is a multiple of step_m" -- true of every pixel this
+// encoding can produce by construction (decoded_h = base_m + pixel *
+// step_m, and base_m is itself floor(min/step)*step), so it would still
+// pass even if quantize_heights were never actually applied to the
+// input. Comparing against jackdaw_terrain::quantize_height(original,
+// step) pins the real behavior: the encoded value must match what
+// quantization actually does to each input height.
 #[test]
-fn quantized_heights_decode_to_exact_step_multiples() {
+fn quantized_heights_decode_to_the_actual_snapped_value() {
     let heights = vec![0.1, 0.4, 0.6, -0.3, 1.55, 2.0, 0.0, -1.2, 3.05];
     let channels: Vec<ExportChannel> = Vec::new();
     let mut input = base_input(&heights, &channels, &[]);
@@ -291,12 +298,15 @@ fn quantized_heights_decode_to_exact_step_multiples() {
         .into_luma16();
     for z in 0..3u32 {
         for x in 0..3u32 {
+            let i = (z * 3 + x) as usize;
+            let expected = jackdaw_terrain::quantize_height(heights[i], 0.25);
             let pixel = decoded.get_pixel(x, z).0[0];
             let decoded_h = base_m + pixel as f32 * step_m;
-            let steps = decoded_h / step_m;
             assert!(
-                (steps - steps.round()).abs() < 1e-3,
-                "decoded height {decoded_h} is not a multiple of {step_m}"
+                (decoded_h - expected).abs() < 1e-3,
+                "x={x} z={z}: decoded {decoded_h} does not match the actual quantized \
+                 value {expected} of input {}",
+                heights[i]
             );
         }
     }
@@ -471,4 +481,27 @@ fn exact_duplicate_channel_names_are_refused() {
 
     let error = build_export(&input).expect_err("exact-duplicate channel names must be refused");
     assert!(error.to_string().contains("channel-1"));
+}
+
+/// M3: a U8 channel value over 255 must saturate on export, matching
+/// sidecar.rs's own U8 encode. Wrapping (`as u8`) would turn 256 into 0
+/// -- silently the wrong palette index, not just a clipped one.
+#[test]
+fn a_u8_channel_value_over_255_saturates_rather_than_wraps() {
+    let heights = sample_heights();
+    let channels = vec![ExportChannel {
+        name: "biome".to_string(),
+        element: ExportChannelElement::U8,
+        values: vec![256, 300, 0, 1, 2, 3, 4, 5, 6],
+        palette: vec![],
+    }];
+    let input = base_input(&heights, &channels, &[]);
+
+    let files = build_export(&input).expect("build_export succeeds");
+    let decoded = image::load_from_memory(&find_file(&files, "channels/biome.png").bytes)
+        .unwrap()
+        .into_luma8();
+    assert_eq!(decoded.get_pixel(0, 0).0[0], 255, "256 must saturate to 255, not wrap to 0");
+    assert_eq!(decoded.get_pixel(1, 0).0[0], 255, "300 must saturate to 255");
+    assert_eq!(decoded.get_pixel(2, 0).0[0], 0);
 }

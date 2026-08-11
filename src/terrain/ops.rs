@@ -147,9 +147,12 @@ pub(crate) fn terrain_tool_generate(
 /// Reads the noise/octaves/etc. settings from the inspector's
 /// generation panel ([`TerrainGenerateState`]).
 ///
-/// `allows_undo = false` because this op pushes its own
-/// [`SetTerrainHeights`] history entry; letting the framework also
-/// capture a diff would double-record the change.
+/// `allows_undo` is left at its default (`true`), not set to `false`:
+/// this op pushes its own [`SetTerrainHeights`] history entry, but that
+/// entry only ever touches heights, which live outside the AST (see
+/// `store.rs`'s module doc). The framework's automatic before/after
+/// snapshot diff sees no change there and skips recording a duplicate,
+/// per CONTRIBUTING's note on `push_executed`.
 #[operator(
     id = "terrain.generate",
     label = "Generate Terrain",
@@ -192,9 +195,12 @@ pub(crate) fn terrain_generate(
 /// Uses the erosion settings from the inspector's generation panel
 /// ([`TerrainGenerateState::erosion`]).
 ///
-/// `allows_undo = false` because this op pushes its own
-/// [`SetTerrainHeights`] history entry; letting the framework also
-/// capture a diff would double-record the change.
+/// `allows_undo` is left at its default (`true`), not set to `false`:
+/// this op pushes its own [`SetTerrainHeights`] history entry, but that
+/// entry only ever touches heights, which live outside the AST (see
+/// `store.rs`'s module doc). The framework's automatic before/after
+/// snapshot diff sees no change there and skips recording a duplicate,
+/// per CONTRIBUTING's note on `push_executed`.
 #[operator(
     id = "terrain.erode",
     label = "Erode Terrain",

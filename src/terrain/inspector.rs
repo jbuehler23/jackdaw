@@ -350,7 +350,7 @@ fn update_terrain_inspector(
                 ChildOf(body),
             ));
 
-            spawn_quant_field(
+            spawn_labeled_field(
                 &mut commands,
                 body,
                 "Cell Size",
@@ -358,7 +358,7 @@ fn update_terrain_inspector(
                 quantization.cell_size as f64,
                 QuantField::CellSize,
             );
-            spawn_quant_field(
+            spawn_labeled_field(
                 &mut commands,
                 body,
                 "Height Step",
@@ -430,7 +430,7 @@ fn update_terrain_inspector(
                 },
             );
 
-        spawn_gen_field(
+        spawn_labeled_field(
             &mut commands,
             body,
             "Seed",
@@ -438,7 +438,7 @@ fn update_terrain_inspector(
             gen_state.settings.seed as f64,
             GenField::Seed,
         );
-        spawn_gen_field(
+        spawn_labeled_field(
             &mut commands,
             body,
             "Frequency",
@@ -446,7 +446,7 @@ fn update_terrain_inspector(
             gen_state.settings.frequency,
             GenField::Frequency,
         );
-        spawn_gen_field(
+        spawn_labeled_field(
             &mut commands,
             body,
             "Octaves",
@@ -454,7 +454,7 @@ fn update_terrain_inspector(
             gen_state.settings.octaves as f64,
             GenField::Octaves,
         );
-        spawn_gen_field(
+        spawn_labeled_field(
             &mut commands,
             body,
             "Lacunarity",
@@ -462,7 +462,7 @@ fn update_terrain_inspector(
             gen_state.settings.lacunarity,
             GenField::Lacunarity,
         );
-        spawn_gen_field(
+        spawn_labeled_field(
             &mut commands,
             body,
             "Persistence",
@@ -470,7 +470,7 @@ fn update_terrain_inspector(
             gen_state.settings.persistence,
             GenField::Persistence,
         );
-        spawn_gen_field(
+        spawn_labeled_field(
             &mut commands,
             body,
             "Amplitude",
@@ -478,7 +478,7 @@ fn update_terrain_inspector(
             gen_state.settings.amplitude as f64,
             GenField::Amplitude,
         );
-        spawn_gen_field(
+        spawn_labeled_field(
             &mut commands,
             body,
             "Offset",
@@ -505,7 +505,7 @@ fn update_terrain_inspector(
             container,
         );
 
-        spawn_erosion_field(
+        spawn_labeled_field(
             &mut commands,
             ebody,
             "Iterations",
@@ -513,7 +513,7 @@ fn update_terrain_inspector(
             gen_state.erosion.iterations as f64,
             ErosionField::Iterations,
         );
-        spawn_erosion_field(
+        spawn_labeled_field(
             &mut commands,
             ebody,
             "Erosion Radius",
@@ -521,7 +521,7 @@ fn update_terrain_inspector(
             gen_state.erosion.erosion_radius as f64,
             ErosionField::ErosionRadius,
         );
-        spawn_erosion_field(
+        spawn_labeled_field(
             &mut commands,
             ebody,
             "Inertia",
@@ -529,7 +529,7 @@ fn update_terrain_inspector(
             gen_state.erosion.inertia as f64,
             ErosionField::Inertia,
         );
-        spawn_erosion_field(
+        spawn_labeled_field(
             &mut commands,
             ebody,
             "Capacity",
@@ -537,7 +537,7 @@ fn update_terrain_inspector(
             gen_state.erosion.capacity as f64,
             ErosionField::Capacity,
         );
-        spawn_erosion_field(
+        spawn_labeled_field(
             &mut commands,
             ebody,
             "Deposition",
@@ -545,7 +545,7 @@ fn update_terrain_inspector(
             gen_state.erosion.deposition as f64,
             ErosionField::Deposition,
         );
-        spawn_erosion_field(
+        spawn_labeled_field(
             &mut commands,
             ebody,
             "Erosion Rate",
@@ -553,7 +553,7 @@ fn update_terrain_inspector(
             gen_state.erosion.erosion as f64,
             ErosionField::Erosion,
         );
-        spawn_erosion_field(
+        spawn_labeled_field(
             &mut commands,
             ebody,
             "Evaporation",
@@ -959,159 +959,6 @@ pub(super) fn spawn_labeled_field<C: Component>(
     tooltip: &str,
     value: f64,
     field: C,
-) {
-    let row = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: px(tokens::SPACING_XS),
-                width: Val::Percent(100.0),
-                ..Default::default()
-            },
-            ChildOf(parent),
-        ))
-        .id();
-
-    commands.spawn((
-        Text::new(label),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(row),
-    ));
-
-    commands.spawn((
-        Text::new(tooltip),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_XS,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(row),
-    ));
-
-    commands.spawn((
-        text_edit::text_edit(
-            TextEditProps::default()
-                .numeric_f32()
-                .with_default_value(value.to_string()),
-        ),
-        field,
-        ChildOf(row),
-    ));
-}
-
-fn spawn_quant_field(
-    commands: &mut Commands,
-    parent: Entity,
-    label: &str,
-    tooltip: &str,
-    value: f64,
-    field: QuantField,
-) {
-    let row = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: px(tokens::SPACING_XS),
-                width: Val::Percent(100.0),
-                ..Default::default()
-            },
-            ChildOf(parent),
-        ))
-        .id();
-
-    commands.spawn((
-        Text::new(label),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(row),
-    ));
-
-    commands.spawn((
-        Text::new(tooltip),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_XS,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(row),
-    ));
-
-    commands.spawn((
-        text_edit::text_edit(
-            TextEditProps::default()
-                .numeric_f32()
-                .with_default_value(value.to_string()),
-        ),
-        field,
-        ChildOf(row),
-    ));
-}
-
-fn spawn_gen_field(
-    commands: &mut Commands,
-    parent: Entity,
-    label: &str,
-    tooltip: &str,
-    value: f64,
-    field: GenField,
-) {
-    let row = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: px(tokens::SPACING_XS),
-                width: Val::Percent(100.0),
-                ..Default::default()
-            },
-            ChildOf(parent),
-        ))
-        .id();
-
-    commands.spawn((
-        Text::new(label),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(row),
-    ));
-
-    commands.spawn((
-        Text::new(tooltip),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_XS,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(row),
-    ));
-
-    commands.spawn((
-        text_edit::text_edit(
-            TextEditProps::default()
-                .numeric_f32()
-                .with_default_value(value.to_string()),
-        ),
-        field,
-        ChildOf(row),
-    ));
-}
-
-fn spawn_erosion_field(
-    commands: &mut Commands,
-    parent: Entity,
-    label: &str,
-    tooltip: &str,
-    value: f64,
-    field: ErosionField,
 ) {
     let row = commands
         .spawn((

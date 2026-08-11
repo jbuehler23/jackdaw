@@ -29,6 +29,16 @@
 //! Every integer and float is little-endian. Encoding is a pure function of
 //! the data, so the same terrain always produces the same bytes and a
 //! sidecar can be committed and diffed.
+//!
+//! There is no checksum. A file can be truncated or bit-flipped by
+//! something outside the atomic-write path this format's own writer uses
+//! (a bad disk, a naive sync tool) and still pass magic/version/length
+//! checks while carrying wrong values -- decode only catches structural
+//! corruption (bad magic, an unreadable version, a length that does not
+//! fit the claimed shape), not silent bit rot within otherwise
+//! well-formed bytes. Accepted as a tradeoff for the format staying
+//! trivial to read from any language; revisit if this ever needs to
+//! survive untrusted or unreliable transport.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -280,7 +290,10 @@ pub fn decode(bytes: &[u8]) -> Result<TerrainData, SidecarError> {
         return Err(SidecarError::BadMagic);
     }
     let version = r.u16()?;
-    if version > VERSION {
+    // 0 has never been a version any build wrote (VERSION starts at 1);
+    // accepting it would let a file whose version bytes were zeroed out
+    // by corruption parse as if it were a real, if ancient, format.
+    if version == 0 || version > VERSION {
         return Err(SidecarError::UnsupportedVersion(version));
     }
     if r.u16()? != 0 {
@@ -464,6 +477,16 @@ mod tests {
             decode(&bytes),
             Err(SidecarError::UnsupportedVersion(VERSION + 1))
         );
+    }
+
+    /// M5: version 0 has never been written by any build and must not be
+    /// accepted as if it were a real, if ancient, format -- most likely
+    /// to show up from version bytes zeroed out by corruption.
+    #[test]
+    fn rejects_version_zero() {
+        let mut bytes = encode(&sample()).expect("encodes");
+        bytes[8..10].copy_from_slice(&0u16.to_le_bytes());
+        assert_eq!(decode(&bytes), Err(SidecarError::UnsupportedVersion(0)));
     }
 
     #[test]
